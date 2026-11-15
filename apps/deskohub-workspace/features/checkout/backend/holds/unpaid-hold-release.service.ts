@@ -9,7 +9,10 @@ import {
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Predicate } from "effect";
 import type { WorkspaceReservationDetailsMalformedError } from "@/features/reservation/backend/stored-reservation-details.server";
+import type { ReservationCancellationCause } from "@/db/schema";
 import {
+  hasReservationHold,
+  type ReservationHoldIdentity,
   type WorkspaceReservation,
   WorkspaceReservationRepository,
   type WorkspaceReservationStateError,
@@ -25,18 +28,34 @@ import { DotyposHoldRelease } from "./dotypos-hold-release.service";
  *   recreates the reservation or refunds.
  * - `agent_rotated`: an agent client's hold left behind in a rotated checkout
  *   session.
+ * - `payment_retry`: a payment retry frees the order's hold before it takes a
+ *   new one for the same order.
+ *
+ * Each reason is also the cancellation cause its claim records.
  */
 type UnpaidHoldReleaseReason =
   | "hold_expired"
   | "late_payment"
-  | "agent_rotated";
+  | "agent_rotated"
+  | "payment_retry";
 
 export type UnpaidHoldReleaseRequest =
   | {
       readonly reason: "hold_expired";
       readonly reservationId: WorkspaceReservationId;
+      /**
+       * The hold cleanup found expired. Cleanup releases only this hold, never
+       * a newer one a payment retry gave the reservation since.
+       */
+      readonly expectedHold: ReservationHoldIdentity;
       /** When cleanup found the hold expired; recorded with the cancellation. */
       readonly holdExpiredAt?: Temporal.Instant;
+    }
+  | {
+      readonly reason: "payment_retry";
+      readonly reservationId: WorkspaceReservationId;
+      /** The hold the retry read on the order; only this hold is released. */
+      readonly expectedHold: ReservationHoldIdentity;
     }
   | {
       readonly reason: "late_payment";
@@ -66,11 +85,23 @@ interface RefusedHold {
 }
 
 /**
+ * A hold Dotypos had cancelled before any release of ours did, such as an
+ * operator's cancellation in Dotypos: marked cancelled with the
+ * `provider_cancelled` cause, never reported as this run's release.
+ */
+interface ProviderCancelledHold {
+  /** The reservation as this run took it over, before it was marked cancelled. */
+  readonly providerCancelled: WorkspaceReservation;
+  readonly cancelledAt: Temporal.Instant;
+}
+
+/**
  * - `already_released`: the reservation was cancelled already, or another run
  *   marked it cancelled while this one released it.
  * - `in_progress`: another run's cancellation of it is fresh, so this run
  *   leaves it alone.
- * - `unclaimed`: the reservation changed before this run could claim it.
+ * - `unclaimed`: the reservation changed before this run could claim it, or
+ *   it no longer has the hold the request expected.
  * - `unreleasable`: it isn't an unpaid hold with a Dotypos reservation this
  *   reason may release.
  * - `state_changed`: it left `cancelling` before this run marked it
@@ -81,6 +112,7 @@ interface RefusedHold {
  */
 type UnpaidHoldReleaseOutcome =
   | ReleasedHold
+  | ProviderCancelledHold
   | "already_released"
   | "in_progress"
   | "unclaimed"
@@ -118,11 +150,26 @@ type ReleaseFailureCode =
  * - `confirm_cancelled`: another run finished the cancellation when the
  *   reservation reads `cancelled`; the refusal fails the release otherwise.
  * - `fails`: the refusal fails the release.
+ *
+ * `alreadyCancelled`, what a `CANCELLED` live status after the claim means:
+ * - `released`: the hold is released.
+ * - `own_release_only`: released only when the cause the claim replaced is
+ *   an earlier release of the same kind (`ownReleaseCauses`), such as a
+ *   cancel whose outcome was uncertain; otherwise Dotypos cancelled it
+ *   without us and the reservation is marked `provider_cancelled`.
+ *
+ * `markerFence`, whether the cancelled and failure markers also require the
+ * reservation to still name the released hold (`claimed_hold`), so a delayed
+ * run can't finish a newer hold's cancellation. Late payment releases the
+ * original hold its recovery recorded, which the reservation may no longer
+ * name (`none`).
  */
 interface ReleasePolicy {
   readonly liveStatus: "require_new" | "read_before_claim";
   readonly failureCode: ReleaseFailureCode;
   readonly markerRefused: "state_changed" | "confirm_cancelled" | "fails";
+  readonly alreadyCancelled: "released" | "own_release_only";
+  readonly markerFence: "claimed_hold" | "none";
 }
 
 const releasePolicies = {
@@ -130,18 +177,42 @@ const releasePolicies = {
     liveStatus: "require_new",
     failureCode: "dotypos_cancel_failed",
     markerRefused: "state_changed",
+    alreadyCancelled: "own_release_only",
+    markerFence: "claimed_hold",
+  },
+  payment_retry: {
+    liveStatus: "require_new",
+    failureCode: "dotypos_cancel_failed",
+    markerRefused: "confirm_cancelled",
+    alreadyCancelled: "own_release_only",
+    markerFence: "claimed_hold",
   },
   late_payment: {
     liveStatus: "read_before_claim",
     failureCode: "dotypos_cancel_failed",
     markerRefused: "confirm_cancelled",
+    alreadyCancelled: "released",
+    markerFence: "none",
   },
   agent_rotated: {
     liveStatus: "require_new",
     failureCode: "checkout_supersession_cancel_failed",
     markerRefused: "fails",
+    alreadyCancelled: "released",
+    markerFence: "claimed_hold",
   },
 } as const satisfies Record<UnpaidHoldReleaseReason, ReleasePolicy>;
+
+/**
+ * Causes of the releases of an order's own expired or retried hold. A
+ * `CANCELLED` hold after an earlier claim under one of them is that claim's
+ * release finishing.
+ */
+const ownReleaseCauses: ReadonlySet<ReservationCancellationCause | null> =
+  new Set<ReservationCancellationCause | null>([
+    "hold_expired",
+    "payment_retry",
+  ]);
 
 /**
  * Local states whose Dotypos hold may still exist, as late-payment recovery
@@ -168,17 +239,24 @@ const isHoldCancellationFresh = (reservation: WorkspaceReservation) =>
     Temporal.Now.instant().subtract(staleHoldCancellationAfter)
   ) > 0;
 
-/** A claimed hold, with the live status read before the claim, if any. */
+/**
+ * A claimed hold, with the live status read before the claim, if any, and the
+ * cancellation cause the reservation carried before this run's claim.
+ */
 interface ClaimedHold {
   readonly reservation: WorkspaceReservation;
   readonly dotyposReservationId: DotyposReservationId;
+  readonly previousCancellationCause: ReservationCancellationCause | null;
   readonly statusBeforeClaim?: "NEW" | "CANCELLED";
 }
 
 /** A hold this run claimed, or the outcome that ended the release first. */
 type ClaimResult =
   | ClaimedHold
-  | Exclude<UnpaidHoldReleaseOutcome, ReleasedHold | "state_changed">;
+  | Exclude<
+      UnpaidHoldReleaseOutcome,
+      ReleasedHold | ProviderCancelledHold | "state_changed"
+    >;
 
 const isClaimedHold = (result: ClaimResult): result is ClaimedHold =>
   !Predicate.isString(result) && "reservation" in result;
@@ -208,20 +286,32 @@ export class UnpaidHoldRelease extends Context.Service<
       const dotypos = yield* DotyposService;
       const holdRelease = yield* DotyposHoldRelease;
 
-      // Claims the cancellation, or takes over a `cancelling` reservation
-      // another run claimed; unreleasable after logging why it may not be
-      // released.
-      const claimResumingClaimed = Effect.fnUntraced(function* (
-        reservationId: WorkspaceReservationId
-      ): Effect.fn.Return<ClaimResult, UnpaidHoldReleaseError> {
-        const claimedFromNew =
-          yield* reservations.claimCancellation(reservationId);
+      // Claims the cancellation of the expected hold, or takes over a
+      // `cancelling` reservation another run claimed while it still has that
+      // hold; unclaimed when it has another hold, unreleasable after logging
+      // why it may not be released.
+      const claimResumingClaimed = Effect.fnUntraced(function* (request: {
+        readonly reservationId: WorkspaceReservationId;
+        readonly expectedHold: ReservationHoldIdentity;
+      }): Effect.fn.Return<ClaimResult, UnpaidHoldReleaseError> {
+        const claimedFromNew = yield* reservations.claimCancellation(
+          request.reservationId,
+          "hold_expired",
+          request.expectedHold
+        );
         yield* Effect.logDebug(
           "Reservation hold cancellation claim completed",
           { claimedFromNew: claimedFromNew !== null }
         );
         const claimed =
-          claimedFromNew ?? (yield* reservations.findById(reservationId));
+          claimedFromNew?.reservation ??
+          (yield* reservations.findById(request.reservationId));
+        if (claimed && !hasReservationHold(claimed, request.expectedHold)) {
+          yield* Effect.logWarning(
+            "Reservation hold cancellation skipped: reservation has another hold"
+          );
+          return "unclaimed" as const;
+        }
         if (claimed?.reservationState !== "cancelling") {
           yield* Effect.logWarning(
             "Reservation hold cancellation skipped: claim not cancellable"
@@ -243,6 +333,56 @@ export class UnpaidHoldRelease extends Context.Service<
         return {
           reservation: claimed,
           dotyposReservationId: claimed.dotyposReservationId,
+          previousCancellationCause: claimedFromNew
+            ? claimedFromNew.previousCancellationCause
+            : claimed.cancellationCause,
+        } satisfies ClaimedHold;
+      });
+
+      // From the current reservation, releases a cancelled one as done
+      // without asking Dotypos, waits out a fresh `cancelling` one, and
+      // otherwise claims the expected hold's cancellation or takes over a
+      // stale `cancelling` reservation that still has it.
+      const claimForPaymentRetry = Effect.fnUntraced(function* (request: {
+        readonly reservationId: WorkspaceReservationId;
+        readonly expectedHold: ReservationHoldIdentity;
+      }): Effect.fn.Return<ClaimResult, UnpaidHoldReleaseError> {
+        const reservation = yield* reservations.findById(request.reservationId);
+        if (!reservation) {
+          return yield* Effect.die(
+            "Unpaid hold release reservation disappeared before release."
+          );
+        }
+        if (reservation.reservationState === "cancelled") {
+          return "already_released" as const;
+        }
+        if (reservation.reservationState === "cancelling") {
+          if (isHoldCancellationFresh(reservation)) return "in_progress" as const;
+          if (!hasReservationHold(reservation, request.expectedHold)) {
+            return "unclaimed" as const;
+          }
+          if (reservation.paymentState === "paid") {
+            return "unreleasable" as const;
+          }
+          return {
+            reservation,
+            dotyposReservationId: request.expectedHold.dotyposReservationId,
+            previousCancellationCause: reservation.cancellationCause,
+          } satisfies ClaimedHold;
+        }
+        if (!releasableReservationStates.has(reservation.reservationState)) {
+          return "unreleasable" as const;
+        }
+        const claimed = yield* reservations.claimCancellation(
+          reservation.id,
+          "payment_retry",
+          request.expectedHold
+        );
+        if (!claimed) return "unclaimed" as const;
+        return {
+          reservation: claimed.reservation,
+          dotyposReservationId: request.expectedHold.dotyposReservationId,
+          previousCancellationCause: claimed.previousCancellationCause,
         } satisfies ClaimedHold;
       });
 
@@ -250,8 +390,10 @@ export class UnpaidHoldRelease extends Context.Service<
       const claimSupersession = Effect.fnUntraced(function* (
         reservationId: WorkspaceReservationId
       ): Effect.fn.Return<ClaimResult, UnpaidHoldReleaseError> {
-        const claimed =
-          yield* reservations.claimSupersessionCancellation(reservationId);
+        const claimed = yield* reservations.claimSupersessionCancellation(
+          reservationId,
+          "agent_rotated"
+        );
         if (!claimed) return "unclaimed" as const;
         // workspace_reservations_hold_id_check rejects a cancelling row
         // without its Dotypos hold, so a claimed row always carries one.
@@ -259,6 +401,8 @@ export class UnpaidHoldRelease extends Context.Service<
         return {
           reservation: claimed,
           dotyposReservationId: claimed.dotyposReservationId,
+          // Only `held` reservations are claimed, so no earlier claim's cause.
+          previousCancellationCause: null,
         } satisfies ClaimedHold;
       });
 
@@ -297,24 +441,30 @@ export class UnpaidHoldRelease extends Context.Service<
         }
         if (
           !resumesStaleCancellation &&
-          !(yield* reservations.claimCancellation(reservation.id))
+          !(yield* reservations.claimCancellation(
+            reservation.id,
+            "late_payment"
+          ))
         ) {
           return "unclaimed" as const;
         }
         return {
           reservation,
           dotyposReservationId: request.originalDotyposReservationId,
+          previousCancellationCause: reservation.cancellationCause,
           statusBeforeClaim: status,
         } satisfies ClaimedHold;
       });
 
-      // Each reason's claim. Hold cleanup and agent rotated holds release the
-      // Dotypos hold on the row they claimed; late payment releases the
-      // original hold its recovery recorded.
+      // Each reason's claim. Hold cleanup, payment retry, and agent rotated
+      // holds release the Dotypos hold on the row they claimed; late payment
+      // releases the original hold its recovery recorded.
       const claimHold = (request: UnpaidHoldReleaseRequest) => {
         switch (request.reason) {
           case "hold_expired":
-            return claimResumingClaimed(request.reservationId);
+            return claimResumingClaimed(request);
+          case "payment_retry":
+            return claimForPaymentRetry(request);
           case "late_payment":
             return claimResumingStale(request);
           case "agent_rotated":
@@ -323,25 +473,25 @@ export class UnpaidHoldRelease extends Context.Service<
       };
 
       // Releases the claimed hold in Dotypos: a refusal when its live status
-      // keeps it there, nothing when it may be marked cancelled.
+      // keeps it there, whether Dotypos had cancelled it already otherwise.
       const releaseDotyposHold = (
         policy: ReleasePolicy,
         claimed: ClaimedHold
       ) => {
-        if (claimed.statusBeforeClaim === "CANCELLED") return Effect.void;
-        return holdRelease
-          .release({
-            reservationId: claimed.reservation.id,
-            dotyposReservationId: claimed.dotyposReservationId,
-            liveStatus:
-              policy.liveStatus === "require_new" ? "require_new" : "unchecked",
-            failureCode: policy.failureCode,
-          })
-          .pipe(
-            Effect.map((outcome) =>
-              Predicate.isString(outcome) ? undefined : outcome
-            )
-          );
+        if (claimed.statusBeforeClaim === "CANCELLED") {
+          return Effect.succeed("already_cancelled" as const);
+        }
+        return holdRelease.release({
+          reservationId: claimed.reservation.id,
+          dotyposReservationId: claimed.dotyposReservationId,
+          liveStatus:
+            policy.liveStatus === "require_new" ? "require_new" : "unchecked",
+          failureCode: policy.failureCode,
+          failureMarkerFence:
+            policy.markerFence === "claimed_hold"
+              ? "dotypos_reservation"
+              : "none",
+        });
       };
 
       // Marks the released hold cancelled; a marker the reservation's state
@@ -349,20 +499,32 @@ export class UnpaidHoldRelease extends Context.Service<
       const markReleased = Effect.fnUntraced(function* (
         policy: ReleasePolicy,
         claimed: ClaimedHold,
-        holdExpiry: { readonly holdExpiredAt?: Temporal.Instant }
+        marker: {
+          readonly holdExpiredAt?: Temporal.Instant;
+          readonly providerCancelled: boolean;
+        }
       ) {
         const cancelledAt = Temporal.Now.instant();
         return yield* reservations
           .markCancelled({
             id: claimed.reservation.id,
             cancelledAt,
-            ...holdExpiry,
+            ...(marker.holdExpiredAt && {
+              holdExpiredAt: marker.holdExpiredAt,
+            }),
+            ...(marker.providerCancelled && {
+              cancellationCause: "provider_cancelled" as const,
+            }),
+            ...(policy.markerFence === "claimed_hold" && {
+              dotyposReservationId: claimed.dotyposReservationId,
+            }),
           })
           .pipe(
-            Effect.as<UnpaidHoldReleaseOutcome>({
-              released: claimed.reservation,
-              cancelledAt,
-            }),
+            Effect.as<UnpaidHoldReleaseOutcome>(
+              marker.providerCancelled
+                ? { providerCancelled: claimed.reservation, cancelledAt }
+                : { released: claimed.reservation, cancelledAt }
+            ),
             Effect.catchTag(
               "WorkspaceReservationStateError",
               Effect.fnUntraced(function* (refusal) {
@@ -389,17 +551,19 @@ export class UnpaidHoldRelease extends Context.Service<
           const policy: ReleasePolicy = releasePolicies[request.reason];
           const claimed = yield* claimHold(request);
           if (!isClaimedHold(claimed)) return claimed;
-          const refused = yield* releaseDotyposHold(policy, claimed);
-          if (refused) return refused;
-          return yield* markReleased(
-            policy,
-            claimed,
+          const released = yield* releaseDotyposHold(policy, claimed);
+          if (!Predicate.isString(released)) return released;
+          return yield* markReleased(policy, claimed, {
             // Only cleanup records when it found the hold expired; the other
             // reasons leave the column untouched.
-            request.reason === "hold_expired"
-              ? { holdExpiredAt: request.holdExpiredAt }
-              : {}
-          );
+            ...(request.reason === "hold_expired" && {
+              holdExpiredAt: request.holdExpiredAt,
+            }),
+            providerCancelled:
+              released === "already_cancelled" &&
+              policy.alreadyCancelled === "own_release_only" &&
+              !ownReleaseCauses.has(claimed.previousCancellationCause),
+          });
         }),
       });
     })

@@ -85,6 +85,8 @@ const makePayStateToken = async (input?: {
   readonly changedKeys?: CheckoutSummaryChangedKeys;
   /** A code the signed state already applied. */
   readonly submittedCode?: CanonicalPromotionCode;
+  /** Signs an order-bound (payment retry) state instead of a session one. */
+  readonly orderBound?: true;
 }) => {
   const state = await Effect.runPromise(
     buildSignedPayState({
@@ -93,7 +95,9 @@ const makePayStateToken = async (input?: {
       quote,
       orderId: "reservation-id",
       bookedAt: payStateBookedAt,
-      checkoutSessionId,
+      ...(input?.orderBound
+        ? { binding: "order", retriedAttemptId: "retried-attempt-id" }
+        : { checkoutSessionId }),
       requestedDiscountCode: input?.requestedDiscountCode,
       changedKeys: input?.changedKeys,
       ...(input?.submittedCode && {
@@ -122,6 +126,8 @@ type SubmissionInput = {
   readonly payStateToken?: string;
   readonly activePaymentAttemptId?: string;
   readonly activePaymentAttemptIdAfterPricing?: string;
+  /** The order's payment state while an attempt is active; pending by default. */
+  readonly activePaymentState?: "paid" | "failed" | "cancelled" | "expired";
   readonly payableReservationUnavailableAt?: 1 | 2;
   readonly requestedDiscountCode?: CanonicalPromotionCode;
   /** How long each live payable-reservation guard takes. */
@@ -155,16 +161,24 @@ const prepareSubmission = async (input?: SubmissionInput) => {
     import("@/features/referrals"),
   ]);
   let payableReservationReadCount = 0;
-  const getReservation = () => ({
-    id: "reservation-id",
-    dotyposCustomerId: input?.dotyposCustomerId ?? "customer-id",
-    activePaymentAttemptId:
+  const getReservation = () => {
+    const activePaymentAttemptId =
       payableReservationReadCount > 1
         ? (input?.activePaymentAttemptIdAfterPricing ??
           input?.activePaymentAttemptId ??
           null)
-        : (input?.activePaymentAttemptId ?? null),
-  });
+        : (input?.activePaymentAttemptId ?? null);
+    return {
+      id: "reservation-id",
+      dotyposCustomerId: input?.dotyposCustomerId ?? "customer-id",
+      activePaymentAttemptId,
+      // An active attempt is under way unless it already settled or ended.
+      paymentState:
+        activePaymentAttemptId === null
+          ? "not_started"
+          : (input?.activePaymentState ?? "pending"),
+    };
+  };
   const requireCurrent = mock(() =>
     Effect.sleep(input?.requireCurrentDuration ?? 0).pipe(
       Effect.andThen(() => {
@@ -816,6 +830,62 @@ describe("applyDiscountCodeToPayState", () => {
     expect(scenario.applyDiscountCode).not.toHaveBeenCalled();
   });
 
+  describe.each([
+    { binding: "session", orderBound: undefined },
+    { binding: "order-bound", orderBound: true },
+  ] as const)("on a $binding Pay state", ({ orderBound }) => {
+    const token = () =>
+      makePayStateToken(orderBound ? { orderBound } : undefined);
+
+    test.each([undefined, "paid"] as const)(
+      "refuses a code while the active attempt is under way or paid (%s)",
+      async (activePaymentState) => {
+        const scenario = await runSubmission({
+          payStateToken: await token(),
+          activePaymentAttemptId: "attempt-id",
+          activePaymentState,
+        });
+
+        expect(scenario.result).toEqual({
+          status: "unavailable",
+          reason: "checkout",
+          checkoutReason: "payment_in_progress",
+        });
+        expect(scenario.applyDiscountCode).not.toHaveBeenCalled();
+      }
+    );
+
+    test("discards the replacement when the payment completes during repricing", async () => {
+      const scenario = await runSubmission({
+        payStateToken: await token(),
+        activePaymentAttemptIdAfterPricing: "attempt-id",
+        activePaymentState: "paid",
+      });
+
+      expect(scenario.result).toEqual({
+        status: "unavailable",
+        reason: "checkout",
+        checkoutReason: "payment_in_progress",
+      });
+      expect(scenario.applyDiscountCode).toHaveBeenCalledTimes(1);
+    });
+
+    test.each(["failed", "cancelled", "expired"] as const)(
+      "applies a code once the active attempt has %s",
+      async (activePaymentState) => {
+        const scenario = await runSubmission({
+          payStateToken: await token(),
+          activePaymentAttemptId: "attempt-id",
+          activePaymentState,
+        });
+
+        expect(scenario.result.status).toBe("applied");
+        expect(scenario.applyDiscountCode).toHaveBeenCalledTimes(1);
+        expect(scenario.requireCurrent).toHaveBeenCalledTimes(2);
+      }
+    );
+  });
+
   test("discards a replacement summary when payment starts during repricing", async () => {
     const scenario = await runSubmission({
       activePaymentAttemptIdAfterPricing: "attempt-id",
@@ -1008,6 +1078,96 @@ describe("applyDiscountCodeToPayState", () => {
       await expectReplacementFromOneSeal(scenario.result);
     }
   );
+
+  describe("on an order-bound (payment retry) Pay state", () => {
+    const openFreshState = (freshPayUrl: string) =>
+      Effect.runPromise(
+        openPayState(
+          new URL(freshPayUrl, "https://deskohub.test").searchParams.get(
+            payStateTokenQueryParam
+          ) ?? ""
+        ).pipe(Effect.provide(TestSealedStateKeys))
+      );
+    const expectOrderBound = (
+      state: Awaited<ReturnType<typeof openFreshState>>
+    ) => {
+      expect(state.binding).toBe("order");
+      expect(state.retriedAttemptId).toBe("retried-attempt-id");
+      expect(state.checkoutSessionId).toBeUndefined();
+    };
+    const orderBoundToken = () => makePayStateToken({ orderBound: true });
+
+    test("guards the order with its binding and keeps it on an applied code", async () => {
+      const scenario = await runSubmission({
+        payStateToken: await orderBoundToken(),
+      });
+
+      expect(scenario.requireCurrent).toHaveBeenCalledTimes(2);
+      for (const [request] of scenario.requireCurrent.mock.calls) {
+        expect(request).toMatchObject({
+          orderId: "reservation-id",
+          binding: "order",
+        });
+        expect(request.checkoutSessionId).toBeUndefined();
+      }
+      if (scenario.result.status !== "applied") {
+        throw new Error("Expected applied result");
+      }
+      const freshState = await openFreshState(scenario.result.freshPayUrl);
+      expectOrderBound(freshState);
+      expect(freshState.submittedCode).toBe("SAVE20");
+    });
+
+    test("keeps the binding on a changed price", async () => {
+      const changedKeys = {
+        sectionKeys: ["order", "total"],
+        itemKeys: ["product:cowork:basic", "total:final"],
+      };
+      const scenario = await runSubmission({
+        payStateToken: await orderBoundToken(),
+        applyDiscountCode: mock(() =>
+          Effect.succeed({
+            kind: "cowork" as const,
+            reservation,
+            status: "pricing_changed" as const,
+            quote,
+            changedKeys,
+          })
+        ),
+      });
+
+      if (scenario.result.status !== "pricing_changed") {
+        throw new Error("Expected pricing_changed result");
+      }
+      const freshState = await openFreshState(scenario.result.freshPayUrl);
+      expectOrderBound(freshState);
+      expect(freshState.changedKeys).toEqual(changedKeys);
+    });
+
+    test("keeps the binding on a rejected code's replacement", async () => {
+      const scenario = await runSubmission({
+        payStateToken: await orderBoundToken(),
+        applyDiscountCode: mock(() =>
+          Effect.fail(
+            new PromotionCodeUnavailableError({
+              reason: "unknown_code",
+              message: "The submitted promotion code does not exist.",
+            })
+          )
+        ),
+      });
+
+      if (
+        scenario.result.status !== "unavailable" ||
+        scenario.result.freshPayUrl === undefined
+      ) {
+        throw new Error("Expected a rejected code's replacement");
+      }
+      const freshState = await openFreshState(scenario.result.freshPayUrl);
+      expectOrderBound(freshState);
+      expect(freshState.requestedDiscountCode).toBe("SAVE20");
+    });
+  });
 
   test("returns a rejected code's replacement with its sealed token and the code reason", async () => {
     const scenario = await runSubmission({

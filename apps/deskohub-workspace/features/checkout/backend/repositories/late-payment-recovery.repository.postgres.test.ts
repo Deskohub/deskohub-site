@@ -7,8 +7,10 @@ import {
 } from "@deskohub/dotypos";
 import { NexiOrderIdSchema, NexiWebhookEventIdSchema } from "@deskohub/nexi";
 import { eq } from "drizzle-orm";
+import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Effect } from "effect";
 import { toStoredInstant } from "@/db/instant";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   customerEvents,
   discountApplications,
@@ -17,8 +19,14 @@ import {
   discounts,
   latePaymentRecoveries,
   paymentAttempts,
+  promotionCodes,
+  referralAttributions,
+  referralCodes,
+  referralInvitationClaims,
   workspaceReservations,
 } from "@/db/schema";
+import { isDatabaseQueryError, isLockWaitTimeout } from "@/db/sql-constraint";
+import { WorkspaceLockSections } from "@/db/workspace-locks";
 import {
   checkoutSessionKeySchema,
   type PaymentAttemptId,
@@ -51,8 +59,17 @@ describe.skipIf(!testDatabase)(
     if (!testDatabase) return;
     const reservationIds: WorkspaceReservationId[] = [];
     const discountIds: string[] = [];
+    const promotionCodeIds: string[] = [];
 
     afterAll(async () => {
+      await testDatabase.pool.query(
+        "delete from referral_invitation_claims where payment_attempt_id in (select id from payment_attempts where workspace_reservation_id = any($1))",
+        [reservationIds]
+      );
+      await testDatabase.pool.query(
+        "delete from referral_attributions where promotion_code_id = any($1)",
+        [promotionCodeIds]
+      );
       await testDatabase.pool.query(
         "delete from discount_code_redemptions where payment_attempt_id in (select id from payment_attempts where workspace_reservation_id = any($1))",
         [reservationIds]
@@ -81,6 +98,11 @@ describe.skipIf(!testDatabase)(
       await testDatabase.pool.query(
         "delete from workspace_reservations where id = any($1)",
         [reservationIds]
+      );
+      // Deleting a promotion code also deletes its referral code.
+      await testDatabase.pool.query(
+        "delete from promotion_codes where id = any($1)",
+        [promotionCodeIds]
       );
     });
 
@@ -175,6 +197,42 @@ describe.skipIf(!testDatabase)(
       };
     };
 
+    /** Inserts a synthetic discount application on the checkout's attempt. */
+    const insertDiscountApplication = async (input: {
+      readonly reservationId: WorkspaceReservationId;
+      readonly paymentAttemptId: PaymentAttemptId;
+    }) => {
+      const [application] = await Effect.runPromise(
+        testDatabase.db
+          .insert(discountApplications)
+          .values({
+            paymentAttemptId: input.paymentAttemptId,
+            workspaceReservationId: input.reservationId,
+            sequence: 0,
+            publicDiscountId: "synthetic-discount",
+            label: "Synthetic discount",
+            adjustment: { kind: "percentage", basisPoints: 1000 },
+            productIdentity: { kind: "cowork", tier: "basic" },
+            subtotalBeforeValue: 32_200,
+            subtotalBeforeExponent: 2,
+            subtotalBeforeCurrency: "CZK",
+            appliedAmountValue: 3200,
+            appliedAmountExponent: 2,
+            appliedAmountCurrency: "CZK",
+            subtotalAfterValue: 29_000,
+            subtotalAfterExponent: 2,
+            subtotalAfterCurrency: "CZK",
+            provenance: {
+              providerNamespace: "synthetic",
+              providerReference: "synthetic",
+            },
+          })
+          .returning({ id: discountApplications.id })
+      );
+      if (!application) throw new Error("Discount application insert failed.");
+      return application.id;
+    };
+
     /** Reserves a synthetic discount-code claim for the checkout's attempt. */
     const insertDiscountClaim = async (input: {
       readonly reservationId: WorkspaceReservationId;
@@ -205,38 +263,11 @@ describe.skipIf(!testDatabase)(
           discountId,
         })
       );
-      const [application] = await Effect.runPromise(
-        testDatabase.db
-          .insert(discountApplications)
-          .values({
-            paymentAttemptId: input.paymentAttemptId,
-            workspaceReservationId: input.reservationId,
-            sequence: 0,
-            publicDiscountId: "synthetic-discount",
-            label: "Synthetic discount",
-            adjustment: { kind: "percentage", basisPoints: 1000 },
-            productIdentity: { kind: "cowork", tier: "basic" },
-            subtotalBeforeValue: 32_200,
-            subtotalBeforeExponent: 2,
-            subtotalBeforeCurrency: "CZK",
-            appliedAmountValue: 3200,
-            appliedAmountExponent: 2,
-            appliedAmountCurrency: "CZK",
-            subtotalAfterValue: 29_000,
-            subtotalAfterExponent: 2,
-            subtotalAfterCurrency: "CZK",
-            provenance: {
-              providerNamespace: "synthetic",
-              providerReference: "synthetic",
-            },
-          })
-          .returning({ id: discountApplications.id })
-      );
-      if (!application) throw new Error("Discount application insert failed.");
+      const applicationId = await insertDiscountApplication(input);
       await Effect.runPromise(
         testDatabase.db.insert(discountCodeRedemptions).values({
           codeId,
-          applicationId: application.id,
+          applicationId,
           paymentAttemptId: input.paymentAttemptId,
           dotyposCustomerId: DotyposCustomerIdSchema.make(
             `customer-${input.id}`
@@ -1465,6 +1496,215 @@ describe.skipIf(!testDatabase)(
       expect(attempt?.state).toBe("created");
       expect(reservation?.paymentState).toBe("expired");
       expect(recoveries[0]?.state).toBe("processing");
+    });
+
+    describe("settlement inside the order's lock section", () => {
+      const advisoryLock = WorkspaceDatabaseAdvisoryLock.makeLayer(
+        testDatabase.pool
+      );
+      const referralGraphLock = ["referral-attribution", "graph"] as const;
+
+      /** Runs `operation` inside the order's lock section, as recovery's hold work does. */
+      const runInOrderSection = <A, E>(
+        workspaceReservationId: WorkspaceReservationId,
+        operation: (
+          repository: typeof LatePaymentRecoveryRepository.Service
+        ) => Effect.Effect<A, E>
+      ) =>
+        Effect.runPromise(
+          WorkspaceLockSections.reservationOrder(workspaceReservationId)(
+            Effect.gen(function* () {
+              return yield* operation(yield* LatePaymentRecoveryRepository);
+            })
+          ).pipe(
+            Effect.provide(LatePaymentRecoveryRepository.Default),
+            Effect.provide(testDatabase.layer),
+            Effect.provide(advisoryLock),
+            Effect.result
+          )
+        );
+
+      type LatePaidCheckout = Awaited<
+        ReturnType<typeof insertLatePaidCheckout>
+      >;
+
+      /** A late-paid checkout whose attempt claimed a referral invitation, so settlement records a referral. */
+      const insertReferralCheckout = async () => {
+        const checkout = await insertLatePaidCheckout({
+          reservationState: "cancelled",
+          holdExpiresAt: Temporal.Now.instant().subtract({ minutes: 30 }),
+        });
+        const referrerDotyposCustomerId = DotyposCustomerIdSchema.make(
+          `referrer-${checkout.id}`
+        );
+        const [promotion] = await Effect.runPromise(
+          testDatabase.db
+            .insert(promotionCodes)
+            .values({
+              kind: "referral",
+              code: canonicalPromotionCodeSchema.make(
+                `REF-${checkout.id.toUpperCase()}`
+              ),
+              enabled: true,
+            })
+            .returning({ id: promotionCodes.id })
+        );
+        if (!promotion) throw new Error("Promotion code insert failed.");
+        promotionCodeIds.push(promotion.id);
+        await Effect.runPromise(
+          testDatabase.db.insert(referralCodes).values({
+            promotionCodeId: promotion.id,
+            referrerDotyposCustomerId,
+          })
+        );
+        const applicationId = await insertDiscountApplication(checkout);
+        await Effect.runPromise(
+          testDatabase.db.insert(referralInvitationClaims).values({
+            invitedDotyposCustomerId: checkout.dotyposCustomerId,
+            referrerDotyposCustomerId,
+            promotionCodeId: promotion.id,
+            applicationId,
+            paymentAttemptId: checkout.paymentAttemptId,
+            state: "reserved",
+            reservationExpiresAt: Temporal.Now.instant().add({ hours: 1 }),
+          })
+        );
+        await startAndClaim(checkout);
+        return {
+          checkout,
+          referrerDotyposCustomerId,
+          promotionCodeId: promotion.id,
+        };
+      };
+
+      const settleWithReplacement =
+        (checkout: LatePaidCheckout) =>
+        (repository: typeof LatePaymentRecoveryRepository.Service) =>
+          repository.completeWithReplacement({
+            paymentAttemptId: checkout.paymentAttemptId,
+            workspaceReservationId: checkout.reservationId,
+            recoveredDotyposReservationId: DotyposReservationIdSchema.make(
+              `dotypos-replacement-${checkout.id}`
+            ),
+            reservationState: "confirmed",
+            completedAt: Temporal.Now.instant(),
+          });
+
+      /** Every row settlement may write, as plain JSON so instants compare by value. */
+      const readSettlementRows = async (checkout: LatePaidCheckout) => {
+        const [claim] = await Effect.runPromise(
+          testDatabase.db
+            .select()
+            .from(referralInvitationClaims)
+            .where(
+              eq(
+                referralInvitationClaims.paymentAttemptId,
+                checkout.paymentAttemptId
+              )
+            )
+        );
+        const attributions = await Effect.runPromise(
+          testDatabase.db
+            .select()
+            .from(referralAttributions)
+            .where(
+              eq(
+                referralAttributions.invitedDotyposCustomerId,
+                checkout.dotyposCustomerId
+              )
+            )
+        );
+        return JSON.parse(
+          JSON.stringify({
+            ...(await readRows(checkout)),
+            claim,
+            attributions,
+            events: await readCustomerEvents(checkout.reservationId),
+          })
+        );
+      };
+
+      const expectRecoveredWithReferral = async (
+        referral: Awaited<ReturnType<typeof insertReferralCheckout>>
+      ) => {
+        const rows = await readSettlementRows(referral.checkout);
+        expect(rows.reservation?.paymentState).toBe("paid");
+        expect(rows.attempt?.state).toBe("paid");
+        expect(rows.recoveries).toHaveLength(1);
+        expect(rows.recoveries[0]?.state).toBe("recovered");
+        expect(rows.claim?.state).toBe("redeemed");
+        expect(rows.attributions).toHaveLength(1);
+        expect(rows.attributions[0]?.referrerDotyposCustomerId).toBe(
+          referral.referrerDotyposCustomerId
+        );
+        expect(rows.attributions[0]?.promotionCodeId).toBe(
+          referral.promotionCodeId
+        );
+      };
+
+      test("settles a recovery that records a referral", async () => {
+        const referral = await insertReferralCheckout();
+
+        const settled = await runInOrderSection(
+          referral.checkout.reservationId,
+          settleWithReplacement(referral.checkout)
+        );
+
+        expect(settled._tag).toBe("Success");
+        await expectRecoveredWithReferral(referral);
+      });
+
+      test("times out on a referral-graph lock held elsewhere, changes nothing, and settles once it is free", {
+        timeout: 30_000,
+      }, async () => {
+        const referral = await insertReferralCheckout();
+        const { checkout } = referral;
+        const before = await readSettlementRows(checkout);
+        expect(before.recoveries[0]?.state).toBe("processing");
+        expect(before.claim?.state).toBe("reserved");
+
+        const blocker = await testDatabase.pool.connect();
+        let blocked: Awaited<ReturnType<typeof runInOrderSection>> | undefined;
+        let waitedMillis = 0;
+        try {
+          await blocker.query("begin");
+          await blocker.query(
+            "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+            referralGraphLock
+          );
+          const startedAt = performance.now();
+          blocked = await runInOrderSection(
+            checkout.reservationId,
+            settleWithReplacement(checkout)
+          );
+          waitedMillis = performance.now() - startedAt;
+          expect(await readSettlementRows(checkout)).toEqual(before);
+          await blocker.query("commit");
+        } finally {
+          await blocker.query("rollback").catch(() => undefined);
+          blocker.release();
+        }
+
+        expect(blocked?._tag).toBe("Failure");
+        // The bounded wait's statement fails through Drizzle with Postgres's
+        // lock timeout, an expected failure the recovery queue retries.
+        const error = blocked?._tag === "Failure" ? blocked.failure : undefined;
+        expect(error).toBeInstanceOf(EffectDrizzleQueryError);
+        expect(isDatabaseQueryError(error) && isLockWaitTimeout(error)).toBe(
+          true
+        );
+        expect(waitedMillis).toBeGreaterThanOrEqual(4_900);
+        expect(waitedMillis).toBeLessThan(15_000);
+        expect(await readSettlementRows(checkout)).toEqual(before);
+
+        const retried = await runInOrderSection(
+          checkout.reservationId,
+          settleWithReplacement(checkout)
+        );
+
+        expect(retried._tag).toBe("Success");
+        await expectRecoveredWithReferral(referral);
+      });
     });
   }
 );

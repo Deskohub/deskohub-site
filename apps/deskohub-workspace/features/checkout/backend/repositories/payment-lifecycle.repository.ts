@@ -86,6 +86,7 @@ import {
   moneyWithValue,
   sameMoneyUnit,
 } from "@/shared/money/money";
+import { LatePaymentRecoveryRepository } from "./late-payment-recovery.repository";
 import {
   type PaymentAttempt,
   toPaymentAttempt,
@@ -115,6 +116,18 @@ export class PaymentLifecycleStateError extends Data.TaggedError(
   readonly message: string;
 }> {}
 
+/**
+ * No new payment of the order may start: a late payment of one of its
+ * earlier attempts is being, or was, recovered, so money already arrived
+ * for it.
+ */
+export class PaymentAdmissionRefusedError extends Data.TaggedError(
+  "PaymentAdmissionRefusedError"
+)<{
+  readonly workspaceReservationId: WorkspaceReservationId;
+  readonly reason: "late_payment_recovery";
+}> {}
+
 interface PaymentLifecycleTransition {
   readonly attempt: PaymentAttempt;
   readonly changed: boolean;
@@ -139,7 +152,10 @@ export interface IPaymentLifecycleRepository {
     readonly commitment: DiscountCommitment;
     readonly locale: Locale;
     readonly accountingSnapshot: AccountingDocumentSnapshot;
-  }) => Effect.Effect<PaymentAttempt, PaymentLifecycleRepositoryError>;
+  }) => Effect.Effect<
+    PaymentAttempt,
+    PaymentLifecycleRepositoryError | PaymentAdmissionRefusedError
+  >;
   readonly completeInternalPayment: (input: {
     readonly workspaceReservationId: WorkspaceReservationId;
     readonly amount: Money;
@@ -148,7 +164,7 @@ export interface IPaymentLifecycleRepository {
     readonly accountingSnapshot: AccountingDocumentSnapshot;
   }) => Effect.Effect<
     PaymentLifecycleTransition,
-    PaymentLifecycleRepositoryError
+    PaymentLifecycleRepositoryError | PaymentAdmissionRefusedError
   >;
   readonly attachProviderSession: (input: {
     readonly id: PaymentAttemptId;
@@ -203,6 +219,29 @@ export class PaymentLifecycleRepository extends Context.Service<
     Effect.gen(function* () {
       const { db, transaction } = yield* WorkspaceDatabase;
       const sealedSnapshots = yield* sealedAccountingDocumentSnapshots;
+      const latePaymentRecoveries = yield* LatePaymentRecoveryRepository;
+
+      /**
+       * Refuses a new payment of an order with a late-payment recovery. Runs
+       * in the admission transaction after the order's row lock. Recovery
+       * start takes the same first-booking lock and row lock before it
+       * records a recovery, so an admission either sees the recovery or
+       * commits first, and recovery then finds a newer attempt active.
+       */
+      const requireNoLatePaymentRecovery = Effect.fnUntraced(function* (
+        workspaceReservationId: WorkspaceReservationId
+      ) {
+        const recovery =
+          yield* latePaymentRecoveries.findLatestByWorkspaceReservationId(
+            workspaceReservationId
+          );
+        if (recovery) {
+          return yield* new PaymentAdmissionRefusedError({
+            workspaceReservationId,
+            reason: "late_payment_recovery",
+          });
+        }
+      });
 
       const createPendingNexiAttempt = Effect.fn(
         "PaymentLifecycleRepository.createPendingNexiAttempt"
@@ -289,6 +328,8 @@ export class PaymentLifecycleRepository extends Context.Service<
                   "Payment attempts can only be created for a current held reservation.",
               });
             }
+
+            yield* requireNoLatePaymentRecovery(input.workspaceReservationId);
 
             yield* validateFirstBookingPaymentAdmission({
               dotyposCustomerId: reservation.dotyposCustomerId,
@@ -493,6 +534,8 @@ export class PaymentLifecycleRepository extends Context.Service<
                 "Internal payments can only complete a current held unpaid reservation."
               );
             }
+
+            yield* requireNoLatePaymentRecovery(input.workspaceReservationId);
 
             yield* validateFirstBookingPaymentAdmission({
               dotyposCustomerId: reservation.dotyposCustomerId,
@@ -913,7 +956,16 @@ export class PaymentLifecycleRepository extends Context.Service<
         markPaid,
         markTerminal,
       } satisfies IPaymentLifecycleRepository;
-    }).pipe(Effect.provide(AccountingSnapshotKeyService.Default))
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          AccountingSnapshotKeyService.Default,
+          // Suspended: the recovery repository's module imports this one, so
+          // its layer is read when this one is built, not when it's declared.
+          Layer.suspend(() => LatePaymentRecoveryRepository.Default)
+        )
+      )
+    )
   );
 }
 

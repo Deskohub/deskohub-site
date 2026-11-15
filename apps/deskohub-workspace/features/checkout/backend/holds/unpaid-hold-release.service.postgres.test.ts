@@ -14,6 +14,7 @@ import { Effect, Layer } from "effect";
 import { workspaceReservations } from "@/db/schema";
 import {
   type IWorkspaceReservationRepository,
+  type ReservationHoldIdentity,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
@@ -140,6 +141,66 @@ describe.skipIf(!postgresDatabase)(
 
     const heldHold = () => newReservation({ stage: { reservation: "held" } });
 
+    /** The hold a reservation row has; fixture rows past `held` set an expiry. */
+    const holdOf = (row: {
+      readonly dotyposReservationId: DotyposReservationId | null;
+      readonly reservationHoldExpiresAt: Temporal.Instant | null;
+    }): ReservationHoldIdentity => ({
+      dotyposReservationId: row.dotyposReservationId!,
+      reservationHoldExpiresAt: row.reservationHoldExpiresAt!,
+    });
+
+    /** A reservation at `stage` that still has an expiring hold. */
+    const withHold = (
+      reservation: "cancelling" | "cancellation_failed",
+      overrides: ReservationFixtureInput["overrides"] = {}
+    ) =>
+      newReservation({
+        stage: { reservation },
+        overrides: {
+          reservationHoldExpiresAt: Temporal.Now.instant(),
+          ...overrides,
+        },
+      });
+
+    const newHold = (): ReservationHoldIdentity => ({
+      dotyposReservationId: DotyposReservationIdSchema.make(
+        `retry-hold-${crypto.randomUUID()}`
+      ),
+      reservationHoldExpiresAt: Temporal.Now.instant().add({ minutes: 10 }),
+    });
+
+    const writeRow = (
+      id: WorkspaceReservationId,
+      values: Partial<typeof workspaceReservations.$inferInsert>
+    ) =>
+      postgres.db
+        .update(workspaceReservations)
+        .set(values)
+        .where(eq(workspaceReservations.id, id))
+        .pipe(Effect.asVoid);
+
+    /**
+     * What a payment retry will do to a released hold's reservation: its
+     * hold cancelled by cleanup, then held again with `next`, a new Dotypos
+     * hold and expiry. Written directly, since the retry doesn't exist yet.
+     */
+    const reacquire = (id: WorkspaceReservationId, next: ReservationHoldIdentity) =>
+      writeRow(id, {
+        reservationState: "cancelled",
+        reservationCancelledAt: Temporal.Now.instant(),
+        cancellationCause: "hold_expired",
+      }).pipe(
+        Effect.andThen(
+          writeRow(id, {
+            reservationState: "held",
+            reservationCancelledAt: null,
+            cancellationCause: null,
+            ...next,
+          })
+        )
+      );
+
     /** A late payment's release of the hold the reservation names. */
     const latePayment = (hold: {
       readonly id: WorkspaceReservationId;
@@ -153,10 +214,15 @@ describe.skipIf(!postgresDatabase)(
     describe("for an expired hold", () => {
       const holdExpiredAt = Temporal.Instant.from("2026-07-01T08:00:00Z");
 
-      const expired = (hold: { readonly id: WorkspaceReservationId }) =>
+      const expired = (hold: {
+        readonly id: WorkspaceReservationId;
+        readonly dotyposReservationId: DotyposReservationId | null;
+        readonly reservationHoldExpiresAt: Temporal.Instant | null;
+      }) =>
         ({
           reason: "hold_expired",
           reservationId: hold.id,
+          expectedHold: holdOf(hold),
           holdExpiredAt,
         }) satisfies UnpaidHoldReleaseRequest;
 
@@ -169,14 +235,57 @@ describe.skipIf(!postgresDatabase)(
         [
           "a hold whose cancellation failed before",
           () =>
-            newReservation({
-              stage: { reservation: "cancellation_failed" },
-              overrides: { failureCode: "dotypos_cancel_failed" },
+            withHold("cancellation_failed", {
+              failureCode: "dotypos_cancel_failed",
+              cancellationCause: "hold_expired",
             }),
         ],
         [
           "a cancellation another run claimed",
-          () => newReservation({ stage: { reservation: "cancelling" } }),
+          () => withHold("cancelling", { cancellationCause: "hold_expired" }),
+        ],
+      ] as const;
+
+      /**
+       * Holds an earlier cleanup or retry claimed, whose cancel may have
+       * gone through without its run seeing it.
+       */
+      const ownEarlierReleases = [
+        [
+          "a hold whose cleanup cancel failed before",
+          () =>
+            withHold("cancellation_failed", {
+              failureCode: "dotypos_cancel_failed",
+              cancellationCause: "hold_expired",
+            }),
+        ],
+        [
+          "a hold whose retry cancel failed before",
+          () =>
+            withHold("cancellation_failed", {
+              failureCode: "dotypos_cancel_failed",
+              cancellationCause: "payment_retry",
+            }),
+        ],
+        [
+          "a cancellation another cleanup claimed",
+          () => withHold("cancelling", { cancellationCause: "hold_expired" }),
+        ],
+      ] as const;
+
+      /** Holds no cleanup or retry of ours claimed before. */
+      const holdsWithoutOwnRelease = [
+        ["a held hold", () => heldHold()],
+        [
+          "a hold whose cancellation failed before the cause was recorded",
+          () =>
+            withHold("cancellation_failed", {
+              failureCode: "dotypos_cancel_failed",
+            }),
+        ],
+        [
+          "a cancellation a supersession claimed",
+          () => withHold("cancelling", { cancellationCause: "supersession" }),
         ],
       ] as const;
 
@@ -207,11 +316,12 @@ describe.skipIf(!postgresDatabase)(
           expect(await rowOf(hold.id)).toMatchObject({
             reservationState: "cancelled",
             reservationHoldExpiredAt: holdExpiredAt,
+            cancellationCause: "hold_expired",
           });
         }
       );
 
-      test.each(releasableHolds)(
+      test.each(ownEarlierReleases)(
         "records the cancellation of %s that Dotypos already cancelled without cancelling again",
         async (_, makeHold) => {
           const hold = await makeHold();
@@ -229,6 +339,29 @@ describe.skipIf(!postgresDatabase)(
           expect(await rowOf(hold.id)).toMatchObject({
             reservationState: "cancelled",
             reservationHoldExpiredAt: holdExpiredAt,
+            cancellationCause: "hold_expired",
+          });
+        }
+      );
+
+      test.each(holdsWithoutOwnRelease)(
+        "records %s that Dotypos cancelled without us as cancelled by the provider",
+        async (_, makeHold) => {
+          const hold = await makeHold();
+          const dotypos = makeDotypos(hold.id, "CANCELLED");
+
+          const outcome = await release(expired(hold), dotypos);
+
+          expect(outcome).toMatchObject({
+            _tag: "Success",
+            success: { providerCancelled: { id: hold.id } },
+          });
+          expect(dotypos.calls).toEqual([
+            "getReservationStatus while cancelling",
+          ]);
+          expect(await rowOf(hold.id)).toMatchObject({
+            reservationState: "cancelled",
+            cancellationCause: "provider_cancelled",
           });
         }
       );
@@ -340,6 +473,137 @@ describe.skipIf(!postgresDatabase)(
         expect(await rowOf(hold.id)).toMatchObject({
           reservationState: "cancelled",
           reservationHoldExpiredAt: null,
+        });
+      });
+    });
+
+    describe("for an expired hold a payment retry replaced since", () => {
+      /**
+       * A cleanup that read the first hold, run after a payment retry gave
+       * the reservation its second hold.
+       */
+      const staleCleanup = (
+        id: WorkspaceReservationId,
+        first: ReservationHoldIdentity
+      ): UnpaidHoldReleaseRequest => ({
+        reason: "hold_expired",
+        reservationId: id,
+        expectedHold: first,
+        holdExpiredAt: Temporal.Now.instant(),
+      });
+
+      const secondHoldStates = [
+        ["held", {}],
+        [
+          "cancelling for another cleanup",
+          { reservationState: "cancelling", cancellationCause: "hold_expired" },
+        ],
+        [
+          "cancellation_failed",
+          {
+            reservationState: "cancellation_failed",
+            cancellationCause: "hold_expired",
+            failureCode: "dotypos_cancel_failed",
+          },
+        ],
+      ] as const;
+
+      test.each(secondHoldStates)(
+        "can't claim or cancel the second hold while it is %s",
+        async (_, secondState) => {
+          const hold = await heldHold();
+          const first = holdOf(hold);
+          const second = newHold();
+          await reacquire(hold.id, second).pipe(
+            Effect.andThen(writeRow(hold.id, secondState)),
+            Effect.runPromise
+          );
+          const before = await rowOf(hold.id);
+          const dotypos = makeDotypos(hold.id, "NEW");
+
+          const outcome = await release(staleCleanup(hold.id, first), dotypos);
+
+          expect(outcome).toMatchObject({
+            _tag: "Success",
+            success: "unclaimed",
+          });
+          expect(dotypos.calls).toEqual([]);
+          expect(await rowOf(hold.id)).toEqual(before);
+        }
+      );
+
+      /**
+       * While this run cancels the first hold in Dotypos, another run
+       * finishes it, a payment retry takes the second hold, and another
+       * cleanup claims that one.
+       */
+      const replaceDuringCancel = (
+        id: WorkspaceReservationId,
+        second: ReservationHoldIdentity
+      ) =>
+        reacquire(id, second).pipe(
+          Effect.andThen(
+            elsewhere((reservations) =>
+              reservations.claimCancellation(id, "hold_expired", second)
+            )
+          ),
+          Effect.orDie
+        );
+
+      test("a delayed run can't mark the second hold's cancellation cancelled", async () => {
+        const hold = await heldHold();
+        const second = newHold();
+        const dotypos = makeDotypos(hold.id, "NEW");
+        dotypos.cancelReservation.mockImplementationOnce(() =>
+          replaceDuringCancel(hold.id, second)
+        );
+
+        const outcome = await release(
+          staleCleanup(hold.id, holdOf(hold)),
+          dotypos
+        );
+
+        expect(outcome).toMatchObject({
+          _tag: "Success",
+          success: "state_changed",
+        });
+        expect(dotypos.cancelReservation).toHaveBeenCalledTimes(1);
+        expect(dotypos.cancelReservation).toHaveBeenCalledWith(
+          hold.dotyposReservationId
+        );
+        expect(await rowOf(hold.id)).toMatchObject({
+          reservationState: "cancelling",
+          dotyposReservationId: second.dotyposReservationId,
+        });
+      });
+
+      test("a delayed run can't mark the second hold's cancellation failed", async () => {
+        const hold = await heldHold();
+        const second = newHold();
+        const dotypos = makeDotypos(hold.id, "NEW");
+        dotypos.cancelReservation.mockImplementationOnce(() =>
+          replaceDuringCancel(hold.id, second).pipe(
+            Effect.andThen(Effect.fail(dotyposUnavailable("cancelReservation")))
+          )
+        );
+
+        const outcome = await release(
+          staleCleanup(hold.id, holdOf(hold)),
+          dotypos
+        );
+
+        expect(outcome).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "DotyposUnavailable" },
+        });
+        expect(dotypos.cancelReservation).toHaveBeenCalledTimes(1);
+        expect(dotypos.cancelReservation).toHaveBeenCalledWith(
+          hold.dotyposReservationId
+        );
+        expect(await rowOf(hold.id)).toMatchObject({
+          reservationState: "cancelling",
+          dotyposReservationId: second.dotyposReservationId,
+          failureCode: null,
         });
       });
     });
@@ -613,6 +877,185 @@ describe.skipIf(!postgresDatabase)(
           "cancellation_failed"
         );
       });
+    });
+
+    describe("for a payment retry", () => {
+      const retry = (hold: {
+        readonly id: WorkspaceReservationId;
+        readonly dotyposReservationId: DotyposReservationId | null;
+        readonly reservationHoldExpiresAt: Temporal.Instant | null;
+      }): UnpaidHoldReleaseRequest => ({
+        reason: "payment_retry",
+        reservationId: hold.id,
+        expectedHold: holdOf(hold),
+      });
+
+      const staleCancelling = () =>
+        withHold("cancelling", {
+          cancellationCause: "hold_expired",
+          updatedAt: Temporal.Now.instant().subtract({ minutes: 30 }),
+        });
+
+      test.each([
+        ["a held hold", () => heldHold()],
+        [
+          "a hold whose cancellation failed before",
+          () =>
+            withHold("cancellation_failed", {
+              failureCode: "dotypos_cancel_failed",
+            }),
+        ],
+        ["a stale cancellation", staleCancelling],
+      ] as const)(
+        "claims %s, then cancels it once Dotypos reports it NEW",
+        async (_, makeHold) => {
+          const hold = await makeHold();
+          const dotypos = makeDotypos(hold.id, "NEW");
+
+          const outcome = await release(retry(hold), dotypos);
+
+          expect(outcome).toMatchObject({
+            _tag: "Success",
+            success: { released: { id: hold.id } },
+          });
+          expect(dotypos.calls).toEqual([
+            "getReservationStatus while cancelling",
+            "cancelReservation while cancelling",
+          ]);
+          expect(dotypos.cancelReservation).toHaveBeenCalledWith(
+            hold.dotyposReservationId
+          );
+          expect(await rowOf(hold.id)).toMatchObject({
+            reservationState: "cancelled",
+            reservationHoldExpiredAt: null,
+          });
+        }
+      );
+
+      test("records its cause on the hold it released", async () => {
+        const hold = await heldHold();
+
+        await release(retry(hold), makeDotypos(hold.id, "NEW"));
+
+        expect((await rowOf(hold.id)).cancellationCause).toBe("payment_retry");
+      });
+
+      test("records a held hold Dotypos cancelled without us as cancelled by the provider", async () => {
+        const hold = await heldHold();
+        const dotypos = makeDotypos(hold.id, "CANCELLED");
+
+        const outcome = await release(retry(hold), dotypos);
+
+        expect(outcome).toMatchObject({
+          _tag: "Success",
+          success: { providerCancelled: { id: hold.id } },
+        });
+        expect(dotypos.cancelReservation).not.toHaveBeenCalled();
+        expect(await rowOf(hold.id)).toMatchObject({
+          reservationState: "cancelled",
+          cancellationCause: "provider_cancelled",
+        });
+      });
+
+      test("accepts a hold its own earlier cancel released", async () => {
+        const hold = await withHold("cancellation_failed", {
+          failureCode: "dotypos_cancel_failed",
+          cancellationCause: "payment_retry",
+        });
+        const dotypos = makeDotypos(hold.id, "CANCELLED");
+
+        const outcome = await release(retry(hold), dotypos);
+
+        expect(outcome).toMatchObject({
+          _tag: "Success",
+          success: { released: { id: hold.id } },
+        });
+        expect(await rowOf(hold.id)).toMatchObject({
+          reservationState: "cancelled",
+          cancellationCause: "payment_retry",
+        });
+      });
+
+      test("reports a cancelled hold as released without asking Dotypos", async () => {
+        const hold = await newReservation({
+          stage: { reservation: "cancelled" },
+          overrides: {
+            reservationHoldExpiresAt: Temporal.Now.instant(),
+            cancellationCause: "hold_expired",
+          },
+        });
+        const dotypos = makeDotypos(hold.id);
+
+        const outcome = await release(retry(hold), dotypos);
+
+        expect(outcome).toMatchObject({
+          _tag: "Success",
+          success: "already_released",
+        });
+        expect(dotypos.calls).toEqual([]);
+      });
+
+      test("waits out a fresh cancellation another run owns", async () => {
+        const hold = await withHold("cancelling", {
+          cancellationCause: "hold_expired",
+        });
+        const dotypos = makeDotypos(hold.id);
+
+        const outcome = await release(retry(hold), dotypos);
+
+        expect(outcome).toMatchObject({
+          _tag: "Success",
+          success: "in_progress",
+        });
+        expect(dotypos.calls).toEqual([]);
+        expect((await rowOf(hold.id)).reservationState).toBe("cancelling");
+      });
+
+      test("refuses a hold Dotypos confirmed and marks its cancellation failed", async () => {
+        const hold = await heldHold();
+        const dotypos = makeDotypos(hold.id, "CONFIRMED");
+
+        const outcome = await release(retry(hold), dotypos);
+
+        expect(outcome).toMatchObject({
+          _tag: "Success",
+          success: { refused: "CONFIRMED" },
+        });
+        expect(dotypos.cancelReservation).not.toHaveBeenCalled();
+        expect(await rowOf(hold.id)).toMatchObject({
+          reservationState: "cancellation_failed",
+          failureCode: "dotypos_cancel_failed",
+          cancellationCause: "payment_retry",
+        });
+      });
+
+      test.each([
+        ["held", () => heldHold()],
+        ["a stale cancellation", staleCancelling],
+      ] as const)(
+        "leaves %s with another hold than the retry read unclaimed",
+        async (_, makeHold) => {
+          const hold = await makeHold();
+          const before = await rowOf(hold.id);
+          const dotypos = makeDotypos(hold.id);
+
+          const outcome = await release(
+            {
+              reason: "payment_retry",
+              reservationId: hold.id,
+              expectedHold: newHold(),
+            },
+            dotypos
+          );
+
+          expect(outcome).toMatchObject({
+            _tag: "Success",
+            success: "unclaimed",
+          });
+          expect(dotypos.calls).toEqual([]);
+          expect(await rowOf(hold.id)).toEqual(before);
+        }
+      );
     });
 
     describe("for an agent's rotated hold", () => {

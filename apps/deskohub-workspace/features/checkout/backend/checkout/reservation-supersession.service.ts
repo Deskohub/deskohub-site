@@ -38,14 +38,23 @@ export class ReservationSupersessionService extends Context.Service<
 
       return {
         findCurrent: Effect.fn("reservationSupersession.findCurrent")((input) =>
-          payableReservations.requireCurrent(input).pipe(
-            Effect.map((reservation) =>
-              isReservationSupersedable(reservation) ? reservation : undefined
-            ),
-            Effect.catchTag("PayableReservationUnavailableError", () =>
-              Effect.succeed(undefined)
+          // Only a session's own order can be superseded by a resubmission
+          // of that session, so the guard is asked with the session alone:
+          // an order-bound (payment retry) state names no session and is
+          // never current here, even when handed in whole.
+          payableReservations
+            .requireCurrent({
+              orderId: input.orderId,
+              checkoutSessionId: input.checkoutSessionId,
+            })
+            .pipe(
+              Effect.map((reservation) =>
+                isReservationSupersedable(reservation) ? reservation : undefined
+              ),
+              Effect.catchTag("PayableReservationUnavailableError", () =>
+                Effect.succeed(undefined)
+              )
             )
-          )
         ),
       } satisfies IReservationSupersessionService;
     })

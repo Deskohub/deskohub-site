@@ -663,6 +663,7 @@ const cancelSupersededHold = Effect.fn("preparePayState.cancelSupersededHold")(
         dotyposReservationId,
         liveStatus: "require_new",
         failureCode: "checkout_supersession_cancel_failed",
+        failureMarkerFence: "none",
       })
       .pipe(
         Effect.flatMap((release) =>
@@ -850,7 +851,8 @@ const supersedeSessionReservation = Effect.fnUntraced(function* (input: {
   const { reservations, availability } = input.services;
   const { checkoutSessionId, request } = input;
   const claimed = yield* reservations.claimSupersessionCancellation(
-    input.currentReservation.id
+    input.currentReservation.id,
+    "supersession"
   );
   if (!claimed) {
     return { kind: "retry", checkoutSessionId } satisfies ReservationDraftStep;

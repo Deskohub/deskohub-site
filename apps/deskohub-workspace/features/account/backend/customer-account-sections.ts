@@ -1,6 +1,12 @@
 import { Context, Data, Effect, Layer, Option } from "effect";
+import type { SqlError } from "effect/unstable/sql";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { WorkspaceLockSections } from "@/db/workspace-locks";
+import {
+  holdSections,
+  WorkspaceLockSectionSpecs,
+  WorkspaceLockSections,
+} from "@/db/workspace-locks";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import {
   CustomerAccountAccessError,
   type CustomerAccountId,
@@ -50,6 +56,18 @@ type OptionalAccountSection<A, E, R> = (
   accountId: CustomerAccountId | null
 ) => Effect.Effect<A, E, R>;
 
+type OptionalAccountSectionOptions = {
+  /**
+   * Also holds this order's section while the work runs. With a signed-in
+   * session both sections are held in one combined entry, the account's
+   * before the order's, on one connection under one pool permit; otherwise
+   * the order's section is held alone. A call inside an enclosing account
+   * section dies before any lock is requested, since the order's section
+   * would nest and take a second permit.
+   */
+  readonly reservationOrder: WorkspaceReservationId;
+};
+
 interface ICustomerAccountSections {
   /**
    * Runs `section` holding the account lock on its own connection, after the
@@ -82,9 +100,20 @@ interface ICustomerAccountSections {
    * outside production), runs it without a lock and with a null account.
    * Any other session failure fails closed before the section runs.
    */
-  readonly withOptionalAccount: <A, E, R>(
-    section: OptionalAccountSection<A, E, R>
-  ) => Effect.Effect<A, E | CustomerAccountAccessError, R>;
+  readonly withOptionalAccount: {
+    <A, E, R>(
+      section: OptionalAccountSection<A, E, R>
+    ): Effect.Effect<A, E | CustomerAccountAccessError, R>;
+    /**
+     * Holds the order's section too (`OptionalAccountSectionOptions`). The
+     * combined entry's own failure maps like the account lock's; the order
+     * section's own failure, held alone, is its `SqlError`.
+     */
+    <A, E, R>(
+      section: OptionalAccountSection<A, E, R>,
+      options: OptionalAccountSectionOptions
+    ): Effect.Effect<A, E | CustomerAccountAccessError | SqlError.SqlError, R>;
+  };
 }
 
 export class CustomerAccountSections extends Context.Service<
@@ -135,40 +164,60 @@ export class CustomerAccountSections extends Context.Service<
           return { accountId, email: activity.email };
         });
 
+      /** This account's hold by an enclosing section, if there is one. */
+      const enclosingHold = (accountId: CustomerAccountId) =>
+        Effect.map(
+          Effect.serviceOption(HeldCustomerAccount),
+          Option.filter((held) => held.accountId === accountId)
+        );
+
+      /** Runs `section` after the recheck, with the rechecked account held. */
+      const afterRecheck = <A, E, R>(
+        accountId: CustomerAccountId,
+        recheckKind: CustomerAccountRecheck,
+        section: Effect.Effect<A, E, R>
+      ) =>
+        recheck(accountId, recheckKind).pipe(
+          Effect.flatMap((held) =>
+            Effect.provideService(section, HeldCustomerAccount, held)
+          )
+        );
+
       const withActiveAccount: ICustomerAccountSections["withActiveAccount"] = (
         accountId,
         section,
         options
       ) =>
         Effect.flatMap(
-          Effect.serviceOption(HeldCustomerAccount),
-          (enclosing) =>
-            Option.isSome(enclosing) && enclosing.value.accountId === accountId
-              ? Effect.provideService(
-                  section,
-                  HeldCustomerAccount,
-                  enclosing.value
-                )
-              : holdAccount(
-                  accountId,
-                  recheck(accountId, options?.recheck ?? "session").pipe(
-                    Effect.flatMap((held) =>
-                      Effect.provideService(section, HeldCustomerAccount, held)
-                    )
-                  )
-                )
+          enclosingHold(accountId),
+          Option.match({
+            onSome: (held) =>
+              Effect.provideService(section, HeldCustomerAccount, held),
+            onNone: () =>
+              holdAccount(
+                accountId,
+                afterRecheck(accountId, options?.recheck ?? "session", section)
+              ),
+          })
         );
 
       /**
        * The lock's own SqlError is the only failure the registry adds. The
        * work's failures cross the lock wrapped, so a SqlError of the work is
-       * never taken for the lock's.
+       * never taken for the lock's. With an order, the account's and the
+       * order's sections are one combined entry, whose failure is the lock's.
        */
       const holdAccount = <A, E, R>(
         accountId: CustomerAccountId,
-        work: Effect.Effect<A, E, R>
+        work: Effect.Effect<A, E, R>,
+        reservationOrder?: WorkspaceReservationId
       ): Effect.Effect<A, E | CustomerAccountAccessError, R> =>
-        WorkspaceLockSections.customerAccount(accountId)(
+        (reservationOrder === undefined
+          ? WorkspaceLockSections.customerAccount(accountId)
+          : holdSections([
+              WorkspaceLockSectionSpecs.customerAccount(accountId),
+              WorkspaceLockSectionSpecs.reservationOrder(reservationOrder),
+            ]))(
           work.pipe(Effect.mapError((error) => new SectionFailure({ error })))
         ).pipe(
           Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock),
@@ -180,22 +229,92 @@ export class CustomerAccountSections extends Context.Service<
           )
         );
 
-      const withOptionalAccount: ICustomerAccountSections["withOptionalAccount"] =
-        (section) =>
-          authentication.currentUser.pipe(
-            Effect.catchIf(isAuthenticationNotConfigured, () =>
-              Effect.succeed(null)
-            ),
-            Effect.flatMap((session) =>
+      /** The order's section held alone; its own failure is its SqlError. */
+      const holdOrder = <A, E, R>(
+        reservationOrder: WorkspaceReservationId,
+        work: Effect.Effect<A, E, R>
+      ) =>
+        WorkspaceLockSections.reservationOrder(reservationOrder)(work).pipe(
+          Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock)
+        );
+
+      /**
+       * Dies before the session read and before any lock is requested
+       * inside an enclosing account section: the order's section would
+       * nest under that hold, signed in or not, and wait for a second pool
+       * permit while holding one.
+       */
+      const outsideAccountSections = Effect.flatMap(
+        Effect.serviceOption(HeldCustomerAccount),
+        (enclosing) =>
+          Option.isSome(enclosing)
+            ? Effect.die(
+                new Error(
+                  "A reservationOrder section was requested inside an enclosing customerAccount section; hold both in one entry instead of nesting them"
+                )
+              )
+            : Effect.void
+      );
+
+      function withOptionalAccount<A, E, R>(
+        section: OptionalAccountSection<A, E, R>
+      ): Effect.Effect<A, E | CustomerAccountAccessError, R>;
+      function withOptionalAccount<A, E, R>(
+        section: OptionalAccountSection<A, E, R>,
+        options: OptionalAccountSectionOptions
+      ): Effect.Effect<
+        A,
+        E | CustomerAccountAccessError | SqlError.SqlError,
+        R
+      >;
+      function withOptionalAccount<A, E, R>(
+        section: OptionalAccountSection<A, E, R>,
+        options?: OptionalAccountSectionOptions
+      ) {
+        const reservationOrder = options?.reservationOrder;
+        const sessionRead =
+          reservationOrder === undefined
+            ? authentication.currentUser
+            : Effect.andThen(
+                outsideAccountSections,
+                authentication.currentUser
+              );
+        return sessionRead.pipe(
+          Effect.catchIf(isAuthenticationNotConfigured, () =>
+            Effect.succeed(null)
+          ),
+          Effect.flatMap(
+            (
               session
+            ): Effect.Effect<
+              A,
+              E | CustomerAccountAccessError | SqlError.SqlError,
+              R
+            > => {
+              if (session === null) {
+                return reservationOrder === undefined
+                  ? section(null)
+                  : holdOrder(reservationOrder, section(null));
+              }
+              return reservationOrder === undefined
                 ? withActiveAccount(
                     session.accountId,
                     section(session.accountId),
                     { recheck: "active" }
                   )
-                : section(null)
-            )
-          );
+                : holdAccount(
+                    session.accountId,
+                    afterRecheck(
+                      session.accountId,
+                      "active",
+                      section(session.accountId)
+                    ),
+                    reservationOrder
+                  );
+            }
+          )
+        );
+      }
 
       return {
         withActiveAccount,

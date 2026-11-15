@@ -3,6 +3,9 @@ import { Context, Data, Effect, Layer, Match, Predicate } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import {
+  hasReservationHold,
+  type ReservationHoldIdentity,
+  reservationHoldOf,
   reservationLogFields,
   type WorkspaceReservation,
   WorkspaceReservationRepository,
@@ -43,9 +46,14 @@ export type ReservationHoldCleanupOutcome =
   | "skipped";
 
 export interface IReservationHoldCleanupService {
+  /**
+   * Cancels the order's expired hold `expectedHold`. Skips an order that has
+   * another hold by now, such as a payment retry's new one.
+   */
   readonly cancelOrderHold: (input: {
     readonly orderId: WorkspaceReservationId;
     readonly checkedAt?: Temporal.Instant;
+    readonly expectedHold: ReservationHoldIdentity;
   }) => Effect.Effect<
     ReservationHoldCleanupOutcome,
     ReservationHoldCleanupError
@@ -260,11 +268,13 @@ function makeReservationHoldCleanupServiceLayer(
       const releaseExpiredHold = Effect.fnUntraced(function* (input: {
         readonly orderId: WorkspaceReservationId;
         readonly checkedAt?: Temporal.Instant;
+        readonly expectedHold: ReservationHoldIdentity;
       }) {
         const outcome = yield* holdRelease
           .release({
             reason: "hold_expired",
             reservationId: input.orderId,
+            expectedHold: input.expectedHold,
             holdExpiredAt: input.checkedAt,
           })
           .pipe(
@@ -298,6 +308,14 @@ function makeReservationHoldCleanupServiceLayer(
           );
           return "skipped" as const;
         }
+        // Dotypos had cancelled the hold without us, so the customer didn't
+        // abandon it.
+        if ("providerCancelled" in outcome) {
+          yield* Effect.logInfo(
+            "Reservation hold marked cancelled: Dotypos had cancelled it"
+          );
+          return "cancelled" as const;
+        }
         yield* Effect.logInfo("Reservation hold marked cancelled");
         yield* checkoutAnalytics.reservationAbandoned({
           reservation: outcome.released,
@@ -312,6 +330,7 @@ function makeReservationHoldCleanupServiceLayer(
         function* (input: {
           readonly orderId: WorkspaceReservationId;
           readonly checkedAt?: Temporal.Instant;
+          readonly expectedHold: ReservationHoldIdentity;
         }) {
           yield* Effect.annotateLogsScoped({ input });
           yield* Effect.logInfo("Reservation hold cancellation started");
@@ -321,6 +340,14 @@ function makeReservationHoldCleanupServiceLayer(
           yield* Effect.logDebug(
             "Reservation hold cancellation active reservation loaded"
           );
+          // Before provider finalization, which would settle the newer hold's
+          // payment.
+          if (active && !hasReservationHold(active, input.expectedHold)) {
+            yield* Effect.logInfo(
+              "Reservation hold cancellation skipped: reservation has another hold"
+            );
+            return "skipped" as const;
+          }
 
           const pendingPayment = pendingProviderPayment(active);
           if (pendingPayment) {
@@ -378,9 +405,21 @@ function makeReservationHoldCleanupServiceLayer(
                   orderId: order.id,
                 }
               );
+              // The selection reads only `held` rows with an expiry, which
+              // workspace_reservations_hold_id_check gives a Dotypos hold.
+              const expectedHold = reservationHoldOf(order);
+              if (!expectedHold) {
+                skipped += 1;
+                yield* Effect.logWarning(
+                  "Expired reservation hold cleanup skipped: reservation has no hold",
+                  { orderId: order.id }
+                );
+                continue;
+              }
               const result = yield* cancelOrderHold({
                 orderId: order.id,
                 checkedAt: input.now,
+                expectedHold,
               }).pipe(Effect.result);
               yield* Match.value(result).pipe(
                 Match.tag(

@@ -887,6 +887,7 @@
   "checkoutStatusContactReservation": "Rezervácia: {reservation}, {date}",
   "checkoutStatusFulfillmentFailedContactMessage": "Dobrý deň,\n\nmoja platba bola prijatá, ale potvrdzovací e-mail k rezervácii neprišiel.\n\n{reservationDetails}\n\nProsím, pomôžte mi získať bezpečný prístupový odkaz.",
   "checkoutStatusPaymentPendingContactMessage": "Dobrý deň,\n\nstránka so stavom platby pri mojej rezervácii stále ukazuje, že sa platba spracúva.\n\n{reservationDetails}\n\nProsím, overte, či moja platba prebehla.",
+  "checkoutStatusPaymentRetrySpotUnavailable": "Tento výber už nie je voľný.",
   "checkoutStatusReserveAgain": "Spustiť novú rezerváciu",
   "checkoutStatusBookAgain": "Rezervovať znova",
   "checkoutStatusTryAgain": "Skúsiť znova",

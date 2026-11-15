@@ -128,6 +128,8 @@ export {
   CustomerPaymentPage,
   CustomerPaymentPageClosed,
   CustomerPaymentPageClosedReason,
+  CustomerPaymentRetryRefusalReason,
+  CustomerPaymentRetryRefused,
   CustomerReservationAccess,
   CustomerReservationHistory,
   CustomerReservationKind,
@@ -138,6 +140,7 @@ export {
   CustomerReservationStatus,
   CustomerReservationSummary,
   CustomerReservationsApi,
+  PrepareCustomerPaymentRetry,
   ReopenCustomerPaymentPage,
 } from "./customer-reservations-api";
 export {

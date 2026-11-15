@@ -2,14 +2,26 @@ import type {
   DotyposCustomerId,
   DotyposReservationId,
 } from "@deskohub/dotypos";
-import { and, asc, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer } from "effect";
 import type { SqlError } from "effect/unstable/sql";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { retryDatabaseRead } from "@/db/retry-database-read";
+import { toStoredInstant } from "@/db/instant";
 import {
   paymentAttempts,
+  type ReservationCancellationCause,
   reservationAccessGrants,
   type WorkspaceReservationRow,
   workspaceReservations,
@@ -54,6 +66,62 @@ const withReservationKindFields = (reservation: WorkspaceReservationRow) => {
 };
 
 export type WorkspaceReservation = ReturnType<typeof withReservationKindFields>;
+
+/**
+ * One hold of a reservation: its Dotypos reservation and expiry. A payment
+ * retry can give a cancelled reservation a new hold, so a run that read the
+ * reservation earlier names the hold it means to release.
+ */
+export interface ReservationHoldIdentity {
+  readonly dotyposReservationId: DotyposReservationId;
+  readonly reservationHoldExpiresAt: Temporal.Instant;
+}
+
+/** The reservation's current hold, if it has one. */
+export const reservationHoldOf = (
+  reservation: Pick<
+    WorkspaceReservation,
+    "dotyposReservationId" | "reservationHoldExpiresAt"
+  >
+): ReservationHoldIdentity | null =>
+  reservation.dotyposReservationId && reservation.reservationHoldExpiresAt
+    ? {
+        dotyposReservationId: reservation.dotyposReservationId,
+        reservationHoldExpiresAt: reservation.reservationHoldExpiresAt,
+      }
+    : null;
+
+/**
+ * Whether the reservation still has the hold, comparing expiries at stored
+ * precision.
+ */
+export const hasReservationHold = (
+  reservation: Pick<
+    WorkspaceReservation,
+    "dotyposReservationId" | "reservationHoldExpiresAt"
+  >,
+  hold: ReservationHoldIdentity
+) =>
+  reservation.dotyposReservationId === hold.dotyposReservationId &&
+  reservation.reservationHoldExpiresAt !== null &&
+  toStoredInstant(reservation.reservationHoldExpiresAt).equals(
+    toStoredInstant(hold.reservationHoldExpiresAt)
+  );
+
+/** The causes `claimCancellation` claims under. */
+type UnpaidCancellationCause = Extract<
+  ReservationCancellationCause,
+  "hold_expired" | "payment_retry" | "late_payment"
+>;
+
+/**
+ * A cancellation `claimCancellation` claimed, with the cause the reservation
+ * carried before, as a run whose Dotypos cancel failed left it.
+ */
+export interface ClaimedCancellation {
+  readonly reservation: WorkspaceReservation;
+  readonly previousCancellationCause: ReservationCancellationCause | null;
+}
 
 /**
  * The reservation's identifiers and states for log annotations. Scoped
@@ -223,14 +291,21 @@ export interface IWorkspaceReservationRepository {
     void,
     EffectDrizzleQueryError | WorkspaceReservationStateError
   >;
+  /**
+   * Claims an unpaid hold's cancellation under `cause`. With `expectedHold`,
+   * claims only while the reservation still has that hold.
+   */
   readonly claimCancellation: (
-    id: WorkspaceReservationId
+    id: WorkspaceReservationId,
+    cause: UnpaidCancellationCause,
+    expectedHold?: ReservationHoldIdentity
   ) => Effect.Effect<
-    WorkspaceReservation | null,
+    ClaimedCancellation | null,
     EffectDrizzleQueryError | WorkspaceReservationDetailsMalformedError
   >;
   readonly claimSupersessionCancellation: (
-    id: WorkspaceReservationId
+    id: WorkspaceReservationId,
+    cause: Extract<ReservationCancellationCause, "supersession" | "agent_rotated">
   ) => Effect.Effect<
     WorkspaceReservation | null,
     EffectDrizzleQueryError | WorkspaceReservationDetailsMalformedError
@@ -252,10 +327,17 @@ export interface IWorkspaceReservationRepository {
     | WorkspaceReservationDetailsMalformedError
     | WorkspaceReservationStateError
   >;
+  /**
+   * Marks a `cancelling` reservation cancelled. With `dotyposReservationId`,
+   * only while it still names that hold, so a delayed run can't finish a
+   * newer hold's cancellation. `cancellationCause` replaces the claimed cause.
+   */
   readonly markCancelled: (input: {
     readonly id: WorkspaceReservationId;
     readonly cancelledAt: Temporal.Instant;
     readonly holdExpiredAt?: Temporal.Instant;
+    readonly dotyposReservationId?: DotyposReservationId;
+    readonly cancellationCause?: ReservationCancellationCause;
   }) => Effect.Effect<
     void,
     EffectDrizzleQueryError | WorkspaceReservationStateError
@@ -280,9 +362,14 @@ export interface IWorkspaceReservationRepository {
     | WorkspaceReservationDetailsMalformedError
     | WorkspaceReservationStateError
   >;
+  /**
+   * Moves a `cancelling` reservation to `cancellation_failed`. With
+   * `dotyposReservationId`, only while it still names that hold.
+   */
   readonly markCancellationFailed: (input: {
     readonly id: WorkspaceReservationId;
     readonly failureCode: string;
+    readonly dotyposReservationId?: DotyposReservationId;
   }) => Effect.Effect<
     void,
     EffectDrizzleQueryError | WorkspaceReservationStateError
@@ -504,6 +591,7 @@ const recordAdministrationCancellationClaim = Effect.fnUntraced(function* (
     .update(workspaceReservations)
     .set({
       reservationState: "cancelling",
+      cancellationCause: "administration",
       ...(input.pendingPaymentCancellation && {
         paymentState: "cancelled" as const,
         failureCode: input.pendingPaymentCancellation.failureCode,
@@ -993,13 +1081,25 @@ export class WorkspaceReservationRepository extends Context.Service<
           );
         }),
         claimCancellation: Effect.fn("workspaceReservations.claimCancellation")(
-          function* (id) {
+          function* (id, cause, expectedHold) {
+            // The locked read sees the cause a concurrent claim committed, so
+            // the claim reports the cause it replaced.
+            const previous = db
+              .select({
+                cancellationCause: workspaceReservations.cancellationCause,
+              })
+              .from(workspaceReservations)
+              .where(eq(workspaceReservations.id, id))
+              .for("update")
+              .as("previous");
             const [claimed] = yield* db
               .update(workspaceReservations)
               .set({
                 reservationState: "cancelling",
+                cancellationCause: cause,
                 updatedAt: Temporal.Now.instant(),
               })
+              .from(previous)
               .where(
                 and(
                   eq(workspaceReservations.id, id),
@@ -1009,20 +1109,40 @@ export class WorkspaceReservationRepository extends Context.Service<
                     "cancellation_failed",
                   ]),
                   sql`${workspaceReservations.paymentState} <> 'paid'`,
-                  sql`${workspaceReservations.reservationState} <> 'confirmed'`
+                  sql`${workspaceReservations.reservationState} <> 'confirmed'`,
+                  expectedHold &&
+                    and(
+                      eq(
+                        workspaceReservations.dotyposReservationId,
+                        expectedHold.dotyposReservationId
+                      ),
+                      eq(
+                        workspaceReservations.reservationHoldExpiresAt,
+                        toStoredInstant(expectedHold.reservationHoldExpiresAt)
+                      )
+                    )
                 )
               )
-              .returning();
-            return yield* decodeOptionalWorkspaceReservation(claimed);
+              .returning({
+                ...getTableColumns(workspaceReservations),
+                previousCancellationCause: previous.cancellationCause,
+              });
+            if (!claimed) return null;
+            const { previousCancellationCause, ...reservation } = claimed;
+            return {
+              reservation: yield* decodeWorkspaceReservation(reservation),
+              previousCancellationCause,
+            } satisfies ClaimedCancellation;
           }
         ),
         claimSupersessionCancellation: Effect.fn(
           "workspaceReservations.claimSupersessionCancellation"
-        )(function* (id) {
+        )(function* (id, cause) {
           const [claimed] = yield* db
             .update(workspaceReservations)
             .set({
               reservationState: "cancelling",
+              cancellationCause: cause,
               updatedAt: Temporal.Now.instant(),
             })
             .where(
@@ -1079,6 +1199,7 @@ export class WorkspaceReservationRepository extends Context.Service<
                 reservationState: "cancelled",
                 reservationCancelledAt: input.cancelledAt,
                 reservationHoldExpiredAt: input.holdExpiredAt,
+                cancellationCause: input.cancellationCause,
                 updatedAt: Temporal.Now.instant(),
               })
               .where(
@@ -1086,7 +1207,12 @@ export class WorkspaceReservationRepository extends Context.Service<
                   eq(workspaceReservations.id, input.id),
                   eq(workspaceReservations.reservationState, "cancelling"),
                   sql`${workspaceReservations.paymentState} <> 'paid'`,
-                  sql`${workspaceReservations.reservationConfirmedAt} is null`
+                  sql`${workspaceReservations.reservationConfirmedAt} is null`,
+                  input.dotyposReservationId &&
+                    eq(
+                      workspaceReservations.dotyposReservationId,
+                      input.dotyposReservationId
+                    )
                 )
               )
               .returning({ id: workspaceReservations.id });
@@ -1242,7 +1368,12 @@ export class WorkspaceReservationRepository extends Context.Service<
               and(
                 eq(workspaceReservations.id, input.id),
                 eq(workspaceReservations.reservationState, "cancelling"),
-                sql`${workspaceReservations.paymentState} <> 'paid'`
+                sql`${workspaceReservations.paymentState} <> 'paid'`,
+                input.dotyposReservationId &&
+                  eq(
+                    workspaceReservations.dotyposReservationId,
+                    input.dotyposReservationId
+                  )
               )
             )
             .returning({ id: workspaceReservations.id });

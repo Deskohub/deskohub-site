@@ -4,6 +4,7 @@ import { CurrentCustomerAccount } from "@/features/account/backend/current-custo
 import type { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
 import { ReservationInvoicePdfService } from "@/features/accounting/backend/reservation-invoice-pdf.service";
 import { CheckoutPaymentPageService } from "@/features/checkout/backend/checkout/checkout-payment-page.service";
+import { CheckoutPaymentRetryService } from "@/features/checkout/backend/checkout/checkout-payment-retry.service";
 import { CheckoutStatusService } from "@/features/checkout/backend/checkout/checkout-status.service";
 import { ReservationAccessService } from "@/features/reservation/backend/reservation-access.service";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
@@ -53,6 +54,19 @@ export type CustomerReservationServiceLayers = {
     CheckoutPaymentPageService,
     Layer.Error<typeof CheckoutPaymentPageService.Live>
   >;
+  /**
+   * The same order's checkout again after its payment ended unpaid,
+   * prepared for whom `authorization` lets.
+   */
+  readonly paymentRetry: (
+    authorization: Layer.Layer<
+      ReservationAuthorizationService,
+      AuthorizationLayerError
+    >
+  ) => Layer.Layer<
+    CheckoutPaymentRetryService,
+    Layer.Error<typeof CheckoutPaymentRetryService.Live>
+  >;
   /** Door codes, shown to whom `authorization` lets see them. */
   readonly access: (
     authorization: Layer.Layer<
@@ -90,6 +104,7 @@ export class CustomerReservationLayers extends Context.Service<
     authorization: ReservationAuthorizationService.withAuthentication,
     checkoutStatus: CheckoutStatusService.Live,
     paymentPage: CheckoutPaymentPageService.withAuthorization,
+    paymentRetry: CheckoutPaymentRetryService.withAuthorization,
     access: ReservationAccessService.withAuthorization,
     invoice: ReservationInvoicePdfService.withAuthorization,
   });

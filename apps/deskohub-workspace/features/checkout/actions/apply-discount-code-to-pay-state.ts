@@ -14,7 +14,9 @@ import {
   toFreshPayState,
 } from "@/features/checkout/backend/checkout/checkout-pay-url";
 import type { CheckoutReferralResult } from "@/features/checkout/backend/checkout/checkout-referral.service";
+import { isOrderPriceCommitted } from "@/features/checkout/backend/checkout/order-price-commitment";
 import type { SignedPayState } from "@/features/checkout/backend/checkout/pay-state";
+import { getPayStateBindingInput } from "@/features/checkout/backend/checkout/pay-state-contract";
 import type { PayableReservationUnavailableError } from "@/features/checkout/backend/checkout/payable-reservation.service";
 import type { DiscountCodeRejection } from "@/features/checkout/discount-code-rejection";
 import {
@@ -108,7 +110,7 @@ const issueRejectedCodePayState = (
       ...state,
       locale: input.locale,
       orderId: state.orderId,
-      checkoutSessionId: state.checkoutSessionId,
+      ...getPayStateBindingInput(state),
       requestedDiscountCode: submittedCode,
     },
     {},
@@ -233,11 +235,8 @@ const applyPromotionCode = Effect.fnUntraced(function* (
   const payableReservations = yield* PayableReservationService;
   const { input, state, submittedCode } = entry;
 
-  const reservation = yield* payableReservations.requireCurrent({
-    orderId: state.orderId,
-    checkoutSessionId: state.checkoutSessionId,
-  });
-  if (reservation.activePaymentAttemptId) return paymentInProgress;
+  const reservation = yield* payableReservations.requireCurrent(state);
+  if (isOrderPriceCommitted(reservation)) return paymentInProgress;
 
   const dotyposCustomerId = yield* Schema.decodeEffect(dotyposCustomerIdSchema)(
     reservation.dotyposCustomerId
@@ -272,11 +271,8 @@ const applyPromotionCode = Effect.fnUntraced(function* (
         )
       )
     );
-  const currentReservation = yield* payableReservations.requireCurrent({
-    orderId: state.orderId,
-    checkoutSessionId: state.checkoutSessionId,
-  });
-  if (currentReservation.activePaymentAttemptId) return paymentInProgress;
+  const currentReservation = yield* payableReservations.requireCurrent(state);
+  if (isOrderPriceCommitted(currentReservation)) return paymentInProgress;
 
   if (result.status === "unavailable") {
     return result;
@@ -291,7 +287,7 @@ const applyPromotionCode = Effect.fnUntraced(function* (
             locale: input.locale,
             orderId: state.orderId,
             bookedAt: state.bookedAt,
-            checkoutSessionId: state.checkoutSessionId,
+            ...getPayStateBindingInput(state),
             submittedCode,
             submittedCodeDiscountId: applied.submittedCodeDiscountId,
             requestedDiscountCode: submittedCode,
@@ -307,7 +303,7 @@ const applyPromotionCode = Effect.fnUntraced(function* (
             locale: input.locale,
             orderId: state.orderId,
             bookedAt: state.bookedAt,
-            checkoutSessionId: state.checkoutSessionId,
+            ...getPayStateBindingInput(state),
             changedKeys: changed.changedKeys,
             requestedDiscountCode: submittedCode,
             referralCode: state.referralCode,

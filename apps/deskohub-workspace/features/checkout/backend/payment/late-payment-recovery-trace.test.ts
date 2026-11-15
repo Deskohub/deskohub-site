@@ -10,6 +10,7 @@ import {
   makeOfficeInvoiceDocument,
 } from "@/features/accounting/invoice.test-utils";
 import { DiscountClaimError } from "@/features/discounts/errors";
+import { makeReservationOrderSections } from "@/features/reservation/backend/reservation-order-sections.test-utils";
 import {
   WorkspaceAvailabilityService,
   WorkspaceTableUnavailableError,
@@ -232,7 +233,9 @@ const recover = async (scenario: Scenario) => {
     );
   }).pipe(
     Effect.provide(
-      LatePaymentRecoveryService.Default.pipe(
+      LatePaymentRecoveryService.withOrderSections(
+        makeReservationOrderSections().layer
+      ).pipe(
         Layer.provide(UnpaidHoldRelease.Default),
         Layer.provide(
           Layer.mergeAll(

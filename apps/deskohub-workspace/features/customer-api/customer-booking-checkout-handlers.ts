@@ -42,7 +42,6 @@ import {
   type PayStateTokenError,
 } from "@/features/checkout/backend/checkout";
 import { getCheckoutSubmitDeadline } from "@/features/checkout/backend/checkout/checkout-submit-deadline";
-import type { SignedPayState } from "@/features/checkout/backend/checkout/pay-state";
 import type { Locale } from "@/features/i18n";
 import { isCurrentPaymentSubmitLegalAcceptance } from "@/features/legal/payment-submit-evidence";
 import { preparePayStateInputSchema } from "@/features/reservation/actions/prepare-pay-state.schema";
@@ -65,6 +64,7 @@ import {
   answerBookingSelectionFailure,
   toBookingSelectionInput,
 } from "./customer-booking-selection";
+import { toCustomerCheckout } from "./customer-checkout";
 import {
   CheckoutServicesUnavailable,
   CustomerCheckoutOperations,
@@ -739,41 +739,12 @@ const checkoutAt = (
       Effect.flatMap((updates) => updates.recorded)
     );
 
-    return toCustomerCheckout(state, yield* currentInstant, payStateToken, {
-      ...facts,
-      ...referral,
-    });
+    return toCustomerCheckout(
+      getPayStateCheckoutView(state, yield* currentInstant),
+      payStateToken,
+      { ...facts, ...referral }
+    );
   });
-
-const toCustomerCheckout = (
-  state: SignedPayState,
-  now: Temporal.Instant,
-  payStateToken: string,
-  facts: Pick<
-    CustomerCheckout,
-    "referralApplied" | "rememberReferralCode" | "rememberedReferralCodeUsed"
-  >
-): CustomerCheckout => {
-  const view = getPayStateCheckoutView(state, now);
-  return {
-    status: view.changedKeys === undefined ? "ready" : "price_review",
-    orderId: view.orderId,
-    payStateToken,
-    expiresAt: view.expiresAt,
-    summary: view.summary,
-    ...(view.changedKeys !== undefined && {
-      priceReview: { changedKeys: view.changedKeys },
-    }),
-    earlyPerformanceConsent: view.earlyPerformanceConsent,
-    ...(facts.referralApplied && { referralApplied: true }),
-    ...(facts.rememberReferralCode !== undefined && {
-      rememberReferralCode: facts.rememberReferralCode,
-    }),
-    ...(facts.rememberedReferralCodeUsed && {
-      rememberedReferralCodeUsed: true,
-    }),
-  };
-};
 
 /**
  * A token the client can't use any more starts a new checkout; keys that

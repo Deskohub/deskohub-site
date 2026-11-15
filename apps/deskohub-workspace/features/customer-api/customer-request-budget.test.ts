@@ -27,7 +27,7 @@ describe("customer request budget classes", () => {
       )
       .toSorted();
 
-    expect(contractEndpoints()).toHaveLength(31);
+    expect(contractEndpoints()).toHaveLength(32);
     expect(classified).toEqual(contractEndpoints());
   });
 

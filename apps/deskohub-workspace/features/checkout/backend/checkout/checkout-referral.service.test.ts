@@ -6,6 +6,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { Effect, Layer, Schema } from "effect";
 import { SqlError } from "effect/unstable/sql";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import type { WorkspaceProductIdentity } from "@/features/checkout/product-identity";
 import {
   buildCoworkReservationQuote,
@@ -68,6 +69,7 @@ import {
 } from "./checkout-referral.service";
 import type { SignedPayState } from "./pay-state";
 import {
+  type PayableReservationRequest,
   PayableReservationService,
   PayableReservationUnavailableError,
 } from "./payable-reservation.service";
@@ -365,9 +367,15 @@ const makeServiceLayer = (input: {
   readonly payableReservationFailure?: PayableReservationUnavailableError;
   /** The payment attempt every live payable-reservation read reports. */
   readonly activePaymentAttemptId?: string;
+  /** The order's payment state while an attempt is active; pending by default. */
+  readonly activePaymentState?: "paid" | "failed" | "cancelled" | "expired";
   /** The payment attempt reads after the first report, once pricing ran. */
   readonly activePaymentAttemptIdAfterPricing?: string;
   readonly onPayableReservationRead?: () => void;
+  /** Sees what each live payable-reservation guard was asked for. */
+  readonly onPayableReservationRequest?: (
+    request: PayableReservationRequest
+  ) => void;
 }) => {
   let payableReservationReadCount = 0;
   const dependencies = Layer.mergeAll(
@@ -392,8 +400,9 @@ const makeServiceLayer = (input: {
       )
     ),
     Layer.mock(PayableReservationService, {
-      requireCurrent: () =>
+      requireCurrent: (request: PayableReservationRequest) =>
         Effect.suspend(() => {
+          input.onPayableReservationRequest?.(request);
           payableReservationReadCount += 1;
           input.onPayableReservationRead?.();
           if (input.payableReservationFailure !== undefined) {
@@ -408,6 +417,11 @@ const makeServiceLayer = (input: {
             dotyposCustomerId:
               input.payableReservationCustomerId ?? dotyposCustomerId,
             activePaymentAttemptId: activePaymentAttemptId ?? null,
+            // An active attempt is under way unless it already settled or ended.
+            paymentState:
+              activePaymentAttemptId === undefined
+                ? "not_started"
+                : (input.activePaymentState ?? "pending"),
           } as WorkspaceReservation);
         }),
     })
@@ -590,6 +604,45 @@ describe("CheckoutReferralService", () => {
     expect(freshState.changedKeys).toBeUndefined();
     expect(freshState.reservation.kind).toBe("cowork");
     expect(freshUrl.searchParams.has("referralApplied")).toBe(false);
+  });
+
+  test("guards an order-bound (payment retry) state by its order and keeps the binding", async () => {
+    const quote = Effect.runSync(buildCoworkReservationQuote(reservation));
+    const requests: PayableReservationRequest[] = [];
+    const layer = makeServiceLayer({
+      affirmation: {
+        quote,
+        commitment: makeCommitment(coworkProduct, []),
+      },
+      evaluateCheckoutReferral: () => Effect.succeed(eligible),
+      onPayableReservationRequest: (request) => requests.push(request),
+    });
+    const payStateToken = tokenFor(
+      { reservation, quote, bookedAt: payStateBookedAt },
+      ({ checkoutSessionId: _sessionId, ...state }) => ({
+        ...state,
+        binding: "order",
+        retriedAttemptId: paymentAttemptIdSchema.make("retried-attempt-id"),
+      })
+    );
+
+    const result = await Effect.runPromise(runAcceptCode(layer, payStateToken));
+
+    expect(result.status).toBe("accepted");
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request).toMatchObject({
+        orderId: "checkout-referral-service-test-reservation",
+        binding: "order",
+        retriedAttemptId: "retried-attempt-id",
+      });
+      expect(request).not.toHaveProperty("checkoutSessionId");
+    }
+    const freshState = openFreshPayState(result);
+    expect(freshState.binding).toBe("order");
+    expect(freshState.retriedAttemptId).toBe("retried-attempt-id");
+    expect(freshState.checkoutSessionId).toBeUndefined();
+    expect(freshState.referralCode).toBe("RFL12345");
   });
 
   test("accepts and retries referral pricing from a meeting-room signed state", async () => {
@@ -1184,6 +1237,78 @@ describe("CheckoutReferralService", () => {
     });
     expect(evaluationCount).toBe(0);
     expect(pricingAffirmationCount).toBe(0);
+  });
+
+  describe.each([
+    { binding: "session", orderBound: false },
+    { binding: "order-bound", orderBound: true },
+  ] as const)("on a $binding Pay state", ({ orderBound }) => {
+    const quote = Effect.runSync(buildCoworkReservationQuote(reservation));
+    const token = () =>
+      tokenFor(
+        { reservation, quote, bookedAt: payStateBookedAt },
+        orderBound
+          ? ({ checkoutSessionId: _sessionId, ...state }) => ({
+              ...state,
+              binding: "order",
+              retriedAttemptId: paymentAttemptIdSchema.make("attempt-id"),
+            })
+          : undefined
+      );
+    const accept = (input: {
+      readonly activePaymentState?: "paid" | "failed" | "cancelled" | "expired";
+      readonly activePaymentAttemptIdAfterPricing?: string;
+    }) =>
+      Effect.runPromise(
+        runAcceptCode(
+          makeServiceLayer({
+            affirmation: {
+              quote,
+              commitment: makeCommitment(coworkProduct, []),
+            },
+            ...(input.activePaymentAttemptIdAfterPricing === undefined && {
+              activePaymentAttemptId: "attempt-id",
+            }),
+            ...input,
+            evaluateCheckoutReferral: () => Effect.succeed(eligible),
+          }),
+          token()
+        )
+      );
+
+    test.each([undefined, "paid"] as const)(
+      "refuses a referral while the active attempt is under way or paid (%s)",
+      async (activePaymentState) => {
+        expect(await accept({ activePaymentState })).toEqual({
+          status: "unavailable",
+          reason: "checkout",
+          checkoutReason: "payment_in_progress",
+        });
+      }
+    );
+
+    test("discards the referral repricing when the payment completes meanwhile", async () => {
+      expect(
+        await accept({
+          activePaymentAttemptIdAfterPricing: "attempt-id",
+          activePaymentState: "paid",
+        })
+      ).toEqual({
+        status: "unavailable",
+        reason: "checkout",
+        checkoutReason: "payment_in_progress",
+      });
+    });
+
+    test.each(["failed", "cancelled", "expired"] as const)(
+      "accepts a referral once the active attempt has %s",
+      async (activePaymentState) => {
+        const result = await accept({ activePaymentState });
+
+        expect(result.status).toBe("accepted");
+        expect(openFreshPayState(result).referralCode).toBe("RFL12345");
+      }
+    );
   });
 
   test("discards a referral repricing when a payment attempt starts meanwhile", async () => {

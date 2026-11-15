@@ -34,6 +34,7 @@ import {
   type PaymentPriceAffirmation,
 } from "./checkout-pricing.service";
 import { isExpectedReferralQuoteAddition } from "./checkout-referral-price-change";
+import { isOrderPriceCommitted } from "./order-price-commitment";
 import {
   getSignedPayStateBookedAt,
   getSignedPayStateCheckoutSummary,
@@ -41,6 +42,7 @@ import {
   openPayState,
   type SignedPayState,
 } from "./pay-state.server";
+import { getPayStateBindingInput } from "./pay-state-contract";
 import {
   PayableReservationService,
   type PayableReservationUnavailableError,
@@ -252,15 +254,11 @@ export class CheckoutReferralService extends Context.Service<
 
           // The referral belongs to the booked customer: the account's own
           // customer, or the person it books for.
-          const payableReservation = {
-            orderId: opened.orderId,
-            checkoutSessionId: opened.checkoutSessionId,
-          };
           const currentReservation =
-            yield* payableReservations.requireCurrent(payableReservation);
+            yield* payableReservations.requireCurrent(opened);
           // Like an ordinary code, a referral never replaces the summary of a
           // payment already in progress; payment admission rechecks it too.
-          if (currentReservation.activePaymentAttemptId) {
+          if (isOrderPriceCommitted(currentReservation)) {
             return paymentInProgress;
           }
           const dotyposCustomerId = yield* Schema.decodeEffect(
@@ -293,8 +291,8 @@ export class CheckoutReferralService extends Context.Service<
           // A payment that started while the referral was priced keeps the
           // summary it was admitted with.
           const repricedReservation =
-            yield* payableReservations.requireCurrent(payableReservation);
-          if (repricedReservation.activePaymentAttemptId) {
+            yield* payableReservations.requireCurrent(opened);
+          if (isOrderPriceCommitted(repricedReservation)) {
             return paymentInProgress;
           }
           const freshPayPathInput = {
@@ -302,7 +300,7 @@ export class CheckoutReferralService extends Context.Service<
             locale: input.locale,
             orderId: opened.orderId,
             bookedAt: opened.bookedAt,
-            checkoutSessionId: opened.checkoutSessionId,
+            ...getPayStateBindingInput(opened),
             ...referralInput,
             ...getSignedPayStateSubmittedCode(
               opened,

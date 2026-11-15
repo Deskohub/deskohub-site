@@ -52,6 +52,14 @@ describe("reservation retries", () => {
       )
     ).toEqual(["payment_failed", "cancelled", "expired"]);
   });
+
+  test("pays the same order again wherever its payment ended without settling", () => {
+    expect(
+      checkoutStatusKinds.filter(
+        (status) => checkoutStatusTraits[status].offersPaymentRetryInPlace
+      )
+    ).toEqual(["payment_failed", "cancelled", "expired"]);
+  });
 });
 
 describe("reservation details email", () => {

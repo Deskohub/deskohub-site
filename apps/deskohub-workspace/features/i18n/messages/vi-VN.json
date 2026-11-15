@@ -866,6 +866,7 @@
   "checkoutStatusContactReservation": "Đặt chỗ: {reservation}, {date}",
   "checkoutStatusFulfillmentFailedContactMessage": "Xin chào,\n\nkhoản thanh toán của tôi đã được nhận, nhưng tôi chưa nhận được email xác nhận đặt chỗ.\n\n{reservationDetails}\n\nVui lòng giúp tôi nhận liên kết truy cập bảo mật.",
   "checkoutStatusPaymentPendingContactMessage": "Xin chào,\n\ntrang trạng thái thanh toán của đặt chỗ vẫn cho thấy khoản thanh toán của tôi đang được xử lý.\n\n{reservationDetails}\n\nVui lòng kiểm tra giúp tôi khoản thanh toán đã thành công chưa.",
+  "checkoutStatusPaymentRetrySpotUnavailable": "Lựa chọn này không còn trống.",
   "checkoutStatusReserveAgain": "Tạo đặt chỗ mới",
   "checkoutStatusBookAgain": "Đặt chỗ lại",
   "checkoutStatusTryAgain": "Thử lại",
