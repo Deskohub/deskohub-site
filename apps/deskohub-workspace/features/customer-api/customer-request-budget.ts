@@ -98,6 +98,8 @@ export const customerRequestBudgetClasses = {
     getReservationInvoice: "dotypos-read",
     // Authorizes like the invoice, then records the page's return target.
     reopenPaymentPage: "dotypos-mutation",
+    // Preparing can release and hold the order's spot again in Dotypos.
+    preparePaymentRetry: "dotypos-mutation",
   },
   booking: {
     // The office's seat maximum reads the shared table snapshot, which

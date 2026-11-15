@@ -47,9 +47,11 @@ const renderRetry = ({ isExecuting = false } = {}) => {
   const view = render(
     <CheckoutStatusPaymentRetry
       className="actions"
-      fallback={<a href="/en-US/cowork" id="checkout-status-reserve-again">
+      fallback={
+        <a href="/en-US/cowork" id="checkout-status-reserve-again">
           book
-        </a>}
+        </a>
+      }
       locale="en-US"
       orderId={orderId}
     >
@@ -185,6 +187,28 @@ describe("CheckoutStatusPaymentRetry", () => {
     expect(button()).toBeNull();
     expect(spotNotice()).toBeNull();
     expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  test("hands the refused button's focus to booking again", () => {
+    const { answer, button, fallback } = renderRetry();
+    (button() as HTMLButtonElement).focus();
+    fireEvent.click(button() as HTMLButtonElement);
+
+    answer({ state: "refused" });
+
+    expect(document.activeElement).toBe(fallback());
+  });
+
+  test("leaves focus where the customer moved it before the refusal", () => {
+    const { answer, button, view } = renderRetry();
+    (button() as HTMLButtonElement).focus();
+    fireEvent.click(button() as HTMLButtonElement);
+    const home = view.container.querySelector("#home") as HTMLElement;
+    home.focus();
+
+    answer({ state: "spot_unavailable" });
+
+    expect(document.activeElement).toBe(home);
   });
 
   test("shows the action's public failure and keeps the button", () => {

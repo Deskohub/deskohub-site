@@ -85,9 +85,10 @@ export class CustomerPaymentPageClosed extends Schema.TaggedErrorClass<CustomerP
  * cancelled (`reservation_cancelled`) or its time has passed
  * (`reservation_ended`); its booking details can't be read back
  * (`details_unavailable`); it `needs_review` by the staff; or its spot was
- * taken since the hold was released (`spot_unavailable`). Except for
- * `payment_settling`, whose status changes soon, the customer can book the
- * selection again instead.
+ * taken since the hold was released (`spot_unavailable`). After `paid`,
+ * `payment_in_progress`, `payment_settling` and `late_payment`, show the
+ * order's status again: it has changed or soon will. After any other
+ * reason, the customer can book the selection again instead.
  */
 export const CustomerPaymentRetryRefusalReason = Schema.Literals([
   "paid",

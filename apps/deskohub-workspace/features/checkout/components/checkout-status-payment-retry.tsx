@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { preparePaymentRetry } from "@/features/checkout/actions/prepare-payment-retry";
 import { CheckoutBanner } from "@/features/checkout/components/checkout-banner";
 import { type Locale, m } from "@/features/i18n";
@@ -15,7 +15,8 @@ type Refusal = "spot_unavailable" | "refused";
  * The status page's action row led by a button that pays the same order
  * again on its Pay page. When the order can't be paid again in place,
  * `fallback`, the link that books the selection again, takes the button's
- * place, after a notice when the spot was taken, and the status refreshes.
+ * place, taking the button's focus, after a notice when the spot was
+ * taken, and the status refreshes.
  * A payment that may still settle refreshes the status alone. A failure
  * shows in an alert region that stays mounted.
  */
@@ -33,6 +34,12 @@ export function CheckoutStatusPaymentRetry({
   readonly orderId: WorkspaceReservationId;
 }) {
   const router = useRouter();
+  const rowRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  // Whether the button had focus when asked, and still had it (or lost it
+  // only to its own pending state) when refused; its fallback then takes it.
+  const askedWithFocus = useRef(false);
+  const refusedWithFocus = useRef(false);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [leaving, setLeaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -55,6 +62,11 @@ export function CheckoutStatusPaymentRetry({
         default:
           // The refusal may come from a status that changed since the page
           // rendered, such as a payment that arrived meanwhile.
+          refusedWithFocus.current =
+            askedWithFocus.current &&
+            [buttonRef.current, document.body, null].includes(
+              document.activeElement as HTMLButtonElement | null
+            );
           setRefusal(data.state);
           router.refresh();
       }
@@ -68,8 +80,16 @@ export function CheckoutStatusPaymentRetry({
   });
   const pending = isExecuting || leaving;
 
+  useEffect(() => {
+    if (!refusal || !refusedWithFocus.current) return;
+    refusedWithFocus.current = false;
+    const fallbackControl = rowRef.current?.firstElementChild;
+    if (fallbackControl instanceof HTMLElement) fallbackControl.focus();
+  }, [refusal]);
+
   const retry = () => {
     if (pending) return;
+    askedWithFocus.current = document.activeElement === buttonRef.current;
     setErrorMessage(null);
     execute({ locale, orderId });
   };
@@ -85,7 +105,7 @@ export function CheckoutStatusPaymentRetry({
           </div>
         )}
       </div>
-      <div className={className}>
+      <div className={className} ref={rowRef}>
         {refusal ? (
           fallback
         ) : (
@@ -93,6 +113,7 @@ export function CheckoutStatusPaymentRetry({
             id="checkout-status-try-payment-again"
             onClick={retry}
             pending={pending}
+            ref={buttonRef}
             size="lg"
             type="button"
           >

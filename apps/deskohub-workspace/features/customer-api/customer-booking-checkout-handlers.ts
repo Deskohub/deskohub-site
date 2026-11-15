@@ -59,12 +59,12 @@ import {
   answerUnavailable,
 } from "./customer-api-failure";
 import { CustomerBookingCheckoutLayers } from "./customer-booking-checkout-layers";
-import { toCustomerCheckout } from "./customer-checkout";
 import type { CustomerBookingEndpoint } from "./customer-booking-endpoint";
 import {
   answerBookingSelectionFailure,
   toBookingSelectionInput,
 } from "./customer-booking-selection";
+import { toCustomerCheckout } from "./customer-checkout";
 import {
   CheckoutServicesUnavailable,
   CustomerCheckoutOperations,

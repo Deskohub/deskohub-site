@@ -38,12 +38,13 @@ import {
   type PaymentRetryPreparation,
   PaymentRetryUnavailableError,
 } from "@/features/checkout/backend/checkout/checkout-payment-retry.service";
-import type { PayStateCheckoutView } from "@/features/checkout/backend/checkout/pay-state-checkout-view";
-import { syntheticChangedKeys } from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
 import {
   CheckoutStatusService,
   type CheckoutStatusViewModel,
 } from "@/features/checkout/backend/checkout/checkout-status.service";
+import type { PayStateCheckoutView } from "@/features/checkout/backend/checkout/pay-state-checkout-view";
+import { syntheticChangedKeys } from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
+import { buildCoworkCheckoutSummary } from "@/features/checkout/checkout-quote.test-utils";
 import {
   ReservationAccessService,
   type ReservationAccessViewModel,
@@ -53,7 +54,6 @@ import {
   ReservationAuthorizationService,
   ReservationAuthorizationUnavailableError,
 } from "@/features/reservation/backend/reservation-authorization.service";
-import { buildCoworkCheckoutSummary } from "@/features/checkout/checkout-quote.test-utils";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   type CustomerApiCall,
@@ -594,6 +594,7 @@ describe("preparePaymentRetry", () => {
     expiresAt: "2099-07-01T10:13:00.000Z",
     summary: buildCoworkCheckoutSummary({
       entryTier: "open-space",
+      coffee: false,
       date: "2099-07-01",
     }),
     changedKeys: undefined,
@@ -736,22 +737,24 @@ describe("preparePaymentRetry", () => {
     }
   );
 
-  test.each([
-    "spot_unavailable",
-    "payment_settling",
-  ] as const)("answers an order whose state is %s as that refusal", async (state) => {
-    const api = makeCustomerApiTestServer({
-      reservations: answering({ state }),
-    });
+  test.each(["spot_unavailable", "payment_settling"] as const)(
+    "answers an order whose state is %s as that refusal",
+    async (state) => {
+      const api = makeCustomerApiTestServer({
+        reservations: answering({ state }),
+      });
 
-    const response = await api.handle(customerApiRequest(preparePaymentRetry));
+      const response = await api.handle(
+        customerApiRequest(preparePaymentRetry)
+      );
 
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
-      _tag: "CustomerPaymentRetryRefused",
-      reason: state,
-    });
-  });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        _tag: "CustomerPaymentRetryRefused",
+        reason: state,
+      });
+    }
+  );
 
   test.each([
     new PaymentRetryUnavailableError({ message: "provider lookup failed" }),
@@ -759,18 +762,23 @@ describe("preparePaymentRetry", () => {
       orderId,
       cause: customerAccountUnavailable("account-link.read"),
     }),
-  ])("answers unavailable when the retry can't be prepared now", async (failure) => {
-    const api = makeCustomerApiTestServer({
-      reservations: paymentRetryServices(() => Effect.fail(failure)),
-    });
+  ])(
+    "answers unavailable when the retry can't be prepared now",
+    async (failure) => {
+      const api = makeCustomerApiTestServer({
+        reservations: paymentRetryServices(() => Effect.fail(failure)),
+      });
 
-    const response = await api.handle(customerApiRequest(preparePaymentRetry));
+      const response = await api.handle(
+        customerApiRequest(preparePaymentRetry)
+      );
 
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({
-      _tag: "CustomerServiceUnavailable",
-    });
-  });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        _tag: "CustomerServiceUnavailable",
+      });
+    }
+  );
 
   test("rejects a locale the app can't show", async () => {
     const prepare = mock(() => Effect.succeed(ready()));
