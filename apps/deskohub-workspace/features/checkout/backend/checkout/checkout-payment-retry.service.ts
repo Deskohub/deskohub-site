@@ -1,9 +1,5 @@
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer } from "effect";
-import type {
-  CheckoutSummary,
-  CheckoutSummaryChangedKeys,
-} from "@/features/checkout/checkout-summary";
 import type { Locale } from "@/features/i18n";
 import {
   ReservationAuthorizationService,
@@ -11,6 +7,7 @@ import {
 } from "@/features/reservation/backend/reservation-authorization.service";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { FreshPayState } from "./checkout-pay-url";
+import type { PayStateCheckoutView } from "./pay-state-checkout-view";
 
 /**
  * Why an order's failed, cancelled or expired payment can't be tried again
@@ -28,15 +25,15 @@ export type PaymentRetryRefusalReason =
 
 export type PaymentRetryPreparation =
   /**
-   * A Pay state for the same order. `retry` asks for the terms again at the
-   * accepted price; `pricingChanged` shows the changed price to accept.
+   * An order-bound Pay state for the same order and the checkout view built
+   * from the exact state sealed into it. A view with `changedKeys` asks the
+   * customer to accept the changed price; otherwise it asks for the terms
+   * again at the accepted price.
    */
   | {
       readonly state: "ready";
-      readonly variant: "retry" | "pricingChanged";
       readonly payState: FreshPayState;
-      readonly summary: CheckoutSummary;
-      readonly changedKeys?: CheckoutSummaryChangedKeys;
+      readonly checkout: PayStateCheckoutView;
     }
   /** The order doesn't exist or the visitor may not see it. */
   | { readonly state: "not_found" }

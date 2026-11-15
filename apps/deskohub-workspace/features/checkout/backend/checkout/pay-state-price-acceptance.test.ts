@@ -9,6 +9,7 @@ import {
   getPayStateExpiresAt,
 } from "./checkout-pay-url";
 import { openPayState } from "./pay-state";
+import { isOrderBoundPayState } from "./pay-state-contract";
 import { acceptPayStatePriceChange } from "./pay-state-price-acceptance";
 import {
   sealSyntheticPayStateToken,
@@ -23,6 +24,22 @@ const runFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   run(Effect.flip(effect));
 
 describe("acceptPayStatePriceChange", () => {
+  test("keeps a payment retry's order binding", async () => {
+    const payStateToken = await sealSyntheticPayStateToken({
+      changedKeys: syntheticChangedKeys,
+      orderBound: true,
+    });
+
+    const accepted = await run(
+      acceptPayStatePriceChange({ payStateToken, locale: "en-US" })
+    );
+    const continued = await run(openPayState(accepted.payStateToken));
+
+    expect(accepted.status).toBe("accepted");
+    expect(isOrderBoundPayState(continued)).toBe(true);
+    expect(continued.checkoutSessionId).toBeUndefined();
+  });
+
   test("continues a price review with the same order and quote, without its changed keys", async () => {
     const payStateToken = await sealSyntheticPayStateToken({
       changedKeys: syntheticChangedKeys,
