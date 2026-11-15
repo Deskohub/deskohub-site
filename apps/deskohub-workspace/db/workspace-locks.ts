@@ -6,6 +6,8 @@ import { WorkspaceTransaction } from "./database.service";
 import type { DatabaseQueryError } from "./sql-constraint";
 import {
   holdSection,
+  holdSections,
+  type LockSection,
   type LockWait,
   type TransactionLockRequest,
   takeTransactionLock,
@@ -124,38 +126,54 @@ export const WorkspaceLocks = {
 } as const;
 
 /**
- * Session-held sections on a dedicated connection, for a lock held across
- * non-transactional work. They never provide `WorkspaceTransaction`; enter
- * them outside every Workspace transaction.
+ * The session-held sections' keys and ranks, one spec per section, so a
+ * section's single entry (`WorkspaceLockSections`) and a combined entry of
+ * several sections (`holdSections`) lock the same key.
  *
  * Sections are declared in nesting order: a section may be entered inside one
  * declared before it, never inside one declared after it. Their ranks share
  * `WorkspaceLocks`' scale and ascend in declaration order, which is what the
  * check compares; the same section nests in ascending key order.
  */
-export const WorkspaceLockSections = {
-  signInEmail: (addressDigest: string) =>
-    holdSection({
-      name: "signInEmail",
-      rank: 0,
-      pair: ["sign-in-email", addressDigest],
-    }),
-  customerAccount: (accountId: CustomerAccountId) =>
-    holdSection({
-      name: "customerAccount",
-      rank: 20,
-      pair: ["customer-account", accountId],
-    }),
+export const WorkspaceLockSectionSpecs = {
+  signInEmail: (addressDigest: string): LockSection => ({
+    name: "signInEmail",
+    rank: 0,
+    pair: ["sign-in-email", addressDigest],
+  }),
+  customerAccount: (accountId: CustomerAccountId): LockSection => ({
+    name: "customerAccount",
+    rank: 20,
+    pair: ["customer-account", accountId],
+  }),
   /**
    * One order's hold and payment start: preparing a payment retry, the
    * submission sequence from its progress check to the attempt, and late
-   * payment recovery's hold work. Entered inside an account section, never
-   * around one.
+   * payment recovery's hold work. A submission for a signed-in account holds
+   * it together with the account's section in one combined entry.
    */
+  reservationOrder: (orderId: WorkspaceReservationId): LockSection => ({
+    name: "reservationOrder",
+    rank: 21,
+    pair: ["reservation-order", orderId],
+  }),
+} as const;
+
+/** Holds several sections in one entry: one connection, one pool permit. */
+export { holdSections };
+
+/**
+ * Session-held sections on a dedicated connection, for a lock held across
+ * non-transactional work. They never provide `WorkspaceTransaction`; enter
+ * them outside every Workspace transaction. Each entry takes one pool permit;
+ * hold several sections together with `holdSections` and their
+ * `WorkspaceLockSectionSpecs` rather than nesting them.
+ */
+export const WorkspaceLockSections = {
+  signInEmail: (addressDigest: string) =>
+    holdSection(WorkspaceLockSectionSpecs.signInEmail(addressDigest)),
+  customerAccount: (accountId: CustomerAccountId) =>
+    holdSection(WorkspaceLockSectionSpecs.customerAccount(accountId)),
   reservationOrder: (orderId: WorkspaceReservationId) =>
-    holdSection({
-      name: "reservationOrder",
-      rank: 21,
-      pair: ["reservation-order", orderId],
-    }),
+    holdSection(WorkspaceLockSectionSpecs.reservationOrder(orderId)),
 } as const;

@@ -275,21 +275,68 @@ const withLockTimeout = <A, E, R>(
     return result;
   });
 
+/** A session lock section: a pair key held on its own connection. */
+export type LockSection = {
+  readonly name: string;
+  readonly rank: number;
+  readonly pair: PostgresAdvisoryLockKey;
+};
+
+/**
+ * The entry checks shared by every section entry, run before any lock is
+ * requested. Each of these is a defect: a section entered inside a Workspace
+ * transaction, which would wait on that transaction's locks from another
+ * connection; a section entered inside one that orders after it
+ * (`lockOrder`: declaration order, then key order); and a section entered
+ * inside itself, since sections are not reentrant. The entered sections
+ * count as enclosing the ones after them, so one entry's sections must
+ * ascend too. Returns the sections held once they are all entered.
+ */
+const enterSections = Effect.fnUntraced(function* (
+  sections: ReadonlyArray<LockSection>
+) {
+  const transaction = yield* CurrentTransactionLedger;
+  if (Option.isSome(transaction)) {
+    return yield* lockViolation(
+      "A Workspace lock section was entered inside a Workspace transaction",
+      { name: sections.map(({ name }) => name).join(", ") },
+      "after",
+      transaction.value.held
+    );
+  }
+  let held = yield* HeldSections;
+  for (const section of sections) {
+    const enclosingAbove = held.filter((enclosing) =>
+      Order.isGreaterThan(lockOrder)(enclosing, section)
+    );
+    if (enclosingAbove.length > 0) {
+      return yield* lockViolation(
+        "A Workspace lock section was entered out of section order",
+        section,
+        "inside",
+        enclosingAbove
+      );
+    }
+    if (held.some((enclosing) => isSameKey(enclosing, section))) {
+      return yield* Effect.die(
+        new Error(
+          `The Workspace lock section ${section.name} was entered inside itself; sections are not reentrant`
+        )
+      );
+    }
+    held = [...held, { ...section, holder: "section" }];
+  }
+  return held;
+});
+
 /**
  * Holds a session lock section: the lock on its own connection, through
- * `WorkspaceDatabaseAdvisoryLock.withLock`, while `effect` runs. Each of these
- * is a defect, checked before the lock is requested: a section entered inside
- * a Workspace transaction, which would wait on that transaction's locks from
- * another connection; a section entered inside one that orders after it
- * (`lockOrder`: declaration order, then key order); and a section
- * entered inside itself, since sections are not reentrant.
+ * `WorkspaceDatabaseAdvisoryLock.withLock`, while `effect` runs, under one
+ * pool permit. The entry checks (`enterSections`) run before the lock is
+ * requested.
  */
 export const holdSection =
-  (section: {
-    readonly name: string;
-    readonly rank: number;
-    readonly pair: PostgresAdvisoryLockKey;
-  }) =>
+  (section: LockSection) =>
   <A, E, R>(
     effect: Effect.Effect<A, E, R>
   ): Effect.Effect<
@@ -298,40 +345,37 @@ export const holdSection =
     R | WorkspaceDatabaseAdvisoryLock
   > =>
     Effect.gen(function* () {
-      const transaction = yield* CurrentTransactionLedger;
-      if (Option.isSome(transaction)) {
-        return yield* lockViolation(
-          "A Workspace lock section was entered inside a Workspace transaction",
-          section,
-          "after",
-          transaction.value.held
-        );
-      }
-      const sections = yield* HeldSections;
-      const enclosingAbove = sections.filter((held) =>
-        Order.isGreaterThan(lockOrder)(held, section)
-      );
-      if (enclosingAbove.length > 0) {
-        return yield* lockViolation(
-          "A Workspace lock section was entered out of section order",
-          section,
-          "inside",
-          enclosingAbove
-        );
-      }
-      if (sections.some((held) => isSameKey(held, section))) {
-        return yield* Effect.die(
-          new Error(
-            `The Workspace lock section ${section.name} was entered inside itself; sections are not reentrant`
-          )
-        );
-      }
+      const held = yield* enterSections([section]);
       const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
       return yield* advisoryLock.withLock(
         section.pair,
-        Effect.provideService(effect, HeldSections, [
-          ...sections,
-          { ...section, holder: "section" },
-        ])
+        Effect.provideService(effect, HeldSections, held)
+      );
+    });
+
+/**
+ * Holds several sections in one entry: their locks in the given order on one
+ * connection, through `WorkspaceDatabaseAdvisoryLock.withLocks`, under one
+ * pool permit, with every section recorded as held while `effect` runs. Use
+ * it instead of nesting sections, which takes a permit per section: holders
+ * waiting for an inner permit while holding an outer one can take every
+ * permit and wait forever. Give the sections in ascending section order;
+ * the entry checks (`enterSections`) treat each as enclosing the next.
+ */
+export const holdSections =
+  (sections: readonly [LockSection, ...LockSection[]]) =>
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ): Effect.Effect<
+    A,
+    E | SqlError.SqlError,
+    R | WorkspaceDatabaseAdvisoryLock
+  > =>
+    Effect.gen(function* () {
+      const held = yield* enterSections(sections);
+      const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
+      return yield* advisoryLock.withLocks(
+        sections.map(({ pair }) => pair),
+        Effect.provideService(effect, HeldSections, held)
       );
     });

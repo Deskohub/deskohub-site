@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import { Cause, Duration, Effect, Exit, Predicate } from "effect";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
   WorkspaceDatabase,
@@ -13,7 +14,12 @@ import {
 import { makeDatabaseClient, makeDatabasePool } from "./database-client";
 import { WorkspaceDatabaseAdvisoryLock } from "./postgres-advisory-lock";
 import { isLockWaitTimeout } from "./sql-constraint";
-import { WorkspaceLockSections, WorkspaceLocks } from "./workspace-locks";
+import {
+  holdSections,
+  WorkspaceLockSectionSpecs,
+  WorkspaceLockSections,
+  WorkspaceLocks,
+} from "./workspace-locks";
 
 const suiteDatabase =
   await createWorkspacePostgresSuiteDatabase("workspace_locks");
@@ -653,6 +659,210 @@ describe.skipIf(!suiteDatabase)(
         const section = WorkspaceLockSections.customerAccount;
         const exit = await run(section(account)(section(account)(Effect.void)));
         expect(dies(exit, "not reentrant")).toBe(true);
+      });
+    });
+
+    describe("a combined section entry", () => {
+      const orderId = () =>
+        `order-${crypto.randomUUID()}` as WorkspaceReservationId;
+      const orderProbe = (id: string) => pairProbe("reservation-order", id);
+      /** The account's and the order's sections in one entry. */
+      const accountAndOrder = (
+        account: CustomerAccountId,
+        order: WorkspaceReservationId
+      ) =>
+        holdSections([
+          WorkspaceLockSectionSpecs.customerAccount(account),
+          WorkspaceLockSectionSpecs.reservationOrder(order),
+        ]);
+
+      test("holds both sections' keys, today's encodings, on one connection, and releases both", async () => {
+        const account = accountId();
+        const order = orderId();
+        recorded.length = 0;
+        const exit = await run(
+          accountAndOrder(
+            account,
+            order
+          )(
+            Effect.all([
+              freeElsewhere(accountProbe(account)),
+              freeElsewhere(orderProbe(order)),
+            ])
+          )
+        );
+        expect(exit).toStrictEqual(Exit.succeed([false, false]));
+        expect(
+          recorded.map(({ text, values }) => [text, values])
+        ).toStrictEqual([
+          [
+            "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+            ["customer-account", account],
+          ],
+          [
+            "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+            ["reservation-order", order],
+          ],
+        ]);
+        expect(await freeElsewhereNow(accountProbe(account))).toBe(true);
+        expect(await freeElsewhereNow(orderProbe(order))).toBe(true);
+      });
+
+      test("a transaction lock ranked below the order without a bounded wait dies inside it", async () => {
+        const exit = await run(
+          accountAndOrder(
+            accountId(),
+            orderId()
+          )(transaction(WorkspaceLocks.referralGraph()))
+        );
+        expect(dies(exit, "out of rank order")).toBe(true);
+        for (const name of [
+          "referralGraph",
+          "customerAccount",
+          "reservationOrder",
+        ]) {
+          expect(dies(exit, name)).toBe(true);
+        }
+      });
+
+      test("a bounded-wait lock ranked below both, and a lock ranked above both, are taken inside it", async () => {
+        const exit = await run(
+          accountAndOrder(
+            accountId(),
+            orderId()
+          )(
+            transaction(
+              Effect.gen(function* () {
+                yield* WorkspaceLocks.referralGraph({
+                  boundedWait: Duration.seconds(5),
+                });
+                yield* WorkspaceLocks.referralFirstBooking(
+                  `customer-${crypto.randomUUID()}` as DotyposCustomerId
+                );
+                return "taken";
+              })
+            )
+          )
+        );
+        expect(exit).toStrictEqual(Exit.succeed("taken"));
+      });
+
+      test("either held key requested again inside it dies instead of waiting on it", async () => {
+        const account = accountId();
+        const order = orderId();
+        const entered = (
+          inner: Effect.Effect<unknown, unknown, WorkspaceDatabaseAdvisoryLock>
+        ) =>
+          run(
+            accountAndOrder(
+              account,
+              order
+            )(inner).pipe(Effect.timeout("20 seconds"))
+          );
+
+        // The account's section orders before the held order's, so its
+        // re-entry dies on section order before the reentry check.
+        expect(
+          dies(
+            await entered(
+              WorkspaceLockSections.customerAccount(account)(Effect.void)
+            ),
+            "out of section order"
+          )
+        ).toBe(true);
+        expect(
+          dies(
+            await entered(
+              WorkspaceLockSections.reservationOrder(order)(Effect.void)
+            ),
+            "not reentrant"
+          )
+        ).toBe(true);
+        expect(
+          dies(
+            await entered(transaction(WorkspaceLocks.customerAccount(account))),
+            "enclosing lock section"
+          )
+        ).toBe(true);
+      });
+
+      test("inside a section ordered after its first section it dies before any lock is requested", async () => {
+        const account = accountId();
+        const order = orderId();
+        const exit = await run(
+          WorkspaceLockSections.reservationOrder(orderId())(
+            Effect.gen(function* () {
+              recorded.length = 0;
+              const entered = yield* Effect.exit(
+                accountAndOrder(account, order)(Effect.void)
+              );
+              return { entered, requested: recorded.length };
+            })
+          )
+        );
+        expect(Exit.isSuccess(exit)).toBe(true);
+        if (!Exit.isSuccess(exit)) return;
+        expect(dies(exit.value.entered, "out of section order")).toBe(true);
+        expect(exit.value.requested).toBe(0);
+        expect(await freeElsewhereNow(accountProbe(account))).toBe(true);
+      });
+
+      test("inside a section declared before both it is held", async () => {
+        const exit = await run(
+          WorkspaceLockSections.signInEmail(`digest-${crypto.randomUUID()}`)(
+            accountAndOrder(accountId(), orderId())(Effect.succeed("held"))
+          )
+        );
+        expect(exit).toStrictEqual(Exit.succeed("held"));
+      });
+
+      test("sections given out of order, or one section twice, die before any lock is requested", async () => {
+        const account = accountId();
+        const order = orderId();
+        recorded.length = 0;
+        const reversed = await run(
+          holdSections([
+            WorkspaceLockSectionSpecs.reservationOrder(order),
+            WorkspaceLockSectionSpecs.customerAccount(account),
+          ])(Effect.void)
+        );
+        const [first, second] = accountPair();
+        const descending = await run(
+          holdSections([
+            WorkspaceLockSectionSpecs.customerAccount(second),
+            WorkspaceLockSectionSpecs.customerAccount(first),
+          ])(Effect.void)
+        );
+        const twice = await run(
+          holdSections([
+            WorkspaceLockSectionSpecs.customerAccount(account),
+            WorkspaceLockSectionSpecs.customerAccount(account),
+          ])(Effect.void)
+        );
+        expect(dies(reversed, "out of section order")).toBe(true);
+        expect(dies(descending, "out of section order")).toBe(true);
+        expect(dies(twice, "not reentrant")).toBe(true);
+        expect(recorded).toStrictEqual([]);
+      });
+
+      test("inside a Workspace transaction it dies before any lock is requested", async () => {
+        const exit = await run(
+          transaction(
+            Effect.gen(function* () {
+              recorded.length = 0;
+              const entered = yield* Effect.exit(
+                accountAndOrder(accountId(), orderId())(Effect.void)
+              );
+              return { entered, requested: recorded.length };
+            })
+          )
+        );
+        expect(Exit.isSuccess(exit)).toBe(true);
+        if (!Exit.isSuccess(exit)) return;
+        expect(dies(exit.value.entered, "inside a Workspace transaction")).toBe(
+          true
+        );
+        expect(exit.value.requested).toBe(0);
       });
     });
   }

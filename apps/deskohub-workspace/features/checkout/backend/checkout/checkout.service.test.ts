@@ -29,6 +29,7 @@ import { env } from "@/env";
 import {
   type CustomerAccountSectionsFixture,
   makeCustomerAccountSections,
+  sectionAccountId,
 } from "@/features/account/backend/customer-account-sections.test-utils";
 import {
   type CustomerAccountId,
@@ -567,8 +568,11 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly accountAuthority?: CustomerAccountSectionsFixture;
   readonly returnTarget?: PaymentReturnTarget;
   readonly orderBound?: boolean;
-  /** The advisory lock under the order's section; uncontended by default. */
-  readonly orderLock?: Layer.Layer<WorkspaceDatabaseAdvisoryLock>;
+  /**
+   * The advisory lock under the account's and the order's sections;
+   * uncontended by default.
+   */
+  readonly orderLock?: WorkspaceDatabaseAdvisoryLock["Service"];
   /**
    * The order row and its attempt follow the payment lifecycle: admission
    * makes the created attempt active, attachment gives it its page.
@@ -577,33 +581,39 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
 };
 
 /**
- * An in-memory advisory lock with real mutual exclusion per key, under the
- * real lock ledger. `holdFirstUntilContended` keeps the first holder of a
+ * An in-memory advisory lock with real mutual exclusion per key, taking a
+ * request's keys in order as Postgres does, under the real lock ledger. `holdFirstUntilContended` keeps the first holder of a
  * key from running until a second request for that key arrives, so two
  * submissions provably overlap at the order's section.
  */
 const makeOrderLock = (
-  options: {
-    readonly holdFirstUntilContended?: true;
-    /** Runs as each holder acquires the lock, for observing what it holds. */
-    readonly onAcquired?: () => void;
-  } = {}
+  options: { readonly holdFirstUntilContended?: true } = {}
 ) => {
   const events: string[] = [];
   const semaphores = new Map<string, Semaphore.Semaphore>();
   const contended = Deferred.makeUnsafe<void>();
   let requests = 0;
   const withLock = <A, E, R>(
-    key: PostgresAdvisoryLockKey | readonly PostgresAdvisoryLockKey[],
+    keys: readonly PostgresAdvisoryLockKey[],
     effect: Effect.Effect<A, E, R>
   ): Effect.Effect<A, E, R> =>
     Effect.suspend(() => {
-      const name = JSON.stringify(key);
-      let semaphore = semaphores.get(name);
-      if (!semaphore) {
-        semaphore = Semaphore.makeUnsafe(1);
-        semaphores.set(name, semaphore);
-      }
+      const name = JSON.stringify(keys);
+      const semaphoreFor = (key: PostgresAdvisoryLockKey) => {
+        const keyName = JSON.stringify(key);
+        let semaphore = semaphores.get(keyName);
+        if (!semaphore) {
+          semaphore = Semaphore.makeUnsafe(1);
+          semaphores.set(keyName, semaphore);
+        }
+        return semaphore;
+      };
+      /** Each key's permit in request order, the last one around `held`. */
+      const holdingKeys = <B, F, S>(held: Effect.Effect<B, F, S>) =>
+        keys.reduceRight<Effect.Effect<B, F, S>>(
+          (inner, key) => semaphoreFor(key).withPermits(1)(inner),
+          held
+        );
       requests += 1;
       const request = requests;
       events.push(`lock-requested:${name}`);
@@ -615,10 +625,9 @@ const makeOrderLock = (
           : effect;
       return contention.pipe(
         Effect.andThen(
-          semaphore.withPermits(1)(
+          holdingKeys(
             Effect.sync(() => {
               events.push(`lock-acquired:${name}`);
-              options.onAcquired?.();
             }).pipe(
               Effect.andThen(run),
               Effect.ensuring(
@@ -631,10 +640,10 @@ const makeOrderLock = (
     });
   return {
     events,
-    layer: Layer.succeed(WorkspaceDatabaseAdvisoryLock, {
+    service: WorkspaceDatabaseAdvisoryLock.of({
       withTransactionPermit: (effect) => effect,
-      withLock,
-      withLocks: (keys, effect) => withLock(keys, effect),
+      withLock: (key, effect) => withLock([key], effect),
+      withLocks: withLock,
     }),
   };
 };
@@ -826,9 +835,10 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     (pricingInput) => affirm(pricingInput) as never
   );
 
-  const accountAuthority = makeCustomerAccountSections(
-    options.accountAuthority ?? { session: null }
-  );
+  const accountAuthority = makeCustomerAccountSections({
+    ...(options.accountAuthority ?? { session: null }),
+    lock: options.orderLock ?? makeOrderLock().service,
+  });
 
   const effect = Effect.gen(function* () {
     const service = yield* CheckoutService;
@@ -874,7 +884,6 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
             Layer.mock(LegalEvidenceEventRepository, {
               recordMany: recordLegalEvidence,
             }),
-            options.orderLock ?? makeOrderLock().layer,
             TestSealedStateKeys
           )
         )
@@ -3368,7 +3377,7 @@ describe("CheckoutService", () => {
           orderId: "reservation-concurrent-submit",
           statefulOrder: true,
           orderBound,
-          orderLock: orderLock.layer,
+          orderLock: orderLock.service,
           ...(accountAuthority && { accountAuthority }),
         });
 
@@ -3387,43 +3396,45 @@ describe("CheckoutService", () => {
         expect(harness.createPendingNexiAttempt).toHaveBeenCalledTimes(1);
         expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(1);
         // The second reached the order's section while the first held it,
-        // and waited for it.
-        const orderKey = JSON.stringify([
-          "reservation-order",
-          "reservation-concurrent-submit",
-        ]);
+        // and waited for it. A signed-in submission holds it in one entry
+        // with the account's section.
+        const orderKey = ["reservation-order", "reservation-concurrent-submit"];
+        const sections = JSON.stringify(
+          accountAuthority
+            ? [["customer-account", sectionAccountId], orderKey]
+            : [orderKey]
+        );
         expect(orderLock.events).toEqual([
-          `lock-requested:${orderKey}`,
-          `lock-acquired:${orderKey}`,
-          `lock-requested:${orderKey}`,
-          `lock-released:${orderKey}`,
-          `lock-acquired:${orderKey}`,
-          `lock-released:${orderKey}`,
+          `lock-requested:${sections}`,
+          `lock-acquired:${sections}`,
+          `lock-requested:${sections}`,
+          `lock-released:${sections}`,
+          `lock-acquired:${sections}`,
+          `lock-released:${sections}`,
         ]);
       }
     );
 
-    test("enters the order's section inside the account's", async () => {
-      const accountLock = { held: false };
-      const accountHeldAtOrderLock: boolean[] = [];
-      const orderLock = makeOrderLock({
-        onAcquired: () => accountHeldAtOrderLock.push(accountLock.held),
-      });
+    test("holds the account's and the order's sections in one lock request, account first", async () => {
+      const orderLock = makeOrderLock();
       const harness = await createCheckoutHarness({
         orderId: "reservation-section-order",
-        orderLock: orderLock.layer,
-        accountAuthority: {
-          session: {},
-          activityState: "active",
-          lockProbe: accountLock,
-        },
+        orderLock: orderLock.service,
+        accountAuthority: { session: {}, activityState: "active" },
       });
 
       const result = await Effect.runPromise(harness.effect);
 
       expect(result.status).toBe("redirect");
-      expect(accountHeldAtOrderLock).toEqual([true]);
-      expect(accountLock.held).toBe(false);
+      const sections = JSON.stringify([
+        ["customer-account", sectionAccountId],
+        ["reservation-order", "reservation-section-order"],
+      ]);
+      expect(orderLock.events).toEqual([
+        `lock-requested:${sections}`,
+        `lock-acquired:${sections}`,
+        `lock-released:${sections}`,
+      ]);
     });
   });
 
@@ -3565,7 +3576,11 @@ describe("CheckoutService", () => {
     expect(harness.updateReservationDetails).toHaveBeenCalledTimes(1);
     expect(harness.updateReservation).toHaveBeenCalledTimes(1);
     expect(harness.reservationRecord.authorAccountId).toBe(author);
-    expect(harness.accountEvents).toEqual([]);
+    // Only the order's section, held alone: no session or activity read.
+    expect(harness.accountEvents).toEqual([
+      "section-lock-acquired",
+      "section-lock-released",
+    ]);
   });
 
   test("does not make a payer the author of a reservation another account created", async () => {

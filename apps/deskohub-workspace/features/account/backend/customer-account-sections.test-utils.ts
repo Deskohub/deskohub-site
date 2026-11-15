@@ -1,7 +1,10 @@
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import { SqlError } from "effect/unstable/sql";
-import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import {
+  type PostgresAdvisoryLockKey,
+  WorkspaceDatabaseAdvisoryLock,
+} from "@/db/postgres-advisory-lock";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import {
   CustomerAccountAccessError,
@@ -37,22 +40,36 @@ export type CustomerAccountSectionsFixture = {
   readonly lockUnavailable?: boolean;
   /** Mutated by the fake advisory lock so tests can sample lock state mid-section. */
   readonly lockProbe?: { held: boolean };
+  /**
+   * The lock the fake advisory lock takes each request through, for real
+   * mutual exclusion; by default requests never wait.
+   */
+  readonly lock?: WorkspaceDatabaseAdvisoryLock["Service"];
 };
+
+/** The first key's section names a lock request's events. */
+const lockEventPrefix = (keys: ReadonlyArray<PostgresAdvisoryLockKey>) =>
+  keys[0]?.[0] === "customer-account" ? "account" : "section";
 
 /**
  * The real `CustomerAccountSections` over an in-memory session, account
  * activity row, and advisory lock, so unit tests exercise the real recheck,
  * reuse, and error mapping and can observe which authority reads happened and
  * when the account lock is held. Events: `account-session`,
- * `account-activity`, `account-lock-acquired`, `account-lock-released`.
+ * `account-activity`, `account-lock-acquired`, `account-lock-released`; a
+ * request without the account's key (the order's section alone) records
+ * `section-lock-acquired` and `section-lock-released`.
  */
 export const makeCustomerAccountSections = (
   fixture: CustomerAccountSectionsFixture = {}
 ): {
   readonly layer: Layer.Layer<CustomerAccountSections>;
   readonly events: string[];
+  /** Each lock request's keys, in request order; one request is one permit. */
+  readonly lockRequests: Array<ReadonlyArray<PostgresAdvisoryLockKey>>;
 } => {
   const events: string[] = [];
+  const lockRequests: Array<ReadonlyArray<PostgresAdvisoryLockKey>> = [];
   const record = (event: string) =>
     Effect.sync(() => {
       events.push(event);
@@ -98,31 +115,41 @@ export const makeCustomerAccountSections = (
   })();
 
   const holdLock = <A, E, R>(
+    keys: ReadonlyArray<PostgresAdvisoryLockKey>,
     effect: Effect.Effect<A, E, R>
   ): Effect.Effect<A, E | SqlError.SqlError, R> =>
-    fixture.lockUnavailable === true
-      ? Effect.fail(
-          new SqlError.SqlError({
-            reason: new SqlError.ConnectionError({
-              cause: new Error("advisory lock unavailable"),
-              message: "advisory lock unavailable",
-              operation: "connect",
-            }),
-          })
-        )
-      : Effect.acquireUseRelease(
-          Effect.sync(() => {
-            if (fixture.lockProbe) fixture.lockProbe.held = true;
-          }).pipe(Effect.andThen(record("account-lock-acquired"))),
-          () => effect,
-          () =>
-            Effect.sync(() => {
-              if (fixture.lockProbe) fixture.lockProbe.held = false;
-            }).pipe(Effect.andThen(record("account-lock-released")))
-        );
+    Effect.suspend(() => {
+      lockRequests.push(keys);
+      const prefix = lockEventPrefix(keys);
+      const held: Effect.Effect<A, E | SqlError.SqlError, R> =
+        fixture.lockUnavailable === true
+          ? Effect.fail(
+              new SqlError.SqlError({
+                reason: new SqlError.ConnectionError({
+                  cause: new Error("advisory lock unavailable"),
+                  message: "advisory lock unavailable",
+                  operation: "connect",
+                }),
+              })
+            )
+          : Effect.acquireUseRelease(
+              Effect.sync(() => {
+                if (fixture.lockProbe) fixture.lockProbe.held = true;
+              }).pipe(Effect.andThen(record(`${prefix}-lock-acquired`))),
+              () => effect,
+              () =>
+                Effect.sync(() => {
+                  if (fixture.lockProbe) fixture.lockProbe.held = false;
+                }).pipe(Effect.andThen(record(`${prefix}-lock-released`)))
+            );
+      return fixture.lock && fixture.lockUnavailable !== true
+        ? fixture.lock.withLocks(keys, held)
+        : held;
+    });
 
   return {
     events,
+    lockRequests,
     layer: CustomerAccountSections.Default.pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -135,8 +162,8 @@ export const makeCustomerAccountSections = (
           }),
           Layer.succeed(WorkspaceDatabaseAdvisoryLock, {
             withTransactionPermit: (effect) => effect,
-            withLock: (_key, effect) => holdLock(effect),
-            withLocks: (_keys, effect) => holdLock(effect),
+            withLock: (key, effect) => holdLock([key], effect),
+            withLocks: (keys, effect) => holdLock(keys, effect),
           })
         )
       )
