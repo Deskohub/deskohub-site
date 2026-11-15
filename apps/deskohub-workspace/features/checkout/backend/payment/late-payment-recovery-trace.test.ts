@@ -10,6 +10,7 @@ import {
   makeOfficeInvoiceDocument,
 } from "@/features/accounting/invoice.test-utils";
 import { DiscountClaimError } from "@/features/discounts/errors";
+import { makeReservationOrderSections } from "@/features/reservation/backend/reservation-order-sections.test-utils";
 import {
   WorkspaceAvailabilityService,
   WorkspaceTableUnavailableError,
@@ -18,7 +19,6 @@ import {
   WorkspaceReservationRepository,
   WorkspaceReservationStateError,
 } from "@/features/reservation/backend/workspace-reservation.repository";
-import { makeReservationOrderSections } from "@/features/reservation/backend/reservation-order-sections.test-utils";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { moneyWithValue } from "@/shared/money/money";
 import {

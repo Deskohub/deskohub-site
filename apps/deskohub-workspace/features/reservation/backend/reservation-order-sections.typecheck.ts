@@ -1,11 +1,11 @@
 import type { Effect } from "effect";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import type { WorkspaceAvailabilityService as OtherService } from "./workspace-availability.service";
 import type {
   HeldReservationOrder,
   ReservationOrderSections,
   ReservationOrderSectionUnavailableError,
 } from "./reservation-order-sections";
+import type { WorkspaceAvailabilityService as OtherService } from "./workspace-availability.service";
 
 declare const sections: ReservationOrderSections["Service"];
 declare const orderId: WorkspaceReservationId;
@@ -41,8 +41,11 @@ if (typecheck) {
 
   // @ts-expect-error The section removes only HeldReservationOrder from the requirements.
   // @effect-diagnostics-next-line missingEffectContext:off
-  const lost: Effect.Effect<void, ReservationOrderSectionUnavailableError, never> =
-    sections.withOrder(orderId, heldStepWithService);
+  const lost: Effect.Effect<
+    void,
+    ReservationOrderSectionUnavailableError,
+    never
+  > = sections.withOrder(orderId, heldStepWithService);
 
   void [held, nested, keepsOtherRequirements, outside, lost];
 }

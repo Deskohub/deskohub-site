@@ -12,6 +12,7 @@ import {
   WorkspaceTableUnavailableError,
 } from "@/features/reservation/backend/workspace-availability.service";
 import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   findOrderDotyposReservations,
   type RecreatedReservation,
@@ -23,11 +24,12 @@ import {
   WorkspaceTableAssignmentService,
 } from "./workspace-table-assignment.service";
 
-const order = {
-  id: "reservation-id",
+const orderId = workspaceReservationIdSchema.make("reservation-id");
+const order: WorkspaceReservation = {
+  id: orderId,
   dotyposCustomerId: "dotypos-customer-id",
   reservationDetails: { kind: "cowork", entryTier: "basic", coffee: true },
-} as unknown as WorkspaceReservation;
+} as never;
 
 const coworkSnapshot = makeCoworkInvoiceDocument("en-US") as never;
 
@@ -80,7 +82,9 @@ const makeHarness = (
     effect: Effect.Effect<
       A,
       E,
-      DotyposService | WorkspaceAvailabilityService | WorkspaceTableAssignmentService
+      | DotyposService
+      | WorkspaceAvailabilityService
+      | WorkspaceTableAssignmentService
     >
   ) => effect.pipe(Effect.provide(layer), Effect.result, Effect.runPromise);
   return { events, spies, run };
@@ -131,7 +135,11 @@ describe("findOrderDotyposReservations", () => {
   test("keeps the overlapping active reservations whose note names the order", async () => {
     const harness = makeHarness({
       overlapping: [
-        { id: "order-hold", status: "NEW", note: "Payment order: reservation-id" },
+        {
+          id: "order-hold",
+          status: "NEW",
+          note: "Payment order: reservation-id",
+        },
         { id: "other-hold", status: "NEW", note: "Payment order: other-id" },
         { id: "walk-in", status: "CONFIRMED" },
       ],
@@ -142,7 +150,7 @@ describe("findOrderDotyposReservations", () => {
     };
 
     const result = await harness.run(
-      findOrderDotyposReservations({ orderId: order.id, interval })
+      findOrderDotyposReservations({ orderId, interval })
     );
 
     expect(result).toMatchObject({
@@ -159,42 +167,42 @@ describe("findOrderDotyposReservations", () => {
 });
 
 describe("resumeOrCreateOrderDotyposReservation", () => {
-  test.each([
-    "NEW",
-    "CONFIRMED",
-  ] as const)("resumes the order's existing %s reservation without creating one", async (existingStatus) => {
-    const harness = makeHarness();
+  test.each(["NEW", "CONFIRMED"] as const)(
+    "resumes the order's existing %s reservation without creating one",
+    async (existingStatus) => {
+      const harness = makeHarness();
 
-    const result = await resumeOrCreate(harness, {
-      found: [{ id: "existing-id", status: existingStatus }],
-      status: "NEW",
-    });
+      const result = await resumeOrCreate(harness, {
+        found: [{ id: "existing-id", status: existingStatus }],
+        status: "NEW",
+      });
 
-    expect(result).toMatchObject({
-      _tag: "Success",
-      success: { id: "existing-id", status: existingStatus, resumed: true },
-    });
-    expect(harness.events).toEqual([]);
-  });
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { id: "existing-id", status: existingStatus, resumed: true },
+      });
+      expect(harness.events).toEqual([]);
+    }
+  );
 
-  test.each([
-    "NEW",
-    "CONFIRMED",
-  ] as const)("creates a %s reservation after availability and table assignment", async (status) => {
-    const harness = makeHarness();
+  test.each(["NEW", "CONFIRMED"] as const)(
+    "creates a %s reservation after availability and table assignment",
+    async (status) => {
+      const harness = makeHarness();
 
-    const result = await resumeOrCreate(harness, { found: [], status });
+      const result = await resumeOrCreate(harness, { found: [], status });
 
-    expect(result).toMatchObject({
-      _tag: "Success",
-      success: { id: "created-id", status, resumed: false },
-    });
-    expect(harness.events).toEqual([
-      "ensureAvailable",
-      "assignTableId",
-      `createReservation:${status}`,
-    ]);
-  });
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { id: "created-id", status, resumed: false },
+      });
+      expect(harness.events).toEqual([
+        "ensureAvailable",
+        "assignTableId",
+        `createReservation:${status}`,
+      ]);
+    }
+  );
 
   test("returns null without creating when the workspace is unavailable", async () => {
     const harness = makeHarness({

@@ -81,15 +81,21 @@ export class ReservationOrderSections extends Context.Service<
         orderId,
         section
       ) =>
-        Effect.flatMap(Effect.serviceOption(HeldReservationOrder), (enclosing) =>
-          Option.isSome(enclosing) && enclosing.value.orderId === orderId
-            ? Effect.provideService(section, HeldReservationOrder, enclosing.value)
-            : holdOrder(
-                orderId,
-                Effect.provideService(section, HeldReservationOrder, {
+        Effect.flatMap(
+          Effect.serviceOption(HeldReservationOrder),
+          (enclosing) =>
+            Option.isSome(enclosing) && enclosing.value.orderId === orderId
+              ? Effect.provideService(
+                  section,
+                  HeldReservationOrder,
+                  enclosing.value
+                )
+              : holdOrder(
                   orderId,
-                })
-              )
+                  Effect.provideService(section, HeldReservationOrder, {
+                    orderId,
+                  })
+                )
         );
 
       return { withOrder } satisfies IReservationOrderSections;

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Effect, type Layer } from "effect";
 import { SqlError } from "effect/unstable/sql";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   HeldReservationOrder,
-  ReservationOrderSectionUnavailableError,
   ReservationOrderSections,
+  ReservationOrderSectionUnavailableError,
 } from "./reservation-order-sections";
 import { makeReservationOrderSections } from "./reservation-order-sections.test-utils";
 

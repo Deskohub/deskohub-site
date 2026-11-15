@@ -9,12 +9,12 @@ import {
   makeMeetingRoomInvoiceDocument,
 } from "@/features/accounting/invoice.test-utils";
 import { DiscountClaimError } from "@/features/discounts/errors";
+import { makeReservationOrderSections } from "@/features/reservation/backend/reservation-order-sections.test-utils";
 import {
   WorkspaceAvailabilityService,
   WorkspaceTableUnavailableError,
 } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { makeReservationOrderSections } from "@/features/reservation/backend/reservation-order-sections.test-utils";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
 import { UnpaidHoldRelease } from "../holds/unpaid-hold-release.service";
@@ -744,6 +744,8 @@ describe("late payment recovery in the order section", () => {
     expect(result).toMatchObject({ _tag: "Success", success: "recovered" });
     expect(harness.events).toEqual([
       orderLockAcquired,
+      "findById",
+      // The release reads the current row before claiming it.
       "findById",
       ...releaseEvents,
       "findById",

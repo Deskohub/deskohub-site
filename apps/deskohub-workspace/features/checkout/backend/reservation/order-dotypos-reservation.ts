@@ -172,9 +172,11 @@ export type OrderDotyposReservation = {
 /**
  * Resumes the first of the order's `found` Dotypos reservations, which an
  * interrupted earlier run created after the availability check and table
- * assignment, and otherwise creates one with `status` after both. Callers
- * decide beforehand what more than one found reservation means. Null when
- * the workspace or a table is no longer available for the reservation.
+ * assignment, and otherwise creates one with `status` after both. `status`
+ * applies to creation only: the first found reservation is resumed whatever
+ * its status, so callers pass only the reservations they may resume and
+ * decide beforehand what more than one means. Null when the workspace or a
+ * table is no longer available for the reservation.
  */
 export const resumeOrCreateOrderDotyposReservation = Effect.fnUntraced(
   function* (input: {
@@ -203,13 +205,11 @@ export const resumeOrCreateOrderDotyposReservation = Effect.fnUntraced(
           status: input.status,
         })
       ),
-      Effect.map(
-        (created): OrderDotyposReservation | null => ({
-          id: created.id,
-          status: input.status,
-          resumed: false,
-        })
-      ),
+      Effect.map((created): OrderDotyposReservation | null => ({
+        id: created.id,
+        status: input.status,
+        resumed: false,
+      })),
       Effect.catchTags({
         WorkspaceTableUnavailableError: () => Effect.succeed(null),
         TableAssignmentUnavailableError: () => Effect.succeed(null),
