@@ -26,6 +26,8 @@ export const sealSyntheticPayStateToken = (input?: {
   readonly locale?: Locale;
   readonly changedKeys?: CheckoutSummaryChangedKeys;
   readonly issuedAt?: Temporal.Instant;
+  /** Seal an order-bound (payment retry) state instead of a session one. */
+  readonly orderBound?: boolean;
 }) => {
   const reservation = Schema.decodeUnknownSync(
     normalizedCoworkReservationOrderSchema
@@ -46,7 +48,13 @@ export const sealSyntheticPayStateToken = (input?: {
         quote: buildCoworkReservationQuote(reservation),
         orderId: syntheticPayStateOrderId,
         bookedAt: instantStringSchema.make("2099-07-01T09:58:00.000Z"),
-        checkoutSessionId: checkoutSessionIdSchema.make("checkout-session-id"),
+        ...(input?.orderBound
+          ? { binding: "order" as const }
+          : {
+              checkoutSessionId: checkoutSessionIdSchema.make(
+                "checkout-session-id"
+              ),
+            }),
         changedKeys: input?.changedKeys,
       },
       { issuedAt: input?.issuedAt }
