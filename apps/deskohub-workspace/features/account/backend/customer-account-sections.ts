@@ -61,9 +61,9 @@ type OptionalAccountSectionOptions = {
    * Also holds this order's section while the work runs. With a signed-in
    * session both sections are held in one combined entry, the account's
    * before the order's, on one connection under one pool permit; otherwise
-   * the order's section is held alone. A signed-in call inside an enclosing
-   * account section dies before any lock is requested, since the order's
-   * section would nest and take a second permit.
+   * the order's section is held alone. A call inside an enclosing account
+   * section dies before any lock is requested, since the order's section
+   * would nest and take a second permit.
    */
   readonly reservationOrder: WorkspaceReservationId;
 };
@@ -239,31 +239,22 @@ export class CustomerAccountSections extends Context.Service<
         );
 
       /**
-       * The signed-in account's section with the order's in one combined
-       * entry. Inside an enclosing account hold it dies before any lock is
-       * requested: the order's section would nest under that hold and wait
-       * for a second pool permit while holding one.
+       * Dies before the session read and before any lock is requested
+       * inside an enclosing account section: the order's section would
+       * nest under that hold, signed in or not, and wait for a second pool
+       * permit while holding one.
        */
-      const holdAccountAndOrder = <A, E, R>(
-        accountId: CustomerAccountId,
-        section: Effect.Effect<A, E, R>,
-        reservationOrder: WorkspaceReservationId
-      ) =>
-        Effect.flatMap(
-          Effect.serviceOption(HeldCustomerAccount),
-          (enclosing) =>
-            Option.isSome(enclosing)
-              ? Effect.die(
-                  new Error(
-                    "A reservationOrder section was requested inside an enclosing customerAccount section; hold both in one entry instead of nesting them"
-                  )
+      const outsideAccountSections = Effect.flatMap(
+        Effect.serviceOption(HeldCustomerAccount),
+        (enclosing) =>
+          Option.isSome(enclosing)
+            ? Effect.die(
+                new Error(
+                  "A reservationOrder section was requested inside an enclosing customerAccount section; hold both in one entry instead of nesting them"
                 )
-              : holdAccount(
-                  accountId,
-                  afterRecheck(accountId, "active", section),
-                  reservationOrder
-                )
-        );
+              )
+            : Effect.void
+      );
 
       function withOptionalAccount<A, E, R>(
         section: OptionalAccountSection<A, E, R>
@@ -281,7 +272,14 @@ export class CustomerAccountSections extends Context.Service<
         options?: OptionalAccountSectionOptions
       ) {
         const reservationOrder = options?.reservationOrder;
-        return authentication.currentUser.pipe(
+        const sessionRead =
+          reservationOrder === undefined
+            ? authentication.currentUser
+            : Effect.andThen(
+                outsideAccountSections,
+                authentication.currentUser
+              );
+        return sessionRead.pipe(
           Effect.catchIf(isAuthenticationNotConfigured, () =>
             Effect.succeed(null)
           ),
@@ -304,9 +302,13 @@ export class CustomerAccountSections extends Context.Service<
                     section(session.accountId),
                     { recheck: "active" }
                   )
-                : holdAccountAndOrder(
+                : holdAccount(
                     session.accountId,
-                    section(session.accountId),
+                    afterRecheck(
+                      session.accountId,
+                      "active",
+                      section(session.accountId)
+                    ),
                     reservationOrder
                   );
             }

@@ -496,4 +496,31 @@ describe("CustomerAccountSections.withOptionalAccount holding an order's section
     expect(lockRequests).toEqual([[accountKey]]);
     expect(events).not.toContain("section");
   });
+
+  test("inside an enclosing hold of the account with no session, dies before the session read or the order's section", async () => {
+    const { layer, events, lockRequests } = makeCustomerAccountSections({
+      session: null,
+      activityState: "active",
+    });
+
+    const exit = await CustomerAccountSections.pipe(
+      Effect.flatMap((sections) =>
+        sections.withActiveAccount(
+          sectionAccountId,
+          sections.withOptionalAccount(recordSection(events), withOrder),
+          { recheck: "active" }
+        )
+      ),
+      Effect.provide(layer),
+      Effect.runPromiseExit
+    );
+
+    expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true);
+    expect(lockRequests).toEqual([[accountKey]]);
+    expect(events).toEqual([
+      "account-lock-acquired",
+      "account-activity",
+      "account-lock-released",
+    ]);
+  });
 });
