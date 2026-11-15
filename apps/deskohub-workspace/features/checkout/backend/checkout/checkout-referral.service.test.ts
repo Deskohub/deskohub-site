@@ -68,6 +68,7 @@ import {
 } from "./checkout-referral.service";
 import type { SignedPayState } from "./pay-state";
 import {
+  type PayableReservationRequest,
   PayableReservationService,
   PayableReservationUnavailableError,
 } from "./payable-reservation.service";
@@ -368,6 +369,10 @@ const makeServiceLayer = (input: {
   /** The payment attempt reads after the first report, once pricing ran. */
   readonly activePaymentAttemptIdAfterPricing?: string;
   readonly onPayableReservationRead?: () => void;
+  /** Sees what each live payable-reservation guard was asked for. */
+  readonly onPayableReservationRequest?: (
+    request: PayableReservationRequest
+  ) => void;
 }) => {
   let payableReservationReadCount = 0;
   const dependencies = Layer.mergeAll(
@@ -392,8 +397,9 @@ const makeServiceLayer = (input: {
       )
     ),
     Layer.mock(PayableReservationService, {
-      requireCurrent: () =>
+      requireCurrent: (request: PayableReservationRequest) =>
         Effect.suspend(() => {
+          input.onPayableReservationRequest?.(request);
           payableReservationReadCount += 1;
           input.onPayableReservationRead?.();
           if (input.payableReservationFailure !== undefined) {
@@ -590,6 +596,42 @@ describe("CheckoutReferralService", () => {
     expect(freshState.changedKeys).toBeUndefined();
     expect(freshState.reservation.kind).toBe("cowork");
     expect(freshUrl.searchParams.has("referralApplied")).toBe(false);
+  });
+
+  test("guards an order-bound (payment retry) state by its order and keeps the binding", async () => {
+    const quote = Effect.runSync(buildCoworkReservationQuote(reservation));
+    const requests: PayableReservationRequest[] = [];
+    const layer = makeServiceLayer({
+      affirmation: {
+        quote,
+        commitment: makeCommitment(coworkProduct, []),
+      },
+      evaluateCheckoutReferral: () => Effect.succeed(eligible),
+      onPayableReservationRequest: (request) => requests.push(request),
+    });
+    const payStateToken = tokenFor(
+      { reservation, quote, bookedAt: payStateBookedAt },
+      ({ checkoutSessionId: _sessionId, ...state }) => ({
+        ...state,
+        binding: "order",
+      })
+    );
+
+    const result = await Effect.runPromise(runAcceptCode(layer, payStateToken));
+
+    expect(result.status).toBe("accepted");
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request).toMatchObject({
+        orderId: "checkout-referral-service-test-reservation",
+        binding: "order",
+      });
+      expect(request).not.toHaveProperty("checkoutSessionId");
+    }
+    const freshState = openFreshPayState(result);
+    expect(freshState.binding).toBe("order");
+    expect(freshState.checkoutSessionId).toBeUndefined();
+    expect(freshState.referralCode).toBe("RFL12345");
   });
 
   test("accepts and retries referral pricing from a meeting-room signed state", async () => {

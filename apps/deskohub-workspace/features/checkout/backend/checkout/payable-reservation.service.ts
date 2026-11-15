@@ -12,6 +12,10 @@ import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import type { SealedStateTokenError } from "@/shared/backend/sealed-state";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { deriveCheckoutSessionKeys } from "./checkout-lookup-keys.server";
+import {
+  getPayStateBinding,
+  type SignedPayStateEnvelope,
+} from "./pay-state-contract";
 
 export class PayableReservationUnavailableError extends Data.TaggedError(
   "PayableReservationUnavailableError"
@@ -27,11 +31,22 @@ export class PayableReservationUnavailableError extends Data.TaggedError(
     | "dotypos_not_pending";
 }> {}
 
+/** The part of a Pay state that names the order it may pay. */
+export type PayableReservationRequest = Pick<
+  SignedPayStateEnvelope,
+  "orderId" | "checkoutSessionId" | "binding"
+>;
+
 interface IPayableReservationService {
-  readonly requireCurrent: (input: {
-    readonly orderId: WorkspaceReservationId;
-    readonly checkoutSessionId?: CheckoutSessionId;
-  }) => Effect.Effect<
+  /**
+   * The order a Pay state may still pay: a session-bound state's order while
+   * it is its session's current order, an order-bound (payment retry) state's
+   * order while it is the current order of its own stored session; either way
+   * held, unexpired, and pending in Dotypos.
+   */
+  readonly requireCurrent: (
+    input: PayableReservationRequest
+  ) => Effect.Effect<
     WorkspaceReservation,
     | PayableReservationUnavailableError
     | SealedStateTokenError
@@ -52,6 +67,29 @@ export class PayableReservationService extends Context.Service<
       const dotypos = yield* DotyposService;
       const sealedStateKeys = yield* SealedStateKeys;
 
+      const findReservation = Effect.fnUntraced(function* (
+        orderId: WorkspaceReservationId
+      ) {
+        const reservation = yield* reservations.findById(orderId);
+        if (!reservation) {
+          return yield* unavailable({ orderId }, "missing_reservation");
+        }
+        return reservation;
+      });
+
+      /** Refuses an order its checkout session has since replaced. */
+      const requireCurrentOfStoredSession = Effect.fnUntraced(function* (
+        reservation: WorkspaceReservation
+      ) {
+        const current = yield* reservations.findCurrentByCheckoutSessionKey(
+          reservation.checkoutSessionKey
+        );
+        if (current?.id !== reservation.id) {
+          return yield* unavailable({ orderId: reservation.id }, "not_current");
+        }
+        return reservation;
+      });
+
       /** The order, when it is the current reservation of this checkout session. */
       const findSessionReservation = Effect.fnUntraced(function* (input: {
         readonly orderId: WorkspaceReservationId;
@@ -60,36 +98,42 @@ export class PayableReservationService extends Context.Service<
         const checkoutSessionKeys = yield* deriveCheckoutSessionKeys(
           input.checkoutSessionId
         ).pipe(Effect.provideService(SealedStateKeys, sealedStateKeys));
-        const reservation = yield* reservations.findById(input.orderId);
-        if (!reservation) {
-          return yield* unavailable(input, "missing_reservation");
-        }
+        const reservation = yield* findReservation(input.orderId);
         if (
           !checkoutSessionKeys.accepted.includes(reservation.checkoutSessionKey)
         ) {
           return yield* unavailable(input, "not_current");
         }
+        return yield* requireCurrentOfStoredSession(reservation);
+      });
 
-        const current = yield* reservations.findCurrentByCheckoutSessionKey(
-          reservation.checkoutSessionKey
-        );
-        if (current?.id !== reservation.id) {
-          return yield* unavailable(input, "not_current");
-        }
-        return reservation;
+      /**
+       * The order of an order-bound Pay state, when it is still the current
+       * order of the checkout session it was booked in. Only the stored key
+       * is known; the state carries no raw session ID.
+       */
+      const findBoundOrder = Effect.fnUntraced(function* (
+        orderId: WorkspaceReservationId
+      ) {
+        const reservation = yield* findReservation(orderId);
+        return yield* requireCurrentOfStoredSession(reservation);
       });
 
       return PayableReservationService.of({
         requireCurrent: Effect.fn("payableReservation.requireCurrent")(
           function* (input) {
-            if (!input.checkoutSessionId) {
+            const binding = getPayStateBinding(input);
+            if (!binding) {
               return yield* unavailable(input, "missing_checkout_session");
             }
 
-            const reservation = yield* findSessionReservation({
-              orderId: input.orderId,
-              checkoutSessionId: input.checkoutSessionId,
-            });
+            const reservation =
+              binding.kind === "order"
+                ? yield* findBoundOrder(input.orderId)
+                : yield* findSessionReservation({
+                    orderId: input.orderId,
+                    checkoutSessionId: binding.checkoutSessionId,
+                  });
 
             const holdRefusal = getHoldRefusal(reservation);
             if (holdRefusal) return yield* unavailable(input, holdRefusal);

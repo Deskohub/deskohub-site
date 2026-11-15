@@ -51,7 +51,7 @@ export const signedPayStateEnvelopeSchema = Schema.Struct({
 
 export type SignedPayStateEnvelope = typeof signedPayStateEnvelopeSchema.Type;
 
-type BuildSignedPayStateBindingInput = {
+export type BuildSignedPayStateBindingInput = {
   readonly checkoutSessionId?: typeof checkoutSessionIdSchema.Type;
   /**
    * `order` binds the state to `orderId` alone, for a payment retry; it
@@ -147,7 +147,9 @@ export const getPayStateBinding = (
   state: Pick<SignedPayStateEnvelope, "binding" | "checkoutSessionId">
 ): PayStateBinding | undefined => {
   if (state.binding === "order") {
-    return state.checkoutSessionId === undefined ? { kind: "order" } : undefined;
+    return state.checkoutSessionId === undefined
+      ? { kind: "order" }
+      : undefined;
   }
   return state.checkoutSessionId === undefined
     ? undefined
@@ -158,3 +160,17 @@ export const getPayStateBinding = (
 export const isOrderBoundPayState = (
   state: Pick<SignedPayStateEnvelope, "binding" | "checkoutSessionId">
 ) => getPayStateBinding(state)?.kind === "order";
+
+/**
+ * The binding a state issued from `state` keeps: its checkout session, or
+ * its order for a payment retry. Every reissue (price review, discount code,
+ * referral) spreads it instead of naming `checkoutSessionId`.
+ */
+export const getPayStateBindingInput = (
+  state: Pick<SignedPayStateEnvelope, "binding" | "checkoutSessionId">
+): BuildSignedPayStateBindingInput => ({
+  ...(state.checkoutSessionId !== undefined && {
+    checkoutSessionId: state.checkoutSessionId,
+  }),
+  ...(state.binding !== undefined && { binding: state.binding }),
+});

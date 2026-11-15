@@ -24,6 +24,8 @@ const reservation = (
 const findCurrent = async (input: {
   readonly current?: WorkspaceReservation;
   readonly unavailable?: boolean;
+  /** What the caller hands in; a session-bound state by default. */
+  readonly request?: object;
 }) => {
   const requireCurrent = mock(() =>
     input.unavailable
@@ -38,10 +40,12 @@ const findCurrent = async (input: {
 
   const result = await Effect.gen(function* () {
     const supersessions = yield* ReservationSupersessionService;
-    return yield* supersessions.findCurrent({
-      orderId: "reservation-id",
-      checkoutSessionId: "checkout-session-id",
-    });
+    return yield* supersessions.findCurrent(
+      (input.request ?? {
+        orderId: "reservation-id",
+        checkoutSessionId: "checkout-session-id",
+      }) as never
+    );
   }).pipe(
     Effect.provide(
       ReservationSupersessionService.Default.pipe(
@@ -86,5 +90,21 @@ describe("ReservationSupersessionService", () => {
     const { result } = await findCurrent({ unavailable: true });
 
     expect(result).toBeUndefined();
+  });
+
+  test("asks the guard by session alone, so an order-bound state is never a supersedable session", async () => {
+    const { requireCurrent } = await findCurrent({
+      unavailable: true,
+      // A whole order-bound (payment retry) Pay state handed in at run time.
+      request: { orderId: "reservation-id", binding: "order" },
+    });
+
+    expect(requireCurrent).toHaveBeenCalledTimes(1);
+    expect(requireCurrent.mock.calls[0]).toEqual([
+      expect.not.objectContaining({ binding: "order" }),
+    ]);
+    expect(requireCurrent.mock.calls[0]).toEqual([
+      expect.objectContaining({ orderId: "reservation-id" }),
+    ]);
   });
 });

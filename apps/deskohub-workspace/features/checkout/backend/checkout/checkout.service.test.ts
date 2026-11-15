@@ -12,13 +12,19 @@ import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import {
   type Context,
   Data,
+  Deferred,
   Duration,
   Effect,
   Layer,
   Logger,
   References,
   Schema,
+  Semaphore,
 } from "effect";
+import {
+  type PostgresAdvisoryLockKey,
+  WorkspaceDatabaseAdvisoryLock,
+} from "@/db/postgres-advisory-lock";
 import { env } from "@/env";
 import {
   type CustomerAccountSectionsFixture,
@@ -256,6 +262,8 @@ const buildPayStateToken = (input: {
   readonly submittedCode?: CanonicalPromotionCode;
   readonly requestedDiscountCode?: CanonicalPromotionCode;
   readonly changedKeys?: CheckoutSummaryChangedKeys;
+  /** Signs an order-bound (payment retry) state instead of a session one. */
+  readonly orderBound?: boolean;
 }) =>
   Effect.runSync(
     Effect.gen(function* () {
@@ -266,7 +274,12 @@ const buildPayStateToken = (input: {
         quote: input.quote ?? buildCoworkReservationQuote(reservation),
         orderId: input.orderId,
         bookedAt: payStateBookedAt,
-        checkoutSessionId: input.checkoutSessionId ?? "checkout-session-id",
+        ...(input.orderBound === true
+          ? { binding: "order" as const }
+          : {
+              checkoutSessionId:
+                input.checkoutSessionId ?? "checkout-session-id",
+            }),
         ...(input.submittedCode !== undefined && {
           submittedCode: input.submittedCode,
           submittedCodeDiscountId: application.discount.id,
@@ -546,6 +559,77 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly run?: ReturnType<typeof mock>;
   readonly accountAuthority?: CustomerAccountSectionsFixture;
   readonly returnTarget?: PaymentReturnTarget;
+  readonly orderBound?: boolean;
+  /** The advisory lock under the order's section; uncontended by default. */
+  readonly orderLock?: Layer.Layer<WorkspaceDatabaseAdvisoryLock>;
+  /**
+   * The order row and its attempt follow the payment lifecycle: admission
+   * makes the created attempt active, attachment gives it its page.
+   */
+  readonly statefulOrder?: boolean;
+};
+
+/**
+ * An in-memory advisory lock with real mutual exclusion per key, under the
+ * real lock ledger. `holdFirstUntilContended` keeps the first holder of a
+ * key from running until a second request for that key arrives, so two
+ * submissions provably overlap at the order's section.
+ */
+const makeOrderLock = (
+  options: {
+    readonly holdFirstUntilContended?: true;
+    /** Runs as each holder acquires the lock, for observing what it holds. */
+    readonly onAcquired?: () => void;
+  } = {}
+) => {
+  const events: string[] = [];
+  const semaphores = new Map<string, Semaphore.Semaphore>();
+  const contended = Deferred.makeUnsafe<void>();
+  let requests = 0;
+  const withLock = <A, E, R>(
+    key: PostgresAdvisoryLockKey | readonly PostgresAdvisoryLockKey[],
+    effect: Effect.Effect<A, E, R>
+  ): Effect.Effect<A, E, R> =>
+    Effect.suspend(() => {
+      const name = JSON.stringify(key);
+      let semaphore = semaphores.get(name);
+      if (!semaphore) {
+        semaphore = Semaphore.makeUnsafe(1);
+        semaphores.set(name, semaphore);
+      }
+      requests += 1;
+      const request = requests;
+      events.push(`lock-requested:${name}`);
+      const contention =
+        request === 2 ? Deferred.succeed(contended, undefined) : Effect.void;
+      const run =
+        options.holdFirstUntilContended && request === 1
+          ? Deferred.await(contended).pipe(Effect.andThen(effect))
+          : effect;
+      return contention.pipe(
+        Effect.andThen(
+          semaphore.withPermits(1)(
+            Effect.sync(() => {
+              events.push(`lock-acquired:${name}`);
+              options.onAcquired?.();
+            }).pipe(
+              Effect.andThen(run),
+              Effect.ensuring(
+                Effect.sync(() => events.push(`lock-released:${name}`))
+              )
+            )
+          )
+        )
+      );
+    });
+  return {
+    events,
+    layer: Layer.succeed(WorkspaceDatabaseAdvisoryLock, {
+      withTransactionPermit: (effect) => effect,
+      withLock,
+      withLocks: (keys, effect) => withLock(keys, effect),
+    }),
+  };
 };
 
 const createCheckoutHarness = async <ReservationOverrides extends object>(
@@ -587,7 +671,19 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   };
   const createPendingNexiAttempt =
     options.createPendingNexiAttempt ??
-    mock(() => Effect.succeed(createdAttempt));
+    mock(() =>
+      Effect.sync(() => {
+        if (options.statefulOrder) {
+          currentAttempt = createdAttempt;
+          storedReservation = {
+            ...storedReservation,
+            activePaymentAttemptId: createdAttempt.id,
+            paymentState: "pending",
+          };
+        }
+        return createdAttempt;
+      })
+    );
   const internalAttempt = {
     ...createdAttempt,
     provider: "internal" as const,
@@ -607,8 +703,17 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   const fulfillPaidOrder = options.run ?? mock(() => Effect.void);
   const analytics = recordCheckoutAnalytics();
   const recordLegalEvidence = mock((_input: readonly unknown[]) => Effect.void);
-  const findAttempt = mock(() => Effect.succeed(options.activeAttempt ?? null));
-  const attachHostedPaymentPage = mock(() => Effect.succeed(attachedAttempt));
+  let currentAttempt: typeof createdAttempt | typeof attachedAttempt | null =
+    null;
+  const findAttempt = mock(() =>
+    Effect.succeed(currentAttempt ?? options.activeAttempt ?? null)
+  );
+  const attachHostedPaymentPage = mock(() =>
+    Effect.sync(() => {
+      if (options.statefulOrder) currentAttempt = attachedAttempt;
+      return attachedAttempt;
+    })
+  );
   const markTerminalForReservation = mock(() =>
     Effect.succeed({
       attempt: {
@@ -647,6 +752,8 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     locale,
     ...options.reservationOverrides,
   });
+  // The row as later reads find it; a stateful order's admission moves it.
+  let storedReservation: typeof reservationRecord = reservationRecord;
   const requireCurrent =
     options.requireCurrent ??
     mock(() =>
@@ -663,7 +770,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     }): Effect.Effect<void, EffectDrizzleQueryError> => Effect.void
   );
   const reservations = {
-    findById: mock(() => Effect.succeed(reservationRecord)),
+    findById: mock(() => Effect.sync(() => storedReservation)),
     updateReservationDetails,
     recordPaymentReturnTarget,
   };
@@ -717,6 +824,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
             submittedCode: options.submittedCode,
             requestedDiscountCode: options.requestedDiscountCode,
             changedKeys: options.changedKeys,
+            orderBound: options.orderBound,
           }),
         legalConsent: options.legalConsent ?? true,
         earlyPerformanceConsent: options.earlyPerformanceConsent ?? true,
@@ -746,6 +854,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
             Layer.mock(LegalEvidenceEventRepository, {
               recordMany: recordLegalEvidence,
             }),
+            options.orderLock ?? makeOrderLock().layer,
             TestSealedStateKeys
           )
         )
@@ -2986,6 +3095,225 @@ describe("CheckoutService", () => {
     expect(harness.markTerminalForReservation).not.toHaveBeenCalled();
     expect(harness.createPendingNexiAttempt).toHaveBeenCalledTimes(1);
     expect(harness.updateReservation).toHaveBeenCalledTimes(1);
+  });
+
+  describe("an order-bound (payment retry) Pay state", () => {
+    const openFreshState = (result: { readonly freshPayUrl: string }) =>
+      Effect.runSync(
+        openPayState(
+          new URL(result.freshPayUrl, "https://deskohub.test").searchParams.get(
+            payStateTokenQueryParam
+          ) ?? ""
+        ).pipe(Effect.provide(TestSealedStateKeys))
+      );
+    const expectOrderBound = (state: {
+      readonly binding?: string;
+      readonly checkoutSessionId?: string;
+    }) => {
+      expect(state.binding).toBe("order");
+      expect(state.checkoutSessionId).toBeUndefined();
+    };
+
+    test("guards the order by its binding when loading it and before provider work", async () => {
+      const harness = await createCheckoutHarness({
+        orderId: "reservation-order-bound",
+        orderBound: true,
+      });
+
+      const result = await Effect.runPromise(harness.effect);
+
+      expect(result).toMatchObject({
+        status: "redirect",
+        redirectUrl: "https://payments.example/hosted",
+      });
+      expect(harness.requireCurrent).toHaveBeenCalledTimes(2);
+      for (const [request] of harness.requireCurrent.mock.calls) {
+        expect(request).toMatchObject({
+          orderId: "reservation-order-bound",
+          binding: "order",
+        });
+        expect(request.checkoutSessionId).toBeUndefined();
+      }
+      expect(harness.createPendingNexiAttempt).toHaveBeenCalledTimes(1);
+    });
+
+    test("keeps the binding on a pending price review", async () => {
+      const harness = await createCheckoutHarness({
+        orderId: "reservation-order-bound-review",
+        orderBound: true,
+        changedKeys: {
+          sectionKeys: ["order", "total"],
+          itemKeys: ["product:cowork:reserved-desk"],
+        },
+      });
+
+      const result = await Effect.runPromise(harness.effect);
+      if (result.status !== "pricing_changed") {
+        throw new Error("Expected pricing_changed result");
+      }
+      expectOrderBound(openFreshState(result));
+    });
+
+    test("keeps the binding on a repriced order's review", async () => {
+      const harness = await createCheckoutHarness({
+        orderId: "reservation-order-bound-repriced",
+        orderBound: true,
+        acceptedQuote: buildCoworkReservationQuote(reservationData, {
+          discountQuote: discountedQuote,
+        }),
+        submittedCode: canonicalCode("SUMMER50"),
+        affirm: mock(() =>
+          Effect.succeed({
+            quote: buildCoworkReservationQuote(reservationData, {
+              discountQuote: undiscountedQuote,
+            }),
+            commitment: emptyCommitment,
+          })
+        ),
+      });
+
+      const result = await Effect.runPromise(harness.effect);
+      if (result.status !== "pricing_changed") {
+        throw new Error("Expected pricing_changed result");
+      }
+      expectOrderBound(openFreshState(result));
+      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    });
+
+    test("keeps the binding on the review after claim admission loses a race", async () => {
+      const acceptedQuote = buildCoworkReservationQuote(reservationData, {
+        discountQuote: discountedQuote,
+      });
+      const harness = await createCheckoutHarness({
+        orderId: "reservation-order-bound-claim-race",
+        orderBound: true,
+        acceptedQuote,
+        requestedDiscountCode: canonicalCode("CAMPAIGN10"),
+        affirm: mock()
+          .mockImplementationOnce(() =>
+            Effect.succeed({
+              quote: acceptedQuote,
+              commitment: privateCommitment,
+            })
+          )
+          .mockImplementationOnce(() =>
+            Effect.succeed({
+              quote: buildCoworkReservationQuote(reservationData),
+              commitment: emptyCommitment,
+            })
+          ),
+        createPendingNexiAttempt: mock(() =>
+          Effect.fail(
+            new DiscountClaimError({
+              operation: "reserve",
+              reason: "usage_limit_reached",
+              message: "The last use was claimed concurrently.",
+            })
+          )
+        ),
+      });
+
+      const result = await Effect.runPromise(harness.effect);
+      if (result.status !== "pricing_changed") {
+        throw new Error("Expected pricing_changed result");
+      }
+      expectOrderBound(openFreshState(result));
+    });
+  });
+
+  test("reports an order whose admission a late-payment recovery refuses as in progress, without a payment page", async () => {
+    const { PaymentAdmissionRefusedError } = await import(
+      "../repositories/payment-lifecycle.repository"
+    );
+    const harness = await createCheckoutHarness({
+      orderId: "reservation-late-recovery",
+      createPendingNexiAttempt: mock(() =>
+        Effect.fail(
+          new PaymentAdmissionRefusedError({
+            workspaceReservationId: "reservation-late-recovery" as never,
+            reason: "late_payment_recovery",
+          })
+        )
+      ),
+    });
+
+    const result = await Effect.runPromise(harness.effect);
+
+    expect(result).toEqual({ status: "in_progress" });
+    expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
+  });
+
+  describe("concurrent submissions of one Pay state", () => {
+    test.each([
+      { viewer: "an anonymous customer", accountAuthority: undefined },
+      {
+        viewer: "a signed-in customer",
+        accountAuthority: { session: {}, activityState: "active" } as const,
+      },
+    ])(
+      "start one attempt with one evidence set for $viewer, and both get its page",
+      async ({ accountAuthority }) => {
+        const orderLock = makeOrderLock({ holdFirstUntilContended: true });
+        const harness = await createCheckoutHarness({
+          orderId: "reservation-concurrent-submit",
+          statefulOrder: true,
+          orderLock: orderLock.layer,
+          ...(accountAuthority && { accountAuthority }),
+        });
+
+        const [first, second] = await Effect.runPromise(
+          Effect.all([harness.effect, harness.effect], { concurrency: 2 })
+        );
+
+        expect(first).toMatchObject({
+          status: "redirect",
+          redirectUrl: "https://payments.example/hosted",
+        });
+        expect(second).toEqual(first);
+        expect(harness.recordLegalEvidence).toHaveBeenCalledTimes(1);
+        expect(harness.updateReservationDetails).toHaveBeenCalledTimes(1);
+        expect(harness.updateReservation).toHaveBeenCalledTimes(1);
+        expect(harness.createPendingNexiAttempt).toHaveBeenCalledTimes(1);
+        expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(1);
+        // The second reached the order's section while the first held it,
+        // and waited for it.
+        const orderKey = JSON.stringify([
+          "reservation-order",
+          "reservation-concurrent-submit",
+        ]);
+        expect(orderLock.events).toEqual([
+          `lock-requested:${orderKey}`,
+          `lock-acquired:${orderKey}`,
+          `lock-requested:${orderKey}`,
+          `lock-released:${orderKey}`,
+          `lock-acquired:${orderKey}`,
+          `lock-released:${orderKey}`,
+        ]);
+      }
+    );
+
+    test("enters the order's section inside the account's", async () => {
+      const accountLock = { held: false };
+      const accountHeldAtOrderLock: boolean[] = [];
+      const orderLock = makeOrderLock({
+        onAcquired: () => accountHeldAtOrderLock.push(accountLock.held),
+      });
+      const harness = await createCheckoutHarness({
+        orderId: "reservation-section-order",
+        orderLock: orderLock.layer,
+        accountAuthority: {
+          session: {},
+          activityState: "active",
+          lockProbe: accountLock,
+        },
+      });
+
+      const result = await Effect.runPromise(harness.effect);
+
+      expect(result.status).toBe("redirect");
+      expect(accountHeldAtOrderLock).toEqual([true]);
+      expect(accountLock.held).toBe(false);
+    });
   });
 
   test("returns refreshed pricing when code claim admission loses a race", async () => {

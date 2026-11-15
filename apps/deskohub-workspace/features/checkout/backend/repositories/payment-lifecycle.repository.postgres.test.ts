@@ -11,7 +11,15 @@ import {
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
 import { eq, sql } from "drizzle-orm";
-import { Cause, Effect, Exit, Layer, Predicate, Schema } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Predicate,
+  Schema,
+} from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { makeDatabaseClient, makeDatabasePool } from "@/db/database-client";
 import { databasePoolTimeouts } from "@/db/database-pool-timeouts";
@@ -1116,6 +1124,242 @@ describe.skipIf(!testDatabase)(
           })
         );
       } finally {
+        await fixture.cleanup();
+      }
+    });
+
+    test("refuses a new attempt for an order with a late-payment recovery", async () => {
+      const repository = await makeRepository();
+      const lateRecoveries = await makeLateRecoveryRepository();
+      const dotyposCustomerId = customerId();
+      const reservation = await createHeldReservation(dotyposCustomerId);
+      const firstAttempt = await Effect.runPromise(
+        admit(
+          repository,
+          reservation,
+          makeOrdinaryAdmission(reservation, dotyposCustomerId)
+        )
+      );
+      await Effect.runPromise(
+        repository.markTerminal({
+          id: firstAttempt.id,
+          workspaceReservationId: reservation.id,
+          state: "failed",
+          failureCode: "synthetic_first_failure",
+        })
+      );
+      // Without a recovery, the failed order admits a retry attempt.
+      const control = await createHeldReservation(dotyposCustomerId);
+      const controlAttempt = await Effect.runPromise(
+        admit(
+          repository,
+          control,
+          makeOrdinaryAdmission(control, dotyposCustomerId)
+        )
+      );
+      await Effect.runPromise(
+        repository.markTerminal({
+          id: controlAttempt.id,
+          workspaceReservationId: control.id,
+          state: "failed",
+          failureCode: "synthetic_first_failure",
+        })
+      );
+      const controlRetry = await Effect.runPromise(
+        admit(
+          repository,
+          control,
+          makeOrdinaryAdmission(control, dotyposCustomerId)
+        )
+      );
+      expect(controlRetry.state).toBe("created");
+
+      await Effect.runPromise(
+        lateRecoveries.start({
+          paymentAttemptId: firstAttempt.id,
+          workspaceReservationId: reservation.id,
+          webhookEventId: `webhook-${uniqueId()}` as never,
+          verifiedPaidAt: Temporal.Now.instant(),
+        })
+      );
+
+      const refused = await Effect.runPromise(
+        Effect.result(
+          admit(
+            repository,
+            reservation,
+            makeOrdinaryAdmission(reservation, dotyposCustomerId)
+          )
+        )
+      );
+
+      expect(refused).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: "PaymentAdmissionRefusedError",
+          workspaceReservationId: reservation.id,
+          reason: "late_payment_recovery",
+        },
+      });
+      const attempts = await testDatabase!.pool.query(
+        "select id from payment_attempts where workspace_reservation_id = $1",
+        [reservation.id]
+      );
+      expect(attempts.rows).toEqual([{ id: firstAttempt.id }]);
+      const order = await testDatabase!.pool.query(
+        "select payment_state, active_payment_attempt_id from workspace_reservations where id = $1",
+        [reservation.id]
+      );
+      expect(order.rows).toEqual([
+        {
+          payment_state: "failed",
+          active_payment_attempt_id: firstAttempt.id,
+        },
+      ]);
+    });
+
+    test("an admission that waits behind an uncommitted recovery start sees the recovery and refuses", async () => {
+      const repository = await makeRepository();
+      const dotyposCustomerId = customerId();
+      const reservation = await createHeldReservation(dotyposCustomerId);
+      const firstAttempt = await Effect.runPromise(
+        admit(
+          repository,
+          reservation,
+          makeOrdinaryAdmission(reservation, dotyposCustomerId)
+        )
+      );
+      await Effect.runPromise(
+        repository.markTerminal({
+          id: firstAttempt.id,
+          workspaceReservationId: reservation.id,
+          state: "failed",
+          failureCode: "synthetic_first_failure",
+        })
+      );
+      const started = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      // Recovery start holds its locks until this outer transaction commits.
+      const recovery = Effect.gen(function* () {
+        const { transaction } = yield* WorkspaceDatabase;
+        const recoveries = yield* LatePaymentRecoveryRepository;
+        yield* transaction(
+          recoveries
+            .start({
+              paymentAttemptId: firstAttempt.id,
+              workspaceReservationId: reservation.id,
+              webhookEventId: `webhook-${uniqueId()}` as never,
+              verifiedPaidAt: Temporal.Now.instant(),
+            })
+            .pipe(
+              Effect.andThen(Deferred.succeed(started, undefined)),
+              Effect.andThen(Deferred.await(release))
+            )
+        );
+      }).pipe(
+        Effect.provide(
+          LatePaymentRecoveryRepository.Default.pipe(
+            Layer.provideMerge(testDatabase!.layer)
+          )
+        ),
+        Effect.runPromise
+      );
+      await Effect.runPromise(Deferred.await(started));
+
+      const admission = Effect.runPromise(
+        Effect.result(
+          admit(
+            repository,
+            reservation,
+            makeOrdinaryAdmission(reservation, dotyposCustomerId)
+          )
+        )
+      );
+      await waitForAdvisoryLockWaiter(testDatabase!.pool, [
+        "referral-first-booking",
+        dotyposCustomerId,
+      ]);
+      await Effect.runPromise(Deferred.succeed(release, undefined));
+      await recovery;
+
+      expect(await admission).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: "PaymentAdmissionRefusedError",
+          reason: "late_payment_recovery",
+        },
+      });
+    });
+
+    test("refuses a zero-payable internal payment for an order with a late-payment recovery", async () => {
+      const repository = await makeRepository();
+      const lateRecoveries = await makeLateRecoveryRepository();
+      const fixture = await createInvitedCustomer(false);
+      let voucher: Awaited<ReturnType<typeof createVoucher>> | undefined;
+      try {
+        const reservation = await createHeldReservation(
+          fixture.invitedDotyposCustomerId
+        );
+        const firstAttempt = await Effect.runPromise(
+          admit(
+            repository,
+            reservation,
+            makeOrdinaryAdmission(reservation, fixture.invitedDotyposCustomerId)
+          )
+        );
+        await Effect.runPromise(
+          repository.markTerminal({
+            id: firstAttempt.id,
+            workspaceReservationId: reservation.id,
+            state: "failed",
+            failureCode: "synthetic_first_failure",
+          })
+        );
+        await Effect.runPromise(
+          lateRecoveries.start({
+            paymentAttemptId: firstAttempt.id,
+            workspaceReservationId: reservation.id,
+            webhookEventId: `webhook-${uniqueId()}` as never,
+            verifiedPaidAt: Temporal.Now.instant(),
+          })
+        );
+        const referralOnly = makeReferralAdmission({ reservation, ...fixture });
+        voucher = await createVoucher(
+          fixture.invitedDotyposCustomerId,
+          referralOnly.admission.amount.value
+        );
+        const fullyCovered = makeReferralAdmission({
+          reservation,
+          ...fixture,
+          creditCandidates: [voucher.candidate],
+        });
+
+        const refused = await Effect.runPromise(
+          Effect.result(
+            repository.completeInternalPayment({
+              workspaceReservationId: reservation.id,
+              amount: fullyCovered.admission.amount,
+              commitment: fullyCovered.admission.commitment,
+              locale: fullyCovered.locale,
+              accountingSnapshot: fullyCovered.snapshot,
+            })
+          )
+        );
+
+        expect(refused).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            _tag: "PaymentAdmissionRefusedError",
+            reason: "late_payment_recovery",
+          },
+        });
+        const order = await testDatabase!.pool.query(
+          "select payment_state from workspace_reservations where id = $1",
+          [reservation.id]
+        );
+        expect(order.rows).toEqual([{ payment_state: "failed" }]);
+      } finally {
+        await voucher?.cleanup();
         await fixture.cleanup();
       }
     });

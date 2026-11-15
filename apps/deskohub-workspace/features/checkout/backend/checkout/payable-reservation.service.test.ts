@@ -51,6 +51,8 @@ const runRequireCurrent = (input: {
   readonly current?: WorkspaceReservationRow | null;
   readonly dotyposStatus?: "NEW" | "CANCELLED" | "CONFIRMED";
   readonly checkoutSessionId?: string | null;
+  /** `order` asks as an order-bound (payment retry) Pay state. */
+  readonly binding?: "order";
 }) => {
   const candidate =
     input.candidate === undefined ? reservation() : input.candidate;
@@ -80,13 +82,17 @@ const runRequireCurrent = (input: {
       const payable = yield* PayableReservationService;
       return yield* payable.requireCurrent({
         orderId: "reservation-id",
-        ...(input.checkoutSessionId !== null && {
-          checkoutSessionId: checkoutSessionIdSchema.make(
-            input.checkoutSessionId ?? checkoutSessionId
-          ),
-        }),
+        ...(input.binding !== undefined && { binding: input.binding }),
+        ...(input.checkoutSessionId !== null &&
+          (input.binding === undefined ||
+            input.checkoutSessionId !== undefined) && {
+            checkoutSessionId: checkoutSessionIdSchema.make(
+              input.checkoutSessionId ?? checkoutSessionId
+            ),
+          }),
       });
     }).pipe(Effect.provide(layer), Effect.runPromise),
+    repository,
   };
 };
 
@@ -199,5 +205,103 @@ describe("PayableReservationService", () => {
 
     await expect(result).resolves.toMatchObject({ id: "reservation-id" });
     expect(getReservationStatus).toHaveBeenCalledWith("dotypos-reservation-id");
+  });
+
+  describe("an order-bound Pay state", () => {
+    test("accepts the order while it is the current order of its stored session key and Dotypos reports NEW", async () => {
+      const { getReservationStatus, repository, result } = runRequireCurrent({
+        binding: "order",
+        // The stored key need not derive from any session the caller knows.
+        candidate: reservation({
+          checkoutSessionKey: "stored-session-key" as CheckoutSessionKey,
+        }),
+      });
+
+      await expect(result).resolves.toMatchObject({ id: "reservation-id" });
+      expect(repository.findById).toHaveBeenCalledWith("reservation-id");
+      expect(repository.findCurrentByCheckoutSessionKey).toHaveBeenCalledWith(
+        "stored-session-key"
+      );
+      expect(getReservationStatus).toHaveBeenCalledWith(
+        "dotypos-reservation-id"
+      );
+    });
+
+    test.each(["CANCELLED", "CONFIRMED"] as const)(
+      "rejects the order while Dotypos reports %s",
+      async (dotyposStatus) => {
+        const { result } = runRequireCurrent({
+          binding: "order",
+          dotyposStatus,
+        });
+
+        await expect(result).rejects.toEqual(
+          new PayableReservationUnavailableError({
+            orderId: "reservation-id",
+            reason: "dotypos_not_pending",
+          })
+        );
+      }
+    );
+
+    test.each([
+      {
+        name: "a newer order of the same session",
+        run: { current: reservation({ id: "replacement-reservation-id" }) },
+        reason: "not_current",
+      },
+      {
+        name: "a session with no current order",
+        run: { current: null },
+        reason: "not_current",
+      },
+      {
+        name: "a missing order",
+        run: { candidate: null },
+        reason: "missing_reservation",
+      },
+      {
+        name: "an order that is no longer held",
+        run: { candidate: reservation({ reservationState: "cancelled" }) },
+        reason: "not_held",
+      },
+      {
+        name: "an expired hold",
+        run: {
+          candidate: reservation({
+            reservationHoldExpiresAt: Temporal.Now.instant().subtract({
+              seconds: 1,
+            }),
+          }),
+        },
+        reason: "expired",
+      },
+      {
+        name: "a hold without its Dotypos reservation",
+        run: { candidate: reservation({ dotyposReservationId: null }) },
+        reason: "missing_dotypos_reservation",
+      },
+      {
+        name: "a state that also names a checkout session",
+        run: { checkoutSessionId: "checkout-session-id" },
+        reason: "missing_checkout_session",
+      },
+    ] as const)(
+      "rejects $name without calling Dotypos",
+      async ({ run, reason }) => {
+        const { getReservationStatus, result } = runRequireCurrent({
+          binding: "order",
+          ...run,
+        });
+
+        await expect(result).rejects.toEqual(
+          new PayableReservationUnavailableError({
+            orderId: "reservation-id",
+            reason,
+          })
+        );
+        expect(getReservationStatus).not.toHaveBeenCalled();
+      }
+    );
   });
 });
