@@ -14,6 +14,8 @@ import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { deriveCheckoutSessionKeys } from "./checkout-lookup-keys.server";
 import {
   getPayStateBinding,
+  isPayStateAttemptCurrent,
+  type PayStateBinding,
   type SignedPayStateEnvelope,
 } from "./pay-state-contract";
 
@@ -34,15 +36,16 @@ export class PayableReservationUnavailableError extends Data.TaggedError(
 /** The part of a Pay state that names the order it may pay. */
 export type PayableReservationRequest = Pick<
   SignedPayStateEnvelope,
-  "orderId" | "checkoutSessionId" | "binding"
+  "orderId" | "checkoutSessionId" | "binding" | "retriedAttemptId"
 >;
 
 interface IPayableReservationService {
   /**
    * The order a Pay state may still pay: a session-bound state's order while
    * it is its session's current order, an order-bound (payment retry) state's
-   * order while it is the current order of its own stored session; either way
-   * held, unexpired, and pending in Dotypos.
+   * order while it is the current order of its own stored session and the
+   * retried attempt is still its active one; either way held, unexpired, and
+   * pending in Dotypos.
    */
   readonly requireCurrent: (
     input: PayableReservationRequest
@@ -109,13 +112,18 @@ export class PayableReservationService extends Context.Service<
 
       /**
        * The order of an order-bound Pay state, when it is still the current
-       * order of the checkout session it was booked in. Only the stored key
-       * is known; the state carries no raw session ID.
+       * order of the checkout session it was booked in and the attempt the
+       * state retries is still its active one. Only the stored key is known;
+       * the state carries no raw session ID.
        */
-      const findBoundOrder = Effect.fnUntraced(function* (
-        orderId: WorkspaceReservationId
-      ) {
-        const reservation = yield* findReservation(orderId);
+      const findBoundOrder = Effect.fnUntraced(function* (input: {
+        readonly orderId: WorkspaceReservationId;
+        readonly binding: Extract<PayStateBinding, { readonly kind: "order" }>;
+      }) {
+        const reservation = yield* findReservation(input.orderId);
+        if (!isPayStateAttemptCurrent(input.binding, reservation)) {
+          return yield* unavailable(input, "not_current");
+        }
         return yield* requireCurrentOfStoredSession(reservation);
       });
 
@@ -129,7 +137,7 @@ export class PayableReservationService extends Context.Service<
 
             const reservation =
               binding.kind === "order"
-                ? yield* findBoundOrder(input.orderId)
+                ? yield* findBoundOrder({ orderId: input.orderId, binding })
                 : yield* findSessionReservation({
                     orderId: input.orderId,
                     checkoutSessionId: binding.checkoutSessionId,

@@ -56,6 +56,14 @@ export const signedPayStateSchema = Schema.Union([
           issue: "an order-bound Pay state carries no checkout session id",
         }
     ),
+    Schema.makeFilter(
+      ({ binding, retriedAttemptId }) =>
+        (binding === "order") === (retriedAttemptId !== undefined) || {
+          path: ["retriedAttemptId"],
+          issue:
+            "an order-bound Pay state, and only one, names the attempt it retries",
+        }
+    ),
     // The normalized reservation carries no locale; the Pay state does, so it
     // re-checks the phone in that locale's region. A token whose phone fails
     // today's rule doesn't open.

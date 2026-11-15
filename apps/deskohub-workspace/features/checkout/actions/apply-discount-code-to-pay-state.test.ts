@@ -95,7 +95,9 @@ const makePayStateToken = async (input?: {
       quote,
       orderId: "reservation-id",
       bookedAt: payStateBookedAt,
-      ...(input?.orderBound ? { binding: "order" } : { checkoutSessionId }),
+      ...(input?.orderBound
+        ? { binding: "order", retriedAttemptId: "retried-attempt-id" }
+        : { checkoutSessionId }),
       requestedDiscountCode: input?.requestedDiscountCode,
       changedKeys: input?.changedKeys,
       ...(input?.submittedCode && {
@@ -1024,6 +1026,7 @@ describe("applyDiscountCodeToPayState", () => {
       state: Awaited<ReturnType<typeof openFreshState>>
     ) => {
       expect(state.binding).toBe("order");
+      expect(state.retriedAttemptId).toBe("retried-attempt-id");
       expect(state.checkoutSessionId).toBeUndefined();
     };
     const orderBoundToken = () => makePayStateToken({ orderBound: true });

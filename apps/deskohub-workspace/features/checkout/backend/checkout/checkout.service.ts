@@ -86,7 +86,9 @@ import {
 } from "./pay-state.server";
 import {
   type BuildSignedPayStateBindingInput,
+  getPayStateBinding,
   getPayStateBindingInput,
+  isPayStateAttemptCurrent,
 } from "./pay-state-contract";
 import {
   affirmPayStatePrice,
@@ -841,6 +843,15 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 "Hosted payment checkout resolved by the order's earlier submission"
               );
               return progressResult;
+            }
+            // A retry state retries one attempt: once a later attempt
+            // started from it, paying again needs a new retry.
+            const binding = getPayStateBinding(input.state);
+            if (!binding || !isPayStateAttemptCurrent(binding, reservation)) {
+              yield* Effect.logInfo(
+                "Hosted payment checkout returned in_progress: a later attempt replaced the retried one"
+              );
+              return { status: "in_progress" as const };
             }
             return yield* start(reservation);
           })

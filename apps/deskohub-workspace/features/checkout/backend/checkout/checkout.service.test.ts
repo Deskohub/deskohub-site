@@ -34,6 +34,7 @@ import {
   type CustomerAccountId,
   customerAccountIdSchema,
 } from "@/features/account/customer-account";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import type { CheckoutSummaryChangedKeys } from "@/features/checkout/checkout-summary";
 import type { PaymentReturnTarget } from "@/features/checkout/payment-return-target";
@@ -253,6 +254,9 @@ const fullyDiscountedCommitment = makeDiscountCommitment({
   ],
 });
 
+/** The failed attempt an order-bound test state retries. */
+const retriedAttemptId = "attempt-retried";
+
 const buildPayStateToken = (input: {
   readonly orderId: string;
   readonly locale?: Locale;
@@ -275,7 +279,10 @@ const buildPayStateToken = (input: {
         orderId: input.orderId,
         bookedAt: payStateBookedAt,
         ...(input.orderBound === true
-          ? { binding: "order" as const }
+          ? {
+              binding: "order" as const,
+              retriedAttemptId: paymentAttemptIdSchema.make(retriedAttemptId),
+            }
           : {
               checkoutSessionId:
                 input.checkoutSessionId ?? "checkout-session-id",
@@ -705,8 +712,17 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   const recordLegalEvidence = mock((_input: readonly unknown[]) => Effect.void);
   let currentAttempt: typeof createdAttempt | typeof attachedAttempt | null =
     null;
+  // An order-bound state retries the order's failed active attempt.
+  const activeAttempt =
+    options.activeAttempt === undefined && options.orderBound
+      ? makeAttempt({
+          id: retriedAttemptId,
+          orderId: options.orderId,
+          state: "failed",
+        })
+      : (options.activeAttempt ?? null);
   const findAttempt = mock(() =>
-    Effect.succeed(currentAttempt ?? options.activeAttempt ?? null)
+    Effect.succeed(currentAttempt ?? activeAttempt)
   );
   const attachHostedPaymentPage = mock(() =>
     Effect.sync(() => {
@@ -750,6 +766,10 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   );
   const reservationRecord = makeReservation(options.orderId, {
     locale,
+    ...(options.orderBound && {
+      activePaymentAttemptId: retriedAttemptId,
+      paymentState: "failed",
+    }),
     ...options.reservationOverrides,
   });
   // The row as later reads find it; a stateful order's admission moves it.
@@ -3241,6 +3261,26 @@ describe("CheckoutService", () => {
 
     expect(result).toEqual({ status: "in_progress" });
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
+  });
+
+  test("refuses an order-bound state once a later attempt than the one it retries is active", async () => {
+    const harness = await createCheckoutHarness({
+      orderId: "reservation-order-bound-stale",
+      orderBound: true,
+      reservationOverrides: { activePaymentAttemptId: "attempt-later" },
+      activeAttempt: makeAttempt({
+        id: "attempt-later",
+        orderId: "reservation-order-bound-stale",
+        state: "failed",
+      }),
+    });
+
+    const result = await Effect.runPromise(harness.effect);
+
+    expect(result).toEqual({ status: "in_progress" });
+    expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
+    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.completeInternalPayment).not.toHaveBeenCalled();
   });
 
   describe("concurrent submissions of one Pay state", () => {

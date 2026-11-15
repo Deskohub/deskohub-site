@@ -14,6 +14,7 @@ import { acceptPayStatePriceChange } from "./pay-state-price-acceptance";
 import {
   sealSyntheticPayStateToken,
   syntheticChangedKeys,
+  syntheticRetriedAttemptId,
 } from "./signed-pay-state.test-utils";
 
 const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -38,6 +39,7 @@ describe("acceptPayStatePriceChange", () => {
     expect(accepted.status).toBe("accepted");
     expect(isOrderBoundPayState(continued)).toBe(true);
     expect(continued.checkoutSessionId).toBeUndefined();
+    expect(continued.retriedAttemptId).toBe(syntheticRetriedAttemptId);
   });
 
   test("continues a price review with the same order and quote, without its changed keys", async () => {

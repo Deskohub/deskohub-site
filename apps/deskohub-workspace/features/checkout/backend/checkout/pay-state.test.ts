@@ -3,7 +3,10 @@ import { describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Predicate, Schema } from "effect";
 import type { JsonObject } from "type-fest";
-import { checkoutSessionIdSchema } from "@/features/checkout/checkout-identifiers";
+import {
+  checkoutSessionIdSchema,
+  paymentAttemptIdSchema,
+} from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import { buildReservationQuote } from "@/features/checkout/reservation-quote";
 import {
@@ -574,6 +577,9 @@ describe("reservation phone in signed Pay state", () => {
 });
 
 describe("Pay state binding", () => {
+  const retriedAttemptId = paymentAttemptIdSchema.make(
+    "pay-state-test-retried-attempt-id"
+  );
   const buildOrderBoundState = () =>
     run(
       buildSignedPayState({
@@ -583,6 +589,7 @@ describe("Pay state binding", () => {
         orderId: "pay-state-test-order-id",
         bookedAt: payStateBookedAt,
         binding: "order",
+        retriedAttemptId,
       })
     );
 
@@ -592,7 +599,10 @@ describe("Pay state binding", () => {
 
     expect(opened).toEqual(state);
     expect(opened.checkoutSessionId).toBeUndefined();
-    expect(getPayStateBinding(opened)).toEqual({ kind: "order" });
+    expect(getPayStateBinding(opened)).toEqual({
+      kind: "order",
+      retriedAttemptId,
+    });
     expect(isOrderBoundPayState(opened)).toBe(true);
   });
 
@@ -612,6 +622,23 @@ describe("Pay state binding", () => {
 
     expect(getPayStateBinding(state)).toBeUndefined();
     expect(isOrderBoundPayState(state)).toBe(false);
+  });
+
+  test("an order-bound state must name the attempt it retries, and only it may", () => {
+    const { retriedAttemptId: _retried, ...withoutRetriedAttempt } =
+      buildOrderBoundState();
+
+    expect(() => decodeSignedPayState(withoutRetriedAttempt)).toThrow();
+    expect(() =>
+      decodeSignedPayState({ ...buildState(), retriedAttemptId })
+    ).toThrow();
+    expect(getPayStateBinding({ binding: "order" })).toBeUndefined();
+    expect(
+      getPayStateBinding({
+        checkoutSessionId: checkoutSessionIdSchema.make("session"),
+        retriedAttemptId,
+      })
+    ).toBeUndefined();
   });
 
   test("an order-bound state carrying a checkout session id is refused", () => {
@@ -635,11 +662,14 @@ describe("Pay state binding", () => {
       changedKeys: { sectionKeys: ["total"], itemKeys: [] },
     };
     const continuationPath = run(buildCheckoutPayContinuationPath(reviewed));
-    const token = new URL(continuationPath, "https://workspace.test")
-      .searchParams.get(payStateTokenQueryParam);
+    const token = new URL(
+      continuationPath,
+      "https://workspace.test"
+    ).searchParams.get(payStateTokenQueryParam);
     const continued = run(openPayState(token ?? ""));
 
     expect(continued.changedKeys).toBeUndefined();
     expect(isOrderBoundPayState(continued)).toBe(true);
+    expect(continued.retriedAttemptId).toBe(retriedAttemptId);
   });
 });

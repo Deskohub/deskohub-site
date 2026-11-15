@@ -39,10 +39,12 @@ const reservation = (overrides: Partial<WorkspaceReservationRow> = {}) =>
     checkoutSessionKey,
     checkoutAttemptKey: "checkout-attempt-key",
     reservationState: "held",
-    paymentState: "not_started",
     fulfillmentState: "not_started",
     dotyposReservationId: "dotypos-reservation-id",
     reservationHoldExpiresAt: Temporal.Instant.from("2030-07-22T12:00:00Z"),
+    // The failed attempt an order-bound state retries.
+    activePaymentAttemptId: "retried-attempt-id",
+    paymentState: "failed",
     ...overrides,
   }) as WorkspaceReservationRow;
 
@@ -53,6 +55,8 @@ const runRequireCurrent = (input: {
   readonly checkoutSessionId?: string | null;
   /** `order` asks as an order-bound (payment retry) Pay state. */
   readonly binding?: "order";
+  /** The attempt an order-bound state retries; the row's active one by default. */
+  readonly retriedAttemptId?: string;
 }) => {
   const candidate =
     input.candidate === undefined ? reservation() : input.candidate;
@@ -82,7 +86,10 @@ const runRequireCurrent = (input: {
       const payable = yield* PayableReservationService;
       return yield* payable.requireCurrent({
         orderId: "reservation-id",
-        ...(input.binding !== undefined && { binding: input.binding }),
+        ...(input.binding !== undefined && {
+          binding: input.binding,
+          retriedAttemptId: input.retriedAttemptId ?? "retried-attempt-id",
+        }),
         ...(input.checkoutSessionId !== null &&
           (input.binding === undefined ||
             input.checkoutSessionId !== undefined) && {
@@ -245,6 +252,20 @@ describe("PayableReservationService", () => {
     );
 
     test.each([
+      {
+        name: "a later attempt than the one it retries",
+        run: {
+          candidate: reservation({
+            activePaymentAttemptId: "later-attempt-id",
+          }),
+        },
+        reason: "not_current",
+      },
+      {
+        name: "an order whose retried attempt was never active",
+        run: { retriedAttemptId: "other-attempt-id" },
+        reason: "not_current",
+      },
       {
         name: "a newer order of the same session",
         run: { current: reservation({ id: "replacement-reservation-id" }) },

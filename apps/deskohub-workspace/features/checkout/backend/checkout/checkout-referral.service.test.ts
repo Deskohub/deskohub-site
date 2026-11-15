@@ -6,6 +6,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { Effect, Layer, Schema } from "effect";
 import { SqlError } from "effect/unstable/sql";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import type { WorkspaceProductIdentity } from "@/features/checkout/product-identity";
 import {
   buildCoworkReservationQuote,
@@ -614,6 +615,7 @@ describe("CheckoutReferralService", () => {
       ({ checkoutSessionId: _sessionId, ...state }) => ({
         ...state,
         binding: "order",
+        retriedAttemptId: paymentAttemptIdSchema.make("retried-attempt-id"),
       })
     );
 
@@ -625,11 +627,13 @@ describe("CheckoutReferralService", () => {
       expect(request).toMatchObject({
         orderId: "checkout-referral-service-test-reservation",
         binding: "order",
+        retriedAttemptId: "retried-attempt-id",
       });
       expect(request).not.toHaveProperty("checkoutSessionId");
     }
     const freshState = openFreshPayState(result);
     expect(freshState.binding).toBe("order");
+    expect(freshState.retriedAttemptId).toBe("retried-attempt-id");
     expect(freshState.checkoutSessionId).toBeUndefined();
     expect(freshState.referralCode).toBe("RFL12345");
   });
