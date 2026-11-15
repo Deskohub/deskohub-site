@@ -4,7 +4,7 @@ import type { DotyposReservationId } from "@deskohub/dotypos";
 import type { NexiOperationId, NexiWebhookEventId } from "@deskohub/nexi";
 import { and, asc, desc, eq, gt, inArray, lte, ne, or, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Duration, Effect, Layer } from "effect";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { equalsAny } from "@/db/equals-any";
@@ -499,9 +499,14 @@ const lockSettlementRecovery = Effect.fnUntraced(function* (
   const { db } = yield* WorkspaceTransaction;
   const dotyposCustomerId = yield* findRecoveryCustomer("settle", input);
   // A transition that may record a referral attribution takes the
-  // graph lock first, matching acceptReferral's lock order.
+  // graph lock first, matching acceptReferral's lock order. Recovery
+  // settles inside the order's lock section, held on another connection
+  // and ranked above the graph lock, so the wait is bounded: past it this
+  // settlement rolls back and the queue retries the recovery, instead of
+  // a graph-lock holder and this section waiting on each other. The bound
+  // also allows the graph lock under that section.
   if (yield* attemptRecordsReferral(input.paymentAttemptId)) {
-    yield* WorkspaceLocks.referralGraph();
+    yield* WorkspaceLocks.referralGraph({ boundedWait: Duration.seconds(5) });
   }
   yield* WorkspaceLocks.referralFirstBooking(dotyposCustomerId);
 

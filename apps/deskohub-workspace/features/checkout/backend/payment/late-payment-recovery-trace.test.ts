@@ -18,6 +18,7 @@ import {
   WorkspaceReservationRepository,
   WorkspaceReservationStateError,
 } from "@/features/reservation/backend/workspace-reservation.repository";
+import { makeReservationOrderSections } from "@/features/reservation/backend/reservation-order-sections.test-utils";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { moneyWithValue } from "@/shared/money/money";
 import {
@@ -232,7 +233,9 @@ const recover = async (scenario: Scenario) => {
     );
   }).pipe(
     Effect.provide(
-      LatePaymentRecoveryService.Default.pipe(
+      LatePaymentRecoveryService.withOrderSections(
+        makeReservationOrderSections().layer
+      ).pipe(
         Layer.provide(UnpaidHoldRelease.Default),
         Layer.provide(
           Layer.mergeAll(

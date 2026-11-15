@@ -14,6 +14,7 @@ import {
   WorkspaceTableUnavailableError,
 } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { makeReservationOrderSections } from "@/features/reservation/backend/reservation-order-sections.test-utils";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
 import { UnpaidHoldRelease } from "../holds/unpaid-hold-release.service";
@@ -73,6 +74,10 @@ const makeRecoveryHarness = (options: {
     void,
     unknown
   >;
+  /** Records the order section's lock and row loads among the harness events. */
+  readonly recordOrderLock?: boolean;
+  /** Fails taking the order section's lock. */
+  readonly orderLockUnavailable?: boolean;
 }) => {
   const events: string[] = [];
   let reservation = { ...options.reservation };
@@ -175,7 +180,12 @@ const makeRecoveryHarness = (options: {
     dotyposReservationId: "dotypos-reservation-id",
     dotyposCustomerId: "dotypos-customer-id",
   } as never;
-  const layer = LatePaymentRecoveryService.Default.pipe(
+  const layer = LatePaymentRecoveryService.withOrderSections(
+    makeReservationOrderSections({
+      events: options.recordOrderLock ? events : [],
+      lockUnavailable: options.orderLockUnavailable ?? false,
+    }).layer
+  ).pipe(
     Layer.provide(UnpaidHoldRelease.Default),
     Layer.provide(
       Layer.mergeAll(
@@ -196,7 +206,12 @@ const makeRecoveryHarness = (options: {
           requireReview: spies.requireReview,
         }),
         Layer.mock(WorkspaceReservationRepository, {
-          findById: mock(() => Effect.sync(() => reservation as never)),
+          findById: mock(() =>
+            Effect.sync(() => {
+              if (options.recordOrderLock) events.push("findById");
+              return reservation as never;
+            })
+          ),
           claimCancellation: spies.claimCancellation,
           markCancelled: spies.markCancelled,
           markCancellationFailed: spies.markCancellationFailed,
@@ -710,5 +725,107 @@ describe("LatePaymentRecoveryService settlement decisions", () => {
     expect(harness.spies.requireRefund).toHaveBeenCalledWith(
       expect.objectContaining({ failureCode: "late_payment_newer_reservation" })
     );
+  });
+});
+
+describe("late payment recovery in the order section", () => {
+  const orderLockAcquired = "order-lock-acquired:reservation-id";
+  const orderLockReleased = "order-lock-released:reservation-id";
+
+  test("releases and recreates the hold holding the order's lock, then fulfills outside it", async () => {
+    const harness = makeRecoveryHarness({
+      reservation: expiredHeldReservation,
+      originalStatus: "NEW",
+      recordOrderLock: true,
+    });
+
+    const result = await harness.recover();
+
+    expect(result).toMatchObject({ _tag: "Success", success: "recovered" });
+    expect(harness.events).toEqual([
+      orderLockAcquired,
+      "findById",
+      ...releaseEvents,
+      "findById",
+      "ensureAvailable",
+      "assignTableId",
+      "createReservation",
+      "completeWithReplacement",
+      orderLockReleased,
+      "fulfillPaidOrder",
+    ]);
+  });
+
+  test("reuses the original hold holding the order's lock, then fulfills outside it", async () => {
+    const harness = makeRecoveryHarness({
+      reservation: currentHeldReservation,
+      originalStatus: "NEW",
+      recordOrderLock: true,
+    });
+
+    const result = await harness.recover();
+
+    expect(result).toMatchObject({ _tag: "Success", success: "recovered" });
+    expect(harness.events).toEqual([
+      orderLockAcquired,
+      "findById",
+      "getReservationStatus",
+      "completeUsingOriginalReservation",
+      orderLockReleased,
+      "fulfillPaidOrder",
+    ]);
+  });
+
+  test("refunds an older attempt after a newer one became active without touching the order's hold", async () => {
+    const harness = makeRecoveryHarness({
+      // A payment retry re-acquired a hold for its newer attempt.
+      reservation: {
+        ...currentHeldReservation,
+        activePaymentAttemptId: "newer-attempt-id",
+      },
+      originalStatus: "NEW",
+      recordOrderLock: true,
+    });
+
+    const result = await harness.recover();
+
+    expect(result).toMatchObject({
+      _tag: "Success",
+      success: "refund_required",
+    });
+    expect(harness.events).toEqual([
+      orderLockAcquired,
+      "findById",
+      "settle:refund_required",
+      orderLockReleased,
+    ]);
+    expect(harness.spies.requireRefund).toHaveBeenCalledWith(
+      expect.objectContaining({
+        failureCode: "late_payment_superseded_attempt",
+      })
+    );
+    expect(harness.spies.getReservationStatus).not.toHaveBeenCalled();
+    expect(harness.spies.cancelReservation).not.toHaveBeenCalled();
+    expect(harness.spies.createReservation).not.toHaveBeenCalled();
+    expect(harness.spies.claimCancellation).not.toHaveBeenCalled();
+    expect(harness.spies.fulfillPaidOrder).not.toHaveBeenCalled();
+  });
+
+  test("fails for a queue retry without hold work when the order's lock is unavailable", async () => {
+    const harness = makeRecoveryHarness({
+      reservation: expiredHeldReservation,
+      originalStatus: "NEW",
+      recordOrderLock: true,
+      orderLockUnavailable: true,
+    });
+
+    const result = await harness.recover();
+
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "LatePaymentRecoveryError" },
+    });
+    expect(harness.spies.claim).toHaveBeenCalledTimes(1);
+    expect(harness.events).toEqual([]);
   });
 });
