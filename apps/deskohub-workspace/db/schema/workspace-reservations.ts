@@ -58,7 +58,34 @@ export const paymentStates = orderPaymentStates;
 
 export const fulfillmentStates = orderFulfillmentStates;
 
+/**
+ * Why a reservation was cancelled, written by the run that claims the
+ * cancellation and kept through `cancellation_failed` and `cancelled`:
+ *
+ * - `hold_expired`: hold cleanup released an expired or abandoned hold.
+ * - `payment_retry`: a payment retry released the hold to take a new one.
+ * - `late_payment`: late-payment recovery released the original hold.
+ * - `agent_rotated`: an agent client's hold left in a rotated checkout session.
+ * - `supersession`: a new submission in the same checkout session replaced it.
+ * - `administration`: an operator cancelled it.
+ * - `provider_cancelled`: Dotypos had cancelled the hold before a release
+ *   that hadn't cancelled it itself, for example an operator in Dotypos.
+ *
+ * Null on rows cancelled before the column existed.
+ */
+export const reservationCancellationCauses = [
+  "hold_expired",
+  "payment_retry",
+  "late_payment",
+  "agent_rotated",
+  "supersession",
+  "administration",
+  "provider_cancelled",
+] as const;
+
 export type ReservationState = (typeof reservationStates)[number];
+export type ReservationCancellationCause =
+  (typeof reservationCancellationCauses)[number];
 export type PaymentState = (typeof paymentStates)[number];
 export type FulfillmentState = (typeof fulfillmentStates)[number];
 
@@ -154,6 +181,9 @@ export const workspaceReservations = pgTable(
     fulfilledAt: instant("fulfilled_at"),
     fulfillmentFailedAt: instant("fulfillment_failed_at"),
     failureCode: text("failure_code"),
+    cancellationCause: text(
+      "cancellation_cause"
+    ).$type<ReservationCancellationCause>(),
     fulfillmentFailureCode: text("fulfillment_failure_code"),
     createdAt: instant("created_at").notNull().default(sql`now()`),
     updatedAt: instant("updated_at").notNull().default(sql`now()`),
@@ -182,6 +212,10 @@ export const workspaceReservations = pgTable(
     check(
       "workspace_reservations_payment_return_target_check",
       sql`${t.paymentReturnTarget} is null or ${t.paymentReturnTarget} in (${quotedSqlList(paymentReturnTargets)})`
+    ),
+    check(
+      "workspace_reservations_cancellation_cause_check",
+      sql`${t.cancellationCause} is null or ${t.cancellationCause} in (${quotedSqlList(reservationCancellationCauses)})`
     ),
     check(
       "workspace_reservations_hold_id_check",

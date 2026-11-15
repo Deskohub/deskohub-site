@@ -1,0 +1,2 @@
+ALTER TABLE "workspace_reservations" ADD COLUMN "cancellation_cause" text;--> statement-breakpoint
+ALTER TABLE "workspace_reservations" ADD CONSTRAINT "workspace_reservations_cancellation_cause_check" CHECK ("cancellation_cause" is null or "cancellation_cause" in ('hold_expired', 'payment_retry', 'late_payment', 'agent_rotated', 'supersession', 'administration', 'provider_cancelled'));

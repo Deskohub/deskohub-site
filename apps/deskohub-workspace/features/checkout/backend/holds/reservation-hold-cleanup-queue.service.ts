@@ -193,7 +193,13 @@ export const processReservationHoldCleanupScheduleMessage = Effect.fn(
       )
     );
 
-  if (!isDueReservation(reservation, reservationHoldExpiresAt, now)) {
+  // A due reservation is in a state workspace_reservations_hold_id_check
+  // gives a Dotypos hold, so a due one always names the hold to clean up.
+  const dotyposReservationId = reservation?.dotyposReservationId;
+  if (
+    !dotyposReservationId ||
+    !isDueReservation(reservation, reservationHoldExpiresAt, now)
+  ) {
     yield* Effect.logInfo(
       "Reservation hold cleanup queue message ignored: reservation not due",
       { payload }
@@ -202,7 +208,11 @@ export const processReservationHoldCleanupScheduleMessage = Effect.fn(
   }
 
   const outcome = yield* cleanup
-    .cancelOrderHold({ orderId: payload.orderId, checkedAt: now })
+    .cancelOrderHold({
+      orderId: payload.orderId,
+      checkedAt: now,
+      expectedHold: { dotyposReservationId, reservationHoldExpiresAt },
+    })
     .pipe(
       Effect.mapError(
         ReservationHoldCleanupScheduleError.fromError(
