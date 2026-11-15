@@ -28,6 +28,18 @@ type DotyposHoldReleaseFailureCode =
  */
 type DotyposHoldLiveStatusRule = "require_new" | "unchecked";
 
+/**
+ * What the failure marker requires of the reservation besides `cancelling`:
+ *
+ * - `dotypos_reservation`: that it still names the released hold, so a
+ *   delayed release can't mark a newer hold's cancellation failed. Releases
+ *   of the reservation's own hold.
+ * - `none`: nothing more. Late payment releases the original hold its
+ *   recovery recorded, which the reservation may no longer name, and session
+ *   supersession keeps its marker.
+ */
+type DotyposHoldFailureMarkerFence = "dotypos_reservation" | "none";
+
 /** A release that left the hold in Dotypos because of its live status. */
 interface DotyposHoldRefusal {
   readonly refused: DotyposReservationStatus;
@@ -51,6 +63,7 @@ interface IDotyposHoldRelease {
     readonly dotyposReservationId: DotyposReservationId;
     readonly liveStatus: DotyposHoldLiveStatusRule;
     readonly failureCode: DotyposHoldReleaseFailureCode;
+    readonly failureMarkerFence: DotyposHoldFailureMarkerFence;
   }) => Effect.Effect<DotyposHoldReleaseOutcome, DotyposWriteFailure>;
 }
 
@@ -68,12 +81,17 @@ export class DotyposHoldRelease extends Context.Service<
       // outcome, and the claim stays `cancelling` for a later run.
       const markReleaseFailed = (input: {
         readonly reservationId: WorkspaceReservationId;
+        readonly dotyposReservationId: DotyposReservationId;
         readonly failureCode: DotyposHoldReleaseFailureCode;
+        readonly failureMarkerFence: DotyposHoldFailureMarkerFence;
       }) =>
         reservations
           .markCancellationFailed({
             id: input.reservationId,
             failureCode: input.failureCode,
+            ...(input.failureMarkerFence === "dotypos_reservation" && {
+              dotyposReservationId: input.dotyposReservationId,
+            }),
           })
           .pipe(
             Effect.tapError((cause) =>
