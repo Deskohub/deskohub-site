@@ -14,7 +14,7 @@ import {
   toFreshPayState,
 } from "@/features/checkout/backend/checkout/checkout-pay-url";
 import type { CheckoutReferralResult } from "@/features/checkout/backend/checkout/checkout-referral.service";
-import { isOrderPaymentInProgress } from "@/features/checkout/backend/checkout/order-payment-progress";
+import { isOrderPriceCommitted } from "@/features/checkout/backend/checkout/order-price-commitment";
 import type { SignedPayState } from "@/features/checkout/backend/checkout/pay-state";
 import { getPayStateBindingInput } from "@/features/checkout/backend/checkout/pay-state-contract";
 import type { PayableReservationUnavailableError } from "@/features/checkout/backend/checkout/payable-reservation.service";
@@ -236,7 +236,7 @@ const applyPromotionCode = Effect.fnUntraced(function* (
   const { input, state, submittedCode } = entry;
 
   const reservation = yield* payableReservations.requireCurrent(state);
-  if (isOrderPaymentInProgress(reservation)) return paymentInProgress;
+  if (isOrderPriceCommitted(reservation)) return paymentInProgress;
 
   const dotyposCustomerId = yield* Schema.decodeEffect(dotyposCustomerIdSchema)(
     reservation.dotyposCustomerId
@@ -272,7 +272,7 @@ const applyPromotionCode = Effect.fnUntraced(function* (
       )
     );
   const currentReservation = yield* payableReservations.requireCurrent(state);
-  if (isOrderPaymentInProgress(currentReservation)) return paymentInProgress;
+  if (isOrderPriceCommitted(currentReservation)) return paymentInProgress;
 
   if (result.status === "unavailable") {
     return result;

@@ -752,26 +752,38 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
       const loadPayableReservation = Effect.fnUntraced(function* (
         state: SignedPayState
       ) {
-        const reservation = yield* payableReservations
-          .requireCurrent(state)
-          .pipe(
-            Effect.catchTag(
-              "PayableReservationUnavailableError",
-              (cause: PayableReservationUnavailableError) =>
-                Effect.logInfo(
-                  "Hosted payment checkout reservation is unavailable",
-                  { orderId: state.orderId, reason: cause.reason }
-                ).pipe(Effect.as(null))
-            )
-          );
-        yield* Effect.annotateLogsScoped(reservationLogFields(reservation));
-        return reservation;
+        const payable = yield* payableReservations.requireCurrent(state).pipe(
+          Effect.map((reservation) => ({ reservation })),
+          Effect.catchTag(
+            "PayableReservationUnavailableError",
+            (cause: PayableReservationUnavailableError) =>
+              Effect.logInfo(
+                "Hosted payment checkout reservation is unavailable",
+                { orderId: state.orderId, reason: cause.reason }
+              ).pipe(Effect.as({ refusal: cause.reason }))
+          )
+        );
+        yield* Effect.annotateLogsScoped(
+          reservationLogFields(
+            "reservation" in payable ? payable.reservation : null
+          )
+        );
+        return payable;
       });
 
       /** An order that can't be paid again is either already paid or still moving. */
       const recoverUnpayableOrder = Effect.fnUntraced(function* (input: {
         readonly orderId: WorkspaceReservationId;
         readonly locale: Locale;
+        /**
+         * A retry state whose retried attempt a later one replaced: that
+         * attempt's progress (its open page, or the paid order) is still
+         * returned, but no new payment starts from the state.
+         */
+        readonly replacedRetry?: Omit<
+          ReservationProgressInput,
+          "reservation" | "locale"
+        >;
       }) {
         const completedReservation = yield* reservations.findById(
           input.orderId
@@ -784,6 +796,14 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             orderId: completedReservation.id,
             locale: input.locale,
           });
+        }
+        if (completedReservation && input.replacedRetry) {
+          const progressResult = yield* findReservationProgressResult({
+            ...input.replacedRetry,
+            reservation: completedReservation,
+            locale: input.locale,
+          });
+          if (progressResult) return progressResult;
         }
 
         yield* Effect.logWarning(
@@ -1087,14 +1107,18 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             yield* Effect.logInfo("Hosted payment checkout pay state opened");
 
             const data = state.reservation;
-            const reservation = yield* loadPayableReservation(state);
+            const payable = yield* loadPayableReservation(state);
 
-            if (!reservation) {
+            if (!("reservation" in payable)) {
               return yield* recoverUnpayableOrder({
                 orderId: state.orderId,
                 locale,
+                ...(payable.refusal === "retried_attempt_replaced" && {
+                  replacedRetry: { state, returnTarget: input.returnTarget },
+                }),
               });
             }
+            const { reservation } = payable;
 
             const progressResult = yield* findReservationProgressResult({
               reservation,

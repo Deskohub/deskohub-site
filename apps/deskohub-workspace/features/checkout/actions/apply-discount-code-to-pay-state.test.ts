@@ -126,8 +126,8 @@ type SubmissionInput = {
   readonly payStateToken?: string;
   readonly activePaymentAttemptId?: string;
   readonly activePaymentAttemptIdAfterPricing?: string;
-  /** The active attempt has ended this way instead of being under way. */
-  readonly endedPaymentState?: "failed" | "cancelled" | "expired";
+  /** The order's payment state while an attempt is active; pending by default. */
+  readonly activePaymentState?: "paid" | "failed" | "cancelled" | "expired";
   readonly payableReservationUnavailableAt?: 1 | 2;
   readonly requestedDiscountCode?: CanonicalPromotionCode;
   /** How long each live payable-reservation guard takes. */
@@ -172,11 +172,11 @@ const prepareSubmission = async (input?: SubmissionInput) => {
       id: "reservation-id",
       dotyposCustomerId: input?.dotyposCustomerId ?? "customer-id",
       activePaymentAttemptId,
-      // An active attempt is under way unless it has already ended.
+      // An active attempt is under way unless it already settled or ended.
       paymentState:
         activePaymentAttemptId === null
           ? "not_started"
-          : (input?.endedPaymentState ?? "pending"),
+          : (input?.activePaymentState ?? "pending"),
     };
   };
   const requireCurrent = mock(() =>
@@ -837,10 +837,29 @@ describe("applyDiscountCodeToPayState", () => {
     const token = () =>
       makePayStateToken(orderBound ? { orderBound } : undefined);
 
-    test("refuses a code while the active attempt is under way", async () => {
+    test.each([undefined, "paid"] as const)(
+      "refuses a code while the active attempt is under way or paid (%s)",
+      async (activePaymentState) => {
+        const scenario = await runSubmission({
+          payStateToken: await token(),
+          activePaymentAttemptId: "attempt-id",
+          activePaymentState,
+        });
+
+        expect(scenario.result).toEqual({
+          status: "unavailable",
+          reason: "checkout",
+          checkoutReason: "payment_in_progress",
+        });
+        expect(scenario.applyDiscountCode).not.toHaveBeenCalled();
+      }
+    );
+
+    test("discards the replacement when the payment completes during repricing", async () => {
       const scenario = await runSubmission({
         payStateToken: await token(),
-        activePaymentAttemptId: "attempt-id",
+        activePaymentAttemptIdAfterPricing: "attempt-id",
+        activePaymentState: "paid",
       });
 
       expect(scenario.result).toEqual({
@@ -848,16 +867,16 @@ describe("applyDiscountCodeToPayState", () => {
         reason: "checkout",
         checkoutReason: "payment_in_progress",
       });
-      expect(scenario.applyDiscountCode).not.toHaveBeenCalled();
+      expect(scenario.applyDiscountCode).toHaveBeenCalledTimes(1);
     });
 
     test.each(["failed", "cancelled", "expired"] as const)(
       "applies a code once the active attempt has %s",
-      async (endedPaymentState) => {
+      async (activePaymentState) => {
         const scenario = await runSubmission({
           payStateToken: await token(),
           activePaymentAttemptId: "attempt-id",
-          endedPaymentState,
+          activePaymentState,
         });
 
         expect(scenario.result.status).toBe("applied");

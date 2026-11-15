@@ -3283,6 +3283,71 @@ describe("CheckoutService", () => {
     expect(harness.completeInternalPayment).not.toHaveBeenCalled();
   });
 
+  describe("a retry state whose retried attempt a later one replaced", () => {
+    const replacedRetry = async (
+      laterAttempt: ReturnType<typeof makeAttempt>
+    ) => {
+      const { PayableReservationUnavailableError } = await import(
+        "./payable-reservation.service"
+      );
+      return createCheckoutHarness({
+        orderId: "reservation-order-bound-replaced",
+        orderBound: true,
+        reservationOverrides: {
+          activePaymentAttemptId: laterAttempt.id,
+          paymentState: laterAttempt.state === "failed" ? "failed" : "pending",
+        },
+        activeAttempt: laterAttempt,
+        requireCurrent: mock(() =>
+          Effect.fail(
+            new PayableReservationUnavailableError({
+              orderId: "reservation-order-bound-replaced" as never,
+              reason: "retried_attempt_replaced",
+            })
+          )
+        ),
+      });
+    };
+
+    test("returns the later attempt's open page and starts no payment", async () => {
+      const harness = await replacedRetry(
+        makeAttempt({
+          id: "attempt-later",
+          orderId: "reservation-order-bound-replaced",
+          state: "pending",
+          securityToken: "provider-security-token",
+          providerRedirectUrl: "https://payments.example/later",
+        })
+      );
+
+      const result = await Effect.runPromise(harness.effect);
+
+      expect(result).toMatchObject({
+        status: "redirect",
+        redirectUrl: "https://payments.example/later",
+      });
+      expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
+      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    });
+
+    test("starts no payment once the later attempt ended too", async () => {
+      const harness = await replacedRetry(
+        makeAttempt({
+          id: "attempt-later",
+          orderId: "reservation-order-bound-replaced",
+          state: "failed",
+        })
+      );
+
+      const result = await Effect.runPromise(harness.effect);
+
+      expect(result).toEqual({ status: "in_progress" });
+      expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
+      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.completeInternalPayment).not.toHaveBeenCalled();
+    });
+  });
+
   describe("concurrent submissions of one Pay state", () => {
     test.each([
       { viewer: "an anonymous customer", accountAuthority: undefined },
@@ -3290,13 +3355,19 @@ describe("CheckoutService", () => {
         viewer: "a signed-in customer",
         accountAuthority: { session: {}, activityState: "active" } as const,
       },
+      {
+        viewer: "an anonymous customer retrying an order",
+        accountAuthority: undefined,
+        orderBound: true,
+      },
     ])(
       "start one attempt with one evidence set for $viewer, and both get its page",
-      async ({ accountAuthority }) => {
+      async ({ accountAuthority, orderBound }) => {
         const orderLock = makeOrderLock({ holdFirstUntilContended: true });
         const harness = await createCheckoutHarness({
           orderId: "reservation-concurrent-submit",
           statefulOrder: true,
+          orderBound,
           orderLock: orderLock.layer,
           ...(accountAuthority && { accountAuthority }),
         });

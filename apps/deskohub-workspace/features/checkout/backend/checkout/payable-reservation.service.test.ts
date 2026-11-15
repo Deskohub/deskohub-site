@@ -259,12 +259,12 @@ describe("PayableReservationService", () => {
             activePaymentAttemptId: "later-attempt-id",
           }),
         },
-        reason: "not_current",
+        reason: "retried_attempt_replaced",
       },
       {
         name: "an order whose retried attempt was never active",
         run: { retriedAttemptId: "other-attempt-id" },
-        reason: "not_current",
+        reason: "retried_attempt_replaced",
       },
       {
         name: "a newer order of the same session",
