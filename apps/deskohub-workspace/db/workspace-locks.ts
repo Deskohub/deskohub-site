@@ -1,6 +1,7 @@
 import { Effect, Order } from "effect";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { WorkspaceTransaction } from "./database.service";
 import type { DatabaseQueryError } from "./sql-constraint";
 import {
@@ -144,5 +145,17 @@ export const WorkspaceLockSections = {
       name: "customerAccount",
       rank: 20,
       pair: ["customer-account", accountId],
+    }),
+  /**
+   * One order's hold and payment start: preparing a payment retry, the
+   * submission sequence from its progress check to the attempt, and late
+   * payment recovery's hold work. Entered inside an account section, never
+   * around one.
+   */
+  reservationOrder: (orderId: WorkspaceReservationId) =>
+    holdSection({
+      name: "reservationOrder",
+      rank: 21,
+      pair: ["reservation-order", orderId],
     }),
 } as const;
