@@ -156,14 +156,19 @@ const { buildSignedPayState, sealPayState } = await import(
   "@/features/checkout/backend/checkout/pay-state"
 );
 
-/** Seals a genuine cowork Pay state for a stay on `date`. */
+/**
+ * Seals a genuine cowork Pay state for a stay on `date`, bound to its
+ * checkout session or, for a payment retry, to its order.
+ */
 const sealCoworkPayState = ({
   date,
   locale = "cs-CZ",
   changedKeys,
+  binding = "session",
 }: {
   readonly date: string;
   readonly locale?: Locale;
+  readonly binding?: "session" | "order";
   readonly changedKeys?: {
     readonly sectionKeys: readonly string[];
     readonly itemKeys: readonly string[];
@@ -193,7 +198,9 @@ const sealCoworkPayState = ({
         quote,
         orderId: workspaceReservationIdSchema.make("reservation-id"),
         bookedAt: instantStringSchema.make("2026-06-01T09:58:00.000Z"),
-        checkoutSessionId: checkoutSessionIdSchema.make("session-id"),
+        ...(binding === "order"
+          ? { binding: "order" as const }
+          : { checkoutSessionId: checkoutSessionIdSchema.make("session-id") }),
       });
       return yield* sealPayState({
         ...state,
@@ -289,6 +296,43 @@ describe("LocalizedCheckoutPayPage", () => {
     expect(attributeOf(markup, "data-fresh-pay-url")).toContain(
       `${payStateTokenQueryParam}=`
     );
+  });
+
+  test("asks again for the terms to pay an existing order again", async () => {
+    reservationPayable = true;
+    const token = await sealCoworkPayState({
+      date: distantDate,
+      binding: "order",
+    });
+    const markup = await renderPayPage({ [payStateTokenQueryParam]: token });
+
+    expect(attributeOf(markup, "data-variant")).toBe("retry");
+    expect(attributeOf(markup, "data-pay-state-token")).toBe(token);
+  });
+
+  test("shows a retried order's changed price before its payment", async () => {
+    reservationPayable = true;
+    const token = await sealCoworkPayState({
+      date: distantDate,
+      binding: "order",
+      changedKeys: { sectionKeys: ["total"], itemKeys: [] },
+    });
+    const markup = await renderPayPage({ [payStateTokenQueryParam]: token });
+
+    expect(attributeOf(markup, "data-variant")).toBe("pricingChanged");
+    expect(attributeOf(markup, "data-pay-state-token")).toBeUndefined();
+  });
+
+  test("never opens the retry page from the address alone", async () => {
+    reservationPayable = true;
+    const token = await sealCoworkPayState({ date: distantDate });
+    const markup = await renderPayPage({
+      [payStateTokenQueryParam]: token,
+      variant: "retry",
+      retry: "1",
+    });
+
+    expect(attributeOf(markup, "data-variant")).toBe("pay");
   });
 
   test("passes a rejected discount code back to a disabled form", async () => {
