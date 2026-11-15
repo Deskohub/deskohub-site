@@ -8,6 +8,7 @@ import {
   type CustomerOrderState,
   type CustomerPaymentPage,
   CustomerPaymentPageClosed,
+  CustomerPaymentRetryRefused,
   type CustomerReservationAccess,
   type CustomerReservationHistory,
   CustomerReservationNotFound,
@@ -30,6 +31,10 @@ import {
   CheckoutPaymentPageService,
   type PaymentPageReopening,
 } from "@/features/checkout/backend/checkout/checkout-payment-page.service";
+import {
+  CheckoutPaymentRetryService,
+  type PaymentRetryPreparation,
+} from "@/features/checkout/backend/checkout/checkout-payment-retry.service";
 import type { CheckoutStatusViewModel } from "@/features/checkout/backend/checkout/checkout-status.service";
 import { defaultLocale } from "@/features/i18n";
 import {
@@ -43,6 +48,7 @@ import {
   answerSessionApiFailure,
   answerUnavailable,
 } from "./customer-api-failure";
+import { toCustomerCheckout } from "./customer-checkout";
 import { answerFileDownload } from "./customer-file-download";
 import { CustomerReservationLayers } from "./customer-reservation-layers";
 
@@ -116,6 +122,18 @@ export const CustomerReservationsApiHandlers = HttpApiBuilder.group(
             Effect.provide(reservations.paymentPage(authorization)),
             answerSessionApiFailure("customerApi.reopenPaymentPage"),
             Effect.flatMap(answerPaymentPage)
+          )
+        )
+        // Preparing can release and hold the order's spot again, so it ends
+        // even when the client disconnects.
+        .handle("preparePaymentRetry", ({ params: { orderId }, payload }) =>
+          Effect.flatMap(CheckoutPaymentRetryService, (retries) =>
+            retries.prepare({ orderId, locale: payload.locale })
+          ).pipe(
+            Effect.provide(reservations.paymentRetry(authorization)),
+            runToCompletion,
+            answerSessionApiFailure("customerApi.preparePaymentRetry"),
+            Effect.flatMap(answerPaymentRetry)
           )
         )
         // Showing a code can issue it at the lock provider and store it, so
@@ -260,6 +278,31 @@ const answerPaymentPage = (reopening: PaymentPageReopening) =>
       not_found: () => Effect.fail(new CustomerReservationNotFound()),
       closed: ({ reason }) =>
         Effect.fail(new CustomerPaymentPageClosed({ reason })),
+    })
+  );
+
+/**
+ * The same order's checkout to pay again, or why its payment can't be tried
+ * again in place.
+ */
+const answerPaymentRetry = (preparation: PaymentRetryPreparation) =>
+  Match.value(preparation).pipe(
+    Match.discriminatorsExhaustive("state")({
+      ready: ({ payState, checkout }) =>
+        Effect.succeed(
+          toCustomerCheckout(checkout, payState.freshPayStateToken)
+        ),
+      not_found: () => Effect.fail(new CustomerReservationNotFound()),
+      not_retryable: ({ reason }) =>
+        Effect.fail(new CustomerPaymentRetryRefused({ reason })),
+      spot_unavailable: () =>
+        Effect.fail(
+          new CustomerPaymentRetryRefused({ reason: "spot_unavailable" })
+        ),
+      payment_settling: () =>
+        Effect.fail(
+          new CustomerPaymentRetryRefused({ reason: "payment_settling" })
+        ),
     })
   );
 

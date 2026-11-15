@@ -873,6 +873,7 @@
   "checkoutStatusContactReservation": "Reservierung: {reservation}, {date}",
   "checkoutStatusFulfillmentFailedContactMessage": "Guten Tag,\n\nmeine Zahlung ist eingegangen, aber die Bestätigungs-E-Mail zur Reservierung ist nicht angekommen.\n\n{reservationDetails}\n\nBitte helfen Sie mir, den sicheren Zugangslink zu bekommen.",
   "checkoutStatusPaymentPendingContactMessage": "Guten Tag,\n\ndie Seite mit dem Zahlungsstatus meiner Reservierung zeigt noch immer an, dass die Zahlung verarbeitet wird.\n\n{reservationDetails}\n\nBitte prüfen Sie, ob meine Zahlung durchgegangen ist.",
+  "checkoutStatusPaymentRetrySpotUnavailable": "Diese Auswahl ist nicht mehr frei.",
   "checkoutStatusReserveAgain": "Neue Reservierung starten",
   "checkoutStatusBookAgain": "Erneut reservieren",
   "checkoutStatusTryAgain": "Erneut versuchen",

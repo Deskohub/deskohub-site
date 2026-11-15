@@ -5,7 +5,11 @@ import {
   HttpApiSchema,
 } from "effect/unstable/httpapi";
 import { CustomerAccountLinkRequired, Money } from "./customer-account-api";
-import { CustomerCheckoutReturnTarget } from "./customer-booking-checkout-api";
+import {
+  CustomerCheckout,
+  CustomerCheckoutReturnTarget,
+} from "./customer-booking-checkout-api";
+import { CustomerLocale } from "./customer-locale";
 import { customerInputParseOptions } from "./customer-profile";
 import { CustomerServiceUnavailable } from "./customer-session";
 import { responseHeaders } from "./openapi-response-headers";
@@ -69,6 +73,41 @@ export type CustomerPaymentPageClosedReason =
 export class CustomerPaymentPageClosed extends Schema.TaggedErrorClass<CustomerPaymentPageClosed>()(
   "CustomerPaymentPageClosed",
   { reason: CustomerPaymentPageClosedReason }
+) {
+  static schema = this.pipe(HttpApiSchema.status("Conflict"));
+}
+
+/**
+ * Why the order's payment can't be tried again in place. The order is
+ * `paid`; a payment of it is in progress (`payment_in_progress`) or may
+ * still settle (`payment_settling`); a `late_payment` of it is being
+ * checked; a newer booking replaced it (`superseded`); the reservation was
+ * cancelled (`reservation_cancelled`) or its time has passed
+ * (`reservation_ended`); its booking details can't be read back
+ * (`details_unavailable`); it `needs_review` by the staff; or its spot was
+ * taken since the hold was released (`spot_unavailable`). Except for
+ * `payment_settling`, whose status changes soon, the customer can book the
+ * selection again instead.
+ */
+export const CustomerPaymentRetryRefusalReason = Schema.Literals([
+  "paid",
+  "payment_in_progress",
+  "payment_settling",
+  "late_payment",
+  "superseded",
+  "reservation_cancelled",
+  "reservation_ended",
+  "details_unavailable",
+  "needs_review",
+  "spot_unavailable",
+]).annotate({ identifier: "CustomerPaymentRetryRefusalReason" });
+export type CustomerPaymentRetryRefusalReason =
+  typeof CustomerPaymentRetryRefusalReason.Type;
+
+/** The order's payment can't be tried again in place, for `reason`. */
+export class CustomerPaymentRetryRefused extends Schema.TaggedErrorClass<CustomerPaymentRetryRefused>()(
+  "CustomerPaymentRetryRefused",
+  { reason: CustomerPaymentRetryRefusalReason }
 ) {
   static schema = this.pipe(HttpApiSchema.status("Conflict"));
 }
@@ -303,10 +342,21 @@ export const CustomerPaymentPage = Schema.Struct({
 }).annotate({ identifier: "CustomerPaymentPage" });
 export type CustomerPaymentPage = typeof CustomerPaymentPage.Type;
 
+/** The language the client shows the checkout of the retried payment in. */
+export const PrepareCustomerPaymentRetry = Schema.Struct({
+  locale: CustomerLocale,
+}).annotate({
+  identifier: "PrepareCustomerPaymentRetry",
+  parseOptions: customerInputParseOptions,
+});
+
 /**
  * The signed-in customer's reservations: the history, and the status, door
  * code and invoice of an order the account booked or whose customer it is,
- * and the payment page of one it hasn't paid yet.
+ * the payment page of one it hasn't paid yet, and the checkout of the same
+ * order again after its payment failed, was cancelled or expired. That
+ * checkout continues through the booking group's price acceptance and
+ * submission, like any other; preparing it starts no payment.
  * The status and door code reads refresh the order, as the website's pages
  * do, and the door code and invoice only the order's customer sees.
  */
@@ -338,6 +388,18 @@ export const CustomerReservationsApi = HttpApiGroup.make("reservations")
       error: [
         CustomerReservationNotFound.schema,
         CustomerPaymentPageClosed.schema,
+        CustomerServiceUnavailable.schema,
+      ],
+    })
+  )
+  .add(
+    HttpApiEndpoint.post("preparePaymentRetry", "/:orderId/payment-retry", {
+      params: OrderParams,
+      payload: PrepareCustomerPaymentRetry,
+      success: CustomerCheckout,
+      error: [
+        CustomerReservationNotFound.schema,
+        CustomerPaymentRetryRefused.schema,
         CustomerServiceUnavailable.schema,
       ],
     })
