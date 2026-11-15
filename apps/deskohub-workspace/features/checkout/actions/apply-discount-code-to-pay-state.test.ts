@@ -126,6 +126,8 @@ type SubmissionInput = {
   readonly payStateToken?: string;
   readonly activePaymentAttemptId?: string;
   readonly activePaymentAttemptIdAfterPricing?: string;
+  /** The active attempt has ended this way instead of being under way. */
+  readonly endedPaymentState?: "failed" | "cancelled" | "expired";
   readonly payableReservationUnavailableAt?: 1 | 2;
   readonly requestedDiscountCode?: CanonicalPromotionCode;
   /** How long each live payable-reservation guard takes. */
@@ -159,16 +161,24 @@ const prepareSubmission = async (input?: SubmissionInput) => {
     import("@/features/referrals"),
   ]);
   let payableReservationReadCount = 0;
-  const getReservation = () => ({
-    id: "reservation-id",
-    dotyposCustomerId: input?.dotyposCustomerId ?? "customer-id",
-    activePaymentAttemptId:
+  const getReservation = () => {
+    const activePaymentAttemptId =
       payableReservationReadCount > 1
         ? (input?.activePaymentAttemptIdAfterPricing ??
           input?.activePaymentAttemptId ??
           null)
-        : (input?.activePaymentAttemptId ?? null),
-  });
+        : (input?.activePaymentAttemptId ?? null);
+    return {
+      id: "reservation-id",
+      dotyposCustomerId: input?.dotyposCustomerId ?? "customer-id",
+      activePaymentAttemptId,
+      // An active attempt is under way unless it has already ended.
+      paymentState:
+        activePaymentAttemptId === null
+          ? "not_started"
+          : (input?.endedPaymentState ?? "pending"),
+    };
+  };
   const requireCurrent = mock(() =>
     Effect.sleep(input?.requireCurrentDuration ?? 0).pipe(
       Effect.andThen(() => {
@@ -818,6 +828,43 @@ describe("applyDiscountCodeToPayState", () => {
       checkoutReason: "payment_in_progress",
     });
     expect(scenario.applyDiscountCode).not.toHaveBeenCalled();
+  });
+
+  describe.each([
+    { binding: "session", orderBound: undefined },
+    { binding: "order-bound", orderBound: true },
+  ] as const)("on a $binding Pay state", ({ orderBound }) => {
+    const token = () =>
+      makePayStateToken(orderBound ? { orderBound } : undefined);
+
+    test("refuses a code while the active attempt is under way", async () => {
+      const scenario = await runSubmission({
+        payStateToken: await token(),
+        activePaymentAttemptId: "attempt-id",
+      });
+
+      expect(scenario.result).toEqual({
+        status: "unavailable",
+        reason: "checkout",
+        checkoutReason: "payment_in_progress",
+      });
+      expect(scenario.applyDiscountCode).not.toHaveBeenCalled();
+    });
+
+    test.each(["failed", "cancelled", "expired"] as const)(
+      "applies a code once the active attempt has %s",
+      async (endedPaymentState) => {
+        const scenario = await runSubmission({
+          payStateToken: await token(),
+          activePaymentAttemptId: "attempt-id",
+          endedPaymentState,
+        });
+
+        expect(scenario.result.status).toBe("applied");
+        expect(scenario.applyDiscountCode).toHaveBeenCalledTimes(1);
+        expect(scenario.requireCurrent).toHaveBeenCalledTimes(2);
+      }
+    );
   });
 
   test("discards a replacement summary when payment starts during repricing", async () => {

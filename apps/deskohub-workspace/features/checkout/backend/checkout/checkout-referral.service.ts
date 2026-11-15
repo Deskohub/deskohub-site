@@ -34,6 +34,7 @@ import {
   type PaymentPriceAffirmation,
 } from "./checkout-pricing.service";
 import { isExpectedReferralQuoteAddition } from "./checkout-referral-price-change";
+import { isOrderPaymentInProgress } from "./order-payment-progress";
 import {
   getSignedPayStateBookedAt,
   getSignedPayStateCheckoutSummary,
@@ -257,7 +258,7 @@ export class CheckoutReferralService extends Context.Service<
             yield* payableReservations.requireCurrent(opened);
           // Like an ordinary code, a referral never replaces the summary of a
           // payment already in progress; payment admission rechecks it too.
-          if (currentReservation.activePaymentAttemptId) {
+          if (isOrderPaymentInProgress(currentReservation)) {
             return paymentInProgress;
           }
           const dotyposCustomerId = yield* Schema.decodeEffect(
@@ -291,7 +292,7 @@ export class CheckoutReferralService extends Context.Service<
           // summary it was admitted with.
           const repricedReservation =
             yield* payableReservations.requireCurrent(opened);
-          if (repricedReservation.activePaymentAttemptId) {
+          if (isOrderPaymentInProgress(repricedReservation)) {
             return paymentInProgress;
           }
           const freshPayPathInput = {

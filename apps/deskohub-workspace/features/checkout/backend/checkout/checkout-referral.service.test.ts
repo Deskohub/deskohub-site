@@ -367,6 +367,8 @@ const makeServiceLayer = (input: {
   readonly payableReservationFailure?: PayableReservationUnavailableError;
   /** The payment attempt every live payable-reservation read reports. */
   readonly activePaymentAttemptId?: string;
+  /** The active attempt has ended this way instead of being under way. */
+  readonly endedPaymentState?: "failed" | "cancelled" | "expired";
   /** The payment attempt reads after the first report, once pricing ran. */
   readonly activePaymentAttemptIdAfterPricing?: string;
   readonly onPayableReservationRead?: () => void;
@@ -415,6 +417,11 @@ const makeServiceLayer = (input: {
             dotyposCustomerId:
               input.payableReservationCustomerId ?? dotyposCustomerId,
             activePaymentAttemptId: activePaymentAttemptId ?? null,
+            // An active attempt is under way unless it has already ended.
+            paymentState:
+              activePaymentAttemptId === undefined
+                ? "not_started"
+                : (input.endedPaymentState ?? "pending"),
           } as WorkspaceReservation);
         }),
     })
@@ -1230,6 +1237,59 @@ describe("CheckoutReferralService", () => {
     });
     expect(evaluationCount).toBe(0);
     expect(pricingAffirmationCount).toBe(0);
+  });
+
+  describe.each([
+    { binding: "session", orderBound: false },
+    { binding: "order-bound", orderBound: true },
+  ] as const)("on a $binding Pay state", ({ orderBound }) => {
+    const quote = Effect.runSync(buildCoworkReservationQuote(reservation));
+    const token = () =>
+      tokenFor(
+        { reservation, quote, bookedAt: payStateBookedAt },
+        orderBound
+          ? ({ checkoutSessionId: _sessionId, ...state }) => ({
+              ...state,
+              binding: "order",
+              retriedAttemptId: paymentAttemptIdSchema.make("attempt-id"),
+            })
+          : undefined
+      );
+    const accept = (input: {
+      readonly endedPaymentState?: "failed" | "cancelled" | "expired";
+    }) =>
+      Effect.runPromise(
+        runAcceptCode(
+          makeServiceLayer({
+            affirmation: {
+              quote,
+              commitment: makeCommitment(coworkProduct, []),
+            },
+            activePaymentAttemptId: "attempt-id",
+            ...input,
+            evaluateCheckoutReferral: () => Effect.succeed(eligible),
+          }),
+          token()
+        )
+      );
+
+    test("refuses a referral while the active attempt is under way", async () => {
+      expect(await accept({})).toEqual({
+        status: "unavailable",
+        reason: "checkout",
+        checkoutReason: "payment_in_progress",
+      });
+    });
+
+    test.each(["failed", "cancelled", "expired"] as const)(
+      "accepts a referral once the active attempt has %s",
+      async (endedPaymentState) => {
+        const result = await accept({ endedPaymentState });
+
+        expect(result.status).toBe("accepted");
+        expect(openFreshPayState(result).referralCode).toBe("RFL12345");
+      }
+    );
   });
 
   test("discards a referral repricing when a payment attempt starts meanwhile", async () => {
