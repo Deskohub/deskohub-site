@@ -9,8 +9,7 @@ CREATE TABLE "pass_entry_claims" (
 CREATE TABLE "pass_purchases" (
 	"id" text PRIMARY KEY,
 	"buyer_account_id" text NOT NULL,
-	"holder_account_id" text,
-	"holder_email" text,
+	"holder_account_id" text NOT NULL,
 	"product" text NOT NULL,
 	"tier" text NOT NULL,
 	"entry_count" integer NOT NULL,
@@ -24,8 +23,7 @@ CREATE TABLE "pass_purchases" (
 	CONSTRAINT "pass_purchases_tier_check" CHECK ("tier" in ('open-space', 'reserved-desk', 'reserved-desk-workstation')),
 	CONSTRAINT "pass_purchases_entry_count_check" CHECK ("entry_count" in (5, 10)),
 	CONSTRAINT "pass_purchases_status_check" CHECK ("status" in ('pending_payment', 'active', 'depleted', 'expired', 'cancelled', 'withdrawn', 'void')),
-	CONSTRAINT "pass_purchases_validity_check" CHECK ("valid_from" < "valid_until"),
-	CONSTRAINT "pass_purchases_holder_check" CHECK ("holder_account_id" is not null or nullif(btrim("holder_email"), '') is not null)
+	CONSTRAINT "pass_purchases_validity_check" CHECK ("valid_from" < "valid_until")
 );
 --> statement-breakpoint
 CREATE INDEX "pass_entry_claims_pass_date_idx" ON "pass_entry_claims" ("pass_id","date");--> statement-breakpoint
