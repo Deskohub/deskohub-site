@@ -46,6 +46,8 @@ export type PaymentPageOutcome = Data.TaggedEnum<{
   Closed: { readonly reason: CustomerPaymentPageClosedReason };
   /** The order isn't the account's (any more). */
   NotFound: Record<never, never>;
+  /** The screen left before its payment URL arrived. */
+  Abandoned: Record<never, never>;
 }>;
 export const PaymentPageOutcome = Data.taggedEnum<PaymentPageOutcome>();
 
@@ -99,7 +101,10 @@ const reservationsApi = Effect.map(
  * Opens the order's unpaid payment page again (POST payment-page) in the
  * payment browser, returning to the app's status screen for the order.
  */
-export const reopenPaymentPage = (orderId: CustomerReservationOrderId) =>
+export const reopenPaymentPage = (
+  orderId: CustomerReservationOrderId,
+  ownsAttempt: () => boolean
+) =>
   reservationsApi.pipe(
     Effect.flatMap((reservations) =>
       reservations
@@ -110,11 +115,13 @@ export const reopenPaymentPage = (orderId: CustomerReservationOrderId) =>
         .pipe(customerWrite)
     ),
     Effect.flatMap(({ url }) =>
-      Effect.flatMap(Effect.service(PaymentBrowser), (browser) =>
-        browser.open(url, appPaymentReturnUrl(orderId))
-      )
+      Effect.gen(function* () {
+        const browser = yield* Effect.service(PaymentBrowser);
+        if (!ownsAttempt()) return PaymentPageOutcome.Abandoned();
+        const result = yield* browser.open(url, appPaymentReturnUrl(orderId));
+        return PaymentPageOutcome.Opened({ result });
+      })
     ),
-    Effect.map((result) => PaymentPageOutcome.Opened({ result })),
     Effect.catchTags({
       CustomerPaymentPageClosed: ({ reason }) =>
         Effect.succeed(PaymentPageOutcome.Closed({ reason })),
@@ -151,8 +158,16 @@ export const retryPayment = (
   );
 
 export const reopenPaymentPageAtom = customerDataRuntime.fn(
-  (orderId: CustomerReservationOrderId) =>
-    reopenPaymentPage(orderId).pipe(Effect.provide(paymentBrowserLayer))
+  ({
+    orderId,
+    ownsAttempt,
+  }: {
+    readonly orderId: CustomerReservationOrderId;
+    readonly ownsAttempt: () => boolean;
+  }) =>
+    reopenPaymentPage(orderId, ownsAttempt).pipe(
+      Effect.provide(paymentBrowserLayer)
+    )
 );
 
 export const retryPaymentAtom = customerDataRuntime.fn(

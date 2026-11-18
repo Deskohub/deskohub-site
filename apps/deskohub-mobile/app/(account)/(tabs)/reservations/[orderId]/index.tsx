@@ -1,10 +1,20 @@
 import { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
-import { Stack, useLocalSearchParams } from "expo-router";
-import { OrderStatusScreen } from "../../../../../src/account/reservations/order-status-screen";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import {
+  OrderStatusScreen,
+  ReservationPaneHeading,
+} from "../../../../../src/account/reservations/order-status-screen";
+import { ReservationsListScreen } from "../../../../../src/account/reservations/reservations-list-screen";
 import { statusVisitOf } from "../../../../../src/account/reservations/status-refresh-rules";
+import {
+  orderStatusHref,
+  reservationsHref,
+} from "../../../../../src/booking/booking-routes";
 import { useAppLocale } from "../../../../../src/i18n/locale-context";
 import { m } from "../../../../../src/i18n/messages";
 import { renderClosingStackHeader } from "../../../../../src/ui/navigation";
+import { SplitPane } from "../../../../../src/ui/split-pane";
+import { useViewport } from "../../../../../src/ui/viewport";
 
 export default function ReservationStatusRoute() {
   // Only `after` matters; other params (such as a preview's bypass) are ignored.
@@ -13,24 +23,59 @@ export default function ReservationStatusRoute() {
     after?: string;
   }>();
   const locale = useAppLocale();
+  const router = useRouter();
+  const { isExpanded } = useViewport();
+  const id = CustomerReservationOrderId.make(orderId);
   const visit = statusVisitOf(after);
+  const closes = visit === "after-payment";
   return (
     <>
       {/* Straight after payment the booking closes to the Reservations list
           below it (`leaveCheckout`), never back into checkout. */}
-      {visit === "after-payment" && (
-        <Stack.Screen
-          options={{
+      <Stack.Screen
+        options={{
+          headerShown: !isExpanded,
+          ...(closes && {
             title: m.reservations_your_booking({}, { locale }),
             header: renderClosingStackHeader,
-          }}
-        />
-      )}
-      <OrderStatusScreen
-        key={orderId}
-        orderId={CustomerReservationOrderId.make(orderId)}
-        visit={visit}
+          }),
+        }}
       />
+      <SplitPane
+        list={
+          isExpanded && (
+            <ReservationsListScreen
+              selection={{
+                orderId: id,
+                onSelect: (selected) => {
+                  if (selected !== id)
+                    router.replace(orderStatusHref(selected));
+                },
+              }}
+            />
+          )
+        }
+      >
+        <OrderStatusScreen
+          key={orderId}
+          orderId={id}
+          visit={visit}
+          heading={
+            isExpanded ? (
+              <ReservationPaneHeading
+                closes={closes}
+                onBack={() => {
+                  if (closes || !router.canGoBack()) {
+                    router.dismissTo(reservationsHref);
+                  } else {
+                    router.back();
+                  }
+                }}
+              />
+            ) : undefined
+          }
+        />
+      </SplitPane>
     </>
   );
 }

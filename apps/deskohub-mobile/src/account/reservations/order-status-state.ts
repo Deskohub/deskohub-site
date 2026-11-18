@@ -5,6 +5,7 @@ import { AccountReadBudget } from "../../customer-api/account-read-budget";
 import { CustomerApi } from "../../customer-api/customer-api.service";
 import { customerDataRuntime } from "../../customer-api/customer-data-runtime";
 import { customerRead } from "../../customer-api/customer-request";
+import type { CustomerRequestFailure } from "../../customer-api/customer-view-error";
 import { appForegroundAtom } from "../../platform/app-foreground";
 import { reservationHistoryAtom } from "./reservations-list-state";
 import { type StatusRefreshState, statusRefreshes } from "./status-refresh";
@@ -40,31 +41,52 @@ const refreshTaps = (
 export interface StatusScreenFocus {
   /** Counts the times the screen came into focus; each one is a new session. */
   readonly session: number;
-  readonly focused: boolean;
+  /** The focused detail owning this order's refresh, if any. */
+  readonly owner: symbol | undefined;
+  /** A focused preview pauses while it is hidden by the pane layout. */
+  readonly visible: boolean;
   /** How the customer arrived, which picks the automatic refresh schedule. */
   readonly visit: StatusVisit;
 }
 
 const unfocused: StatusScreenFocus = {
   session: 0,
-  focused: false,
+  owner: undefined,
+  visible: false,
   visit: "normal",
 };
 
 /** The screen came into focus for a `visit`: a new session starts. */
 export const focusGained =
-  (visit: StatusVisit) =>
+  (visit: StatusVisit, owner: symbol, visible = true) =>
   (focus: StatusScreenFocus): StatusScreenFocus => ({
     session: focus.session + 1,
-    focused: true,
+    owner,
+    visible,
     visit,
   });
 
 /** The screen lost focus; its session ends. */
-export const focusLost = (focus: StatusScreenFocus): StatusScreenFocus => ({
-  ...focus,
-  focused: false,
-});
+export const focusLost =
+  (owner: symbol) =>
+  (focus: StatusScreenFocus): StatusScreenFocus =>
+    focus.owner === owner
+      ? { ...focus, owner: undefined, visible: false }
+      : focus;
+
+export const focusVisibility =
+  (owner: symbol, visible: boolean) =>
+  (focus: StatusScreenFocus): StatusScreenFocus =>
+    focus.owner === owner && focus.visible !== visible
+      ? { ...focus, visible }
+      : focus;
+
+export const restartStatusVisit =
+  (owner: symbol, visit?: StatusVisit) =>
+  (focus: StatusScreenFocus): StatusScreenFocus =>
+    focus.owner === owner
+      ? focusGained(visit ?? focus.visit, owner, focus.visible)(focus)
+      : focus;
 
 // The refresh state and the focus session it belongs to.
 interface StatusProgress {
@@ -72,18 +94,28 @@ interface StatusProgress {
   readonly state: StatusRefreshState;
 }
 
-// A stream atom fails with NoSuchElementError when its stream ends without a
-// value; these refreshes never end, so that would be a defect.
-const endedAsDefect = <E>(
-  cause: Cause.Cause<E | Cause.NoSuchElementError>
-): Cause.Cause<E> =>
+interface StatusReadFailure {
+  readonly session: number;
+  readonly cause: CustomerRequestFailure;
+}
+
+type StatusProgressResult = AsyncResult.AsyncResult<
+  StatusProgress,
+  StatusReadFailure | Cause.NoSuchElementError
+>;
+
+// The screen uses the original failure. A stream atom that ends without a
+// value reports NoSuchElementError, which is a defect for these refreshes.
+const statusReadCause = (
+  cause: Cause.Cause<StatusReadFailure | Cause.NoSuchElementError>
+): Cause.Cause<CustomerRequestFailure> =>
   Cause.fromReasons(
-    cause.reasons.map((reason): Cause.Reason<E> => {
+    cause.reasons.map((reason): Cause.Reason<CustomerRequestFailure> => {
       if (!Cause.isFailReason(reason)) return reason;
       const { error } = reason;
       return Cause.isNoSuchElementError(error)
         ? Cause.makeDieReason(error)
-        : Cause.makeFailReason(error);
+        : Cause.makeFailReason(error.cause);
     })
   );
 
@@ -95,24 +127,23 @@ const endedAsDefect = <E>(
 // - A new session whose first read failed keeps showing the previous
 //   session's order under the failure, stopped: refreshing it means retrying
 //   the session, not tapping a stream that has ended.
-const shownProgress = <E>(
-  result: AsyncResult.AsyncResult<StatusProgress, E | Cause.NoSuchElementError>,
+const shownProgress = (
+  result: StatusProgressResult,
   session: number
-): AsyncResult.AsyncResult<StatusRefreshState, E> =>
+): AsyncResult.AsyncResult<StatusRefreshState, CustomerRequestFailure> =>
   AsyncResult.match(result, {
-    onInitial: ({ waiting }) =>
-      AsyncResult.initial<StatusRefreshState, E>(waiting),
+    onInitial: ({ waiting }) => AsyncResult.initial(waiting),
     onSuccess: ({ value }) => {
       const reading = value.state.reading || value.session !== session;
-      return AsyncResult.success<StatusRefreshState, E>(
+      return AsyncResult.success(
         { ...value.state, reading },
         { waiting: reading }
       );
     },
     onFailure: ({ cause, previousSuccess, waiting }) =>
-      AsyncResult.failure<StatusRefreshState, E>(endedAsDefect(cause), {
+      AsyncResult.failure(statusReadCause(cause), {
         previousSuccess: Option.map(previousSuccess, ({ value }) =>
-          AsyncResult.success<StatusRefreshState, E>({
+          AsyncResult.success({
             ...value.state,
             // A retry of the visit is under way.
             reading: waiting,
@@ -149,15 +180,24 @@ export const makeOrderStatusAtoms = (foreground: Atom.Atom<boolean>) => {
   // starts over with a fresh read and a new automatic count.
   const progress = Atom.family((orderId: CustomerReservationOrderId) =>
     customerDataRuntime.atom((get) => {
-      const { session, focused, visit } = get(focus(orderId));
-      const previous = get
-        .self<AsyncResult.AsyncResult<StatusProgress, unknown>>()
-        .pipe(Option.flatMap(AsyncResult.value));
+      const { session, owner, visible, visit } = get(focus(orderId));
+      const prior = get.self<StatusProgressResult>();
+      const failure = Option.flatMap(prior, AsyncResult.error);
+      // A failed first read has no successful value to resume. Keep its
+      // error for this visit until an explicit retry or a new visit.
+      if (
+        Option.isSome(failure) &&
+        !Cause.isNoSuchElementError(failure.value) &&
+        failure.value.session === session
+      ) {
+        return Stream.fail(failure.value);
+      }
+      const previous = Option.flatMap(prior, AsyncResult.value);
       const resume = previous.pipe(
         Option.filter((previous) => previous.session === session),
         Option.map((previous) => previous.state)
       );
-      return focused && get(foreground)
+      return owner !== undefined && visible && get(foreground)
         ? statusRefreshes({
             read: readOrderStatus(orderId),
             remainingBudget: remainingReadBudget,
@@ -170,7 +210,10 @@ export const makeOrderStatusAtoms = (foreground: Atom.Atom<boolean>) => {
             ),
             // The list read the order while it was settling.
             onSettled: Effect.sync(() => get.refresh(reservationHistoryAtom)),
-          }).pipe(Stream.map((state) => ({ session, state })))
+          }).pipe(
+            Stream.map((state) => ({ session, state })),
+            Stream.mapError((cause): StatusReadFailure => ({ session, cause }))
+          )
         : Stream.never;
     })
   );
@@ -182,7 +225,7 @@ export const makeOrderStatusAtoms = (foreground: Atom.Atom<boolean>) => {
     )
   );
 
-  return { focus, refreshRequests, progress, status };
+  return { focus, refreshRequests, status };
 };
 
 export const orderStatusAtoms = makeOrderStatusAtoms(appForegroundAtom);
