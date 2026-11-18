@@ -3,7 +3,7 @@ import { formatDiscountAdjustment } from "@/features/checkout/format-discount-ad
 import {
   type WorkspaceProductFamily,
   type WorkspaceProductTarget,
-  workspaceProductFamilies,
+  workspaceReservationProductFamilies,
 } from "@/features/discounts/product-target";
 import { type Locale, m } from "@/features/i18n";
 import { getLandingPageSaleBannerLabel } from "./landing-page-sale-banner-content";
@@ -18,14 +18,14 @@ const officeProduct = {
   kind: "office",
 } as const satisfies WorkspaceProductTarget;
 
-const bookableWithoutOffice = workspaceProductFamilies.filter(
+const bookableWithoutOffice = workspaceReservationProductFamilies.filter(
   (family) => family !== "office"
 );
 
 const formatLabel = (
   products: readonly WorkspaceProductTarget[],
   {
-    bookableProducts = workspaceProductFamilies,
+    bookableProducts = workspaceReservationProductFamilies,
     locale = "en-US",
   }: {
     readonly bookableProducts?: readonly WorkspaceProductFamily[];

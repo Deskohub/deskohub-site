@@ -1,29 +1,61 @@
 import { Match, Schema } from "effect";
 import { workspaceCoworkCurrentTiers } from "@/features/checkout/product-catalog";
 import type { WorkspaceProductIdentity } from "@/features/checkout/product-identity";
+import {
+  entryPackOffers,
+  entryPackProductSchema,
+  getPassProductKey,
+  unlimitedPassOffers,
+  unlimitedPassProductSchema,
+} from "@/features/passes/pass-offer";
 import { workspaceCoworkProductTargetSchema } from "@/features/reservation/cowork-reservation-product";
 import { workspaceMeetingRoomProductTargetSchema } from "@/features/reservation/meeting-room-reservation";
 import { workspaceOfficeProductTargetSchema } from "@/features/reservation/office-reservation";
+
+const entryPackFamilyTarget = { kind: "entry-pack" } as const;
+const unlimitedFamilyTarget = { kind: "unlimited" } as const;
+
+export const workspacePassOfferTargets = [
+  ...entryPackOffers.map(({ product }) => product),
+  ...unlimitedPassOffers.map(({ product }) => product),
+];
 
 export const workspaceProductTargetSchema = Schema.Union([
   workspaceCoworkProductTargetSchema,
   workspaceMeetingRoomProductTargetSchema,
   workspaceOfficeProductTargetSchema,
+  entryPackProductSchema,
+  Schema.Struct({
+    kind: Schema.Literal("entry-pack"),
+    tier: Schema.optionalKey(Schema.Never),
+    size: Schema.optionalKey(Schema.Never),
+  }),
+  unlimitedPassProductSchema,
+  Schema.Struct({
+    kind: Schema.Literal("unlimited"),
+    tier: Schema.optionalKey(Schema.Never),
+  }),
 ]);
 
 export type WorkspaceProductTarget = typeof workspaceProductTargetSchema.Type;
 
 export type WorkspaceProductFamily = WorkspaceProductTarget["kind"];
 
-/** Family targets, each covering every product of its reservation family. */
-export const workspaceProductTargets = [
-  { kind: "cowork" as const },
-  { kind: "meeting-room" as const },
-  { kind: "office" as const },
-] satisfies readonly WorkspaceProductTarget[];
+const reservationProductTargets = [
+  { kind: "cowork" },
+  { kind: "meeting-room" },
+  { kind: "office" },
+] as const satisfies readonly WorkspaceProductTarget[];
 
-export const workspaceProductFamilies: readonly WorkspaceProductFamily[] =
-  workspaceProductTargets.map(({ kind }) => kind);
+export const workspaceReservationProductFamilies: readonly WorkspaceProductFamily[] =
+  reservationProductTargets.map(({ kind }) => kind);
+
+/** Family targets, each covering every product of its family. */
+export const workspaceProductTargets = [
+  ...reservationProductTargets,
+  entryPackFamilyTarget,
+  unlimitedFamilyTarget,
+] satisfies readonly WorkspaceProductTarget[];
 
 /** Cowork tier targets, each covering one saleable cowork tier. */
 export const workspaceCoworkTierProductTargets =
@@ -34,14 +66,23 @@ export const workspaceCoworkTierProductTargets =
 
 export type WorkspaceProductTargetKey =
   | WorkspaceProductFamily
-  | `cowork:${(typeof workspaceCoworkCurrentTiers)[number]}`;
+  | `cowork:${(typeof workspaceCoworkCurrentTiers)[number]}`
+  | ReturnType<typeof getPassProductKey>;
 
 export const getWorkspaceProductTargetKey = (
   target: WorkspaceProductTarget
-): WorkspaceProductTargetKey =>
-  target.kind === "cowork" && target.tier !== undefined
-    ? `cowork:${target.tier}`
-    : target.kind;
+): WorkspaceProductTargetKey => {
+  if (target.kind === "cowork" && target.tier !== undefined) {
+    return `cowork:${target.tier}`;
+  }
+  if (
+    (target.kind === "entry-pack" || target.kind === "unlimited") &&
+    target.tier !== undefined
+  ) {
+    return getPassProductKey(target);
+  }
+  return target.kind;
+};
 
 /**
  * Every target value that covers the product: its family target and, for a
@@ -74,6 +115,8 @@ export const getWorkspaceProductTargetsCovering = (
         ] as const,
       office: () =>
         [workspaceOfficeProductTargetSchema.make({ kind: "office" })] as const,
+      "entry-pack": (product) => [entryPackFamilyTarget, product] as const,
+      unlimited: (product) => [unlimitedFamilyTarget, product] as const,
     })
   );
 
@@ -81,10 +124,11 @@ export const workspaceProductTargetMatches = (
   target: WorkspaceProductTarget,
   product: WorkspaceProductIdentity
 ): boolean =>
-  target.kind === product.kind &&
-  (target.kind !== "cowork" ||
-    target.tier === undefined ||
-    (product.kind === "cowork" && target.tier === product.tier));
+  getWorkspaceProductTargetsCovering(product).some(
+    (covering) =>
+      getWorkspaceProductTargetKey(covering) ===
+      getWorkspaceProductTargetKey(target)
+  );
 
 /** Whether the targets together cover every product of the family. */
 export const workspaceProductTargetsCoverFamily = (
@@ -97,7 +141,11 @@ export const workspaceProductTargetsCoverFamily = (
     (family === "cowork" &&
       workspaceCoworkTierProductTargets.every((target) =>
         keys.has(getWorkspaceProductTargetKey(target))
-      ))
+      )) ||
+    ((family === "entry-pack" || family === "unlimited") &&
+      workspacePassOfferTargets
+        .filter((target) => target.kind === family)
+        .every((target) => keys.has(getWorkspaceProductTargetKey(target))))
   );
 };
 
@@ -112,13 +160,15 @@ export const findWorkspaceProductTargetsIssue = (
   if (new Set(keys).size !== keys.length) {
     return "product targets must be unique";
   }
-  if (
-    keys.includes("cowork") &&
-    targets.some(
-      ({ kind }, index) => kind === "cowork" && keys[index] !== "cowork"
-    )
-  ) {
-    return "a cowork target covering every tier cannot be combined with cowork tier targets";
+  for (const target of targets) {
+    if (
+      keys.includes(target.kind) &&
+      getWorkspaceProductTargetKey(target) !== target.kind
+    ) {
+      return target.kind === "cowork"
+        ? "a cowork target covering every tier cannot be combined with cowork tier targets"
+        : "a pass family target cannot be combined with its offer targets";
+    }
   }
   return undefined;
 };

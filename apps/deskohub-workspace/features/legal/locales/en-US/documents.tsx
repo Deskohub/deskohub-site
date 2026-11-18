@@ -129,6 +129,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "9.4 Following a valid withdrawal, the Provider will reimburse payments received without undue delay and no later than 14 days, using the same payment method unless the parties agree otherwise without additional cost to the Consumer.",
       "9.5 Model notice: “I hereby give notice that I withdraw from my contract for the following Service: [description and Booking number], ordered on [date]. Consumer name: [complete]. Consumer address: [complete]. Date: [complete]. Signature only if submitted on paper.” Use of the model is optional.",
       "9.6 The rights in this article apply only to a Consumer and operate alongside any more favorable cancellation terms stated in the order summary or individual offer.",
+      "9.7 If a Consumer validly withdraws from an Entry pack purchase after requesting immediate use and the statutory conditions for a proportional charge are met, the refund is the price actually paid multiplied by the number of unused entries and divided by the total number of entries in the pack, rounded down to whole Czech koruna. Entries for past visits and an entry booked for the day of withdrawal count as used. Bookings for later dates are cancelled and those entries count as unused.",
     ],
   },
   {
@@ -747,7 +748,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "12 August 2026",
+    updatedAt: "18 November 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {

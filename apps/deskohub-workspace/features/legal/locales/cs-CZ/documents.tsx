@@ -127,6 +127,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "9.4 Po platném odstoupení vrátí Poskytovatel přijaté peněžní prostředky bez zbytečného odkladu, nejpozději do 14 dnů, stejným způsobem, kterým byly přijaty, nedohodnou-li se strany jinak bez vzniku dalších nákladů Spotřebitele.",
       "9.5 Vzor oznámení: „Oznamuji, že odstupuji od smlouvy na tuto Službu: [popis a číslo Rezervace], objednanou dne [datum]. Jméno a příjmení Spotřebitele: [doplnit]. Adresa Spotřebitele: [doplnit]. Datum: [doplnit]. Podpis pouze při listinném podání.“ Použití vzoru není povinné.",
       "9.6 Práva podle tohoto článku náleží pouze Spotřebiteli a platí vedle případných výhodnějších storno podmínek uvedených v souhrnu objednávky nebo individuální nabídce.",
+      "9.7 Odstoupí-li Spotřebitel platně od smlouvy o nákupu balíčku vstupů poté, co požádal o jeho okamžité využití, a jsou-li splněny zákonné podmínky pro úhradu poměrné části ceny, vrátí Poskytovatel skutečně zaplacenou cenu vynásobenou počtem nevyužitých vstupů a vydělenou celkovým počtem vstupů v balíčku, zaokrouhlenou dolů na celé koruny. Za využité se považují vstupy za předchozí návštěvy a vstup rezervovaný na den odstoupení. Rezervace na pozdější dny se zruší a tyto vstupy se považují za nevyužité.",
     ],
   },
   {
@@ -750,7 +751,7 @@ export const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "12. srpna 2026",
+    updatedAt: "18. listopadu 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {

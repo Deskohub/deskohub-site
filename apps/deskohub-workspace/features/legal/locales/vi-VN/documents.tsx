@@ -129,6 +129,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "9.4 Sau khi rút khỏi hợp đồng hợp lệ, Bên Cung cấp hoàn trả số tiền đã nhận mà không chậm trễ không cần thiết, chậm nhất trong vòng 14 ngày, bằng cùng phương thức đã nhận, trừ khi các bên có thỏa thuận khác mà Người tiêu dùng không phải chịu thêm chi phí.",
       "9.5 Mẫu thông báo: “Tôi xin thông báo rằng tôi rút khỏi hợp đồng đối với Dịch vụ sau: [mô tả và số Đặt chỗ], được đặt ngày [ngày]. Họ và tên của Người tiêu dùng: [điền vào]. Địa chỉ của Người tiêu dùng: [điền vào]. Ngày: [điền vào]. Chữ ký chỉ khi gửi bằng văn bản giấy.” Việc sử dụng mẫu này không bắt buộc.",
       "9.6 Các quyền theo điều này chỉ thuộc về Người tiêu dùng và áp dụng song song với các điều kiện hủy có lợi hơn (nếu có) được nêu trong phần tóm tắt đơn hàng hoặc báo giá riêng.",
+      "9.7 Nếu Người tiêu dùng rút khỏi hợp đồng mua gói lượt vào một cách hợp lệ sau khi yêu cầu sử dụng ngay và đáp ứng các điều kiện pháp luật về thanh toán theo tỷ lệ, số tiền hoàn lại bằng giá thực trả nhân với số lượt chưa dùng rồi chia cho tổng số lượt trong gói. Số tiền được làm tròn xuống đến đơn vị korun Séc. Các lượt đã đến và lượt đã đặt cho ngày rút khỏi hợp đồng được tính là đã dùng. Các đặt chỗ cho những ngày sau đó sẽ bị hủy và những lượt này được tính là chưa dùng.",
     ],
   },
   {
@@ -793,7 +794,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "12 tháng 8, 2026",
+    updatedAt: "18 tháng 11, 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {

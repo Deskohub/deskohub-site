@@ -130,6 +130,7 @@ const termsAndConditionsSections: LegalSection[] = [
       "9.4 Nach einem wirksamen Widerruf erstattet der Anbieter die erhaltenen Geldbeträge unverzüglich, spätestens innerhalb von 14 Tagen, auf demselben Weg, auf dem sie empfangen wurden, sofern die Parteien nicht etwas anderes vereinbaren, ohne dass dem Verbraucher dadurch weitere Kosten entstehen.",
       "9.5 Muster der Mitteilung: „Hiermit teile ich mit, dass ich den Vertrag über folgende Leistung widerrufe: [Beschreibung und Nummer der Reservierung], bestellt am [Datum]. Vor- und Nachname des Verbrauchers: [ergänzen]. Anschrift des Verbrauchers: [ergänzen]. Datum: [ergänzen]. Unterschrift nur bei Mitteilung in Papierform.“ Die Verwendung des Musters ist nicht verpflichtend.",
       "9.6 Die Rechte nach diesem Artikel stehen nur dem Verbraucher zu und gelten neben etwaigen günstigeren Stornierungsbedingungen, die in der Bestellübersicht oder im individuellen Angebot angegeben sind.",
+      "9.7 Widerruft ein Verbraucher den Kauf eines Eintrittspakets wirksam, nachdem er die sofortige Nutzung verlangt hat, und sind die gesetzlichen Voraussetzungen für eine anteilige Zahlung erfüllt, wird der tatsächlich gezahlte Preis mit der Anzahl der ungenutzten Eintritte multipliziert und durch die Gesamtzahl der Eintritte im Paket geteilt. Die Erstattung wird auf volle tschechische Kronen abgerundet. Eintritte für vergangene Besuche und ein für den Tag des Widerrufs gebuchter Eintritt gelten als genutzt. Buchungen für spätere Tage werden storniert und diese Eintritte gelten als ungenutzt.",
     ],
   },
   {
@@ -803,7 +804,7 @@ const legalDocuments = {
     ],
   },
   "terms-and-conditions": {
-    updatedAt: "12. August 2026",
+    updatedAt: "18. November 2026",
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {

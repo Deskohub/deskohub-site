@@ -8,6 +8,7 @@ import { equalsAny } from "@/db/equals-any";
 import { type LegalEvidenceEvent, legalEvidenceEvents } from "@/db/schema";
 import { postgresUuidV7 } from "@/db/uuid-v7";
 import { legalEvidenceSchema } from "@/features/checkout/legal-evidence";
+import { orderIdSchema } from "@/features/order";
 import {
   reservationOrderId,
   type WorkspaceReservationId,
@@ -21,6 +22,7 @@ import {
 
 const legalEvidenceEventInputSchema = Schema.Struct({
   workspaceReservationId: Schema.optional(workspaceReservationIdSchema),
+  orderId: Schema.optional(orderIdSchema),
   evidence: legalEvidenceSchema,
 });
 
@@ -92,7 +94,7 @@ const getLegalEvidenceEventRecord = (
   workspaceReservationId: parsed.workspaceReservationId,
   orderId:
     parsed.workspaceReservationId === undefined
-      ? undefined
+      ? parsed.orderId
       : reservationOrderId(parsed.workspaceReservationId),
   documentKey: parsed.evidence.documentKey,
   documentPath: parsed.evidence.document.path,
