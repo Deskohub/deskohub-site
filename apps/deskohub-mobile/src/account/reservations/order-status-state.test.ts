@@ -4,6 +4,7 @@ import { Duration, Effect, Layer, Option } from "effect";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { TestClock } from "effect/testing";
 import { customerDataRuntime } from "../../customer-api/customer-data-runtime";
+import { toCustomerViewError } from "../../customer-api/customer-view-error";
 import { makeCustomerDataRegistry } from "../../customer-api/testing/customer-data-test-registry";
 import {
   fakeCustomerDataLayer,
@@ -247,7 +248,10 @@ describe("order status atoms", () => {
         eventually(() => AsyncResult.isFailure(h.registry.get(h.status)))
       );
       const failure = AsyncResult.error(h.registry.get(h.status));
-      expect(Option.isSome(failure)).toBe(true);
+      expect(Option.map(failure, toCustomerViewError)).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "RateLimited" },
+      });
       expect(h.reads()).toBe(1);
 
       h.show(false);
@@ -276,6 +280,24 @@ describe("order status atoms", () => {
 
     const shown = h.registry.get(h.status);
     expect(AsyncResult.isSuccess(shown) && shown.waiting).toBe(false);
+    h.dispose();
+  });
+
+  test("a payment recheck requested while hidden starts on reveal", async () => {
+    const h = harness("normal", sampleOrderIds.fulfilled);
+    h.focus(true);
+    await h.readsSettled(1);
+
+    h.show(false);
+    h.retry();
+    await h.adjust("30 minutes");
+    await h.quietly();
+    expect(h.reads()).toBe(1);
+
+    h.show(true);
+    await h.readsSettled(2);
+    await h.adjust("30 minutes");
+    expect(h.reads()).toBe(2);
     h.dispose();
   });
 

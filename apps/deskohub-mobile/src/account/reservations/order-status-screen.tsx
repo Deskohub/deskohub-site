@@ -51,6 +51,7 @@ import { AppBar } from "../../ui/app-bar";
 import { Card } from "../../ui/card";
 import { Button, LiveMessage } from "../../ui/controls";
 import { EmptyState } from "../../ui/empty-state";
+import { FocusedStatusBar } from "../../ui/focused-status-bar";
 import { Icon } from "../../ui/icon";
 import { ListGroup, ListRow } from "../../ui/list";
 import { useLiveRegionAnnouncement } from "../../ui/live-announcement";
@@ -325,11 +326,13 @@ function TicketStub({
 function OrderTicket({
   state,
   onCheckAgain,
+  onPaymentCheckAgain,
   onPaymentPageLeft,
   announce,
 }: {
   readonly state: StatusRefreshState;
   readonly onCheckAgain: () => void;
+  readonly onPaymentCheckAgain: () => void;
   /** The customer came back from the payment page: follow the payment. */
   readonly onPaymentPageLeft: () => void;
   readonly announce: boolean;
@@ -339,7 +342,7 @@ function OrderTicket({
   const reservation = useAtomValue(reservationOfOrderAtom(order.orderId));
   const booked = bookedSelectionOf(order, reservation);
   const recovery = usePaymentRecovery(order, booked, {
-    onCheckAgain,
+    onCheckAgain: onPaymentCheckAgain,
     onPaymentPageLeft,
   });
   const model = orderTicketModel(
@@ -489,6 +492,7 @@ export function ReservationPaneHeading({
     : m.reservations_status_title({}, { locale });
   return (
     <View style={[column, { paddingTop: insets.top + space.md }]}>
+      <FocusedStatusBar style="dark" />
       {onBack === undefined ? (
         <Text variant="display" role="heading">
           {title}
@@ -560,6 +564,14 @@ export function OrderStatusScreen({
       else tap((taps) => taps + 1);
     }
   };
+  const checkAfterPayment = () => {
+    const focus = registry.get(focusAtom);
+    if (focus.owner !== owner || !navigation.isFocused()) return;
+    if (focus.visible) refresh();
+    // A payment outcome can invalidate the order while its preview is hidden.
+    // Start the fresh read once the same preview is visible.
+    else setFocus(restartStatusVisit(owner));
+  };
   const refreshable = Option.match(AsyncResult.value(result), {
     onNone: () => AsyncResult.isFailure(result),
     onSome: canRefreshManually,
@@ -600,6 +612,7 @@ export function OrderStatusScreen({
             <OrderTicket
               state={state}
               onCheckAgain={refresh}
+              onPaymentCheckAgain={checkAfterPayment}
               onPaymentPageLeft={() => {
                 if (!navigation.isFocused()) return;
                 setFocus(restartStatusVisit(owner, "after-payment"));

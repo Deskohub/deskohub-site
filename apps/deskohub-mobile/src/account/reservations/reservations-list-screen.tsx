@@ -22,6 +22,7 @@ import {
   useState,
 } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { orderStatusHref } from "../../booking/booking-routes";
 import { AsyncView } from "../../customer-api/async-view";
 import { accountAtom } from "../../customer-api/customer-data-runtime";
@@ -44,7 +45,7 @@ import { SplitPane } from "../../ui/split-pane";
 import { Text } from "../../ui/text";
 import { useToast } from "../../ui/toast";
 import { brandText, color, radius, space } from "../../ui/tokens";
-import { useViewport } from "../../ui/viewport";
+import { useContentColumn, useViewport } from "../../ui/viewport";
 import {
   type AccountNotice,
   type ReservationsAccess,
@@ -128,9 +129,22 @@ const SelectionContext = createContext<ReservationListSelection | undefined>(
 );
 
 /** The tab root's masthead. */
-function ReservationsMasthead() {
+function ReservationsMasthead({ inPane }: { readonly inPane: boolean }) {
   const locale = useAppLocale();
-  return <Masthead title={m.account_section_reservations({}, { locale })} />;
+  const { top } = useSafeAreaInsets();
+  const column = useContentColumn();
+  const title = m.account_section_reservations({}, { locale });
+  return inPane ? (
+    <View style={[styles.paneMasthead, { paddingTop: top + space.md }]}>
+      <View style={column}>
+        <Text variant="display" tone="inverse" role="heading">
+          {title}
+        </Text>
+      </View>
+    </View>
+  ) : (
+    <Masthead title={title} />
+  );
 }
 
 /**
@@ -141,16 +155,18 @@ function ReservationsMasthead() {
 function ReservationsScreen({
   refreshing,
   onRefresh,
+  inPane = false,
   children,
 }: {
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
+  readonly inPane?: boolean;
   readonly children: ReactNode;
 }) {
   const refreshInvited = useAtomRefresh(invitedReservationsAtom);
   return (
     <ScrollScreen
-      masthead={<ReservationsMasthead />}
+      masthead={<ReservationsMasthead inPane={inPane} />}
       refreshing={refreshing}
       onRefresh={() => {
         onRefresh();
@@ -187,7 +203,10 @@ export function ReservationsListScreen({
             access.kind === "available" ? (
               <ReservationsHistory selection={selection} />
             ) : (
-              <ReservationsGate access={access} />
+              <ReservationsGate
+                access={access}
+                inPane={selection !== undefined}
+              />
             ),
         }
       )}
@@ -196,7 +215,13 @@ export function ReservationsListScreen({
 }
 
 /** When the account may not see reservations. */
-function ReservationsGate({ access }: { readonly access: ReservationsAccess }) {
+function ReservationsGate({
+  access,
+  inPane,
+}: {
+  readonly access: ReservationsAccess;
+  readonly inPane: boolean;
+}) {
   const locale = useAppLocale();
   const account = useAtomValue(accountAtom);
   const refresh = useAtomRefresh(accountAtom);
@@ -206,7 +231,11 @@ function ReservationsGate({ access }: { readonly access: ReservationsAccess }) {
   const notice =
     shownNotice === undefined ? undefined : gateNotice[shownNotice](locale);
   return (
-    <ReservationsScreen refreshing={account.waiting} onRefresh={refresh}>
+    <ReservationsScreen
+      refreshing={account.waiting}
+      onRefresh={refresh}
+      inPane={inPane}
+    >
       {/* Kept mounted so assistive tech announces each change. */}
       <Notice tone="info" message={notice} />
       <AsyncView
@@ -346,6 +375,7 @@ function ReservationsListView<E extends CustomerRequestFailure>({
       <ReservationsScreen
         refreshing={list.waiting && !AsyncResult.isInitial(list)}
         onRefresh={refresh}
+        inPane={listSelection !== undefined}
       >
         <AsyncView
           result={shown}
@@ -389,7 +419,7 @@ function ReservationsListView<E extends CustomerRequestFailure>({
           orderId={preferred}
           visit="normal"
           active={isExpanded}
-          heading={<ReservationPaneHeading />}
+          heading={isExpanded ? <ReservationPaneHeading /> : undefined}
         />
       )}
     </SplitPane>
@@ -898,6 +928,7 @@ const rowChevronColumn = 20 + space.md;
 const styles = StyleSheet.create({
   invited: { marginTop: space.xl },
   invitedBadge: { marginTop: space.xs },
+  paneMasthead: { backgroundColor: color.navy, paddingBottom: space.md },
   stack: { gap: space.lg },
   rowDetail: { marginTop: 2 },
   selectedRow: { backgroundColor: color.actionTint },
