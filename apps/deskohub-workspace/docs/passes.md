@@ -20,8 +20,9 @@ is no Dotypos receipt. Billing belongs to the buyer.
 
 Each purchase has its own order. The pack becomes active when payment is
 confirmed. It starts with every entry available. For purchases made for someone
-else, the buyer provides the holder's email address. The holder is the only
-person entitled to use the pack.
+else, the buyer provides the holder's sign-in email. Deskohub creates an
+unverified login if the holder does not already have one. The holder must verify
+that email before using the pack.
 
 At checkout the buyer accepts the current terms and asks to be able to use the
 pack immediately, within the statutory withdrawal period. When the buyer

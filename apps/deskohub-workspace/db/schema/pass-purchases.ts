@@ -20,7 +20,6 @@ import {
 } from "@/features/passes/pass-offer";
 import type { PlainDate } from "@/shared/utils/temporal";
 import { instant } from "../instant";
-import { sensitiveText } from "../sensitive-text";
 import { customerAccounts } from "./customer-accounts";
 import { orders } from "./orders";
 import { quotedSqlList } from "./sql-list";
@@ -37,10 +36,9 @@ export const passPurchases = pgTable(
       .$type<CustomerAccountId>()
       .references(() => customerAccounts.id),
     holderAccountId: text("holder_account_id")
+      .notNull()
       .$type<CustomerAccountId>()
       .references(() => customerAccounts.id),
-    // Gift delivery and claim are a later step. A self-purchase uses the buyer's account.
-    holderEmail: sensitiveText("holder_email"),
     product: text("product").notNull().$type<"entry-pack">(),
     tier: text("tier").notNull().$type<PassTier>(),
     entryCount: integer("entry_count").notNull().$type<EntryPackSize>(),
@@ -69,10 +67,6 @@ export const passPurchases = pgTable(
     check(
       "pass_purchases_validity_check",
       sql`${t.validFrom} < ${t.validUntil}`
-    ),
-    check(
-      "pass_purchases_holder_check",
-      sql`${t.holderAccountId} is not null or nullif(btrim(${t.holderEmail}), '') is not null`
     ),
     index("pass_purchases_buyer_idx").on(t.buyerAccountId),
     index("pass_purchases_holder_idx").on(t.holderAccountId),

@@ -11,11 +11,11 @@ export const passTiers = [
   "reserved-desk",
   "reserved-desk-workstation",
 ] as const;
-export const passTierSchema = Schema.Literals(passTiers);
+const passTierSchema = Schema.Literals(passTiers);
 export type PassTier = typeof passTierSchema.Type;
 
-export const entryPackSizes = [5, 10] as const;
-export const entryPackSizeSchema = Schema.Literals(entryPackSizes);
+const entryPackSizes = [5, 10] as const;
+const entryPackSizeSchema = Schema.Literals(entryPackSizes);
 export type EntryPackSize = typeof entryPackSizeSchema.Type;
 
 export const entryPackProductSchema = Schema.Struct({
@@ -29,7 +29,7 @@ export const unlimitedPassProductSchema = Schema.Struct({
   kind: Schema.Literal("unlimited"),
   tier: passTierSchema,
 });
-export type UnlimitedPassProduct = typeof unlimitedPassProductSchema.Type;
+type UnlimitedPassProduct = typeof unlimitedPassProductSchema.Type;
 
 export const entryPackProductKeySchema = Schema.TemplateLiteral([
   "entry-pack:",

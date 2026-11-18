@@ -5,6 +5,10 @@ import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { orders, passPurchases } from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import {
+  ensurePassHolderAccount,
+  findPassHolderAccount,
+} from "@/features/account/backend/customer-account-by-email";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
 import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
 import type { CustomerProfileSave } from "@/features/account/contracts";
@@ -28,12 +32,13 @@ import { currentInstant } from "@/shared/utils/temporal";
 import type { EntryPackProduct } from "../pass-offer";
 import { quoteEntryPack } from "./entry-pack-quote";
 
-export class EntryPackPurchaseError extends Data.TaggedError(
+class EntryPackPurchaseError extends Data.TaggedError(
   "EntryPackPurchaseError"
 )<{
   readonly reason:
     | "unavailable"
     | "buyer-profile-required"
+    | "holder-unavailable"
     | "purchase-conflict"
     | "consent-required"
     | "terms-changed";
@@ -59,20 +64,30 @@ const readPurchase = Effect.fn("readEntryPackPurchase")(function* (
   return purchase;
 });
 
-const verifyRetry = (
+const verifyRetry = Effect.fn("verifyEntryPackPurchaseRetry")(function* (
   purchase: typeof passPurchases.$inferSelect,
   input: {
     readonly buyerAccountId: CustomerAccountId;
     readonly product: EntryPackProduct;
     readonly holderEmail: string | null;
   }
-) =>
-  purchase.buyerAccountId === input.buyerAccountId &&
-  purchase.tier === input.product.tier &&
-  purchase.entryCount === input.product.size &&
-  purchase.holderEmail === input.holderEmail
-    ? Effect.succeed(purchase)
-    : Effect.fail(new EntryPackPurchaseError({ reason: "purchase-conflict" }));
+) {
+  if (
+    purchase.buyerAccountId !== input.buyerAccountId ||
+    purchase.tier !== input.product.tier ||
+    purchase.entryCount !== input.product.size
+  ) {
+    return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
+  }
+  const holderAccountId =
+    input.holderEmail === null
+      ? input.buyerAccountId
+      : yield* findPassHolderAccount(input.holderEmail);
+  if (purchase.holderAccountId !== holderAccountId) {
+    return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
+  }
+  return purchase;
+});
 
 /** Continue creates the order and pending pack in one transaction. Reuse its ID on retry. */
 export const beginEntryPackPurchase = Effect.fn("beginEntryPackPurchase")(
@@ -165,13 +180,22 @@ export const beginEntryPackPurchase = Effect.fn("beginEntryPackPurchase")(
               return yield* verifyRetry(competing, retry);
             }
 
+            const holderAccountId =
+              giftEmail === null
+                ? session.accountId
+                : yield* ensurePassHolderAccount(giftEmail);
+            if (!holderAccountId) {
+              return yield* new EntryPackPurchaseError({
+                reason: "holder-unavailable",
+              });
+            }
+
             const [purchase] = yield* db
               .insert(passPurchases)
               .values({
                 id: order.id,
                 buyerAccountId: session.accountId,
-                holderAccountId: giftEmail === null ? session.accountId : null,
-                holderEmail: giftEmail,
+                holderAccountId,
                 product: input.product.kind,
                 tier: input.product.tier,
                 entryCount: input.product.size,

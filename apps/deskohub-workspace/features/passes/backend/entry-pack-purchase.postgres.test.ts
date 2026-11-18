@@ -94,11 +94,21 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(first).toMatchObject({
         id: orderId,
         buyerAccountId: accountId,
-        holderAccountId: null,
-        holderEmail,
         status: "pending_payment",
         entryCount: 10,
       });
+      expect(first.holderAccountId).not.toBe(accountId);
+      const holder = await db.pool.query(
+        'select login.email, login.email_verified, account.dotypos_customer_id from auth."user" login join customer_accounts account using (id) where login.id = $1',
+        [first.holderAccountId]
+      );
+      expect(holder.rows).toEqual([
+        {
+          email: holderEmail,
+          email_verified: false,
+          dotypos_customer_id: null,
+        },
+      ]);
       const { rows } = await db.pool.query(
         "select kind, payment_state from orders where id = $1",
         [orderId]
@@ -162,6 +172,30 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           },
         },
       ]);
+    });
+
+    test("reuses one unverified holder across concurrent purchases with the same login email", async () => {
+      const db = database!;
+      const holderEmail = testEmailAddress("shared-pack-holder");
+      const begin = (email: string) =>
+        Effect.runPromise(
+          beginEntryPackPurchase({
+            orderId: orderIdSchema.make(crypto.randomUUID()),
+            product: { kind: "entry-pack", size: 5, tier: "open-space" },
+            locale: "en-US",
+            holderEmail: email,
+          }).pipe(Effect.provide(Layer.merge(db.layer, purchaseServices)))
+        );
+      const [first, second] = await Promise.all([
+        begin(holderEmail),
+        begin(holderEmail.toUpperCase()),
+      ]);
+      expect(second.holderAccountId).toBe(first.holderAccountId);
+      const holder = await db.pool.query(
+        'select email_verified from auth."user" where email = $1',
+        [holderEmail]
+      );
+      expect(holder.rows).toEqual([{ email_verified: false }]);
     });
 
     test("voids unpaid packs and activates verified late payments just once", async () => {
