@@ -19,9 +19,16 @@ const beginCheckout = mock((_input: BeginInput) => begin.promise);
 type PayInput = Parameters<
   typeof import("../entry-pack-checkout-actions").payEntryPackCheckout
 >[0];
-const payCheckout = mock(async (_input: PayInput) => ({
-  data: { status: "purchase_error", reason: "unavailable" },
-}));
+type PayResult = Awaited<
+  ReturnType<
+    typeof import("../entry-pack-checkout-actions").payEntryPackCheckout
+  >
+>;
+const payCheckout = mock(
+  async (_input: PayInput): Promise<PayResult> => ({
+    data: { status: "purchase_error", reason: "unavailable" },
+  })
+);
 mock.module("../entry-pack-checkout-actions", () => ({
   beginEntryPackCheckout: beginCheckout,
   payEntryPackCheckout: payCheckout,
@@ -190,6 +197,68 @@ test("Choose and Details keep an owned draft's date until the selected pack chan
   );
   expect(view.getByText("Jan 19, 2027")).toBeDefined();
   expect(view.queryByText("Jan 18, 2027")).toBeNull();
+});
+
+test("Pay removes the applied-code label after repricing keeps a different discount", async () => {
+  const code = "PACK-EXAMPLE";
+  const appliedCodeLabel = m.entryPackCheckoutCodeApplied({ code }, { locale });
+  const customerDiscount = {
+    id: "customer-discount",
+    label: "Customer discount",
+    amount: currencyCZK(1_000),
+  };
+  const refreshedPrice = {
+    fingerprint: "1".repeat(64),
+    subtotal: currencyCZK(115_000),
+    total: currencyCZK(114_000),
+    discounts: [customerDiscount],
+  };
+  payCheckout.mockImplementationOnce(async () => ({
+    data: { status: "pricing_changed", price: refreshedPrice },
+  }));
+  const view = render(
+    <EntryPackPay
+      discountCodeEntryEnabled
+      locale={locale}
+      orderId={orderIdSchema.make(crypto.randomUUID())}
+      state={{
+        status: "ready",
+        product,
+        price: {
+          ...refreshedPrice,
+          fingerprint: "0".repeat(64),
+          total: currencyCZK(112_000),
+          appliedDiscountCode: code,
+          discounts: [
+            customerDiscount,
+            { id: "voucher", label: "Voucher", amount: currencyCZK(2_000) },
+          ],
+        },
+        validFrom: "2026-11-19",
+        lastUsableDate: "2027-01-18",
+        disclosure: {
+          documents: getPaymentSubmitLegalDocuments(locale),
+          earlyStartRequest: m.passEarlyStartConsent({}, { locale }),
+        },
+        billing: { purpose: "personal", invoice: "none" },
+      }}
+      headingRef={null}
+      onExpire={() => {}}
+      onRequestPayment={() => {}}
+    />
+  );
+  expect(view.getByText(appliedCodeLabel)).toBeDefined();
+  expect(view.getByText(/^Voucher ·/)).toBeDefined();
+  fireEvent.click(view.getByRole("checkbox"));
+  fireEvent.click(view.getByRole("button", { name: /order and pay/i }));
+
+  const codeInput = await view.findByLabelText(
+    m.checkoutDiscountCodeLabel({}, { locale })
+  );
+  expect(codeInput).toHaveProperty("value", "");
+  expect(view.queryByText(appliedCodeLabel)).toBeNull();
+  expect(view.getByText(/customer discount/i)).toBeDefined();
+  expect(view.queryByText(/^Voucher ·/)).toBeNull();
 });
 
 test.each([true, false])(

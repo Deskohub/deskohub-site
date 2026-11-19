@@ -74,6 +74,7 @@ import { readOwnedEntryPackOrderLocale } from "./entry-pack-order";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
   beginEntryPackPurchase,
+  displayEntryPackCheckoutPrice,
   getEntryPackPaymentDisclosure,
   getEntryPackPriceFingerprint,
   payForEntryPack,
@@ -195,6 +196,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       voucherValue: number,
       purchasedAt?: Temporal.Instant,
       billing?: ReservationBillingSelection,
+      otherDiscount?: DiscountCandidate,
       holderEmail?: string
     ) => {
       const code = canonicalPromotionCodeSchema.make(
@@ -385,28 +387,41 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           applyDiscountCode: ({ baseQuote }) =>
             Effect.succeed({
               quote: baseQuote,
-              application: baseQuote.discounts[0]!,
+              application: baseQuote.discounts.find(
+                ({ discount }) => discount.id === candidate.discount.id
+              )!,
             }),
           quote: (input) =>
-            calculateDiscounts({ ...input, candidates: [candidate] }).pipe(
-              Effect.map(({ quote }) => quote)
+            calculateDiscounts({
+              ...input,
+              candidates: otherDiscount
+                ? [otherDiscount, candidate]
+                : [candidate],
+            }).pipe(
+              Effect.map(({ quote }) => ({
+                ...quote,
+                submittedCodeDiscountId: candidate.discount.id,
+              }))
             ),
           affirmDisplayedDiscounts: (input) =>
             calculateDiscounts({
               ...input,
-              candidates: discountAvailable
-                ? [
-                    {
-                      ...candidate,
-                      provenance: {
-                        ...candidate.provenance,
-                        providerReference:
-                          replacementProviderReference ??
-                          candidate.provenance.providerReference,
+              candidates: [
+                ...(otherDiscount ? [otherDiscount] : []),
+                ...(discountAvailable
+                  ? [
+                      {
+                        ...candidate,
+                        provenance: {
+                          ...candidate.provenance,
+                          providerReference:
+                            replacementProviderReference ??
+                            candidate.provenance.providerReference,
+                        },
                       },
-                    },
-                  ]
-                : [],
+                    ]
+                  : []),
+              ],
             }).pipe(
               Effect.map(({ quote, applications }) => ({
                 quote,
@@ -632,6 +647,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         },
         notify,
         readAffirmedCode: () => affirmedCode,
+        initialQuote,
         initialFingerprint: getEntryPackPriceFingerprint(initialQuote),
         reprice: (
           displayedPriceFingerprint: string,
@@ -703,6 +719,67 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       ).toMatchObject({ status: "hosted" });
       expect(payment.providerOrders).toHaveLength(1);
       await payment.notify("failure");
+    });
+
+    test("drops the applied-code label when only the customer discount survives repricing", async () => {
+      const customerDiscount = {
+        discount: {
+          id: deriveOpaqueDiscountId({
+            providerNamespace: "dotypos-customer",
+            providerReference: dotyposCustomerId,
+          }),
+          label: "Customer discount",
+          adjustment: { kind: "fixed", amount: currencyCZK(1_000) },
+        },
+        provenance: {
+          providerNamespace: "dotypos-customer",
+          providerReference: dotyposCustomerId,
+        },
+      } satisfies DiscountCandidate;
+      const payment = await integration(
+        database!,
+        2_000,
+        undefined,
+        undefined,
+        customerDiscount
+      );
+      const code = payment.initialQuote.selection?.submittedCode;
+      expect(code).toBeDefined();
+      expect(
+        displayEntryPackCheckoutPrice(payment.initialQuote)
+      ).toHaveProperty("appliedDiscountCode", code);
+
+      const { submittedCodeDiscountId, ...legacyQuote } = payment.initialQuote;
+      expect(submittedCodeDiscountId).toBeDefined();
+      const legacyStoredQuote = Schema.decodeSync(entryPackPurchaseQuoteCodec)(
+        Schema.encodeSync(entryPackPurchaseQuoteCodec)(legacyQuote)
+      );
+      expect(legacyStoredQuote.selection?.submittedCode).toBe(code);
+      expect(getEntryPackPriceFingerprint(legacyStoredQuote)).toBe(
+        payment.initialFingerprint
+      );
+      expect(
+        displayEntryPackCheckoutPrice(legacyStoredQuote)
+      ).not.toHaveProperty("appliedDiscountCode");
+
+      payment.removeDiscount();
+      const refreshed = await payment.pay();
+      if (refreshed.status !== "pricing_changed")
+        throw new Error("Missing refreshed price");
+      expect(refreshed.quote.selection?.submittedCode).toBe(code);
+      expect(
+        refreshed.quote.discounts.map(({ discount }) => discount.id)
+      ).toEqual([customerDiscount.discount.id]);
+      expect(refreshed.quote).not.toHaveProperty("submittedCodeDiscountId");
+      expect(displayEntryPackCheckoutPrice(refreshed.quote)).not.toHaveProperty(
+        "appliedDiscountCode"
+      );
+      expect(payment.providerOrders).toHaveLength(0);
+      expect(
+        await payment.pay(undefined, {
+          displayedPriceFingerprint: payment.initialFingerprint,
+        })
+      ).toEqual(refreshed);
     });
 
     test("keeps the first attempt's pricing and billing after an ended payment", async () => {
@@ -779,6 +856,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         2_000,
         undefined,
         requestedInvoice,
+        undefined,
         holderEmail
       );
       expect(await payment.pay()).toMatchObject({ status: "hosted" });

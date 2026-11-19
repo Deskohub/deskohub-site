@@ -32,7 +32,10 @@ import { LatePaymentVerificationService } from "@/features/checkout/backend/paym
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { startPaymentSession } from "@/features/checkout/backend/payment/payment-session";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
-import { getDiscountCommitmentPayload } from "@/features/discounts/commitment";
+import {
+  getAppliedPromotionDiscountId,
+  getDiscountCommitmentPayload,
+} from "@/features/discounts/commitment";
 import type { CanonicalPromotionCode } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
@@ -53,6 +56,7 @@ import {
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { currentInstant } from "@/shared/utils/temporal";
+import type { EntryPackCheckoutPrice } from "../entry-pack-checkout";
 import {
   type EntryPackPurchaseQuote,
   entryPackPurchaseQuoteCodec,
@@ -99,6 +103,23 @@ export const getEntryPackPriceFingerprint = (quote: EntryPackPurchaseQuote) =>
       ])
     )
     .digest("hex");
+
+export const displayEntryPackCheckoutPrice = (
+  quote: EntryPackPurchaseQuote
+): EntryPackCheckoutPrice => ({
+  fingerprint: getEntryPackPriceFingerprint(quote),
+  subtotal: quote.discountableSubtotal,
+  total: quote.discountedSubtotal,
+  ...(quote.selection?.submittedCode !== undefined &&
+    quote.discounts.some(
+      ({ discount }) => discount.id === quote.submittedCodeDiscountId
+    ) && { appliedDiscountCode: quote.selection.submittedCode }),
+  discounts: quote.discounts.map(({ discount, amount }) => ({
+    id: discount.id,
+    label: discount.label,
+    amount,
+  })),
+});
 
 const requirePassPurchasesEnabled = Effect.fn("requirePassPurchasesEnabled")(
   function* () {
@@ -469,16 +490,22 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
           }),
         };
         const baseQuote = yield* discounts.quote(discountInput);
-        const quote = input.submittedCode
-          ? (yield* discounts.applyDiscountCode({
+        const appliedCode = input.submittedCode
+          ? yield* discounts.applyDiscountCode({
               ...discountInput,
               baseQuote,
               submittedCode: input.submittedCode,
-            })).quote
-          : baseQuote;
+            })
+          : undefined;
+        const quote = appliedCode?.quote ?? baseQuote;
+        const submittedCodeDiscountId = appliedCode?.application.discount.id;
 
         const selectedQuote = {
           ...quote,
+          ...(submittedCodeDiscountId !== undefined &&
+            quote.discounts.some(
+              ({ discount }) => discount.id === submittedCodeDiscountId
+            ) && { submittedCodeDiscountId }),
           selection: {
             ...(input.submittedCode !== undefined && {
               submittedCode: input.submittedCode,
@@ -694,9 +721,16 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           ),
           ...selection,
         });
+      const submittedCodeDiscountId = getAppliedPromotionDiscountId(
+        quote,
+        getDiscountCommitmentPayload(commitment).applications
+      );
       const refreshedQuote = {
         ...quote,
         ...(accepted.selection && { selection }),
+        ...(submittedCodeDiscountId !== undefined && {
+          submittedCodeDiscountId,
+        }),
       };
       const currentFingerprint = getEntryPackPriceFingerprint(refreshedQuote);
       if (acceptedFingerprint !== currentFingerprint) {

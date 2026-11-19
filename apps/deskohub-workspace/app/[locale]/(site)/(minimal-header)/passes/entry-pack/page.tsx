@@ -15,8 +15,8 @@ import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { readOwnedEntryPackOrderLocale } from "@/features/passes/backend/entry-pack-order";
-import { displayEntryPackCheckoutPrice } from "@/features/passes/backend/entry-pack-checkout-price";
 import {
+  displayEntryPackCheckoutPrice,
   getEntryPackPaymentDisclosure,
   readEntryPackCheckoutDraft,
   readEntryPackPaymentRetry,

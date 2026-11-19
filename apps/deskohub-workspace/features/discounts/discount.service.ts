@@ -18,7 +18,11 @@ import { shareAcrossRequests } from "@/shared/backend/share-across-requests";
 import { moneyWithValue, positiveMoneyCodec } from "@/shared/money/money";
 import { appendDiscounts, calculateDiscounts } from "./calculator";
 import { CalendarDiscountProvider } from "./calendar-discount-provider.service";
-import { type DiscountCommitment, makeDiscountCommitment } from "./commitment";
+import {
+  type DiscountCommitment,
+  getAppliedPromotionDiscountId,
+  makeDiscountCommitment,
+} from "./commitment";
 import {
   type ActiveSale,
   type ActiveSaleDiscoveryInput,
@@ -133,7 +137,10 @@ export interface IDiscountService {
   ) => Effect.Effect<readonly ActiveSale[]>;
   readonly quote: (
     input: DiscountQuoteInput
-  ) => Effect.Effect<DiscountQuote, DiscountCalculationError>;
+  ) => Effect.Effect<
+    DiscountQuote & { readonly submittedCodeDiscountId?: DiscountId },
+    DiscountCalculationError
+  >;
   readonly discoverAdvertisedDiscounts: (
     input: DiscountAdvertisementInput
   ) => Effect.Effect<DiscountAdvertisement, DiscountCalculationError>;
@@ -387,7 +394,21 @@ export class DiscountService extends Context.Service<
                 calculation: { applications: referralQuote.quote.discounts },
               })
             ),
-            Effect.map(({ referralQuote }) => referralQuote.quote)
+            Effect.map(({ calculation, referralQuote }) => {
+              const submittedCodeDiscountId = getAppliedPromotionDiscountId(
+                referralQuote.quote,
+                calculation.applications.map(({ application, candidate }) => ({
+                  application,
+                  ...(candidate.claim && { claim: candidate.claim }),
+                }))
+              );
+              return {
+                ...referralQuote.quote,
+                ...(submittedCodeDiscountId !== undefined && {
+                  submittedCodeDiscountId,
+                }),
+              };
+            })
           ),
         withServiceAnnotations("quote")
       );

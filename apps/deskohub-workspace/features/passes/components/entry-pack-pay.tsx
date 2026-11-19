@@ -50,7 +50,7 @@ export function EntryPackPay({
   const [price, setPrice] = useState(state.price);
   const [disclosure, setDisclosure] = useState(state.disclosure);
   const [checked, setChecked] = useState(false);
-  const submittedCode = price.submittedCode;
+  const { appliedDiscountCode } = price;
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string>();
   const [expired, setExpired] = useState(false);
@@ -210,11 +210,11 @@ export function EntryPackPay({
         </CheckoutSummarySection>
       </CheckoutSummarySections>
       {discountCodeEntryEnabled &&
-        (submittedCode ? (
+        (appliedDiscountCode ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-aquamarine-green/40 bg-aquamarine-green/15 p-3 text-sm">
             <span>
               {m.entryPackCheckoutCodeApplied(
-                { code: submittedCode },
+                { code: appliedDiscountCode },
                 { locale }
               )}
             </span>

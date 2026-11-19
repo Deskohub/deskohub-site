@@ -25,22 +25,18 @@ import { RememberedReferral } from "@/features/referrals/remembered-referral.ser
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 import {
   beginEntryPackPurchase,
+  displayEntryPackCheckoutPrice,
   EntryPackPurchaseError,
   getEntryPackPaymentDisclosure,
-  getEntryPackPriceFingerprint,
   payForEntryPack,
   repriceEntryPackPurchase,
 } from "./backend/entry-pack-purchase";
 import {
   beginEntryPackCheckoutSchema,
-  type EntryPackCheckoutPrice,
   payEntryPackCheckoutSchema,
   repriceEntryPackCheckoutSchema,
 } from "./entry-pack-checkout";
-import {
-  type EntryPackPurchaseQuote,
-  entryPackPurchaseQuoteCodec,
-} from "./entry-pack-purchase-quote";
+import { entryPackPurchaseQuoteCodec } from "./entry-pack-purchase-quote";
 import { getEntryPackLastUsableDate } from "./pass-offer";
 
 const purchaseLayer = Layer.mergeAll(
@@ -74,20 +70,6 @@ const payLayer = Layer.mergeAll(
   CheckoutAnalytics.Live,
   PaymentProvidersLive
 );
-
-const displayPrice = (
-  quote: EntryPackPurchaseQuote
-): EntryPackCheckoutPrice => ({
-  fingerprint: getEntryPackPriceFingerprint(quote),
-  subtotal: quote.discountableSubtotal,
-  total: quote.discountedSubtotal,
-  submittedCode: quote.selection?.submittedCode,
-  discounts: quote.discounts.map(({ discount, amount }) => ({
-    id: discount.id,
-    label: discount.label,
-    amount,
-  })),
-});
 
 const readReferralCode = Effect.gen(function* () {
   const remembered = yield* RememberedReferral;
@@ -151,7 +133,7 @@ const beginAction = defineWorkspaceAction(
             tier: purchase.tier,
             size: purchase.entryCount,
           },
-          price: displayPrice(quote),
+          price: displayEntryPackCheckoutPrice(quote),
           validFrom: purchase.validFrom.toString(),
           lastUsableDate: getEntryPackLastUsableDate(
             purchase.validUntil
@@ -186,7 +168,7 @@ const repriceAction = defineWorkspaceAction(
         });
         return {
           status: result.status,
-          price: displayPrice(result.quote),
+          price: displayEntryPackCheckoutPrice(result.quote),
         };
       }).pipe(
         Effect.catchTag("PromotionCodeUnavailableError", () =>
@@ -208,7 +190,10 @@ const payAction = defineWorkspaceAction(
       Effect.gen(function* () {
         const result = yield* payForEntryPack(input);
         if (result.status === "pricing_changed") {
-          return { status: result.status, price: displayPrice(result.quote) };
+          return {
+            status: result.status,
+            price: displayEntryPackCheckoutPrice(result.quote),
+          };
         }
         return result;
       })
