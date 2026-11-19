@@ -7,6 +7,8 @@ import { POST } from "./route";
 test.each([
   { VERCEL_ENV: "development", WORKSPACE_PAYMENT_PROVIDER: "nexi" },
   { VERCEL_ENV: "production", WORKSPACE_PAYMENT_PROVIDER: "nexi" },
+  { VERCEL_ENV: "production", WORKSPACE_PAYMENT_PROVIDER: "mock" },
+  { VERCEL_ENV: "production", WORKSPACE_PAYMENT_PROVIDER: "fallback" },
   { VERCEL_ENV: "preview", WORKSPACE_PAYMENT_PROVIDER: "nexi" },
 ] as const)(
   "returns 404 before reading the body when mock payments are disabled",
@@ -14,8 +16,11 @@ test.each([
     const previous = {
       VERCEL_ENV: env.VERCEL_ENV,
       WORKSPACE_PAYMENT_PROVIDER: env.WORKSPACE_PAYMENT_PROVIDER,
+      VERCEL_AUTOMATION_BYPASS_SECRET: env.VERCEL_AUTOMATION_BYPASS_SECRET,
     };
-    Object.assign(env, mode);
+    Object.assign(env, mode, {
+      VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-test-protection",
+    });
     try {
       const json = mock(() =>
         Promise.reject(new Error("Body must remain unread."))

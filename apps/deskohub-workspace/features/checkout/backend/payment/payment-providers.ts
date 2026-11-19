@@ -2,7 +2,6 @@ import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceNexiLayer } from "@/shared/backend/config/nexi.config";
 import { CheckoutError } from "../checkout/checkout-error";
-import { makeMockPaymentProvider } from "./mock-payment-provider";
 import { makeNexiPaymentProvider } from "./nexi-payment-provider";
 import {
   type PaymentProviderAdapter,
@@ -51,27 +50,39 @@ export const PaymentProvidersFromNexi = Layer.effect(
   )
 );
 
-const PreviewPaymentProviders = Layer.effect(
-  PaymentProviders,
-  Effect.gen(function* () {
-    const nexi = yield* makeNexiPaymentProvider;
-    const mock = yield* makeMockPaymentProvider;
-    const mode = configuredPaymentProvider();
-    const adapters = { nexi, mock };
-
-    return PaymentProviders.of({
-      activeProviders: ["nexi", "mock"],
-      forAttempt: (provider) => adapters[provider],
-      selectForCustomer: (customer, retriedAttempt) =>
-        Effect.succeed(
-          selectCheckoutPaymentProvider(mode, customer, retriedAttempt)
-        ),
-    });
-  })
-).pipe(
-  Layer.provide(Layer.mergeAll(WorkspaceNexiLayer, WorkspaceDatabase.Default))
+const NexiPaymentProviders = PaymentProvidersFromNexi.pipe(
+  Layer.provide(WorkspaceNexiLayer)
 );
 
-export const PaymentProvidersLive = isMockPaymentEnabled()
-  ? PreviewPaymentProviders
-  : PaymentProvidersFromNexi.pipe(Layer.provide(WorkspaceNexiLayer));
+const PreviewPaymentProviders = Layer.unwrap(
+  Effect.promise(async () => {
+    const { makeMockPaymentProvider } = await import("./mock-payment-provider");
+
+    return Layer.effect(
+      PaymentProviders,
+      Effect.gen(function* () {
+        const nexi = yield* makeNexiPaymentProvider;
+        const mock = yield* makeMockPaymentProvider;
+        const mode = configuredPaymentProvider();
+        const adapters = { nexi, mock };
+
+        return PaymentProviders.of({
+          activeProviders: ["nexi", "mock"],
+          forAttempt: (provider) => adapters[provider],
+          selectForCustomer: (customer, retriedAttempt) =>
+            Effect.succeed(
+              selectCheckoutPaymentProvider(mode, customer, retriedAttempt)
+            ),
+        });
+      })
+    ).pipe(
+      Layer.provide(
+        Layer.mergeAll(WorkspaceNexiLayer, WorkspaceDatabase.Default)
+      )
+    );
+  })
+);
+
+export const PaymentProvidersLive = Layer.suspend(() =>
+  isMockPaymentEnabled() ? PreviewPaymentProviders : NexiPaymentProviders
+);
