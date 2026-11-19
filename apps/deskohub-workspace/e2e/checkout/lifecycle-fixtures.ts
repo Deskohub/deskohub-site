@@ -3,6 +3,7 @@ import { WorkspaceDatabase } from "@/db/database.service";
 import type { PaymentAttemptState, PaymentState } from "@/db/schema";
 import { PaymentTerminalTransitions } from "@/features/checkout/backend/repositories/payment-terminal-transitions";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { tryWorkspaceE2ESync, type WorkspaceE2EError } from "../errors";
@@ -35,22 +36,30 @@ export const nexiSandboxRejectedFailureCode =
  */
 export const retireRejectedAttempt = (
   orderId: WorkspaceReservationId,
-  paymentAttemptId: PaymentAttemptId
+  paymentAttemptId: PaymentAttemptId,
+  failureCode:
+    | typeof nexiSandboxRejectedFailureCode
+    | typeof NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE = nexiSandboxRejectedFailureCode
 ): Effect.Effect<CheckoutRow, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {
+    const fallback = failureCode === NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE;
     const { db } = yield* E2EDatabase;
-    yield* runDatabaseOperation(
+    const transition = yield* runDatabaseOperation(
       "retire rejected payment attempt",
       PaymentTerminalTransitions.use((transitions) =>
         transitions.markTerminal({
           id: paymentAttemptId,
           orderId: reservationOrderId(orderId),
           state: "failed",
-          failureCode: nexiSandboxRejectedFailureCode,
+          failureCode,
+          ...(fallback
+            ? { fromAttemptStates: ["pending"], requireTransition: true }
+            : {}),
         })
       ).pipe(
-        Effect.asVoid,
-        Effect.catchTag("PaymentLifecycleStateError", () => Effect.void),
+        Effect.catchTag("PaymentLifecycleStateError", (error) =>
+          fallback ? Effect.fail(error) : Effect.succeed(undefined)
+        ),
         Effect.provide(PaymentTerminalTransitions.Default),
         Effect.provideService(WorkspaceDatabase, WorkspaceDatabase.make(db))
       )
@@ -71,6 +80,15 @@ export const retireRejectedAttempt = (
           row.reservation_state === "held",
           "reservation hold ended before the payment could restart"
         );
+        if (fallback) {
+          assert(
+            transition?.changed &&
+              row.provider === "nexi" &&
+              row.payment_failure_code === failureCode &&
+              row.failure_code === failureCode,
+            "the active Nexi payment was not retired for mock fallback"
+          );
+        }
         return row;
       }
     );

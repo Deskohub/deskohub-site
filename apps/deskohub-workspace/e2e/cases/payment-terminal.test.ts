@@ -27,7 +27,7 @@ const hostedAuthenticationFailure: PaymentTerminalScenario = {
   failureCode: "nexi_payment_failed",
   id: "payment-authentication-failed",
   providerStatus: "THREEDS_FAILED",
-  trigger: "hosted_authentication_failure",
+  trigger: "hosted_failure",
 };
 
 const runUntilStatusPage = async (scenario: PaymentTerminalScenario) => {
@@ -46,6 +46,10 @@ const runUntilStatusPage = async (scenario: PaymentTerminalScenario) => {
       id: step.id,
     });
     if (step.id === "prepare-checkout-pay-page") return Effect.succeed(orderId);
+    if (step.id === "start-checkout-payment")
+      return Effect.succeed({ provider: "nexi" });
+    if (step.id === "read-provider-session-row")
+      return Effect.succeed({ provider: "nexi" });
     return step.id === "assert-failed-status-page"
       ? Effect.fail(stop)
       : Effect.void;

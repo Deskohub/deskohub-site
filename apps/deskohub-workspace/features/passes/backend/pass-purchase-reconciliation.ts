@@ -5,6 +5,8 @@ import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { orders, paymentAttempts } from "@/db/schema";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
+import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
+import { PaymentProvidersLive } from "@/features/checkout/backend/payment/payment-providers";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
 import { providerOrderAbandonmentTimeoutMinutes } from "@/features/checkout/provider-order-abandonment";
 
@@ -16,6 +18,7 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
   }) {
     const { db, transaction } = yield* WorkspaceDatabase;
     const finalization = yield* ProviderPaymentFinalizationService;
+    const providers = yield* PaymentProviders;
     const registry = yield* OrderPaymentHandlers;
     const handler = registry.byKind["pass-purchase"];
     if (!handler) return { paymentsChecked: 0, fulfillmentRetried: 0 };
@@ -45,7 +48,7 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
             and(
               eq(orders.kind, "pass-purchase"),
               eq(orders.paymentState, "pending"),
-              eq(paymentAttempts.provider, "nexi"),
+              inArray(paymentAttempts.provider, providers.activeProviders),
               inArray(paymentAttempts.state, ["created", "pending"]),
               lte(orders.updatedAt, retryBefore),
               or(
@@ -144,6 +147,7 @@ export const runPassPurchaseReconciliation = (input: {
       Layer.mergeAll(
         WorkspaceDatabase.Default,
         OrderPaymentHandlers.Live,
+        PaymentProvidersLive,
         ProviderPaymentFinalizationService.Live
       )
     )

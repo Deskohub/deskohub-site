@@ -124,6 +124,7 @@ const runCheckoutFlowSteps = async (
   const orderId = "019f70bd-0131-7f30-9f8a-48e768f00292";
   const checkoutRow = {
     dotypos_customer_id: "dotypos-customer-paid",
+    provider: "nexi",
   } as CheckoutRow;
   const runStep = ((step) => {
     observedSteps.push({
@@ -133,6 +134,9 @@ const runCheckoutFlowSteps = async (
     });
     if (step.id === "prepare-checkout-pay-page") {
       return Effect.succeed(orderId);
+    }
+    if (step.id === "start-checkout-payment") {
+      return Effect.succeed({ provider: "nexi" });
     }
     if (
       step.id === "read-provider-session-row" ||
@@ -165,7 +169,10 @@ const runCheckoutFlowSteps = async (
   await Effect.runPromise(
     executeCheckoutFlow({
       ...options,
-      config: { timeouts: workspaceE2ETimeouts } as WorkspaceE2EConfig,
+      config: {
+        paymentProvider: "nexi",
+        timeouts: workspaceE2ETimeouts,
+      } as WorkspaceE2EConfig,
       data,
       datasourceConfig: {} as DatasourceConfig,
       flow: {
@@ -256,16 +263,24 @@ test("runs the post-fulfillment paths only for an opted-in case, after every ful
 describe("Nexi sandbox payment restart", () => {
   const firstRow = {
     payment_attempt_id: "first-attempt",
+    provider: "nexi",
     provider_order_id: "first-nexi-order",
   } as CheckoutRow;
   const retryRow = {
     payment_attempt_id: "retry-attempt",
+    provider: "nexi",
     provider_order_id: "retry-nexi-order",
+  } as CheckoutRow;
+  const mockRow = {
+    payment_attempt_id: "mock-attempt",
+    provider: "mock",
+    provider_order_id: "mock-order",
   } as CheckoutRow;
   const hostedPaymentPage = {
     checkoutPageUrl: "https://workspace.test/en-US/reservation/order-id",
     checkoutPage: {} as never,
     page: {} as never,
+    provider: "nexi" as const,
     url: "https://xpay.nexigroup.com/hpp/nexi/",
   };
   const sandboxRejection = () =>
@@ -276,10 +291,16 @@ describe("Nexi sandbox payment restart", () => {
 
   const payWithSteps = ({
     hostedPaymentFailures,
+    mode = "nexi",
+    initialProvider = "nexi",
     restarted = true,
+    fellBack = true,
   }: {
     readonly hostedPaymentFailures: Record<string, WorkspaceE2EError>;
+    readonly mode?: WorkspaceE2EConfig["paymentProvider"];
+    readonly initialProvider?: "nexi" | "mock";
     readonly restarted?: boolean;
+    readonly fellBack?: boolean;
   }) => {
     const hostedPaymentPermit = makeWorkspaceE2EHostedPaymentPermitRecorder();
     const stepIds: string[] = [];
@@ -287,21 +308,35 @@ describe("Nexi sandbox payment restart", () => {
     const runStep = ((step) => {
       stepIds.push(step.id);
       if (!hostedPaymentPermit.isHolding()) stepsOutsidePermit.push(step.id);
-      if (step.id.startsWith("start-checkout-payment"))
-        return Effect.succeed(hostedPaymentPage);
+      const failure = hostedPaymentFailures[step.id];
+      if (failure) return Effect.fail(failure);
+      if (step.id.startsWith("start-checkout-payment")) {
+        return Effect.succeed({
+          ...hostedPaymentPage,
+          provider: step.id.endsWith("-mock-fallback")
+            ? "mock"
+            : initialProvider,
+        });
+      }
       if (step.id === "read-provider-session-row")
-        return Effect.succeed(firstRow);
+        return Effect.succeed(initialProvider === "mock" ? mockRow : firstRow);
       if (step.id === "read-provider-session-row-retry")
         return Effect.succeed(retryRow);
+      if (step.id === "read-provider-session-row-mock-fallback")
+        return Effect.succeed(mockRow);
       if (step.id === "restart-sandbox-rejected-payment")
         return Effect.succeed(restarted);
-      const failure = hostedPaymentFailures[step.id];
-      return failure ? Effect.fail(failure) : Effect.void;
+      if (step.id === "restart-sandbox-rejected-payment-with-mock")
+        return Effect.succeed(fellBack);
+      return Effect.void;
     }) as WorkspaceE2EStepRunner;
     const data = {} as CheckoutData;
     const result = Effect.runPromiseExit(
       completeHostedCheckoutPayment({
-        config: { timeouts: workspaceE2ETimeouts } as WorkspaceE2EConfig,
+        config: {
+          paymentProvider: mode,
+          timeouts: workspaceE2ETimeouts,
+        } as WorkspaceE2EConfig,
         data,
         orderId: "order-id" as CheckoutRow["reservation_id"],
         openSession: unopenedBrowserSession,
@@ -365,6 +400,76 @@ describe("Nexi sandbox payment restart", () => {
     expect(stepIds.at(-1)).toBe("complete-hosted-payment-retry");
   });
 
+  test("uses a single mock payment after the Nexi restart also rejects", async () => {
+    const { result, stepIds, stepsOutsidePermit } = payWithSteps({
+      mode: "fallback",
+      hostedPaymentFailures: {
+        "complete-hosted-payment": sandboxRejection(),
+        "complete-hosted-payment-retry": sandboxRejection(),
+      },
+    });
+    expect(await result).toEqual(Exit.succeed(mockRow));
+    expect(stepsOutsidePermit).toEqual([]);
+    expect(
+      stepIds.filter((id) => id.startsWith("start-checkout-payment"))
+    ).toEqual([
+      "start-checkout-payment",
+      "start-checkout-payment-retry",
+      "start-checkout-payment-mock-fallback",
+    ]);
+    expect(stepIds.slice(-5)).toEqual([
+      "restart-sandbox-rejected-payment-with-mock",
+      "start-checkout-payment-mock-fallback",
+      "read-provider-session-row-mock-fallback",
+      "complete-hosted-payment-mock-fallback",
+      "reach-checkout-status-page-mock-fallback",
+    ]);
+  });
+
+  test("keeps a fresh checkout on Nexi in fallback mode", async () => {
+    const { result, stepIds } = payWithSteps({
+      mode: "fallback",
+      hostedPaymentFailures: {},
+    });
+    expect(await result).toEqual(Exit.succeed(firstRow));
+    expect(
+      stepIds.filter((id) => id.startsWith("start-checkout-payment"))
+    ).toEqual(["start-checkout-payment"]);
+  });
+
+  test("stops at the second Nexi rejection when fallback is denied", async () => {
+    const rejection = sandboxRejection();
+    const { result, stepIds } = payWithSteps({
+      mode: "fallback",
+      fellBack: false,
+      hostedPaymentFailures: {
+        "complete-hosted-payment": sandboxRejection(),
+        "complete-hosted-payment-retry": rejection,
+      },
+    });
+    expect(failureOf(await result)).toEqual(Option.some(rejection));
+    expect(stepIds.at(-1)).toBe("restart-sandbox-rejected-payment-with-mock");
+  });
+
+  test.each([
+    "start-checkout-payment",
+    "start-checkout-payment-retry",
+    "start-checkout-payment-mock-fallback",
+  ])("does not reissue ambiguous creation at %s", async (stepId) => {
+    const failure = workspaceE2EError("creation response could not be decoded");
+    const { result, stepIds } = payWithSteps({
+      mode: "fallback",
+      hostedPaymentFailures: {
+        "complete-hosted-payment": sandboxRejection(),
+        "complete-hosted-payment-retry": sandboxRejection(),
+        [stepId]: failure,
+      },
+    });
+    expect(failureOf(await result)).toEqual(Option.some(failure));
+    expect(stepIds.at(-1)).toBe(stepId);
+    expect(stepIds.filter((id) => id === stepId)).toHaveLength(1);
+  });
+
   test("never restarts timeouts or failures that are not sandbox rejections", async () => {
     for (const failure of [
       workspaceE2ETimeoutError("Nexi continue timed out", {
@@ -384,6 +489,17 @@ describe("Nexi sandbox payment restart", () => {
     }
   });
 
+  test("leaves a mock checkout failure outside the Nexi restart path", async () => {
+    const rejection = sandboxRejection();
+    const { result, stepIds } = payWithSteps({
+      mode: "mock",
+      initialProvider: "mock",
+      hostedPaymentFailures: { "complete-hosted-payment": rejection },
+    });
+    expect(failureOf(await result)).toEqual(Option.some(rejection));
+    expect(stepIds.at(-1)).toBe("complete-hosted-payment");
+  });
+
   test("requires a fresh payment attempt and Nexi order", () => {
     expect(() => assertFreshPaymentAttempt(firstRow, retryRow)).not.toThrow();
     expect(() =>
@@ -397,6 +513,6 @@ describe("Nexi sandbox payment restart", () => {
         ...retryRow,
         provider_order_id: firstRow.provider_order_id,
       })
-    ).toThrow("restarted payment reused the rejected Nexi order");
+    ).toThrow("restarted payment reused the rejected provider order");
   });
 });

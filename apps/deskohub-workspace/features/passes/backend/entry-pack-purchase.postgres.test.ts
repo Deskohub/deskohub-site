@@ -39,6 +39,7 @@ import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkou
 import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
 import { NexiWebhookService } from "@/features/checkout/backend/payment/nexi-webhook.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
+import { PaymentProvidersFromNexi } from "@/features/checkout/backend/payment/payment-providers";
 import { PaymentRefundService } from "@/features/checkout/backend/payment/payment-refund.service";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
@@ -340,60 +341,66 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               Effect.tap(() => beforeAdmission)
             ),
         }),
-        Layer.mock(NexiService, {
-          createHostedPaymentPage: ({ orderId }) =>
-            Effect.suspend(() => {
-              providerOrders.push(orderId);
-              if (failCreation) {
-                failCreation = false;
-                return Effect.fail(
-                  new NetworkError({
-                    message: "Synthetic ambiguous Nexi creation",
+        PaymentProvidersFromNexi.pipe(
+          Layer.provide(
+            Layer.mock(NexiService, {
+              createHostedPaymentPage: ({ orderId }) =>
+                Effect.suspend(() => {
+                  providerOrders.push(orderId);
+                  if (failCreation) {
+                    failCreation = false;
+                    return Effect.fail(
+                      new NetworkError({
+                        message: "Synthetic ambiguous Nexi creation",
+                      })
+                    );
+                  }
+                  return Effect.succeed({
+                    orderId,
+                    hostedPage: "https://nexi.test/payment",
+                    securityToken: "synthetic-session",
+                  });
+                }),
+              getOrder: () =>
+                Effect.fail(
+                  new ExternalAPIError({
+                    service: "Nexi",
+                    operation: "Get order",
+                    statusCode: 404,
                   })
-                );
-              }
-              return Effect.succeed({
-                orderId,
-                hostedPage: "https://nexi.test/payment",
-                securityToken: "synthetic-session",
-              });
-            }),
-          getOrder: () =>
-            Effect.fail(
-              new ExternalAPIError({
-                service: "Nexi",
-                operation: "Get order",
-                statusCode: 404,
-              })
-            ),
-          verifyPaymentOutcome: (input) => {
-            if (inconclusiveProviderOrders.has(input.orderId)) {
-              return Effect.fail(
-                new NetworkError({ message: "Synthetic inconclusive order" })
-              );
-            }
-            const settledStatus = captured ? "success" : "failure";
-            const settledOrderStatus = captured ? "EXECUTED" : "DECLINED";
-            return Effect.succeed({
-              status: abandoned ? "pending" : settledStatus,
-              provider: {
-                orderId: input.orderId,
-                operationId: abandoned
-                  ? undefined
-                  : NexiOperationIdSchema.make("synthetic-operation"),
-                operationCount: abandoned ? 0 : 1,
-                amount: input.amount,
-                authorizedAmount: undefined,
-                capturedAmount:
-                  captured && !abandoned ? input.amount : undefined,
-                currency: input.currency,
-                orderStatus: abandoned ? undefined : settledOrderStatus,
-                captureExecuted: captured && !abandoned,
+                ),
+              verifyPaymentOutcome: (input) => {
+                if (inconclusiveProviderOrders.has(input.orderId)) {
+                  return Effect.fail(
+                    new NetworkError({
+                      message: "Synthetic inconclusive order",
+                    })
+                  );
+                }
+                const settledStatus = captured ? "success" : "failure";
+                const settledOrderStatus = captured ? "EXECUTED" : "DECLINED";
+                return Effect.succeed({
+                  status: abandoned ? "pending" : settledStatus,
+                  provider: {
+                    orderId: input.orderId,
+                    operationId: abandoned
+                      ? undefined
+                      : NexiOperationIdSchema.make("synthetic-operation"),
+                    operationCount: abandoned ? 0 : 1,
+                    amount: input.amount,
+                    authorizedAmount: undefined,
+                    capturedAmount:
+                      captured && !abandoned ? input.amount : undefined,
+                    currency: input.currency,
+                    orderStatus: abandoned ? undefined : settledOrderStatus,
+                    captureExecuted: captured && !abandoned,
+                  },
+                  mismatches: [],
+                });
               },
-              mismatches: [],
-            });
-          },
-        })
+            })
+          )
+        )
       );
       const orderId = orderIdSchema.make(crypto.randomUUID());
       const begin = beginEntryPackPurchase({

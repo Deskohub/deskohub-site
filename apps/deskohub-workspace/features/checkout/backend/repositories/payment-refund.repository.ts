@@ -1,4 +1,3 @@
-import type { NexiCorrelationId } from "@deskohub/nexi";
 import {
   and,
   asc,
@@ -25,9 +24,10 @@ import {
 import { orders } from "@/db/schema/orders";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import type { PaymentProvider } from "../payment/payment-provider";
 import {
-  isNexiPaymentAttempt,
-  type NexiPaymentAttempt,
+  isProviderPaymentAttempt,
+  type ProviderPaymentAttempt,
   toPaymentAttempt,
 } from "./payment-attempt.repository";
 
@@ -46,8 +46,8 @@ export type PaymentRefundRecordResult =
   | "not_applicable";
 
 export interface RefundablePaymentAttempt {
-  readonly attempt: NexiPaymentAttempt;
-  readonly correlationId: NexiCorrelationId;
+  readonly attempt: ProviderPaymentAttempt;
+  readonly correlationId: string;
 }
 
 /** A reservation's payment attempt as its refund facts stand. */
@@ -81,6 +81,7 @@ export interface IPaymentRefundRepository {
    * attempt starves the others. Concurrent runs skip each other's claims.
    */
   readonly claimRefundChecks: (input: {
+    readonly providers: readonly PaymentProvider[];
     readonly limit: number;
     readonly checkedAt: Temporal.Instant;
     readonly lastCheckedBefore: Temporal.Instant;
@@ -140,6 +141,7 @@ export class PaymentRefundRepository extends Context.Service<
       const claimRefundChecks = Effect.fn(
         "PaymentRefundRepository.claimRefundChecks"
       )(function* (input: {
+        readonly providers: readonly PaymentProvider[];
         readonly limit: number;
         readonly checkedAt: Temporal.Instant;
         readonly lastCheckedBefore: Temporal.Instant;
@@ -162,10 +164,10 @@ export class PaymentRefundRepository extends Context.Service<
               .innerJoin(orders, eq(orders.id, paymentAttempts.orderId))
               .where(
                 and(
+                  inArray(paymentAttempts.provider, input.providers),
                   or(
                     eq(paymentAttempts.refundState, "required"),
                     and(
-                      eq(paymentAttempts.provider, "nexi"),
                       eq(paymentAttempts.state, "paid"),
                       gte(paymentAttempts.createdAt, input.recentPaymentsSince),
                       or(
@@ -217,7 +219,7 @@ export class PaymentRefundRepository extends Context.Service<
         return claimed.flatMap((row): ClaimedRefundCheck[] => {
           const attempt = toPaymentAttempt(row);
           const check = checksById.get(row.id);
-          return check && isNexiPaymentAttempt(attempt)
+          return check && isProviderPaymentAttempt(attempt)
             ? [
                 {
                   attempt,
@@ -266,7 +268,7 @@ export class PaymentRefundRepository extends Context.Service<
             .where(
               and(
                 eq(paymentAttempts.id, input.id),
-                eq(paymentAttempts.provider, "nexi"),
+                ne(paymentAttempts.provider, "internal"),
                 eq(paymentAttempts.state, "paid"),
                 or(
                   ne(paymentAttempts.refundState, "refunded"),
@@ -302,7 +304,7 @@ export class PaymentRefundRepository extends Context.Service<
             .where(
               and(
                 eq(paymentAttempts.id, input.id),
-                eq(paymentAttempts.provider, "nexi"),
+                ne(paymentAttempts.provider, "internal"),
                 eq(paymentAttempts.state, "paid"),
                 eq(paymentAttempts.refundState, "required"),
                 gt(
@@ -354,14 +356,14 @@ export class PaymentRefundRepository extends Context.Service<
           .where(
             and(
               eq(paymentAttempts.workspaceReservationId, reservationId),
-              eq(paymentAttempts.provider, "nexi"),
+              ne(paymentAttempts.provider, "internal"),
               eq(paymentAttempts.refundState, "required")
             )
           )
           .orderBy(asc(paymentAttempts.createdAt), asc(paymentAttempts.id));
         return rows.flatMap(({ attempt: row, correlationId }) => {
           const attempt = toPaymentAttempt(row);
-          return isNexiPaymentAttempt(attempt)
+          return isProviderPaymentAttempt(attempt)
             ? [{ attempt, correlationId }]
             : [];
         });

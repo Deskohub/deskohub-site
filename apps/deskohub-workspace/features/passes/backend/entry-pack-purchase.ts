@@ -21,8 +21,8 @@ import {
   decidePaymentPageReopening,
   getPaymentPageToReopen,
 } from "@/features/checkout/backend/checkout/reusable-payment-attempt";
-import { startNexiPaymentSession } from "@/features/checkout/backend/payment/nexi-payment-session";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
+import { startPaymentSession } from "@/features/checkout/backend/payment/payment-session";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
 import {
   type CanonicalPromotionCode,
@@ -487,14 +487,15 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return { status: "paid" as const, statusUrl };
       }
 
-      const { hostedPaymentPage, attachedAttempt } =
-        yield* startNexiPaymentSession({
+      const { hostedPaymentPage, attachedAttempt } = yield* startPaymentSession(
+        {
           ...admission,
           kind: "pass-purchase",
           correlationId: order.correlationId,
           customer: { name: contact.name, email: session.email },
           beforeAttempt: recordEntryPackPaymentConsent(input),
-        }).pipe(Effect.scoped);
+        }
+      ).pipe(Effect.scoped);
       yield* analytics.paymentStarted({
         attempt: attachedAttempt,
         timestamp: attachedAttempt.updatedAt,

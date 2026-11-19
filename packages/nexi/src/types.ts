@@ -355,4 +355,12 @@ export interface NexiOrder {
   readonly lastOperationTime?: string;
   readonly lastOperationType?: string;
   readonly operations: readonly NexiOperation[];
+  /** The order identity and payment status supplied by the detail response. */
+  readonly reportedStatus?: {
+    readonly orderId: NexiOrderId;
+    readonly authorizedAmount?: string | undefined;
+    readonly capturedAmount?: string | undefined;
+    readonly lastOperationTime?: string | undefined;
+    readonly lastOperationType?: string | undefined;
+  };
 }

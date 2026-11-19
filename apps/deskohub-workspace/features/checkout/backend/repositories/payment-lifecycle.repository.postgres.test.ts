@@ -51,6 +51,7 @@ import {
   type IPaymentLifecycleRepository,
   PaymentLifecycleRepository,
 } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
+import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
 import { calculateDiscounts } from "@/features/discounts/calculator";
 import {
@@ -81,6 +82,7 @@ import { type Locale, m } from "@/features/i18n";
 import { ReferralService } from "@/features/referrals/referral.service";
 import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
@@ -633,7 +635,8 @@ const admit = (
   reservation: Reservation,
   input: ReturnType<typeof makeOrdinaryAdmission>
 ) =>
-  repository.createPendingNexiAttempt({
+  repository.createPendingProviderAttempt({
+    provider: "nexi",
     orderId: reservationOrderId(reservation.id),
     providerOrderId: `order-${uniqueId()}` as never,
     amount: input.admission.amount,
@@ -645,6 +648,111 @@ const admit = (
 describe.skipIf(!testDatabase)(
   "PaymentLifecycleRepository admission after a late payment on disposable Postgres",
   () => {
+    test("admits only one successor of the exact marked Nexi attempt", async () => {
+      const repository = await makeRepository();
+      const dotyposCustomerId = customerId();
+      const reservation = await createHeldReservation(dotyposCustomerId);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        dotyposCustomerId
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const payment = {
+        orderId,
+        amount: admission.amount,
+        commitment: admission.commitment,
+        locale,
+        accountingSnapshot: snapshot,
+      };
+      const nexi = await Effect.runPromise(
+        repository.createPendingProviderAttempt({
+          ...payment,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+        })
+      );
+      const { attempt: marked } = await Effect.runPromise(
+        repository.markTerminal({
+          id: nexi.id,
+          orderId,
+          state: "failed",
+          failureCode: NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE,
+        })
+      );
+      const releaseRetriedAttempt = (retriedAttemptId: typeof marked.id) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const reservations = yield* WorkspaceReservationRepository;
+            return yield* reservations.releaseRetriedAttempt({
+              id: reservation.id,
+              retriedAttemptId,
+              heldUntilAfter: Temporal.Now.instant(),
+            });
+          }).pipe(
+            Effect.provide(
+              WorkspaceReservationRepository.Default.pipe(
+                Layer.provide(testDatabase!.layer)
+              )
+            )
+          )
+        );
+      expect(await releaseRetriedAttempt(marked.id)).toMatchObject({
+        activePaymentAttemptId: null,
+        paymentState: "failed",
+      });
+      const admitMock = (retriedAttempt: typeof marked) =>
+        Effect.runPromise(
+          Effect.result(
+            repository.createPendingProviderAttempt({
+              ...payment,
+              provider: "mock",
+              providerOrderId: `mock-${uniqueId()}`,
+              retriedAttempt,
+            })
+          )
+        );
+      const contenders = await Promise.all([
+        admitMock(marked),
+        admitMock(marked),
+      ]);
+      expect(
+        contenders.filter((result) => result._tag === "Success")
+      ).toHaveLength(1);
+      expect(
+        contenders.filter((result) => result._tag === "Failure")
+      ).toHaveLength(1);
+      const successor = contenders.find((result) => result._tag === "Success")!;
+      await Effect.runPromise(
+        repository.markTerminal({
+          id: successor.success.id,
+          orderId,
+          state: "failed",
+          failureCode: "mock_declined",
+        })
+      );
+      expect(await releaseRetriedAttempt(successor.success.id)).toMatchObject({
+        activePaymentAttemptId: null,
+      });
+      expect(await admitMock(marked)).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "PaymentLifecycleStateError" },
+      });
+
+      const attempts = await Effect.runPromise(
+        testDatabase!.db
+          .select()
+          .from(paymentAttempts)
+          .where(eq(paymentAttempts.orderId, orderId))
+      );
+      expect(attempts).toHaveLength(2);
+      expect(attempts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ provider: "nexi", state: "failed" }),
+          expect.objectContaining({ provider: "mock", state: "failed" }),
+        ])
+      );
+    });
+
     test("admits no new payment for an order whose earlier attempt settled late, and still admits one without", async () => {
       const repository = await makeRepository();
       const dotyposCustomerId = customerId();
@@ -2695,14 +2803,15 @@ describe.skipIf(!testDatabase)(
       });
     };
 
-    const createPendingNexiAttempt = (input: {
+    const createPendingProviderAttempt = (input: {
       readonly reservationId: WorkspaceReservationId;
       readonly id: string;
       readonly snapshot: AccountingDocumentSnapshot;
       readonly commitment: DiscountCommitment;
     }) =>
       runResult((repository) =>
-        repository.createPendingNexiAttempt({
+        repository.createPendingProviderAttempt({
+          provider: "nexi",
           orderId: reservationOrderId(input.reservationId),
           providerOrderId: NexiOrderIdSchema.make(`order-${input.id}`),
           amount: input.snapshot.quote.payment.expectedPrice,
@@ -2816,7 +2925,7 @@ describe.skipIf(!testDatabase)(
       const subtotalBefore = snapshot.quote.payment.expectedPrice;
       const amount = { ...subtotalBefore, value: subtotalBefore.value / 10 };
 
-      return createPendingNexiAttempt({
+      return createPendingProviderAttempt({
         ...reservation,
         snapshot,
         commitment: makeDiscountCommitment({
@@ -2882,7 +2991,7 @@ describe.skipIf(!testDatabase)(
     test("admits the attempt, its accounting snapshot, and the reservation link together", async () => {
       const reservation = await insertHeldReservation();
 
-      const result = await createPendingNexiAttempt({
+      const result = await createPendingProviderAttempt({
         ...reservation,
         snapshot: makeSnapshot(reservation),
         commitment: makeDiscountCommitment({
@@ -2914,7 +3023,7 @@ describe.skipIf(!testDatabase)(
       const amount = { ...subtotalBefore, value: subtotalBefore.value / 10 };
       const product = { kind: "cowork", tier: "basic" } as const;
 
-      const result = await createPendingNexiAttempt({
+      const result = await createPendingProviderAttempt({
         ...reservation,
         snapshot,
         commitment: makeDiscountCommitment({
@@ -3040,7 +3149,7 @@ describe.skipIf(!testDatabase)(
           [voucherId]
         );
 
-        const attempt = createPendingNexiAttempt({
+        const attempt = createPendingProviderAttempt({
           ...reservation,
           snapshot,
           commitment: makeDiscountCommitment({

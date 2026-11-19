@@ -1,13 +1,12 @@
 import "@/shared/polyfills/temporal";
 
-import { NexiService } from "@deskohub/nexi";
 import { Context, Duration, Effect, Layer } from "effect";
-import { hasProviderPaymentActivity } from "@/features/checkout/provider-order-abandonment";
 import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
+import { PaymentProviders } from "../payment/payment-provider";
 import {
-  nexiRequestTimeout,
-  WorkspaceNexiLayer,
-} from "@/shared/backend/config/nexi.config";
+  PaymentProvidersLive,
+  paymentVerificationRequestTimeout,
+} from "../payment/payment-providers";
 import type { PaymentAttempt } from "../repositories/payment-attempt.repository";
 
 /**
@@ -27,7 +26,8 @@ import type { PaymentAttempt } from "../repositories/payment-attempt.repository"
 export type PaymentPageProviderObservation =
   | "no_activity"
   | "activity"
-  | "unknown";
+  | "unknown"
+  | "inactive";
 
 /**
  * How long a page render waits for the provider: one Nexi request and a
@@ -35,7 +35,7 @@ export type PaymentPageProviderObservation =
  * provider reads as `unknown`.
  */
 const observationTimeout = Duration.sum(
-  nexiRequestTimeout,
+  paymentVerificationRequestTimeout,
   Duration.seconds(1)
 );
 
@@ -45,7 +45,7 @@ interface IPaymentPageProviderStatus {
    * `observationTimeout`.
    */
   readonly observe: (input: {
-    readonly attempt: Pick<PaymentAttempt, "providerOrderId">;
+    readonly attempt: Pick<PaymentAttempt, "provider" | "providerOrderId">;
     readonly reservation: Pick<WorkspaceReservation, "correlationId">;
   }) => Effect.Effect<PaymentPageProviderObservation>;
 }
@@ -57,23 +57,25 @@ export class PaymentPageProviderStatus extends Context.Service<
   static Default = Layer.effect(
     this,
     Effect.gen(function* () {
-      const nexi = yield* NexiService;
+      const providers = yield* PaymentProviders;
       return {
         observe: Effect.fn("PaymentPageProviderStatus.observe")(
           function* ({ attempt, reservation }) {
+            if (
+              attempt.provider === "internal" ||
+              !providers.activeProviders.includes(attempt.provider)
+            )
+              return "inactive" as const;
             if (!attempt.providerOrderId) return "unknown" as const;
-            return yield* nexi
-              .getOrder({
-                orderId: attempt.providerOrderId,
+            return yield* providers
+              .forAttempt(attempt.provider)
+              .lookup({
+                providerOrderId: attempt.providerOrderId,
                 correlationId: reservation.correlationId,
               })
               .pipe(
                 Effect.map((order) =>
-                  hasProviderPaymentActivity({
-                    operationCount: order.operations.length,
-                    authorizedAmount: order.authorizedAmount,
-                    capturedAmount: order.capturedAmount,
-                  })
+                  order.hasActivity
                     ? ("activity" as const)
                     : ("no_activity" as const)
                 ),
@@ -97,5 +99,5 @@ export class PaymentPageProviderStatus extends Context.Service<
     })
   );
 
-  static Live = this.Default.pipe(Layer.provide(WorkspaceNexiLayer));
+  static Live = this.Default.pipe(Layer.provide(PaymentProvidersLive));
 }

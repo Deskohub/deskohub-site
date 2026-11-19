@@ -23,6 +23,7 @@ import { capturePaymentRetryReview } from "../checkout/payment-retry-review";
 import type { ReservationFormPreparation } from "../checkout/reservation-form-preparation";
 import type { WorkspaceE2EConfig } from "../config";
 import { WorkspaceE2EHostedPaymentPermitService } from "../coordination/hosted-payment-permit.service";
+import type { E2EPaymentProvider } from "../e2e-env";
 import { tryWorkspaceE2ESync, type WorkspaceE2EError } from "../errors";
 import {
   assertPaymentTerminalRow,
@@ -47,25 +48,40 @@ import type {
 import { makeUrl, setSearchParams } from "../urls";
 import { completeHostedCheckoutPayment } from "./checkout";
 
-export const getPaymentTerminalScenarios =
-  (): readonly PaymentTerminalScenario[] => [
+export const getPaymentTerminalScenarios = (
+  provider: E2EPaymentProvider = "nexi"
+): readonly PaymentTerminalScenario[] => {
+  return [
     {
-      failureCode: "nexi_payment_failed",
       id: "payment-authentication-failed",
-      providerStatus: "THREEDS_FAILED",
       state: "failed",
       titlePattern: /Payment was not completed\./i,
-      trigger: "hosted_authentication_failure",
+      trigger: "hosted_failure",
+      ...paymentTerminalContract(provider, "hosted_failure"),
     },
     {
-      failureCode: "workspace_e2e_nexi_cancelled",
       id: "payment-cancelled",
-      providerStatus: "CANCELLED",
       state: "cancelled",
       titlePattern: /Payment was cancelled\./i,
       trigger: "injected",
+      ...paymentTerminalContract(provider, "injected"),
     },
   ];
+};
+
+const paymentTerminalContract = (
+  provider: E2EPaymentProvider,
+  trigger: PaymentTerminalScenario["trigger"]
+) =>
+  trigger === "hosted_failure"
+    ? {
+        failureCode: `${provider}_payment_failed`,
+        providerStatus: provider === "nexi" ? "THREEDS_FAILED" : "declined",
+      }
+    : {
+        failureCode: `workspace_e2e_${provider}_cancelled`,
+        providerStatus: provider === "nexi" ? "CANCELLED" : "cancelled",
+      };
 
 export const assertPaymentTerminalPath = ({
   config,
@@ -107,10 +123,9 @@ export const assertPaymentTerminalPath = ({
       timeoutMs: config.timeouts.checkoutStart,
     });
     state.orderId = orderId;
-    if (scenario.trigger === "hosted_authentication_failure") {
-      // The hosted-payment permit ends once Nexi returns to checkout status.
-      yield* completeHostedCheckoutPayment({
-        challengeOutcome: "failed",
+    if (scenario.trigger === "hosted_failure") {
+      const failed = yield* completeHostedCheckoutPayment({
+        outcome: "declined",
         config,
         data,
         orderId,
@@ -118,7 +133,7 @@ export const assertPaymentTerminalPath = ({
         openSession,
         state,
       });
-      // The status page reconciles the order with Nexi; no webhook replay.
+      // Assert reconciliation through the ordinary hosted return.
       yield* runStep({
         execute: Effect.flatMap(openSession, (browser) =>
           assertReturnedTerminalStatusPage({
@@ -132,7 +147,15 @@ export const assertPaymentTerminalPath = ({
         timeoutMs: config.timeouts.uiTransition,
       });
       yield* runStep({
-        execute: validateReconciledTerminalRow({ orderId, scenario, state }),
+        execute: validateReconciledTerminalRow({
+          orderId,
+          paymentProvider: failed.provider,
+          scenario: {
+            ...scenario,
+            ...paymentTerminalContract(failed.provider, scenario.trigger),
+          },
+          state,
+        }),
         id: `validate-${scenario.state}-payment-state`,
         timeoutMs: config.timeouts.datasource,
       });
@@ -161,7 +184,7 @@ export const assertPaymentTerminalPath = ({
     // The failed payment's case captures the retry for review; the
     // cancelled one would only overwrite it.
     const captureReview =
-      scenario.trigger === "hosted_authentication_failure"
+      scenario.trigger === "hosted_failure"
         ? capturePaymentRetryReview
         : () => Effect.void;
     yield* runStep({
@@ -191,10 +214,9 @@ export const assertPaymentTerminalPath = ({
       id: "retry-payment-in-place",
       timeoutMs: config.timeouts.uiTransition,
     });
-    if (scenario.trigger === "hosted_authentication_failure") {
-      // The same order, paid on the Nexi sandbox after its failed payment.
+    if (scenario.trigger === "hosted_failure") {
       const failedAttemptId = state.checkoutRow?.payment_attempt_id ?? null;
-      yield* completeHostedCheckoutPayment({
+      const retried = yield* completeHostedCheckoutPayment({
         config,
         data,
         orderId,
@@ -202,11 +224,11 @@ export const assertPaymentTerminalPath = ({
         openSession,
         state,
       });
-      // The status page reconciles the order with Nexi; no webhook replay.
       state.checkoutRow = yield* runStep({
         execute: waitForRetriedPayment({
           failedAttemptId,
           orderId,
+          paymentProvider: retried.provider,
           timeouts: config.timeouts,
         }),
         id: "validate-retried-payment",
@@ -242,14 +264,16 @@ const injectPaymentTerminalState = ({
     yield* hostedPaymentPermit.withPermit(
       "hosted payment terminal state",
       Effect.gen(function* () {
-        yield* runStep({
+        const paymentProvider = yield* runStep({
           execute: Effect.gen(function* () {
             const browser = yield* openSession;
-            const { checkoutPage } = yield* submitPaymentAndWaitForHostedPage({
-              session: browser,
-              timeouts: config.timeouts,
-            });
+            const { checkoutPage, provider } =
+              yield* submitPaymentAndWaitForHostedPage({
+                config,
+                session: browser,
+              });
             yield* browser.activate(checkoutPage);
+            return provider;
           }),
           id: "start-hosted-payment",
           timeoutMs: config.timeouts.providerTransition,
@@ -258,6 +282,7 @@ const injectPaymentTerminalState = ({
         yield* runStep({
           execute: preparePaymentTerminalState({
             orderId,
+            paymentProvider,
             scenario,
             state,
             timeoutMs: config.timeouts.browserAction,
@@ -271,11 +296,13 @@ const injectPaymentTerminalState = ({
 
 const preparePaymentTerminalState = ({
   orderId,
+  paymentProvider,
   scenario,
   state,
   timeoutMs,
 }: {
   orderId: WorkspaceReservationId;
+  paymentProvider: E2EPaymentProvider;
   scenario: PaymentTerminalScenario;
   state: CheckoutFlowState;
   timeoutMs: number;
@@ -287,6 +314,7 @@ const preparePaymentTerminalState = ({
         onRow: (row) => {
           state.checkoutRow = row;
         },
+        paymentProvider,
         timeoutMs,
       }
     );
@@ -297,17 +325,19 @@ const preparePaymentTerminalState = ({
       scenario
     );
     state.checkoutRow = checkoutRow;
-    yield* assertPaymentTerminalRow(checkoutRow, scenario);
+    yield* assertPaymentTerminalRow(checkoutRow, scenario, paymentProvider);
   });
 
 /** Waits until a newer attempt than the failed one paid the same order. */
 const waitForRetriedPayment = ({
   failedAttemptId,
   orderId,
+  paymentProvider,
   timeouts,
 }: {
   failedAttemptId: string | null;
   orderId: WorkspaceReservationId;
+  paymentProvider: E2EPaymentProvider;
   timeouts: WorkspaceE2ETimeouts;
 }): Effect.Effect<CheckoutRow, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {
@@ -324,13 +354,17 @@ const waitForRetriedPayment = ({
         timeoutMs: timeouts.providerTransition,
       }
     );
-    yield* tryWorkspaceE2ESync("validate retried payment", () =>
+    yield* tryWorkspaceE2ESync("validate retried payment", () => {
+      assert(
+        row.provider === paymentProvider,
+        "retried payment provider mismatch"
+      );
       assert(
         row.payment_attempt_id !== null &&
           row.payment_attempt_id !== failedAttemptId,
         "the retried payment reused the failed attempt"
-      )
-    );
+      );
+    });
     return row;
   });
 
@@ -380,8 +414,7 @@ const waitForRetryPaymentControl = (
 const isOrderStatusUrl = (value: string, orderId: WorkspaceReservationId) =>
   parseUrl(value)?.pathname.endsWith(`/reservation/status/${orderId}`) === true;
 
-// The customer stays on the status page Nexi returned to; it refreshes while
-// the payment is pending and reconciles the order with Nexi.
+// The status page refreshes while the payment is pending and reconciles the order.
 export const assertReturnedTerminalStatusPage = ({
   orderId,
   scenario,
@@ -398,11 +431,11 @@ export const assertReturnedTerminalStatusPage = ({
     yield* tryWorkspaceE2ESync("assert returned checkout status order", () =>
       assert(
         url && isOrderStatusUrl(url, orderId),
-        "Nexi returned to a different checkout status page"
+        "Hosted payment returned to a different checkout status page"
       )
     );
     yield* waitForPageText({
-      description: `${scenario.state} checkout status copy after the Nexi return`,
+      description: `${scenario.state} checkout status copy after the hosted return`,
       matches: (text) => scenario.titlePattern.test(text),
       session,
       timeoutMs: timeouts.uiTransition,
@@ -410,16 +443,18 @@ export const assertReturnedTerminalStatusPage = ({
     yield* waitForRetryPaymentControl(session, scenario, timeouts);
 
     log(
-      `Checkout ${scenario.state} status page validated after the Nexi return`
+      `Checkout ${scenario.state} status page validated after the hosted return`
     );
   });
 
 const validateReconciledTerminalRow = ({
   orderId,
+  paymentProvider,
   scenario,
   state,
 }: {
   orderId: WorkspaceReservationId;
+  paymentProvider: E2EPaymentProvider;
   scenario: PaymentTerminalScenario;
   state: CheckoutFlowState;
 }): Effect.Effect<void, WorkspaceE2EError, E2EDatabase> =>
@@ -428,10 +463,10 @@ const validateReconciledTerminalRow = ({
     const checkoutRow = yield* tryWorkspaceE2ESync(
       "read reconciled terminal checkout row",
       () => {
-        assert(row, "checkout row missing after the Nexi return");
+        assert(row, "checkout row missing after the payment return");
         return row;
       }
     );
     state.checkoutRow = checkoutRow;
-    yield* assertPaymentTerminalRow(checkoutRow, scenario);
+    yield* assertPaymentTerminalRow(checkoutRow, scenario, paymentProvider);
   });

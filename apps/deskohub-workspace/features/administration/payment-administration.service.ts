@@ -4,6 +4,7 @@ import {
   type NexiOperationId,
   type NexiOrder,
   type NexiOrderId,
+  NexiOrderIdSchema,
   NexiService,
 } from "@deskohub/nexi";
 import {
@@ -197,7 +198,7 @@ const normalizeMaximumRecords = (value?: number) =>
 
 const toLocalOrderRows = (
   rows: readonly (Omit<LocalOrderRow, "providerOrderId" | "reservationId"> & {
-    readonly providerOrderId: NexiOrderId | null;
+    readonly providerOrderId: string | null;
     readonly reservationId: WorkspaceReservationId | null;
   })[]
 ): readonly LocalOrderRow[] =>
@@ -206,7 +207,7 @@ const toLocalOrderRows = (
       ? [
           {
             ...row,
-            providerOrderId: row.providerOrderId,
+            providerOrderId: NexiOrderIdSchema.make(row.providerOrderId),
             reservationId: row.reservationId,
           },
         ]

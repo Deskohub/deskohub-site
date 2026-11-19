@@ -115,6 +115,7 @@ const assertPublicMeetingRoomAvailability = ({
     baseUrl: "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
     bypassSecret: undefined,
     expectedHost: "deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
+    paymentProvider: "nexi",
     timeouts: { ...workspaceE2ETimeouts, datasource: 1 },
   };
   const fetchMock: typeof globalThis.fetch = (_input, _init) =>
@@ -185,6 +186,7 @@ const linkCaseConfig: WorkspaceE2EConfig = {
   baseUrl: "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
   bypassSecret: undefined,
   expectedHost: "deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
+  paymentProvider: "nexi",
   timeouts: workspaceE2ETimeouts,
 };
 

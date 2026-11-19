@@ -1,9 +1,4 @@
 import { DotyposService } from "@deskohub/dotypos";
-import {
-  type HostedPaymentCustomer,
-  type NexiCorrelationId,
-  NexiService,
-} from "@deskohub/nexi";
 import { parsePhoneNumber } from "@deskohub/phone-number";
 import { Context, Effect, Layer, Match } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
@@ -42,15 +37,19 @@ import {
 } from "@/features/reservation/persistence-contracts";
 import { hasReservationIntervalEnded } from "@/features/reservation/reservation-interval";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
-import { WorkspaceNexiLayer } from "@/shared/backend/config/nexi.config";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { type Money, moneyEquals } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { localDateTimeToInstant } from "@/shared/utils/temporal";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
-import { getNexiHostedPaymentCustomer } from "../payment/nexi-customer-info";
-import { startNexiPaymentSession } from "../payment/nexi-payment-session";
 import { OrderPaymentHandlers } from "../payment/order-payment-handlers.service";
+import { getPaymentCustomer } from "../payment/payment-customer";
+import {
+  type PaymentCustomer,
+  PaymentProviders,
+} from "../payment/payment-provider";
+import { PaymentProvidersLive } from "../payment/payment-providers";
+import { startPaymentSession } from "../payment/payment-session";
 import { LegalEvidenceEventRepository } from "../repositories/legal-evidence-event.repository";
 import {
   PaymentAttemptRepository,
@@ -219,7 +218,7 @@ export class CheckoutService extends Context.Service<
     Layer.provide(WorkspaceReservationRepository.Default),
     Layer.provide(WorkspaceDatabase.Default),
     Layer.provide(WorkspaceDotyposLayer),
-    Layer.provide(WorkspaceNexiLayer),
+    Layer.provide(PaymentProvidersLive),
     Layer.provide(CheckoutPricingService.Live),
     Layer.provide(SealedStateKeys.Default)
   );
@@ -289,7 +288,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
     service,
     Effect.gen(function* () {
       const dotypos = yield* DotyposService;
-      const nexi = yield* NexiService;
+      const providers = yield* PaymentProviders;
       const reservations = yield* WorkspaceReservationRepository;
       const paymentAttempts = yield* PaymentAttemptRepository;
       const orderPaymentHandlers = yield* OrderPaymentHandlers;
@@ -303,8 +302,8 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
         yield* SealedStateKeys
       );
 
-      const provideNexiPaymentSession = Effect.provide(
-        Context.make(NexiService, nexi).pipe(
+      const providePaymentSession = Effect.provide(
+        Context.make(PaymentProviders, providers).pipe(
           Context.add(OrderPaymentHandlers, orderPaymentHandlers),
           Context.add(CheckoutAnalytics, checkoutAnalytics)
         )
@@ -314,18 +313,19 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
       const reconfirmPayableCheckout = Effect.fn(
         "checkout.reconfirmPayableCheckout"
       )(function* (checkout: OpenCheckout) {
-        yield* payableCheckout.reconfirm(checkout.state);
+        const current = yield* payableCheckout.reconfirm(checkout.state);
         yield* Effect.logDebug("Checkout payable reservation revalidated");
+        return current;
       });
 
       const startProviderSession = Effect.fn("checkout.startProviderSession")(
         function* (input: {
           readonly workspaceReservationId: WorkspaceReservationId;
-          readonly correlationId: NexiCorrelationId;
+          readonly correlationId: string;
           readonly locale: Locale;
           readonly total: Money;
           readonly commitment: DiscountCommitment;
-          readonly customer: HostedPaymentCustomer;
+          readonly customer: PaymentCustomer;
           readonly accountingSnapshot: AccountingDocumentSnapshot;
           readonly reservation: SignedPayState["reservation"];
           readonly returnTarget: PaymentReturnTarget | undefined;
@@ -342,17 +342,20 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           });
           yield* Effect.logInfo("Checkout provider session start requested");
 
-          yield* reconfirmPayableCheckout(input.checkout);
+          const { retriedAttempt } = yield* reconfirmPayableCheckout(
+            input.checkout
+          );
 
           const orderId = reservationOrderId(input.workspaceReservationId);
           const { attachedAttempt, hostedPaymentPage } =
-            yield* startNexiPaymentSession({
+            yield* startPaymentSession({
               kind: input.checkout.kind,
               orderId,
               locale: input.locale,
               correlationId: input.correlationId,
               amount: input.total,
               customer: input.customer,
+              retriedAttempt,
               beforeAttempt: Effect.gen(function* () {
                 yield* ensureReservationHasNotEnded(input.reservation);
                 yield* reservations.recordPaymentReturnTarget({
@@ -364,7 +367,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 commitment: input.commitment,
                 accountingSnapshot: input.accountingSnapshot,
               },
-            }).pipe(provideNexiPaymentSession);
+            }).pipe(providePaymentSession);
           yield* checkoutAnalytics.paymentStarted({
             attempt: attachedAttempt,
             timestamp: attachedAttempt.updatedAt,
@@ -579,6 +582,12 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           return undefined;
         }
 
+        if (
+          attempt.provider === "internal" ||
+          !providers.activeProviders.includes(attempt.provider)
+        ) {
+          return { status: "in_progress" as const };
+        }
         const providerRedirectUrl = getReusableProviderRedirectUrl(attempt);
         if (
           providerRedirectUrl &&
@@ -903,7 +912,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                           locale,
                           total: expectedPrice,
                           commitment: prepared.commitment,
-                          customer: getNexiHostedPaymentCustomer({
+                          customer: getPaymentCustomer({
                             id: dotyposCustomerId,
                             name: data.name,
                             email: data.email,

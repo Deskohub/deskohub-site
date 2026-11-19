@@ -122,7 +122,8 @@ export const admitPendingNexiPayment = (
         quote,
       } as PreparedCustomerQuote,
     });
-    return yield* repository.createPendingNexiAttempt({
+    return yield* repository.createPendingProviderAttempt({
+      provider: "nexi",
       orderId: reservationOrderId(reservation.id),
       providerOrderId: `order-${crypto.randomUUID()}` as never,
       amount: snapshot.quote.payment.expectedPrice,

@@ -5,7 +5,7 @@ import {
   DotyposEmployeeIdSchema,
 } from "@deskohub/dotypos";
 import { createEnv } from "@t3-oss/env-core";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { urlStringSchema } from "../shared/utils/url-schema";
 
 const toEnvironmentSchema = <S extends Schema.Decoder<unknown>>(schema: S) =>
@@ -51,6 +51,18 @@ const optionalOptIn = toEnvironmentSchema(
 );
 type RuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 
+export const e2ePaymentProviderModeSchema = Schema.Literals([
+  "nexi",
+  "mock",
+  "fallback",
+]);
+type E2EPaymentProviderMode = typeof e2ePaymentProviderModeSchema.Type;
+export type E2EPaymentProvider = Exclude<E2EPaymentProviderMode, "fallback">;
+
+export const initialE2EPaymentProvider = (
+  mode: E2EPaymentProviderMode
+): E2EPaymentProvider => (mode === "fallback" ? "nexi" : mode);
+
 const e2eEnvironmentSchema = Schema.Struct({
   CI: optionalNonEmptyString,
   DATABASE_URL: nonEmptyString,
@@ -89,6 +101,11 @@ const e2eEnvironmentSchema = Schema.Struct({
   ),
   WORKSPACE_E2E_BASE_URL: url,
   WORKSPACE_E2E_ALLOCATION_SHARD: optionalAllocationShard,
+  WORKSPACE_E2E_PAYMENT_PROVIDER: toEnvironmentSchema(
+    e2ePaymentProviderModeSchema.pipe(
+      Schema.withDecodingDefault(Effect.succeed("nexi"))
+    )
+  ),
   WORKSPACE_E2E_PROVIDER_PERMIT_REQUIRED: toEnvironmentSchema(
     Schema.optional(Schema.Literals(["true"]))
   ),
@@ -147,6 +164,8 @@ export const makeE2EEnvironment = (
       WORKSPACE_E2E_BASE_URL: runtimeEnvironment.WORKSPACE_E2E_BASE_URL,
       WORKSPACE_E2E_ALLOCATION_SHARD:
         runtimeEnvironment.WORKSPACE_E2E_ALLOCATION_SHARD,
+      WORKSPACE_E2E_PAYMENT_PROVIDER:
+        runtimeEnvironment.WORKSPACE_E2E_PAYMENT_PROVIDER,
       WORKSPACE_E2E_PROVIDER_PERMIT_REQUIRED:
         runtimeEnvironment.WORKSPACE_E2E_PROVIDER_PERMIT_REQUIRED,
       WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL:

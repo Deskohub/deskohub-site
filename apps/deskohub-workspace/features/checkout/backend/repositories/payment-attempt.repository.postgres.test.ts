@@ -15,7 +15,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
-  isNexiPaymentAttempt,
+  isProviderPaymentAttempt,
   PaymentAttemptRepository,
 } from "./payment-attempt.repository";
 
@@ -120,11 +120,11 @@ describe.skipIf(!testDatabase)(
         exponent: 2,
         currency: "CZK",
       });
-      expect(byId && isNexiPaymentAttempt(byId)).toBe(true);
+      expect(byId && isProviderPaymentAttempt(byId)).toBe(true);
       expect(byId).not.toHaveProperty("amountValue");
 
       const byOrder = await run((repository) =>
-        repository.findByProviderOrderId(byId!.providerOrderId!)
+        repository.findByProviderOrderId("nexi", byId!.providerOrderId!)
       );
       expect(byOrder?.id).toBe(id);
       expect(byOrder?.orderKind).toBe("reservation");
@@ -164,7 +164,7 @@ describe.skipIf(!testDatabase)(
 
       expect(
         await run((repository) =>
-          repository.findByProviderOrderId(providerOrderId)
+          repository.findByProviderOrderId("nexi", providerOrderId)
         )
       ).toMatchObject({
         orderId,
@@ -184,6 +184,7 @@ describe.skipIf(!testDatabase)(
       expect(
         await run((repository) =>
           repository.findByProviderOrderId(
+            "nexi",
             NexiOrderIdSchema.make(`missing-${crypto.randomUUID()}`)
           )
         )
@@ -200,7 +201,7 @@ describe.skipIf(!testDatabase)(
 
       const attempt = await run((repository) => repository.findById(id));
       expect(attempt?.amount.value).toBe(0);
-      expect(attempt && isNexiPaymentAttempt(attempt)).toBe(false);
+      expect(attempt && isProviderPaymentAttempt(attempt)).toBe(false);
     });
 
     test("shows the active attempt while it is created, pending, or paid", async () => {

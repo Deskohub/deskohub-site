@@ -1,55 +1,36 @@
 import {
-  classifyNexiFailureStatus,
-  type ExternalAPIError,
-  getNexiPaymentMetadata,
-  type NetworkError,
-  type NexiCurrency,
-  NexiCurrencySchema,
-  type NexiPaymentMetadata,
-  NexiService,
-  type NexiWebhookEventId,
-  type PaymentVerificationResult,
-} from "@deskohub/nexi";
-import {
   Context,
   Data,
   Duration,
   Effect,
   Layer,
-  Match,
-  Option,
-  Schema,
+  Result,
   type Scope,
 } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { OrderId } from "@/features/order";
-import { WorkspaceNexiLayer } from "@/shared/backend/config/nexi.config";
-import {
-  getProviderOrderAbandonment,
-  getProviderOrderAbandonmentCutoff,
-  hasProviderPaymentActivity,
-} from "../../provider-order-abandonment";
+import { getProviderOrderAbandonmentCutoff } from "../../provider-order-abandonment";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
 import {
-  isNexiPaymentAttempt,
-  type NexiPaymentAttempt,
-  type PaymentAttempt,
+  isProviderPaymentAttempt,
   PaymentAttemptRepository,
+  type ProviderPaymentAttempt,
   paymentAttemptLogFields,
 } from "../repositories/payment-attempt.repository";
 import type { PaymentLifecycleRepositoryError } from "../repositories/payment-lifecycle.repository";
-import { getNexiCurrencyOverride } from "./nexi-currency";
 import type {
   OrderPaymentHandler,
   PaymentOrder,
 } from "./order-payment-handler";
 import { OrderPaymentHandlers } from "./order-payment-handlers.service";
+import { PaymentProviders, type PaymentVerification } from "./payment-provider";
+import { PaymentProvidersLive } from "./payment-providers";
 import { paymentVerificationLogFields } from "./payment-verification-log-fields";
 import {
-  isVerifiableNexiPaymentAttempt,
-  type VerifiableNexiPaymentAttempt,
-} from "./verifiable-nexi-payment-attempt";
+  isVerifiableProviderPaymentAttempt,
+  type VerifiableProviderPaymentAttempt,
+} from "./verifiable-provider-payment-attempt";
 
 /**
  * An operation-free provider order, or an unattached session, still inside
@@ -111,9 +92,9 @@ export interface IProviderPaymentFinalizationService {
   readonly finalizePendingProviderPayment: (input: {
     readonly orderId: OrderId;
     readonly paymentAttemptId?: PaymentAttemptId;
-    readonly webhookEventId?: NexiWebhookEventId;
+    readonly webhookEventId?: string;
     readonly abandonmentCheckedAt?: Temporal.Instant;
-    /** Bounds the Nexi payment verification, retries included. */
+    /** Bounds payment verification, retries included. */
     readonly verificationDeadline?: Duration.Input;
   }) => Effect.Effect<
     ProviderPaymentFinalizationResult,
@@ -132,7 +113,7 @@ export class ProviderPaymentFinalizationService extends Context.Service<
     Layer.provide(OrderPaymentHandlers.Live),
     Layer.provide(CheckoutAnalytics.Live),
     Layer.provide(WorkspaceDatabase.Default),
-    Layer.provide(WorkspaceNexiLayer)
+    Layer.provide(PaymentProvidersLive)
   );
 }
 
@@ -144,24 +125,22 @@ function makeProviderPaymentFinalizationServiceLayer(
     Effect.gen(function* () {
       const handlers = yield* OrderPaymentHandlers;
       const paymentAttempts = yield* PaymentAttemptRepository;
-      const nexi = yield* NexiService;
+      const providers = yield* PaymentProviders;
       const checkoutAnalytics = yield* CheckoutAnalytics;
 
       /**
        * Ends an attempt whose hosted payment page creation failed ambiguously
-       * and never attached a provider session. Nexi documents no idempotency
-       * key for hosted page creation and its order lookup returns no hosted
-       * page, so the original session cannot be recovered. It is also
-       * unpayable: only an attached session's hosted page reaches the
-       * customer. Hold cleanup fails it after the abandonment window unless
-       * the provider order unexpectedly shows payment activity.
+       * and never attached a provider session. Only an attached session's
+       * hosted page reaches the customer. Hold cleanup fails the attempt
+       * after the abandonment window unless the provider order unexpectedly
+       * shows payment activity.
        */
       const resolveUnattachedProviderSession = Effect.fn(
         "providerPaymentFinalization.resolveUnattachedProviderSession"
       )(function* (input: {
         readonly order: PaymentOrder;
         readonly handler: OrderPaymentHandler;
-        readonly attempt: NexiPaymentAttempt;
+        readonly attempt: ProviderPaymentAttempt;
         readonly checkedAt: Temporal.Instant | undefined;
       }): Effect.fn.Return<
         ProviderPaymentFinalizationResult,
@@ -183,33 +162,29 @@ function makeProviderPaymentFinalizationServiceLayer(
           return new ProviderPaymentDeferral({ abandonmentCutoff });
         }
 
-        const providerOrder = yield* nexi
-          .getOrder({
-            orderId: input.attempt.providerOrderId,
+        const provider = providers.forAttempt(input.attempt.provider);
+        const providerOrder = yield* provider
+          .lookup({
+            providerOrderId: input.attempt.providerOrderId,
             correlationId: input.order.correlationId,
           })
           .pipe(
-            Effect.map(Option.some),
-            Effect.catchIf(isProviderOrderNotFound, () => Effect.succeedNone),
+            Effect.catchIf(
+              (error) => error.notFound === true,
+              () => Effect.succeed(null)
+            ),
             Effect.tapError((cause) =>
               Effect.logError(
                 "Unattached provider session order lookup failed",
                 { cause }
               )
             ),
-            Effect.option
+            Effect.result
           );
-        if (Option.isNone(providerOrder)) {
+        if (Result.isFailure(providerOrder)) {
           return "provider_verification_failed";
         }
-        if (
-          Option.isSome(providerOrder.value) &&
-          hasProviderPaymentActivity({
-            operationCount: providerOrder.value.value.operations.length,
-            authorizedAmount: providerOrder.value.value.authorizedAmount,
-            capturedAmount: providerOrder.value.value.capturedAmount,
-          })
-        ) {
+        if (providerOrder.success?.hasActivity) {
           yield* Effect.logError(
             "Unattached provider session has payment activity and needs operator review"
           );
@@ -221,7 +196,7 @@ function makeProviderPaymentFinalizationServiceLayer(
             id: input.attempt.id,
             orderId: input.order.id,
             state: "failed",
-            failureCode: "nexi_hpp_create_unconfirmed",
+            failureCode: provider.unconfirmedSessionFailureCode,
             providerStatus: "hpp_create_unconfirmed",
             fromAttemptStates: ["created"],
           })
@@ -242,13 +217,13 @@ function makeProviderPaymentFinalizationServiceLayer(
         if (terminal.changed) {
           yield* checkoutAnalytics.paymentFailed({
             attempt: terminal.attempt,
-            failureReason: "nexi_hpp_create_unconfirmed",
+            failureReason: provider.unconfirmedSessionFailureCode,
             timestamp: terminal.timestamp,
           });
         }
         yield* Effect.logInfo(
           "Payment finalization failed an unattached provider session",
-          { providerOrderFound: Option.isSome(providerOrder.value) }
+          { providerOrderFound: providerOrder.success !== null }
         );
         return "terminal";
       });
@@ -321,58 +296,38 @@ function makeProviderPaymentFinalizationServiceLayer(
         return attempt;
       });
 
-      const decodeAttemptCurrency = Effect.fnUntraced(function* (
-        verifiable: VerifiableAttemptFinalization
-      ) {
-        const { input, order, attempt } = verifiable;
-        const currency = yield* Schema.decodeUnknownEffect(NexiCurrencySchema)(
-          attempt.amount.currency
-        ).pipe(
-          Effect.tapError((cause) =>
-            Effect.logError("Payment finalization currency decode failed", {
-              input,
-              orderId: order.id,
-              ...paymentAttemptLogFields(attempt),
-              cause,
-            })
-          ),
-          Effect.orElseSucceed(() => undefined)
-        );
-        yield* Effect.annotateLogsScoped({ currency });
-        yield* Effect.logDebug("Payment finalization currency decoded");
-        return currency;
-      });
-
-      const verifyProviderPayment = Effect.fnUntraced(function* (
-        { input, order, attempt }: VerifiableAttemptFinalization,
-        currency: NexiCurrency
-      ) {
+      const verifyProviderPayment = Effect.fnUntraced(function* ({
+        input,
+        order,
+        attempt,
+      }: VerifiableAttemptFinalization) {
+        yield* Effect.annotateLogsScoped({ currency: attempt.amount.currency });
         yield* Effect.logInfo(
           "Payment finalization provider verification started"
         );
-        const verification = yield* nexi
-          .verifyPaymentOutcome({
-            orderId: attempt.providerOrderId,
+        const verification = yield* providers
+          .forAttempt(attempt.provider)
+          .verify({
+            providerOrderId: attempt.providerOrderId,
             correlationId: order.correlationId,
-            amount: String(attempt.amount.value),
-            currency: getNexiCurrencyOverride() ?? currency,
+            amount: attempt.amount,
             securityToken: attempt.securityToken,
             deadline: input.verificationDeadline,
           })
           .pipe(
             Effect.tapError((cause) =>
-              Effect.logError("Nexi payment outcome verification failed", {
+              Effect.logError("Provider payment outcome verification failed", {
                 orderId: order.id,
                 paymentAttemptId: attempt.id,
                 providerOrderId: attempt.providerOrderId,
                 cause,
               })
             ),
-            Effect.orElseSucceed(() => undefined)
+            Effect.result
           );
 
         yield* Effect.annotateLogsScoped(
-          paymentVerificationLogFields(verification)
+          paymentVerificationLogFields(Result.getOrUndefined(verification))
         );
         yield* Effect.logInfo(
           "Payment finalization provider verification completed"
@@ -382,7 +337,7 @@ function makeProviderPaymentFinalizationServiceLayer(
 
       const markVerifiedPaymentPaid = Effect.fnUntraced(function* (
         { input, order, handler, attempt }: VerifiableAttemptFinalization,
-        { providerOperationId, providerStatus }: NexiPaymentMetadata
+        { providerOperationId, providerStatus }: PaymentVerification
       ) {
         yield* Effect.logInfo("Payment finalization mark paid started");
         const paidSuccess = yield* handler
@@ -427,9 +382,13 @@ function makeProviderPaymentFinalizationServiceLayer(
 
       const markVerifiedPaymentTerminal = Effect.fnUntraced(function* (
         { input, order, handler, attempt }: VerifiableAttemptFinalization,
-        { providerOperationId, providerStatus }: NexiPaymentMetadata
+        {
+          providerOperationId,
+          providerStatus,
+          terminalState,
+          failureCode,
+        }: Extract<PaymentVerification, { status: "failure" }>
       ) {
-        const terminalState = classifyNexiFailureStatus(providerStatus);
         yield* Effect.annotateLogsScoped({
           failureKind: terminalState,
           terminalState,
@@ -441,7 +400,7 @@ function makeProviderPaymentFinalizationServiceLayer(
             id: attempt.id,
             orderId: order.id,
             state: terminalState,
-            failureCode: "nexi_payment_failed",
+            failureCode,
             webhookEventId: input.webhookEventId,
             providerOperationId,
             providerStatus,
@@ -466,7 +425,7 @@ function makeProviderPaymentFinalizationServiceLayer(
           if (terminalState === "failed") {
             yield* checkoutAnalytics.paymentFailed({
               attempt: terminalSuccess.attempt,
-              failureReason: "nexi_payment_failed",
+              failureReason: failureCode,
               timestamp: terminalSuccess.timestamp,
             });
           } else {
@@ -484,38 +443,27 @@ function makeProviderPaymentFinalizationServiceLayer(
       /** A verified provider order that is neither paid nor failed. */
       const resolvePendingProviderOrder = Effect.fnUntraced(function* (
         { input, attempt }: VerifiableAttemptFinalization,
-        verification: PaymentVerificationResult
+        { hasActivity }: PaymentVerification
       ) {
-        const emptyOrder = getProviderOrderAbandonment({
-          checkedAt: input.abandonmentCheckedAt,
-          providerOrderCreatedAt: attempt.providerOrderCreatedAt,
-          order: verification.provider,
-        });
-        // Without an abandonment check, an operation-free order is still
-        // waiting for the customer's payment on its page.
-        if (
-          !input.abandonmentCheckedAt &&
-          !hasProviderPaymentActivity(verification.provider)
-        ) {
+        const checkedAt = input.abandonmentCheckedAt;
+        const orderCreatedAt = attempt.providerOrderCreatedAt;
+        if (!hasActivity && !checkedAt) {
           yield* Effect.logInfo(
             "Payment finalization returned awaiting_payment"
           );
           return "awaiting_payment" as const;
         }
-        if (emptyOrder.state !== "not_empty") {
+        if (!hasActivity && checkedAt && orderCreatedAt) {
+          const cutoff = getProviderOrderAbandonmentCutoff(orderCreatedAt);
+          const abandoned = Temporal.Instant.compare(checkedAt, cutoff) >= 0;
           yield* Effect.logInfo(
             "Payment finalization resolved empty provider order",
-            { result: emptyOrder.state }
+            { result: abandoned ? "abandoned" : "deferred" }
           );
-          return Match.value(emptyOrder).pipe(
-            Match.discriminatorsExhaustive("state")({
-              abandoned: () => "abandoned" as const,
-              deferred: ({ cutoff }) =>
-                new ProviderPaymentDeferral({ abandonmentCutoff: cutoff }),
-            })
-          );
+          return abandoned
+            ? ("abandoned" as const)
+            : new ProviderPaymentDeferral({ abandonmentCutoff: cutoff });
         }
-
         yield* Effect.logInfo("Payment finalization returned pending");
         return "pending" as const;
       });
@@ -527,21 +475,15 @@ function makeProviderPaymentFinalizationServiceLayer(
         PaymentLifecycleRepositoryError,
         Scope.Scope
       > {
-        const currency = yield* decodeAttemptCurrency(verifiable);
-        if (!currency) {
-          yield* Effect.logWarning(
-            "Payment finalization returned not_verifiable"
-          );
-          return "not_verifiable";
+        const result = yield* verifyProviderPayment(verifiable);
+        if (Result.isFailure(result)) {
+          const outcome = result.failure.invalidInput
+            ? "not_verifiable"
+            : "provider_verification_failed";
+          yield* Effect.logWarning(`Payment finalization returned ${outcome}`);
+          return outcome;
         }
-
-        const verification = yield* verifyProviderPayment(verifiable, currency);
-        if (!verification) {
-          yield* Effect.logWarning(
-            "Payment finalization returned provider_verification_failed"
-          );
-          return "provider_verification_failed";
-        }
+        const verification = result.success;
         if (verification.mismatches.length > 0) {
           yield* Effect.logWarning(
             "Payment finalization returned verification_mismatch"
@@ -549,20 +491,19 @@ function makeProviderPaymentFinalizationServiceLayer(
           return "verification_mismatch";
         }
 
-        const metadata = getNexiPaymentMetadata(verification);
         yield* Effect.annotateLogsScoped({
-          providerOperationId: metadata.providerOperationId,
-          providerStatus: metadata.providerStatus,
+          providerOperationId: verification.providerOperationId,
+          providerStatus: verification.providerStatus,
         });
         yield* Effect.logDebug(
           "Payment finalization provider metadata resolved"
         );
 
         if (verification.status === "success") {
-          return yield* markVerifiedPaymentPaid(verifiable, metadata);
+          return yield* markVerifiedPaymentPaid(verifiable, verification);
         }
         if (verification.status === "failure") {
-          return yield* markVerifiedPaymentTerminal(verifiable, metadata);
+          return yield* markVerifiedPaymentTerminal(verifiable, verification);
         }
         return yield* resolvePendingProviderOrder(verifiable, verification);
       });
@@ -600,7 +541,12 @@ function makeProviderPaymentFinalizationServiceLayer(
             );
             const attempt =
               loadedAttempt?.orderId === order.id ? loadedAttempt : null;
-            if (isUnattachedProviderSession(attempt)) {
+            if (
+              attempt &&
+              isProviderPaymentAttempt(attempt) &&
+              attempt.state === "created" &&
+              !attempt.securityToken
+            ) {
               return yield* resolveUnattachedProviderSession({
                 order,
                 handler,
@@ -608,7 +554,7 @@ function makeProviderPaymentFinalizationServiceLayer(
                 checkedAt: input.abandonmentCheckedAt,
               });
             }
-            if (!isVerifiableNexiPaymentAttempt(attempt)) {
+            if (!isVerifiableProviderPaymentAttempt(attempt)) {
               yield* Effect.logWarning(
                 "Payment finalization returned not_verifiable"
               );
@@ -639,7 +585,6 @@ function makeProviderPaymentFinalizationServiceLayer(
     })
   );
 }
-
 type ProviderPaymentFinalizationInput = Parameters<
   IProviderPaymentFinalizationService["finalizePendingProviderPayment"]
 >[0];
@@ -648,7 +593,7 @@ interface VerifiableAttemptFinalization {
   readonly input: ProviderPaymentFinalizationInput;
   readonly order: PaymentOrder;
   readonly handler: OrderPaymentHandler;
-  readonly attempt: VerifiableNexiPaymentAttempt;
+  readonly attempt: VerifiableProviderPaymentAttempt;
 }
 
 /**
@@ -674,15 +619,3 @@ const settledOrderProgress = (
   }
   return "not_pending";
 };
-
-/** A Nexi attempt whose hosted payment page creation never attached a session. */
-const isUnattachedProviderSession = (
-  attempt: PaymentAttempt | null
-): attempt is NexiPaymentAttempt => {
-  if (!attempt || !isNexiPaymentAttempt(attempt)) return false;
-  return attempt.state === "created" && !attempt.securityToken;
-};
-
-// Nexi documents 404 as "Order not found" for GET /orders/{orderId}.
-const isProviderOrderNotFound = (error: ExternalAPIError | NetworkError) =>
-  error._tag === "ExternalAPIError" && error.statusCode === 404;

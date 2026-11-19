@@ -12,7 +12,7 @@ Business policy for holds, payment, recovery, refunds, and fulfillment is in the
 - [Supersession](#supersession)
 - [Agent bookings](#agent-bookings)
 - [Review account sandbox](#review-account-sandbox)
-- [Nexi payment attempts](#nexi-payment-attempts)
+- [Payment providers](#payment-providers)
 - [Hold cleanup](#hold-cleanup)
 - [Late payment recovery](#late-payment-recovery)
 - [Refunds](#refunds)
@@ -48,7 +48,7 @@ Cron schedules are in `vercel.json`. Queue payloads are versionless; evolve thei
 
 ## Data ownership and PII
 
-Dotypos owns customer and reservation facts. Nexi owns external payment facts. The local database is a workflow, payment, legal, and recovery ledger:
+Dotypos owns customer and reservation facts. The payment provider owns payment facts. The local database is a workflow, payment, legal, and recovery ledger:
 
 - Store only `dotypos_customer_id` and `dotypos_reservation_id`; read Dotypos for reservation facts.
 - `author_account_id` names the reservation author, the signed-in customer account whose submission created or resumed the reservation. Checkout requires a verified session, so every submission records one, and the column is `NOT NULL`. A superseding replacement records the account that submitted it. A draft another account authored isn't reused (`CheckoutAttemptUnavailableError`). Payment does not establish or change authorship. The domain skill's [reservation parties](../../deskohub-workspace-domain/references/reservation-parties.md) reference defines author and customer; the account skill's [durable customer account](../../deskohub-workspace-account/references/account-domain-and-routes.md#durable-customer-account) section covers storage.
@@ -188,7 +188,34 @@ App-directory review accounts (`customer_accounts.review`) book in a sandbox own
 - Every review account also shows computed samples (`getReviewSampleReservations`): a past cowork day and an upcoming meeting room relative to today, with IDs stable per account (`review-sample-…`).
 - `CheckoutStatusService` falls back to `ReviewSandbox.status` only when the order isn't in the ledger. `ReservationAuthorizationService` grants a sandbox order the author's `view-status`, never `view-access-code`. Status views and history items carry `reviewSandbox`, which hides access links.
 
-## Nexi payment attempts
+## Payment providers
+
+Nexi is the default. A protected Vercel preview can set `WORKSPACE_PAYMENT_PROVIDER`
+to `mock` or `fallback`. The Nexi health route reports the configured mode in
+`paymentProvider`. Keep Deployment Protection enabled and pass the automation
+bypass through the existing preview access flow.
+
+Production provides the Nexi-only Layer. The protected preview Layer loads
+the mock adapter when enabled. The mock hosted and webhook routes check
+availability before running a handler.
+
+In `fallback` mode a fresh checkout uses Nexi. Ordinary Try Again can admit
+one mock successor for a synthetic customer on that protected preview. The
+signed retry state must identify the newest terminal Nexi attempt, which must
+carry `workspace_e2e_nexi_fallback_eligible`. Nexi must report the expected
+order ID, amount, and currency, an empty operations list, and no payment
+activity. Admission checks that the checkout is still unpaid, has no
+unresolved recovery, and still has the marked attempt as its newest attempt.
+Every attempt uses its stored provider for later operations.
+
+The mock payment page requires a session capability. Its database table holds
+the capability digest and the first approved or declined outcome, independently
+of the checkout attempt. The form redirects through the standard checkout
+return. `POST /api/webhooks/mock-payment` takes `eventId`, `paymentId`, and
+`token`. The webhook verifies the session's authoritative state before
+applying the shared payment lifecycle.
+
+### Nexi session creation
 
 - Meeting-room checkout stays eligible after its start until its exclusive end. Check the end at reservation submission and immediately before creating any payment attempt. Returning an already-created matching active session is recovery, not initiation: return it before the end check, and never use recovery to create a replacement.
 - A definitive HPP rejection marks the attempt failed and releases its claim atomically. An ambiguous failure (network, retryable, conflict, rate limit) keeps the attempt and claim so the active attempt blocks a second charge.
@@ -205,9 +232,9 @@ Each Nexi request times out after 5 seconds in production and 30 seconds elsewhe
 
 ### Webhook
 
-1. Derive the event identity and insert into `webhook_events`, or load the duplicate. A processed duplicate is a no-op success.
-2. Load the attempt by `provider_order_id`. Nexi marks `securityToken` optional: accept a missing token, compare a present one in constant time, and reject a mismatch (including any token for an attempt that was never issued one).
-3. Verify with `GET /orders/{orderId}`. Only that verification moves payment state.
+1. Decode the provider envelope and record its identity in `webhook_events`, scoped to the provider. A processed duplicate is a no-op success.
+2. Load the attempt by provider and `provider_order_id`. Nexi marks `securityToken` optional: accept a missing token, compare a present one in constant time, and reject a mismatch (including any token for an attempt that was never issued one).
+3. Ask the stored provider to verify the payment. Nexi uses `GET /orders/{orderId}`. Only an authoritative verification moves payment state.
 4. In one transaction, mark attempt and reservation paid and redeem the claim; then fulfill synchronously.
 
 A checkout referral's invitation claim stores its referrer and code. Every paid transaction that redeems it (including the zero-total internal payment and late-recovery settlement) records the referral attribution through `ReferralInvitationLedger.redeem`, whatever the `referrals` flag says; a conflicting referrer or a cycle keeps the existing graph and never fails the payment. Lock order is in the referrals skill. The paid status page and the zero-total payment action clear the remembered referral-code cookie.

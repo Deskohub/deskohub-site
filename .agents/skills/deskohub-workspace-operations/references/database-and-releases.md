@@ -35,6 +35,16 @@ Email automation work units (`workspace-email-automation-unit`) ship consumer fi
 
 Don't add a custom Vercel Ignored Build Step for documentation-, test-, CI-, or E2E-only changes. Rely on Vercel's automatic affected-project skipping.
 
+## Payment provider migration compatibility
+
+Apply the payment webhook migration before promoting the application. The
+database must already have `webhook_events_event_id_unique` on the legacy
+Nexi `event_id`. The migration keeps that key and backfills the canonical
+provider-scoped `provider_event_id`. A trigger keeps both Nexi columns equal
+and takes a per-event transaction advisory lock
+so old and new conflict targets can coexist during promotion. Preserve those
+compatibility objects until every writer uses the canonical key.
+
 ## Migrate protected preview databases
 
 The Neon/Vercel integration creates and deletes Workspace preview branches for the PR lifecycle. Keep its automatic obsolete-branch deletion on. E2E and other repository workflows must not expire or delete integration-owned branches.

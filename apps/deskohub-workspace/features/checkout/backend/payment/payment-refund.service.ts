@@ -1,6 +1,5 @@
 import "@/shared/polyfills/temporal";
 
-import { NexiService, summarizeNexiRefunds } from "@deskohub/nexi";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import {
   Clock,
@@ -16,7 +15,6 @@ import type { SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { databasePoolTimeouts } from "@/db/database-pool-timeouts";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import { WorkspaceNexiLayer } from "@/shared/backend/config/nexi.config";
 import { parseInstant } from "@/shared/utils/temporal";
 import {
   type ClaimedRefundCheck,
@@ -25,9 +23,11 @@ import {
   type RefundablePaymentAttempt,
   type ReservationRefundAttempt,
 } from "../repositories/payment-refund.repository";
+import { PaymentProviders } from "./payment-provider";
+import { PaymentProvidersLive } from "./payment-providers";
 
 /**
- * `no_refund` means Nexi reports no successful refund for the attempt's order
+ * `no_refund` means the provider reports no successful refund for the order
  * yet; the other results come from recording the refund.
  */
 type PaymentRefundReconciliationResult =
@@ -49,9 +49,8 @@ export class PaymentRefundReconciliationError extends Data.TaggedError(
 
 export interface IPaymentRefundService {
   /**
-   * Reads the attempt's Nexi order and records any successful refund on the
-   * attempt. Operators refund in the Nexi back office, so Nexi's order
-   * operations are the only evidence that money went back.
+   * Reads the provider order and records any successful refund on the
+   * attempt. The provider's order operations establish that money went back.
    */
   readonly reconcileAttempt: (
     input: RefundablePaymentAttempt
@@ -60,9 +59,9 @@ export interface IPaymentRefundService {
     PaymentRefundReconciliationError
   >;
   /**
-   * Reconciles, one after another, each of the reservation's Nexi attempts
+   * Reconciles, one after another, each of the reservation's provider attempts
    * still awaiting a refund (`reconcileAttempt`), then returns all its
-   * payment attempts as stored. Calls Nexi, so run it outside every
+   * payment attempts as stored. Run these provider calls outside every
    * database transaction.
    */
   readonly reconcileReservationRefunds: (
@@ -73,7 +72,7 @@ export interface IPaymentRefundService {
   >;
   /**
    * Reconciles up to `limit` attempts still awaiting a refund and recent
-   * payments Nexi has not fully refunded, least recently checked first,
+   * payments the provider has not fully refunded, least recently checked first,
    * skipping any checked in the last few hours. Each attempt is claimed just
    * before its lookup, and the lookup starts only while one taking
    * `worstCaseLookupDuration` still ends within `budget`; a claim that leaves
@@ -98,8 +97,8 @@ export interface IPaymentRefundService {
 
 /**
  * How long after creating a paid attempt that nobody marked for refund the
- * batch keeps checking Nexi for a back-office refund, including the rest of a
- * partial refund. Production has received no Nexi notification for
+ * batch checks providers for back-office refunds, including any remaining
+ * amount after a partial refund. Production has received no Nexi notification for
  * back-office refunds, so unless one arrives, an older payment's refund is
  * recorded only once an operator cancellation marks it as required.
  */
@@ -141,7 +140,7 @@ export const refundBatchOverrunWorstCase = Duration.millis(
 );
 
 /**
- * Nexi's latest refund time, or the recording time when Nexi omits it or
+ * The provider's latest refund time, or the recording time when it omits it or
  * reports a time that names no instant. The refund itself is still recorded.
  */
 const toRefundedAt = (value: string | undefined, fallback: Temporal.Instant) =>
@@ -157,20 +156,21 @@ export class PaymentRefundService extends Context.Service<
   static Default = Layer.effect(
     this,
     Effect.gen(function* () {
-      const nexi = yield* NexiService;
+      const providers = yield* PaymentProviders;
       const refunds = yield* PaymentRefundRepository;
 
       const reconcileAttempt = Effect.fn(
         "PaymentRefundService.reconcileAttempt"
       )(
         function* ({ attempt, correlationId }: RefundablePaymentAttempt) {
-          const order = yield* nexi.getOrder({
-            orderId: attempt.providerOrderId,
-            correlationId,
-          });
-          const refund = summarizeNexiRefunds(order.operations);
+          const { refund } = yield* providers
+            .forAttempt(attempt.provider)
+            .lookup({
+              providerOrderId: attempt.providerOrderId,
+              correlationId,
+            });
           if (!refund) {
-            yield* Effect.logInfo("Nexi reports no successful refund yet");
+            yield* Effect.logInfo("Provider reports no successful refund yet");
             return "no_refund" as const;
           }
           yield* Effect.annotateLogsScoped({
@@ -195,14 +195,14 @@ export class PaymentRefundService extends Context.Service<
           });
           if (result === "not_applicable") {
             yield* Effect.logWarning(
-              "Nexi refund found for an attempt that cannot record it"
+              "Provider refund found for an attempt that cannot record it"
             ).pipe(withRefundOperations);
           } else if (result === "below_target") {
             yield* Effect.logInfo(
-              "Nexi refund is still below the refund owed"
+              "Provider refund is still below the refund owed"
             ).pipe(withRefundOperations);
           } else {
-            yield* Effect.logInfo("Nexi refund reconciled").pipe(
+            yield* Effect.logInfo("Provider refund reconciled").pipe(
               withRefundOperations
             );
           }
@@ -213,13 +213,14 @@ export class PaymentRefundService extends Context.Service<
             Effect.mapError(
               (cause) =>
                 new PaymentRefundReconciliationError({
-                  message: "Nexi refund reconciliation failed.",
+                  message: "Payment refund reconciliation failed.",
                   cause,
                 })
             ),
             Effect.scoped,
             Effect.annotateLogs({
               paymentAttemptId: input.attempt.id,
+              paymentProvider: input.attempt.provider,
               providerOrderId: input.attempt.providerOrderId,
             })
           )
@@ -273,6 +274,7 @@ export class PaymentRefundService extends Context.Service<
             Math.floor(yield* Clock.currentTimeMillis)
           );
           const [claimed] = yield* refunds.claimRefundChecks({
+            providers: providers.activeProviders,
             limit: 1,
             checkedAt,
             lastCheckedBefore: checkedAt.subtract(refundRecheckInterval),
@@ -314,7 +316,7 @@ export class PaymentRefundService extends Context.Service<
           results.push(
             yield* reconcileAttempt(claimed).pipe(
               Effect.tapError((cause) =>
-                Effect.logError("Nexi refund reconciliation failed", {
+                Effect.logError("Payment refund reconciliation failed", {
                   cause,
                 })
               ),
@@ -359,7 +361,7 @@ export class PaymentRefundService extends Context.Service<
         );
         if (!finishedInTime || (unclaimed > 0 && !exhausted)) {
           yield* Effect.logWarning(
-            "Nexi refund reconciliation stopped at its time budget",
+            "Payment refund reconciliation stopped at its time budget",
             { unclaimed }
           );
         }
@@ -368,7 +370,7 @@ export class PaymentRefundService extends Context.Service<
           recorded: results.filter((result) => result === "recorded").length,
           failed: results.filter((result) => result === "failed").length,
         };
-        yield* Effect.logInfo("Nexi refund reconciliation batch completed", {
+        yield* Effect.logInfo("Payment refund reconciliation batch completed", {
           summary,
         });
         return summary;
@@ -385,6 +387,6 @@ export class PaymentRefundService extends Context.Service<
   static Live = this.Default.pipe(
     Layer.provide(PaymentRefundRepository.Default),
     Layer.provide(WorkspaceDatabase.Default),
-    Layer.provide(WorkspaceNexiLayer)
+    Layer.provide(PaymentProvidersLive)
   );
 }

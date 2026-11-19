@@ -28,11 +28,12 @@ import {
 } from "../repositories/payment-attempt-writes";
 import { WebhookEventRepository } from "../repositories/webhook-event.repository";
 import { LatePaymentVerificationService } from "./late-payment-verification.service";
-import { startNexiPaymentSession } from "./nexi-payment-session";
 import { NexiWebhookService } from "./nexi-webhook.service";
 import type { AdmittingOrderPaymentHandler } from "./order-payment-handler";
 import { OrderPaymentHandlers } from "./order-payment-handlers.service";
+import { PaymentProvidersFromNexi } from "./payment-providers";
 import { PaymentRefundService } from "./payment-refund.service";
+import { startPaymentSession } from "./payment-session";
 import { ProviderPaymentFinalizationService } from "./provider-payment-finalization.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
@@ -140,7 +141,7 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
               found ? { ...found, logFields: { orderId } } : null
             )
           ),
-      admitNexi: (input) =>
+      admitProvider: (input) =>
         transaction(
           Effect.gen(function* () {
             const snapshot = Schema.decodeUnknownOption(accountingDetails)(
@@ -150,7 +151,6 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
               return yield* Effect.die("Invalid synthetic accounting data");
             const attempt = yield* insertPaymentAttempt({
               ...input,
-              provider: "nexi",
               workspaceReservationId: null,
             });
             yield* db
@@ -231,31 +231,36 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
               findOrderKind(orderId).pipe(Effect.provide(testDatabase.layer))
             )
           ),
-          Layer.mock(NexiService, {
-            createHostedPaymentPage: (input) =>
-              Effect.succeed({
-                orderId: input.orderId,
-                hostedPage: "https://nexi.test/payment",
-                securityToken: "synthetic-session",
-              }),
-            verifyPaymentOutcome: (input) =>
-              Effect.succeed({
-                status,
-                provider: {
-                  orderId: input.orderId,
-                  operationId,
-                  operationCount: 1,
-                  amount: input.amount,
-                  authorizedAmount: undefined,
-                  capturedAmount:
-                    status === "success" ? input.amount : undefined,
-                  currency: input.currency,
-                  orderStatus: status === "failure" ? "DECLINED" : "EXECUTED",
-                  captureExecuted: status === "success",
-                },
-                mismatches: [],
-              }),
-          }),
+          PaymentProvidersFromNexi.pipe(
+            Layer.provide(
+              Layer.mock(NexiService, {
+                createHostedPaymentPage: (input) =>
+                  Effect.succeed({
+                    orderId: input.orderId,
+                    hostedPage: "https://nexi.test/payment",
+                    securityToken: "synthetic-session",
+                  }),
+                verifyPaymentOutcome: (input) =>
+                  Effect.succeed({
+                    status,
+                    provider: {
+                      orderId: input.orderId,
+                      operationId,
+                      operationCount: 1,
+                      amount: input.amount,
+                      authorizedAmount: undefined,
+                      capturedAmount:
+                        status === "success" ? input.amount : undefined,
+                      currency: input.currency,
+                      orderStatus:
+                        status === "failure" ? "DECLINED" : "EXECUTED",
+                      captureExecuted: status === "success",
+                    },
+                    mismatches: [],
+                  }),
+              })
+            )
+          ),
           Layer.mock(CheckoutAnalytics, {
             paymentCompleted: ({ attempt }) =>
               Effect.sync(() => {
@@ -286,7 +291,7 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
           applications: [],
         }),
       };
-      return startNexiPaymentSession({
+      return startPaymentSession({
         kind: order.kind,
         orderId: order.id,
         amount: { value: 29_000, exponent: 2, currency: "CZK" },
@@ -406,7 +411,7 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
             outcome === "success" ? "EXECUTED" : "DECLINED";
 
           const first = yield* notify(
-            hostedPaymentPage.orderId,
+            hostedPaymentPage.providerOrderId,
             operationResult
           );
           expect(first.status).toBe("accepted");
@@ -421,7 +426,7 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
           if (outcome === "success") expect(firstOrder?.paidAt).not.toBeNull();
 
           const replay = yield* notify(
-            hostedPaymentPage.orderId,
+            hostedPaymentPage.providerOrderId,
             operationResult
           );
           expect(replay.status).toBe("accepted");
@@ -454,12 +459,14 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
           if (outcome === "late recovery") {
             setOutcome("failure");
             expect(
-              (yield* notify(hostedPaymentPage.orderId, "DECLINED")).status
+              (yield* notify(hostedPaymentPage.providerOrderId, "DECLINED"))
+                .status
             ).toBe("accepted");
             setOutcome("success");
           }
           expect(
-            (yield* notify(hostedPaymentPage.orderId, "EXECUTED")).status
+            (yield* notify(hostedPaymentPage.providerOrderId, "EXECUTED"))
+              .status
           ).toBe("accepted");
           expect(fulfilled.has(order.id)).toBe(outcome === "paid");
           expect(recoveries.has(attachedAttempt.id)).toBe(

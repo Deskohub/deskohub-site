@@ -37,6 +37,7 @@ mock.module(
   () => ({
     PaymentRefundService: FakePaymentRefundService,
     refundBatchOverrunWorstCase: Duration.seconds(35),
+    paymentLookupWorstCaseDuration: Duration.seconds(21),
   })
 );
 

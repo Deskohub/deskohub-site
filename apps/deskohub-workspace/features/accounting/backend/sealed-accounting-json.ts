@@ -1,4 +1,3 @@
-import type { NexiOrderId } from "@deskohub/nexi";
 import type { SQL } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
@@ -26,7 +25,7 @@ export type AccountingRecordReference =
   | { readonly type: "invoiceId"; readonly id: InvoiceId }
   | { readonly type: "invoicePreviewId"; readonly id: InvoicePreviewId }
   | { readonly type: "paymentAttemptId"; readonly id: PaymentAttemptId }
-  | { readonly type: "providerOrderId"; readonly id: NexiOrderId }
+  | { readonly type: "providerOrderId"; readonly id: string }
   | {
       readonly type: "workspaceReservationId";
       readonly id: WorkspaceReservationId;

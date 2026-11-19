@@ -1,9 +1,3 @@
-import type {
-  NexiCorrelationId,
-  NexiOperationId,
-  NexiOrderId,
-  NexiWebhookEventId,
-} from "@deskohub/nexi";
 import type { Effect } from "effect";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { Locale } from "@/features/i18n";
@@ -19,10 +13,14 @@ import type {
   NonTerminalPaymentAttemptState,
   PaymentLifecycleTransition,
 } from "../repositories/payment-lifecycle-state";
+import type {
+  PaymentProvider,
+  RetriedPaymentAttempt,
+} from "./payment-provider";
 
 export interface PaymentOrder {
   readonly id: OrderId;
-  readonly correlationId: NexiCorrelationId;
+  readonly correlationId: string;
   readonly activePaymentAttemptId: PaymentAttemptId | null;
   readonly paymentState: OrderPaymentState;
   readonly fulfillmentState: OrderFulfillmentState;
@@ -39,8 +37,8 @@ export interface PaymentAdmission<Details> {
 interface PaymentOutcome {
   readonly orderId: OrderId;
   readonly id: PaymentAttemptId;
-  readonly webhookEventId?: NexiWebhookEventId;
-  readonly providerOperationId?: NexiOperationId;
+  readonly webhookEventId?: string;
+  readonly providerOperationId?: string;
   readonly providerStatus?: string;
 }
 
@@ -86,9 +84,11 @@ export interface OrderPaymentHandler {
 export interface AdmittingOrderPaymentHandler<Details>
   extends OrderPaymentHandler {
   /** Admit the attempt and freeze its accounting data in the same transaction. */
-  readonly admitNexi: (
+  readonly admitProvider: (
     input: PaymentAdmission<Details> & {
-      readonly providerOrderId: NexiOrderId;
+      readonly provider: PaymentProvider;
+      readonly providerOrderId: string;
+      readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
     }
   ) => Effect.Effect<PaymentAttempt, PaymentLifecycleRepositoryError>;
   readonly admitInternal: (

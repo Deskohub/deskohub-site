@@ -50,7 +50,10 @@ export type EntryPackPaymentAdmissionDetails = {
 };
 
 type Handler = AdmittingOrderPaymentHandler<EntryPackPaymentAdmissionDetails>;
-type NexiAdmission = Parameters<Handler["admitNexi"]>[0];
+type ProviderAdmission = Pick<
+  Parameters<Handler["admitProvider"]>[0],
+  "provider" | "providerOrderId"
+>;
 type Verification = Parameters<Handler["markPaid"]>[0];
 type PackOrder = typeof orders.$inferSelect;
 type AttemptRow = typeof paymentAttempts.$inferSelect;
@@ -161,15 +164,15 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
 
   const admit = Effect.fnUntraced(function* (
     input: PaymentAdmission<EntryPackPaymentAdmissionDetails>,
-    providerOrderId?: NexiAdmission["providerOrderId"]
+    providerAdmission?: ProviderAdmission
   ) {
     const commitment = getDiscountCommitmentPayload(input.details.commitment);
-    const claims = yield* providerOrderId === undefined
+    const claims = yield* providerAdmission === undefined
       ? validateInternalPaymentCommitment(commitment, input.amount)
       : validateDiscountCommitment(commitment);
     const order = yield* lockOrder(
       input.orderId,
-      providerOrderId === undefined
+      providerAdmission === undefined
         ? { admittedInvitation: claims.referral !== undefined }
         : "nothing"
     );
@@ -195,7 +198,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       );
     }
     if (
-      providerOrderId === undefined &&
+      providerAdmission === undefined &&
       order.paymentState === "paid" &&
       order.activePaymentAttemptId
     ) {
@@ -236,9 +239,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       orderId: order.id,
       workspaceReservationId: null,
       amount: input.amount,
-      ...(providerOrderId
-        ? { provider: "nexi", providerOrderId }
-        : { provider: "internal", paidAt: now }),
+      ...(providerAdmission ?? { provider: "internal", paidAt: now }),
     });
     yield* snapshots.recordEntryPack({
       snapshot: input.details.snapshot,
@@ -262,7 +263,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       reservationExpiresAt: now.add({ hours: 1 }),
       firstServiceDate: pack.validFrom,
     });
-    if (!providerOrderId) {
+    if (!providerAdmission) {
       yield* redeemClaims(order, attempt.id, now, false);
       return yield* setPaid(order, attempt, now);
     }
@@ -427,7 +428,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   ) {
     const order = yield* lockOrder(input.orderId, { claimOf: input.id });
     const [attempt] = yield* readAttempt(order.id, input.id).for("update");
-    if (attempt?.provider !== "nexi") {
+    if (!attempt || attempt.provider === "internal") {
       return yield* paymentError(
         order.id,
         "The late Entry pack attempt was not found."
@@ -472,9 +473,11 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           order ? { ...order, logFields: { orderId } } : null
         )
       ),
-    admitNexi: (input) =>
+    admitProvider: ({ provider, providerOrderId, ...input }) =>
       transaction(
-        admit(input, input.providerOrderId).pipe(Effect.provide(services))
+        admit(input, { provider, providerOrderId }).pipe(
+          Effect.provide(services)
+        )
       ).pipe(Effect.map(({ attempt }) => attempt)),
     admitInternal: (input) =>
       transaction(admit(input).pipe(Effect.provide(services))),
