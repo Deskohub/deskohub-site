@@ -1,0 +1,240 @@
+"use client";
+
+import { useRef, useState } from "react";
+import { getAccountSignInPath } from "@/features/account/routes";
+import {
+  CheckoutFlowLayout,
+  CheckoutSteps,
+} from "@/features/checkout/components/checkout-flow-layout";
+import { type Locale, m } from "@/features/i18n";
+import { type OrderId, orderIdSchema } from "@/features/order";
+import {
+  defaultReservationBillingSelection,
+  type ReservationBillingSelection,
+} from "@/features/reservation/reservation-billing";
+import {
+  type EntryPackBuyer,
+  type entryPackDetailsSchema,
+  getEntryPackDetailsPath,
+} from "../entry-pack-checkout";
+import { beginEntryPackCheckout } from "../entry-pack-checkout-actions";
+import type { EntryPackProduct, EntryPackSize } from "../pass-offer";
+import { EntryPackChoose } from "./entry-pack-choose";
+import { EntryPackDetails } from "./entry-pack-details";
+import { EntryPackPay } from "./entry-pack-pay";
+
+type Step = "choose" | "details" | "pay";
+const checkoutStage = {
+  choose: "chooseSpace",
+  details: "contact",
+  pay: "pay",
+} as const;
+type DetailsSchema = ReturnType<typeof entryPackDetailsSchema>;
+type CheckoutResult = Awaited<
+  ReturnType<typeof beginEntryPackCheckout>
+>["data"];
+
+export type EntryPackPayState = Extract<CheckoutResult, { status: "ready" }> & {
+  readonly billing: ReservationBillingSelection;
+  readonly holderEmail?: string;
+};
+
+export function EntryPackCheckout({
+  buyer,
+  locale,
+  initialProduct,
+  initialStep,
+  validity,
+  continuation,
+}: {
+  readonly buyer: EntryPackBuyer;
+  readonly locale: Locale;
+  readonly initialProduct: EntryPackProduct;
+  readonly initialStep: Exclude<Step, "pay">;
+  readonly validity: Partial<Record<EntryPackSize, string>>;
+  readonly continuation?: {
+    readonly orderId: OrderId;
+    readonly holderEmail?: string;
+    readonly validUntil?: string;
+  };
+}) {
+  const [product, setProduct] = useState(initialProduct);
+  const [step, setStep] = useState<Step>(initialStep);
+  const [details, setDetails] = useState<DetailsSchema["Encoded"] | undefined>(
+    continuation?.holderEmail === undefined
+      ? undefined
+      : {
+          holderEmail: continuation.holderEmail,
+          billing: defaultReservationBillingSelection,
+        }
+  );
+  const [payment, setPayment] = useState<{
+    orderId: OrderId;
+    state: EntryPackPayState;
+  }>();
+  const [error, setError] = useState<string>();
+  const [paymentRequested, setPaymentRequested] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const attempt = useRef<{ orderId: OrderId; holderEmail?: string }>(
+    continuation
+  );
+
+  const moveTo = (next: Step) => {
+    setError(undefined);
+    setStep(next);
+    // Focus the next heading after React commits the selected step.
+    requestAnimationFrame(() => heading.current?.focus());
+  };
+
+  const submitDetails = async (values: DetailsSchema["Type"]) => {
+    if (buyer.kind !== "linked" && buyer.kind !== "profile-required") return;
+    setError(undefined);
+    const holderEmail =
+      values.holderEmail?.toLowerCase() === buyer.email.toLowerCase()
+        ? undefined
+        : values.holderEmail;
+    if (!attempt.current || attempt.current.holderEmail !== holderEmail) {
+      attempt.current = {
+        orderId: orderIdSchema.make(crypto.randomUUID()),
+        ...(holderEmail !== undefined && { holderEmail }),
+      };
+    }
+    const { orderId } = attempt.current;
+    try {
+      const result = await beginEntryPackCheckout({
+        orderId,
+        product,
+        locale,
+        buyerEmail: buyer.email,
+        ...(holderEmail !== undefined && { holderEmail }),
+        ...(values.buyerProfile !== undefined && {
+          buyerProfile: values.buyerProfile,
+        }),
+      });
+      if (result.data?.status === "signed_out") {
+        window.location.assign(
+          getAccountSignInPath(
+            locale,
+            getEntryPackDetailsPath(locale, product, continuation?.orderId)
+          )
+        );
+        return;
+      }
+      if (result.data?.status === "ready") {
+        window.history.replaceState(
+          null,
+          "",
+          getEntryPackDetailsPath(locale, product, orderId)
+        );
+        setDetails(values);
+        setPaymentRequested(false);
+        setPayment({
+          orderId,
+          state: {
+            ...result.data,
+            billing: values.billing,
+            ...(holderEmail !== undefined && { holderEmail }),
+          },
+        });
+        moveTo("pay");
+        return;
+      }
+      setError(
+        result.serverError ?? m.actionFailedUnexpectedly({}, { locale })
+      );
+    } catch {
+      setError(m.actionFailedUnexpectedly({}, { locale }));
+    }
+  };
+
+  const stage = checkoutStage[step];
+  return (
+    <CheckoutFlowLayout
+      activeStepKey={stage}
+      locale={locale}
+      steps={
+        <CheckoutSteps
+          activeStepKey={stage}
+          label={m.entryPackCheckoutSteps({}, { locale })}
+          labels={{
+            chooseSpace: m.entryPackCheckoutChoose({}, { locale }),
+            contact: m.entryPackCheckoutDetails({}, { locale }),
+          }}
+          locale={locale}
+          stepLinks={{
+            ...(step === "details" && {
+              chooseSpace: { onSelect: () => moveTo("choose") },
+            }),
+            ...(step === "pay" &&
+              !paymentRequested && {
+                contact: { onSelect: () => moveTo("details") },
+              }),
+          }}
+        />
+      }
+    >
+      {step !== "pay" && (
+        <h1
+          className="text-4xl leading-tight text-balance sm:text-5xl"
+          ref={heading}
+          tabIndex={-1}
+        >
+          {m.entryPackCheckoutTitle({}, { locale })}
+        </h1>
+      )}
+      {step === "choose" && (
+        <EntryPackChoose
+          locale={locale}
+          product={product}
+          validity={validity}
+          onChange={(next) => {
+            attempt.current = undefined;
+            window.history.replaceState(
+              null,
+              "",
+              getEntryPackDetailsPath(locale, next)
+            );
+            setProduct(next);
+          }}
+          onContinue={() => moveTo("details")}
+        />
+      )}
+      {step === "details" && (
+        <EntryPackDetails
+          buyer={buyer}
+          locale={locale}
+          product={product}
+          validUntil={
+            product.size === initialProduct.size
+              ? (continuation?.validUntil ?? validity[product.size])
+              : validity[product.size]
+          }
+          initialValues={details}
+          orderId={continuation?.orderId}
+          error={error}
+          onChangeSelection={() => moveTo("choose")}
+          onSubmit={submitDetails}
+        />
+      )}
+      {step === "pay" && payment && (
+        <EntryPackPay
+          locale={locale}
+          orderId={payment.orderId}
+          product={product}
+          state={payment.state}
+          headingRef={heading}
+          onRequestPayment={() => setPaymentRequested(true)}
+          onExpire={() => {
+            attempt.current = undefined;
+            window.history.replaceState(
+              null,
+              "",
+              getEntryPackDetailsPath(locale, product)
+            );
+            moveTo("details");
+          }}
+        />
+      )}
+    </CheckoutFlowLayout>
+  );
+}

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
@@ -8,6 +9,7 @@ import { CurrentCustomerAccount } from "@/features/account/backend/current-custo
 import {
   ensurePassHolderAccount,
   findPassHolderAccount,
+  findPurchaseLoginEmail,
 } from "@/features/account/backend/customer-account-by-email";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
 import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
@@ -26,6 +28,7 @@ import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
 import {
   type CanonicalPromotionCode,
+  type DiscountQuote,
   discountQuoteCodec,
 } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
@@ -46,7 +49,6 @@ import {
 } from "@/features/reservation/reservation-billing";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { reservationStatusPath } from "@/features/reservation/routes";
-import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
   type EntryPackProduct,
@@ -55,7 +57,7 @@ import {
 } from "../pass-offer";
 import { quoteEntryPack } from "./entry-pack-quote";
 
-class EntryPackPurchaseError extends Data.TaggedError(
+export class EntryPackPurchaseError extends Data.TaggedError(
   "EntryPackPurchaseError"
 )<{
   readonly reason:
@@ -66,6 +68,7 @@ class EntryPackPurchaseError extends Data.TaggedError(
     | "consent-required"
     | "terms-changed"
     | "quote-expired"
+    | "payment-in-progress"
     | "billing-changed";
 }> {}
 
@@ -73,6 +76,18 @@ const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
   onExcessProperty: "error",
 });
 const billingMatches = Schema.toEquivalence(reservationBillingSelectionSchema);
+
+/** The terms of a price the buyer has seen, independent of labels and timers. */
+export const getEntryPackPriceFingerprint = (quote: DiscountQuote) =>
+  createHash("sha256")
+    .update(
+      JSON.stringify([
+        quote.discountableSubtotal,
+        quote.discountedSubtotal,
+        quote.discounts.map(({ discount, amount }) => [discount.id, amount]),
+      ])
+    )
+    .digest("hex");
 
 const requirePassPurchasesEnabled = Effect.fn("requirePassPurchasesEnabled")(
   function* () {
@@ -253,6 +268,146 @@ export const getEntryPackPaymentDisclosure = (locale: Locale) => ({
   earlyStartRequest: m.passEarlyStartConsent({}, { locale }),
 });
 
+const readOwnedPurchaseOrder = Effect.fn("readOwnedEntryPackPurchaseOrder")(
+  function* (orderId: OrderId, buyerAccountId: CustomerAccountId) {
+    const { db } = yield* WorkspaceDatabase;
+    const [entry] = yield* db
+      .select({ order: orders, purchase: passPurchases })
+      .from(passPurchases)
+      .innerJoin(orders, eq(orders.id, passPurchases.id))
+      .where(
+        and(
+          eq(passPurchases.id, orderId),
+          eq(passPurchases.buyerAccountId, buyerAccountId),
+          eq(orders.kind, "pass-purchase")
+        )
+      );
+    if (!entry)
+      return yield* new EntryPackPurchaseError({ reason: "unavailable" });
+    return entry;
+  }
+);
+
+export const readEntryPackCheckoutDraft = Effect.fn(
+  "readEntryPackCheckoutDraft"
+)(function* (orderId: OrderId) {
+  const current = yield* CurrentCustomerAccount;
+  const { accountId } = yield* current.requireActive;
+  const { order, purchase } = yield* readOwnedPurchaseOrder(orderId, accountId);
+  if (order.paymentState !== "not_started" || order.activePaymentAttemptId) {
+    return { kind: "status" as const };
+  }
+  const now = yield* currentInstant;
+  if (isEntryPackQuoteExpired(now, purchase.validUntil)) {
+    return { kind: "expired" as const };
+  }
+  const holderEmail =
+    purchase.holderAccountId === accountId
+      ? undefined
+      : yield* findPurchaseLoginEmail(purchase.holderAccountId);
+  if (purchase.holderAccountId !== accountId && !holderEmail) {
+    return { kind: "status" as const };
+  }
+  return {
+    kind: "draft" as const,
+    product: {
+      kind: "entry-pack",
+      tier: purchase.tier,
+      size: purchase.entryCount,
+    } satisfies EntryPackProduct,
+    validUntil: purchase.validUntil.toString(),
+    holderEmail,
+  };
+});
+
+const saveEntryPackQuote = Effect.fn("saveEntryPackQuote")(function* (
+  orderId: OrderId,
+  quote: DiscountQuote
+) {
+  const { db } = yield* WorkspaceDatabase;
+  const encoded = yield* Schema.encodeEffect(discountQuoteCodec)(quote);
+  yield* db
+    .update(passPurchases)
+    .set({ quote: encoded })
+    .where(eq(passPurchases.id, orderId));
+});
+
+/** Reprices an unpaid pack without making a payment attempt. */
+export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
+  function* (input: {
+    readonly orderId: OrderId;
+    readonly displayedPriceFingerprint: string;
+    readonly submittedCode?: CanonicalPromotionCode;
+    readonly referralCode?: CanonicalPromotionCode;
+  }) {
+    yield* requirePassPurchasesEnabled();
+    const current = yield* CurrentCustomerAccount;
+    const session = yield* current.requireActive;
+    const accounts = yield* CustomerAccountSections;
+
+    return yield* accounts.withActiveAccount(
+      session.accountId,
+      Effect.gen(function* () {
+        const { order, purchase } = yield* readOwnedPurchaseOrder(
+          input.orderId,
+          session.accountId
+        );
+        if (
+          order.paymentState !== "not_started" ||
+          order.activePaymentAttemptId
+        ) {
+          return yield* new EntryPackPurchaseError({
+            reason: "payment-in-progress",
+          });
+        }
+        const bookedAt = yield* currentInstant;
+        if (isEntryPackQuoteExpired(bookedAt, purchase.validUntil)) {
+          return yield* new EntryPackPurchaseError({ reason: "quote-expired" });
+        }
+        const storedQuote = yield* Schema.decodeUnknownEffect(
+          discountQuoteCodec
+        )(purchase.quote);
+        if (
+          input.displayedPriceFingerprint !==
+          getEntryPackPriceFingerprint(storedQuote)
+        ) {
+          return { status: "pricing_changed" as const, quote: storedQuote };
+        }
+
+        const discounts = yield* DiscountService;
+        const product = {
+          kind: "entry-pack",
+          tier: purchase.tier,
+          size: purchase.entryCount,
+        } as const;
+        const discountInput = {
+          product,
+          discountableSubtotal: getEntryPackPrice(product),
+          firstServiceDate: purchase.validFrom,
+          lastServiceDate: purchase.validFrom,
+          bookedAt,
+          dotyposCustomerId: order.dotyposCustomerId,
+          locale: purchase.locale,
+          ...(input.referralCode !== undefined && {
+            referralCode: input.referralCode,
+          }),
+        };
+        const baseQuote = yield* discounts.quote(discountInput);
+        const quote = input.submittedCode
+          ? (yield* discounts.applyDiscountCode({
+              ...discountInput,
+              baseQuote,
+              submittedCode: input.submittedCode,
+            })).quote
+          : baseQuote;
+
+        yield* saveEntryPackQuote(order.id, quote);
+        return { status: "ready" as const, quote };
+      })
+    );
+  }
+);
+
 /** Pay records the versions and the buyer's express request before starting payment. */
 export const recordEntryPackPaymentConsent = Effect.fn(
   "recordEntryPackPaymentConsent"
@@ -306,13 +461,13 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
     readonly submittedCode?: CanonicalPromotionCode;
     readonly referralCode?: CanonicalPromotionCode;
     readonly billing?: ReservationBillingSelection;
+    readonly displayedPriceFingerprint?: string;
   }
 ) {
   yield* requirePassPurchasesEnabled();
   const current = yield* CurrentCustomerAccount;
   const session = yield* current.requireActive;
   const accounts = yield* CustomerAccountSections;
-  const { db } = yield* WorkspaceDatabase;
   const handlers = yield* OrderPaymentHandlers;
   const handler = handlers.byKind["pass-purchase"];
   if (!handler)
@@ -321,23 +476,27 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
   const result = yield* accounts.withActiveAccount(
     session.accountId,
     Effect.gen(function* () {
-      const [entry] = yield* db
-        .select({ order: orders, purchase: passPurchases })
-        .from(passPurchases)
-        .innerJoin(orders, eq(orders.id, passPurchases.id))
-        .where(
-          and(
-            eq(passPurchases.id, input.orderId),
-            eq(passPurchases.buyerAccountId, session.accountId),
-            eq(orders.kind, "pass-purchase")
-          )
-        );
-      if (!entry)
-        return yield* new EntryPackPurchaseError({ reason: "unavailable" });
-      const { order, purchase } = entry;
+      const { db } = yield* WorkspaceDatabase;
+      const { order, purchase } = yield* readOwnedPurchaseOrder(
+        input.orderId,
+        session.accountId
+      );
       const statusUrl = `/${purchase.locale}${reservationStatusPath}/${order.id}`;
       if (order.paymentState === "paid") {
         return { status: "paid" as const, statusUrl };
+      }
+      const snapshots = yield* AccountingDocumentSnapshots;
+      const frozen = order.activePaymentAttemptId
+        ? yield* snapshots.findEntryPack(order.activePaymentAttemptId)
+        : undefined;
+      const billing = yield* decodeBilling(
+        input.billing ?? frozen?.billing ?? defaultReservationBillingSelection
+      );
+      if (
+        order.activePaymentAttemptId &&
+        (!frozen || !billingMatches(frozen.billing, billing))
+      ) {
+        return yield* new EntryPackPurchaseError({ reason: "billing-changed" });
       }
       if (order.paymentState === "pending" && order.activePaymentAttemptId) {
         const [attempt] = yield* db
@@ -352,21 +511,6 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         if (attempt) {
           const page = getPaymentPageToReopen(attempt, yield* currentInstant);
           if ("providerRedirectUrl" in page) {
-            if (input.billing !== undefined) {
-              const snapshots = yield* AccountingDocumentSnapshots;
-              const frozen = yield* snapshots.findEntryPack(attempt.id);
-              const billing = yield* decodeBilling(input.billing).pipe(
-                Effect.mapError(
-                  () =>
-                    new EntryPackPurchaseError({ reason: "billing-changed" })
-                )
-              );
-              if (!frozen || !billingMatches(frozen.billing, billing)) {
-                return yield* new EntryPackPurchaseError({
-                  reason: "billing-changed",
-                });
-              }
-            }
             const providerStatus = yield* PaymentPageProviderStatus;
             const observation = yield* providerStatus.observe({
               attempt,
@@ -403,6 +547,13 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       const accepted = yield* Schema.decodeUnknownEffect(discountQuoteCodec)(
         purchase.quote
       );
+      const acceptedFingerprint = getEntryPackPriceFingerprint(accepted);
+      if (
+        input.displayedPriceFingerprint !== undefined &&
+        input.displayedPriceFingerprint !== acceptedFingerprint
+      ) {
+        return { status: "pricing_changed" as const, quote: accepted };
+      }
       const { quote, commitment } =
         yield* discountService.affirmDisplayedDiscounts({
           product,
@@ -422,19 +573,15 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
             referralCode: input.referralCode,
           }),
         });
-      if (
-        !moneyEquals(
-          accepted.discountableSubtotal,
-          quote.discountableSubtotal
-        ) ||
-        !moneyEquals(accepted.discountedSubtotal, quote.discountedSubtotal) ||
-        accepted.discounts.length !== quote.discounts.length ||
-        !accepted.discounts.every(
-          (application, index) =>
-            application.discount.id === quote.discounts[index]?.discount.id &&
-            moneyEquals(application.amount, quote.discounts[index]?.amount)
-        )
-      ) {
+      const currentFingerprint = getEntryPackPriceFingerprint(quote);
+      if (acceptedFingerprint !== currentFingerprint) {
+        // An ended attempt may still settle late at its original price.
+        if (order.activePaymentAttemptId) {
+          return yield* new EntryPackPurchaseError({
+            reason: "payment-in-progress",
+          });
+        }
+        yield* saveEntryPackQuote(order.id, quote);
         return { status: "pricing_changed" as const, quote };
       }
 
@@ -448,9 +595,6 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return yield* new EntryPackPurchaseError({
           reason: "buyer-profile-required",
         });
-      const billing = yield* decodeBilling(
-        input.billing ?? defaultReservationBillingSelection
-      );
       const buyer = getReservationInvoiceBuyer({
         billing,
         customerName: contact.name,
