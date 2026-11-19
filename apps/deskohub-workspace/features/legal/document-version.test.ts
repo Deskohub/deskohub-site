@@ -16,7 +16,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "en-US",
     documentKey: "terms-and-conditions",
-    version: "6ff4acd85d5bc879cfca99a11957da028da9bc5bdd973c0e4b46b37aa91c24a5",
+    version: "de75ea2a10fff4dbdd526fdba1403b03d94f6249acd9ac9f4ff6ca7648400eae",
   },
   {
     locale: "en-US",
@@ -41,7 +41,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "cs-CZ",
     documentKey: "terms-and-conditions",
-    version: "1ef444d9b775dc65ed7478c895c83fa80604642e5002ebb5cc3c0ebe2ffb3deb",
+    version: "4cfd9a4576667353332eeff0c66c4749565be88821ae0b22c5a0b0c45e1d4815",
   },
   {
     locale: "cs-CZ",
@@ -66,7 +66,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "de-DE",
     documentKey: "terms-and-conditions",
-    version: "dc33b3f58fb527945f2c13d6f58f192ff1f159ceb3c1b7d1c303b19e611a46c4",
+    version: "70d5ffc55e4f7f73069918d00977ed645476fd253710a5d6e88879703b25918a",
   },
   {
     locale: "de-DE",
@@ -91,7 +91,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "uk-UA",
     documentKey: "terms-and-conditions",
-    version: "8e6b29071cc61a50f6649c0eca863605a76fc147cd58feb21ee0672729cbe67e",
+    version: "c258bc86021110fdc3a8b96cb2d09e62f3bba48bbc5a0fbabbbeef0f3821e719",
   },
   {
     locale: "uk-UA",
@@ -116,7 +116,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "sk-SK",
     documentKey: "terms-and-conditions",
-    version: "3bab07695ad0d7a174efb6fa9a68de38a12a03c8030f866d9e07b407cb1a9899",
+    version: "f442589755e20c8825ae75a442b81cff977f291dc216eda59fd7b875840aa7b0",
   },
   {
     locale: "sk-SK",
@@ -141,7 +141,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "vi-VN",
     documentKey: "terms-and-conditions",
-    version: "b487b9d1fc8cd5a2fb112a8fcd6c52be1fecb9f2d9aa0d082fb6dc3992e2918e",
+    version: "074730223ef374db64790530526e9633e5b191bd86b55b36d46b17e35d1977f0",
   },
   {
     locale: "vi-VN",
@@ -166,7 +166,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "hi-IN",
     documentKey: "terms-and-conditions",
-    version: "f5312eaf3bbd041688a489d3d1231c56acbd187778eb38aefbff059f275afd2e",
+    version: "8f7bce7ffc2328653c9a6e8e3ee57ae9a8fc9e124ce6f139f6a392687d1a88a3",
   },
   {
     locale: "hi-IN",
