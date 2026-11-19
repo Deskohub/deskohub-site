@@ -313,8 +313,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
       const reconfirmPayableCheckout = Effect.fn(
         "checkout.reconfirmPayableCheckout"
       )(function* (checkout: OpenCheckout) {
-        yield* payableCheckout.reconfirm(checkout.state);
+        const current = yield* payableCheckout.reconfirm(checkout.state);
         yield* Effect.logDebug("Checkout payable reservation revalidated");
+        return current;
       });
 
       const startProviderSession = Effect.fn("checkout.startProviderSession")(
@@ -341,7 +342,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           });
           yield* Effect.logInfo("Checkout provider session start requested");
 
-          yield* reconfirmPayableCheckout(input.checkout);
+          const { retriedAttempt } = yield* reconfirmPayableCheckout(
+            input.checkout
+          );
 
           const orderId = reservationOrderId(input.workspaceReservationId);
           const { attachedAttempt, hostedPaymentPage } =
@@ -352,6 +355,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
               correlationId: input.correlationId,
               amount: input.total,
               customer: input.customer,
+              retriedAttempt,
               beforeAttempt: Effect.gen(function* () {
                 yield* ensureReservationHasNotEnded(input.reservation);
                 yield* reservations.recordPaymentReturnTarget({

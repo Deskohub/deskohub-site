@@ -63,7 +63,6 @@ const paymentProviderEnvironmentCheck = Schema.makeFilter<{
     | undefined;
   readonly VERCEL_ENV: string;
   readonly VERCEL_AUTOMATION_BYPASS_SECRET?: string | undefined;
-  readonly VERCEL_URL?: string | undefined;
 }>((environment) => {
   const provider = environment.WORKSPACE_PAYMENT_PROVIDER;
   if (
@@ -75,14 +74,6 @@ const paymentProviderEnvironmentCheck = Schema.makeFilter<{
         path: ["WORKSPACE_PAYMENT_PROVIDER"],
         issue:
           "Mock payments require a preview with Deployment Protection for Automation configured.",
-      },
-    ];
-  }
-  if (provider === "fallback" && isBlank(environment.VERCEL_URL)) {
-    return [
-      {
-        path: ["VERCEL_URL"],
-        issue: "Payment fallback requires the immutable deployment hostname.",
       },
     ];
   }

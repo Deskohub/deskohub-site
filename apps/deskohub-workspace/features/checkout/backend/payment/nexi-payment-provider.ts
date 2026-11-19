@@ -129,14 +129,26 @@ export const makeNexiPaymentProvider = Effect.gen(function* () {
         capturedAmount: order.capturedAmount,
       };
       const refund = summarizeNexiRefunds(order.operations);
+      const hasActivity = hasProviderPaymentActivity({
+        ...amounts,
+        operationCount: order.operations.length,
+      });
       return {
-        hasActivity: hasProviderPaymentActivity({
-          ...amounts,
-          operationCount: order.operations.length,
-        }),
+        hasActivity,
         canRetry:
           order.operations.every(isDeclinedNexiPaymentOperation) &&
           !hasProviderPaymentActivity({ ...amounts, operationCount: 0 }),
+        // A successful lookup can supply the requested ID even if the body
+        // omits it. Require matching amount and currency as order evidence.
+        canFallback:
+          input.expectedAmount !== undefined &&
+          order.orderId === input.providerOrderId &&
+          order.amount === String(input.expectedAmount.value) &&
+          order.currency ===
+            (getNexiCurrencyOverride() ?? input.expectedAmount.currency) &&
+          !hasActivity &&
+          order.lastOperationType === undefined &&
+          order.lastOperationTime === undefined,
         diagnostics: {
           lastOperationType: order.lastOperationType,
           operations: order.operations.map(

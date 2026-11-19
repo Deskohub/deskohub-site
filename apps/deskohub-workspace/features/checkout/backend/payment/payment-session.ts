@@ -22,6 +22,7 @@ import {
   type PaymentCustomer,
   type PaymentProvider,
   PaymentProviders,
+  type RetriedPaymentAttempt,
 } from "./payment-provider";
 
 const toCheckoutUrlError = (cause: WorkspaceUrlConfigError) =>
@@ -102,12 +103,16 @@ export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
     readonly kind: Kind;
     readonly correlationId: string;
     readonly customer: PaymentCustomer;
+    readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
     readonly beforeAttempt: Effect.Effect<void, PrepareError>;
   }
 ) {
   const { byKind } = yield* OrderPaymentHandlers;
   const providers = yield* PaymentProviders;
-  const provider = yield* providers.selectForCustomer(input.customer);
+  const provider = yield* providers.selectForCustomer(
+    input.customer,
+    input.retriedAttempt
+  );
   const adapter = providers.forAttempt(provider);
   const analytics = yield* CheckoutAnalytics;
   const handler = byKind[input.kind];
@@ -156,6 +161,7 @@ export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
         details: input.details,
         provider,
         providerOrderId: prepared.providerOrderId,
+        retriedAttempt: input.retriedAttempt,
       });
       if (
         !isProviderPaymentAttempt(attempt) ||

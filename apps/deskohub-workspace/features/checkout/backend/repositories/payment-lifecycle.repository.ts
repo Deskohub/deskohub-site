@@ -21,6 +21,7 @@ import {
 } from "@/features/accounting/backend/accounting-document-snapshots";
 import { AccountingStorage } from "@/features/accounting/backend/accounting-storage";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import { getWorkspaceProductKey } from "@/features/checkout/product-identity";
 import {
   type DiscountCommitment,
@@ -35,14 +36,18 @@ import {
 } from "@/features/discounts/promotion-claims";
 import type { DiscountClaimInstruction } from "@/features/discounts/provider";
 import type { Locale } from "@/features/i18n";
-import type { OrderId } from "@/features/order";
+import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import {
   reservationIdForOrder,
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import { type Money, moneyEquals, moneyWithValue } from "@/shared/money/money";
-import type { PaymentProvider } from "../payment/payment-provider";
+import type {
+  PaymentProvider,
+  RetriedPaymentAttempt,
+} from "../payment/payment-provider";
+import { newestPaymentAttemptsFirst } from "./newest-payment-attempt";
 import {
   type PaymentAttempt,
   toPaymentAttempt,
@@ -75,6 +80,7 @@ export interface IPaymentLifecycleRepository {
     readonly orderId: OrderId;
     readonly provider: PaymentProvider;
     readonly providerOrderId: string;
+    readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
     readonly amount: Money;
     readonly commitment: DiscountCommitment;
     readonly locale: Locale;
@@ -161,6 +167,7 @@ export class PaymentLifecycleRepository extends Context.Service<
         readonly orderId: OrderId;
         readonly provider: PaymentProvider;
         readonly providerOrderId: string;
+        readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
         readonly amount: Money;
         readonly commitment: DiscountCommitment;
         readonly locale: Locale;
@@ -201,6 +208,8 @@ export class PaymentLifecycleRepository extends Context.Service<
                   workspaceReservations.dotyposReservationId,
                 reservationHoldExpiresAt:
                   workspaceReservations.reservationHoldExpiresAt,
+                activePaymentAttemptId:
+                  workspaceReservations.activePaymentAttemptId,
               })
               .from(workspaceReservations)
               .where(
@@ -237,6 +246,45 @@ export class PaymentLifecycleRepository extends Context.Service<
                 message:
                   "Payment attempts can only be created for a current held reservation.",
               });
+            }
+
+            // The checkout read happened before this row lock. A later
+            // attempt may already have started and ended in that gap.
+            if (input.retriedAttempt) {
+              const [newest] = yield* db
+                .select({
+                  id: paymentAttempts.id,
+                  state: paymentAttempts.state,
+                  failureCode: paymentAttempts.failureCode,
+                })
+                .from(paymentAttempts)
+                .where(
+                  eq(
+                    paymentAttempts.workspaceReservationId,
+                    workspaceReservationId
+                  )
+                )
+                .orderBy(...newestPaymentAttemptsFirst)
+                .limit(1);
+              if (
+                reservation.activePaymentAttemptId !== null ||
+                newest?.id !== input.retriedAttempt.id ||
+                !isEndedUnpaidPaymentState(newest.state) ||
+                (input.retriedAttempt.failureCode ===
+                  NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE &&
+                  newest.failureCode !== NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE)
+              ) {
+                return yield* new PaymentLifecycleStateError({
+                  operation:
+                    "PaymentLifecycleRepository.createPendingProviderAttempt",
+                  paymentReference: {
+                    type: "providerOrderId",
+                    id: input.providerOrderId,
+                  },
+                  message:
+                    "The payment attempt being retried is no longer current.",
+                });
+              }
             }
 
             yield* admitFirstBookingPayment({

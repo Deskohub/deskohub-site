@@ -13,7 +13,10 @@ import type {
   NonTerminalPaymentAttemptState,
   PaymentLifecycleTransition,
 } from "../repositories/payment-lifecycle-state";
-import type { PaymentProvider } from "./payment-provider";
+import type {
+  PaymentProvider,
+  RetriedPaymentAttempt,
+} from "./payment-provider";
 
 export interface PaymentOrder {
   readonly id: OrderId;
@@ -85,6 +88,7 @@ export interface AdmittingOrderPaymentHandler<Details>
     input: PaymentAdmission<Details> & {
       readonly provider: PaymentProvider;
       readonly providerOrderId: string;
+      readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
     }
   ) => Effect.Effect<PaymentAttempt, PaymentLifecycleRepositoryError>;
   readonly admitInternal: (

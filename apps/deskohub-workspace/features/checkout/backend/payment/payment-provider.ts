@@ -2,10 +2,15 @@ import { Context, Data, type Duration, type Effect } from "effect";
 import type { Locale } from "@/features/i18n";
 import type { Money } from "@/shared/money/money";
 import type { CheckoutError } from "../checkout/checkout-error";
+import type { PaymentAttempt } from "../repositories/payment-attempt.repository";
 
 export type PaymentProvider = "nexi" | "mock";
 export type PaymentProviderMode = PaymentProvider | "fallback";
 export type ProviderPaymentFailureCode = `${PaymentProvider}_${string}`;
+export type RetriedPaymentAttempt = Pick<
+  PaymentAttempt,
+  "id" | "provider" | "state" | "failureCode"
+>;
 
 export interface PaymentCustomer {
   readonly id?: string;
@@ -53,6 +58,8 @@ export interface VerifyPayment extends PaymentReference {
 export interface PaymentProviderOrder {
   readonly hasActivity: boolean;
   readonly canRetry: boolean;
+  /** The provider corroborates that the marked attempt never reached authorization. */
+  readonly canFallback?: boolean;
   readonly diagnostics?: {
     readonly lastOperationType?: string | undefined;
     readonly operations: readonly string[];
@@ -102,7 +109,7 @@ export interface PaymentProviderAdapter {
     input: PaymentSessionInput
   ) => Effect.Effect<PreparedPaymentSession, CheckoutError>;
   readonly lookup: (
-    input: PaymentReference
+    input: PaymentReference & { readonly expectedAmount?: Money }
   ) => Effect.Effect<PaymentProviderOrder, PaymentProviderError>;
   readonly verify: (
     input: VerifyPayment
@@ -114,7 +121,8 @@ export class PaymentProviders extends Context.Service<
   {
     readonly activeProviders: readonly PaymentProvider[];
     readonly selectForCustomer: (
-      customer: PaymentCustomer
+      customer: PaymentCustomer,
+      retriedAttempt?: RetriedPaymentAttempt
     ) => Effect.Effect<PaymentProvider, CheckoutError>;
     readonly forAttempt: (provider: PaymentProvider) => PaymentProviderAdapter;
   }

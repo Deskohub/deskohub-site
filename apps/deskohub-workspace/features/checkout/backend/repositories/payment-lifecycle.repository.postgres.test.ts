@@ -51,6 +51,7 @@ import {
   type IPaymentLifecycleRepository,
   PaymentLifecycleRepository,
 } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
+import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
 import { calculateDiscounts } from "@/features/discounts/calculator";
 import {
@@ -646,6 +647,106 @@ const admit = (
 describe.skipIf(!testDatabase)(
   "PaymentLifecycleRepository admission after a late payment on disposable Postgres",
   () => {
+    test("admits only one successor of the exact marked Nexi attempt", async () => {
+      const repository = await makeRepository();
+      const dotyposCustomerId = customerId();
+      const reservation = await createHeldReservation(dotyposCustomerId);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        dotyposCustomerId
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const payment = {
+        orderId,
+        amount: admission.amount,
+        commitment: admission.commitment,
+        locale,
+        accountingSnapshot: snapshot,
+      };
+      const nexi = await Effect.runPromise(
+        repository.createPendingProviderAttempt({
+          ...payment,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+        })
+      );
+      const { attempt: marked } = await Effect.runPromise(
+        repository.markTerminal({
+          id: nexi.id,
+          orderId,
+          state: "failed",
+          failureCode: NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE,
+        })
+      );
+      // Try Again has secured the hold and cleared the previous active pointer.
+      const releaseRetriedAttempt = () =>
+        Effect.runPromise(
+          testDatabase!.db
+            .update(workspaceReservations)
+            .set({ activePaymentAttemptId: null, paymentState: "not_started" })
+            .where(eq(workspaceReservations.id, reservation.id))
+        );
+      await releaseRetriedAttempt();
+      const admitMock = (retriedAttempt: typeof marked) =>
+        Effect.runPromise(
+          Effect.result(
+            repository.createPendingProviderAttempt({
+              ...payment,
+              provider: "mock",
+              providerOrderId: `mock-${uniqueId()}`,
+              retriedAttempt,
+            })
+          )
+        );
+      const stale = await admitMock({
+        ...marked,
+        id: `stale-${uniqueId()}` as typeof marked.id,
+      });
+      expect(stale).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "PaymentLifecycleStateError" },
+      });
+
+      const contenders = await Promise.all([
+        admitMock(marked),
+        admitMock(marked),
+      ]);
+      expect(
+        contenders.filter((result) => result._tag === "Success")
+      ).toHaveLength(1);
+      expect(
+        contenders.filter((result) => result._tag === "Failure")
+      ).toHaveLength(1);
+      const successor = contenders.find((result) => result._tag === "Success")!;
+      await Effect.runPromise(
+        repository.markTerminal({
+          id: successor.success.id,
+          orderId,
+          state: "failed",
+          failureCode: "mock_declined",
+        })
+      );
+      await releaseRetriedAttempt();
+      expect(await admitMock(marked)).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "PaymentLifecycleStateError" },
+      });
+
+      const attempts = await Effect.runPromise(
+        testDatabase!.db
+          .select()
+          .from(paymentAttempts)
+          .where(eq(paymentAttempts.orderId, orderId))
+      );
+      expect(attempts).toHaveLength(2);
+      expect(attempts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ provider: "nexi", state: "failed" }),
+          expect.objectContaining({ provider: "mock", state: "failed" }),
+        ])
+      );
+    });
+
     test("admits no new payment for an order whose earlier attempt settled late, and still admits one without", async () => {
       const repository = await makeRepository();
       const dotyposCustomerId = customerId();

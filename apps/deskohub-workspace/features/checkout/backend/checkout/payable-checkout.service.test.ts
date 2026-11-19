@@ -11,6 +11,7 @@ import {
   checkoutSessionIdSchema,
   paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
+import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
@@ -118,6 +119,9 @@ const runPayableCheckout = <A, E>(
           findNewestForReservation: () =>
             Effect.succeed({
               id: input.newestAttemptId ?? retriedAttemptId,
+              provider: "nexi",
+              state: "failed",
+              failureCode: NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE,
             } as PaymentAttempt),
         }),
         TestSealedStateKeys
@@ -261,7 +265,15 @@ describe("PayableCheckout.reconfirm", () => {
 
     expect(result).toMatchObject({
       _tag: "Success",
-      success: { reservation: { id: syntheticPayStateOrderId } },
+      success: {
+        reservation: { id: syntheticPayStateOrderId },
+        retriedAttempt: {
+          id: retriedAttemptId,
+          provider: "nexi",
+          state: "failed",
+          failureCode: NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE,
+        },
+      },
     });
   });
 

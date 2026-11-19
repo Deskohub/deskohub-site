@@ -1,6 +1,5 @@
 import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { env } from "@/env";
 import { WorkspaceNexiLayer } from "@/shared/backend/config/nexi.config";
 import { CheckoutError } from "../checkout/checkout-error";
 import { makeMockPaymentProvider } from "./mock-payment-provider";
@@ -10,7 +9,6 @@ import {
   PaymentProviderError,
   PaymentProviders,
 } from "./payment-provider";
-import { PaymentProviderFallbackRepository } from "./payment-provider-fallback.repository";
 import {
   configuredPaymentProvider,
   isMockPaymentEnabled,
@@ -58,36 +56,19 @@ const PreviewPaymentProviders = Layer.effect(
   Effect.gen(function* () {
     const nexi = yield* makeNexiPaymentProvider;
     const mock = yield* makeMockPaymentProvider;
-    const gate = yield* PaymentProviderFallbackRepository;
     const mode = configuredPaymentProvider();
-    const deploymentHost = env.VERCEL_URL;
     const adapters = { nexi, mock };
 
     return PaymentProviders.of({
       activeProviders: ["nexi", "mock"],
       forAttempt: (provider) => adapters[provider],
-      selectForCustomer: (customer) =>
-        selectCheckoutPaymentProvider(
-          mode,
-          customer,
-          deploymentHost
-            ? gate.isActive(deploymentHost).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new CheckoutError({
-                      code: "checkout_failed",
-                      message:
-                        "The deployment payment provider could not be selected.",
-                      cause,
-                    })
-                )
-              )
-            : Effect.succeed(false)
+      selectForCustomer: (customer, retriedAttempt) =>
+        Effect.succeed(
+          selectCheckoutPaymentProvider(mode, customer, retriedAttempt)
         ),
     });
   })
 ).pipe(
-  Layer.provide(PaymentProviderFallbackRepository.Default),
   Layer.provide(Layer.mergeAll(WorkspaceNexiLayer, WorkspaceDatabase.Default))
 );
 
