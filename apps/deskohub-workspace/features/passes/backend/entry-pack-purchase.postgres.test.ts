@@ -15,6 +15,8 @@ import {
 } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
+import { TestClock } from "effect/testing";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { promotionCodes, vouchers } from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
@@ -28,6 +30,8 @@ import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accou
 import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
 import { testAccountingStorage } from "@/features/accounting/backend/accounting-storage.test-utils";
 import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
+import { InvoiceCancellationNotices } from "@/features/accounting/backend/invoice-cancellation-notices";
+import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/invoice-email-delivery.repository";
 import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
 import { companyRegistrationIdSchema } from "@/features/accounting/billing-identity";
 import { getInvoicePresentation } from "@/features/accounting/invoice-presentation";
@@ -184,6 +188,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const mail: EmailMessage[] = [];
       const attemptedKeys: (string | undefined)[] = [];
       let failSend = false;
+      let failInternalInvoice = false;
+      let beforeAdmission = Effect.void;
+      const rejectedConfirmations = new Set<string>();
+      const inconclusiveProviderOrders = new Set<string>();
       let buyerName = "Fixture Buyer";
       const invoiceDeliveries = new Set<string>();
       const key = {
@@ -196,6 +204,65 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           getActive: Effect.succeed(key),
           getById: () => Effect.succeed(key),
         })
+      );
+      const deliveryAttempts: string[] = [];
+      const emailLayer = Layer.merge(
+        Layer.succeed(EmailConfigTag, {
+          defaultFrom: { email: testEmailAddress("pass-sender") },
+        }),
+        Layer.mock(EmailServiceTag, {
+          send: (message) =>
+            Effect.suspend(() => {
+              const key = message.idempotencyKey ?? "";
+              if (key.startsWith("entry-pack-purchase:")) {
+                attemptedKeys.push(key);
+                if (failSend || rejectedConfirmations.has(key)) {
+                  failSend = false;
+                  return Effect.fail(
+                    new EmailServiceError("Synthetic confirmation failure.")
+                  );
+                }
+                mail.push(message);
+              } else {
+                deliveryAttempts.push(key);
+                if (
+                  key.startsWith("workspace-invoice-internal-") &&
+                  failInternalInvoice
+                ) {
+                  failInternalInvoice = false;
+                  return Effect.fail(
+                    new EmailServiceError("Synthetic internal invoice failure.")
+                  );
+                }
+                if (key.startsWith("workspace-invoice-customer-")) {
+                  invoiceDeliveries.add(
+                    key.slice("workspace-invoice-customer-".length)
+                  );
+                }
+              }
+              return Effect.succeed({
+                id: EmailDeliveryIdSchema.make(crypto.randomUUID()),
+                status: "sent" as const,
+                provider: "fixture",
+                timestamp: new Date(),
+              });
+            }),
+        })
+      );
+      const invoiceDeliveryLedger = InvoiceEmailDeliveryRepository.Default.pipe(
+        Layer.provide(db.layer)
+      );
+      const invoiceDelivery = InvoiceEmailDeliveryService.Default.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            accounting,
+            emailLayer,
+            invoiceDeliveryLedger,
+            Layer.mock(InvoiceCancellationNotices, {
+              ensureOwed: () => Effect.void,
+            })
+          )
+        )
       );
       const { layer } = await Effect.runPromise(
         Effect.gen(function* () {
@@ -215,38 +282,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             Layer.mergeAll(
               db.layer,
               accounting,
-              Layer.mock(InvoiceEmailDeliveryService, {
-                deliverByInvoiceId: ({ invoiceId }) =>
-                  Effect.sync(() => {
-                    const changed = !invoiceDeliveries.has(invoiceId);
-                    invoiceDeliveries.add(invoiceId);
-                    return { status: "delivered", changed } as const;
-                  }),
-              }),
-              Layer.succeed(EmailConfigTag, {
-                defaultFrom: { email: testEmailAddress("pass-sender") },
-              }),
-              Layer.mock(EmailServiceTag, {
-                send: (message) =>
-                  Effect.suspend(() => {
-                    attemptedKeys.push(message.idempotencyKey);
-                    if (failSend) {
-                      failSend = false;
-                      return Effect.fail(
-                        new EmailServiceError("Synthetic email failure.")
-                      );
-                    }
-                    mail.push(message);
-                    return Effect.succeed({
-                      id: EmailDeliveryIdSchema.make(
-                        "synthetic-pass-confirmation"
-                      ),
-                      status: "sent" as const,
-                      provider: "fixture",
-                      timestamp: new Date(),
-                    });
-                  }),
-              })
+              invoiceDeliveryLedger,
+              invoiceDelivery,
+              emailLayer,
+              WorkspaceDatabaseAdvisoryLock.makeLayer(db.databasePool)
             )
           )
         )
@@ -297,7 +336,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
                   firstServiceDate: input.firstServiceDate,
                   applications,
                 }),
-              }))
+              })),
+              Effect.tap(() => beforeAdmission)
             ),
         }),
         Layer.mock(NexiService, {
@@ -327,6 +367,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               })
             ),
           verifyPaymentOutcome: (input) => {
+            if (inconclusiveProviderOrders.has(input.orderId)) {
+              return Effect.fail(
+                new NetworkError({ message: "Synthetic inconclusive order" })
+              );
+            }
             const settledStatus = captured ? "success" : "failure";
             const settledOrderStatus = captured ? "EXECUTED" : "DECLINED";
             return Effect.succeed({
@@ -365,7 +410,6 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         accepted: true,
         acceptedDocuments: getEntryPackPaymentDisclosure("en-US").documents,
         submittedCode: code,
-        ...(billing && { billing }),
       };
       const notify = async (payment: "failure" | "success") => {
         captured = payment === "success";
@@ -396,6 +440,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         mail,
         attemptedKeys,
         invoiceDeliveries,
+        deliveryAttempts,
+        rejectInternalInvoice: () => {
+          failInternalInvoice = true;
+        },
+        rejectConfirmationFor: (id: string) => {
+          rejectedConfirmations.add(`entry-pack-purchase:${id}`);
+        },
+        makeOrderInconclusive: (id: string) => {
+          inconclusiveProviderOrders.add(id);
+        },
+        advanceDuringPay: () => {
+          beforeAdmission = TestClock.adjust("2 seconds");
+        },
         changeBuyerName: (name: string) => {
           buyerName = name;
         },
@@ -405,15 +462,15 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         rejectNextCreation: () => {
           failCreation = true;
         },
-        reconcile: (now: Temporal.Instant) =>
+        reconcile: (now: Temporal.Instant, limit = 25) =>
           Effect.runPromise(
-            reconcilePassPurchases({ now, limit: 25 }).pipe(
+            reconcilePassPurchases({ now, limit }).pipe(
               Effect.provide(ProviderPaymentFinalizationService.Default),
               Effect.provide(services),
               atInstant(now)
             )
           ),
-        readAccounting: (attemptId: string, invoiceId: string) =>
+        readAccounting: (attemptId: string, invoiceId?: string) =>
           Effect.runPromise(
             Effect.gen(function* () {
               const snapshots = yield* AccountingDocumentSnapshots;
@@ -422,7 +479,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
                 snapshot: yield* snapshots.findEntryPack(
                   paymentAttemptIdSchema.make(attemptId)
                 ),
-                invoice: yield* invoices.findById(invoiceId),
+                invoice: invoiceId ? yield* invoices.findById(invoiceId) : null,
               };
             }).pipe(Effect.provide(accounting))
           ),
@@ -431,12 +488,227 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         },
         providerOrders,
         notify,
-        pay: (at?: Temporal.Instant) => {
-          const pay = payForEntryPack(accept).pipe(Effect.provide(services));
+        pay: (
+          at?: Temporal.Instant,
+          options?: { billing?: ReservationBillingSelection }
+        ) => {
+          const pay = payForEntryPack({
+            ...accept,
+            ...(options ?? (billing && { billing })),
+          }).pipe(Effect.provide(services));
           return Effect.runPromise(at ? pay.pipe(atInstant(at)) : pay);
         },
       };
     };
+
+    const requestedInvoice = {
+      purpose: "personal",
+      invoice: "requested",
+      address: {
+        line1: "Synthetic 8",
+        city: "Praha",
+        postalCode: "11000",
+        country: "CZ",
+      },
+    } satisfies ReservationBillingSelection;
+
+    test("reconciliation rotates past an inconclusive Nexi order at batch size one", async () => {
+      const db = database!;
+      const first = await integration(db, 2_000);
+      const next = await integration(db, 2_000);
+      const now = Temporal.Now.instant();
+      await first.pay(now);
+      await next.pay(now.add({ seconds: 1 }));
+      next.makeOrderInconclusive(first.providerOrders[0]!);
+      next.abandonProviderOrder();
+      const read = (orderId: string) =>
+        db.pool
+          .query(
+            `select a.state, v.state as claim from payment_attempts a
+         join voucher_redemptions v on v.payment_attempt_id = a.id where a.order_id = $1`,
+            [orderId]
+          )
+          .then(({ rows }) => rows);
+      const afterCutoff = now.add({ minutes: 31 });
+      expect(await next.reconcile(afterCutoff, 1)).toMatchObject({
+        paymentsChecked: 1,
+      });
+      expect(await read(next.orderId)).toEqual([
+        { state: "pending", claim: "reserved" },
+      ]);
+      expect(
+        await next.reconcile(afterCutoff.add({ minutes: 10 }), 1)
+      ).toMatchObject({ paymentsChecked: 1 });
+      expect(await read(first.orderId)).toEqual([
+        { state: "pending", claim: "reserved" },
+      ]);
+      expect(await read(next.orderId)).toEqual([
+        { state: "expired", claim: "released" },
+      ]);
+      first.abandonProviderOrder();
+      await first.reconcile(afterCutoff.add({ minutes: 20 }), 1);
+      expect(await read(first.orderId)).toEqual([
+        { state: "expired", claim: "released" },
+      ]);
+    });
+
+    test("reconciliation rotates past a failing confirmation at batch size one", async () => {
+      const db = database!;
+      const first = await integration(db, 115_000);
+      const next = await integration(db, 115_000);
+      const now = Temporal.Now.instant();
+      first.rejectNextEmail();
+      next.rejectNextEmail();
+      await first.pay(now);
+      await next.pay(now.add({ seconds: 1 }));
+      next.rejectConfirmationFor(first.orderId);
+      const read = (orderId: string) =>
+        db.pool
+          .query(
+            "select payment_state, fulfillment_state from orders where id = $1",
+            [orderId]
+          )
+          .then(({ rows }) => rows);
+      const firstRetry = now.add({ minutes: 10 });
+      expect(await next.reconcile(firstRetry, 1)).toMatchObject({
+        fulfillmentRetried: 1,
+      });
+      expect(await read(next.orderId)).toEqual([
+        { payment_state: "paid", fulfillment_state: "not_started" },
+      ]);
+      expect(
+        await next.reconcile(firstRetry.add({ minutes: 10 }), 1)
+      ).toMatchObject({ fulfillmentRetried: 1 });
+      expect(await read(first.orderId)).toEqual([
+        { payment_state: "paid", fulfillment_state: "not_started" },
+      ]);
+      expect(await read(next.orderId)).toEqual([
+        { payment_state: "paid", fulfillment_state: "fulfilled" },
+      ]);
+      expect(next.mail).toHaveLength(1);
+      await first.reconcile(firstRetry.add({ minutes: 20 }), 1);
+      expect(await read(first.orderId)).toEqual([
+        { payment_state: "paid", fulfillment_state: "fulfilled" },
+      ]);
+    });
+
+    test("refuses changed billing on a hosted attempt without changing the attempt or frozen choice", async () => {
+      const db = database!;
+      const payment = await integration(db, 2_000);
+      const first = await payment.pay();
+      expect(first).toMatchObject({ status: "hosted" });
+      const frozen = () =>
+        db.pool
+          .query<{ id: string; state: string }>(
+            "select id, state from payment_attempts where order_id = $1",
+            [payment.orderId]
+          )
+          .then(({ rows }) => rows);
+      const before = await frozen();
+      await expect(
+        payment.pay(undefined, { billing: requestedInvoice })
+      ).rejects.toMatchObject({
+        reason: "billing-changed",
+      });
+      expect(await frozen()).toEqual(before);
+      expect(
+        (await payment.readAccounting(before[0]!.id)).snapshot?.billing
+      ).toEqual({
+        purpose: "personal",
+        invoice: "none",
+      });
+      expect(await payment.pay()).toEqual(first);
+      expect(
+        await payment.pay(undefined, {
+          billing: { purpose: "personal", invoice: "none" },
+        })
+      ).toEqual(first);
+      expect(payment.providerOrders).toHaveLength(1);
+      await payment.notify("failure");
+    });
+
+    test("reopens a hosted payment with the same normalized invoice details and refuses different details", async () => {
+      const db = database!;
+      const payment = await integration(db, 2_000, undefined, requestedInvoice);
+      const first = await payment.pay();
+      expect(first).toMatchObject({ status: "hosted" });
+      expect(await payment.pay(undefined, {})).toEqual(first);
+      expect(
+        await payment.pay(undefined, {
+          billing: {
+            ...requestedInvoice,
+            address: { ...requestedInvoice.address, line1: " Synthetic 8 " },
+          },
+        })
+      ).toEqual(first);
+      await expect(
+        payment.pay(undefined, {
+          billing: {
+            ...requestedInvoice,
+            address: { ...requestedInvoice.address, line1: "Synthetic 9" },
+          },
+        })
+      ).rejects.toMatchObject({ reason: "billing-changed" });
+      expect(payment.providerOrders).toHaveLength(1);
+      await payment.notify("failure");
+    });
+
+    test("retries only the failed internal invoice copy after confirming the purchase", async () => {
+      const db = database!;
+      const payment = await integration(
+        db,
+        115_000,
+        undefined,
+        requestedInvoice
+      );
+      payment.rejectInternalInvoice();
+      expect(await payment.pay()).toMatchObject({ status: "paid" });
+      const read = () =>
+        db.pool
+          .query(
+            `select o.fulfillment_state, a.id as attempt_id, i.id as invoice_id,
+                d.audience, d.state, d.attempt_count
+         from orders o join payment_attempts a on a.order_id = o.id
+         join invoices i on i.payment_attempt_id = a.id
+         join invoice_email_deliveries d on d.invoice_id = i.id
+         where o.id = $1 order by d.audience`,
+            [payment.orderId]
+          )
+          .then(({ rows }) => rows);
+      const failed = await read();
+      expect(failed).toMatchObject([
+        {
+          fulfillment_state: "awaiting_delivery",
+          audience: "customer",
+          state: "accepted",
+          attempt_count: 1,
+        },
+        {
+          fulfillment_state: "awaiting_delivery",
+          audience: "internal",
+          state: "failed",
+          attempt_count: 1,
+        },
+      ]);
+      expect(payment.mail).toHaveLength(1);
+      const later = Temporal.Now.instant().add({ minutes: 10 });
+      await payment.reconcile(later);
+      await payment.reconcile(later);
+      expect(await read()).toEqual([
+        { ...failed[0], fulfillment_state: "fulfilled" },
+        {
+          ...failed[1],
+          fulfillment_state: "fulfilled",
+          state: "accepted",
+          attempt_count: 2,
+        },
+      ]);
+      expect(payment.attemptedKeys).toEqual([
+        `entry-pack-purchase:${payment.orderId}`,
+      ]);
+      expect(payment.deliveryAttempts).toHaveLength(3);
+      expect(payment.providerOrders).toEqual([]);
+    });
 
     test.each([2_000, 115_000])(
       "requires a fresh quote on the exclusive Prague end date for voucher value %i",
@@ -460,6 +732,31 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           [payment.orderId]
         );
         expect(attempts.rows).toEqual([]);
+      }
+    );
+
+    test.each([2_000, 115_000])(
+      "refuses locked admission when Prague midnight crosses after Pay for voucher value %i",
+      async (voucherValue) => {
+        const db = database!;
+        const payment = await integration(
+          db,
+          voucherValue,
+          Temporal.Instant.from("2026-11-19T12:00:00Z")
+        );
+        payment.advanceDuringPay();
+        await expect(
+          payment.pay(Temporal.Instant.from("2027-01-18T22:59:59Z"))
+        ).rejects.toMatchObject({
+          _tag: "PaymentLifecycleStateError",
+          message: "The Entry pack quote expired. Request a new quote.",
+        });
+        const attempts = await db.pool.query(
+          "select id from payment_attempts where order_id = $1",
+          [payment.orderId]
+        );
+        expect(attempts.rows).toEqual([]);
+        expect(payment.providerOrders).toEqual([]);
       }
     );
 

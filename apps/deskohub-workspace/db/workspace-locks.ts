@@ -1,5 +1,6 @@
 import { Effect, Order } from "effect";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import type { OrderId } from "@/features/order";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { WorkspaceTransaction } from "./database.service";
@@ -168,6 +169,12 @@ export const WorkspaceLockSections = {
       name: "customerAccount",
       rank: 20,
       pair: ["customer-account", accountId],
+    }),
+  passPurchaseFulfillment: (orderId: OrderId) =>
+    holdSection({
+      name: "passPurchaseFulfillment",
+      rank: 30,
+      pair: ["pass-purchase-fulfillment", orderId],
     }),
   reservationInviteeNotices: (orderId: WorkspaceReservationId) =>
     holdSection(reservationInviteeNotices(orderId)),

@@ -1,14 +1,17 @@
 import "server-only";
 
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
-import { and, eq } from "drizzle-orm";
-import { Context, Effect } from "effect";
+import { and, eq, inArray } from "drizzle-orm";
+import { Context, Effect, Result } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { orders, passPurchases, paymentAttempts } from "@/db/schema";
+import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { findPurchaseLoginEmail } from "@/features/account/backend/customer-account-by-email";
 import type { EntryPackAccountingSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
+import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/invoice-email-delivery.repository";
 import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
 import type {
   AdmittingOrderPaymentHandler,
@@ -110,11 +113,13 @@ const redeemClaims = Effect.fnUntraced(function* (
 
 export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   const { db, transaction } = yield* WorkspaceDatabase;
+  const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
   const email = yield* EmailServiceTag;
   const emailConfig = yield* EmailConfigTag;
   const snapshots = yield* AccountingDocumentSnapshots;
   const invoices = yield* InvoiceRepository;
   const invoiceDelivery = yield* InvoiceEmailDeliveryService;
+  const invoiceDeliveryLedger = yield* InvoiceEmailDeliveryRepository;
   const services = Context.make(WorkspaceDatabase, { db, transaction });
   const sendingServices = services.pipe(
     Context.add(EmailServiceTag, email),
@@ -280,59 +285,116 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     return transition(attempt, true, now);
   });
 
-  const fulfill = Effect.fn("entryPack.fulfill")(function* (orderId: OrderId) {
-    const [paid] = yield* db
-      .select({ order: orders, purchase: passPurchases })
-      .from(orders)
-      .innerJoin(passPurchases, eq(orders.id, passPurchases.id))
-      .where(
-        and(
-          eq(orders.id, orderId),
-          eq(orders.paymentState, "paid"),
-          eq(orders.fulfillmentState, "not_started")
-        )
-      );
-    if (!paid) return;
-    const {
-      purchase,
-      order: { paidAt, activePaymentAttemptId },
-    } = paid;
-    if (!paidAt || !activePaymentAttemptId)
-      return yield* paymentError(
-        orderId,
-        "Paid Entry pack has no active payment attempt."
-      );
-    const invoiceId = yield* invoices.issueEntryPack({
-      orderId,
-      paymentAttemptId: activePaymentAttemptId,
-    });
-    if (invoiceId) yield* invoiceDelivery.deliverByInvoiceId({ invoiceId });
-    const buyer = yield* findPurchaseLoginEmail(purchase.buyerAccountId).pipe(
-      Effect.provide(services)
-    );
-    if (buyer) {
-      const holderEmail =
-        purchase.buyerAccountId === purchase.holderAccountId
-          ? null
-          : ((yield* findPurchaseLoginEmail(purchase.holderAccountId).pipe(
-              Effect.provide(services)
-            )) ?? null);
-      yield* sendEntryPackPurchaseEmail({
+  const fulfill = Effect.fn("entryPack.fulfill")(
+    function* (orderId: OrderId) {
+      const [paid] = yield* db
+        .select({ order: orders, purchase: passPurchases })
+        .from(orders)
+        .innerJoin(passPurchases, eq(orders.id, passPurchases.id))
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.paymentState, "paid"),
+            inArray(orders.fulfillmentState, [
+              "not_started",
+              "awaiting_delivery",
+            ])
+          )
+        );
+      if (!paid) return;
+      const {
         purchase,
-        buyer: { email: buyer },
-        holderEmail,
-        paidAt,
-        invoiceRequested: invoiceId !== null,
-      }).pipe(Effect.provide(sendingServices));
-    }
-    const now = yield* currentInstant;
-    yield* db
-      .update(orders)
-      .set({ fulfillmentState: "fulfilled", fulfilledAt: now, updatedAt: now })
-      .where(
-        and(eq(orders.id, orderId), eq(orders.fulfillmentState, "not_started"))
+        order: { paidAt, activePaymentAttemptId, fulfillmentState },
+      } = paid;
+      if (!paidAt || !activePaymentAttemptId)
+        return yield* paymentError(
+          orderId,
+          "Paid Entry pack has no active payment attempt."
+        );
+      const attemptIsActive = and(
+        eq(orders.id, orderId),
+        eq(orders.paymentState, "paid"),
+        eq(orders.activePaymentAttemptId, activePaymentAttemptId)
       );
-  });
+      const confirmation = yield* Effect.gen(function* () {
+        if (fulfillmentState !== "not_started") return;
+        const snapshot = yield* snapshots.findEntryPack(activePaymentAttemptId);
+        if (!snapshot) {
+          return yield* paymentError(
+            orderId,
+            "Paid Entry pack has no accounting snapshot."
+          );
+        }
+        const buyer = yield* findPurchaseLoginEmail(
+          purchase.buyerAccountId
+        ).pipe(Effect.provide(services));
+        if (buyer) {
+          const holderEmail =
+            purchase.buyerAccountId === purchase.holderAccountId
+              ? null
+              : ((yield* findPurchaseLoginEmail(purchase.holderAccountId).pipe(
+                  Effect.provide(services)
+                )) ?? null);
+          yield* sendEntryPackPurchaseEmail({
+            purchase,
+            buyer: { email: buyer },
+            holderEmail,
+            paidAt,
+            invoiceRequested: snapshot.billing.invoice !== "none",
+          }).pipe(Effect.provide(sendingServices));
+        }
+        // Confirmation settled. Any remaining work belongs to the invoice ledger.
+        yield* db
+          .update(orders)
+          .set({
+            fulfillmentState: "awaiting_delivery",
+            updatedAt: yield* currentInstant,
+          })
+          .where(
+            and(attemptIsActive, eq(orders.fulfillmentState, "not_started"))
+          );
+      }).pipe(Effect.result);
+      const invoicing = yield* Effect.gen(function* () {
+        const invoiceId = yield* invoices.issueEntryPack({
+          orderId,
+          paymentAttemptId: activePaymentAttemptId,
+        });
+        if (!invoiceId) return true;
+        const delivery = yield* invoiceDelivery.deliverByInvoiceId({
+          invoiceId,
+        });
+        if (delivery.status === "cancelled") return true;
+        const ledger = (yield* invoiceDeliveryLedger.status([invoiceId])).get(
+          invoiceId
+        );
+        return (
+          ledger?.sentTo.includes("customer") === true &&
+          ledger.sentTo.includes("internal")
+        );
+      }).pipe(Effect.result);
+      if (Result.isFailure(confirmation))
+        return yield* Effect.fail(confirmation.failure);
+      if (Result.isFailure(invoicing))
+        return yield* Effect.fail(invoicing.failure);
+      if (!invoicing.success) return;
+      const now = yield* currentInstant;
+      yield* db
+        .update(orders)
+        .set({
+          fulfillmentState: "fulfilled",
+          fulfilledAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(attemptIsActive, eq(orders.fulfillmentState, "awaiting_delivery"))
+        );
+    },
+    (effect, orderId) =>
+      effect.pipe(
+        WorkspaceLockSections.passPurchaseFulfillment(orderId),
+        Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock)
+      )
+  );
 
   const recordLateCapture = Effect.fnUntraced(function* (
     input: Verification,
@@ -500,7 +562,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     scheduleFulfillment: ({ orderId }) =>
       fulfill(orderId).pipe(
         Effect.catch(() =>
-          Effect.logWarning("Entry pack confirmation could not be sent", {
+          Effect.logWarning("Entry pack fulfillment could not complete", {
             orderId,
           })
         )

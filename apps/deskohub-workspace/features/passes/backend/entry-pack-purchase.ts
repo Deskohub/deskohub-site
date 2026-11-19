@@ -14,6 +14,7 @@ import { CustomerAccountSections } from "@/features/account/backend/customer-acc
 import type { CustomerProfileSave } from "@/features/account/contracts";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { workspaceAccountingSupplier } from "@/features/accounting/accounting-document-snapshot";
+import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
 import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
 import {
@@ -41,6 +42,7 @@ import {
   defaultReservationBillingSelection,
   getReservationInvoiceBuyer,
   type ReservationBillingSelection,
+  reservationBillingSelectionSchema,
 } from "@/features/reservation/reservation-billing";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { reservationStatusPath } from "@/features/reservation/routes";
@@ -63,8 +65,14 @@ class EntryPackPurchaseError extends Data.TaggedError(
     | "purchase-conflict"
     | "consent-required"
     | "terms-changed"
-    | "quote-expired";
+    | "quote-expired"
+    | "billing-changed";
 }> {}
+
+const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
+  onExcessProperty: "error",
+});
+const billingMatches = Schema.toEquivalence(reservationBillingSelectionSchema);
 
 const requirePassPurchasesEnabled = Effect.fn("requirePassPurchasesEnabled")(
   function* () {
@@ -310,7 +318,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
   if (!handler)
     return yield* new EntryPackPurchaseError({ reason: "unavailable" });
 
-  return yield* accounts.withActiveAccount(
+  const result = yield* accounts.withActiveAccount(
     session.accountId,
     Effect.gen(function* () {
       const [entry] = yield* db
@@ -329,7 +337,6 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       const { order, purchase } = entry;
       const statusUrl = `/${purchase.locale}${reservationStatusPath}/${order.id}`;
       if (order.paymentState === "paid") {
-        yield* handler.scheduleFulfillment({ orderId: order.id });
         return { status: "paid" as const, statusUrl };
       }
       if (order.paymentState === "pending" && order.activePaymentAttemptId) {
@@ -345,6 +352,21 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         if (attempt) {
           const page = getPaymentPageToReopen(attempt, yield* currentInstant);
           if ("providerRedirectUrl" in page) {
+            if (input.billing !== undefined) {
+              const snapshots = yield* AccountingDocumentSnapshots;
+              const frozen = yield* snapshots.findEntryPack(attempt.id);
+              const billing = yield* decodeBilling(input.billing).pipe(
+                Effect.mapError(
+                  () =>
+                    new EntryPackPurchaseError({ reason: "billing-changed" })
+                )
+              );
+              if (!frozen || !billingMatches(frozen.billing, billing)) {
+                return yield* new EntryPackPurchaseError({
+                  reason: "billing-changed",
+                });
+              }
+            }
             const providerStatus = yield* PaymentPageProviderStatus;
             const observation = yield* providerStatus.observe({
               attempt,
@@ -426,7 +448,9 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return yield* new EntryPackPurchaseError({
           reason: "buyer-profile-required",
         });
-      const billing = input.billing ?? defaultReservationBillingSelection;
+      const billing = yield* decodeBilling(
+        input.billing ?? defaultReservationBillingSelection
+      );
       const buyer = getReservationInvoiceBuyer({
         billing,
         customerName: contact.name,
@@ -460,7 +484,6 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
             attempt: payment.attempt,
             timestamp: payment.timestamp,
           });
-        yield* handler.scheduleFulfillment({ orderId: order.id });
         return { status: "paid" as const, statusUrl };
       }
 
@@ -483,4 +506,9 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       };
     })
   );
+  // Fulfillment takes its order section after the account section ends.
+  if (result.status === "paid") {
+    yield* handler.scheduleFulfillment({ orderId: input.orderId });
+  }
+  return result;
 });
