@@ -308,7 +308,8 @@ const makeNexiService = Effect.gen(function* () {
         ...toNexiAmountFields(amount),
         ...toNexiOrderProgress(status),
         operations,
-        ...(reportedOrderId !== undefined &&
+        ...(response.operations !== undefined &&
+          reportedOrderId !== undefined &&
           (response.orderId === undefined || response.orderId === orderId) &&
           amountMatchesOrder && {
             reportedStatus: {

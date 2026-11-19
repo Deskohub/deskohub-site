@@ -274,6 +274,22 @@ describe("PaymentRetryProviderCheck", () => {
     ).toMatchObject({ success: "may_settle" });
   });
 
+  test("requires Nexi to report the operations list", async () => {
+    const response = {
+      orderStatus: { order: { ...reportedAmount, orderId: providerOrderId } },
+    };
+
+    expect(await checkNexiResponse(response)).toMatchObject({
+      success: "may_settle",
+    });
+    expect(
+      await checkNexiResponse(response, {
+        ...fallbackAttempt,
+        failureCode: null,
+      })
+    ).toMatchObject({ success: "ended_unpaid" });
+  });
+
   test.each([
     ["different amounts", { ...reportedAmount, amount: "1" }, "may_settle"],
     [

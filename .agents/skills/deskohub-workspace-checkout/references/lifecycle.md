@@ -203,10 +203,10 @@ In `fallback` mode a fresh checkout uses Nexi. Ordinary Try Again can admit
 one mock successor for a synthetic customer on that protected preview. The
 signed retry state must identify the newest terminal Nexi attempt, which must
 carry `workspace_e2e_nexi_fallback_eligible`. Nexi must report the expected
-order ID, amount, and currency with no payment activity. Admission checks that
-the checkout is still unpaid, has no unresolved recovery, and still has
-the marked attempt as its newest attempt. Every attempt uses its stored
-provider for later operations.
+order ID, amount, and currency, an empty operations list, and no payment
+activity. Admission checks that the checkout is still unpaid, has no
+unresolved recovery, and still has the marked attempt as its newest attempt.
+Every attempt uses its stored provider for later operations.
 
 The mock payment page requires a session capability. Its database table holds
 the capability digest and the first approved or declined outcome, independently
