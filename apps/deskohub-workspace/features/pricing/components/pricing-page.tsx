@@ -1,6 +1,6 @@
 import { Match } from "effect";
 import { connection } from "next/server";
-import { Suspense } from "react";
+import { Fragment, Suspense } from "react";
 import { PublicOfferingsStructuredData } from "@/features/checkout/components/public-offerings-structured-data";
 import {
   getPublicOfferingSelection,
@@ -20,6 +20,7 @@ import {
 } from "../backend/price-list.server";
 import { getOfferingSale } from "../offering-sale";
 import { getPriceFamilies } from "../price-family";
+import { EntryPackPrices } from "./entry-pack-prices";
 
 type PricingPageProps = {
   readonly locale: Locale;
@@ -127,12 +128,8 @@ function PriceList({
           ? rows[0]?.usage
           : undefined;
 
-      return (
-        <section
-          key={kind}
-          aria-labelledby={`pricing-${kind}-title`}
-          className="mt-14"
-        >
+      const section = (
+        <section aria-labelledby={`pricing-${kind}-title`} className="mt-14">
           <h2 id={`pricing-${kind}-title`} className="text-2xl sm:text-3xl">
             {title}
           </h2>
@@ -190,6 +187,13 @@ function PriceList({
             })}
           </ul>
         </section>
+      );
+
+      return (
+        <Fragment key={kind}>
+          {section}
+          {kind === "cowork" && <EntryPackPrices locale={locale} />}
+        </Fragment>
       );
     }
   );

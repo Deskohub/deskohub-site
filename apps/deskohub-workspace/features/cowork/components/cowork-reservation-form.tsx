@@ -1,6 +1,7 @@
 "use client";
 
 import { effectSchemaResolver } from "@deskohub/effect-schema-resolver";
+import Interpolate from "@doist/react-interpolate";
 import {
   AlertTriangle,
   Clock3,
@@ -17,6 +18,7 @@ import { type Control, useForm } from "react-hook-form";
 import type { PreloadedAdvertisedPrice } from "@/features/checkout/advertised-price";
 import type { CheckoutSessionId } from "@/features/checkout/checkout-identifiers";
 import {
+  isWorkspaceCoworkCurrentProductTier,
   type WorkspaceCoworkCurrentTier,
   type WorkspaceProductMonitorOption,
   workspaceCoworkCurrentTiers,
@@ -36,6 +38,10 @@ import reservedDeskArtwork from "@/features/cowork/assets/reserved-desk.png";
 import reservedDeskWorkstationArtwork from "@/features/cowork/assets/reserved-desk-workstation.png";
 import type { CanonicalPromotionCode } from "@/features/discounts";
 import { defaultPhoneRegion, type Locale, m } from "@/features/i18n";
+import {
+  getEntryPackPurchasePath,
+  minimumEntryPackPricePerDay,
+} from "@/features/passes/entry-pack-discovery";
 import { ReservationAdvertisedPrice } from "@/features/reservation/components/reservation-advertised-price";
 import { ReservationCheckoutForm } from "@/features/reservation/components/reservation-checkout-form";
 import { ReservationFormDateInput } from "@/features/reservation/components/reservation-date-input";
@@ -74,6 +80,7 @@ import {
 } from "@/features/reservation/reservation-date";
 import type { ReservationCheckoutCustomerForm } from "@/features/reservation/reservation-existing-customer";
 import type { PreloadedWorkspaceAvailability } from "@/features/reservation/workspace-availability";
+import { GuardedLink as Link } from "@/shared/components/guarded-link";
 import {
   FormControl,
   FormField,
@@ -82,6 +89,8 @@ import {
 } from "@/shared/components/ui/form";
 import { Label } from "@/shared/components/ui/label";
 import { Switch } from "@/shared/components/ui/switch";
+import { textLink } from "@/shared/components/ui/text-link";
+import { formatMoney } from "@/shared/money/money";
 import { cn } from "@/shared/utils";
 import { CoworkOptionalAddonToggle } from "./cowork-optional-addon-toggle";
 import { getCoworkReservationSelectionSummary } from "./cowork-reservation-selection-summary";
@@ -91,6 +100,7 @@ import { useCoworkAdvertisedPrices } from "./use-cowork-advertised-prices";
 import { useCoworkSelectionAvailability } from "./use-cowork-selection-availability";
 
 type CoworkReservationFormProps = {
+  entryPackOffered?: boolean;
   initialReservation?: NormalizedCoworkReservationOrder;
   initialAdvertisedPrices?: ReadonlyArray<PreloadedAdvertisedPrice>;
   initialValues?: CoworkReservationInput;
@@ -149,6 +159,7 @@ const formatDisplayDate = (date: string, locale: Locale) =>
   );
 
 export function CoworkReservationForm({
+  entryPackOffered = false,
   initialReservation,
   initialAdvertisedPrices = [],
   initialValues,
@@ -183,6 +194,7 @@ export function CoworkReservationForm({
   } = selection;
   const offersStayChoice =
     overnightStayOffered && selectedTier === overnightCoworkStayTier;
+  const isOvernightStay = offersStayChoice && selectedStay === "overnight";
   useReservationSelectionUrl(coworkSelectionLink, selection);
   const allowedMonitorOptions =
     getAllowedMonitorOptionsForCoworkTier(selectedTier);
@@ -331,6 +343,39 @@ export function CoworkReservationForm({
               </ReservationTypeInput>
             </FormControl>
             <FormMessage />
+            {entryPackOffered &&
+              !isOvernightStay &&
+              isWorkspaceCoworkCurrentProductTier(selectedTier) && (
+                <p className="pt-1 text-sm leading-6 text-navy-blue/60">
+                  <Interpolate
+                    string={m.entryPackDiscoveryCoworkLink(
+                      {
+                        price: formatMoney(minimumEntryPackPricePerDay, locale),
+                      },
+                      { locale }
+                    )}
+                    mapping={{
+                      packLink: (label) => (
+                        <Link
+                          className={cn(
+                            textLink({ tone: "inherit" }),
+                            "font-semibold text-navy-blue hover:text-burned-orange"
+                          )}
+                          href={getEntryPackPurchasePath(
+                            locale,
+                            selectedTier === "reserved-desk" &&
+                              selectedMonitorOption
+                              ? "reserved-desk-workstation"
+                              : selectedTier
+                          )}
+                        >
+                          {label}
+                        </Link>
+                      ),
+                    }}
+                  />
+                </p>
+              )}
           </FormItem>
         )}
       />
@@ -341,7 +386,7 @@ export function CoworkReservationForm({
             control={form.control}
             locale={locale}
             offersStayChoice={offersStayChoice}
-            overnight={offersStayChoice && selectedStay === "overnight"}
+            overnight={isOvernightStay}
             unavailableDates={selectionAvailability.unavailableDates}
           />
 
