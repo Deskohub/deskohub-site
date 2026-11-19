@@ -27,43 +27,43 @@ export const consentBannerDocumentVersions: Readonly<
     "privacy-policy":
       "3f36b29f196c659d2672472007e43f35dc08ff0b16a1ff09af1a50326c4dd3f8",
     "cookie-policy":
-      "476c15e027bde0e04823024f02842b5652456a9721680f0efd0dabf9d494fd03",
+      "2f705c21210f6fc44919ba388ddf4456abad86fa88dee41a25d87df7c0f42033",
   },
   "cs-CZ": {
     "privacy-policy":
       "06ef7eccee6ae782d255f20318a23487b3a6919d9abf6da1310aa0c4355ffaba",
     "cookie-policy":
-      "9e1622d98ffc2f8879400494842ee8e2ee3f096a5e023636388c65c220dc3801",
+      "8aa600ff58b9d8d896dbe63f55b98774211ea53d031e8021815916b9b11957b6",
   },
   "de-DE": {
     "privacy-policy":
       "12971bc012fa60f835e50ebfa162649dd15138ab5cdcb75f90c9f6cc0e439fb5",
     "cookie-policy":
-      "6812034325d23d8f848a4fb64f09d8aa014d62cc7d3addc45759c1fb075fc486",
+      "c1754e2cda352680810ee0826c73ad6149b37b3d9ce2d89b1c9f7ebef49b3934",
   },
   "uk-UA": {
     "privacy-policy":
       "5e2fb2f96c5600e33892e1a8d6b348fab61fcfc94c552529c2ab19466c6c932e",
     "cookie-policy":
-      "08480393eeeadb3cbc83b2cdd9be368d03eb1f96a2156c4d5cf064ee7c656d00",
+      "46d2f95acd2e8de5cd0a4fc0bb62aea6ac9475357228f44d9b071194ced0ed5b",
   },
   "sk-SK": {
     "privacy-policy":
       "b5f247ecb4e7311ee0847aaf5f141310cd1ff37a34b87e2ca6fc792b7d8f32a3",
     "cookie-policy":
-      "d9cc345892616de3c3b05e7e1f7e505a7947738423b2ee4276d0757f3d4dbfaf",
+      "39dd69f612391cf5f4a62a11de40e45270ce12dd3c59ab98e5811533bd3b561b",
   },
   "vi-VN": {
     "privacy-policy":
       "b2a920b3aeca14d6321ef1bfa0f762076ccf365bb483664a19f8f26c753912fc",
     "cookie-policy":
-      "d1a469bc79c9be640a99e42a1266b825ad10e543c7895526567d9207c4f2dd92",
+      "45b40480e12b3e026438562a8263bfb64f5804a257c669e65ce9c85c59deef9e",
   },
   "hi-IN": {
     "privacy-policy":
       "feeaa3947ca6aeca453a0c49ff09cff76c7d48fd381b5521ac3d51fa65614330",
     "cookie-policy":
-      "8a1b1ac6543ec1b2a5d9ab7188e86679699a29fe1910e762bfa8a1a151ed6bad",
+      "1a1525e0af085f8817a19e2108f592ae8213e6427676c1947a5c3002c9f0b9bb",
   },
 };
 

@@ -770,7 +770,7 @@ export const legalDocuments = {
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
-    updatedAt: "8. listopadu 2026",
+    updatedAt: "19. listopadu 2026",
     sections: [
       {
         heading: "1. Co jsou cookies",
@@ -830,8 +830,18 @@ export const legalDocuments = {
             odesílání rezervací a účinnosti kampaní. Podle kategorie
             poskytovatele mohou zpracovávané údaje zahrnovat zobrazení stránek,
             informace o prohlížeči a zařízení, technické údaje odvozené z IP
-            adresy, typy událostí a standardní kampanové parametry z URL:
-            utm_source, utm_medium, utm_campaign, utm_content a utm_term.
+            adresy a typy událostí.
+          </>,
+          <>
+            S vaším souhlasem s analytikou můžeme spolu se zobrazením stránky
+            odeslat do PostHog vybrané parametry kampaní z adresy stránky. Jde o
+            standardní parametry UTM (utm_source, utm_medium, utm_campaign,
+            utm_id, utm_term, utm_content, utm_source_platform,
+            utm_creative_format a utm_marketing_tactic), parametry Google Ads o
+            zdroji návštěvnosti a kampani (gad_source, gad_campaignid a gclsrc)
+            a identifikátor kampaně Mailchimp (mc_cid). Z údajů o zobrazení
+            stránek pro PostHog vylučujeme identifikátory jednotlivých kliknutí
+            na reklamu a příjemců e-mailů.
           </>,
           <>
             S vaším analytickým souhlasem přiřazujeme k analytickému profilu

@@ -36,7 +36,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "en-US",
     documentKey: "cookie-policy",
-    version: "476c15e027bde0e04823024f02842b5652456a9721680f0efd0dabf9d494fd03",
+    version: "2f705c21210f6fc44919ba388ddf4456abad86fa88dee41a25d87df7c0f42033",
   },
   {
     locale: "cs-CZ",
@@ -61,7 +61,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "cs-CZ",
     documentKey: "cookie-policy",
-    version: "9e1622d98ffc2f8879400494842ee8e2ee3f096a5e023636388c65c220dc3801",
+    version: "8aa600ff58b9d8d896dbe63f55b98774211ea53d031e8021815916b9b11957b6",
   },
   {
     locale: "de-DE",
@@ -86,7 +86,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "de-DE",
     documentKey: "cookie-policy",
-    version: "6812034325d23d8f848a4fb64f09d8aa014d62cc7d3addc45759c1fb075fc486",
+    version: "c1754e2cda352680810ee0826c73ad6149b37b3d9ce2d89b1c9f7ebef49b3934",
   },
   {
     locale: "uk-UA",
@@ -111,7 +111,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "uk-UA",
     documentKey: "cookie-policy",
-    version: "08480393eeeadb3cbc83b2cdd9be368d03eb1f96a2156c4d5cf064ee7c656d00",
+    version: "46d2f95acd2e8de5cd0a4fc0bb62aea6ac9475357228f44d9b071194ced0ed5b",
   },
   {
     locale: "sk-SK",
@@ -136,7 +136,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "sk-SK",
     documentKey: "cookie-policy",
-    version: "d9cc345892616de3c3b05e7e1f7e505a7947738423b2ee4276d0757f3d4dbfaf",
+    version: "39dd69f612391cf5f4a62a11de40e45270ce12dd3c59ab98e5811533bd3b561b",
   },
   {
     locale: "vi-VN",
@@ -161,7 +161,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "vi-VN",
     documentKey: "cookie-policy",
-    version: "d1a469bc79c9be640a99e42a1266b825ad10e543c7895526567d9207c4f2dd92",
+    version: "45b40480e12b3e026438562a8263bfb64f5804a257c669e65ce9c85c59deef9e",
   },
   {
     locale: "hi-IN",
@@ -186,7 +186,7 @@ const publishedDocuments: ReadonlyArray<{
   {
     locale: "hi-IN",
     documentKey: "cookie-policy",
-    version: "8a1b1ac6543ec1b2a5d9ab7188e86679699a29fe1910e762bfa8a1a151ed6bad",
+    version: "1a1525e0af085f8817a19e2108f592ae8213e6427676c1947a5c3002c9f0b9bb",
   },
 ];
 
