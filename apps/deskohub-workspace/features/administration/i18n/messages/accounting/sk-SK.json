@@ -38,6 +38,7 @@
   "accountingInvoiceSourceAdminUi": "Administrácia",
   "accountingInvoiceSourceDhwCli": "CLI dhw",
   "accountingInvoiceSourceAssistant": "AI asistent",
+  "accountingInvoiceSourcePassPurchase": "Nákup balíka vstupov",
   "accountingInvoiceSourceLegacy": "Starší záznam / neznáme",
   "accountingInvoiceDeliveryNeedsResend": "Treba znova odoslať",
   "accountingInvoiceDeliverySent": "Odoslané",

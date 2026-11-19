@@ -36,6 +36,7 @@
   "accountingInvoiceSourceAdminUi": "प्रशासन",
   "accountingInvoiceSourceDhwCli": "dhw CLI",
   "accountingInvoiceSourceAssistant": "AI असिस्टेंट",
+  "accountingInvoiceSourcePassPurchase": "प्रवेश पैक की खरीद",
   "accountingInvoiceSourceLegacy": "पुराना रिकॉर्ड / अज्ञात",
   "accountingInvoiceDeliveryNeedsResend": "फिर से भेजना ज़रूरी",
   "accountingInvoiceDeliverySent": "भेजा गया",

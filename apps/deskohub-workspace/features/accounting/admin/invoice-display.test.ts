@@ -10,6 +10,12 @@ import {
 test("labels the invoice provenance in the route locale", () => {
   expect(getInvoiceSourceLabel("dhw-cli", "cs-CZ")).toBe("CLI dhw");
   expect(getInvoiceSourceLabel("legacy", "en-US")).toBe("Legacy / unknown");
+  expect(getInvoiceSourceLabel("pass-purchase", "en-US")).toBe(
+    "Entry pack purchase"
+  );
+  expect(getInvoiceSourceLabel("pass-purchase", "cs-CZ")).toBe(
+    "Nákup balíčku vstupů"
+  );
 });
 
 test("explains a rejected customer in the route locale", () => {

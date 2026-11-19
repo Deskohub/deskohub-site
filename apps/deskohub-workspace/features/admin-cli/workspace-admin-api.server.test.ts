@@ -1691,6 +1691,47 @@ describe("invoice cancellation and archive endpoints", () => {
     ]);
   });
 
+  test("encodes pass invoices for clients of the existing v1 invoice schema", async () => {
+    const invoices = invoicesWith({
+      list: () =>
+        Effect.succeed({
+          items: [
+            {
+              id: invoiceId,
+              invoiceNumber: "WS-2026-000001",
+              issuedAt: "2026-11-15T10:00:00Z",
+              customerId:
+                AdministrationDotyposCustomerId.make("synthetic-buyer"),
+              customerName: "Synthetic buyer",
+              reservationId: null,
+              total: "1150",
+              currency: "CZK",
+              paymentStatus: "paid",
+              source: "pass-purchase",
+              actor: null,
+              delivery: { customer: "accepted", internal: "accepted" },
+              needsAttention: false,
+              cancellation: null,
+              archivedAt: null,
+              replacesInvoiceId: null,
+              replacedByInvoiceId: null,
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 50,
+          pageCount: 1,
+        }),
+    });
+
+    const result = await callAdministrationApi(
+      (client) => client.listInvoices({ query: {} }),
+      { invoices }
+    );
+
+    expect(result.items.map(({ source }) => source)).toEqual(["legacy"]);
+  });
+
   test("cancels an invoice as the caller with the confirmations sent", async () => {
     const cancellations: unknown[] = [];
     const result = {

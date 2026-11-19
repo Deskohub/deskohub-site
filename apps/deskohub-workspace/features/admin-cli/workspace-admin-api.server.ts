@@ -27,7 +27,10 @@ import {
   StandaloneAccessCodeAdministration,
   type StandaloneAccessCodeCreationError,
 } from "@/features/access-codes";
-import { InvoiceAdministrationService } from "@/features/accounting/admin/invoice-administration.service";
+import {
+  type InvoiceAdministrationListItem,
+  InvoiceAdministrationService,
+} from "@/features/accounting/admin/invoice-administration.service";
 import { InvoiceAdministrationNotFoundError } from "@/features/accounting/admin/invoice-administration-identifier";
 import type { InvoiceArchiveError } from "@/features/accounting/invoice-archive";
 import type { InvoiceCancellationError } from "@/features/accounting/invoice-cancellation";
@@ -465,12 +468,21 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
         )
       )
       .handle("listInvoices", ({ query }) =>
-        invoices.list(query).pipe(mapServiceFailure)
+        invoices.list(query).pipe(
+          Effect.map((page) => ({
+            ...page,
+            items: page.items.map(toV1Invoice),
+          })),
+          mapServiceFailure
+        )
       )
       .handle("getInvoice", ({ params }) =>
         invoices
           .get(params.invoiceId, { includeArchived: true })
-          .pipe(mapAdministrationApiFailure(mapInvoiceReadFailure))
+          .pipe(
+            Effect.map(toV1Invoice),
+            mapAdministrationApiFailure(mapInvoiceReadFailure)
+          )
       )
       .handle("getInvoicePdf", ({ params }) =>
         invoices.getPdf(params.invoiceId, { includeArchived: true }).pipe(
@@ -706,6 +718,17 @@ export const CliSessionAdministrationAuthenticationLive = Layer.effect(
 );
 
 type InvoiceAdministration = typeof InvoiceAdministrationService.Service;
+
+// Released v1 clients validate a closed set of invoice sources.
+const toV1Invoice = <
+  Invoice extends Pick<InvoiceAdministrationListItem, "source">,
+>(
+  invoice: Invoice
+) => ({
+  ...invoice,
+  source:
+    invoice.source === "pass-purchase" ? ("legacy" as const) : invoice.source,
+});
 
 const mapInvoiceReadFailure = (
   cause: Effect.Error<ReturnType<InvoiceAdministration["get" | "getPdf"]>>

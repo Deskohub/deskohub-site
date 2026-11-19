@@ -19,6 +19,7 @@ export const getInvoiceSourceLabel = (
   ({
     "reservation-request": m.accountingInvoiceSourceReservationRequest,
     "post-order-link": m.accountingInvoiceSourcePostOrderLink,
+    "pass-purchase": m.accountingInvoiceSourcePassPurchase,
     "admin-ui": m.accountingInvoiceSourceAdminUi,
     "dhw-cli": m.accountingInvoiceSourceDhwCli,
     assistant: m.accountingInvoiceSourceAssistant,

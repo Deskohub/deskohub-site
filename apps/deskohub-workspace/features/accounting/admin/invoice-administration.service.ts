@@ -37,6 +37,7 @@ import {
   type InvoiceBuyer,
   invoiceBuyerSchema,
   invoiceNumberSchema,
+  isEntryPackInvoiceDocument,
   isLineItemInvoiceDocument,
   isManualInvoiceDocument,
   makeManualInvoiceDocument,
@@ -167,6 +168,7 @@ type InvoiceAdministrationDelivery = Readonly<
 >;
 
 type InvoiceAdministrationSource =
+  | "pass-purchase"
   | "reservation-request"
   | "post-order-link"
   | "admin-ui"
@@ -1140,10 +1142,9 @@ const toListItem = (
     total: total.amount,
     currency: total.currency,
     paymentStatus: getInvoicePaymentStatus(document, today),
-    source:
-      document.provenance && "source" in document.provenance
-        ? document.provenance.source
-        : "legacy",
+    source: isEntryPackInvoiceDocument(document)
+      ? "pass-purchase"
+      : (document.provenance?.source ?? "legacy"),
     actor: manual ? document.provenance.actor : null,
     delivery: { customer, internal },
     // A cancelled invoice's own email no longer needs attention; its
