@@ -14,7 +14,7 @@ import { useAppLocale } from "../../../../../src/i18n/locale-context";
 import { m } from "../../../../../src/i18n/messages";
 import {
   renderClosingStackHeader,
-  renderPaperStackHeader,
+  stackScreenOptions,
 } from "../../../../../src/ui/navigation";
 import { SplitPane } from "../../../../../src/ui/split-pane";
 import { useViewport } from "../../../../../src/ui/viewport";
@@ -53,7 +53,7 @@ export default function ReservationStatusRoute() {
                   },
                   navigation: { ...props.navigation, goBack: close },
                 })
-            : renderPaperStackHeader,
+            : stackScreenOptions(locale).header,
         }}
       />
       <SplitPane

@@ -21,7 +21,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { orderStatusHref } from "../../booking/booking-routes";
 import { AsyncView } from "../../customer-api/async-view";
@@ -35,6 +35,7 @@ import { Badge } from "../../ui/badge";
 import { Card } from "../../ui/card";
 import { Button } from "../../ui/controls";
 import { EmptyState } from "../../ui/empty-state";
+import { FocusedStatusBar } from "../../ui/focused-status-bar";
 import { Icon } from "../../ui/icon";
 import { ListGroup, SectionHeader } from "../../ui/list";
 import { Masthead } from "../../ui/masthead";
@@ -355,7 +356,7 @@ function ReservationsListView<E extends CustomerRequestFailure>({
   }
   const listSelection =
     selection ??
-    (canShowPreferred && isExpanded && preferred !== undefined
+    (canShowPreferred && isExpanded
       ? { orderId: preferred, onSelect: open }
       : undefined);
   const savedAt = Option.flatMap(value, (shown) => shown.savedAt);
@@ -408,11 +409,10 @@ function ReservationsListView<E extends CustomerRequestFailure>({
   );
   if (!canShowPreferred) return content;
   return (
-    <SplitPane
-      list={content}
-      enabled={preferred !== undefined}
-      collapsed="list"
-    >
+    <SplitPane list={content} collapsed="list">
+      {isExpanded && preferred === undefined && (
+        <FocusedStatusBar style="dark" />
+      )}
       {hasOpenedDetails && preferred !== undefined && (
         <OrderStatusScreen
           key={preferred}
@@ -728,8 +728,9 @@ function ReservationRow({
     ),
     onSome: (orderId) => (
       <Pressable
-        role={selection === undefined ? "link" : "button"}
-        accessibilityState={selection === undefined ? undefined : { selected }}
+        role="link"
+        aria-current={selected ? "page" : undefined}
+        aria-selected={selected && Platform.OS !== "web" ? true : undefined}
         onPress={() => (selection?.onSelect ?? open)(orderId)}
         style={({ pressed }) => [
           styles.row,
