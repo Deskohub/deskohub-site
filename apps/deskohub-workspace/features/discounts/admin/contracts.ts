@@ -1,10 +1,13 @@
 import {
   type AdministrationCustomerVoucherCreateInput,
+  AdministrationDiscountCodeCreateInput,
   type AdministrationDiscountCodeUpdateInput,
+  AdministrationDiscountDefinitionInput,
+  AdministrationDiscountMutation,
+  AdministrationDiscountUpdateInput,
   type AdministrationExistingDiscountCodeCreateInput,
   type AdministrationVoucherCreateInput,
   type AdministrationVoucherUpdateInput,
-  makeAdministrationDiscountContracts,
 } from "@deskohub/workspace-admin-api";
 import { Schema } from "effect";
 import {
@@ -12,22 +15,61 @@ import {
   workspaceProductTargetSchema,
 } from "../product-target";
 
-const {
-  AdministrationDiscountDefinitionInput,
-  AdministrationDiscountUpdateInput,
-  AdministrationDiscountCodeCreateInput,
-  AdministrationCustomerDiscountCodeCreateInput,
-  AdministrationDiscountMutation,
-} = makeAdministrationDiscountContracts(
-  Schema.NonEmptyArray(workspaceProductTargetSchema).check(
-    Schema.makeFilter(findWorkspaceProductTargetsIssue)
-  )
+const discountProducts = Schema.NonEmptyArray(
+  workspaceProductTargetSchema
+).check(Schema.makeFilter(findWorkspaceProductTargetsIssue));
+
+const discountDefinition = Schema.Struct({
+  ...AdministrationDiscountDefinitionInput.fields,
+  products: discountProducts,
+});
+
+// Tag fresh unions so the released v1 schemas are left untouched.
+const v1Selections = Schema.Union(
+  AdministrationDiscountCodeCreateInput.fields.discount.members
+).pipe(Schema.toTaggedUnion("kind")).cases;
+
+const discountSelection = Schema.Union(
+  Object.values({
+    ...v1Selections,
+    new: Schema.Struct({
+      ...v1Selections.new.fields,
+      discount: discountDefinition,
+    }),
+  })
 );
 
-export { AdministrationDiscountMutation as discountAdminMutationSchema };
+const v1Mutations = Schema.Union(AdministrationDiscountMutation.members).pipe(
+  Schema.toTaggedUnion("kind")
+).cases;
+
+export const discountAdminMutationSchema = Schema.Union(
+  Object.values({
+    ...v1Mutations,
+    "create-discount": Schema.Struct({
+      ...v1Mutations["create-discount"].fields,
+      discount: discountDefinition,
+    }),
+    "update-discount": Schema.Struct({
+      ...v1Mutations["update-discount"].fields,
+      discount: Schema.Struct({
+        ...AdministrationDiscountUpdateInput.fields,
+        products: discountProducts,
+      }),
+    }),
+    "create-code": Schema.Struct({
+      ...v1Mutations["create-code"].fields,
+      discount: discountSelection,
+    }),
+    "create-customer-code": Schema.Struct({
+      ...v1Mutations["create-customer-code"].fields,
+      discount: discountSelection,
+    }),
+  })
+);
 
 export const discountAdminMutationStandardSchema = Schema.toStandardSchemaV1(
-  AdministrationDiscountMutation,
+  discountAdminMutationSchema,
   {
     parseOptions: {
       errors: "all",
@@ -36,16 +78,26 @@ export const discountAdminMutationStandardSchema = Schema.toStandardSchemaV1(
   }
 );
 
+export type DiscountAdminMutation = typeof discountAdminMutationSchema.Type;
+type DiscountMutation<Kind extends DiscountAdminMutation["kind"]> = Extract<
+  DiscountAdminMutation,
+  { readonly kind: Kind }
+>;
+
 export type CreateDiscountAdminInput =
-  typeof AdministrationDiscountDefinitionInput.Type;
+  DiscountMutation<"create-discount">["discount"];
 export type UpdateDiscountAdminInput =
-  typeof AdministrationDiscountUpdateInput.Type;
+  DiscountMutation<"update-discount">["discount"];
 export type CreateDiscountCodeAdminInput =
   typeof AdministrationExistingDiscountCodeCreateInput.Type;
-export type CreateManagedDiscountCodeAdminInput =
-  typeof AdministrationDiscountCodeCreateInput.Type;
-export type CreateCustomerDiscountCodeAdminInput =
-  typeof AdministrationCustomerDiscountCodeCreateInput.Type;
+export type CreateManagedDiscountCodeAdminInput = Omit<
+  DiscountMutation<"create-code">,
+  "kind"
+>;
+export type CreateCustomerDiscountCodeAdminInput = Omit<
+  DiscountMutation<"create-customer-code">,
+  "kind"
+>;
 export type UpdateDiscountCodeAdminInput =
   typeof AdministrationDiscountCodeUpdateInput.Type;
 export type CreateVoucherAdminInput =
@@ -54,4 +106,3 @@ export type CreateCustomerVoucherAdminInput =
   typeof AdministrationCustomerVoucherCreateInput.Type;
 export type UpdateVoucherAdminInput =
   typeof AdministrationVoucherUpdateInput.Type;
-export type DiscountAdminMutation = typeof AdministrationDiscountMutation.Type;

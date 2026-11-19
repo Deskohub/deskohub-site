@@ -63,6 +63,42 @@ describe("discount administration form input", () => {
     ).toHaveProperty("issues");
   });
 
+  test("accepts pass targets in discount updates and inline code discounts", () => {
+    const discount = createdDiscount(
+      percentageDefinition({ products: ["entry-pack"] })
+    );
+    const code = {
+      code: "PACK10",
+      enabled: true,
+      validFrom: null,
+      validUntil: null,
+      maxUses: null,
+    };
+    const selection = { kind: "new", discount };
+    const mutations = [
+      {
+        kind: "update-discount",
+        discount: { ...discount, id: "01980000-0000-7000-8000-000000000001" },
+      },
+      { kind: "create-code", code, discount: selection },
+      {
+        kind: "create-customer-code",
+        customerId: "synthetic-customer",
+        code,
+        discount: selection,
+      },
+    ];
+
+    for (const mutation of mutations) {
+      expect(
+        discountAdminMutationStandardSchema["~standard"].validate(mutation)
+      ).toEqual({ value: mutation });
+      expect(
+        Schema.decodeUnknownOption(AdministrationDiscountMutation)(mutation)
+      ).toEqual(Option.none());
+    }
+  });
+
   test("forms no discount without a product target", () => {
     expect(
       toCreateDiscountInput(percentageDefinition({ products: [] }))

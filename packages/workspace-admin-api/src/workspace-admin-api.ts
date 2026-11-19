@@ -2308,6 +2308,21 @@ const administrationDiscountProducts = Schema.NonEmptyArray(
   })
 );
 
+export const AdministrationDiscountDefinitionInput = Schema.Struct({
+  labels: AdministrationDiscountLabels,
+  adjustment: administrationDiscountAdjustmentInput,
+  products: administrationDiscountProducts,
+});
+export type AdministrationDiscountDefinitionInput =
+  typeof AdministrationDiscountDefinitionInput.Type;
+
+export const AdministrationDiscountUpdateInput = Schema.Struct({
+  id: AdministrationStoredDiscountId,
+  ...AdministrationDiscountDefinitionInput.fields,
+});
+export type AdministrationDiscountUpdateInput =
+  typeof AdministrationDiscountUpdateInput.Type;
+
 const administrationDiscountCodeWindow = Schema.makeFilter<{
   readonly validFrom: string | null;
   readonly validUntil: string | null;
@@ -2391,6 +2406,31 @@ const administrationVoucherCredit = AdministrationMoney.check(
   )
 );
 
+const AdministrationDiscountSelection = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("existing"),
+    discountId: AdministrationStoredDiscountId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("new"),
+    discount: AdministrationDiscountDefinitionInput,
+  }),
+]);
+
+export const AdministrationDiscountCodeCreateInput = Schema.Struct({
+  code: AdministrationDiscountCodeConfigurationInput,
+  discount: AdministrationDiscountSelection,
+});
+export type AdministrationDiscountCodeCreateInput =
+  typeof AdministrationDiscountCodeCreateInput.Type;
+
+export const AdministrationCustomerDiscountCodeCreateInput = Schema.Struct({
+  customerId: AdministrationDotyposCustomerId,
+  ...AdministrationDiscountCodeCreateInput.fields,
+});
+export type AdministrationCustomerDiscountCodeCreateInput =
+  typeof AdministrationCustomerDiscountCodeCreateInput.Type;
+
 export const AdministrationDiscountCodeUpdateInput = Schema.Struct({
   id: AdministrationDiscountCodeId,
   discountId: AdministrationStoredDiscountId,
@@ -2449,149 +2489,85 @@ export const ADMINISTRATION_DISCOUNT_MUTATION_KINDS = [
   "set-customer-discount-group",
 ] as const;
 
-/** Builds the discount mutation inputs for a surface's supported products. */
-export const makeAdministrationDiscountContracts = <
-  Products extends Schema.Schema<readonly [unknown, ...unknown[]]>,
->(
-  products: Products
-) => {
-  const AdministrationDiscountDefinitionInput = Schema.Struct({
-    labels: AdministrationDiscountLabels,
-    adjustment: administrationDiscountAdjustmentInput,
-    products,
-  });
-
-  const AdministrationDiscountUpdateInput = Schema.Struct({
+export const AdministrationDiscountMutation = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("create-discount"),
+    discount: AdministrationDiscountDefinitionInput,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("update-discount"),
+    discount: AdministrationDiscountUpdateInput,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("delete-discount"),
     id: AdministrationStoredDiscountId,
-    ...AdministrationDiscountDefinitionInput.fields,
-  });
-
-  const AdministrationDiscountSelection = Schema.Union([
-    Schema.Struct({
-      kind: Schema.Literal("existing"),
-      discountId: AdministrationStoredDiscountId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("new"),
-      discount: AdministrationDiscountDefinitionInput,
-    }),
-  ]);
-
-  const AdministrationDiscountCodeCreateInput = Schema.Struct({
-    code: AdministrationDiscountCodeConfigurationInput,
-    discount: AdministrationDiscountSelection,
-  });
-
-  const AdministrationCustomerDiscountCodeCreateInput = Schema.Struct({
-    customerId: AdministrationDotyposCustomerId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("create-code"),
     ...AdministrationDiscountCodeCreateInput.fields,
-  });
-
-  const AdministrationDiscountMutation = Schema.Union([
-    Schema.Struct({
-      kind: Schema.Literal("create-discount"),
-      discount: AdministrationDiscountDefinitionInput,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("update-discount"),
-      discount: AdministrationDiscountUpdateInput,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("delete-discount"),
-      id: AdministrationStoredDiscountId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("create-code"),
-      ...AdministrationDiscountCodeCreateInput.fields,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("create-customer-code"),
-      ...AdministrationCustomerDiscountCodeCreateInput.fields,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("update-code"),
-      code: AdministrationDiscountCodeUpdateInput,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("delete-code"),
-      id: AdministrationDiscountCodeId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("add-code-customer"),
-      codeId: AdministrationDiscountCodeId,
-      customerId: AdministrationDotyposCustomerId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("remove-code-customer"),
-      codeId: AdministrationDiscountCodeId,
-      customerId: AdministrationDotyposCustomerId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("make-code-unrestricted"),
-      codeId: AdministrationDiscountCodeId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("create-voucher"),
-      voucher: AdministrationVoucherCreateInput,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("create-customer-voucher"),
-      voucher: AdministrationCustomerVoucherCreateInput,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("update-voucher"),
-      voucher: AdministrationVoucherUpdateInput,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("delete-voucher"),
-      id: AdministrationVoucherId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("add-voucher-customer"),
-      voucherId: AdministrationVoucherId,
-      customerId: AdministrationDotyposCustomerId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("remove-voucher-customer"),
-      voucherId: AdministrationVoucherId,
-      customerId: AdministrationDotyposCustomerId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("make-voucher-unrestricted"),
-      voucherId: AdministrationVoucherId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("set-customer-discount-group"),
-      customerId: AdministrationDotyposCustomerId,
-      discountGroupId: Schema.NullOr(AdministrationDotyposDiscountGroupId),
-    }),
-  ]);
-
-  return {
-    AdministrationDiscountDefinitionInput,
-    AdministrationDiscountUpdateInput,
-    AdministrationDiscountCodeCreateInput,
-    AdministrationCustomerDiscountCodeCreateInput,
-    AdministrationDiscountMutation,
-  };
-};
-
-export const {
-  AdministrationDiscountDefinitionInput,
-  AdministrationDiscountUpdateInput,
-  AdministrationDiscountCodeCreateInput,
-  AdministrationCustomerDiscountCodeCreateInput,
-  AdministrationDiscountMutation,
-} = makeAdministrationDiscountContracts(administrationDiscountProducts);
-
-export type AdministrationDiscountDefinitionInput =
-  typeof AdministrationDiscountDefinitionInput.Type;
-export type AdministrationDiscountUpdateInput =
-  typeof AdministrationDiscountUpdateInput.Type;
-export type AdministrationDiscountCodeCreateInput =
-  typeof AdministrationDiscountCodeCreateInput.Type;
-export type AdministrationCustomerDiscountCodeCreateInput =
-  typeof AdministrationCustomerDiscountCodeCreateInput.Type;
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("create-customer-code"),
+    ...AdministrationCustomerDiscountCodeCreateInput.fields,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("update-code"),
+    code: AdministrationDiscountCodeUpdateInput,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("delete-code"),
+    id: AdministrationDiscountCodeId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("add-code-customer"),
+    codeId: AdministrationDiscountCodeId,
+    customerId: AdministrationDotyposCustomerId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("remove-code-customer"),
+    codeId: AdministrationDiscountCodeId,
+    customerId: AdministrationDotyposCustomerId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("make-code-unrestricted"),
+    codeId: AdministrationDiscountCodeId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("create-voucher"),
+    voucher: AdministrationVoucherCreateInput,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("create-customer-voucher"),
+    voucher: AdministrationCustomerVoucherCreateInput,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("update-voucher"),
+    voucher: AdministrationVoucherUpdateInput,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("delete-voucher"),
+    id: AdministrationVoucherId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("add-voucher-customer"),
+    voucherId: AdministrationVoucherId,
+    customerId: AdministrationDotyposCustomerId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("remove-voucher-customer"),
+    voucherId: AdministrationVoucherId,
+    customerId: AdministrationDotyposCustomerId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("make-voucher-unrestricted"),
+    voucherId: AdministrationVoucherId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("set-customer-discount-group"),
+    customerId: AdministrationDotyposCustomerId,
+    discountGroupId: Schema.NullOr(AdministrationDotyposDiscountGroupId),
+  }),
+]);
 export type AdministrationDiscountMutation =
   typeof AdministrationDiscountMutation.Type;
 

@@ -824,7 +824,6 @@ export {
   type GrantedCliSession as GrantedCliSessionType,
   invoicesMinimumDhwVersion,
   isStandaloneAccessCodeWindowWithinContractDuration,
-  makeAdministrationDiscountContracts,
   RenameCliSession,
   type RenameCliSession as RenameCliSessionType,
   reservationAccessMutationOperations,
