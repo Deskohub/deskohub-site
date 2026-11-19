@@ -51,8 +51,17 @@ const optionalOptIn = toEnvironmentSchema(
 );
 type RuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 
-export const e2ePaymentProviderSchema = Schema.Literals(["nexi", "mock"]);
-export type E2EPaymentProvider = typeof e2ePaymentProviderSchema.Type;
+export const e2ePaymentProviderModeSchema = Schema.Literals([
+  "nexi",
+  "mock",
+  "fallback",
+]);
+type E2EPaymentProviderMode = typeof e2ePaymentProviderModeSchema.Type;
+export type E2EPaymentProvider = Exclude<E2EPaymentProviderMode, "fallback">;
+
+export const initialE2EPaymentProvider = (
+  mode: E2EPaymentProviderMode
+): E2EPaymentProvider => (mode === "fallback" ? "nexi" : mode);
 
 const e2eEnvironmentSchema = Schema.Struct({
   CI: optionalNonEmptyString,
@@ -93,7 +102,7 @@ const e2eEnvironmentSchema = Schema.Struct({
   WORKSPACE_E2E_BASE_URL: url,
   WORKSPACE_E2E_ALLOCATION_SHARD: optionalAllocationShard,
   WORKSPACE_E2E_PAYMENT_PROVIDER: toEnvironmentSchema(
-    e2ePaymentProviderSchema.pipe(
+    e2ePaymentProviderModeSchema.pipe(
       Schema.withDecodingDefault(Effect.succeed("nexi"))
     )
   ),

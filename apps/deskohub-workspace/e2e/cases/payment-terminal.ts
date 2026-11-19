@@ -150,7 +150,10 @@ export const assertPaymentTerminalPath = ({
         execute: validateReconciledTerminalRow({
           orderId,
           paymentProvider: failed.provider,
-          scenario,
+          scenario: {
+            ...scenario,
+            ...paymentTerminalContract(failed.provider, scenario.trigger),
+          },
           state,
         }),
         id: `validate-${scenario.state}-payment-state`,

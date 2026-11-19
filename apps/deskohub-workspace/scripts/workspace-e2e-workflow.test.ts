@@ -224,9 +224,11 @@ describe("workspace E2E workflow", () => {
   test.each([
     ["repository_dispatch", undefined, undefined, "nexi"],
     ["repository_dispatch", undefined, "mock", "mock"],
+    ["repository_dispatch", undefined, "fallback", "fallback"],
     ["workflow_dispatch", undefined, "mock", "mock"],
     ["workflow_dispatch", "mock", "nexi", "mock"],
     ["workflow_dispatch", "nexi", "mock", "nexi"],
+    ["workflow_dispatch", "fallback", "nexi", "fallback"],
   ] as const)(
     "selects the expected payment provider for the trigger",
     (event, manualProvider, configuredProvider, expected) => {

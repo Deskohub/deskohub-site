@@ -212,7 +212,9 @@ export const replayPaymentWebhook = (
     const operation = `replay ${providerName} webhook`;
     yield* tryWorkspaceE2ESync("assert payment webhook replay row", () => {
       assert(
-        config.paymentProvider === paymentProvider,
+        (paymentProvider === "nexi" || paymentProvider === "mock") &&
+          (config.paymentProvider === "fallback" ||
+            config.paymentProvider === paymentProvider),
         "webhook replay provider mismatch"
       );
       assert(

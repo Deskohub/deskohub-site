@@ -15,7 +15,7 @@ import {
 } from "../browser";
 import type { E2EBrowserSession } from "../browser-session";
 import type { WorkspaceE2EConfig } from "../config";
-import type { E2EPaymentProvider } from "../e2e-env";
+import { type E2EPaymentProvider, initialE2EPaymentProvider } from "../e2e-env";
 import {
   failWorkspaceE2E,
   toWorkspaceE2EError,
@@ -40,6 +40,7 @@ import {
   addMockPaymentUrlRedactions,
   readMockHostedPaymentUrl,
 } from "./mock-payment-url";
+import type { NexiHostedNavigation } from "./nexi-hosted-page-ownership";
 import {
   prepareReservationForm,
   type ReservationFormPreparation,
@@ -552,6 +553,7 @@ const formatReservationStartDiagnostics = (
 export type HostedPaymentPage = {
   readonly checkoutPage: Page;
   readonly checkoutPageUrl: string;
+  readonly nexiNavigation?: NexiHostedNavigation;
   readonly page: Page;
   readonly provider: E2EPaymentProvider;
   readonly url: string;
@@ -560,13 +562,15 @@ export type HostedPaymentPage = {
 /** Waits for the selected hosted page, leaving its tab active. */
 export const submitPaymentAndWaitForHostedPage = ({
   config,
+  paymentProvider = initialE2EPaymentProvider(config.paymentProvider),
   session,
 }: {
   config: WorkspaceE2EConfig;
+  paymentProvider?: E2EPaymentProvider;
   session: E2EBrowserSession;
 }): Effect.Effect<HostedPaymentPage, WorkspaceE2EError> =>
   Effect.gen(function* () {
-    const { timeouts, paymentProvider } = config;
+    const { timeouts } = config;
     const checkoutPageUrl = yield* readPageUrl(session);
     if (!checkoutPageUrl) {
       return yield* failWorkspaceE2E("checkout pay page URL is unavailable", {

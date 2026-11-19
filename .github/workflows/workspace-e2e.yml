@@ -21,13 +21,14 @@ on:
         default: false
         type: boolean
       payment_provider:
-        description: Payment provider expected on the preview
+        description: Payment provider mode expected on the preview
         type: choice
         default: repository-default
         options:
           - repository-default
           - nexi
           - mock
+          - fallback
       review_screenshots:
         description: Capture synthetic PR review screenshots into the review artifact
         required: false

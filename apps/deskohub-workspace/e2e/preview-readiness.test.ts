@@ -11,7 +11,7 @@ import {
 } from "./preview-readiness";
 import { workspaceE2ETimeouts } from "./timeouts";
 
-test.each(["nexi", "mock"] as const)(
+test.each(["nexi", "mock", "fallback"] as const)(
   "checks %s readiness on the exact protected preview origin",
   async (paymentProvider) => {
     const requests: Array<{ headers: Headers; url: string }> = [];
@@ -45,6 +45,10 @@ test.each(["nexi", "mock"] as const)(
 
 test.each([
   [Response.json({ paymentProvider: "mock" }), "is mock, expected nexi"],
+  [
+    Response.json({ paymentProvider: "fallback" }),
+    "is fallback, expected nexi",
+  ],
   [
     Response.json({ paymentProvider: "unsupported" }),
     "recognized payment provider",

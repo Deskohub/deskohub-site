@@ -1,7 +1,7 @@
 import { Effect, Option, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import type { WorkspaceE2EConfig } from "./config";
-import { e2ePaymentProviderSchema } from "./e2e-env";
+import { e2ePaymentProviderModeSchema } from "./e2e-env";
 import {
   toWorkspaceE2EError,
   type WorkspaceE2EError,
@@ -12,7 +12,7 @@ import { makeUrl } from "./urls";
 
 const previewAuthSessionCacheControl = "private, no-store";
 const decodePreviewPaymentProvider = Schema.decodeUnknownOption(
-  Schema.Struct({ paymentProvider: e2ePaymentProviderSchema })
+  Schema.Struct({ paymentProvider: e2ePaymentProviderModeSchema })
 );
 
 export const assertPreviewEndpointsReady = (

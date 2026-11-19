@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { HttpClient } from "effect/http";
 import { meetingRoomEmailDetails } from "@/emails/_components/reservation-email-details";
 import { renderWorkspaceEmailDetailsText } from "@/emails/workspace-email-detail";
+import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import { isMeetingRoomWholeDayReservationDuration } from "@/features/reservation/meeting-room-reservation-duration";
 import {
   formatReservationDisplayDate,
@@ -34,6 +35,10 @@ import {
   parseNexiBuildFailures,
 } from "../checkout/nexi-build-api";
 import {
+  leaveNexiPageForMockFallback,
+  observeNexiHostedNavigation,
+} from "../checkout/nexi-hosted-page-ownership";
+import {
   classifyNexiSandboxRejection,
   decideNexiSandboxRetry,
   type NexiSandboxRejection,
@@ -54,6 +59,7 @@ import { reservationStatusIsolationStep } from "../checkout/reservation-status-i
 import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
 import { WorkspaceE2EHostedPaymentPermitService } from "../coordination/hosted-payment-permit.service";
 import type { WorkspaceE2EProviderVerificationPermitService } from "../coordination/provider-verification-permit.service";
+import { type E2EPaymentProvider, initialE2EPaymentProvider } from "../e2e-env";
 import { tryWorkspaceE2ESync, type WorkspaceE2EError } from "../errors";
 import {
   type ExpectedDiscountApplication,
@@ -349,10 +355,14 @@ export const completeHostedCheckoutPayment = (
     return yield* hostedPaymentPermit.withPermit(
       "hosted checkout payment",
       Effect.gen(function* () {
-        const first = yield* runHostedPaymentAttempt(options);
+        const { config, runStep } = options;
+        const paymentProvider = initialE2EPaymentProvider(
+          config.paymentProvider
+        );
+        const first = yield* runHostedPaymentAttempt(options, paymentProvider);
         if (first.kind === "completed") return first.row;
 
-        const restarted = yield* options.runStep({
+        const restarted = yield* runStep({
           execute: restartSandboxRejectedPayment(options, first),
           id: "restart-sandbox-rejected-payment",
           timeoutMs:
@@ -362,9 +372,28 @@ export const completeHostedCheckoutPayment = (
         });
         if (!restarted) return yield* first.error;
 
-        const retry = yield* runHostedPaymentAttempt(options, first.row);
-        if (retry.kind === "sandbox-rejected") return yield* retry.error;
-        return retry.row;
+        const retry = yield* runHostedPaymentAttempt(options, "nexi", {
+          row: first.row,
+          suffix: "-retry",
+        });
+        if (retry.kind === "completed") return retry.row;
+        if (config.paymentProvider !== "fallback") return yield* retry.error;
+
+        const fellBack = yield* runStep({
+          execute: restartSandboxRejectedPayment(options, retry, true),
+          id: "restart-sandbox-rejected-payment-with-mock",
+          timeoutMs:
+            config.timeouts.datasource +
+            config.timeouts.browserAction +
+            config.timeouts.browserNavigation,
+        });
+        if (!fellBack) return yield* retry.error;
+
+        const mock = yield* runHostedPaymentAttempt(options, "mock", {
+          row: retry.row,
+          suffix: "-mock-fallback",
+        });
+        return mock.kind === "completed" ? mock.row : yield* mock.error;
       })
     );
   });
@@ -379,14 +408,26 @@ const runHostedPaymentAttempt = (
     openSession,
     state,
   }: HostedCheckoutPaymentOptions,
-  rejectedRow?: CheckoutRow
+  paymentProvider: E2EPaymentProvider,
+  restart?: {
+    readonly row: CheckoutRow;
+    readonly suffix: "-retry" | "-mock-fallback";
+  }
 ): Effect.Effect<HostedPaymentAttempt, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {
-    const stepId = (id: string) => (rejectedRow ? `${id}-retry` : id);
+    const stepId = (id: string) => `${id}${restart?.suffix ?? ""}`;
     const hostedPaymentPage = yield* runStep({
-      execute: Effect.flatMap(openSession, (browser) =>
-        submitPaymentAndWaitForHostedPage({ config, session: browser })
-      ),
+      execute: Effect.flatMap(openSession, (browser) => {
+        const launch = submitPaymentAndWaitForHostedPage({
+          config,
+          paymentProvider,
+          session: browser,
+        });
+        return config.paymentProvider === "fallback" &&
+          restart?.suffix === "-retry"
+          ? observeNexiHostedNavigation(browser, launch)
+          : launch;
+      }),
       id: stepId("start-checkout-payment"),
       timeoutMs: config.timeouts.providerTransition,
     });
@@ -399,9 +440,9 @@ const runHostedPaymentAttempt = (
         timeoutMs: config.timeouts.browserAction,
       }).pipe(
         Effect.tap((value) =>
-          rejectedRow
+          restart
             ? tryWorkspaceE2ESync("assert fresh payment attempt", () =>
-                assertFreshPaymentAttempt(rejectedRow, value)
+                assertFreshPaymentAttempt(restart.row, value)
               )
             : Effect.void
         )
@@ -473,7 +514,8 @@ export const assertFreshPaymentAttempt = (
 // retries the payment from the order's status page, whose Pay page starts a fresh attempt and Nexi order.
 const restartSandboxRejectedPayment = (
   { config, orderId, openSession, state }: HostedCheckoutPaymentOptions,
-  rejected: Extract<HostedPaymentAttempt, { kind: "sandbox-rejected" }>
+  rejected: Extract<HostedPaymentAttempt, { kind: "sandbox-rejected" }>,
+  fallback = false
 ): Effect.Effect<boolean, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {
     const browser = yield* openSession;
@@ -481,6 +523,7 @@ const restartSandboxRejectedPayment = (
     const decision = decideNexiSandboxRetry({
       authorizationRequested: rejected.authorizationRequested,
       error: rejected.error,
+      requireNoAuthorization: fallback,
     });
     const nexiCodes = formatNexiBuildFailureCodes(
       parseNexiBuildFailures(networkLog)
@@ -494,25 +537,45 @@ const restartSandboxRejectedPayment = (
     const paymentAttemptId = rejected.row.payment_attempt_id;
     if (!paymentAttemptId) return false;
 
-    log(
-      `Nexi sandbox rejected the hosted payment (${rejected.rejection.diagnosticCode}; Nexi codes: ${nexiCodes}); restarting once with a fresh payment attempt`
-    );
-    state.checkoutRow = yield* retireRejectedAttempt(orderId, paymentAttemptId);
-
     // Paying an ended payment again is a payment retry: its status page's
     // "Try payment again" opens the same order's Pay page.
     const statusPageUrl = yield* getOrderStatusPageUrl(
       rejected.hostedPaymentPage.checkoutPageUrl,
       orderId
     );
-    yield* leaveRejectedHostedPayment({
-      config,
-      hostedPaymentPage: {
-        ...rejected.hostedPaymentPage,
-        checkoutPageUrl: statusPageUrl,
-      },
-      session: browser,
-    });
+    log(
+      `Nexi sandbox rejected the hosted payment (${rejected.rejection.diagnosticCode}; Nexi codes: ${nexiCodes}); ${fallback ? "checking whether the case can retry with mock" : "restarting once with a fresh Nexi attempt"}`
+    );
+    if (fallback) {
+      yield* leaveNexiPageForMockFallback({
+        hostedPaymentPage: rejected.hostedPaymentPage,
+        row: rejected.row,
+        session: browser,
+        statusPageUrl,
+        timeouts: config.timeouts,
+      });
+      state.checkoutRow = yield* retireRejectedAttempt(
+        orderId,
+        paymentAttemptId,
+        NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE
+      );
+      yield* openPage(browser, config, statusPageUrl, {
+        timeoutMs: config.timeouts.browserNavigation,
+      });
+    } else {
+      state.checkoutRow = yield* retireRejectedAttempt(
+        orderId,
+        paymentAttemptId
+      );
+      yield* leaveRejectedHostedPayment({
+        config,
+        hostedPaymentPage: {
+          ...rejected.hostedPaymentPage,
+          checkoutPageUrl: statusPageUrl,
+        },
+        session: browser,
+      });
+    }
     yield* retryPaymentInPlace({
       label: "sandbox-rejected payment",
       orderId,
