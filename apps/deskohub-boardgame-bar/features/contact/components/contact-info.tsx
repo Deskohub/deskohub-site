@@ -5,7 +5,6 @@ import { Card, CardContent } from "@/shared/components/ui/card";
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/shared/components/ui/tooltip";
 import { siteConstants } from "@/shared/utils/constants";
@@ -103,47 +102,54 @@ export function ContactInfo() {
           </Link>
         </Card>
 
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Card className="bg-gray-900 border-gray-700 relative cursor-help">
-                <CardContent className="p-6 flex items-start space-x-4">
-                  <Clock className="w-6 h-6 text-green-400 mt-1" />
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-white mb-2">
-                      {m["contact.hoursLabel"]()}
-                    </h3>
-                    <div className="text-gray-300 space-y-1">
-                      <div className="flex justify-between gap-2">
-                        <span>{m["contact.weekdays"]()}</span>
-                        <span>
-                          {m["contact.weekdayHours"]({
-                            hours: getWeekdayHours().formatted,
-                          })}
-                        </span>
-                      </div>
-                      <div className="flex justify-between gap-2">
-                        <span>{m["contact.weekend"]()}</span>
-                        <span>
-                          {m["contact.weekendHours"]({
-                            hours: getWeekendHours().formatted,
-                          })}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <HelpCircle className="w-4 h-4 text-gray-400 absolute top-4 right-4" />
-                </CardContent>
-              </Card>
-            </TooltipTrigger>
-            <TooltipContent
-              side="top"
-              className="max-w-xs bg-gray-800 border-gray-700 text-gray-100"
-            >
-              <p>{m["contact.hoursTooltip"]()}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Card className="bg-gray-900 border-gray-700 relative">
+          <CardContent className="p-6 flex items-start space-x-4">
+            <Clock className="w-6 h-6 text-green-400 mt-1" />
+            <div className="flex-1">
+              <h3
+                id="contact-opening-hours"
+                className="text-lg font-semibold text-white mb-2"
+              >
+                {m["contact.hoursLabel"]()}
+              </h3>
+              <div className="text-gray-300 space-y-1">
+                <div className="flex justify-between gap-2">
+                  <span>{m["contact.weekdays"]()}</span>
+                  <span>
+                    {m["contact.weekdayHours"]({
+                      hours: getWeekdayHours().formatted,
+                    })}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span>{m["contact.weekend"]()}</span>
+                  <span>
+                    {m["contact.weekendHours"]({
+                      hours: getWeekendHours().formatted,
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <Tooltip delay={200} toggleable type="description">
+              <TooltipTrigger
+                aria-labelledby="contact-opening-hours"
+                className="absolute inset-0 cursor-help rounded-lg"
+              >
+                <HelpCircle
+                  aria-hidden="true"
+                  className="w-4 h-4 text-gray-400 absolute top-4 right-4"
+                />
+              </TooltipTrigger>
+              <TooltipContent
+                side="top"
+                className="max-w-xs bg-gray-800 border-gray-700 text-gray-100"
+              >
+                <p>{m["contact.hoursTooltip"]()}</p>
+              </TooltipContent>
+            </Tooltip>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
