@@ -1,9 +1,6 @@
 import "server-only";
 
-import {
-  type DiscountOperations as DiscountOperationRegistry,
-  discountOperations,
-} from "@deskohub/workspace-admin-api";
+import { discountOperations } from "@deskohub/workspace-admin-api";
 import { Context, Effect, Layer } from "effect";
 import { administrationHref } from "@/features/administration/administration-href";
 import {
@@ -16,13 +13,27 @@ import {
 } from "@/features/administration/administration-operation-port";
 import { AccountRoleGrants } from "@/features/administrators/backend/account-role-grants.service";
 import { startCalendarDiscountSourceRefresh } from "./calendar-discount-source-maintenance.server";
-import type { DiscountAdminMutation } from "./contracts";
-import { DiscountAdministration } from "./discount-administration.service";
+import {
+  type DiscountAdminMutation,
+  discountAdminMutationSchema,
+} from "./contracts";
+import {
+  DiscountAdministration,
+  type DiscountTargetScope,
+} from "./discount-administration.service";
 import {
   type DiscountMutationFailure,
   toDiscountOperationError,
 } from "./discount-operation-errors";
 import { executeDiscountAdminMutation } from "./execute-discount-admin-mutation";
+
+const workspaceDiscountOperations = {
+  mutateDiscounts: {
+    ...discountOperations.mutateDiscounts,
+    input: discountAdminMutationSchema,
+  },
+};
+type DiscountOperationRegistry = typeof workspaceDiscountOperations;
 
 /**
  * Where a discount mutation records its request ID. The administration API
@@ -75,7 +86,9 @@ export const discountOperationSettlements = {
  * Builds the discount operation port from the discount administration, for
  * an adapter that holds the service itself.
  */
-export const makeDiscountOperations = Effect.gen(function* () {
+export const makeDiscountOperations = Effect.fnUntraced(function* (
+  targetScope: DiscountTargetScope
+) {
   const administration = yield* DiscountAdministration;
   const handlers: OperationHandlers<
     DiscountOperationRegistry,
@@ -83,13 +96,13 @@ export const makeDiscountOperations = Effect.gen(function* () {
     never
   > = {
     mutateDiscounts: (mutation) =>
-      executeDiscountAdminMutation(mutation).pipe(
+      executeDiscountAdminMutation(mutation, targetScope).pipe(
         Effect.provideService(DiscountAdministration, administration)
       ),
   };
   return yield* makeAdministrationOperationPort({
     group: "DiscountOperations",
-    operations: discountOperations,
+    operations: workspaceDiscountOperations,
     handlers,
     ledger: DiscountRequestLedger,
     toOperationError: toDiscountOperationError,
@@ -101,7 +114,7 @@ export class DiscountOperations extends Context.Service<
   DiscountOperations,
   AdministrationOperationPort<DiscountOperationRegistry, DiscountRequestLedger>
 >()("@deskohub-workspace/discounts/DiscountOperations") {
-  static Default = Layer.effect(this, makeDiscountOperations);
+  static Default = Layer.effect(this, makeDiscountOperations("all"));
 
   static Live = this.Default.pipe(
     Layer.provide(

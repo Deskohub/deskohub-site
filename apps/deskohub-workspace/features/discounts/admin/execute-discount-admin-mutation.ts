@@ -1,11 +1,14 @@
 import type { AdministrationDiscountMutationResultType } from "@deskohub/workspace-admin-api";
 import { Effect, Match } from "effect";
 import type { DiscountAdminMutation } from "./contracts";
-import { DiscountAdministration } from "./discount-administration.service";
+import {
+  DiscountAdministration,
+  type DiscountTargetScope,
+} from "./discount-administration.service";
 
 export const executeDiscountAdminMutation = Effect.fn(
   "DiscountAdministration.executeMutation"
-)(function* (input: DiscountAdminMutation) {
+)(function* (input: DiscountAdminMutation, targetScope: DiscountTargetScope) {
   const admin = yield* DiscountAdministration;
   const noCreatedIdResult: AdministrationDiscountMutationResultType = {
     kind: input.kind,
@@ -28,7 +31,10 @@ export const executeDiscountAdminMutation = Effect.fn(
           )
         ),
       "update-discount": ({ discount }) =>
-        Effect.as(admin.updateDiscount(discount), noCreatedIdResult),
+        Effect.as(
+          admin.updateDiscount(discount, targetScope),
+          noCreatedIdResult
+        ),
       "delete-discount": ({ id }) =>
         Effect.as(admin.deleteDiscount({ id }), noCreatedIdResult),
       "create-code": ({ code, discount, kind }) =>

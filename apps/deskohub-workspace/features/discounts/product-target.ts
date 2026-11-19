@@ -47,8 +47,19 @@ const reservationProductTargets = [
   { kind: "office" },
 ] as const satisfies readonly WorkspaceProductTarget[];
 
+const reservationProductFamilies = reservationProductTargets.map(
+  ({ kind }) => kind
+);
+
 export const workspaceReservationProductFamilies: readonly WorkspaceProductFamily[] =
-  reservationProductTargets.map(({ kind }) => kind);
+  reservationProductFamilies;
+
+export const isReservationProductTarget = (
+  target: WorkspaceProductTarget
+): target is Extract<
+  WorkspaceProductTarget,
+  { kind: (typeof reservationProductFamilies)[number] }
+> => reservationProductFamilies.some((kind) => target.kind === kind);
 
 /** Family targets, each covering every product of its family. */
 export const workspaceProductTargets = [

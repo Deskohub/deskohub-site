@@ -68,6 +68,7 @@ import {
   DiscountRequestLedger,
   makeDiscountOperations,
 } from "@/features/discounts/admin/discount-operations.service";
+import { isReservationProductTarget } from "@/features/discounts/product-target";
 import { CampaignOperations } from "@/features/email-campaigns/backend/campaign-operations.service";
 import { ReservationProductDetailsBackfill } from "@/features/reservation/backend/reservation-product-details-backfill.service";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
@@ -159,7 +160,7 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
     const reservationAccess = yield* ReservationAccessAdministration;
     const authentication = yield* CliAuthentication;
     const discounts = yield* DiscountAdministration;
-    const discountOperations = yield* makeDiscountOperations;
+    const discountOperations = yield* makeDiscountOperations("reservations");
     const customerDirectory = yield* AdministrationCustomerDirectory;
     const invoices = yield* InvoiceAdministrationService;
     const standaloneAccessCodes = yield* StandaloneAccessCodeAdministration;
@@ -580,10 +581,9 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
         invokeAsCliCaller(
           discountOperations.invoke("mutateDiscounts", payload.mutation),
           DiscountRequestLedger,
-          (caller) =>
-            cliDiscountRequestLedger(ledger, caller, payload.requestId)
+          (caller) => cliDiscountRequestLedger(ledger, caller, payload)
         ).pipe(
-          // The endpoint decoded the payload with the port's strict schema.
+          // The endpoint decoded the payload with the strict v1 schema.
           Effect.catchTag("CliInputInvalid", (invalid) => Effect.die(invalid))
         )
       )
@@ -924,9 +924,9 @@ const toCliReservationAccessGrant = (grant: ReservationAccessGrant) => ({
 const toCliCustomerProfile = (profile: AdminCustomerProfile) => ({
   ...profile,
   codes: profile.codes.map(toCliDiscountCode),
-  claims: profile.claims.map(toCliDiscountCodeClaim),
+  claims: profile.claims.flatMap(toCliReservationClaim),
   vouchers: profile.vouchers.map(toCliVoucher),
-  voucherClaims: profile.voucherClaims.map(toCliVoucherClaim),
+  voucherClaims: profile.voucherClaims.flatMap(toCliReservationClaim),
 });
 
 const toCliDiscountCode = <Code extends AdminDiscountCode>(code: Code) => ({
@@ -937,13 +937,26 @@ const toCliDiscountCode = <Code extends AdminDiscountCode>(code: Code) => ({
   updatedAt: code.updatedAt.toString(),
 });
 
-const toCliDiscountCodeClaim = (claim: AdminDiscountCodeClaim) => ({
-  ...claim,
-  reservationExpiresAt: claim.reservationExpiresAt.toString(),
-  reservedAt: claim.reservedAt.toString(),
-  redeemedAt: claim.redeemedAt?.toString() ?? null,
-  releasedAt: claim.releasedAt?.toString() ?? null,
-});
+/** v1 claims link to a reservation. Pass claims still count in code balances. */
+const toCliReservationClaim = <
+  Claim extends AdminDiscountCodeClaim | AdminVoucherClaim,
+>(
+  claim: Claim
+) => {
+  const { workspaceReservationId } = claim;
+  if (workspaceReservationId === null) return [];
+
+  return [
+    {
+      ...claim,
+      workspaceReservationId,
+      reservationExpiresAt: claim.reservationExpiresAt.toString(),
+      reservedAt: claim.reservedAt.toString(),
+      redeemedAt: claim.redeemedAt?.toString() ?? null,
+      releasedAt: claim.releasedAt?.toString() ?? null,
+    },
+  ];
+};
 
 const toCliVoucher = <Voucher extends AdminVoucher>(voucher: Voucher) => ({
   ...voucher,
@@ -953,18 +966,11 @@ const toCliVoucher = <Voucher extends AdminVoucher>(voucher: Voucher) => ({
   updatedAt: voucher.updatedAt.toString(),
 });
 
-const toCliVoucherClaim = (claim: AdminVoucherClaim) => ({
-  ...claim,
-  reservationExpiresAt: claim.reservationExpiresAt.toString(),
-  reservedAt: claim.reservedAt.toString(),
-  redeemedAt: claim.redeemedAt?.toString() ?? null,
-  releasedAt: claim.releasedAt?.toString() ?? null,
-});
-
 const toCliDiscountDashboard = (dashboard: DiscountAdminDashboard) => ({
   ...dashboard,
   discounts: dashboard.discounts.map((discount) => ({
     ...discount,
+    products: discount.products.filter(isReservationProductTarget),
     createdAt: discount.createdAt.toString(),
     updatedAt: discount.updatedAt.toString(),
   })),
@@ -975,13 +981,13 @@ const toCliDiscountDashboard = (dashboard: DiscountAdminDashboard) => ({
 const toCliDiscountCodeDetail = (detail: AdminDiscountCodeDetail) => ({
   ...detail,
   code: toCliDiscountCode(detail.code),
-  claims: detail.claims.map(toCliDiscountCodeClaim),
+  claims: detail.claims.flatMap(toCliReservationClaim),
 });
 
 const toCliVoucherDetail = (detail: AdminVoucherDetail) => ({
   ...detail,
   voucher: toCliVoucher(detail.voucher),
-  claims: detail.claims.map(toCliVoucherClaim),
+  claims: detail.claims.flatMap(toCliReservationClaim),
 });
 
 const noStore = HttpRouter.middleware(

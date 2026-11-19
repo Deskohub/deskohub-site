@@ -724,6 +724,51 @@ describe("Workspace Admin API", () => {
     expect(result).toEqual(batch);
   });
 
+  test("returns the reservation targets of a mixed discount in the v1 dashboard", async () => {
+    const id = AdministrationStoredDiscountId.make(
+      "01980000-0000-7000-8000-000000000001"
+    );
+    const createdAt = Temporal.Instant.from("2026-08-01T08:00:00Z");
+    const discounts = Layer.mock(DiscountAdministration, {
+      loadDashboard: () =>
+        Effect.succeed({
+          discounts: [
+            {
+              id,
+              labels: { "cs-CZ": "Sleva", "en-US": "Discount" },
+              adjustment: { kind: "percentage", basisPoints: 1000 },
+              products: [
+                { kind: "entry-pack", tier: "reserved-desk", size: 10 },
+                { kind: "cowork", tier: "reserved-desk" },
+                { kind: "unlimited" },
+              ],
+              codeCount: 0,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          ],
+          codes: [],
+          vouchers: [],
+          calendar: {
+            events: [],
+            unavailable: false,
+            calendarUrl: "https://calendar.example/sales",
+            from: "2026-08-01",
+            to: "2026-08-31",
+          },
+        }),
+    });
+
+    const result = await callAdministrationApi(
+      (client) => client.getDiscountDashboard({}),
+      { discounts }
+    );
+
+    expect(result.discounts).toMatchObject([
+      { id, products: [{ kind: "cowork", tier: "reserved-desk" }] },
+    ]);
+  });
+
   test("lists discount groups and maps a failed service to unavailable", async () => {
     const calls: string[] = [];
     const discounts = Layer.succeed(DiscountAdministration, {
@@ -1888,7 +1933,7 @@ describe("invoice cancellation and archive endpoints", () => {
 describe("customer and reservation administration endpoints", () => {
   const instant = (value: string) => Temporal.Instant.from(value);
 
-  test("returns the customer's discount profile with API timestamps", async () => {
+  test("returns the customer's reservation claims with API timestamps", async () => {
     const customerId = AdministrationDotyposCustomerId.make("dotypos-customer");
     const activity = {
       reservations: [],
@@ -1916,6 +1961,7 @@ describe("customer and reservation administration endpoints", () => {
       ],
       claims: [
         adminCodeClaim(),
+        adminCodeClaim({ workspaceReservationId: null }),
         adminCodeClaim({
           state: "released",
           redeemedAt: instant("2026-08-10T08:10:00Z"),
@@ -1931,6 +1977,7 @@ describe("customer and reservation administration endpoints", () => {
       ],
       voucherClaims: [
         adminVoucherClaim(),
+        adminVoucherClaim({ workspaceReservationId: null }),
         adminVoucherClaim({
           state: "released",
           redeemedAt: instant("2026-08-10T08:10:00Z"),

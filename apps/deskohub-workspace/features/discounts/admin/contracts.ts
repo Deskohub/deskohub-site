@@ -1,16 +1,30 @@
 import {
-  type AdministrationCustomerDiscountCodeCreateInput,
   type AdministrationCustomerVoucherCreateInput,
-  type AdministrationDiscountCodeCreateInput,
   type AdministrationDiscountCodeUpdateInput,
-  type AdministrationDiscountDefinitionInput,
-  AdministrationDiscountMutation,
-  type AdministrationDiscountUpdateInput,
   type AdministrationExistingDiscountCodeCreateInput,
   type AdministrationVoucherCreateInput,
   type AdministrationVoucherUpdateInput,
+  makeAdministrationDiscountContracts,
 } from "@deskohub/workspace-admin-api";
 import { Schema } from "effect";
+import {
+  findWorkspaceProductTargetsIssue,
+  workspaceProductTargetSchema,
+} from "../product-target";
+
+const {
+  AdministrationDiscountDefinitionInput,
+  AdministrationDiscountUpdateInput,
+  AdministrationDiscountCodeCreateInput,
+  AdministrationCustomerDiscountCodeCreateInput,
+  AdministrationDiscountMutation,
+} = makeAdministrationDiscountContracts(
+  Schema.NonEmptyArray(workspaceProductTargetSchema).check(
+    Schema.makeFilter(findWorkspaceProductTargetsIssue)
+  )
+);
+
+export { AdministrationDiscountMutation as discountAdminMutationSchema };
 
 export const discountAdminMutationStandardSchema = Schema.toStandardSchemaV1(
   AdministrationDiscountMutation,

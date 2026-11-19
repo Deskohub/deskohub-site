@@ -8,7 +8,7 @@ import type {
   GoogleCalendarEventId,
   GoogleCalendarICalUid,
 } from "@deskohub/google-calendar";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer, Match, Option, Schema } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
@@ -34,7 +34,10 @@ import { AdministrationCustomerDirectory } from "@/features/administration/custo
 import type { AdministrationCustomer } from "@/features/administration/customer-identity";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { DiscountGroupListing } from "@/features/discounts/discount-groups";
-import type { WorkspaceProductTarget } from "@/features/discounts/product-target";
+import {
+  type WorkspaceProductTarget,
+  workspaceReservationProductFamilies,
+} from "@/features/discounts/product-target";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { CalendarResourceConfig } from "@/shared/backend/config/calendar-resource.config";
@@ -260,6 +263,8 @@ export type DiscountAdminSalesPage = Pick<
   "calendar" | "discounts"
 >;
 
+export type DiscountTargetScope = "all" | "reservations";
+
 export interface IDiscountAdministration {
   readonly loadDashboard: () => Effect.Effect<
     DiscountAdminDashboard,
@@ -281,7 +286,8 @@ export interface IDiscountAdministration {
     input: CreateDiscountAdminInput
   ) => Effect.Effect<StoredDiscountId, EffectDrizzleQueryError | SqlError>;
   readonly updateDiscount: (
-    input: UpdateDiscountAdminInput
+    input: UpdateDiscountAdminInput,
+    targetScope?: DiscountTargetScope
   ) => Effect.Effect<
     void,
     EffectDrizzleQueryError | SqlError | DiscountAdminNotFoundError
@@ -522,7 +528,10 @@ export class DiscountAdministration extends Context.Service<
       );
 
       const updateDiscount = Effect.fn("DiscountAdministration.updateDiscount")(
-        (input: UpdateDiscountAdminInput) =>
+        (
+          input: UpdateDiscountAdminInput,
+          targetScope: DiscountTargetScope = "all"
+        ) =>
           transaction(
             Effect.gen(function* () {
               const rows = yield* db
@@ -537,9 +546,18 @@ export class DiscountAdministration extends Context.Service<
                 kind: "discount",
                 id: input.id,
               });
-              yield* db
-                .delete(discountProductTargets)
-                .where(eq(discountProductTargets.discountId, input.id));
+              yield* db.delete(discountProductTargets).where(
+                and(
+                  eq(discountProductTargets.discountId, input.id),
+                  // The v1 API replaces only targets in its reservation view.
+                  targetScope === "reservations"
+                    ? inArray(
+                        sql`${discountProductTargets.productTarget}->>'kind'`,
+                        workspaceReservationProductFamilies
+                      )
+                    : undefined
+                )
+              );
               yield* db
                 .insert(discountProductTargets)
                 .values(toDiscountProductTargetRows(input.id, input.products));
