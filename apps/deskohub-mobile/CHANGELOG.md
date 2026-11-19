@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.6](https://github.com/totalolage/deskohub-site/compare/mobile-v0.2.5...mobile-v0.2.6) (2026-11-19)
+
+### Features
+
+* **mobile:** adapt layouts for foldables, tablets, and landscape, with a navigation rail and side-by-side Account sections
+* **mobile:** book a private office for people by email
+* **mobile:** withdraw from eligible reservations in the app
+
+### Bug Fixes
+
+* **mobile:** omit the per-day unit from the daytime cowork footer's starting price
+
 ## [0.2.5](https://github.com/totalolage/deskohub-site/compare/mobile-v0.2.4...mobile-v0.2.5) (2026-11-19)
 
 ### Bug Fixes
