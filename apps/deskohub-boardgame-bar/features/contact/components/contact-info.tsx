@@ -2,11 +2,7 @@ import { Clock, HelpCircle, Mail, MapPin, Phone } from "lucide-react";
 import Link from "next/link";
 import { getLocale, m } from "@/features/i18n";
 import { Card, CardContent } from "@/shared/components/ui/card";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import { siteConstants } from "@/shared/utils/constants";
 import {
   getLocalizedCountryName,
@@ -131,24 +127,24 @@ export function ContactInfo() {
                 </div>
               </div>
             </div>
-            <Tooltip delay={200} toggleable type="description">
-              <TooltipTrigger
+          </CardContent>
+          <Tooltip
+            trigger={
+              <button
+                type="button"
                 aria-labelledby="contact-opening-hours"
-                className="absolute inset-0 cursor-help rounded-lg"
+                className="absolute inset-0 cursor-help rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-400"
               >
                 <HelpCircle
                   aria-hidden="true"
                   className="w-4 h-4 text-gray-400 absolute top-4 right-4"
                 />
-              </TooltipTrigger>
-              <TooltipContent
-                side="top"
-                className="max-w-xs bg-gray-800 border-gray-700 text-gray-100"
-              >
-                <p>{m["contact.hoursTooltip"]()}</p>
-              </TooltipContent>
-            </Tooltip>
-          </CardContent>
+              </button>
+            }
+            contentClassName="max-w-xs bg-gray-800 border-gray-700 text-gray-100"
+          >
+            <p>{m["contact.hoursTooltip"]()}</p>
+          </Tooltip>
         </Card>
       </div>
     </div>
