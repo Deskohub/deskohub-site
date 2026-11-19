@@ -21,6 +21,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { PaymentRefundRepository } from "../repositories/payment-refund.repository";
+import { PaymentProvidersFromNexi } from "./payment-providers";
 import { PaymentRefundService } from "./payment-refund.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
@@ -84,7 +85,9 @@ describe.skipIf(!testDatabase)(
             Layer.provide(repository),
             Layer.provide(
               Layer.merge(
-                Layer.mock(NexiService, { getOrder }),
+                PaymentProvidersFromNexi.pipe(
+                  Layer.provide(Layer.mock(NexiService, { getOrder }))
+                ),
                 testDatabase.layer
               )
             )

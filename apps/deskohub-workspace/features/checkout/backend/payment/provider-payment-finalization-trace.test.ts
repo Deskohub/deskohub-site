@@ -15,6 +15,12 @@ import {
   startEffectTrace,
 } from "@/shared/testing/effect-trace.test-utils";
 import { withReservationPaymentHandlers } from "./order-payment-handlers.test-utils";
+import {
+  type PaymentProviderAdapter,
+  PaymentProviders,
+  type PaymentVerification,
+} from "./payment-provider";
+import { PaymentProvidersFromNexi } from "./payment-providers";
 
 mock.module("server-only", () => ({}));
 
@@ -199,7 +205,8 @@ const unattachedCollaborators = (overrides: Collaborators = {}) =>
 
 const finalize = async (
   collaborators: Collaborators,
-  input: FinalizationInput = { paymentAttemptId: "attempt-id" }
+  input: FinalizationInput = { paymentAttemptId: "attempt-id" },
+  providers?: Layer.Layer<PaymentProviders>
 ) => {
   const trace: EffectTrace = startEffectTrace();
   const record = (service: string, methods: Methods | undefined) =>
@@ -230,7 +237,12 @@ const finalize = async (
               PaymentLifecycleRepository,
               record("paymentLifecycle", collaborators.paymentLifecycle)
             ),
-            Layer.mock(NexiService, record("nexi", collaborators.nexi)),
+            providers ??
+              PaymentProvidersFromNexi.pipe(
+                Layer.provide(
+                  Layer.mock(NexiService, record("nexi", collaborators.nexi))
+                )
+              ),
             Layer.mock(
               PaidFulfillmentQueueService,
               record("paidFulfillmentQueue", collaborators.paidFulfillmentQueue)
@@ -264,6 +276,49 @@ const outcomeOf = (exit: Exit.Exit<unknown, unknown>) => {
 const queueDown = new PaidFulfillmentQueueError({ message: "queue down" });
 
 describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trace", () => {
+  test("verifies the stored mock attempt without selecting a provider again", async () => {
+    const verify = mock(() =>
+      Effect.succeed<PaymentVerification>({
+        status: "failure",
+        hasActivity: true,
+        mismatches: [],
+        failureCode: "mock_payment_failed",
+        providerStatus: "declined",
+        terminalState: "failed",
+      })
+    );
+    const forAttempt = mock(
+      (): PaymentProviderAdapter => ({
+        unconfirmedSessionFailureCode: "mock_payment_session_unconfirmed",
+        prepareSession: () => Effect.die("not used"),
+        lookup: () => Effect.die("not used"),
+        verify,
+      })
+    );
+    const { outcome, trace } = await finalize(
+      verifyingCollaborators({
+        paymentAttempts: {
+          findById: succeed({ ...pendingAttempt, provider: "mock" }),
+        },
+      }),
+      undefined,
+      Layer.mock(PaymentProviders, {
+        selectForCustomer: () => Effect.die("unexpected provider selection"),
+        activeProviders: ["nexi", "mock"],
+        forAttempt,
+      })
+    );
+
+    expect(forAttempt).toHaveBeenCalledWith("mock");
+    expect(verify).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: pendingAttempt.amount })
+    );
+    expect(outcome).toBe("terminal");
+    expect(trace).toContainEqual(
+      expect.stringContaining("failureCode=mock_payment_failed")
+    );
+  });
+
   test("returns not_found when the reservation can't be loaded", async () => {
     const { outcome, trace } = await finalize({
       reservations: { findById: fail(new Error("db down")) },
@@ -344,10 +399,10 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
-        "Error Nexi payment outcome verification failed (orderId=reservation-id, paymentAttemptId=attempt-id, providerOrderId=provider-order-id, cause=<Error>) {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "Error Provider payment outcome verification failed (orderId=reservation-id, paymentAttemptId=attempt-id, providerOrderId=provider-order-id, cause=<PaymentProviderError>) {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Warn Payment finalization returned provider_verification_failed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Provider payment finalization completed (result=provider_verification_failed) {abandonmentCheckedAt,orderId,paymentAttemptId,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -649,9 +704,11 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Error Payment finalization currency decode failed (input=<Object>, orderId=reservation-id, paymentAttemptId=attempt-id, paymentAttemptState=pending, providerOrderId=provider-order-id, cause=<SchemaError>) {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Warn Payment finalization returned not_verifiable {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
+        "Error Provider payment outcome verification failed (orderId=reservation-id, paymentAttemptId=attempt-id, providerOrderId=provider-order-id, cause=<PaymentProviderError>) {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "Warn Payment finalization returned not_verifiable {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Provider payment finalization completed (result=not_verifiable) {abandonmentCheckedAt,orderId,paymentAttemptId,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
       ]
     `);
@@ -681,10 +738,10 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=15 seconds)",
-        "Error Nexi payment outcome verification failed (orderId=reservation-id, paymentAttemptId=attempt-id, providerOrderId=provider-order-id, cause=<NetworkError>) {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "Error Provider payment outcome verification failed (orderId=reservation-id, paymentAttemptId=attempt-id, providerOrderId=provider-order-id, cause=<PaymentProviderError>) {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Warn Payment finalization returned provider_verification_failed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Provider payment finalization completed (result=provider_verification_failed) {abandonmentCheckedAt,orderId,paymentAttemptId,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -712,8 +769,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Warn Payment finalization returned verification_mismatch {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -740,8 +797,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -773,8 +830,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=15 seconds)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -810,8 +867,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -845,8 +902,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -877,8 +934,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -906,8 +963,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -934,8 +991,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -971,8 +1028,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1008,8 +1065,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1041,8 +1098,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1071,8 +1128,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1101,8 +1158,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1129,8 +1186,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1160,8 +1217,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1195,8 +1252,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1227,8 +1284,8 @@ describe("ProviderPaymentFinalizationService.finalizePendingProviderPayment trac
         "Debug Payment finalization order lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentState,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
-        "Debug Payment finalization currency decoded {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Info Payment finalization provider verification started {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
+        "span NexiPaymentProvider.verify",
         "call nexi.verifyPaymentOutcome(orderId=provider-order-id, correlationId=correlation-id, amount=35000, currency=EUR, securityToken=security-token, deadline=undefined)",
         "Info Payment finalization provider verification completed {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,providerOrderStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "Debug Payment finalization provider metadata resolved {abandonmentCheckedAt,activePaymentAttemptId,currency,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,verificationDeadlineMillis,verificationMismatches,verificationStatus,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1310,6 +1367,7 @@ describe("ProviderPaymentFinalizationService unattached provider session trace",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "span providerPaymentFinalization.resolveUnattachedProviderSession",
+        "span NexiPaymentProvider.lookup",
         "call nexi.getOrder(orderId=provider-order-id, correlationId=correlation-id)",
         "call paymentLifecycle.markTerminal(id=attempt-id, orderId=reservation-id, state=failed, failureCode=nexi_hpp_create_unconfirmed, providerStatus=hpp_create_unconfirmed, fromAttemptStates=<Array>)",
         "call checkoutAnalytics.paymentFailed(attempt=<Object>, failureReason=nexi_hpp_create_unconfirmed, timestamp=<Instant>)",
@@ -1339,6 +1397,7 @@ describe("ProviderPaymentFinalizationService unattached provider session trace",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "span providerPaymentFinalization.resolveUnattachedProviderSession",
+        "span NexiPaymentProvider.lookup",
         "call nexi.getOrder(orderId=provider-order-id, correlationId=correlation-id)",
         "call paymentLifecycle.markTerminal(id=attempt-id, orderId=reservation-id, state=failed, failureCode=nexi_hpp_create_unconfirmed, providerStatus=hpp_create_unconfirmed, fromAttemptStates=<Array>)",
         "Info Payment finalization failed an unattached provider session (providerOrderFound=true) {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.resolveUnattachedProviderSession",
@@ -1370,6 +1429,7 @@ describe("ProviderPaymentFinalizationService unattached provider session trace",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "span providerPaymentFinalization.resolveUnattachedProviderSession",
+        "span NexiPaymentProvider.lookup",
         "call nexi.getOrder(orderId=provider-order-id, correlationId=correlation-id)",
         "Error Unattached provider session has payment activity and needs operator review {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.resolveUnattachedProviderSession",
         "Info Provider payment finalization completed (result=not_verifiable) {abandonmentCheckedAt,orderId,paymentAttemptId,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
@@ -1403,8 +1463,9 @@ describe("ProviderPaymentFinalizationService unattached provider session trace",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "span providerPaymentFinalization.resolveUnattachedProviderSession",
+        "span NexiPaymentProvider.lookup",
         "call nexi.getOrder(orderId=provider-order-id, correlationId=correlation-id)",
-        "Error Unattached provider session order lookup failed (cause=<ExternalAPIError>) {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.resolveUnattachedProviderSession",
+        "Error Unattached provider session order lookup failed (cause=<PaymentProviderError>) {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.resolveUnattachedProviderSession",
         "Info Provider payment finalization completed (result=provider_verification_failed) {abandonmentCheckedAt,orderId,paymentAttemptId,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
       ]
     `);
@@ -1428,6 +1489,7 @@ describe("ProviderPaymentFinalizationService unattached provider session trace",
         "call paymentAttempts.findById(attempt-id)",
         "Debug Payment finalization attempt lookup completed {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.finalizePendingProviderPayment",
         "span providerPaymentFinalization.resolveUnattachedProviderSession",
+        "span NexiPaymentProvider.lookup",
         "call nexi.getOrder(orderId=provider-order-id, correlationId=correlation-id)",
         "call paymentLifecycle.markTerminal(id=attempt-id, orderId=reservation-id, state=failed, failureCode=nexi_hpp_create_unconfirmed, providerStatus=hpp_create_unconfirmed, fromAttemptStates=<Array>)",
         "Warn Unattached provider session changed before it could fail (cause=<PaymentLifecycleStateError>) {abandonmentCheckedAt,activePaymentAttemptId,dotyposReservationId,fulfillmentState,orderId,paymentAttemptId,paymentAttemptState,paymentState,providerOrderId,reservationId,reservationState,verificationDeadlineMillis,webhookEventId} in providerPaymentFinalization.resolveUnattachedProviderSession",

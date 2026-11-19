@@ -21,6 +21,7 @@ import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.s
 import { LatePaymentRecoveryQueueService } from "../payment/late-payment-recovery-queue.service";
 import { LatePaymentVerificationService } from "../payment/late-payment-verification.service";
 import { getNexiCurrencyOverride } from "../payment/nexi-currency";
+import { PaymentProvidersFromNexi } from "../payment/payment-providers";
 import { ProviderPaymentFinalizationService } from "../payment/provider-payment-finalization.service";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
@@ -140,7 +141,9 @@ const loadStatusPageOnTestClock = (options: {
         ),
         Layer.provide(
           Layer.mergeAll(
-            makeWorkspaceNexiLayer("preview"),
+            PaymentProvidersFromNexi.pipe(
+              Layer.provide(makeWorkspaceNexiLayer("preview"))
+            ),
             Layer.mock(PaymentLifecycleRepository, {
               ...(options.markPaid && { markPaid: options.markPaid }),
             }),

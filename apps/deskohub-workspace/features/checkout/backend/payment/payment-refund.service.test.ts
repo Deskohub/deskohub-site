@@ -14,15 +14,16 @@ import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
-import type { NexiPaymentAttempt } from "../repositories/payment-attempt.repository";
+import type { ProviderPaymentAttempt } from "../repositories/payment-attempt.repository";
 import type {
   IPaymentRefundRepository,
   RefundablePaymentAttempt,
 } from "../repositories/payment-refund.repository";
+import { PaymentProvidersFromNexi } from "./payment-providers";
 
 const providerOrderId = NexiOrderIdSchema.make("provider-order-id");
 
-const attempt: NexiPaymentAttempt = {
+const attempt: ProviderPaymentAttempt = {
   id: paymentAttemptIdSchema.make("attempt-id"),
   workspaceReservationId: workspaceReservationIdSchema.make("reservation-id"),
   provider: "nexi",
@@ -83,7 +84,11 @@ const buildService = async (services: {
   const layer = PaymentRefundService.Default.pipe(
     Layer.provide(
       Layer.mergeAll(
-        Layer.mock(NexiService, { getOrder: services.getOrder }),
+        PaymentProvidersFromNexi.pipe(
+          Layer.provide(
+            Layer.mock(NexiService, { getOrder: services.getOrder })
+          )
+        ),
         Layer.mock(PaymentRefundRepository, {
           recordRefund: services.recordRefund ?? unusedRepositoryCall,
           claimRefundChecks: services.claimRefundChecks ?? unusedRepositoryCall,
@@ -231,6 +236,7 @@ describe("PaymentRefundService", () => {
       claimRefundChecks.mock.calls.every(([claim]) => claim.limit === 1)
     ).toBe(true);
     expect(claimRefundChecks).toHaveBeenCalledWith({
+      providers: ["nexi"],
       limit: 1,
       checkedAt: expect.any(Temporal.Instant),
       lastCheckedBefore: expect.any(Temporal.Instant),
@@ -288,13 +294,17 @@ describe("PaymentRefundService", () => {
     const layer = PaymentRefundService.Default.pipe(
       Layer.provide(
         Layer.mergeAll(
-          NexiService.Live.pipe(
+          PaymentProvidersFromNexi.pipe(
             Layer.provide(
-              Layer.succeed(NexiRuntimeConfig, {
-                baseUrl: "https://nexi.example.test",
-                apiKey: "synthetic-api-key",
-                apiTimeout,
-              })
+              NexiService.Live.pipe(
+                Layer.provide(
+                  Layer.succeed(NexiRuntimeConfig, {
+                    baseUrl: "https://nexi.example.test",
+                    apiKey: "synthetic-api-key",
+                    apiTimeout,
+                  })
+                )
+              )
             )
           ),
           Layer.mock(PaymentRefundRepository, {
@@ -367,14 +377,18 @@ describe("PaymentRefundService", () => {
       const layer = PaymentRefundService.Default.pipe(
         Layer.provide(
           Layer.mergeAll(
-            Layer.mock(NexiService, {
-              getOrder: () =>
-                Effect.gen(function* () {
-                  lookupStarts.push(yield* Clock.currentTimeMillis);
-                  yield* Effect.sleep(Duration.millis(lookupMilliseconds));
-                  return refundedOrder;
-                }),
-            }),
+            PaymentProvidersFromNexi.pipe(
+              Layer.provide(
+                Layer.mock(NexiService, {
+                  getOrder: () =>
+                    Effect.gen(function* () {
+                      lookupStarts.push(yield* Clock.currentTimeMillis);
+                      yield* Effect.sleep(Duration.millis(lookupMilliseconds));
+                      return refundedOrder;
+                    }),
+                })
+              )
+            ),
             Layer.mock(PaymentRefundRepository, {
               claimRefundChecks: (input) =>
                 Effect.gen(function* () {
@@ -539,12 +553,16 @@ describe("PaymentRefundService", () => {
       const layer = PaymentRefundService.Default.pipe(
         Layer.provide(
           Layer.mergeAll(
-            Layer.mock(NexiService, {
-              getOrder: () =>
-                Effect.sleep(Duration.millis(lookupMilliseconds)).pipe(
-                  Effect.as({ ...refundedOrder, operations: [] })
-                ),
-            }),
+            PaymentProvidersFromNexi.pipe(
+              Layer.provide(
+                Layer.mock(NexiService, {
+                  getOrder: () =>
+                    Effect.sleep(Duration.millis(lookupMilliseconds)).pipe(
+                      Effect.as({ ...refundedOrder, operations: [] })
+                    ),
+                })
+              )
+            ),
             Layer.mock(PaymentRefundRepository, {
               claimRefundChecks: (input) => {
                 const index = claims;

@@ -1,9 +1,9 @@
 import { Duration, Effect } from "effect";
 import {
   PaymentRefundService,
+  paymentLookupWorstCaseDuration,
   refundBatchOverrunWorstCase,
 } from "@/features/checkout/backend/payment";
-import { nexiRequestWorstCaseDuration } from "@/shared/backend/config/nexi.config";
 import { defineWorkspaceCron } from "@/shared/backend/service-route";
 
 export const maxDuration = 300;
@@ -13,7 +13,7 @@ const startupAndResponseHeadroom = Duration.seconds(25);
 
 /**
  * Time the batch may spend claiming, looking up, and recording. It starts a
- * lookup only while one exhausting every Nexi retry still ends within it, and
+ * lookup only while one exhausting every provider retry still ends within it, and
  * at the budget it interrupts whatever is still running and releases those
  * claims. Uninterruptible transaction phases and releases can still run for
  * up to `refundBatchOverrunWorstCase` (35 seconds with the database pool's
@@ -41,7 +41,7 @@ const cronBatchLimit = 150;
 /**
  * Production has received no Nexi notification for refunds made in the Nexi
  * back office, so polling is the primary way to record them. The webhook still
- * records a refund if Nexi does notify. This re-reads the Nexi orders of paid
+ * records a refund if Nexi does notify. This re-reads the provider orders of paid
  * attempts awaiting a refund and of recent payments not yet fully refunded,
  * checked longest ago first, and records any refund an operator made there.
  */
@@ -51,7 +51,7 @@ export const GET = defineWorkspaceCron({
   input: () => ({
     limit: cronBatchLimit,
     budget: lookupBudget,
-    worstCaseLookupDuration: nexiRequestWorstCaseDuration,
+    worstCaseLookupDuration: paymentLookupWorstCaseDuration,
   }),
   run: (input) =>
     Effect.flatMap(PaymentRefundService, (refunds) =>
