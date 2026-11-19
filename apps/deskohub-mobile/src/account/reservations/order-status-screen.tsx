@@ -589,40 +589,41 @@ export function OrderStatusScreen({
     : result;
 
   return (
-    <ScrollScreen
-      masthead={heading}
-      overlap={false}
-      refreshing={pulled && !AsyncResult.isInitial(result)}
-      onRefresh={refreshable ? refresh : undefined}
-    >
-      {isNotFound(result) ? (
-        <OrderNotFound />
-      ) : (
-        <AsyncView
-          result={shown}
-          onRetry={retryRead}
-          loading={
-            <BookingTicketSkeleton
-              label={m.account_loading({}, { locale })}
-              stub="button"
-            />
-          }
-        >
-          {(state) => (
-            <OrderTicket
-              state={state}
-              onCheckAgain={refresh}
-              onPaymentCheckAgain={checkAfterPayment}
-              onPaymentPageLeft={() => {
-                if (!navigation.isFocused()) return;
-                setFocus(restartStatusVisit(owner, "after-payment"));
-              }}
-              announce={active && focused && currentFocus.owner === owner}
-            />
-          )}
-        </AsyncView>
-      )}
-    </ScrollScreen>
+    <>
+      {heading}
+      <ScrollScreen
+        refreshing={pulled && !AsyncResult.isInitial(result)}
+        onRefresh={refreshable ? refresh : undefined}
+      >
+        {isNotFound(result) ? (
+          <OrderNotFound />
+        ) : (
+          <AsyncView
+            result={shown}
+            onRetry={retryRead}
+            loading={
+              <BookingTicketSkeleton
+                label={m.account_loading({}, { locale })}
+                stub="button"
+              />
+            }
+          >
+            {(state) => (
+              <OrderTicket
+                state={state}
+                onCheckAgain={refresh}
+                onPaymentCheckAgain={checkAfterPayment}
+                onPaymentPageLeft={() => {
+                  if (!navigation.isFocused()) return;
+                  setFocus(restartStatusVisit(owner, "after-payment"));
+                }}
+                announce={active && focused && currentFocus.owner === owner}
+              />
+            )}
+          </AsyncView>
+        )}
+      </ScrollScreen>
+    </>
   );
 }
 

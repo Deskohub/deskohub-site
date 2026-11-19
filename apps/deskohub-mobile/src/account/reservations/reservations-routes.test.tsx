@@ -1,7 +1,8 @@
 import { expect, mock, spyOn, test } from "bun:test";
+import { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
 import { RegistryContext } from "@effect/atom-react";
 import type { NativeStackNavigationOptions } from "expo-router";
-import type { AriaAttributes, ReactElement } from "react";
+import { type AriaAttributes, act, type ReactElement } from "react";
 import type { PressableProps, ViewProps } from "react-native";
 import * as ReactNative from "react-native";
 import {
@@ -16,6 +17,7 @@ import {
 import { FakeWorkspace } from "../../customer-api/testing/fake-workspace";
 import { withSampleHistory } from "../../customer-api/testing/sample-history";
 import { AppLocaleProvider } from "../../i18n/locale-context";
+import { m } from "../../i18n/messages";
 import { clientRoot } from "../../testing/client-root";
 import { expoRouterStandIn } from "../../testing/expo-router-stand-in";
 import { TestWindowDimensions } from "../../testing/window-dimensions";
@@ -24,6 +26,7 @@ import { reservationHistoryAtom } from "./reservations-list-state";
 
 let params: { orderId: string; after?: string } = { orderId: "" };
 let screenOptions: NativeStackNavigationOptions | undefined;
+let activeRoute: ReactElement | undefined;
 const router = {
   push: mock((_href: unknown) => {}),
   replace: mock((_href: unknown) => {}),
@@ -37,12 +40,12 @@ mock.module("expo-router", () => ({
     useLocalSearchParams: () => params,
     useRouter: () => router,
   }),
-  Stack: {
+  Stack: Object.assign(() => activeRoute, {
     Screen: ({ options }: { options: NativeStackNavigationOptions }) => {
       screenOptions = options;
       return null;
     },
-  },
+  }),
 }));
 
 // React DOM needs plain styles where native View permits falsy values and
@@ -67,22 +70,30 @@ mock.module("react-native", () => ({
   },
   Pressable: ({
     children,
+    onPress,
     ...props
-  }: PressableProps & Pick<AriaAttributes, "aria-current">) => (
-    <div
+  }: Omit<PressableProps, "onPress"> &
+    Pick<AriaAttributes, "aria-current"> & { onPress?: () => void }) => (
+    <button
+      type="button"
       role={props.role}
+      aria-label={props["aria-label"]}
       aria-current={props["aria-current"]}
       data-native-selected={props["aria-selected"]}
+      onClick={onPress}
     >
       {typeof children === "function"
         ? children({ pressed: false, hovered: false })
         : children}
-    </div>
+    </button>
   ),
 }));
 
 const { default: ReservationsRoute } = await import(
   "../../../app/(account)/(tabs)/reservations/index"
+);
+const { default: ReservationsLayout } = await import(
+  "../../../app/(account)/(tabs)/reservations/_layout"
 );
 const { default: ReservationStatusRoute } = await import(
   "../../../app/(account)/(tabs)/reservations/[orderId]/index"
@@ -99,13 +110,40 @@ const { ToastProvider } = await import("../../ui/toast");
 
 const root = clientRoot({ keepFetch: true });
 
-const fixture = async (history: "upcoming" | "empty") => {
-  const workspace = withSampleHistory(FakeWorkspace.forKind("linked"), history);
-  const { registry } = makeFakeCustomerData("linked", workspace);
+const fixture = async (
+  history: "upcoming" | "empty" | "four-past",
+  account: "available" | "loading" | "failed" | "gated" = "available"
+) => {
+  const kind = account === "gated" ? "completion-required" : "linked";
+  const workspace = withSampleHistory(
+    FakeWorkspace.forKind(kind),
+    history === "four-past" ? "nothing-upcoming" : history
+  );
+  if (history === "four-past") {
+    const row = workspace.data.history.past[0];
+    if (row === undefined) throw new Error("Expected a sample past booking");
+    workspace.data = {
+      ...workspace.data,
+      invited: { current: [], past: [] },
+      history: {
+        ...workspace.data.history,
+        past: Array.from({ length: 4 }, (_, index) => ({
+          ...row,
+          id: `fixture-past-${index}`,
+          orderId: CustomerReservationOrderId.make(`fixture-order-${index}`),
+        })),
+      },
+    };
+  }
+  if (account === "loading") workspace.fail("getAccount", "hang");
+  if (account === "failed") workspace.fail("getAccount", "service-unavailable");
+  const { registry } = makeFakeCustomerData(kind, workspace);
   registry.mount(accountAtom);
-  registry.mount(reservationHistoryAtom);
-  await settle(registry, accountAtom);
-  await settle(registry, reservationHistoryAtom);
+  if (account !== "loading") await settle(registry, accountAtom);
+  if (account === "available") {
+    registry.mount(reservationHistoryAtom);
+    await settle(registry, reservationHistoryAtom);
+  }
   const statusBars = new Map<symbol, "dark" | "light">();
   const observe = (style: "dark" | "light") => {
     const owner = Symbol();
@@ -162,6 +200,60 @@ test("an empty Reservations list leaves the expanded detail blank", async () => 
   }
 });
 
+test.each(["loading", "failed", "gated"] as const)(
+  "the expanded list keeps a blank detail when the account is %s",
+  async (account) => {
+    const screen = await fixture("upcoming", account);
+    try {
+      await screen.render(1024, <ReservationsRoute />);
+      expect(root.container().querySelectorAll("scrollview")).toHaveLength(1);
+      expect(root.container().querySelector('[style*="400px"]')).not.toBeNull();
+      expect(root.container().querySelector("[aria-current]")).toBeNull();
+      expect([...screen.statusBars.values()]).toEqual(["dark"]);
+      expect(screen.workspace.calls).not.toContain("listReservations");
+      expect(screen.workspace.calls).not.toContain("getReservationStatus");
+    } finally {
+      await screen.dispose();
+    }
+  }
+);
+
+test("the past list stays expanded while opening one of its bookings", async () => {
+  const screen = await fixture("four-past");
+  const bookings = () =>
+    root.container().querySelectorAll<HTMLButtonElement>('button[role="link"]');
+  try {
+    activeRoute = <ReservationsRoute />;
+    await screen.render(1024, <ReservationsLayout />);
+    expect(bookings()).toHaveLength(2);
+    const label = m.reservations_show_all_past({}, { locale: "en-US" });
+    const showAll = Array.from(
+      root.container().querySelectorAll("button")
+    ).find((button) => button.textContent === label);
+    if (showAll === undefined) throw new Error("Expected past list expansion");
+    await act(async () => showAll.click());
+    expect(bookings()).toHaveLength(4);
+    const fourth = screen.workspace.data.history.past[3]?.orderId;
+    const third = screen.workspace.data.history.past[2]?.orderId;
+    if (fourth === undefined || third === undefined)
+      throw new Error("Expected four past bookings");
+    await act(async () => bookings()[3]?.click());
+    expect(router.push).toHaveBeenLastCalledWith(orderStatusHref(fourth));
+
+    params = { orderId: fourth };
+    activeRoute = <ReservationStatusRoute />;
+    await screen.render(1024, <ReservationsLayout />);
+    expect(bookings()).toHaveLength(4);
+    await act(async () => bookings()[2]?.click());
+    expect(router.replace).toHaveBeenLastCalledWith(orderStatusHref(third));
+  } finally {
+    router.push.mockClear();
+    router.replace.mockClear();
+    activeRoute = undefined;
+    await screen.dispose();
+  }
+});
+
 test("a linked detail and its selected row survive the split breakpoint at 200% font size", async () => {
   const screen = await fixture("upcoming");
   const orderId = screen.workspace.data.history.current[0]?.orderId;
@@ -198,6 +290,15 @@ test("selecting another wide booking replaces the route and payment return close
   }
   params = { orderId: first.orderId, after: "payment" };
   try {
+    await screen.render(1024, <ReservationStatusRoute />);
+    const close = root
+      .container()
+      .querySelector(
+        `button[aria-label="${m.navigation_close({}, { locale: "en-US" })}"]`
+      );
+    expect(close).not.toBeNull();
+    expect(close?.closest("scrollview")).toBeNull();
+
     const tree = elementTree(ReservationStatusRoute, {}, (node) =>
       screen.within(1024, node)
     );

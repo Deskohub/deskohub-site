@@ -16,7 +16,9 @@ import Hourglass from "lucide-react-native/icons/hourglass";
 import KeyRound from "lucide-react-native/icons/key-round";
 import {
   createContext,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
   useContext,
   useEffect,
   useState,
@@ -129,6 +131,39 @@ const SelectionContext = createContext<ReservationListSelection | undefined>(
   undefined
 );
 
+const PastReservationsExpansion = createContext<
+  readonly [boolean, Dispatch<SetStateAction<boolean>>] | undefined
+>(undefined);
+
+/** Shares the past list's expansion with every screen in the Reservations stack. */
+export function PastReservationsExpansionProvider({
+  children,
+}: {
+  readonly children: ReactNode;
+}) {
+  const expansion = useState(false);
+  return (
+    <PastReservationsExpansion value={expansion}>
+      {children}
+    </PastReservationsExpansion>
+  );
+}
+
+function ReservationsTabPanes({
+  list,
+  detail,
+}: {
+  readonly list: ReactNode;
+  readonly detail?: ReactNode;
+}) {
+  const { isExpanded } = useViewport();
+  return (
+    <SplitPane list={list} collapsed="list">
+      {detail ?? (isExpanded && <FocusedStatusBar style="dark" />)}
+    </SplitPane>
+  );
+}
+
 /** The tab root's masthead. */
 function ReservationsMasthead({ inPane }: { readonly inPane: boolean }) {
   const locale = useAppLocale();
@@ -206,7 +241,7 @@ export function ReservationsListScreen({
             ) : (
               <ReservationsGate
                 access={access}
-                inPane={selection !== undefined}
+                inDetailRoute={selection !== undefined}
               />
             ),
         }
@@ -218,12 +253,13 @@ export function ReservationsListScreen({
 /** When the account may not see reservations. */
 function ReservationsGate({
   access,
-  inPane,
+  inDetailRoute,
 }: {
   readonly access: ReservationsAccess;
-  readonly inPane: boolean;
+  readonly inDetailRoute: boolean;
 }) {
   const locale = useAppLocale();
+  const { isExpanded } = useViewport();
   const account = useAtomValue(accountAtom);
   const refresh = useAtomRefresh(accountAtom);
   // A gate card says it all; other states keep their notice.
@@ -231,11 +267,11 @@ function ReservationsGate({
   const shownNotice = gate === undefined ? gateNoticeOf(access) : undefined;
   const notice =
     shownNotice === undefined ? undefined : gateNotice[shownNotice](locale);
-  return (
+  const list = (
     <ReservationsScreen
       refreshing={account.waiting}
       onRefresh={refresh}
-      inPane={inPane}
+      inPane={isExpanded}
     >
       {/* Kept mounted so assistive tech announces each change. */}
       <Notice tone="info" message={notice} />
@@ -248,6 +284,7 @@ function ReservationsGate({
       </AsyncView>
     </ReservationsScreen>
   );
+  return inDetailRoute ? list : <ReservationsTabPanes list={list} />;
 }
 
 /** Before the account is read: the saved reservations, if any. */
@@ -338,27 +375,22 @@ function ReservationsListView<E extends CustomerRequestFailure>({
   const { isExpanded } = useViewport();
   const open = useOpenReservation();
   const value = AsyncResult.value(list);
-  const preferred = Option.match(value, {
-    onNone: () => undefined,
-    onSome: ({ groups }) => preferredStatusTarget(groups),
-  });
+  const preferred =
+    showPreferred && selection === undefined
+      ? Option.match(value, {
+          onNone: () => undefined,
+          onSome: ({ groups }) => preferredStatusTarget(groups),
+        })
+      : undefined;
   const [hasOpenedDetails, setHasOpenedDetails] = useState(false);
-  const canShowPreferred = showPreferred && selection === undefined;
   // Keep the preview mounted after its first display so a resize cannot
   // interrupt a ticket action. Its refresh follows visibility and route focus.
-  if (
-    canShowPreferred &&
-    isExpanded &&
-    preferred !== undefined &&
-    !hasOpenedDetails
-  ) {
+  if (isExpanded && preferred !== undefined && !hasOpenedDetails) {
     setHasOpenedDetails(true);
   }
   const listSelection =
     selection ??
-    (canShowPreferred && isExpanded
-      ? { orderId: preferred, onSelect: open }
-      : undefined);
+    (isExpanded ? { orderId: preferred, onSelect: open } : undefined);
   const savedAt = Option.flatMap(value, (shown) => shown.savedAt);
   // The saved list says it is the one on this device; a failed refresh
   // under it needs no second notice.
@@ -407,22 +439,22 @@ function ReservationsListView<E extends CustomerRequestFailure>({
       </ReservationsScreen>
     </SelectionContext>
   );
-  if (!canShowPreferred) return content;
+  if (selection !== undefined) return content;
   return (
-    <SplitPane list={content} collapsed="list">
-      {isExpanded && preferred === undefined && (
-        <FocusedStatusBar style="dark" />
-      )}
-      {hasOpenedDetails && preferred !== undefined && (
-        <OrderStatusScreen
-          key={preferred}
-          orderId={preferred}
-          visit="normal"
-          active={isExpanded}
-          heading={isExpanded ? <ReservationPaneHeading /> : undefined}
-        />
-      )}
-    </SplitPane>
+    <ReservationsTabPanes
+      list={content}
+      detail={
+        hasOpenedDetails && preferred !== undefined ? (
+          <OrderStatusScreen
+            key={preferred}
+            orderId={preferred}
+            visit="normal"
+            active={isExpanded}
+            heading={isExpanded ? <ReservationPaneHeading /> : undefined}
+          />
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -575,7 +607,9 @@ function PastReservations({
 }) {
   const locale = useAppLocale();
   const selection = useContext(SelectionContext);
-  const [all, setAll] = useState(false);
+  const sharedExpansion = useContext(PastReservationsExpansion);
+  const localExpansion = useState(false);
+  const [all, setAll] = sharedExpansion ?? localExpansion;
   const shown = all
     ? rows
     : rows.filter(
