@@ -11,6 +11,9 @@ export const isMockPaymentPreview = () => allowsMockPaymentProvider(env);
 export const configuredPaymentProvider = (): PaymentProviderMode =>
   env.WORKSPACE_PAYMENT_PROVIDER ?? "nexi";
 
+export const isMockPaymentEnabled = () =>
+  isMockPaymentPreview() && configuredPaymentProvider() !== "nexi";
+
 export const selectCheckoutPaymentProvider = (
   mode: PaymentProviderMode,
   customer: PaymentCustomer,

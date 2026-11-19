@@ -28,86 +28,85 @@ export const makeNexiPaymentProvider = Effect.gen(function* () {
 
   return {
     unconfirmedSessionFailureCode: "nexi_hpp_create_unconfirmed",
-    prepareSession: Effect.fn("NexiPaymentProvider.prepareSession")(function* (
-      input
-    ) {
-      const providerOrderId = NexiOrderIdSchema.make(
-        `D${BigInt(`0x${randomUUID().replaceAll("-", "")}`)
-          .toString(36)
-          .toUpperCase()}`
-      );
-      const currencyOverride = getNexiCurrencyOverride();
-      const { amount, currency } = yield* encodeAmount(
-        currencyOverride
-          ? { ...input.amount, currency: currencyOverride }
-          : input.amount
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new CheckoutError({
-              code: "checkout_failed",
-              message: "Unsupported payment amount.",
-              cause,
-            })
-        )
-      );
-      yield* Effect.annotateLogsScoped({
-        nexiAmount: amount,
-        nexiCurrency: currency,
-      });
-
-      const create = Effect.suspend(() =>
-        nexi
-          .createHostedPaymentPage({
-            orderId: providerOrderId,
-            correlationId: NexiCorrelationIdSchema.make(input.correlationId),
-            amount,
-            currency,
-            locale: input.locale,
-            notificationUrl: input.notificationUrl,
-            resultUrl: input.resultUrl,
-            cancelUrl: input.cancelUrl,
-            customer: {
-              ...input.customer,
-              id:
-                input.customer.id === undefined
-                  ? undefined
-                  : NexiCustomerReferenceSchema.make(input.customer.id),
-            },
-          })
-          .pipe(
-            Effect.map(({ orderId, securityToken, hostedPage }) => ({
-              providerOrderId: orderId,
-              securityToken,
-              hostedPage,
-            })),
-            Effect.mapError((cause) => {
-              const status =
-                cause._tag === "ExternalAPIError"
-                  ? cause.statusCode
-                  : undefined;
-              const rejected =
-                status !== undefined &&
-                status >= 400 &&
-                status < 500 &&
-                ![408, 409, 425, 429].includes(status);
-              return new PaymentProviderError({
-                message: "Nexi hosted payment page creation failed.",
+    prepareSession: Effect.fn("NexiPaymentProvider.prepareSession")(
+      function* (input) {
+        const providerOrderId = NexiOrderIdSchema.make(
+          `D${BigInt(`0x${randomUUID().replaceAll("-", "")}`)
+            .toString(36)
+            .toUpperCase()}`
+        );
+        const currencyOverride = getNexiCurrencyOverride();
+        const { amount, currency } = yield* encodeAmount(
+          currencyOverride
+            ? { ...input.amount, currency: currencyOverride }
+            : input.amount
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CheckoutError({
+                code: "checkout_failed",
+                message: "Unsupported payment amount.",
                 cause,
-                transportErrorTag: cause._tag,
-                ...(rejected && {
-                  creationRejection: {
-                    failureCode: "nexi_hpp_create_failed",
-                    providerStatus: "hpp_create_failed",
-                  },
-                }),
-              });
-            })
+              })
           )
-      );
+        );
+        const create = Effect.suspend(() =>
+          nexi
+            .createHostedPaymentPage({
+              orderId: providerOrderId,
+              correlationId: NexiCorrelationIdSchema.make(input.correlationId),
+              amount,
+              currency,
+              locale: input.locale,
+              notificationUrl: input.notificationUrl,
+              resultUrl: input.resultUrl,
+              cancelUrl: input.cancelUrl,
+              customer: {
+                ...input.customer,
+                id:
+                  input.customer.id === undefined
+                    ? undefined
+                    : NexiCustomerReferenceSchema.make(input.customer.id),
+              },
+            })
+            .pipe(
+              Effect.map(({ orderId, securityToken, hostedPage }) => ({
+                providerOrderId: orderId,
+                securityToken,
+                hostedPage,
+              })),
+              Effect.mapError((cause) => {
+                const status =
+                  cause._tag === "ExternalAPIError"
+                    ? cause.statusCode
+                    : undefined;
+                const rejected =
+                  status !== undefined &&
+                  status >= 400 &&
+                  status < 500 &&
+                  ![408, 409, 425, 429].includes(status);
+                return new PaymentProviderError({
+                  message: "Nexi hosted payment page creation failed.",
+                  cause,
+                  transportErrorTag: cause._tag,
+                  ...(rejected && {
+                    creationRejection: {
+                      failureCode: "nexi_hpp_create_failed",
+                      providerStatus: "hpp_create_failed",
+                    },
+                  }),
+                });
+              })
+            )
+        );
 
-      return { providerOrderId, create };
-    }, Effect.scoped),
+        return {
+          providerOrderId,
+          create,
+          logFields: { nexiAmount: amount, nexiCurrency: currency },
+        };
+      }
+    ),
     lookup: Effect.fn("NexiPaymentProvider.lookup")(function* (input) {
       const order = yield* nexi
         .getOrder({

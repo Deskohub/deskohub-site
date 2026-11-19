@@ -13,7 +13,7 @@ import {
 import { PaymentProviderFallbackRepository } from "./payment-provider-fallback.repository";
 import {
   configuredPaymentProvider,
-  isMockPaymentPreview,
+  isMockPaymentEnabled,
   selectCheckoutPaymentProvider,
 } from "./payment-provider-selection";
 
@@ -91,7 +91,6 @@ const PreviewPaymentProviders = Layer.effect(
   Layer.provide(Layer.mergeAll(WorkspaceNexiLayer, WorkspaceDatabase.Default))
 );
 
-export const PaymentProvidersLive =
-  isMockPaymentPreview() && configuredPaymentProvider() !== "nexi"
-    ? PreviewPaymentProviders
-    : PaymentProvidersFromNexi.pipe(Layer.provide(WorkspaceNexiLayer));
+export const PaymentProvidersLive = isMockPaymentEnabled()
+  ? PreviewPaymentProviders
+  : PaymentProvidersFromNexi.pipe(Layer.provide(WorkspaceNexiLayer));

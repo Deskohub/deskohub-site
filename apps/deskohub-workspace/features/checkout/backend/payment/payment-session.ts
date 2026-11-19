@@ -138,6 +138,7 @@ export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
     resultUrl,
     cancelUrl,
   });
+  yield* Effect.annotateLogsScoped(prepared.logFields ?? {});
   yield* Effect.logDebug("Checkout provider session inputs prepared");
 
   yield* input.beforeAttempt;

@@ -829,72 +829,82 @@ describe.skipIf(!testDatabase)(
         }
       );
 
-      test("marks the claimed revision cancelled and requires a refund of its paid Nexi attempt", async () => {
-        const claimedAt = at(5);
-        const id = await insertReservation(
-          { ...confirmedPaid, reservation: "cancelling" },
-          { updatedAt: claimedAt }
-        );
-        const nexiAttempt = await insertActivePaymentAttempt(id);
-        const internalAttempt = await insertActivePaymentAttempt(id, {
-          provider: "internal",
-          providerOrderId: null,
-          amountValue: 0,
-        });
-
-        await run((repository) =>
-          repository.completeRequestedCancellation({
-            id,
-            cancelledAt: at(6),
-            claimedAt,
-            failureCode: "operator_cancelled",
-          })
-        );
-
-        expect(await readReservation(id)).toMatchObject({
-          reservationState: "cancelled",
-          reservationCancelledAt: at(6),
-          failureCode: "operator_cancelled",
-        });
-        expect((await readPaymentAttempt(nexiAttempt))?.refundState).toBe(
-          "required"
-        );
-        expect((await readPaymentAttempt(internalAttempt))?.refundState).toBe(
-          "not_required"
-        );
-      });
-
-      test("records the refund a customer's withdrawal owes on its paid Nexi attempt", async () => {
-        for (const refund of [
-          { targetValue: 1, releasesPromotions: false },
-          { targetValue: 2, releasesPromotions: true },
-        ]) {
+      test.each(["nexi", "mock"] as const)(
+        "requires a refund of the paid %s attempt after operator cancellation",
+        async (provider) => {
           const claimedAt = at(5);
           const id = await insertReservation(
             { ...confirmedPaid, reservation: "cancelling" },
             { updatedAt: claimedAt }
           );
-          const nexiAttempt = await insertActivePaymentAttempt(id);
+          const paidAttempt = await insertActivePaymentAttempt(id, {
+            provider,
+          });
+          const internalAttempt = await insertActivePaymentAttempt(id, {
+            provider: "internal",
+            providerOrderId: null,
+            amountValue: 0,
+          });
 
           await run((repository) =>
             repository.completeRequestedCancellation({
               id,
               cancelledAt: at(6),
               claimedAt,
-              failureCode: null,
-              refund,
+              failureCode: "operator_cancelled",
             })
           );
 
           expect(await readReservation(id)).toMatchObject({
             reservationState: "cancelled",
+            reservationCancelledAt: at(6),
+            failureCode: "operator_cancelled",
           });
-          expect(await readPaymentAttempt(nexiAttempt)).toMatchObject({
-            refundState: "required",
-            refundTargetValue: refund.targetValue,
-          });
+          expect((await readPaymentAttempt(paidAttempt))?.refundState).toBe(
+            "required"
+          );
+          expect((await readPaymentAttempt(internalAttempt))?.refundState).toBe(
+            "not_required"
+          );
         }
-      });
+      );
+
+      test.each(["nexi", "mock"] as const)(
+        "records the refund a withdrawal owes on its paid %s attempt",
+        async (provider) => {
+          for (const refund of [
+            { targetValue: 1, releasesPromotions: false },
+            { targetValue: 2, releasesPromotions: true },
+          ]) {
+            const claimedAt = at(5);
+            const id = await insertReservation(
+              { ...confirmedPaid, reservation: "cancelling" },
+              { updatedAt: claimedAt }
+            );
+            const paidAttempt = await insertActivePaymentAttempt(id, {
+              provider,
+            });
+
+            await run((repository) =>
+              repository.completeRequestedCancellation({
+                id,
+                cancelledAt: at(6),
+                claimedAt,
+                failureCode: null,
+                refund,
+              })
+            );
+
+            expect(await readReservation(id)).toMatchObject({
+              reservationState: "cancelled",
+            });
+            expect(await readPaymentAttempt(paidAttempt)).toMatchObject({
+              refundState: "required",
+              refundTargetValue: refund.targetValue,
+            });
+          }
+        }
+      );
 
       test("notifies office guests on withdrawal and keeps the previous partial refund", async () => {
         const claimedAt = at(5);

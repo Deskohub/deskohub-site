@@ -1062,9 +1062,13 @@ describe("CheckoutService", () => {
   });
 
   describe("log annotations", () => {
-    const captureAnnotations = <A, E>(effect: Effect.Effect<A, E>) => {
+    const captureAnnotations = <A, E>(
+      effect: Effect.Effect<A, E>,
+      forMessage?: string
+    ) => {
       const annotations: LogAnnotations[] = [];
-      const logger = Logger.make(({ fiber }) => {
+      const logger = Logger.make(({ fiber, message }) => {
+        if (forMessage && String(message) !== forMessage) return;
         annotations.push({
           ...fiber.getRef(References.CurrentLogAnnotations),
         });
@@ -1120,6 +1124,29 @@ describe("CheckoutService", () => {
           paymentAttemptState: "created",
         })
       );
+    });
+
+    test("logs the encoded amount and sandbox currency on Nexi creation", async () => {
+      const originalOrigin = env.NEXI_API_ORIGIN;
+      const originalCurrency = env.NEXI_CHECKOUT_CURRENCY_OVERRIDE;
+      env.NEXI_API_ORIGIN = "https://xpaysandbox.nexigroup.com";
+      env.NEXI_CHECKOUT_CURRENCY_OVERRIDE = "EUR";
+
+      try {
+        const harness = await createCheckoutHarness({
+          orderId: "reservation-create-log-currency",
+        });
+        const rows = await captureAnnotations(
+          harness.effect,
+          "Nexi hosted payment page creation started"
+        );
+        expect(rows).toEqual([
+          expect.objectContaining({ nexiAmount: "53000", nexiCurrency: "EUR" }),
+        ]);
+      } finally {
+        env.NEXI_API_ORIGIN = originalOrigin;
+        env.NEXI_CHECKOUT_CURRENCY_OVERRIDE = originalCurrency;
+      }
     });
 
     test("name a reused active attempt by its identifiers, never its record", async () => {

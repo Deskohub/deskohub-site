@@ -11,10 +11,7 @@ import {
   type MockPaymentCapability,
   mockHostedPaymentPath,
 } from "./mock-payment-provider";
-import {
-  configuredPaymentProvider,
-  isMockPaymentPreview,
-} from "./payment-provider-selection";
+import { isMockPaymentEnabled } from "./payment-provider-selection";
 
 const privateHeaders = {
   "Cache-Control": "private, no-store",
@@ -116,6 +113,6 @@ const handleMockHostedPaymentRoute = defineWorkspaceRoute(
 );
 
 export const mockHostedPaymentRoute = (request: Request) =>
-  isMockPaymentPreview() && configuredPaymentProvider() !== "nexi"
+  isMockPaymentEnabled()
     ? handleMockHostedPaymentRoute(request)
     : Promise.resolve(notFound());

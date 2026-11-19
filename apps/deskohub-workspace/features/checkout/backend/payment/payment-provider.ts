@@ -34,6 +34,7 @@ export interface HostedPaymentSession {
 }
 
 export interface PreparedPaymentSession {
+  readonly logFields?: Readonly<Record<string, string>>;
   readonly providerOrderId: string;
   readonly create: Effect.Effect<HostedPaymentSession, PaymentProviderError>;
 }

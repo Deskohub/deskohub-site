@@ -3,6 +3,7 @@ import {
   MockPaymentWebhookError,
   MockPaymentWebhookService,
 } from "@/features/checkout/backend/payment/mock-payment-webhook.service";
+import { isMockPaymentEnabled } from "@/features/checkout/backend/payment/payment-provider-selection";
 import { paymentWebhookDisposition } from "@/features/checkout/backend/payment/payment-webhook-disposition";
 import {
   defineWebhookRoute,
@@ -25,7 +26,7 @@ const processMockWebhookRequest = Effect.fn("processMockPaymentWebhookRequest")(
   }
 );
 
-export const POST = defineWebhookRoute(
+const handleMockPaymentWebhook = defineWebhookRoute(
   {
     operation: "mockPaymentWebhook",
     failureMessage: "Mock payment webhook processing failed",
@@ -44,3 +45,8 @@ export const POST = defineWebhookRoute(
       Effect.provide(MockPaymentWebhookService.Live)
     )
 );
+
+export const POST = (request: Request) =>
+  isMockPaymentEnabled()
+    ? handleMockPaymentWebhook(request)
+    : Promise.resolve(new Response(null, { status: 404 }));
