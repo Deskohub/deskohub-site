@@ -86,6 +86,18 @@ export type BrowserAnalyticsSession = {
 
 const pendingIdentity: AnalyticsAccountIdentity = { status: "pending" };
 
+function getDocumentReferrerType() {
+  try {
+    const referrer = new URL(document.referrer);
+    if (referrer.protocol !== "http:" && referrer.protocol !== "https:") {
+      return "unavailable";
+    }
+    return referrer.origin === window.location.origin ? "internal" : "external";
+  } catch {
+    return "unavailable";
+  }
+}
+
 const telemetryHostAllowedFor = (posthogHost: string | undefined) => {
   const applicationHostname = globalThis.window?.location.hostname;
   return (
@@ -157,6 +169,9 @@ export function createBrowserAnalyticsSession(): BrowserAnalyticsSession {
   let stopSessionIdSubscription: (() => void) | undefined;
   let detachAnalyticsEvents: (() => void) | undefined;
   let detachBrowserLogs: (() => void) | undefined;
+  let observedPathname:
+    | { pathname: string; followedNavigation: boolean }
+    | undefined;
   let lastCapturedPageviewPath: string | undefined;
   let lastReadyIdentity: SettledAnalyticsAccountIdentity | undefined;
   let lastSettledIdentity: SettledAnalyticsAccountIdentity | undefined;
@@ -201,6 +216,11 @@ export function createBrowserAnalyticsSession(): BrowserAnalyticsSession {
     lastCapturedPageviewPath = pageviewPath;
     posthog?.capture("$pageview", {
       $current_url: createPostHogPageUrl(window.location.href),
+      referrer_type:
+        observedPathname?.pathname === pageviewPath &&
+        observedPathname.followedNavigation
+          ? "internal"
+          : getDocumentReferrerType(),
     });
   };
 
@@ -482,6 +502,17 @@ export function createBrowserAnalyticsSession(): BrowserAnalyticsSession {
   const sync = (next: BrowserAnalyticsSettings) => {
     const previous = settings;
     settings = next;
+
+    // Observe route changes even when consent or identity delays capture.
+    if (
+      next.pathname !== null &&
+      next.pathname !== observedPathname?.pathname
+    ) {
+      observedPathname = {
+        pathname: next.pathname,
+        followedNavigation: observedPathname !== undefined,
+      };
+    }
 
     if (previous?.analyticsAccepted !== next.analyticsAccepted) {
       consentSignal = next.analyticsAccepted;

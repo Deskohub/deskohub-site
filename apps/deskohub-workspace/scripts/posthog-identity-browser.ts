@@ -60,6 +60,10 @@ const posthogHostByFixtureMode = {
 const fixtureQueryToken = "posthog-identity-query-token";
 const fixtureHashToken = "posthog-identity-hash-token";
 const fixtureReferrerQueryToken = "posthog-identity-referrer-query-token";
+const fixtureReferrerPath = "/search/posthog-identity-referrer-path-token";
+const fixtureReferrerHost = "www.google.com";
+const fixtureSameOriginReferrer = `${fixtureBaseUrl}${fixtureReferrerPath}?q=${fixtureReferrerQueryToken}`;
+const fixtureExternalReferrer = `http://${fixtureReferrerHost}${fixtureReferrerPath}?q=${fixtureReferrerQueryToken}`;
 const legacyInitialRawQueryToken = "posthog-identity-legacy-raw-query-token";
 const legacyInitialReferrerToken = "posthog-identity-legacy-referrer-token";
 const legacyInitialUtmToken = "posthog-identity-legacy-utm-token";
@@ -83,12 +87,14 @@ const sensitivePayloadMarkers = [
   { code: "query-token", value: fixtureQueryToken },
   { code: "hash-token", value: fixtureHashToken },
   { code: "referrer-query-token", value: fixtureReferrerQueryToken },
+  { code: "referrer-path-token", value: fixtureReferrerPath },
+  { code: "referrer-host", value: fixtureReferrerHost },
   { code: "legacy-raw-query-token", value: legacyInitialRawQueryToken },
   { code: "legacy-referrer-token", value: legacyInitialReferrerToken },
   { code: "legacy-utm-token", value: legacyInitialUtmToken },
 ] as const;
 
-const legacyInitialPropertyNames = [
+const forbiddenPayloadPropertyNames = [
   "$initial_person_info",
   "$initial_referrer_info",
   "$initial_campaign_params",
@@ -98,6 +104,17 @@ const legacyInitialPropertyNames = [
   "$initial_host",
   "$initial_pathname",
   "$initial_utm_source",
+  "$referrer",
+  "$referring_domain",
+  "$session_entry_referrer",
+  "$session_entry_referring_domain",
+  "$search_engine",
+  "ph_keyword",
+  "$initial_search_engine",
+  "$initial_ph_keyword",
+  "$session_entry_search_engine",
+  "$session_entry_ph_keyword",
+  "$prev_pageview_pathname",
 ] as const;
 
 const userIds = {
@@ -1092,12 +1109,23 @@ const waitForFixtureControl = (page: Page) =>
     { timeout: 15_000 }
   );
 
+type FixturePageOptions = {
+  readonly consent: "on" | "off";
+  readonly fixtureMode?: FixtureMode;
+  readonly referrer?: string | null;
+  readonly remoteFlags?: boolean;
+};
+
 const openPage = async (
   context: BrowserContext,
   runId: string,
-  consent: "on" | "off",
   problems: FixtureBrowserProblems,
-  fixtureMode: FixtureMode = "cross-host"
+  {
+    consent,
+    fixtureMode = "cross-host",
+    referrer = fixtureSameOriginReferrer,
+    remoteFlags = false,
+  }: FixturePageOptions
 ) => {
   const page = await context.newPage();
   page.on("pageerror", (error) => {
@@ -1110,9 +1138,9 @@ const openPage = async (
 
   try {
     await page.goto(
-      `${fixtureBaseUrl}/?run=${encodeURIComponent(runId)}&consent=${consent}&fixtureMode=${fixtureMode}&query=${fixtureQueryToken}#hash=${fixtureHashToken}`,
+      `${fixtureBaseUrl}/?run=${encodeURIComponent(runId)}&consent=${consent}&fixtureMode=${fixtureMode}&remoteFlags=${remoteFlags}&query=${fixtureQueryToken}#hash=${fixtureHashToken}`,
       {
-        referer: `${fixtureBaseUrl}/referrer?query=${fixtureReferrerQueryToken}`,
+        referer: referrer ?? undefined,
         timeout: 15_000,
         waitUntil: "load",
       }
@@ -1453,20 +1481,20 @@ const findSensitivePostHogRequestHitsForRequests = (
       }
     }
 
-    for (const propertyName of legacyInitialPropertyNames) {
+    for (const propertyName of forbiddenPayloadPropertyNames) {
       if (request.urlText.includes(propertyName)) {
-        addHit("legacy-initial-property", endpoint, "$url");
+        addHit("forbidden-property", endpoint, "$url");
       }
     }
-    const legacyPropertyPaths = request.body.ok
-      ? findJsonPropertyPaths(request.body.value, legacyInitialPropertyNames)
-      : legacyInitialPropertyNames
+    const forbiddenPropertyPaths = request.body.ok
+      ? findJsonPropertyPaths(request.body.value, forbiddenPayloadPropertyNames)
+      : forbiddenPayloadPropertyNames
           .filter((propertyName) =>
             request.body.searchText.includes(propertyName)
           )
           .map(() => "$body");
-    for (const propertyPath of new Set(legacyPropertyPaths)) {
-      addHit("legacy-initial-property", endpoint, propertyPath);
+    for (const propertyPath of new Set(forbiddenPropertyPaths)) {
+      addHit("forbidden-property", endpoint, propertyPath);
     }
   }
 
@@ -1598,6 +1626,13 @@ const waitForEvent = async (
 
 const waitForFixtureEvent = async (server: LocalPostHogServer) =>
   waitForEvent(server, "fixture-sensitive-event");
+
+const navigateWithinFixture = async (page: Page) => {
+  await page.locator("[data-fixture-navigate]").click();
+  await page
+    .locator("main[data-fixture-pathname='/fixture-navigation']")
+    .waitFor({ state: "attached", timeout: 5_000 });
+};
 
 const browserLogsPath = "/i/v1/logs";
 
@@ -1793,9 +1828,7 @@ type FixtureHandle = {
 const openFixture = async (
   browser: Browser,
   server: LocalPostHogServer,
-  options: {
-    readonly consent: "on" | "off";
-    readonly fixtureMode?: FixtureMode;
+  options: FixturePageOptions & {
     readonly getSessionDelayMs?: number;
     readonly getSessionUnavailable?: boolean;
     readonly session: SyntheticSession;
@@ -1805,13 +1838,7 @@ const openFixture = async (
   const runId = server.createRun(options);
   const context = await createContext(browser, runnerProblems);
   try {
-    const page = await openPage(
-      context,
-      runId,
-      options.consent,
-      runnerProblems,
-      options.fixtureMode
-    );
+    const page = await openPage(context, runId, runnerProblems, options);
     await assertFixtureConsentCookie(page, options.consent === "on");
     return { context, page, problems: runnerProblems, runId };
   } catch (error) {
@@ -1882,6 +1909,7 @@ const runConsentOffScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "off",
+    referrer: fixtureExternalReferrer,
     session: "A",
   });
   try {
@@ -1897,6 +1925,20 @@ const runConsentOffScenario = async (
       "consent-off-capture"
     );
     check(server.ingestMark() === 0, "consent-off-capture");
+
+    await navigateWithinFixture(fixture.page);
+    check(server.ingestMark() === 0, "consent-off-navigation-ingest");
+    await grantConsent(fixture.page);
+    await waitForEvent(server, "$pageview");
+    const [firstPageview] = eventNamed(server.allIngestRecords(), "$pageview");
+    check(
+      firstPageview !== undefined &&
+        eventDistinctId(firstPageview) === accountDistinctIds.A &&
+        propertyString(firstPageview, "referrer_type") === "internal" &&
+        propertyString(firstPageview, "$current_url") ===
+          `${fixtureBaseUrl}/fixture-navigation`,
+      "first-pageview-after-consent-navigation"
+    );
   } finally {
     await closeFixture(fixture);
   }
@@ -1910,6 +1952,7 @@ const runConsentCookieGateScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "on",
+    referrer: fixtureExternalReferrer,
     session: "A",
   });
   try {
@@ -1945,6 +1988,15 @@ const runConsentCookieGateScenario = async (
     await waitForAuthenticatedIdentity(fixture.page);
     await waitForEvent(server, "$identify");
     await waitForEvent(server, "$pageview");
+    const [regrantedPageview] = eventNamed(
+      server.allIngestRecords(),
+      "$pageview"
+    );
+    check(
+      regrantedPageview !== undefined &&
+        propertyString(regrantedPageview, "referrer_type") === "external",
+      "consent-regrant-preserves-document-referrer-type"
+    );
     await captureFixtureEvent(fixture.page);
     await waitForFixtureEvent(server);
     check(
@@ -1998,6 +2050,10 @@ const runDelayedFirstPageviewScenario = async (
     const firstPageview = pageviews[0];
     check(firstPageview !== undefined, "delayed-pageview-missing");
     check(
+      propertyString(firstPageview, "referrer_type") === "internal",
+      "same-origin-document-referrer-type"
+    );
+    check(
       eventDistinctId(firstPageview) === accountDistinctIds.A,
       "delayed-pageview-identity"
     );
@@ -2024,11 +2080,52 @@ const runAnonymousIdentifyScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "on",
+    referrer: fixtureExternalReferrer,
     session: "anonymous",
   });
   try {
     await waitForAnonymous(fixture.page);
     await waitForEvent(server, "$pageview");
+    check(
+      (await fixture.page.evaluate(() => document.referrer)) ===
+        fixtureExternalReferrer,
+      "external-document-referrer-fixture"
+    );
+    const [entryPageview] = eventNamed(server.allIngestRecords(), "$pageview");
+    check(
+      entryPageview !== undefined &&
+        propertyString(entryPageview, "referrer_type") === "external",
+      "external-document-referrer-type"
+    );
+
+    await navigateWithinFixture(fixture.page);
+    await waitFor(
+      () => eventNamed(server.allIngestRecords(), "$pageview").length === 2,
+      "navigation-pageview"
+    );
+    const [, navigationPageview] = eventNamed(
+      server.allIngestRecords(),
+      "$pageview"
+    );
+    check(
+      navigationPageview !== undefined &&
+        propertyString(navigationPageview, "referrer_type") === "internal",
+      "navigation-referrer-type"
+    );
+    for (const property of ["$session_id", "$window_id"]) {
+      const id = propertyString(entryPageview, property);
+      check(
+        Boolean(id) && propertyString(navigationPageview, property) === id,
+        `navigation-preserves-${property}`
+      );
+    }
+    const entryPageviewId = propertyString(entryPageview, "$pageview_id");
+    check(
+      Boolean(entryPageviewId) &&
+        propertyString(navigationPageview, "$prev_pageview_id") ===
+          entryPageviewId,
+      "navigation-preserves-previous-pageview-id"
+    );
     await captureFixtureEvent(fixture.page);
     await waitForFixtureEvent(server);
     const anonymousEvents = fixtureEvents(server.allIngestRecords()).filter(
@@ -2036,6 +2133,10 @@ const runAnonymousIdentifyScenario = async (
     );
     check(anonymousEvents.length > 0, "anonymous-capture-missing");
     const anonymousDistinctId = eventDistinctId(anonymousEvents.at(-1)!);
+    check(
+      anonymousEvents.every((event) => !("referrer_type" in event.properties)),
+      "referrer-type-leaked-into-custom-event"
+    );
     check(anonymousDistinctId !== undefined, "anonymous-distinct-id-missing");
     check(
       anonymousDistinctId !== accountDistinctIds.A,
@@ -2070,11 +2171,23 @@ const runSameIdentityRefreshScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "on",
+    referrer: null,
     session: "A",
   });
   try {
     await waitForAuthenticated(fixture.page);
     await waitForEvent(server, "$identify");
+    await waitForEvent(server, "$pageview");
+    check(
+      (await fixture.page.evaluate(() => document.referrer)) === "",
+      "unavailable-document-referrer-fixture"
+    );
+    const [firstPageview] = eventNamed(server.allIngestRecords(), "$pageview");
+    check(
+      firstPageview !== undefined &&
+        propertyString(firstPageview, "referrer_type") === "unavailable",
+      "unavailable-document-referrer-type"
+    );
     server.clearIngest();
     await refreshAnalyticsAccountIdentity(fixture.page);
     await waitForSessionSettled(fixture.page);
@@ -2106,6 +2219,7 @@ const runLegacyFlagsInitialPropertiesScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "on",
+    remoteFlags: true,
     session: "A",
   });
   try {
@@ -2714,8 +2828,8 @@ const runCrossTabAndFocusScenario = async (
   let pageOne: Page | undefined;
   let pageTwo: Page | undefined;
   try {
-    pageOne = await openPage(context, runId, "on", runnerProblems);
-    pageTwo = await openPage(context, runId, "on", runnerProblems);
+    pageOne = await openPage(context, runId, runnerProblems, { consent: "on" });
+    pageTwo = await openPage(context, runId, runnerProblems, { consent: "on" });
     await waitForAuthenticated(pageOne);
     await waitForAuthenticated(pageTwo);
     await waitForAuthenticatedIdentity(pageOne);
@@ -2792,8 +2906,8 @@ const runDomainNotificationIntegrationScenario = async (
   let pageOne: Page | undefined;
   let pageTwo: Page | undefined;
   try {
-    pageOne = await openPage(context, runId, "on", runnerProblems);
-    pageTwo = await openPage(context, runId, "on", runnerProblems);
+    pageOne = await openPage(context, runId, runnerProblems, { consent: "on" });
+    pageTwo = await openPage(context, runId, runnerProblems, { consent: "on" });
     await waitForAuthenticated(pageOne);
     await waitForAuthenticated(pageTwo);
     await waitForAuthenticatedIdentity(pageOne);
@@ -2883,11 +2997,13 @@ const runCrossTabConsentWithdrawalScenario = async (
   server.clearIngest();
   const runId = server.createRun({ session: "B" });
   const context = await createContext(browser, runnerProblems);
+  const initialRequestMark = server.allPostHogRequests().length;
+  const pageOptions = { consent: "on", remoteFlags: true } as const;
   let pageOne: Page | undefined;
   let pageTwo: Page | undefined;
   try {
-    pageOne = await openPage(context, runId, "on", runnerProblems);
-    pageTwo = await openPage(context, runId, "on", runnerProblems);
+    pageOne = await openPage(context, runId, runnerProblems, pageOptions);
+    pageTwo = await openPage(context, runId, runnerProblems, pageOptions);
     await waitForAuthenticated(pageOne);
     await waitForAuthenticated(pageTwo);
     await waitForAuthenticatedIdentity(pageOne);
@@ -2895,7 +3011,10 @@ const runCrossTabConsentWithdrawalScenario = async (
     await waitForEvent(server, "$identify");
     await waitFor(
       () =>
-        server.allPostHogRequests().filter(isFeatureFlagsRequest).length >= 2,
+        server
+          .allPostHogRequests()
+          .slice(initialRequestMark)
+          .filter(isFeatureFlagsRequest).length >= 2,
       "cross-tab-consent-initial-flags"
     );
     await waitForFixtureConsentView(pageOne, true);

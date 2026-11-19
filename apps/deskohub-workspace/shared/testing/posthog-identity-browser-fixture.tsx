@@ -3,7 +3,7 @@
 import { testEmailAddress } from "@deskohub/test-email";
 import { Schema } from "effect";
 import posthog from "posthog-js";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { signOutOfAccount } from "@/features/account/account-exit";
 import {
@@ -269,6 +269,19 @@ const signOut = async () => (await signOutOfAccount()) === "signed-out";
 
 export function PostHogIdentityBrowserFixture() {
   const analyticsAccepted = useVisitorConsent("analytics");
+  const [pathname, setPathname] = useState(window.location.pathname);
+  // The flag privacy scenario uses the production flag gate with fake ingest.
+  const [posthogEnvironment] = useState<"development" | "production">(() =>
+    new URLSearchParams(window.location.search).get("remoteFlags") === "true"
+      ? "production"
+      : "development"
+  );
+
+  const navigate = () => {
+    const destination = "/fixture-navigation";
+    window.history.pushState(null, "", destination);
+    setPathname(destination);
+  };
 
   const setAnalyticsConsent = useCallback((accepted: boolean) => {
     writeAnalyticsConsentCookie(accepted);
@@ -310,9 +323,12 @@ export function PostHogIdentityBrowserFixture() {
       <PostHogAnalytics
         analyticsAccepted={analyticsAccepted}
         featureFlagOverrides={{ discount_codes: true }}
-        posthogEnvironment="development"
+        posthogEnvironment={posthogEnvironment}
       >
-        <main data-fixture-consent={analyticsAccepted ? "accepted" : "denied"}>
+        <main
+          data-fixture-consent={analyticsAccepted ? "accepted" : "denied"}
+          data-fixture-pathname={pathname}
+        >
           <h1>PostHog identity browser fixture</h1>
           <p data-fixture-readonly-text>
             {syntheticName} — {syntheticBilling} — {syntheticEmail} — PIN{" "}
@@ -344,6 +360,9 @@ export function PostHogIdentityBrowserFixture() {
             type="button"
           >
             Capture synthetic event
+          </button>
+          <button data-fixture-navigate onClick={navigate} type="button">
+            Navigate within fixture
           </button>
         </main>
       </PostHogAnalytics>

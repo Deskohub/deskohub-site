@@ -242,10 +242,15 @@ non-production traffic apart:
 - Keep session replay, autocapture, exception capture, heatmaps, and surveys
   disabled so profile, billing, and PIN values never enter PostHog.
 - Redact URL query strings, hashes, credentials, and operational path
-  identifiers. Apply the URL cleanup to current, initial, and
-  `$session_entry_*` variants, including session-entry campaign fields;
-  disabled replay doesn't suppress session metadata. Drop malformed metadata,
-  and remove saved UTM and click metadata.
+  identifiers from current, initial, and session-entry page URLs and paths.
+  Drop malformed metadata and remove saved UTM and click metadata.
+- The consented browser `$pageview` sends `referrer_type` as `internal`,
+  `external`, or `unavailable`. An observed client pathname transition takes
+  precedence. Otherwise compare an HTTP(S) `document.referrer` to the current
+  origin. An absent or unusable referrer is `unavailable`. Drop referrer URLs,
+  domains, search keywords and engines, and previous pageview pathnames from
+  browser events and person setters. The SDK can add session-entry data with
+  `save_referrer` off.
 - Browser checkout events carry no reservation form values (name, email,
   phone, message, date, tier, or coffee and monitor preferences). The
   PostHog `pre-payment outcome` event's only custom property is its outcome.

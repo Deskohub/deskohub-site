@@ -4,11 +4,8 @@ import { sanitizeAnalyticsUrl } from "@/shared/utils/analytics-url";
 
 const POSTHOG_URL_PROPERTIES = [
   "$current_url",
-  "$referrer",
   "$initial_current_url",
-  "$initial_referrer",
   "$session_entry_url",
-  "$session_entry_referrer",
 ] as const;
 
 const POSTHOG_PATH_PROPERTIES = [
@@ -18,6 +15,23 @@ const POSTHOG_PATH_PROPERTIES = [
 ] as const;
 
 const SYNTHETIC_PATH_ORIGIN = "https://posthog-path.invalid";
+
+// The SDK can attach referrer-derived fields even with save_referrer off.
+const POSTHOG_REFERRER_PROPERTIES = new Set([
+  "$referrer",
+  "$referring_domain",
+  "$initial_referrer",
+  "$initial_referring_domain",
+  "$session_entry_referrer",
+  "$session_entry_referring_domain",
+  "$search_engine",
+  "ph_keyword",
+  "$initial_search_engine",
+  "$initial_ph_keyword",
+  "$session_entry_search_engine",
+  "$session_entry_ph_keyword",
+  "$prev_pageview_pathname",
+]);
 
 const POSTHOG_CLICK_ID_PROPERTIES = new Set([
   "gclid",
@@ -32,8 +46,6 @@ const POSTHOG_CLICK_ID_PROPERTIES = new Set([
   "igshid",
   "ttclid",
 ]);
-
-type PostHogUrlProperty = (typeof POSTHOG_URL_PROPERTIES)[number];
 
 function isPostHogCampaignProperty(property: string) {
   if (
@@ -75,22 +87,6 @@ const parseSyntheticPathUrl = Option.liftThrowable(
   (path: string) => new URL(path, SYNTHETIC_PATH_ORIGIN)
 );
 
-function sanitizePostHogUrl(
-  value: string,
-  property: PostHogUrlProperty
-): string | undefined {
-  if (
-    (property === "$referrer" ||
-      property === "$initial_referrer" ||
-      property === "$session_entry_referrer") &&
-    value === "$direct"
-  ) {
-    return value;
-  }
-
-  return Option.getOrUndefined(parsePostHogPageUrl(value));
-}
-
 function sanitizePostHogPath(value: string): string | undefined {
   if (!value.startsWith("/") || value.startsWith("//")) return undefined;
 
@@ -108,7 +104,10 @@ export function sanitizePostHogUrlProperties(
   const sanitizedProperties: Properties = { ...properties };
 
   for (const property of Object.keys(sanitizedProperties)) {
-    if (isPostHogCampaignProperty(property)) {
+    if (
+      POSTHOG_REFERRER_PROPERTIES.has(property) ||
+      isPostHogCampaignProperty(property)
+    ) {
       delete sanitizedProperties[property];
     }
   }
@@ -120,7 +119,7 @@ export function sanitizePostHogUrlProperties(
       continue;
     }
 
-    const sanitizedUrl = sanitizePostHogUrl(url, property);
+    const sanitizedUrl = Option.getOrUndefined(parsePostHogPageUrl(url));
     if (sanitizedUrl === undefined) {
       delete sanitizedProperties[property];
     } else {
