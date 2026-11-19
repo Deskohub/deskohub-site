@@ -16,6 +16,7 @@ export type InvoiceCancellationNoticeEmailProps = {
   readonly documentNumber: string;
   readonly invoice:
     | { readonly source: "reservation"; readonly orderId: string }
+    | { readonly source: "pass-purchase"; readonly orderId: string }
     | { readonly source: "manual" };
   /** What the corrective document means for the customer's money. */
   readonly settlement: Pick<
@@ -52,11 +53,14 @@ const invoiceCancellationNoticeCopy = (
     Match.when("customer", () => ({
       heading: m.invoiceCancellationNoticeHeading({}, { locale }),
       body: Match.value(invoice).pipe(
-        Match.when({ source: "reservation" }, ({ orderId }) =>
-          m.invoiceCancellationNoticeBody(
-            { invoiceNumber, orderId, documentNumber },
-            { locale }
-          )
+        Match.whenOr(
+          { source: "reservation" },
+          { source: "pass-purchase" },
+          ({ orderId }) =>
+            m.invoiceCancellationNoticeBody(
+              { invoiceNumber, orderId, documentNumber },
+              { locale }
+            )
         ),
         Match.when({ source: "manual" }, () =>
           m.invoiceCancellationNoticeManualBody(
@@ -74,11 +78,14 @@ const invoiceCancellationNoticeCopy = (
     Match.when("internal", () => ({
       heading: m.invoiceCancellationNoticeInternalHeading({}, { locale }),
       body: Match.value(invoice).pipe(
-        Match.when({ source: "reservation" }, ({ orderId }) =>
-          m.invoiceCancellationNoticeInternalBody(
-            { invoiceNumber, orderId, documentNumber },
-            { locale }
-          )
+        Match.whenOr(
+          { source: "reservation" },
+          { source: "pass-purchase" },
+          ({ orderId }) =>
+            m.invoiceCancellationNoticeInternalBody(
+              { invoiceNumber, orderId, documentNumber },
+              { locale }
+            )
         ),
         Match.when({ source: "manual" }, () =>
           m.invoiceCancellationNoticeManualInternalBody(

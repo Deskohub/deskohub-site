@@ -7,7 +7,12 @@ import {
   EmailServiceError,
   EmailServiceTag,
 } from "@deskohub/email";
-import { NexiOperationIdSchema, NexiService } from "@deskohub/nexi";
+import {
+  ExternalAPIError,
+  NetworkError,
+  NexiOperationIdSchema,
+  NexiService,
+} from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import { promotionCodes, vouchers } from "@/db/schema";
@@ -18,13 +23,24 @@ import {
   HeldCustomerAccount,
 } from "@/features/account/backend/customer-account-sections";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
+import { accountingSnapshotKeyIdSchema } from "@/features/accounting/accounting-document-snapshot";
+import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
+import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
+import { testAccountingStorage } from "@/features/accounting/backend/accounting-storage.test-utils";
+import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
+import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
+import { companyRegistrationIdSchema } from "@/features/accounting/billing-identity";
+import { getInvoicePresentation } from "@/features/accounting/invoice-presentation";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
+import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
 import { NexiWebhookService } from "@/features/checkout/backend/payment/nexi-webhook.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentRefundService } from "@/features/checkout/backend/payment/payment-refund.service";
+import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
 import { PaymentAttemptRepository } from "@/features/checkout/backend/repositories/payment-attempt.repository";
 import { WebhookEventRepository } from "@/features/checkout/backend/repositories/webhook-event.repository";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { calculateDiscounts } from "@/features/discounts/calculator";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
@@ -35,6 +51,7 @@ import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/wo
 import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
+import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId as accountId } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
@@ -50,6 +67,7 @@ import {
   recordEntryPackPaymentConsent,
 } from "./entry-pack-purchase";
 import { settleEntryPack } from "./entry-pack-settlement";
+import { reconcilePassPurchases } from "./pass-purchase-reconciliation";
 
 describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
   "Entry pack purchase",
@@ -118,7 +136,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     const integration = async (
       db: WorkspacePostgresSuiteDatabase,
       voucherValue: number,
-      purchasedAt?: Temporal.Instant
+      purchasedAt?: Temporal.Instant,
+      billing?: ReservationBillingSelection
     ) => {
       const code = canonicalPromotionCodeSchema.make(
         `V${crypto.randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`
@@ -165,6 +184,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const mail: EmailMessage[] = [];
       const attemptedKeys: (string | undefined)[] = [];
       let failSend = false;
+      let buyerName = "Fixture Buyer";
+      const invoiceDeliveries = new Set<string>();
+      const key = {
+        id: accountingSnapshotKeyIdSchema.make("PASS_TEST"),
+        secret: "synthetic pass accounting key for PostgreSQL",
+      };
+      const accounting = testAccountingStorage(
+        db.layer,
+        Layer.succeed(AccountingSnapshotKeyService, {
+          getActive: Effect.succeed(key),
+          getById: () => Effect.succeed(key),
+        })
+      );
       const { layer } = await Effect.runPromise(
         Effect.gen(function* () {
           const handler = yield* makeEntryPackOrderPaymentHandler;
@@ -182,6 +214,15 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Effect.provide(
             Layer.mergeAll(
               db.layer,
+              accounting,
+              Layer.mock(InvoiceEmailDeliveryService, {
+                deliverByInvoiceId: ({ invoiceId }) =>
+                  Effect.sync(() => {
+                    const changed = !invoiceDeliveries.has(invoiceId);
+                    invoiceDeliveries.add(invoiceId);
+                    return { status: "delivered", changed } as const;
+                  }),
+              }),
               Layer.succeed(EmailConfigTag, {
                 defaultFrom: { email: testEmailAddress("pass-sender") },
               }),
@@ -212,10 +253,26 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       const providerOrders: string[] = [];
       let captured = true;
+      let abandoned = false;
+      let failCreation = false;
       const services = Layer.mergeAll(
         db.layer,
         purchaseServices,
         layer,
+        accounting,
+        Layer.mock(CustomerAccountContactService, {
+          linkedContact: () =>
+            Effect.sync(() => ({
+              accountId,
+              dotyposCustomerId,
+              email,
+              name: buyerName,
+              phone: null,
+            })),
+        }),
+        Layer.mock(PaymentPageProviderStatus, {
+          observe: () => Effect.succeed("no_activity"),
+        }),
         LegalEvidenceEventRepository.Default.pipe(Layer.provide(db.layer)),
         PaymentAttemptRepository.Default.pipe(Layer.provide(db.layer)),
         WebhookEventRepository.Default.pipe(Layer.provide(db.layer)),
@@ -224,6 +281,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           paymentStarted: () => Effect.void,
           paymentCompleted: () => Effect.void,
           paymentFailed: () => Effect.void,
+          paymentAbandoned: () => Effect.void,
         }),
         Layer.mock(DiscountService, {
           quote: (input) =>
@@ -244,30 +302,52 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         }),
         Layer.mock(NexiService, {
           createHostedPaymentPage: ({ orderId }) =>
-            Effect.sync(() => {
+            Effect.suspend(() => {
               providerOrders.push(orderId);
-              return {
+              if (failCreation) {
+                failCreation = false;
+                return Effect.fail(
+                  new NetworkError({
+                    message: "Synthetic ambiguous Nexi creation",
+                  })
+                );
+              }
+              return Effect.succeed({
                 orderId,
                 hostedPage: "https://nexi.test/payment",
                 securityToken: "synthetic-session",
-              };
+              });
             }),
-          verifyPaymentOutcome: (input) =>
-            Effect.succeed({
-              status: captured ? "success" : "failure",
+          getOrder: () =>
+            Effect.fail(
+              new ExternalAPIError({
+                service: "Nexi",
+                operation: "Get order",
+                statusCode: 404,
+              })
+            ),
+          verifyPaymentOutcome: (input) => {
+            const settledStatus = captured ? "success" : "failure";
+            const settledOrderStatus = captured ? "EXECUTED" : "DECLINED";
+            return Effect.succeed({
+              status: abandoned ? "pending" : settledStatus,
               provider: {
                 orderId: input.orderId,
-                operationId: NexiOperationIdSchema.make("synthetic-operation"),
-                operationCount: 1,
+                operationId: abandoned
+                  ? undefined
+                  : NexiOperationIdSchema.make("synthetic-operation"),
+                operationCount: abandoned ? 0 : 1,
                 amount: input.amount,
                 authorizedAmount: undefined,
-                capturedAmount: captured ? input.amount : undefined,
+                capturedAmount:
+                  captured && !abandoned ? input.amount : undefined,
                 currency: input.currency,
-                orderStatus: captured ? "EXECUTED" : "DECLINED",
-                captureExecuted: captured,
+                orderStatus: abandoned ? undefined : settledOrderStatus,
+                captureExecuted: captured && !abandoned,
               },
               mismatches: [],
-            }),
+            });
+          },
         })
       );
       const orderId = orderIdSchema.make(crypto.randomUUID());
@@ -285,9 +365,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         accepted: true,
         acceptedDocuments: getEntryPackPaymentDisclosure("en-US").documents,
         submittedCode: code,
+        ...(billing && { billing }),
       };
       const notify = async (payment: "failure" | "success") => {
         captured = payment === "success";
+        abandoned = false;
         await Effect.runPromise(
           Effect.flatMap(NexiWebhookService, (webhook) =>
             webhook.processNotification({
@@ -313,6 +395,37 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         orderId,
         mail,
         attemptedKeys,
+        invoiceDeliveries,
+        changeBuyerName: (name: string) => {
+          buyerName = name;
+        },
+        abandonProviderOrder: () => {
+          abandoned = true;
+        },
+        rejectNextCreation: () => {
+          failCreation = true;
+        },
+        reconcile: (now: Temporal.Instant) =>
+          Effect.runPromise(
+            reconcilePassPurchases({ now, limit: 25 }).pipe(
+              Effect.provide(ProviderPaymentFinalizationService.Default),
+              Effect.provide(services),
+              atInstant(now)
+            )
+          ),
+        readAccounting: (attemptId: string, invoiceId: string) =>
+          Effect.runPromise(
+            Effect.gen(function* () {
+              const snapshots = yield* AccountingDocumentSnapshots;
+              const invoices = yield* InvoiceRepository;
+              return {
+                snapshot: yield* snapshots.findEntryPack(
+                  paymentAttemptIdSchema.make(attemptId)
+                ),
+                invoice: yield* invoices.findById(invoiceId),
+              };
+            }).pipe(Effect.provide(accounting))
+          ),
         rejectNextEmail: () => {
           failSend = true;
         },
@@ -398,28 +511,148 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       });
     });
 
-    test("keeps payment settled and retries confirmation with the same key after a send failure", async () => {
-      const db = database!;
-      const payment = await integration(db, 2_000);
-      await payment.pay();
-      payment.rejectNextEmail();
-      await expect(payment.notify("success")).rejects.toBeDefined();
-      expect(
-        (
-          await db.pool.query(
+    test.each([2_000, 115_000])(
+      "retries confirmation through reconciliation with frozen buyer accounting for voucher value %i",
+      async (voucherValue) => {
+        const db = database!;
+        const internal = voucherValue === 115_000;
+        const address = {
+          line1: "Synthetic 8",
+          city: "Praha",
+          postalCode: "11000",
+          country: "CZ",
+        };
+        const billing: ReservationBillingSelection = internal
+          ? {
+              purpose: "business",
+              invoice: "required",
+              buyer: {
+                kind: "business",
+                legalName: "Fixture Buyer Company",
+                companyId: companyRegistrationIdSchema.make("12345678"),
+                address,
+              },
+            }
+          : { purpose: "personal", invoice: "requested", address };
+        const frozenBuyer =
+          billing.purpose === "business"
+            ? billing.buyer
+            : { kind: "person", legalName: "Fixture Buyer", address };
+        const payment = await integration(db, voucherValue, undefined, billing);
+        payment.rejectNextEmail();
+        expect(await payment.pay()).toMatchObject({
+          status: internal ? "paid" : "hosted",
+        });
+        payment.changeBuyerName("Changed Buyer Profile");
+        if (!internal)
+          await expect(payment.notify("success")).rejects.toBeDefined();
+        const progress = () =>
+          db.pool.query(
             "select payment_state, fulfillment_state from orders where id = $1",
             [payment.orderId]
-          )
-        ).rows
-      ).toEqual([{ payment_state: "paid", fulfillment_state: "not_started" }]);
-      await payment.notify("success");
-      await payment.notify("success");
-      expect(payment.attemptedKeys).toEqual([
-        `entry-pack-purchase:${payment.orderId}`,
-        `entry-pack-purchase:${payment.orderId}`,
-      ]);
-      expect(payment.mail).toHaveLength(1);
-    });
+          );
+        expect((await progress()).rows).toEqual([
+          { payment_state: "paid", fulfillment_state: "not_started" },
+        ]);
+        const later = Temporal.Now.instant().add({ minutes: 10 });
+        await payment.reconcile(later);
+        await payment.reconcile(later);
+        expect((await progress()).rows).toEqual([
+          { payment_state: "paid", fulfillment_state: "fulfilled" },
+        ]);
+        expect(payment.attemptedKeys).toEqual([
+          `entry-pack-purchase:${payment.orderId}`,
+          `entry-pack-purchase:${payment.orderId}`,
+        ]);
+        expect(payment.mail).toHaveLength(1);
+        expect(payment.providerOrders).toHaveLength(internal ? 0 : 1);
+        const accountingRows = await db.pool.query<{
+          attempt_id: string;
+          invoice_id: string;
+        }>(
+          `select pa.id as attempt_id, i.id as invoice_id
+           from payment_attempts pa
+           left join invoices i on i.payment_attempt_id = pa.id
+           where pa.order_id = $1`,
+          [payment.orderId]
+        );
+        expect(accountingRows.rows).toHaveLength(1);
+        const row = accountingRows.rows[0]!;
+        expect(payment.invoiceDeliveries).toEqual(new Set([row.invoice_id]));
+        const { snapshot, invoice } = await payment.readAccounting(
+          row.attempt_id,
+          row.invoice_id
+        );
+        expect(snapshot).toMatchObject({
+          orderId: payment.orderId,
+          dotyposCustomerId,
+          buyer: frozenBuyer,
+          billing,
+          delivery: { email },
+          quote: { discountedSubtotal: { value: 115_000 - voucherValue } },
+        });
+        expect(invoice).toMatchObject({
+          workspaceReservationId: null,
+          paymentAttemptId: row.attempt_id,
+          document: {
+            documentKind: "pass-purchase",
+            orderId: payment.orderId,
+            buyer: frozenBuyer,
+            delivery: { email },
+          },
+        });
+        expect(
+          invoice && getInvoicePresentation(invoice.document).lines
+        ).toHaveLength(2);
+      }
+    );
+
+    test.each([false, true])(
+      "reconciles abandoned Nexi holds and releases claims (attached page %p)",
+      async (attached) => {
+        const db = database!;
+        const payment = await integration(db, 2_000);
+        if (attached) {
+          expect(await payment.pay()).toMatchObject({ status: "hosted" });
+          payment.abandonProviderOrder();
+        } else {
+          payment.rejectNextCreation();
+          await expect(payment.pay()).rejects.toBeDefined();
+        }
+        const later = Temporal.Now.instant().add({ minutes: 31 });
+        const read = () =>
+          db.pool.query(
+            `select p.status, pa.state, vr.state as claim
+           from pass_purchases p join payment_attempts pa on pa.order_id = p.id
+           join voucher_redemptions vr on vr.payment_attempt_id = pa.id
+           where p.id = $1 order by pa.created_at, pa.id`,
+            [payment.orderId]
+          );
+        if (attached)
+          expect(await payment.pay(later)).toMatchObject({ status: "pending" });
+        expect((await read()).rows).toEqual([
+          {
+            status: "pending_payment",
+            state: attached ? "pending" : "created",
+            claim: "reserved",
+          },
+        ]);
+        await payment.reconcile(later);
+        expect((await read()).rows).toEqual([
+          {
+            status: "void",
+            state: attached ? "expired" : "failed",
+            claim: "released",
+          },
+        ]);
+        expect(await payment.pay(later)).toMatchObject({ status: "hosted" });
+        expect(payment.providerOrders).toHaveLength(2);
+        expect((await read()).rows.map(({ claim }) => claim)).toEqual([
+          "released",
+          "reserved",
+        ]);
+      }
+    );
 
     test("records a superseded capture for refund without replacing the current attempt", async () => {
       const db = database!;

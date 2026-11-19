@@ -11,7 +11,7 @@ import {
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Data, Effect, Layer } from "effect";
 import { env } from "@/env";
-import { isManualInvoiceDocument } from "@/features/accounting/invoice";
+import { isLineItemInvoiceDocument } from "@/features/accounting/invoice";
 import type { InvoiceEmailDeliveryFailureCode } from "@/features/accounting/invoice-email-delivery";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
@@ -67,7 +67,7 @@ export const invoiceEmailLookupId = (
 export const resolveInvoiceEmailRecipient = Effect.fn(
   "resolveInvoiceEmailRecipient"
 )(function* (invoice: Invoice) {
-  if (isManualInvoiceDocument(invoice.document)) {
+  if (isLineItemInvoiceDocument(invoice.document)) {
     return invoice.document.delivery.email;
   }
 

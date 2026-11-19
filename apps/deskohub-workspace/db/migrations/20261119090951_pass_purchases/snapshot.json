@@ -1,9 +1,9 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "632d6fb6-41d9-473a-a4d0-79b43d14153b",
+  "id": "34df9c04-20db-4293-822c-31bb38f70fa9",
   "prevIds": [
-    "1d55937d-bbaa-4283-9446-d41f00f8f9aa"
+    "725e7841-cf8a-4923-9064-06f0bfcce77e"
   ],
   "ddl": [
     {
@@ -55,6 +55,12 @@
     {
       "isRlsEnabled": false,
       "name": "cli_sessions",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "contract_withdrawals",
       "entityType": "tables",
       "schema": "public"
     },
@@ -716,7 +722,7 @@
     {
       "type": "text",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -1453,6 +1459,435 @@
       "entityType": "columns",
       "schema": "public",
       "table": "cli_sessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "uuid_generate_v7()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "contract_kind",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "contract_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "customer_account_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "locale",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "contract_label",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "statement_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "submitted_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "period_ends_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "paid_amount_value",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "refund_amount_value",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "amount_exponent",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "currency",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "refund_unit",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "refund_unstarted_units",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "refund_total_units",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "receipt_sent_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "operator_notified_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "contract_cancelled_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "settled_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "settlement_claimed_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "receipt_attempts",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "receipt_failure_code",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "receipt_retry_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "operator_notice_attempts",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "operator_notice_failure_code",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "operator_notice_retry_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "cancellation_attempts",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "cancellation_failure_code",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "cancellation_retry_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "next_settlement_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "contract_withdrawals"
     },
     {
       "type": "integer",
@@ -7133,6 +7568,19 @@
       "default": null,
       "generated": null,
       "identity": null,
+      "name": "refund_target_value",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "payment_attempts"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
       "name": "refunded_amount_value",
       "entityType": "columns",
       "schema": "public",
@@ -12140,6 +12588,76 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "contract_kind",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "contract_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "contract_withdrawals_contract_unique_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "customer_account_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "contract_withdrawals_customer_account_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "next_settlement_at",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": "\"settled_at\" is null",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "contract_withdrawals_unsettled_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "document_number",
           "isExpression": false,
           "asc": true,
@@ -15926,6 +16444,23 @@
     {
       "nameExplicit": false,
       "columns": [
+        "customer_account_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "customer_accounts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "contract_withdrawals_r2BUs814ewrw_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
         "cancelled_invoice_id"
       ],
       "schemaTo": "public",
@@ -18040,6 +18575,16 @@
     },
     {
       "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "contract_withdrawals_pkey",
+      "schema": "public",
+      "table": "contract_withdrawals",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "numbering_year"
       ],
       "nameExplicit": false,
@@ -18857,7 +19402,7 @@
       "table": "administration_actions"
     },
     {
-      "value": "num_nonnulls(\"cli_session_id\", \"assistant_connection_id\") = 1",
+      "value": "num_nonnulls(\"cli_session_id\", \"assistant_connection_id\") <= 1",
       "name": "administration_actions_channel_check",
       "entityType": "checks",
       "schema": "public",
@@ -19037,6 +19582,34 @@
       "entityType": "checks",
       "schema": "public",
       "table": "cli_sessions"
+    },
+    {
+      "value": "\"paid_amount_value\" >= 0 and \"refund_amount_value\" >= 0 and \"refund_amount_value\" <= \"paid_amount_value\" and \"amount_exponent\" >= 0 and \"currency\" ~ '^[A-Z]{3}$'",
+      "name": "contract_withdrawals_amount_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "value": "(\"refund_unit\" is null and \"refund_unstarted_units\" is null and \"refund_total_units\" is null and \"refund_amount_value\" = \"paid_amount_value\") or (\"refund_unit\" in ('day', 'hour') and \"refund_unstarted_units\" > 0 and \"refund_total_units\" > \"refund_unstarted_units\")",
+      "name": "contract_withdrawals_refund_basis_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "value": "\"settled_at\" is null or (\"receipt_sent_at\" is not null and \"operator_notified_at\" is not null and \"contract_cancelled_at\" is not null)",
+      "name": "contract_withdrawals_settled_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "contract_withdrawals"
+    },
+    {
+      "value": "btrim(\"contract_kind\") <> '' and btrim(\"contract_id\") <> ''",
+      "name": "contract_withdrawals_contract_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "contract_withdrawals"
     },
     {
       "value": "\"last_sequence\" > 0",
@@ -19242,7 +19815,7 @@
       "table": "discount_code_redemptions"
     },
     {
-      "value": "(\n        \"state\" = 'reserved'\n        and \"redeemed_at\" is null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'redeemed'\n        and \"redeemed_at\" is not null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'released'\n        and \"redeemed_at\" is null\n        and \"released_at\" is not null\n        and \"release_reason\" is not null\n        and btrim(\"release_reason\") <> ''\n      )",
+      "value": "(\n        \"state\" = 'reserved'\n        and \"redeemed_at\" is null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'redeemed'\n        and \"redeemed_at\" is not null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'released'\n        and \"released_at\" is not null\n        and \"release_reason\" is not null\n        and btrim(\"release_reason\") <> ''\n      )",
       "name": "discount_code_redemptions_lifecycle_check",
       "entityType": "checks",
       "schema": "public",
@@ -19781,7 +20354,7 @@
       "table": "invoices"
     },
     {
-      "value": "(\"workspace_reservation_id\" is null) = (\"payment_attempt_id\" is null)",
+      "value": "\"workspace_reservation_id\" is null or \"payment_attempt_id\" is not null",
       "name": "invoices_source_reference_check",
       "entityType": "checks",
       "schema": "public",
@@ -20005,8 +20578,15 @@
       "table": "payment_attempts"
     },
     {
-      "value": "(\"refund_state\" = 'refunded' and \"refunded_amount_value\" > 0 and \"refunded_at\" is not null) or (\"refund_state\" <> 'refunded' and \"refunded_amount_value\" is null and \"refunded_at\" is null)",
+      "value": "(\"refund_state\" = 'refunded' and \"refunded_amount_value\" > 0 and \"refunded_at\" is not null) or (\"refund_state\" = 'required' and \"refund_target_value\" is not null and \"refunded_amount_value\" > 0 and \"refunded_amount_value\" < \"refund_target_value\" and \"refunded_at\" is not null) or (\"refund_state\" <> 'refunded' and \"refunded_amount_value\" is null and \"refunded_at\" is null)",
       "name": "payment_attempts_refund_record_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "payment_attempts"
+    },
+    {
+      "value": "\"refund_target_value\" is null or (\"refund_state\" <> 'not_required' and \"refund_target_value\" > 0 and \"refund_target_value\" <= \"amount_value\")",
+      "name": "payment_attempts_refund_target_check",
       "entityType": "checks",
       "schema": "public",
       "table": "payment_attempts"
@@ -20145,7 +20725,7 @@
       "table": "referral_invitation_claims"
     },
     {
-      "value": "(\n        \"state\" = 'reserved'\n        and \"redeemed_at\" is null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'redeemed'\n        and \"redeemed_at\" is not null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'released'\n        and \"redeemed_at\" is null\n        and \"released_at\" is not null\n        and \"release_reason\" is not null\n        and btrim(\"release_reason\") <> ''\n      )",
+      "value": "(\n        \"state\" = 'reserved'\n        and \"redeemed_at\" is null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'redeemed'\n        and \"redeemed_at\" is not null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'released'\n        and \"released_at\" is not null\n        and \"release_reason\" is not null\n        and btrim(\"release_reason\") <> ''\n      )",
       "name": "referral_invitation_claims_lifecycle_check",
       "entityType": "checks",
       "schema": "public",
@@ -20411,7 +20991,7 @@
       "table": "voucher_redemptions"
     },
     {
-      "value": "(\n        \"state\" = 'reserved'\n        and \"redeemed_at\" is null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'redeemed'\n        and \"redeemed_at\" is not null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'released'\n        and \"redeemed_at\" is null\n        and \"released_at\" is not null\n        and \"release_reason\" is not null\n        and btrim(\"release_reason\") <> ''\n      )",
+      "value": "(\n        \"state\" = 'reserved'\n        and \"redeemed_at\" is null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'redeemed'\n        and \"redeemed_at\" is not null\n        and \"released_at\" is null\n        and \"release_reason\" is null\n      ) or (\n        \"state\" = 'released'\n        and \"released_at\" is not null\n        and \"release_reason\" is not null\n        and btrim(\"release_reason\") <> ''\n      )",
       "name": "voucher_redemptions_lifecycle_check",
       "entityType": "checks",
       "schema": "public",

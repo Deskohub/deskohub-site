@@ -1,17 +1,22 @@
 import { Schema } from "effect";
-import type { Locale } from "@/features/i18n";
+import { type Locale, m } from "@/features/i18n";
+import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import { workspaceCurrencyCodeSchema } from "@/shared/money/currencies";
+import { moneyToDecimalString } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
   instantStringSchema,
   type PlainDate,
   plainDateStringSchema,
   temporalInstantToIsoString,
+  temporalInstantToPlainDate,
 } from "@/shared/utils/temporal";
 import {
   type AccountingDocumentSnapshot,
   accountingDocumentIdentitySchema,
   coworkAccountingDocumentSnapshotSchema,
+  type EntryPackAccountingSnapshot,
+  entryPackAccountingSnapshotSchema,
   meetingRoomAccountingDocumentSnapshotSchema,
   officeAccountingDocumentSnapshotSchema,
   workspaceAccountingSupplier,
@@ -163,11 +168,38 @@ const manualInvoiceDocumentSchema = Schema.Union([
 ]);
 export type ManualInvoiceDocument = typeof manualInvoiceDocumentSchema.Type;
 
+const entryPackInvoiceDocumentSchema = Schema.Struct({
+  documentKind: Schema.Literal("pass-purchase"),
+  orderId: entryPackAccountingSnapshotSchema.fields.orderId,
+  dotyposCustomerId: invoiceIdentitySchema.fields.dotyposCustomerId,
+  locale: invoiceIdentitySchema.fields.locale,
+  supplier: invoiceSupplierSchema,
+  buyer: storedInvoiceBuyerSchema,
+  delivery: entryPackAccountingSnapshotSchema.fields.delivery,
+  paymentAttemptId: invoiceIdentitySchema.fields.paymentAttemptId,
+  invoiceNumber: invoiceNumberSchema,
+  issuedAt: instantStringSchema,
+  serviceDate: plainDateStringSchema,
+  payment: Schema.Struct({
+    status: Schema.Literal("paid"),
+    date: plainDateStringSchema,
+  }),
+  currency: workspaceCurrencyCodeSchema,
+  variableSymbol: invoiceVariableSymbolSchema,
+  lines: manualInvoiceDocumentIdentitySchema.fields.lines,
+  total: Schema.String,
+  provenance: invoiceGenerationProvenanceSchema,
+});
+
+export type EntryPackInvoiceDocument =
+  typeof entryPackInvoiceDocumentSchema.Type;
+
 export const invoiceDocumentSchema = Schema.Union([
   coworkInvoiceDocumentSchema,
   meetingRoomInvoiceDocumentSchema,
   officeInvoiceDocumentSchema,
   manualInvoiceDocumentSchema,
+  entryPackInvoiceDocumentSchema,
 ]).annotate({
   identifier: "InvoiceDocument",
   description:
@@ -178,7 +210,34 @@ export type InvoiceDocument = typeof invoiceDocumentSchema.Type;
 
 export const isManualInvoiceDocument = (
   document: InvoiceDocument
-): document is ManualInvoiceDocument => "documentKind" in document;
+): document is ManualInvoiceDocument =>
+  "documentKind" in document && document.documentKind === "manual";
+
+export const isEntryPackInvoiceDocument = (
+  document: InvoiceDocument
+): document is EntryPackInvoiceDocument =>
+  "documentKind" in document && document.documentKind === "pass-purchase";
+
+export type ReservationInvoiceDocument = Exclude<
+  InvoiceDocument,
+  ManualInvoiceDocument | EntryPackInvoiceDocument
+>;
+
+export const isLineItemInvoiceDocument = (
+  document: InvoiceDocument
+): document is ManualInvoiceDocument | EntryPackInvoiceDocument =>
+  "documentKind" in document;
+
+export const getInvoiceEmailReference = (document: InvoiceDocument) => {
+  if (isManualInvoiceDocument(document)) return { source: "manual" } as const;
+  if (isEntryPackInvoiceDocument(document)) {
+    return { source: "pass-purchase", orderId: document.orderId } as const;
+  }
+  return {
+    source: "reservation",
+    orderId: document.workspaceReservationId,
+  } as const;
+};
 
 const decodeInvoiceNumber = Schema.decodeUnknownSync(invoiceNumberSchema);
 export const decodeInvoiceDocument = Schema.decodeUnknownEffect(
@@ -283,6 +342,64 @@ export const makeManualInvoiceDocument = (input: {
       ...normalized.provenance,
       ...getInvoiceGenerationProvenance(generatedAt),
     },
+  });
+};
+
+export const makeEntryPackInvoiceDocument = (input: {
+  readonly source: EntryPackAccountingSnapshot;
+  readonly buyer: InvoiceBuyer;
+  readonly paymentAttemptId: string;
+  readonly invoiceNumber: InvoiceNumber;
+  readonly issuedAt: Temporal.Instant;
+  readonly paidAt: Temporal.Instant;
+}): EntryPackInvoiceDocument => {
+  const { source, invoiceNumber } = input;
+  const { locale, quote, product } = source;
+  const issuedAt = instantStringSchema.make(
+    temporalInstantToIsoString(input.issuedAt)
+  );
+  const description = [
+    m.passEntryPack({}, { locale }),
+    getPassTierName(product.tier, locale),
+    m.passEntryCount({ count: product.size }, { locale }),
+  ].join(" · ");
+  return entryPackInvoiceDocumentSchema.make({
+    documentKind: "pass-purchase",
+    orderId: source.orderId,
+    dotyposCustomerId: source.dotyposCustomerId,
+    locale,
+    supplier: {
+      ...source.supplier,
+      commercialRegister: workspaceSiteConstants.company.commercialRegister,
+    },
+    buyer: input.buyer,
+    delivery: source.delivery,
+    paymentAttemptId: input.paymentAttemptId,
+    invoiceNumber,
+    issuedAt,
+    serviceDate: source.serviceDate,
+    payment: {
+      status: "paid",
+      date: plainDateStringSchema.make(
+        temporalInstantToPlainDate({
+          instant: input.paidAt,
+          timeZone: workspaceSiteConstants.location.timeZone,
+        }).toString()
+      ),
+    },
+    currency: Schema.decodeUnknownSync(workspaceCurrencyCodeSchema)(
+      quote.discountedSubtotal.currency
+    ),
+    variableSymbol: getInvoiceVariableSymbol(invoiceNumber),
+    lines: [
+      { description, price: moneyToDecimalString(quote.discountableSubtotal) },
+      ...quote.discounts.map(({ amount, discount }) => ({
+        description: discount.label,
+        price: moneyToDecimalString({ ...amount, value: -amount.value }),
+      })),
+    ],
+    total: moneyToDecimalString(quote.discountedSubtotal),
+    provenance: getInvoiceGenerationProvenance(issuedAt),
   });
 };
 

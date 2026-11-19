@@ -37,6 +37,7 @@ import {
   type InvoiceBuyer,
   invoiceBuyerSchema,
   invoiceNumberSchema,
+  isLineItemInvoiceDocument,
   isManualInvoiceDocument,
   makeManualInvoiceDocument,
 } from "@/features/accounting/invoice";
@@ -1139,9 +1140,10 @@ const toListItem = (
     total: total.amount,
     currency: total.currency,
     paymentStatus: getInvoicePaymentStatus(document, today),
-    source: manual
-      ? document.provenance.source
-      : (document.provenance?.source ?? "legacy"),
+    source:
+      document.provenance && "source" in document.provenance
+        ? document.provenance.source
+        : "legacy",
     actor: manual ? document.provenance.actor : null,
     delivery: { customer, internal },
     // A cancelled invoice's own email no longer needs attention; its
@@ -1185,7 +1187,7 @@ const toDetail = (
       }),
     })
   );
-  if (isManualInvoiceDocument(document)) {
+  if (isLineItemInvoiceDocument(document)) {
     return {
       ...summary,
       locale: document.locale,

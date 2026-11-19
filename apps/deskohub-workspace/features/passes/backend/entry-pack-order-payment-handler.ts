@@ -6,6 +6,10 @@ import { Context, Effect } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { orders, passPurchases, paymentAttempts } from "@/db/schema";
 import { findPurchaseLoginEmail } from "@/features/account/backend/customer-account-by-email";
+import type { EntryPackAccountingSnapshot } from "@/features/accounting/accounting-document-snapshot";
+import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
+import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
+import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
 import type {
   AdmittingOrderPaymentHandler,
   PaymentAdmission,
@@ -39,6 +43,7 @@ import { settleEntryPack } from "./entry-pack-settlement";
 
 export type EntryPackPaymentAdmissionDetails = {
   readonly commitment: DiscountCommitment;
+  readonly snapshot: EntryPackAccountingSnapshot;
 };
 
 type Handler = AdmittingOrderPaymentHandler<EntryPackPaymentAdmissionDetails>;
@@ -107,6 +112,9 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   const { db, transaction } = yield* WorkspaceDatabase;
   const email = yield* EmailServiceTag;
   const emailConfig = yield* EmailConfigTag;
+  const snapshots = yield* AccountingDocumentSnapshots;
+  const invoices = yield* InvoiceRepository;
+  const invoiceDelivery = yield* InvoiceEmailDeliveryService;
   const services = Context.make(WorkspaceDatabase, { db, transaction });
   const sendingServices = services.pipe(
     Context.add(EmailServiceTag, email),
@@ -171,6 +179,9 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       commitment.product.tier !== pack.tier ||
       commitment.product.size !== pack.entryCount ||
       commitment.firstServiceDate !== pack.validFrom ||
+      input.details.snapshot.product.tier !== pack.tier ||
+      input.details.snapshot.product.size !== pack.entryCount ||
+      input.details.snapshot.serviceDate !== pack.validFrom ||
       !moneyEquals(pack.quote.discountedSubtotal, input.amount)
     ) {
       return yield* paymentError(
@@ -224,6 +235,14 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         ? { provider: "nexi", providerOrderId }
         : { provider: "internal", paidAt: now }),
     });
+    yield* snapshots.recordEntryPack({
+      snapshot: input.details.snapshot,
+      paymentAttemptId: attempt.id,
+      orderId: order.id,
+      dotyposCustomerId: order.dotyposCustomerId,
+      amount: input.amount,
+      locale: input.locale,
+    });
     const applicationRows = yield* persistDiscountApplications({
       commitment,
       paymentAttemptId: attempt.id,
@@ -276,9 +295,18 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     if (!paid) return;
     const {
       purchase,
-      order: { paidAt },
+      order: { paidAt, activePaymentAttemptId },
     } = paid;
-    if (!paidAt) return;
+    if (!paidAt || !activePaymentAttemptId)
+      return yield* paymentError(
+        orderId,
+        "Paid Entry pack has no active payment attempt."
+      );
+    const invoiceId = yield* invoices.issueEntryPack({
+      orderId,
+      paymentAttemptId: activePaymentAttemptId,
+    });
+    if (invoiceId) yield* invoiceDelivery.deliverByInvoiceId({ invoiceId });
     const buyer = yield* findPurchaseLoginEmail(purchase.buyerAccountId).pipe(
       Effect.provide(services)
     );
@@ -294,7 +322,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         buyer: { email: buyer },
         holderEmail,
         paidAt,
-        invoiceRequested: false,
+        invoiceRequested: invoiceId !== null,
       }).pipe(Effect.provide(sendingServices));
     }
     const now = yield* currentInstant;

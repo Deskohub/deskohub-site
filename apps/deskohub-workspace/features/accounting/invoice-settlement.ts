@@ -2,7 +2,7 @@ import { formatCurrencyAmount } from "@deskohub/i18n/currency";
 import { BigDecimal, Data, Match } from "effect";
 import {
   type InvoiceDocument,
-  isManualInvoiceDocument,
+  isLineItemInvoiceDocument,
 } from "@/features/accounting/invoice";
 import type { InvoiceVariableSymbol } from "@/features/accounting/manual-invoice";
 import type { Locale } from "@/features/i18n";
@@ -58,7 +58,7 @@ const nonPositiveTotalSettlement: Readonly<
 };
 
 export const getInvoiceTotal = (document: InvoiceDocument): InvoiceTotal =>
-  isManualInvoiceDocument(document)
+  isLineItemInvoiceDocument(document)
     ? {
         // Issuance stores the sum as `BigDecimal.format` writes it, which
         // turns large totals into scientific notation.
@@ -87,7 +87,7 @@ export const getInvoiceSettlement = (
   const positiveTotal = BigDecimal.isPositive(
     BigDecimal.fromStringUnsafe(getInvoiceTotal(document).amount)
   );
-  if (!isManualInvoiceDocument(document)) {
+  if (!isLineItemInvoiceDocument(document)) {
     return positiveTotal
       ? paidWithoutStatedDate()
       : settleNonPositiveTotal("reservation", null);

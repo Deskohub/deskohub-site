@@ -1,6 +1,8 @@
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
+import { AccountingStorage } from "@/features/accounting/backend/accounting-storage";
+import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
 import type { OrderId, OrderKind } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
 import {
@@ -82,6 +84,8 @@ export class OrderPaymentHandlers extends Context.Service<
       Layer.mergeAll(
         WorkspaceReservationRepository.Default,
         WorkspaceEmailLayer,
+        AccountingStorage.Live,
+        InvoiceEmailDeliveryService.Live,
         PaymentLifecycleRepository.Live,
         ReservationFulfillment.Live,
         PaidFulfillmentQueueService.Live,

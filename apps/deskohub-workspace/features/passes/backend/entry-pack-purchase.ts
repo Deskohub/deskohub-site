@@ -13,7 +13,13 @@ import { CustomerAccountContactService } from "@/features/account/backend/custom
 import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
 import type { CustomerProfileSave } from "@/features/account/contracts";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import { workspaceAccountingSupplier } from "@/features/accounting/accounting-document-snapshot";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
+import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
+import {
+  decidePaymentPageReopening,
+  getPaymentPageToReopen,
+} from "@/features/checkout/backend/checkout/reusable-payment-attempt";
 import { startNexiPaymentSession } from "@/features/checkout/backend/payment/nexi-payment-session";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
@@ -31,6 +37,11 @@ import {
 } from "@/features/legal/payment-submit-evidence";
 import type { OrderId } from "@/features/order";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
+import {
+  defaultReservationBillingSelection,
+  getReservationInvoiceBuyer,
+  type ReservationBillingSelection,
+} from "@/features/reservation/reservation-billing";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { moneyEquals } from "@/shared/money/money";
@@ -286,6 +297,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
   input: Parameters<typeof recordEntryPackPaymentConsent>[0] & {
     readonly submittedCode?: CanonicalPromotionCode;
     readonly referralCode?: CanonicalPromotionCode;
+    readonly billing?: ReservationBillingSelection;
   }
 ) {
   yield* requirePassPurchasesEnabled();
@@ -322,7 +334,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       }
       if (order.paymentState === "pending" && order.activePaymentAttemptId) {
         const [attempt] = yield* db
-          .select({ redirect: paymentAttempts.providerRedirectUrl })
+          .select()
           .from(paymentAttempts)
           .where(
             and(
@@ -330,13 +342,29 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
               eq(paymentAttempts.orderId, order.id)
             )
           );
-        return attempt?.redirect
-          ? {
-              status: "hosted" as const,
-              statusUrl,
-              redirectUrl: attempt.redirect,
+        if (attempt) {
+          const page = getPaymentPageToReopen(attempt, yield* currentInstant);
+          if ("providerRedirectUrl" in page) {
+            const providerStatus = yield* PaymentPageProviderStatus;
+            const observation = yield* providerStatus.observe({
+              attempt,
+              reservation: order,
+            });
+            const decision = decidePaymentPageReopening(
+              attempt,
+              yield* currentInstant,
+              observation
+            );
+            if (decision === "open") {
+              return {
+                status: "hosted" as const,
+                statusUrl,
+                redirectUrl: page.providerRedirectUrl,
+              };
             }
-          : { status: "pending" as const, statusUrl };
+          }
+        }
+        return { status: "pending" as const, statusUrl };
       }
 
       const now = yield* currentInstant;
@@ -388,11 +416,40 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return { status: "pricing_changed" as const, quote };
       }
 
+      const contacts = yield* CustomerAccountContactService;
+      const contact = yield* contacts.linkedContact({
+        accountId: session.accountId,
+        email: session.email,
+        dotyposCustomerId: order.dotyposCustomerId,
+      });
+      if (!contact)
+        return yield* new EntryPackPurchaseError({
+          reason: "buyer-profile-required",
+        });
+      const billing = input.billing ?? defaultReservationBillingSelection;
+      const buyer = getReservationInvoiceBuyer({
+        billing,
+        customerName: contact.name,
+      }) ?? { kind: "person" as const, legalName: contact.name };
       const admission = {
         orderId: order.id,
         amount: quote.discountedSubtotal,
         locale: purchase.locale,
-        details: { commitment },
+        details: {
+          commitment,
+          snapshot: {
+            orderId: order.id,
+            dotyposCustomerId: order.dotyposCustomerId,
+            locale: purchase.locale,
+            supplier: workspaceAccountingSupplier,
+            buyer,
+            billing,
+            delivery: { email: session.email },
+            serviceDate: purchase.validFrom,
+            product,
+            quote,
+          },
+        },
       };
       const analytics = yield* CheckoutAnalytics;
       if (admission.amount.value === 0) {
@@ -407,16 +464,6 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return { status: "paid" as const, statusUrl };
       }
 
-      const contacts = yield* CustomerAccountContactService;
-      const contact = yield* contacts.linkedContact({
-        accountId: session.accountId,
-        email: session.email,
-        dotyposCustomerId: order.dotyposCustomerId,
-      });
-      if (!contact)
-        return yield* new EntryPackPurchaseError({
-          reason: "buyer-profile-required",
-        });
       const { hostedPaymentPage, attachedAttempt } =
         yield* startNexiPaymentSession({
           ...admission,
