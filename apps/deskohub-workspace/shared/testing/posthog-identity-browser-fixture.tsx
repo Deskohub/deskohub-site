@@ -310,7 +310,7 @@ export function PostHogIdentityBrowserFixture() {
       <PostHogAnalytics
         analyticsAccepted={analyticsAccepted}
         featureFlagOverrides={{ discount_codes: true }}
-        posthogEnvironment="development"
+        posthogEnvironment="production"
       >
         <main data-fixture-consent={analyticsAccepted ? "accepted" : "denied"}>
           <h1>PostHog identity browser fixture</h1>

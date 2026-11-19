@@ -4,7 +4,7 @@ import type { CreateAnalyticsClient } from "./analytics-client";
 import { failedFlagReload, type StoredFlagResponse } from "./flag-reload";
 
 /**
- * The AsyncStorage keys posthog-react-native 4.83.0 keeps all its state in
+ * The AsyncStorage keys posthog-react-native 4.87.0 keeps all its state in
  * with `persistence: "file"` (`EVENTS_STORAGE_FILE` and `LOGS_STORAGE_FILE`
  * in its `storage.ts`): identity, super properties, flags and queued events.
  * Recheck them when upgrading the SDK.

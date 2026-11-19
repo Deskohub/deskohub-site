@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.5](https://github.com/totalolage/deskohub-site/compare/mobile-v0.2.4...mobile-v0.2.5) (2026-11-19)
+
+### Bug Fixes
+
+* **mobile:** update PostHog React Native to 4.87.0
+
 ## [0.2.4](https://github.com/totalolage/deskohub-site/compare/mobile-v0.2.3...mobile-v0.2.4) (2026-11-18)
 
 ### Bug Fixes
