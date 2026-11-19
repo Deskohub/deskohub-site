@@ -1,4 +1,3 @@
-import type { NexiOrderId } from "@deskohub/nexi";
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer } from "effect";
@@ -22,6 +21,7 @@ import {
   requireWithinReadLimit,
 } from "@/shared/backend/read-limit";
 import { type Money, moneyWithValue } from "@/shared/money/money";
+import type { PaymentProvider } from "../payment/payment-provider";
 import { newestPaymentAttemptsFirst } from "./newest-payment-attempt";
 
 export const toPaymentAttempt = (attempt: PaymentAttemptRow) => {
@@ -55,15 +55,15 @@ export const paymentAttemptLogFields = (
   providerOrderId: attempt?.providerOrderId,
 });
 
-export type NexiPaymentAttempt = PaymentAttempt & {
-  readonly provider: "nexi";
-  readonly providerOrderId: NexiOrderId;
+export type ProviderPaymentAttempt = PaymentAttempt & {
+  readonly provider: PaymentProvider;
+  readonly providerOrderId: string;
 };
 
-export const isNexiPaymentAttempt = (
+export const isProviderPaymentAttempt = (
   attempt: PaymentAttempt
-): attempt is NexiPaymentAttempt =>
-  attempt.provider === "nexi" && attempt.providerOrderId !== null;
+): attempt is ProviderPaymentAttempt =>
+  attempt.provider !== "internal" && attempt.providerOrderId !== null;
 
 /**
  * A payment attempt as the customer may see it: what was charged and refunded
@@ -88,7 +88,8 @@ export interface IPaymentAttemptRepository {
     id: PaymentAttemptId
   ) => Effect.Effect<PaymentAttempt | null, EffectDrizzleQueryError>;
   readonly findByProviderOrderId: (
-    providerOrderId: NexiOrderId
+    provider: PaymentProvider,
+    providerOrderId: string
   ) => Effect.Effect<
     PaymentAttemptWithOrderKind | null,
     EffectDrizzleQueryError
@@ -142,14 +143,14 @@ export class PaymentAttemptRepository extends Context.Service<
 
       const findByProviderOrderId = Effect.fn(
         "PaymentAttemptRepository.findByProviderOrderId"
-      )(function* (providerOrderId: NexiOrderId) {
+      )(function* (provider: PaymentProvider, providerOrderId: string) {
         const [row] = yield* db
           .select({ attempt: paymentAttempts, orderKind: orders.kind })
           .from(paymentAttempts)
           .innerJoin(orders, eq(orders.id, paymentAttempts.orderId))
           .where(
             and(
-              eq(paymentAttempts.provider, "nexi"),
+              eq(paymentAttempts.provider, provider),
               eq(paymentAttempts.providerOrderId, providerOrderId)
             )
           )

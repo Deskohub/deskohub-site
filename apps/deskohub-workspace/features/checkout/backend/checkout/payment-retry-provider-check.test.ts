@@ -1,3 +1,4 @@
+import { PaymentProvidersFromNexi } from "../payment/payment-providers";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
@@ -10,6 +11,7 @@ import { PaymentRetryUnavailableError } from "./payment-retry-unavailable";
 const check = (
   order: Partial<NexiOrder> | Error,
   attempt: Pick<PaymentAttempt, "providerOrderId"> = {
+    provider: "nexi",
     providerOrderId: "provider-order-id" as never,
   }
 ) =>
@@ -23,16 +25,20 @@ const check = (
     Effect.provide(
       PaymentRetryProviderCheck.Default.pipe(
         Layer.provide(
-          Layer.mock(NexiService, {
-            getOrder: () =>
-              order instanceof Error
-                ? Effect.fail(order as never)
-                : Effect.succeed({
-                    orderId: "provider-order-id",
-                    operations: [],
-                    ...order,
-                  } as NexiOrder),
-          })
+          PaymentProvidersFromNexi.pipe(
+            Layer.provide(
+              Layer.mock(NexiService, {
+                getOrder: () =>
+                  order instanceof Error
+                    ? Effect.fail(order as never)
+                    : Effect.succeed({
+                        orderId: "provider-order-id",
+                        operations: [],
+                        ...order,
+                      } as NexiOrder),
+              })
+            )
+          )
         )
       )
     ),
@@ -91,7 +97,9 @@ describe("PaymentRetryProviderCheck", () => {
   });
 
   test("reports an attempt without a provider order", async () => {
-    expect(await check({}, { providerOrderId: null })).toMatchObject({
+    expect(
+      await check({}, { provider: "nexi", providerOrderId: null })
+    ).toMatchObject({
       success: "no_provider_order",
     });
   });

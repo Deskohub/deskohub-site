@@ -1,3 +1,4 @@
+import { PaymentProvidersFromNexi } from "../payment/payment-providers";
 import "@/shared/polyfills/temporal";
 import { withReservationPaymentHandlers } from "../payment/order-payment-handlers.test-utils";
 import "@/shared/testing/workspace-test-env";
@@ -573,7 +574,7 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly liveGuardDuration?: Duration.Input;
   readonly activeAttempt?: ReturnType<typeof makeAttempt> | null;
   readonly affirm?: ReturnType<typeof mock>;
-  readonly createPendingNexiAttempt?: ReturnType<typeof mock>;
+  readonly createPendingProviderAttempt?: ReturnType<typeof mock>;
   readonly completeInternalPayment?: ReturnType<typeof mock>;
   readonly createHostedPaymentPage?: ReturnType<typeof mock>;
   readonly run?: ReturnType<typeof mock>;
@@ -618,8 +619,8 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     securityToken: "provider-security-token",
     providerRedirectUrl: "https://payments.example/hosted",
   };
-  const createPendingNexiAttempt =
-    options.createPendingNexiAttempt ??
+  const createPendingProviderAttempt =
+    options.createPendingProviderAttempt ??
     mock(() => Effect.succeed(createdAttempt));
   const internalAttempt = {
     ...createdAttempt,
@@ -660,7 +661,13 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     findDisplayableForReservation: mock(() => Effect.succeed(null)),
   } satisfies PaymentAttemptRepositoryType;
   const paymentLifecycle = {
-    createPendingNexiAttempt,
+    createPendingProviderAttempt: (input) =>
+      createPendingProviderAttempt(input).pipe(
+        Effect.map((attempt) => ({
+          ...attempt,
+          providerOrderId: input.providerOrderId,
+        }))
+      ),
     completeInternalPayment,
     attachProviderSession: attachHostedPaymentPage,
     markPaid: mock(() =>
@@ -729,7 +736,14 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
       })
     );
   const nexi = {
-    createHostedPaymentPage,
+    createHostedPaymentPage: (
+      input: Parameters<
+        (typeof NexiService.Service)["createHostedPaymentPage"]
+      >[0]
+    ) =>
+      createHostedPaymentPage(input).pipe(
+        Effect.map((session) => ({ orderId: input.orderId, ...session }))
+      ),
     verifyPaymentOutcome: mock(() => Effect.die("not used")),
   };
   const affirm =
@@ -777,7 +791,9 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
             accountAuthority.layer,
             CheckoutPricingServiceMock(paymentPricing),
             Layer.mock(DotyposService, dotypos),
-            Layer.mock(NexiService, nexi),
+            PaymentProvidersFromNexi.pipe(
+              Layer.provide(Layer.mock(NexiService, nexi))
+            ),
             Layer.mock(WorkspaceReservationRepository, reservations),
             PayableCheckoutMock(confirm).pipe(
               Layer.provide(TestSealedStateKeys)
@@ -803,7 +819,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     accountEvents: accountAuthority.events,
     rereadUnderAccountLock,
     affirm,
-    createPendingNexiAttempt,
+    createPendingProviderAttempt,
     completeInternalPayment,
     findAttempt,
     attachHostedPaymentPage,
@@ -868,7 +884,7 @@ describe("CheckoutService", () => {
     expect(harness.confirm).toHaveBeenCalled();
     expect(harness.affirm).toHaveBeenCalled();
     expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -935,7 +951,7 @@ describe("CheckoutService", () => {
       expect(result.status).toBe("pricing_changed");
       expect(affirm).toHaveBeenCalled();
       expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     });
   });
 
@@ -1026,7 +1042,7 @@ describe("CheckoutService", () => {
         });
       }),
     });
-    harness.createPendingNexiAttempt.mockImplementation((input) => {
+    harness.createPendingProviderAttempt.mockImplementation((input) => {
       events.push("attempt-created");
       return Effect.succeed(
         makeAttempt({
@@ -1046,9 +1062,13 @@ describe("CheckoutService", () => {
   });
 
   describe("log annotations", () => {
-    const captureAnnotations = <A, E>(effect: Effect.Effect<A, E>) => {
+    const captureAnnotations = <A, E>(
+      effect: Effect.Effect<A, E>,
+      forMessage?: string
+    ) => {
       const annotations: LogAnnotations[] = [];
-      const logger = Logger.make(({ fiber }) => {
+      const logger = Logger.make(({ fiber, message }) => {
+        if (forMessage && String(message) !== forMessage) return;
         annotations.push({
           ...fiber.getRef(References.CurrentLogAnnotations),
         });
@@ -1079,7 +1099,7 @@ describe("CheckoutService", () => {
           })
         ),
       });
-      harness.createPendingNexiAttempt.mockImplementation((input) =>
+      harness.createPendingProviderAttempt.mockImplementation((input) =>
         Effect.succeed(
           makeAttempt({
             id: "attempt-annotated",
@@ -1104,6 +1124,29 @@ describe("CheckoutService", () => {
           paymentAttemptState: "created",
         })
       );
+    });
+
+    test("logs the encoded amount and sandbox currency on Nexi creation", async () => {
+      const originalOrigin = env.NEXI_API_ORIGIN;
+      const originalCurrency = env.NEXI_CHECKOUT_CURRENCY_OVERRIDE;
+      env.NEXI_API_ORIGIN = "https://xpaysandbox.nexigroup.com";
+      env.NEXI_CHECKOUT_CURRENCY_OVERRIDE = "EUR";
+
+      try {
+        const harness = await createCheckoutHarness({
+          orderId: "reservation-create-log-currency",
+        });
+        const rows = await captureAnnotations(
+          harness.effect,
+          "Nexi hosted payment page creation started"
+        );
+        expect(rows).toEqual([
+          expect.objectContaining({ nexiAmount: "53000", nexiCurrency: "EUR" }),
+        ]);
+      } finally {
+        env.NEXI_API_ORIGIN = originalOrigin;
+        env.NEXI_CHECKOUT_CURRENCY_OVERRIDE = originalCurrency;
+      }
     });
 
     test("name a reused active attempt by its identifiers, never its record", async () => {
@@ -1205,7 +1248,7 @@ describe("CheckoutService", () => {
       _tag: "CheckoutError",
       code: "checkout_failed",
     });
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -1421,7 +1464,7 @@ describe("CheckoutService", () => {
     expect(harness.findAttempt).toHaveBeenCalledWith(activeAttempt.id);
     expect(harness.affirm).not.toHaveBeenCalled();
     expect(harness.updateReservation).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     expect(harness.recordPaymentReturnTarget.mock.calls).toEqual([
       [{ id: orderId, paymentReturnTarget: undefined }],
@@ -1479,7 +1522,7 @@ describe("CheckoutService", () => {
     expect(result).toEqual({ status: "in_progress" });
     expect(harness.findAttempt).toHaveBeenCalledWith(activeAttempt.id);
     expect(harness.affirm).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -1510,7 +1553,7 @@ describe("CheckoutService", () => {
     });
     expect(harness.affirm).not.toHaveBeenCalled();
     expect(harness.updateReservation).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -1579,7 +1622,7 @@ describe("CheckoutService", () => {
       expect(harness.findAttempt).not.toHaveBeenCalled();
       expect(harness.affirm).not.toHaveBeenCalled();
       expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
       expect(harness.completeInternalPayment).not.toHaveBeenCalled();
     }
   );
@@ -1609,7 +1652,7 @@ describe("CheckoutService", () => {
 
       expect(result).toEqual({ status: "in_progress" });
       expect(harness.affirm).not.toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     }
   );
 
@@ -1641,7 +1684,7 @@ describe("CheckoutService", () => {
       redirectUrl: "https://payments.example/hosted",
       statusUrl: "/en-US/reservation/status/reservation-starts-new-attempt",
     });
-    expect(harness.createPendingNexiAttempt).toHaveBeenCalledTimes(1);
+    expect(harness.createPendingProviderAttempt).toHaveBeenCalledTimes(1);
   });
 
   test("decides again under the account lock before it records the evidence and starts the payment", async () => {
@@ -1657,7 +1700,7 @@ describe("CheckoutService", () => {
     expect(harness.rereadUnderAccountLock).toEqual([true]);
     expect(harness.accountEvents).toContain("account-lock-acquired");
     expect(harness.recordLegalEvidence).toHaveBeenCalledTimes(1);
-    expect(harness.createPendingNexiAttempt).toHaveBeenCalledTimes(1);
+    expect(harness.createPendingProviderAttempt).toHaveBeenCalledTimes(1);
   });
 
   test("returns the payment another submission started while this one waited for the account lock, without new evidence or a second payment", async () => {
@@ -1689,7 +1732,7 @@ describe("CheckoutService", () => {
     expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
     expect(harness.updateReservationDetails).not.toHaveBeenCalled();
     expect(harness.updateReservation).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -1710,7 +1753,7 @@ describe("CheckoutService", () => {
     expect(harness.confirm).not.toHaveBeenCalled();
     expect(harness.affirm).not.toHaveBeenCalled();
     expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
   });
 
   test("affirms the accepted discounts with the checkout locale, stored customer, and encrypted code", async () => {
@@ -1753,7 +1796,7 @@ describe("CheckoutService", () => {
         bookedAt: Temporal.Instant.from(payStateBookedAt),
       })
     );
-    expect(harness.createPendingNexiAttempt).toHaveBeenCalledWith(
+    expect(harness.createPendingProviderAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         amount: money(53_000),
         commitment: emptyCommitment,
@@ -1792,7 +1835,7 @@ describe("CheckoutService", () => {
 
       await Effect.runPromise(harness.effect);
 
-      expect(harness.createPendingNexiAttempt).toHaveBeenCalledWith(
+      expect(harness.createPendingProviderAttempt).toHaveBeenCalledWith(
         expect.objectContaining({
           amount: expect.objectContaining({ currency: "CZK" }),
         })
@@ -1842,7 +1885,7 @@ describe("CheckoutService", () => {
         delivery: { email: testEmailAddressForAda },
       }),
     });
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     expect(harness.attachHostedPaymentPage).not.toHaveBeenCalled();
     expect(harness.fulfillPaidOrder).toHaveBeenCalledWith(
@@ -2025,7 +2068,7 @@ describe("CheckoutService", () => {
     expect(harness.fulfillPaidOrder).toHaveBeenCalledWith(orderId);
     expect(harness.affirm).not.toHaveBeenCalled();
     expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.completeInternalPayment).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
@@ -2157,7 +2200,7 @@ describe("CheckoutService", () => {
     });
     expect(harness.confirm).toHaveBeenCalled();
     expect(harness.affirm).toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).toHaveBeenCalled();
   });
 
@@ -2193,7 +2236,7 @@ describe("CheckoutService", () => {
       code: "meeting_room_reservation_ended",
     });
     expect(harness.affirm).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -2221,7 +2264,7 @@ describe("CheckoutService", () => {
       code: "office_reservation_ended",
     });
     expect(harness.affirm).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -2253,7 +2296,7 @@ describe("CheckoutService", () => {
         message: "Reserved Desk reservation day has already ended.",
       });
       expect(harness.affirm).not.toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
       expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     } finally {
       Temporal.Now.instant = originalNow;
@@ -2286,7 +2329,7 @@ describe("CheckoutService", () => {
         redirectUrl: "https://payments.example/hosted",
         statusUrl: `/en-US/reservation/status/${orderId}`,
       });
-      expect(harness.createPendingNexiAttempt).toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).toHaveBeenCalled();
       expect(harness.createHostedPaymentPage).toHaveBeenCalled();
     } finally {
       Temporal.Now.instant = originalNow;
@@ -2320,7 +2363,7 @@ describe("CheckoutService", () => {
         message: "Open Space reservation day has already ended.",
       });
       expect(harness.affirm).not.toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
       expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     } finally {
       Temporal.Now.instant = originalNow;
@@ -2371,7 +2414,7 @@ describe("CheckoutService", () => {
       });
       expect(harness.findAttempt).toHaveBeenCalledWith(activeAttempt.id);
       expect(harness.affirm).not.toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
       expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     } finally {
       Temporal.Now.instant = originalNow;
@@ -2412,7 +2455,7 @@ describe("CheckoutService", () => {
         message: "Reserved Desk reservation day has already ended.",
       });
       expect(harness.affirm).toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
       expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     } finally {
       Temporal.Now.instant = originalNow;
@@ -2457,7 +2500,7 @@ describe("CheckoutService", () => {
       });
       expect(confirm).toHaveBeenCalledTimes(2);
       expect(harness.affirm).toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
       expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     } finally {
       Temporal.Now.instant = originalNow;
@@ -2525,7 +2568,7 @@ describe("CheckoutService", () => {
       expect(harness.affirm).toHaveBeenCalled();
       expect(harness.completeInternalPayment).not.toHaveBeenCalled();
       expect(harness.fulfillPaidOrder).not.toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     } finally {
       Temporal.Now.instant = originalNow;
     }
@@ -2573,7 +2616,7 @@ describe("CheckoutService", () => {
     });
     expect(harness.findAttempt).toHaveBeenCalledWith(activeAttempt.id);
     expect(harness.affirm).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -2625,7 +2668,7 @@ describe("CheckoutService", () => {
         message: "Meeting-room reservation has already ended.",
       });
       expect(harness.affirm).toHaveBeenCalled();
-      expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
       expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     } finally {
       Temporal.Now.instant = originalNow;
@@ -2702,7 +2745,7 @@ describe("CheckoutService", () => {
     );
     expect(result.status).toBe("redirect");
     expect(
-      harness.createPendingNexiAttempt.mock.calls[0]?.[0].accountingSnapshot
+      harness.createPendingProviderAttempt.mock.calls[0]?.[0].accountingSnapshot
         .quote.payment.discounts[0]?.discount
     ).toEqual({ ...application.discount, staffLabel: "Letní sleva" });
   });
@@ -2888,7 +2931,7 @@ describe("CheckoutService", () => {
     );
     expect(harness.updateReservationDetails).not.toHaveBeenCalled();
     expect(harness.updateReservation).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -2914,7 +2957,7 @@ describe("CheckoutService", () => {
     });
     expect(harness.updateReservationDetails).not.toHaveBeenCalled();
     expect(harness.updateReservation).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -2982,7 +3025,7 @@ describe("CheckoutService", () => {
       message:
         "Payment checkout could not be started. Please review your details and try again.",
     });
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
@@ -3034,7 +3077,7 @@ describe("CheckoutService", () => {
     await Effect.runPromise(Effect.flip(harness.effect));
 
     expect(harness.markTerminalForReservation).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).toHaveBeenCalledTimes(1);
+    expect(harness.createPendingProviderAttempt).toHaveBeenCalledTimes(1);
     expect(harness.updateReservation).toHaveBeenCalledTimes(1);
   });
 
@@ -3056,7 +3099,7 @@ describe("CheckoutService", () => {
           commitment: emptyCommitment,
         })
       );
-    const createPendingNexiAttempt = mock(() =>
+    const createPendingProviderAttempt = mock(() =>
       Effect.fail(
         new DiscountClaimError({
           operation: "reserve",
@@ -3071,7 +3114,7 @@ describe("CheckoutService", () => {
       requestedDiscountCode: requestedCode,
       accountAuthority: { session: {}, activityState: "active" },
       affirm,
-      createPendingNexiAttempt,
+      createPendingProviderAttempt,
     });
 
     const result = await Effect.runPromise(harness.effect);
@@ -3087,7 +3130,7 @@ describe("CheckoutService", () => {
     }
     expectFreshPayStateFromOneSeal(result);
     expect(affirm).toHaveBeenCalledTimes(2);
-    expect(createPendingNexiAttempt).toHaveBeenCalledTimes(1);
+    expect(createPendingProviderAttempt).toHaveBeenCalledTimes(1);
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     expect(harness.accountEvents).toEqual([
       "account-session",
@@ -3150,7 +3193,7 @@ describe("CheckoutService", () => {
     });
     expect(affirm).toHaveBeenCalledTimes(2);
     expect(completeInternalPayment).toHaveBeenCalledTimes(1);
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
     const freshToken = new URL(
       result.freshPayUrl,
@@ -3193,7 +3236,7 @@ describe("CheckoutService", () => {
       status: "redirect",
       redirectUrl: "https://payments.example/hosted",
     });
-    expect(harness.createPendingNexiAttempt).toHaveBeenCalledTimes(1);
+    expect(harness.createPendingProviderAttempt).toHaveBeenCalledTimes(1);
     expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(1);
     expect(harness.reservationRecord.authorAccountId).toBe(author);
   });
@@ -3243,7 +3286,7 @@ describe("CheckoutService", () => {
     expect(harness.updateReservationDetails).not.toHaveBeenCalled();
     expect(harness.updateReservation).not.toHaveBeenCalled();
     expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
     expect(harness.completeInternalPayment).not.toHaveBeenCalled();
     expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
@@ -3269,7 +3312,7 @@ describe("CheckoutService", () => {
     expect(harness.updateReservationDetails).not.toHaveBeenCalled();
     expect(harness.updateReservation).not.toHaveBeenCalled();
     expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
-    expect(harness.createPendingNexiAttempt).not.toHaveBeenCalled();
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
   });
 
   describe("hold deadline on a price review", () => {

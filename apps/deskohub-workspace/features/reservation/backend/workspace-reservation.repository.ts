@@ -12,6 +12,7 @@ import {
   isNotNull,
   isNull,
   lte,
+  ne,
   notExists,
   or,
   sql,
@@ -1154,13 +1155,13 @@ export class WorkspaceReservationRepository extends Context.Service<
             }
             const target = input.refund?.targetValue;
             const activeAttempt = cancelled?.activePaymentAttemptId;
-            const paidNexiAttempts = and(
+            const paidProviderAttempts = and(
               eq(paymentAttempts.orderId, reservationOrderId(input.id)),
-              eq(paymentAttempts.provider, "nexi"),
+              ne(paymentAttempts.provider, "internal"),
               eq(paymentAttempts.state, "paid")
             );
             if (target !== undefined && activeAttempt) {
-              // Main can learn about a Nexi refund before cancellation.
+              // The provider may have already recorded a refund.
               // Preserve those facts and leave the amount still owed open.
               yield* db
                 .update(paymentAttempts)
@@ -1170,7 +1171,10 @@ export class WorkspaceReservationRepository extends Context.Service<
                   updatedAt,
                 })
                 .where(
-                  and(paidNexiAttempts, eq(paymentAttempts.id, activeAttempt))
+                  and(
+                    paidProviderAttempts,
+                    eq(paymentAttempts.id, activeAttempt)
+                  )
                 );
             } else if (input.refund === undefined) {
               yield* db
@@ -1178,7 +1182,7 @@ export class WorkspaceReservationRepository extends Context.Service<
                 .set({ refundState: "required", updatedAt })
                 .where(
                   and(
-                    paidNexiAttempts,
+                    paidProviderAttempts,
                     eq(paymentAttempts.refundState, "not_required")
                   )
                 );

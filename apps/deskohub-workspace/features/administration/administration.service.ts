@@ -8,7 +8,7 @@ import {
   type DotyposTable,
   type DotyposTableId,
 } from "@deskohub/dotypos";
-import type { NexiOrderId } from "@deskohub/nexi";
+import { type NexiOrderId, NexiOrderIdSchema } from "@deskohub/nexi";
 import type {
   AdministrationReservationFamily,
   AdministrationReservationListStatusFilter,
@@ -353,7 +353,7 @@ export type AdministrationPaymentAttempt = {
   readonly refundState: PaymentRefundState;
   readonly providerOrderId: NexiOrderId | null;
   /** Who collects the payment: Nexi online, or nobody for an included reservation. */
-  readonly provider: "internal" | "nexi";
+  readonly provider: typeof paymentAttempts.$inferSelect.provider;
   readonly providerLabel: string;
   readonly stateLabel: string;
   readonly failureCode: string | null;
@@ -674,8 +674,8 @@ const decodeInstantString = Schema.decodeUnknownOption(instantStringSchema);
 type SafePaymentAttemptRow = {
   readonly id: PaymentAttemptId;
   readonly workspaceReservationId: WorkspaceReservationId | null;
-  readonly providerOrderId: NexiOrderId | null;
-  readonly provider: "internal" | "nexi";
+  readonly providerOrderId: string | null;
+  readonly provider: typeof paymentAttempts.$inferSelect.provider;
   readonly state: PaymentAttemptState;
   readonly failureCode: string | null;
   readonly refundState: PaymentRefundState;
@@ -715,7 +715,10 @@ const toAdministrationPaymentAttempt = (
   id: attempt.id,
   state: attempt.state,
   refundState: attempt.refundState,
-  providerOrderId: attempt.providerOrderId,
+  providerOrderId:
+    attempt.provider === "nexi" && attempt.providerOrderId
+      ? NexiOrderIdSchema.make(attempt.providerOrderId)
+      : null,
   provider: attempt.provider,
   providerLabel:
     attempt.provider === "internal" ? "Included" : "Online payment",
@@ -2566,9 +2569,12 @@ export class AdministrationService extends Context.Service<
                 paymentAttempts,
                 or(
                   eq(webhookEvents.paymentAttemptId, paymentAttempts.id),
-                  eq(
-                    webhookEvents.providerOrderId,
-                    paymentAttempts.providerOrderId
+                  and(
+                    eq(webhookEvents.provider, paymentAttempts.provider),
+                    eq(
+                      webhookEvents.providerOrderId,
+                      paymentAttempts.providerOrderId
+                    )
                   )
                 )
               )

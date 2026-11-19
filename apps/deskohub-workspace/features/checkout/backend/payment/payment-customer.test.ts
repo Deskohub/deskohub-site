@@ -2,14 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { parsePhoneNumber } from "@deskohub/phone-number";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Option } from "effect";
-import { getNexiHostedPaymentCustomer } from "./nexi-customer-info";
+import { getPaymentCustomer } from "./payment-customer";
 
 const testEmailAddressForAda = testEmailAddress("ada");
 
-describe("getNexiHostedPaymentCustomer", () => {
+describe("getPaymentCustomer", () => {
   test("maps Czech customer details to Nexi's split mobile fields", () => {
     expect(
-      getNexiHostedPaymentCustomer({
+      getPaymentCustomer({
         id: "dotypos-customer-id",
         name: "Ada Lovelace",
         email: testEmailAddressForAda,
@@ -28,7 +28,7 @@ describe("getNexiHostedPaymentCustomer", () => {
 
   test("leaves out the mobile phone without a phone number", () => {
     expect(
-      getNexiHostedPaymentCustomer({
+      getPaymentCustomer({
         id: "dotypos-customer-id",
         name: "Ada Lovelace",
         email: testEmailAddressForAda,

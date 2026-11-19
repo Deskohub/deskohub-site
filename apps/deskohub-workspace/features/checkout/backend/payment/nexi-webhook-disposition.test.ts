@@ -10,6 +10,7 @@ import {
 type NexiWebhookFailureCode = NexiWebhookProcessingError["errorCode"];
 
 const pinned = {
+  nexi_webhook_inactive_provider: [202, "error"],
   nexi_webhook_parse_failed: [400, "error"],
   nexi_webhook_unknown_order: [202, "error"],
   nexi_webhook_missing_security_token: [202, "error"],
@@ -47,6 +48,6 @@ test.each(Record.toEntries(pinned))(
     expect(await response.text()).toBe(
       JSON.stringify({ error: "Webhook processing failed", code: errorCode })
     );
-    expect(nexiWebhookDisposition[errorCode].severity).toBe(severity);
+    expect(nexiWebhookDisposition(errorCode).severity).toBe(severity);
   }
 );

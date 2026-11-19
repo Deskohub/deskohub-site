@@ -1,4 +1,3 @@
-import type { NexiOrderId, NexiWebhookEventId } from "@deskohub/nexi";
 import { and, eq, ne } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer } from "effect";
@@ -10,11 +9,13 @@ import type {
   StoredWebhookEventId,
 } from "@/features/checkout/checkout-identifiers";
 
+import type { PaymentProvider } from "../payment/payment-provider";
+
 class WebhookEventStateError extends Data.TaggedError(
   "WebhookEventStateError"
 )<{
   readonly operation: string;
-  readonly eventId: NexiWebhookEventId | StoredWebhookEventId;
+  readonly eventId: string;
   readonly message: string;
 }> {}
 
@@ -24,13 +25,18 @@ type InsertWebhookEventResult =
 
 export type WebhookEventIdentity =
   | { readonly type: "id"; readonly id: StoredWebhookEventId }
-  | { readonly type: "eventId"; readonly eventId: NexiWebhookEventId };
+  | {
+      readonly type: "eventId";
+      readonly provider: PaymentProvider;
+      readonly eventId: string;
+    };
 
 export interface IWebhookEventRepository {
   readonly insertReceived: (input: {
-    readonly eventId: NexiWebhookEventId;
+    readonly provider: PaymentProvider;
+    readonly eventId: string;
     readonly paymentAttemptId?: PaymentAttemptId;
-    readonly providerOrderId?: NexiOrderId;
+    readonly providerOrderId?: string;
     readonly receivedAt: Temporal.Instant;
   }) => Effect.Effect<InsertWebhookEventResult, EffectDrizzleQueryError>;
   readonly markProcessed: (
@@ -56,7 +62,10 @@ export interface IWebhookEventRepository {
 const eventIdentityWhere = (input: WebhookEventIdentity) =>
   input.type === "id"
     ? eq(webhookEvents.id, input.id)
-    : eq(webhookEvents.eventId, input.eventId);
+    : and(
+        eq(webhookEvents.provider, input.provider),
+        eq(webhookEvents.eventId, input.eventId)
+      );
 
 const eventIdentityLabel = (input: WebhookEventIdentity) =>
   input.type === "id" ? input.id : input.eventId;
@@ -64,7 +73,7 @@ const eventIdentityLabel = (input: WebhookEventIdentity) =>
 const ensureUpdated = (
   updated: readonly Pick<WebhookEvent, "id">[],
   operation: string,
-  eventId: NexiWebhookEventId | StoredWebhookEventId
+  eventId: string
 ) =>
   updated.length > 0
     ? Effect.void
@@ -92,14 +101,16 @@ export class WebhookEventRepository extends Context.Service<
               .insert(webhookEvents)
               .values({
                 id: postgresUuidV7,
-                provider: "nexi",
+                provider: input.provider,
                 eventId: input.eventId,
                 paymentAttemptId: input.paymentAttemptId,
                 providerOrderId: input.providerOrderId,
                 receivedAt: input.receivedAt,
                 state: "received",
               })
-              .onConflictDoNothing({ target: webhookEvents.eventId })
+              .onConflictDoNothing({
+                target: [webhookEvents.provider, webhookEvents.eventId],
+              })
               .returning();
 
             if (event) return { status: "inserted" as const, event };
@@ -107,7 +118,13 @@ export class WebhookEventRepository extends Context.Service<
             const [existing] = yield* db
               .select()
               .from(webhookEvents)
-              .where(eq(webhookEvents.eventId, input.eventId))
+              .where(
+                eventIdentityWhere({
+                  type: "eventId",
+                  provider: input.provider,
+                  eventId: input.eventId,
+                })
+              )
               .limit(1);
 
             if (!existing) {

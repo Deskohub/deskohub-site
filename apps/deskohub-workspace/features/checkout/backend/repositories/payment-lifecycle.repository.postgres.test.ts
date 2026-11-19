@@ -633,7 +633,8 @@ const admit = (
   reservation: Reservation,
   input: ReturnType<typeof makeOrdinaryAdmission>
 ) =>
-  repository.createPendingNexiAttempt({
+  repository.createPendingProviderAttempt({
+    provider: "nexi",
     orderId: reservationOrderId(reservation.id),
     providerOrderId: `order-${uniqueId()}` as never,
     amount: input.admission.amount,
@@ -2695,14 +2696,15 @@ describe.skipIf(!testDatabase)(
       });
     };
 
-    const createPendingNexiAttempt = (input: {
+    const createPendingProviderAttempt = (input: {
       readonly reservationId: WorkspaceReservationId;
       readonly id: string;
       readonly snapshot: AccountingDocumentSnapshot;
       readonly commitment: DiscountCommitment;
     }) =>
       runResult((repository) =>
-        repository.createPendingNexiAttempt({
+        repository.createPendingProviderAttempt({
+          provider: "nexi",
           orderId: reservationOrderId(input.reservationId),
           providerOrderId: NexiOrderIdSchema.make(`order-${input.id}`),
           amount: input.snapshot.quote.payment.expectedPrice,
@@ -2816,7 +2818,7 @@ describe.skipIf(!testDatabase)(
       const subtotalBefore = snapshot.quote.payment.expectedPrice;
       const amount = { ...subtotalBefore, value: subtotalBefore.value / 10 };
 
-      return createPendingNexiAttempt({
+      return createPendingProviderAttempt({
         ...reservation,
         snapshot,
         commitment: makeDiscountCommitment({
@@ -2882,7 +2884,7 @@ describe.skipIf(!testDatabase)(
     test("admits the attempt, its accounting snapshot, and the reservation link together", async () => {
       const reservation = await insertHeldReservation();
 
-      const result = await createPendingNexiAttempt({
+      const result = await createPendingProviderAttempt({
         ...reservation,
         snapshot: makeSnapshot(reservation),
         commitment: makeDiscountCommitment({
@@ -2914,7 +2916,7 @@ describe.skipIf(!testDatabase)(
       const amount = { ...subtotalBefore, value: subtotalBefore.value / 10 };
       const product = { kind: "cowork", tier: "basic" } as const;
 
-      const result = await createPendingNexiAttempt({
+      const result = await createPendingProviderAttempt({
         ...reservation,
         snapshot,
         commitment: makeDiscountCommitment({
@@ -3040,7 +3042,7 @@ describe.skipIf(!testDatabase)(
           [voucherId]
         );
 
-        const attempt = createPendingNexiAttempt({
+        const attempt = createPendingProviderAttempt({
           ...reservation,
           snapshot,
           commitment: makeDiscountCommitment({

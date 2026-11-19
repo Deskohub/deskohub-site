@@ -505,7 +505,8 @@ describe.skipIf(!testDatabase)(
       candidates: readonly DiscountCandidate[] = []
     ) =>
       lifecycle((repository) =>
-        repository.createPendingNexiAttempt({
+        repository.createPendingProviderAttempt({
+          provider: "nexi",
           ...admission(reservation, candidates),
           providerOrderId: `order-${crypto.randomUUID()}` as never,
         })
@@ -816,7 +817,8 @@ describe.skipIf(!testDatabase)(
 
         expect(
           await keylessLifecycle((repository) =>
-            repository.createPendingNexiAttempt({
+            repository.createPendingProviderAttempt({
+              provider: "nexi",
               ...admission(reservation),
               providerOrderId: providerOrderId as never,
             })

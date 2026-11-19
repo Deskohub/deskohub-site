@@ -7,6 +7,7 @@ export {
   nexiWebhookResultLogFields,
 } from "./nexi-webhook.service";
 export { nexiWebhookRefusal } from "./nexi-webhook-disposition";
+export { paymentLookupWorstCaseDuration } from "./payment-providers";
 export {
   PaymentRefundService,
   refundBatchOverrunWorstCase,

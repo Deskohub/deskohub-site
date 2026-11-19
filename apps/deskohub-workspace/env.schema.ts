@@ -12,6 +12,7 @@ import {
 import { parseBetterAuthSecrets } from "./features/account/backend/auth/auth-secrets";
 import { signingCertificateFingerprintSchema } from "./features/account/backend/auth/native-app";
 import { reviewAccountCredentialsSchema } from "./features/account/backend/auth/review-account-credentials";
+import { allowsMockPaymentProvider } from "./features/checkout/backend/payment/payment-provider-environment";
 import {
   postHogFeatureFlagOverridesEnvironmentCheck,
   postHogFeatureFlagOverridesSchema,
@@ -53,6 +54,40 @@ const igloohomeProductionEnvironmentCheck = Schema.makeFilter<{
 
 const isBlank = (value: string | undefined): boolean =>
   value === undefined || value.trim() === "";
+
+const paymentProviderEnvironmentCheck = Schema.makeFilter<{
+  readonly WORKSPACE_PAYMENT_PROVIDER?:
+    | "nexi"
+    | "mock"
+    | "fallback"
+    | undefined;
+  readonly VERCEL_ENV: string;
+  readonly VERCEL_AUTOMATION_BYPASS_SECRET?: string | undefined;
+  readonly VERCEL_URL?: string | undefined;
+}>((environment) => {
+  const provider = environment.WORKSPACE_PAYMENT_PROVIDER;
+  if (
+    (provider === "mock" || provider === "fallback") &&
+    !allowsMockPaymentProvider(environment)
+  ) {
+    return [
+      {
+        path: ["WORKSPACE_PAYMENT_PROVIDER"],
+        issue:
+          "Mock payments require a preview with Deployment Protection for Automation configured.",
+      },
+    ];
+  }
+  if (provider === "fallback" && isBlank(environment.VERCEL_URL)) {
+    return [
+      {
+        path: ["VERCEL_URL"],
+        issue: "Payment fallback requires the immutable deployment hostname.",
+      },
+    ];
+  }
+  return undefined;
+});
 
 /**
  * Deployed environments must never serve a release whose account email
@@ -251,11 +286,15 @@ export const workspaceServerEnvSchema = Schema.Struct({
   // name ("All", "Fatal", "Error", "Warn", "Info", "Debug", "Trace", "None").
   // Unset, production logs from Info and every other deployment from Debug.
   WORKSPACE_LOG_LEVEL: toEnvSchema(Schema.optional(workspaceLogLevelSchema)),
+  WORKSPACE_PAYMENT_PROVIDER: toEnvSchema(
+    Schema.optional(Schema.Literals(["nexi", "mock", "fallback"]))
+  ),
 }).check(
   postHogFeatureFlagOverridesEnvironmentCheck,
   igloohomeProductionEnvironmentCheck,
   accountOperationsEnvironmentCheck,
-  betterAuthSecretsProductionEnvironmentCheck
+  betterAuthSecretsProductionEnvironmentCheck,
+  paymentProviderEnvironmentCheck
 );
 
 /**
@@ -276,7 +315,8 @@ export const createEnvironmentSchema = (
           postHogFeatureFlagOverridesEnvironmentCheck,
           igloohomeProductionEnvironmentCheck,
           accountOperationsEnvironmentCheck,
-          betterAuthSecretsProductionEnvironmentCheck
+          betterAuthSecretsProductionEnvironmentCheck,
+          paymentProviderEnvironmentCheck
         )
       : schema
   );

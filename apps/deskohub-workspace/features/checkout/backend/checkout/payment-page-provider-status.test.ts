@@ -1,3 +1,4 @@
+import { PaymentProvidersFromNexi } from "../payment/payment-providers";
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
@@ -11,14 +12,21 @@ import {
 } from "./payment-page-provider-status";
 
 const reservation = { correlationId: "correlation-id" } as never;
-const attempt = { providerOrderId: "provider-order-id" } as never;
+const attempt = {
+  provider: "nexi",
+  providerOrderId: "provider-order-id",
+} as never;
 
 const observeWith = (getOrder: ReturnType<typeof mock>) =>
   PaymentPageProviderStatus.pipe(
     Effect.flatMap((status) => status.observe({ attempt, reservation })),
     Effect.provide(
       PaymentPageProviderStatus.Default.pipe(
-        Layer.provide(Layer.mock(NexiService, { getOrder } as never))
+        Layer.provide(
+          PaymentProvidersFromNexi.pipe(
+            Layer.provide(Layer.mock(NexiService, { getOrder } as never))
+          )
+        )
       )
     )
   );
@@ -87,13 +95,17 @@ describe("PaymentPageProviderStatus.observe", () => {
     const observation = await PaymentPageProviderStatus.pipe(
       Effect.flatMap((status) =>
         status.observe({
-          attempt: { providerOrderId: null } as never,
+          attempt: { provider: "nexi", providerOrderId: null } as never,
           reservation,
         })
       ),
       Effect.provide(
         PaymentPageProviderStatus.Default.pipe(
-          Layer.provide(Layer.mock(NexiService, { getOrder } as never))
+          Layer.provide(
+            PaymentProvidersFromNexi.pipe(
+              Layer.provide(Layer.mock(NexiService, { getOrder } as never))
+            )
+          )
         )
       ),
       Effect.runPromise

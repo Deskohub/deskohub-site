@@ -1,4 +1,3 @@
-import type { NexiOrderId } from "@deskohub/nexi";
 import { eq } from "drizzle-orm";
 import { Data, Effect } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
@@ -15,7 +14,7 @@ import type { PaymentAttempt } from "./payment-attempt.repository";
 
 export type PaymentLifecycleReference =
   | { readonly type: "paymentAttemptId"; readonly id: PaymentAttemptId }
-  | { readonly type: "providerOrderId"; readonly id: NexiOrderId }
+  | { readonly type: "providerOrderId"; readonly id: string }
   | {
       readonly type: "workspaceReservationId";
       readonly id: WorkspaceReservationId;
@@ -59,7 +58,7 @@ export const lifecycleStateError = (
 /** Reads the reservation's customer, whose first-booking lock comes next. */
 export const findPaymentReservationCustomer = Effect.fnUntraced(function* (
   operation:
-    | "createPendingNexiAttempt"
+    | "createPendingProviderAttempt"
     | "completeInternalPayment"
     | "markPaid"
     | "markTerminal",
