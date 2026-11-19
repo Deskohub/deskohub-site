@@ -99,3 +99,17 @@ export const ensurePassHolderAccount = Effect.fn(
     )
   );
 });
+
+/** Reads a purchase party's current login contact. The caller authorizes access to the order. */
+export const findPurchaseLoginEmail = Effect.fn(
+  "CustomerAccount.findPurchaseLoginEmail"
+)(function* (accountId: CustomerAccountId) {
+  const { db } = yield* WorkspaceDatabase;
+  const [login] = yield* db
+    .select({ email: authUser.email })
+    .from(authUser)
+    .where(
+      and(eq(authUser.id, accountId), isNull(authUser.deletionRequestedAt))
+    );
+  return login?.email;
+});

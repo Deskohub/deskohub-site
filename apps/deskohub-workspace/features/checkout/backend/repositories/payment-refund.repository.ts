@@ -21,6 +21,7 @@ import {
   paymentAttempts,
   workspaceReservations,
 } from "@/db/schema";
+import { orders } from "@/db/schema/orders";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import {
@@ -150,16 +151,10 @@ export class PaymentRefundRepository extends Context.Service<
               .select({
                 id: paymentAttempts.id,
                 previousCheckedAt: paymentAttempts.refundCheckedAt,
-                correlationId: workspaceReservations.correlationId,
+                correlationId: orders.correlationId,
               })
               .from(paymentAttempts)
-              .innerJoin(
-                workspaceReservations,
-                eq(
-                  workspaceReservations.id,
-                  paymentAttempts.workspaceReservationId
-                )
-              )
+              .innerJoin(orders, eq(orders.id, paymentAttempts.orderId))
               .where(
                 and(
                   or(

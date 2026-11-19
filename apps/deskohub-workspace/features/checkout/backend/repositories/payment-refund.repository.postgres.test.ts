@@ -13,7 +13,10 @@ import {
   paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
 import type { OrderId } from "@/features/order";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import {
+  reservationOrderId,
+  type WorkspaceReservationId,
+} from "@/features/reservation/persistence-contracts";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
@@ -75,6 +78,7 @@ describe.skipIf(!testDatabase)(
       await Effect.runPromise(
         testDatabase.db.insert(paymentAttempts).values({
           id: paymentAttemptId,
+          orderId: reservationOrderId(reservationId),
           workspaceReservationId: reservationId,
           provider: "nexi",
           providerOrderId: NexiOrderIdSchema.make(`order-${id}`),
@@ -141,15 +145,13 @@ describe.skipIf(!testDatabase)(
       (await claim(input)).map(({ attempt }) => attempt.id);
 
     const countPaymentAttempts = async () => {
-      const {
-        rows: [{ attempts }],
-      } = await testDatabase.pool.query<{ attempts: number }>(
+      const { rows } = await testDatabase.pool.query<{ attempts: number }>(
         "select count(*)::int as attempts from payment_attempts"
       );
-      return attempts;
+      return rows[0]!.attempts;
     };
 
-    test("leaves payments without a reservation outside the reservation refund batch", async () => {
+    test("checks refundable pass payments alongside reservation payments", async () => {
       const [order] = await Effect.runPromise(
         testDatabase.db
           .insert(orders)
@@ -187,8 +189,10 @@ describe.skipIf(!testDatabase)(
         refundState: "required",
       });
 
-      expect(await claimedIds({ limit: 1 })).toEqual([reservationAttempt]);
-      expect((await readAttempt(attempt!.id))?.refundCheckedAt).toBeNull();
+      expect(new Set(await claimedIds({ limit: 2 }))).toEqual(
+        new Set([attempt!.id, reservationAttempt])
+      );
+      expect((await readAttempt(attempt!.id))?.refundCheckedAt).not.toBeNull();
     });
 
     test("lists paid attempts awaiting a refund and recent paid attempts without a full refund", async () => {

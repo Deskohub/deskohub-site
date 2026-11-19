@@ -6,6 +6,7 @@ import {
   workspaceStatementConcurrency,
 } from "@/db/database.service";
 import { discountApplications } from "@/db/schema/discount-applications";
+import { orders } from "@/db/schema/orders";
 import { paymentAttempts } from "@/db/schema/payment-attempts";
 import {
   referralAttributions,
@@ -53,6 +54,19 @@ export const makeReferralStandingReads = Effect.gen(function* () {
       .from(workspaceReservations)
       .where(eq(workspaceReservations.dotyposCustomerId, dotyposCustomerId));
 
+  const findPaidPass = (dotyposCustomerId: DotyposCustomerId) =>
+    db
+      .select({ id: orders.id })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.kind, "pass-purchase"),
+          eq(orders.dotyposCustomerId, dotyposCustomerId),
+          eq(orders.paymentState, "paid")
+        )
+      )
+      .limit(1);
+
   const listDotyposReservations = (dotyposCustomerId: DotyposCustomerId) =>
     dotypos.listReservations({
       customerId: dotyposCustomerId,
@@ -61,9 +75,10 @@ export const makeReferralStandingReads = Effect.gen(function* () {
 
   const summarizeCustomerHistory = (
     dotyposCustomerId: DotyposCustomerId,
-    [localReservations, dotyposReservations]: readonly [
+    [localReservations, dotyposReservations, paidPasses]: readonly [
       Effect.Success<ReturnType<typeof findLocalReservations>>,
       Effect.Success<ReturnType<typeof listDotyposReservations>>,
+      Effect.Success<ReturnType<typeof findPaidPass>>,
     ]
   ) => {
     const localById = new Map(
@@ -100,9 +115,9 @@ export const makeReferralStandingReads = Effect.gen(function* () {
         };
       }
     );
-    const hasLocalPaidBooking = localReservations.some(
-      ({ paymentState }) => paymentState === "paid"
-    );
+    const hasLocalPaidBooking =
+      paidPasses.length > 0 ||
+      localReservations.some(({ paymentState }) => paymentState === "paid");
     return {
       evidence,
       hasPreviousPaidBooking: hasPreviousPaidBooking({
@@ -120,6 +135,7 @@ export const makeReferralStandingReads = Effect.gen(function* () {
           [
             findLocalReservations(dotyposCustomerId),
             listDotyposReservations(dotyposCustomerId),
+            findPaidPass(dotyposCustomerId),
           ],
           { concurrency }
         )
@@ -141,6 +157,7 @@ export const makeReferralStandingReads = Effect.gen(function* () {
     Effect.all([
       findLocalReservations(dotyposCustomerId),
       listDotyposReservations(dotyposCustomerId),
+      findPaidPass(dotyposCustomerId),
     ]).pipe(
       Effect.map((reads) => summarizeCustomerHistory(dotyposCustomerId, reads))
     )

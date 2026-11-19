@@ -26,6 +26,7 @@ CREATE TABLE "pass_purchases" (
 	CONSTRAINT "pass_purchases_validity_check" CHECK ("valid_from" < "valid_until")
 );
 --> statement-breakpoint
+ALTER TABLE "discount_applications" ALTER COLUMN "workspace_reservation_id" DROP NOT NULL;--> statement-breakpoint
 CREATE INDEX "pass_entry_claims_pass_date_idx" ON "pass_entry_claims" ("pass_id","date");--> statement-breakpoint
 CREATE INDEX "pass_purchases_buyer_idx" ON "pass_purchases" ("buyer_account_id");--> statement-breakpoint
 CREATE INDEX "pass_purchases_holder_idx" ON "pass_purchases" ("holder_account_id");--> statement-breakpoint

@@ -6,8 +6,9 @@ import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { customerAccounts } from "@/db/schema";
 import { authUser } from "@/db/schema/auth";
 import { promotionCodes } from "@/db/schema/discounts";
+import { orders } from "@/db/schema/orders";
 import { referralAttributions, referralCodes } from "@/db/schema/referrals";
-import { workspaceReservations } from "@/db/schema/workspace-reservations";
+
 import type { DatabaseQueryError } from "@/db/sql-constraint";
 import { WorkspaceLocks } from "@/db/workspace-locks";
 import { isAccountActive } from "@/features/account/backend/customer-account-activity";
@@ -771,17 +772,17 @@ export class ReferralService extends Context.Service<
         const history =
           yield* standing.loadCustomerHistoryInTurn(dotyposCustomerId);
         if (history.hasPreviousPaidBooking) return "closed" as const;
-        const [pendingReservation] = yield* db
-          .select({ id: workspaceReservations.id })
-          .from(workspaceReservations)
+        const [pendingOrder] = yield* db
+          .select({ id: orders.id })
+          .from(orders)
           .where(
             and(
-              eq(workspaceReservations.dotyposCustomerId, dotyposCustomerId),
-              eq(workspaceReservations.paymentState, "pending")
+              eq(orders.dotyposCustomerId, dotyposCustomerId),
+              eq(orders.paymentState, "pending")
             )
           )
           .limit(1);
-        const window: InvitationWindow = pendingReservation ? "held" : "open";
+        const window: InvitationWindow = pendingOrder ? "held" : "open";
         return window;
       });
 

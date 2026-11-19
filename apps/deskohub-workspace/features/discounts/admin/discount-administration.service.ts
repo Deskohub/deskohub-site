@@ -145,7 +145,7 @@ export type AdminDiscountCodeClaim = {
   readonly dotyposCustomerId: DotyposCustomerId;
   readonly state: DiscountCodeClaimState;
   readonly paymentAttemptId: PaymentAttemptId;
-  readonly workspaceReservationId: WorkspaceReservationId;
+  readonly workspaceReservationId: WorkspaceReservationId | null;
   readonly appliedAmount: Money;
   readonly reservationExpiresAt: Temporal.Instant;
   readonly reservedAt: Temporal.Instant;

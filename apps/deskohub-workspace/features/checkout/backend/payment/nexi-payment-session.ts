@@ -102,12 +102,16 @@ const toNexiAmount = Schema.encodeEffect(NexiAmountFromWorkspaceMoney);
 
 /** Starts Nexi for a prepared order using the lifecycle operations of its kind. */
 export const startNexiPaymentSession = Effect.fn("startNexiPaymentSession")(
-  function* <Kind extends OrderKind, PrepareError>(
+  function* <Kind extends OrderKind, PrepareError, PrepareServices>(
     input: PaymentAdmission<PaymentAdmissionDetailsFor<Kind>> & {
       readonly kind: Kind;
       readonly correlationId: NexiCorrelationId;
       readonly customer: HostedPaymentCustomer;
-      readonly beforeAttempt: Effect.Effect<void, PrepareError>;
+      readonly beforeAttempt: Effect.Effect<
+        void,
+        PrepareError,
+        PrepareServices
+      >;
     }
   ) {
     const { byKind } = yield* OrderPaymentHandlers;

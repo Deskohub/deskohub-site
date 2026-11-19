@@ -19,7 +19,11 @@ purchase uses the buyer's first-booking benefit if the buyer applies it. There
 is no Dotypos receipt. Billing belongs to the buyer.
 
 Each purchase has its own order. The pack becomes active when payment is
-confirmed. It starts with every entry available. For purchases made for someone
+confirmed. It starts with every entry available, and the buyer receives a
+confirmation email. An unsuccessful payment releases the discounts it held.
+If a late payment can still be applied to the order with the buyer's original
+discounts, it activates the pack. A late charge for a superseded attempt, or
+one whose discounts can no longer be applied, is marked for refund. For purchases made for someone
 else, the buyer provides the holder's sign-in email. Deskohub creates an
 unverified login if the holder does not already have one. The holder must verify
 that email before using the pack.

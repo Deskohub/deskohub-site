@@ -46,7 +46,6 @@ export const discountApplications = pgTable(
       .$type<PaymentAttemptId>()
       .references(() => paymentAttempts.id),
     workspaceReservationId: text("workspace_reservation_id")
-      .notNull()
       .$type<WorkspaceReservationId>()
       .references(() => workspaceReservations.id),
     sequence: integer("sequence").notNull(),

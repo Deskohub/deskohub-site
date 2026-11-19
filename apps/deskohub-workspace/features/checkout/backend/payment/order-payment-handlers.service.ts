@@ -3,7 +3,12 @@ import { Context, Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { OrderId, OrderKind } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
+import {
+  type EntryPackPaymentAdmissionDetails,
+  makeEntryPackOrderPaymentHandler,
+} from "@/features/passes/backend/entry-pack-order-payment-handler";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
 import { PaidFulfillmentQueueService } from "../fulfillment/paid-fulfillment-queue.service";
 import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
@@ -20,12 +25,11 @@ import {
 
 interface PaymentAdmissionDetails {
   readonly reservation: ReservationPaymentAdmissionDetails;
+  readonly "pass-purchase": EntryPackPaymentAdmissionDetails;
 }
 
 export type PaymentAdmissionDetailsFor<Kind extends OrderKind> =
-  Kind extends keyof PaymentAdmissionDetails
-    ? PaymentAdmissionDetails[Kind]
-    : unknown;
+  PaymentAdmissionDetails[Kind];
 
 type HandlersByKind = {
   readonly [Kind in OrderKind]?: AdmittingOrderPaymentHandler<
@@ -62,10 +66,13 @@ export class OrderPaymentHandlers extends Context.Service<
     Effect.gen(function* () {
       const database = yield* WorkspaceDatabase;
       const reservation = yield* makeReservationOrderPaymentHandler;
-      return OrderPaymentHandlers.make({ reservation }, (orderId) =>
-        findOrderKind(orderId).pipe(
-          Effect.provideService(WorkspaceDatabase, database)
-        )
+      const passPurchase = yield* makeEntryPackOrderPaymentHandler;
+      return OrderPaymentHandlers.make(
+        { reservation, "pass-purchase": passPurchase },
+        (orderId) =>
+          findOrderKind(orderId).pipe(
+            Effect.provideService(WorkspaceDatabase, database)
+          )
       );
     })
   );
@@ -74,6 +81,7 @@ export class OrderPaymentHandlers extends Context.Service<
     Layer.provide(
       Layer.mergeAll(
         WorkspaceReservationRepository.Default,
+        WorkspaceEmailLayer,
         PaymentLifecycleRepository.Live,
         ReservationFulfillment.Live,
         PaidFulfillmentQueueService.Live,

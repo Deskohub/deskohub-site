@@ -1,9 +1,9 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { orders, passPurchases } from "@/db/schema";
+import { orders, passPurchases, paymentAttempts } from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
   ensurePassHolderAccount,
@@ -13,11 +13,15 @@ import { CustomerAccountContactService } from "@/features/account/backend/custom
 import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
 import type { CustomerProfileSave } from "@/features/account/contracts";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
+import { startNexiPaymentSession } from "@/features/checkout/backend/payment/nexi-payment-session";
+import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
 import {
   type CanonicalPromotionCode,
   discountQuoteCodec,
 } from "@/features/discounts/contracts";
+import { DiscountService } from "@/features/discounts/discount.service";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { type Locale, m } from "@/features/i18n";
 import {
@@ -28,8 +32,10 @@ import {
 import type { OrderId } from "@/features/order";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
+import { reservationStatusPath } from "@/features/reservation/routes";
+import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
-import type { EntryPackProduct } from "../pass-offer";
+import { type EntryPackProduct, getEntryPackPrice } from "../pass-offer";
 import { quoteEntryPack } from "./entry-pack-quote";
 
 class EntryPackPurchaseError extends Data.TaggedError(
@@ -267,5 +273,157 @@ export const recordEntryPackPaymentConsent = Effect.fn(
         })
       ).map((record) => ({ orderId: purchase.id, evidence: record }))
     )
+  );
+});
+
+/** Starts the payment for the authenticated buyer after reconfirming the displayed quote. */
+export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
+  input: Parameters<typeof recordEntryPackPaymentConsent>[0] & {
+    readonly submittedCode?: CanonicalPromotionCode;
+    readonly referralCode?: CanonicalPromotionCode;
+  }
+) {
+  yield* requirePassPurchasesEnabled();
+  const current = yield* CurrentCustomerAccount;
+  const session = yield* current.requireActive;
+  const accounts = yield* CustomerAccountSections;
+  const { db } = yield* WorkspaceDatabase;
+  const handlers = yield* OrderPaymentHandlers;
+  const handler = handlers.byKind["pass-purchase"];
+  if (!handler)
+    return yield* new EntryPackPurchaseError({ reason: "unavailable" });
+
+  return yield* accounts.withActiveAccount(
+    session.accountId,
+    Effect.gen(function* () {
+      const [entry] = yield* db
+        .select({ order: orders, purchase: passPurchases })
+        .from(passPurchases)
+        .innerJoin(orders, eq(orders.id, passPurchases.id))
+        .where(
+          and(
+            eq(passPurchases.id, input.orderId),
+            eq(passPurchases.buyerAccountId, session.accountId),
+            eq(orders.kind, "pass-purchase")
+          )
+        );
+      if (!entry)
+        return yield* new EntryPackPurchaseError({ reason: "unavailable" });
+      const { order, purchase } = entry;
+      const statusUrl = `/${purchase.locale}${reservationStatusPath}/${order.id}`;
+      if (order.paymentState === "paid") {
+        yield* handler.scheduleFulfillment({ orderId: order.id });
+        return { status: "paid" as const, statusUrl };
+      }
+      if (order.paymentState === "pending" && order.activePaymentAttemptId) {
+        const [attempt] = yield* db
+          .select({ redirect: paymentAttempts.providerRedirectUrl })
+          .from(paymentAttempts)
+          .where(
+            and(
+              eq(paymentAttempts.id, order.activePaymentAttemptId),
+              eq(paymentAttempts.orderId, order.id)
+            )
+          );
+        return attempt?.redirect
+          ? {
+              status: "hosted" as const,
+              statusUrl,
+              redirectUrl: attempt.redirect,
+            }
+          : { status: "pending" as const, statusUrl };
+      }
+
+      const discountService = yield* DiscountService;
+      const product = {
+        kind: "entry-pack",
+        tier: purchase.tier,
+        size: purchase.entryCount,
+      } as const;
+      const accepted = yield* Schema.decodeUnknownEffect(discountQuoteCodec)(
+        purchase.quote
+      );
+      const { quote, commitment } =
+        yield* discountService.affirmDisplayedDiscounts({
+          product,
+          discountableSubtotal: getEntryPackPrice(product),
+          firstServiceDate: purchase.validFrom,
+          lastServiceDate: purchase.validFrom,
+          bookedAt: yield* currentInstant,
+          dotyposCustomerId: order.dotyposCustomerId,
+          locale: purchase.locale,
+          displayedDiscountIds: accepted.discounts.map(
+            ({ discount }) => discount.id
+          ),
+          ...(input.submittedCode !== undefined && {
+            submittedCode: input.submittedCode,
+          }),
+          ...(input.referralCode !== undefined && {
+            referralCode: input.referralCode,
+          }),
+        });
+      if (
+        !moneyEquals(
+          accepted.discountableSubtotal,
+          quote.discountableSubtotal
+        ) ||
+        !moneyEquals(accepted.discountedSubtotal, quote.discountedSubtotal) ||
+        accepted.discounts.length !== quote.discounts.length ||
+        !accepted.discounts.every(
+          (application, index) =>
+            application.discount.id === quote.discounts[index]?.discount.id &&
+            moneyEquals(application.amount, quote.discounts[index]?.amount)
+        )
+      ) {
+        return { status: "pricing_changed" as const, quote };
+      }
+
+      const admission = {
+        orderId: order.id,
+        amount: quote.discountedSubtotal,
+        locale: purchase.locale,
+        details: { commitment },
+      };
+      const analytics = yield* CheckoutAnalytics;
+      if (admission.amount.value === 0) {
+        yield* recordEntryPackPaymentConsent(input);
+        const payment = yield* handler.admitInternal(admission);
+        if (payment.changed)
+          yield* analytics.paymentCompleted({
+            attempt: payment.attempt,
+            timestamp: payment.timestamp,
+          });
+        yield* handler.scheduleFulfillment({ orderId: order.id });
+        return { status: "paid" as const, statusUrl };
+      }
+
+      const contacts = yield* CustomerAccountContactService;
+      const contact = yield* contacts.linkedContact({
+        accountId: session.accountId,
+        email: session.email,
+        dotyposCustomerId: order.dotyposCustomerId,
+      });
+      if (!contact)
+        return yield* new EntryPackPurchaseError({
+          reason: "buyer-profile-required",
+        });
+      const { hostedPaymentPage, attachedAttempt } =
+        yield* startNexiPaymentSession({
+          ...admission,
+          kind: "pass-purchase",
+          correlationId: order.correlationId,
+          customer: { name: contact.name, email: session.email },
+          beforeAttempt: recordEntryPackPaymentConsent(input),
+        }).pipe(Effect.scoped);
+      yield* analytics.paymentStarted({
+        attempt: attachedAttempt,
+        timestamp: attachedAttempt.updatedAt,
+      });
+      return {
+        status: "hosted" as const,
+        statusUrl,
+        redirectUrl: hostedPaymentPage.hostedPage,
+      };
+    })
   );
 });
