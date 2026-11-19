@@ -699,6 +699,7 @@ describe("InvoiceAdministrationService cancellation", () => {
                   null
               ),
             list: () => Effect.succeed([...(options.invoices ?? [])]),
+            findManualIssuerProfileLinks: () => Effect.succeed([]),
             listWithUnreadable: () =>
               Effect.succeed({
                 readable: [...(options.invoices ?? [])],

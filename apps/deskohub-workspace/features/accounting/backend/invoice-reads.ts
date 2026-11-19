@@ -1,5 +1,14 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { and, asc, desc, eq, isNull, type SQL, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { Effect, Option, Schema } from "effect";
 import {
@@ -9,10 +18,13 @@ import {
 import {
   accountingDocumentSnapshots,
   correctiveDocuments,
+  customerAccounts,
   invoiceArchives,
   invoiceCancellations,
   invoices,
+  manualInvoiceActors,
 } from "@/db/schema";
+import { authUser } from "@/db/schema/auth";
 import type { CorrectiveDocumentNumber } from "@/features/accounting/corrective-document";
 import {
   type InvoiceDocument,
@@ -321,6 +333,36 @@ export const makeInvoiceReads = Effect.gen(function* () {
     }
   );
 
+  const findManualIssuerProfileLinks = Effect.fn(
+    "InvoiceRepository.findManualIssuerProfileLinks"
+  )((invoiceIds: readonly InvoiceId[]) =>
+    db
+      .select({
+        invoiceId: manualInvoiceActors.invoiceId,
+        customerId: customerAccounts.dotyposCustomerId,
+      })
+      .from(manualInvoiceActors)
+      .innerJoin(
+        customerAccounts,
+        eq(manualInvoiceActors.actorAccountId, customerAccounts.id)
+      )
+      .innerJoin(authUser, eq(customerAccounts.id, authUser.id))
+      .where(
+        and(
+          inArray(manualInvoiceActors.invoiceId, invoiceIds),
+          isNull(customerAccounts.deletedAt),
+          isNull(authUser.deletionRequestedAt)
+        )
+      )
+      .pipe(
+        Effect.map((rows) =>
+          rows.flatMap(({ invoiceId, customerId }) =>
+            customerId ? [{ invoiceId, customerId }] : []
+          )
+        )
+      )
+  );
+
   const listManualInvoiceProvenance = Effect.fn(
     "InvoiceRepository.listManualInvoiceProvenance"
   )(function* () {
@@ -474,6 +516,7 @@ export const makeInvoiceReads = Effect.gen(function* () {
     findLatestByReservationId,
     findLiveByPaymentAttemptId,
     findLiveByReservationId,
+    findManualIssuerProfileLinks,
     list,
     listForCustomer,
     listManualInvoiceProvenance,

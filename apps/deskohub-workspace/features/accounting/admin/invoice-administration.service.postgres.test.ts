@@ -2,6 +2,8 @@ import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
 import {
+  type DotyposCustomer,
+  type DotyposCustomerId,
   DotyposCustomerIdSchema,
   DotyposService,
   FindCustomerResult,
@@ -18,6 +20,10 @@ import { WorkspaceLocks } from "@/db/workspace-locks";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { makeTestManualInvoiceDocument } from "@/features/accounting/invoice.test-utils";
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
+import {
+  syntheticDotyposCustomerId,
+  workspaceFixtures,
+} from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForAdvisoryLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import {
@@ -25,6 +31,7 @@ import {
   InvoiceRepository,
   type ManualInvoiceIssuance,
 } from "../backend/invoice.repository";
+import { makeInvoiceCancellationTestKit } from "../backend/invoice-cancellation.test-utils";
 import {
   type InvoiceDeliverySummary,
   InvoiceEmailDeliveryRepository,
@@ -93,6 +100,74 @@ const deliveryLedger = (
         new Map(invoiceIds.map((id) => [id, summaryOf(id)] as const))
       ),
   });
+
+test.skipIf(!testDatabase)(
+  "enriches the admin invoice list using the recorded issuer's linked profile",
+  async () => {
+    const fixtures = workspaceFixtures(testDatabase!.db);
+    const profileId = syntheticDotyposCustomerId();
+    const administrator = await Effect.runPromise(
+      fixtures.account("invoice-list-issuer", { linkedCustomer: profileId })
+    );
+    const kit = makeInvoiceCancellationTestKit(testDatabase!);
+    const invoice = await kit.issueManualInvoice({
+      source: "admin-ui",
+      administrator,
+    });
+    const profile: DotyposCustomer = {
+      firstName: " Ada ",
+      lastName: " Novak ",
+      companyName: "Synthetic Issuer Company",
+    };
+    const getCustomersByIds = mock((ids: readonly DotyposCustomerId[]) =>
+      Effect.succeed(
+        new Map(ids.includes(profileId) ? [[profileId, profile]] : [])
+      )
+    );
+    const repository = Layer.effect(
+      InvoiceRepository,
+      Effect.map(InvoiceRepository, (stored) => ({
+        ...stored,
+        listWithUnreadable: () =>
+          Effect.succeed({ readable: [invoice], unreadable: [] }),
+      }))
+    ).pipe(Layer.provide(kit.layer()));
+    const layer = InvoiceAdministrationService.Default.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          testDatabase!.layer,
+          repository,
+          Layer.mock(DotyposService, { getCustomersByIds }),
+          deliveryLedger(),
+          liveInvoiceCancellationFakes,
+          Layer.mock(InvoiceEmailDeliveryService, {}),
+          Layer.mock(ManualInvoiceCreationRequests, {})
+        )
+      )
+    );
+    const list = Effect.flatMap(InvoiceAdministrationService, (service) =>
+      service.listWithUnreadable()
+    ).pipe(Effect.provide(layer));
+
+    expect((await Effect.runPromise(list)).items).toMatchObject([
+      {
+        actor: administrator.email,
+        actorName: "Ada Novak",
+        source: "admin-ui",
+      },
+    ]);
+    expect(getCustomersByIds).toHaveBeenCalledWith(
+      [profileId],
+      expect.anything()
+    );
+
+    await Effect.runPromise(fixtures.deleteAccounts([administrator]));
+    expect((await Effect.runPromise(list)).items).toMatchObject([
+      { actor: administrator.email, actorName: null, source: "admin-ui" },
+    ]);
+    expect(getCustomersByIds).toHaveBeenCalledTimes(1);
+  }
+);
 
 describe.skipIf(!testDatabase)(
   "InvoiceAdministrationService creation locks on disposable Postgres",
