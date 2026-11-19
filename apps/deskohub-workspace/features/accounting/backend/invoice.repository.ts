@@ -274,6 +274,16 @@ export interface IInvoiceRepository {
     },
     EffectDrizzleQueryError | AccountingRecordUnavailable
   >;
+  /** The linked profiles of the recorded issuers who still have active accounts. */
+  readonly findManualIssuerProfileLinks: (
+    invoiceIds: readonly InvoiceId[]
+  ) => Effect.Effect<
+    readonly {
+      readonly invoiceId: InvoiceId;
+      readonly customerId: DotyposCustomerId;
+    }[],
+    EffectDrizzleQueryError
+  >;
   /** Decrypts every manual invoice to read who issued it, and through what. */
   readonly listManualInvoiceProvenance: () => Effect.Effect<
     readonly {
