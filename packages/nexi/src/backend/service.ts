@@ -287,10 +287,12 @@ const makeNexiService = Effect.gen(function* () {
       const response = yield* nexiClient
         .getOrder(input)
         .pipe(retryTransientNexiFailure);
-      const orderId = yield* decodeOptionalOrderId(
+      const reportedOrderId = yield* decodeOptionalOrderId(
         getProviderOrderId(response),
-        input.orderId
+        undefined
       );
+      const orderId = reportedOrderId ?? input.orderId;
+      const status: Omit<OrderStatus, "order"> = response.orderStatus ?? {};
       const operations = yield* Effect.forEach(
         response.operations ?? [],
         (operation) => toNexiOperation(operation, orderId)
@@ -298,8 +300,18 @@ const makeNexiService = Effect.gen(function* () {
       const result: NexiOrder = {
         orderId,
         ...toNexiAmountFields(response.amount ?? response.orderStatus?.order),
-        ...toNexiOrderProgress(response.orderStatus ?? {}),
+        ...toNexiOrderProgress(status),
         operations,
+        ...(reportedOrderId !== undefined &&
+          (response.orderId === undefined || response.orderId === orderId) && {
+            reportedStatus: {
+              orderId: reportedOrderId,
+              authorizedAmount: status.authorizedAmount,
+              capturedAmount: status.capturedAmount,
+              lastOperationTime: status.lastOperationTime,
+              lastOperationType: status.lastOperationType,
+            },
+          }),
       };
       yield* Effect.logInfo("Nexi order details lookup completed", {
         operationCount: operations.length,

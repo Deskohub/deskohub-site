@@ -2,8 +2,15 @@ import { PaymentProvidersFromNexi } from "../payment/payment-providers";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import { ExternalAPIError, type NexiOrder, NexiService } from "@deskohub/nexi";
-import { Effect, Layer } from "effect";
+import {
+  ExternalAPIError,
+  type NexiOrder,
+  NexiOrderIdSchema,
+  NexiRuntimeConfig,
+  NexiService,
+} from "@deskohub/nexi";
+import { Effect, Layer, type Schema } from "effect";
+import { FetchHttpClient } from "effect/http";
 import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import { PaymentRetryProviderCheck } from "./payment-retry-provider-check";
 import { PaymentRetryUnavailableError } from "./payment-retry-unavailable";
@@ -12,16 +19,39 @@ type RetryAttempt = Parameters<
   typeof PaymentRetryProviderCheck.Service.check
 >[0]["attempt"];
 const amount = { value: 29_000, exponent: 2, currency: "CZK" };
+const providerOrderId = NexiOrderIdSchema.make("provider-order-id");
 
 const check = (
   order: Partial<NexiOrder> | Error,
   attempt: RetryAttempt = {
     provider: "nexi",
-    providerOrderId: "provider-order-id" as never,
+    providerOrderId,
     failureCode: null,
     amount,
   }
 ) =>
+  checkWithNexi(
+    Layer.mock(NexiService, {
+      getOrder: () =>
+        order instanceof Error
+          ? Effect.fail(order as never)
+          : Effect.succeed({
+              orderId: providerOrderId,
+              operations: [],
+              reportedStatus: {
+                orderId: order.orderId ?? providerOrderId,
+                authorizedAmount: order.authorizedAmount,
+                capturedAmount: order.capturedAmount,
+                lastOperationTime: order.lastOperationTime,
+                lastOperationType: order.lastOperationType,
+              },
+              ...order,
+            }),
+    }),
+    attempt
+  );
+
+const checkWithNexi = (nexi: Layer.Layer<NexiService>, attempt: RetryAttempt) =>
   PaymentRetryProviderCheck.pipe(
     Effect.flatMap((providerCheck) =>
       providerCheck.check({
@@ -31,22 +61,7 @@ const check = (
     ),
     Effect.provide(
       PaymentRetryProviderCheck.Default.pipe(
-        Layer.provide(
-          PaymentProvidersFromNexi.pipe(
-            Layer.provide(
-              Layer.mock(NexiService, {
-                getOrder: () =>
-                  order instanceof Error
-                    ? Effect.fail(order as never)
-                    : Effect.succeed({
-                        orderId: "provider-order-id",
-                        operations: [],
-                        ...order,
-                      } as NexiOrder),
-              })
-            )
-          )
-        )
+        Layer.provide(PaymentProvidersFromNexi.pipe(Layer.provide(nexi)))
       )
     ),
     Effect.result,
@@ -55,7 +70,7 @@ const check = (
 
 const fallbackAttempt = {
   provider: "nexi",
-  providerOrderId: "provider-order-id",
+  providerOrderId,
   failureCode: NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE,
   amount,
 } satisfies RetryAttempt;
@@ -63,6 +78,28 @@ const reportedAmount = {
   amount: String(amount.value),
   currency: "EUR", // The test environment uses the sandbox currency override.
 };
+
+const checkNexiResponse = (
+  response: Schema.Json,
+  attempt: RetryAttempt = fallbackAttempt
+) =>
+  checkWithNexi(
+    NexiService.Live.pipe(
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(NexiRuntimeConfig, {
+            baseUrl: "https://nexi.example.test",
+            apiKey: "test-api-key",
+            apiTimeout: 1000,
+          }),
+          Layer.succeed(FetchHttpClient.Fetch, async () =>
+            Response.json(response)
+          )
+        )
+      )
+    ),
+    attempt
+  );
 
 describe("PaymentRetryProviderCheck", () => {
   test.each([
@@ -180,6 +217,61 @@ describe("PaymentRetryProviderCheck", () => {
     expect(await check({}, fallbackAttempt)).toMatchObject({
       success: "may_settle",
     });
+  });
+
+  test.each([
+    [{ authorizedAmount: "" }, "may_settle"],
+    [{ capturedAmount: "" }, "may_settle"],
+    [{ lastOperationTime: "" }, "may_settle"],
+    [{ lastOperationType: "" }, "may_settle"],
+    [{ authorizedAmount: "0", capturedAmount: "0" }, "ended_unpaid"],
+  ])(
+    "checks amounts and progress as reported by Nexi (%j)",
+    async (progress, decision) => {
+      expect(
+        await checkNexiResponse({
+          orderStatus: {
+            order: { ...reportedAmount, orderId: providerOrderId },
+            ...progress,
+          },
+          operations: [],
+        })
+      ).toMatchObject({ success: decision });
+    }
+  );
+
+  test("requires an order ID in the response even when amount and currency match", async () => {
+    expect(
+      await checkNexiResponse({
+        amount: reportedAmount,
+        operations: [],
+      })
+    ).toMatchObject({ success: "may_settle" });
+  });
+
+  test("keeps the normal Nexi retry rules for an unmarked attempt", async () => {
+    expect(
+      await checkNexiResponse(
+        {
+          orderStatus: {
+            order: { ...reportedAmount, orderId: providerOrderId },
+            authorizedAmount: "",
+          },
+          operations: [],
+        },
+        { ...fallbackAttempt, failureCode: null }
+      )
+    ).toMatchObject({ success: "ended_unpaid" });
+  });
+
+  test("rejects conflicting order IDs in the response", async () => {
+    expect(
+      await checkNexiResponse({
+        orderId: "different-order-id",
+        orderStatus: { order: { ...reportedAmount, orderId: providerOrderId } },
+        operations: [],
+      })
+    ).toMatchObject({ success: "may_settle" });
   });
 
   test.each([
