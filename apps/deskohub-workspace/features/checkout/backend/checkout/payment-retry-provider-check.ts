@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect";
+import { NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE } from "@/features/checkout/payment-fallback";
 import type { WorkspaceReservation } from "@/features/reservation/backend/workspace-reservation.repository";
 import { PaymentProviders } from "../payment/payment-provider";
 import { PaymentProvidersLive } from "../payment/payment-providers";
@@ -29,7 +30,10 @@ interface IPaymentRetryProviderCheck {
    * starts on a payment nobody could read.
    */
   readonly check: (input: {
-    readonly attempt: Pick<PaymentAttempt, "provider" | "providerOrderId">;
+    readonly attempt: Pick<
+      PaymentAttempt,
+      "provider" | "providerOrderId" | "failureCode" | "amount"
+    >;
     readonly reservation: Pick<WorkspaceReservation, "correlationId">;
   }) => Effect.Effect<PaymentRetryProviderState, PaymentRetryUnavailableError>;
 }
@@ -60,11 +64,15 @@ export class PaymentRetryProviderCheck extends Context.Service<
               message: "The original payment provider is inactive.",
             });
           }
+          const markedForFallback =
+            attempt.provider === "nexi" &&
+            attempt.failureCode === NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE;
           const order = yield* providers
             .forAttempt(attempt.provider)
             .lookup({
               providerOrderId: attempt.providerOrderId,
               correlationId: reservation.correlationId,
+              ...(markedForFallback && { expectedAmount: attempt.amount }),
             })
             .pipe(
               Effect.mapError(
@@ -75,7 +83,10 @@ export class PaymentRetryProviderCheck extends Context.Service<
                   })
               )
             );
-          const state = order.canRetry ? "ended_unpaid" : "may_settle";
+          const canRetry = markedForFallback
+            ? order.canFallback
+            : order.canRetry;
+          const state = canRetry ? "ended_unpaid" : "may_settle";
           // Operation types and results only; never ids or tokens.
           yield* Effect.logInfo("Payment retry provider state read", {
             state,

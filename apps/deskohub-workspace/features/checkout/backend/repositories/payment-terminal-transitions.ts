@@ -41,6 +41,8 @@ export interface IPaymentTerminalTransitions {
      * session has been attached to it.
      */
     readonly fromAttemptStates?: readonly NonTerminalPaymentAttemptState[];
+    /** Reject an already-terminal attempt without updating it. */
+    readonly requireTransition?: boolean;
   }) => Effect.Effect<
     PaymentLifecycleTransition,
     DatabaseQueryError | DiscountClaimError | PaymentLifecycleStateError

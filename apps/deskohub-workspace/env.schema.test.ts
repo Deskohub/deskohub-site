@@ -470,21 +470,17 @@ describe("payment provider deployment policy", () => {
     }
   );
 
-  test("requires the immutable host for fallback mode", () => {
-    const preview = {
-      WORKSPACE_PAYMENT_PROVIDER: "fallback",
-      VERCEL_ENV: "preview",
-      VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-automation",
-    };
-    expect(invalidVariables({ ...preview, VERCEL_URL: undefined })).toContain(
-      "VERCEL_URL"
-    );
-    const enabled = createWorkspaceEnv(
-      workspaceRuntimeEnv({
-        ...preview,
-        VERCEL_URL: "synthetic-immutable.vercel.app",
-      })
-    );
-    expect(enabled.WORKSPACE_PAYMENT_PROVIDER).toBe("fallback");
-  });
+  test.each(["mock", "fallback"])(
+    "enables %s on a protected preview",
+    (mode) => {
+      const enabled = createWorkspaceEnv(
+        workspaceRuntimeEnv({
+          WORKSPACE_PAYMENT_PROVIDER: mode,
+          VERCEL_ENV: "preview",
+          VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-automation",
+        })
+      );
+      expect(enabled.WORKSPACE_PAYMENT_PROVIDER).toBe(mode);
+    }
+  );
 });

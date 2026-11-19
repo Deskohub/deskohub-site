@@ -92,6 +92,7 @@ export const markPaymentAttemptTerminal = Effect.fn(
     readonly state: "failed" | "cancelled" | "expired";
     readonly failureCode: string;
     readonly fromAttemptStates: readonly NonTerminalPaymentAttemptState[];
+    readonly requireTransition?: boolean;
     readonly terminalAt: Temporal.Instant;
   }
 ) {
@@ -110,10 +111,12 @@ export const markPaymentAttemptTerminal = Effect.fn(
       and(
         eq(paymentAttempts.orderId, input.orderId),
         eq(paymentAttempts.id, input.id),
-        inArray(paymentAttempts.state, [
-          ...input.fromAttemptStates,
-          input.state,
-        ])
+        inArray(
+          paymentAttempts.state,
+          input.requireTransition
+            ? input.fromAttemptStates
+            : [...input.fromAttemptStates, input.state]
+        )
       )
     )
     .returning();
