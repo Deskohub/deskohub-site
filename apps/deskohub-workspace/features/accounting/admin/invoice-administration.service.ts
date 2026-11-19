@@ -4,6 +4,7 @@ import {
   type DotyposCustomerId,
   DotyposCustomerIdSchema,
   DotyposService,
+  getCustomerDisplayName,
 } from "@deskohub/dotypos";
 import { parsePhoneNumber } from "@deskohub/phone-number";
 import type {
@@ -193,6 +194,10 @@ export type InvoiceAdministrationListItem = {
   readonly archivedAt: string | null;
   readonly replacesInvoiceId: AdministrationInvoiceIdType | null;
   readonly replacedByInvoiceId: AdministrationInvoiceIdType | null;
+};
+
+export type InvoiceAdministrationTableItem = InvoiceAdministrationListItem & {
+  readonly actorName: string | null;
 };
 
 /**
@@ -431,6 +436,40 @@ const makeInvoiceAdministrationService = Effect.gen(function* () {
       )
   );
 
+  const findIssuingAdministratorNames = Effect.fn(
+    "InvoiceAdministrationService.findIssuingAdministratorNames"
+  )(function* (invoiceIds: InvoiceId[]) {
+    const names = new Map<AdministrationInvoiceIdType, string>();
+    if (invoiceIds.length === 0) return names;
+
+    const links = yield* invoices
+      .findManualIssuerProfileLinks(invoiceIds)
+      .pipe(
+        Effect.catch(() =>
+          Effect.logWarning("Invoice issuer profiles unavailable").pipe(
+            Effect.as([])
+          )
+        )
+      );
+    if (links.length === 0) return names;
+
+    const customers = yield* customerDirectory.findMany(
+      links.map(({ customerId }) => customerId)
+    );
+    const now = yield* DateTime.nowAsDate;
+    for (const { invoiceId, customerId } of links) {
+      const customer = customers.get(customerId);
+      if (!customer || !isFindableAdministrationCustomer(customer, now))
+        continue;
+      const name = getCustomerDisplayName({
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+      });
+      if (name) names.set(AdministrationInvoiceId.make(invoiceId), name);
+    }
+    return names;
+  });
+
   /**
    * The Admin UI's list: `list`, except that an invoice whose document
    * cannot be read is listed from its unencrypted columns, and the read logs
@@ -456,7 +495,25 @@ const makeInvoiceAdministrationService = Effect.gen(function* () {
           ])
         )
       ),
-      Effect.map((entries) => toPage(entries, query))
+      Effect.map((entries) => toPage(entries, query)),
+      Effect.flatMap((page) =>
+        findIssuingAdministratorNames(
+          page.items.flatMap((item) =>
+            "documentUnavailable" in item || !item.actor
+              ? []
+              : [invoiceIdSchema.make(item.id)]
+          )
+        ).pipe(
+          Effect.map((names) => ({
+            ...page,
+            items: page.items.map((item) =>
+              "documentUnavailable" in item
+                ? item
+                : { ...item, actorName: names.get(item.id) ?? null }
+            ),
+          }))
+        )
+      )
     )
   );
 
