@@ -83,18 +83,28 @@ describe("Workspace E2E environment", () => {
     }
   });
 
-  test("defaults to Nexi and requires shared replay coordination for mock", () => {
+  test("defaults to Nexi and accepts fallback", () => {
     expect(makeTestE2EEnvironment({}).WORKSPACE_E2E_PAYMENT_PROVIDER).toBe(
       "nexi"
     );
-    expect(() =>
-      makeWorkspaceE2EEnvironment({
-        ...validE2ERuntimeEnvironment,
-        WORKSPACE_E2E_PAYMENT_PROVIDER: "mock",
-        WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL: undefined,
-      })
-    ).toThrow("Invalid workspace E2E environment variables.");
+    expect(
+      makeTestE2EEnvironment({ WORKSPACE_E2E_PAYMENT_PROVIDER: "fallback" })
+        .WORKSPACE_E2E_PAYMENT_PROVIDER
+    ).toBe("fallback");
   });
+
+  test.each(["mock", "fallback"] as const)(
+    "requires shared replay coordination for %s",
+    (paymentProvider) => {
+      expect(() =>
+        makeWorkspaceE2EEnvironment({
+          ...validE2ERuntimeEnvironment,
+          WORKSPACE_E2E_PAYMENT_PROVIDER: paymentProvider,
+          WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL: undefined,
+        })
+      ).toThrow("Invalid workspace E2E environment variables.");
+    }
+  );
 
   test.each([
     { WORKSPACE_E2E_PAYMENT_PROVIDER: "unsupported" },

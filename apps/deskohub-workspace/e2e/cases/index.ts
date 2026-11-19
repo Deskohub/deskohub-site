@@ -14,6 +14,7 @@ import {
   toReservationStep,
 } from "../checkout/reservation-form-preparation";
 import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
+import { initialE2EPaymentProvider } from "../e2e-env";
 import { toWorkspaceE2EError, type WorkspaceE2EError } from "../errors";
 import { discountCodeFixtures } from "../integrations/discount-fixtures";
 import type { E2EDotyposDiscountGroup } from "../integrations/dotypos";
@@ -93,7 +94,7 @@ export const makeWorkspaceE2ECases = ({
     const construction = Effect.gen(function* () {
       const httpClient = yield* HttpClient.HttpClient;
       const terminalScenarios = getPaymentTerminalScenarios(
-        config.paymentProvider
+        initialE2EPaymentProvider(config.paymentProvider)
       );
       const checkoutDates = yield* selectCoworkDates(
         discountPreparation.availableBasicDates,

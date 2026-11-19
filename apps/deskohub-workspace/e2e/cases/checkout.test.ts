@@ -294,11 +294,13 @@ describe("Nexi sandbox payment restart", () => {
     mode = "nexi",
     initialProvider = "nexi",
     restarted = true,
+    fellBack = true,
   }: {
     readonly hostedPaymentFailures: Record<string, WorkspaceE2EError>;
     readonly mode?: WorkspaceE2EConfig["paymentProvider"];
     readonly initialProvider?: "nexi" | "mock";
     readonly restarted?: boolean;
+    readonly fellBack?: boolean;
   }) => {
     const hostedPaymentPermit = makeWorkspaceE2EHostedPaymentPermitRecorder();
     const stepIds: string[] = [];
@@ -306,20 +308,27 @@ describe("Nexi sandbox payment restart", () => {
     const runStep = ((step) => {
       stepIds.push(step.id);
       if (!hostedPaymentPermit.isHolding()) stepsOutsidePermit.push(step.id);
+      const failure = hostedPaymentFailures[step.id];
+      if (failure) return Effect.fail(failure);
       if (step.id.startsWith("start-checkout-payment")) {
         return Effect.succeed({
           ...hostedPaymentPage,
-          provider: initialProvider,
+          provider: step.id.endsWith("-mock-fallback")
+            ? "mock"
+            : initialProvider,
         });
       }
       if (step.id === "read-provider-session-row")
         return Effect.succeed(initialProvider === "mock" ? mockRow : firstRow);
       if (step.id === "read-provider-session-row-retry")
         return Effect.succeed(retryRow);
+      if (step.id === "read-provider-session-row-mock-fallback")
+        return Effect.succeed(mockRow);
       if (step.id === "restart-sandbox-rejected-payment")
         return Effect.succeed(restarted);
-      const failure = hostedPaymentFailures[step.id];
-      return failure ? Effect.fail(failure) : Effect.void;
+      if (step.id === "restart-sandbox-rejected-payment-with-mock")
+        return Effect.succeed(fellBack);
+      return Effect.void;
     }) as WorkspaceE2EStepRunner;
     const data = {} as CheckoutData;
     const result = Effect.runPromiseExit(
@@ -389,6 +398,76 @@ describe("Nexi sandbox payment restart", () => {
       stepIds.filter((id) => id === "restart-sandbox-rejected-payment")
     ).toHaveLength(1);
     expect(stepIds.at(-1)).toBe("complete-hosted-payment-retry");
+  });
+
+  test("uses a single mock payment after the Nexi restart also rejects", async () => {
+    const { result, stepIds, stepsOutsidePermit } = payWithSteps({
+      mode: "fallback",
+      hostedPaymentFailures: {
+        "complete-hosted-payment": sandboxRejection(),
+        "complete-hosted-payment-retry": sandboxRejection(),
+      },
+    });
+    expect(await result).toEqual(Exit.succeed(mockRow));
+    expect(stepsOutsidePermit).toEqual([]);
+    expect(
+      stepIds.filter((id) => id.startsWith("start-checkout-payment"))
+    ).toEqual([
+      "start-checkout-payment",
+      "start-checkout-payment-retry",
+      "start-checkout-payment-mock-fallback",
+    ]);
+    expect(stepIds.slice(-5)).toEqual([
+      "restart-sandbox-rejected-payment-with-mock",
+      "start-checkout-payment-mock-fallback",
+      "read-provider-session-row-mock-fallback",
+      "complete-hosted-payment-mock-fallback",
+      "reach-checkout-status-page-mock-fallback",
+    ]);
+  });
+
+  test("keeps a fresh checkout on Nexi in fallback mode", async () => {
+    const { result, stepIds } = payWithSteps({
+      mode: "fallback",
+      hostedPaymentFailures: {},
+    });
+    expect(await result).toEqual(Exit.succeed(firstRow));
+    expect(
+      stepIds.filter((id) => id.startsWith("start-checkout-payment"))
+    ).toEqual(["start-checkout-payment"]);
+  });
+
+  test("stops at the second Nexi rejection when fallback is denied", async () => {
+    const rejection = sandboxRejection();
+    const { result, stepIds } = payWithSteps({
+      mode: "fallback",
+      fellBack: false,
+      hostedPaymentFailures: {
+        "complete-hosted-payment": sandboxRejection(),
+        "complete-hosted-payment-retry": rejection,
+      },
+    });
+    expect(failureOf(await result)).toEqual(Option.some(rejection));
+    expect(stepIds.at(-1)).toBe("restart-sandbox-rejected-payment-with-mock");
+  });
+
+  test.each([
+    "start-checkout-payment",
+    "start-checkout-payment-retry",
+    "start-checkout-payment-mock-fallback",
+  ])("does not reissue ambiguous creation at %s", async (stepId) => {
+    const failure = workspaceE2EError("creation response could not be decoded");
+    const { result, stepIds } = payWithSteps({
+      mode: "fallback",
+      hostedPaymentFailures: {
+        "complete-hosted-payment": sandboxRejection(),
+        "complete-hosted-payment-retry": sandboxRejection(),
+        [stepId]: failure,
+      },
+    });
+    expect(failureOf(await result)).toEqual(Option.some(failure));
+    expect(stepIds.at(-1)).toBe(stepId);
+    expect(stepIds.filter((id) => id === stepId)).toHaveLength(1);
   });
 
   test("never restarts timeouts or failures that are not sandbox rejections", async () => {

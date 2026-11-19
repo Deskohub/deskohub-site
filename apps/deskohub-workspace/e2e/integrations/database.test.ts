@@ -325,11 +325,21 @@ test("replays Nexi notification against the exact protected preview", async () =
 
   await Effect.runPromise(
     replayPaymentWebhook(makeConfig(), makeCheckoutRow()).pipe(
+      Effect.andThen(
+        replayPaymentWebhook(
+          { ...makeConfig(), paymentProvider: "fallback" },
+          makeCheckoutRow()
+        )
+      ),
       Effect.provide(httpClientLayer)
     )
   );
 
-  expect(requests).toHaveLength(1);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]?.url).toBe(requests[0]?.url);
+  expect(JSON.parse(requests[1]?.body ?? "{}")).toMatchObject({
+    operation: { orderId: "provider-order-1" },
+  });
   const request = requests[0];
   expect(request?.url).toBe(
     "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app/api/webhooks/nexi"
@@ -409,7 +419,9 @@ test("replays mock payment on the protected preview with a stable event ID", asy
 
   await Effect.runPromise(
     replayPaymentWebhook(config, row).pipe(
-      Effect.andThen(replayPaymentWebhook(config, row)),
+      Effect.andThen(
+        replayPaymentWebhook({ ...config, paymentProvider: "fallback" }, row)
+      ),
       Effect.provide(httpClientLayer)
     )
   );

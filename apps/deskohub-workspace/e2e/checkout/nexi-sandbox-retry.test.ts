@@ -92,6 +92,26 @@ test("retries the card-data save rejection Nexi answers with HTTP 400", () => {
   });
 });
 
+test("mock fallback requires independent proof that Pay never requested authorization", () => {
+  const error = hostedPaymentError(
+    "nexi_hosted_continue_card_submission_rejected"
+  );
+  expect(
+    decideNexiSandboxRetry({
+      authorizationRequested: false,
+      error,
+      requireNoAuthorization: true,
+    })
+  ).toMatchObject({ retry: true });
+  expect(
+    decideNexiSandboxRetry({
+      authorizationRequested: true,
+      error,
+      requireNoAuthorization: true,
+    })
+  ).toEqual({ reason: "Nexi may have authorized the payment", retry: false });
+});
+
 test("retries a Pay-step rejection only before Pay asked Nexi to authorize", () => {
   expect(decide("nexi_hosted_pay_provider_error_page")).toMatchObject({
     retry: true,
