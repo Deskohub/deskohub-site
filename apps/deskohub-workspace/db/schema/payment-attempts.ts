@@ -34,8 +34,8 @@ export const paymentAttemptStates = [
 export type PaymentAttemptState = (typeof paymentAttemptStates)[number];
 
 /**
- * `required` marks a paid Nexi attempt whose money must go back to the
- * customer. `refunded` records that Nexi reported a successful refund of the
+ * `required` marks a paid provider attempt whose money must go back to the
+ * customer. `refunded` records that the provider reported a successful refund of the
  * attempt's order, whether full or partial.
  */
 export const paymentRefundStates = [
@@ -46,7 +46,12 @@ export const paymentRefundStates = [
 
 export type PaymentRefundState = (typeof paymentRefundStates)[number];
 
-export const paymentProviders = ["nexi", "internal"] as const;
+const externalPaymentProviders = ["nexi", "mock"] as const;
+
+export const paymentProviders = [
+  ...externalPaymentProviders,
+  "internal",
+] as const;
 
 export type PaymentProvider = (typeof paymentProviders)[number];
 
@@ -92,7 +97,7 @@ export const paymentAttempts = pgTable(
      */
     refundTargetValue: integer("refund_target_value"),
     /**
-     * Sum of successful Nexi refunds, in the attempt's minor units: set once
+     * Sum of successful provider refunds, in the attempt's minor units: set once
      * refunded, or while a partial refund owed is still short of its target.
      */
     refundedAmountValue: integer("refunded_amount_value"),
@@ -131,7 +136,7 @@ export const paymentAttempts = pgTable(
     ),
     check(
       "payment_attempts_refund_state_check",
-      sql`${t.refundState} in (${quotedSqlList(paymentRefundStates)}) and (${t.refundState} = 'not_required' or (${t.provider} = 'nexi' and ${t.state} = 'paid'))`
+      sql`${t.refundState} in (${quotedSqlList(paymentRefundStates)}) and (${t.refundState} = 'not_required' or (${t.provider} in (${quotedSqlList(externalPaymentProviders)}) and ${t.state} = 'paid'))`
     ),
     check(
       "payment_attempts_refund_record_check",
@@ -144,11 +149,11 @@ export const paymentAttempts = pgTable(
     check("payment_attempts_currency_check", sql`${t.currency} ~ '^[A-Z]{3}$'`),
     check(
       "payment_attempts_amount_check",
-      sql`(${t.provider} = 'nexi' and ${t.amountValue} > 0) or (${t.provider} = 'internal' and ${t.amountValue} = 0)`
+      sql`(${t.provider} in (${quotedSqlList(externalPaymentProviders)}) and ${t.amountValue} > 0) or (${t.provider} = 'internal' and ${t.amountValue} = 0)`
     ),
     check(
       "payment_attempts_provider_fields_check",
-      sql`(${t.provider} = 'nexi' and ${t.providerOrderId} is not null) or (${t.provider} = 'internal' and ${t.providerOrderId} is null and ${t.securityToken} is null and ${t.providerRedirectUrl} is null and ${t.lastWebhookEventId} is null and ${t.lastProviderOperationId} is null and ${t.lastProviderStatus} is null and ${t.providerOrderCreatedAt} is null)`
+      sql`(${t.provider} in (${quotedSqlList(externalPaymentProviders)}) and ${t.providerOrderId} is not null) or (${t.provider} = 'internal' and ${t.providerOrderId} is null and ${t.securityToken} is null and ${t.providerRedirectUrl} is null and ${t.lastWebhookEventId} is null and ${t.lastProviderOperationId} is null and ${t.lastProviderStatus} is null and ${t.providerOrderCreatedAt} is null)`
     ),
     check(
       "payment_attempts_internal_state_check",
@@ -158,9 +163,10 @@ export const paymentAttempts = pgTable(
       "payment_attempts_failure_code_check",
       sql`${t.state} not in (${quotedSqlList(paymentAttemptStatesRequiringFailureCode)}) or ${t.failureCode} is not null`
     ),
-    uniqueIndex("payment_attempts_nexi_order_unique_idx")
-      .on(t.providerOrderId)
-      .where(sql`${t.provider} = 'nexi'`),
+    uniqueIndex("payment_attempts_provider_order_unique_idx").on(
+      t.provider,
+      t.providerOrderId
+    ),
     index("payment_attempts_workspace_reservation_idx").on(
       t.workspaceReservationId
     ),

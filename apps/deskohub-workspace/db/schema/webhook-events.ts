@@ -1,6 +1,6 @@
 import type { NexiOrderId, NexiWebhookEventId } from "@deskohub/nexi";
 import { sql } from "drizzle-orm";
-import { check, index, pgTable, text } from "drizzle-orm/pg-core";
+import { check, index, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
 import type {
   PaymentAttemptId,
   StoredWebhookEventId,
@@ -10,7 +10,7 @@ import { postgresUuidV7 } from "../uuid-v7";
 import { paymentAttempts } from "./payment-attempts";
 import { quotedSqlList } from "./sql-list";
 
-export const webhookProviders = ["nexi"] as const;
+export const webhookProviders = ["nexi", "mock"] as const;
 
 export type WebhookProvider = (typeof webhookProviders)[number];
 
@@ -26,7 +26,9 @@ export const webhookEvents = pgTable(
       .default(postgresUuidV7)
       .$type<StoredWebhookEventId>(),
     provider: text("provider").notNull().$type<WebhookProvider>(),
-    eventId: text("event_id").notNull().unique().$type<NexiWebhookEventId>(),
+    eventId: text("provider_event_id").notNull().$type<NexiWebhookEventId>(),
+    /** Conflict target for older Nexi writers. The database mirrors Nexi event IDs here. */
+    legacyEventId: text("event_id").unique().$type<NexiWebhookEventId>(),
     paymentAttemptId: text("payment_attempt_id")
       .$type<PaymentAttemptId>()
       .references(() => paymentAttempts.id),
@@ -44,6 +46,10 @@ export const webhookEvents = pgTable(
       sql`${t.provider} in (${quotedSqlList(webhookProviders)})`
     ),
     check(
+      "webhook_events_legacy_event_id_check",
+      sql`(${t.provider} = 'nexi' and ${t.legacyEventId} is not null and ${t.legacyEventId} = ${t.eventId}) or (${t.provider} = 'mock' and ${t.legacyEventId} is null)`
+    ),
+    check(
       "webhook_events_state_check",
       sql`${t.state} in (${quotedSqlList(webhookEventStates)})`
     ),
@@ -54,6 +60,10 @@ export const webhookEvents = pgTable(
     check(
       "webhook_events_failed_check",
       sql`${t.state} <> 'failed' or ${t.errorCode} is not null`
+    ),
+    uniqueIndex("webhook_events_provider_event_unique_idx").on(
+      t.provider,
+      t.eventId
     ),
     index("webhook_events_payment_attempt_idx")
       .on(t.paymentAttemptId)
