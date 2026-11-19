@@ -1,18 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { PaymentVerificationResult } from "@deskohub/nexi";
+import type { PaymentVerification } from "./payment-provider";
 import { paymentVerificationLogFields } from "./payment-verification-log-fields";
 
-const verification: PaymentVerificationResult = {
+const verification: PaymentVerification = {
   status: "success",
-  provider: {
-    orderId: "provider-order-id",
-    operationId: "operation-id",
-    operationCount: 1,
-    amount: "35000",
-    currency: "CZK",
-    orderStatus: "EXECUTED",
-    captureExecuted: true,
-  },
+  providerOperationId: "operation-id",
+  providerOrderStatus: "EXECUTED",
+  hasActivity: true,
   mismatches: ["amount", "currency"],
 };
 
