@@ -33,6 +33,7 @@ import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
+import { isEntryPackQuoteExpired } from "../pass-offer";
 import { sendEntryPackPurchaseEmail } from "./entry-pack-purchase-email";
 import { settleEntryPack } from "./entry-pack-settlement";
 
@@ -198,6 +199,13 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         "The Entry pack already has a payment."
       );
     }
+    const now = yield* currentInstant;
+    if (isEntryPackQuoteExpired(now, pack.validUntil)) {
+      return yield* paymentError(
+        order.id,
+        "The Entry pack quote expired. Request a new quote."
+      );
+    }
     yield* ReferralInvitationLedger.admitFirstBooking({
       orderId: order.id,
       dotyposCustomerId: order.dotyposCustomerId,
@@ -208,7 +216,6 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       )
     );
 
-    const now = yield* currentInstant;
     const attempt = yield* insertPaymentAttempt({
       orderId: order.id,
       workspaceReservationId: null,

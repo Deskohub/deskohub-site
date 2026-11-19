@@ -80,14 +80,22 @@ export const unlimitedPassOffers = passTiers.map((tier) => ({
   validityDays: 30,
 }));
 
+const entryPackLocalDate = (instant: Temporal.Instant) =>
+  temporalInstantToPlainDate({
+    instant,
+    timeZone: workspaceSiteConstants.location.timeZone,
+  });
+
+export const isEntryPackQuoteExpired = (
+  now: Temporal.Instant,
+  validUntil: typeof plainDateStringSchema.Type
+) => Temporal.PlainDate.compare(entryPackLocalDate(now), validUntil) >= 0;
+
 export const getEntryPackValidity = (
   purchasedAt: Temporal.Instant,
   size: EntryPackSize
 ) => {
-  const date = temporalInstantToPlainDate({
-    instant: purchasedAt,
-    timeZone: workspaceSiteConstants.location.timeZone,
-  });
+  const date = entryPackLocalDate(purchasedAt);
   return {
     validFrom: plainDateStringSchema.make(date.toString()),
     validUntil: plainDateStringSchema.make(

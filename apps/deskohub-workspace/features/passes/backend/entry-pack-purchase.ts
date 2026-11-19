@@ -35,7 +35,11 @@ import { reservationCustomerEmailSchema } from "@/features/reservation/reservati
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
-import { type EntryPackProduct, getEntryPackPrice } from "../pass-offer";
+import {
+  type EntryPackProduct,
+  getEntryPackPrice,
+  isEntryPackQuoteExpired,
+} from "../pass-offer";
 import { quoteEntryPack } from "./entry-pack-quote";
 
 class EntryPackPurchaseError extends Data.TaggedError(
@@ -47,7 +51,8 @@ class EntryPackPurchaseError extends Data.TaggedError(
     | "holder-unavailable"
     | "purchase-conflict"
     | "consent-required"
-    | "terms-changed";
+    | "terms-changed"
+    | "quote-expired";
 }> {}
 
 const requirePassPurchasesEnabled = Effect.fn("requirePassPurchasesEnabled")(
@@ -334,6 +339,11 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           : { status: "pending" as const, statusUrl };
       }
 
+      const now = yield* currentInstant;
+      if (isEntryPackQuoteExpired(now, purchase.validUntil)) {
+        return yield* new EntryPackPurchaseError({ reason: "quote-expired" });
+      }
+
       const discountService = yield* DiscountService;
       const product = {
         kind: "entry-pack",
@@ -349,7 +359,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           discountableSubtotal: getEntryPackPrice(product),
           firstServiceDate: purchase.validFrom,
           lastServiceDate: purchase.validFrom,
-          bookedAt: yield* currentInstant,
+          bookedAt: now,
           dotyposCustomerId: order.dotyposCustomerId,
           locale: purchase.locale,
           displayedDiscountIds: accepted.discounts.map(

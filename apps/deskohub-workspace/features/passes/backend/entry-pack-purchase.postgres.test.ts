@@ -41,6 +41,7 @@ import {
   createWorkspacePostgresSuiteDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
   beginEntryPackPurchase,
@@ -116,7 +117,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
     const integration = async (
       db: WorkspacePostgresSuiteDatabase,
-      voucherValue: number
+      voucherValue: number,
+      purchasedAt?: Temporal.Instant
     ) => {
       const code = canonicalPromotionCodeSchema.make(
         `V${crypto.randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`
@@ -269,13 +271,14 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         })
       );
       const orderId = orderIdSchema.make(crypto.randomUUID());
+      const begin = beginEntryPackPurchase({
+        orderId,
+        product: { kind: "entry-pack", tier: "open-space", size: 5 },
+        locale: "en-US",
+        submittedCode: code,
+      }).pipe(Effect.provide(services));
       await Effect.runPromise(
-        beginEntryPackPurchase({
-          orderId,
-          product: { kind: "entry-pack", tier: "open-space", size: 5 },
-          locale: "en-US",
-          submittedCode: code,
-        }).pipe(Effect.provide(services))
+        purchasedAt ? begin.pipe(atInstant(purchasedAt)) : begin
       );
       const accept = {
         orderId,
@@ -315,12 +318,37 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         },
         providerOrders,
         notify,
-        pay: () =>
-          Effect.runPromise(
-            payForEntryPack(accept).pipe(Effect.provide(services))
-          ),
+        pay: (at?: Temporal.Instant) => {
+          const pay = payForEntryPack(accept).pipe(Effect.provide(services));
+          return Effect.runPromise(at ? pay.pipe(atInstant(at)) : pay);
+        },
       };
     };
+
+    test.each([2_000, 115_000])(
+      "requires a fresh quote on the exclusive Prague end date for voucher value %i",
+      async (voucherValue) => {
+        const db = database!;
+        const payment = await integration(
+          db,
+          voucherValue,
+          Temporal.Instant.from("2026-11-19T12:00:00Z")
+        );
+
+        await expect(
+          payment.pay(Temporal.Instant.from("2027-01-18T23:00:00Z"))
+        ).rejects.toMatchObject({
+          _tag: "EntryPackPurchaseError",
+          reason: "quote-expired",
+        });
+        expect(payment.providerOrders).toEqual([]);
+        const attempts = await db.pool.query(
+          "select id from payment_attempts where order_id = $1",
+          [payment.orderId]
+        );
+        expect(attempts.rows).toEqual([]);
+      }
+    );
 
     test("admits buyer voucher, releases it on terminal failure and redeems it on verified late capture", async () => {
       const db = database!;
