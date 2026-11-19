@@ -1,5 +1,6 @@
 import type { PostHogFeatureFlagOverrides } from "@deskohub/analytics-posthog/feature-flags";
 import type { PostHogClientSource } from "@deskohub/analytics-posthog/feature-flags/react";
+import { Predicate } from "effect";
 import type { BeforeSendFn, PostHog } from "posthog-js";
 import {
   getAnalyticsDotyposCustomerId,
@@ -34,6 +35,10 @@ import {
   deliverAnalyticsEvents,
   discardAnalyticsEvents,
 } from "./analytics-events";
+import {
+  isPostHogCampaignProperty,
+  readPageviewCampaignProperties,
+} from "./utils/posthog-campaign";
 import {
   createPostHogConfig,
   isPostHogTelemetryHostAllowed,
@@ -107,12 +112,25 @@ const telemetryHostAllowedFor = (posthogHost: string | undefined) => {
   );
 };
 
-const clearPostHogInitialPersonProperties = (posthog: PostHog) => {
-  // These are the posthog-js 1.418.1 persistence keys. Re-audit the keys when
-  // upgrading the SDK; save_referrer/save_campaign_params do not clear old data.
+const clearPostHogCampaignFlagProperties = (posthog: PostHog) => {
+  const overrides: unknown = posthog.get_property("$stored_person_properties");
+  if (!Predicate.isObject(overrides)) return;
+
+  const campaignKeys = Object.keys(overrides).filter(isPostHogCampaignProperty);
+  if (campaignKeys.length > 0) {
+    posthog.featureFlags?.unsetPersonPropertiesForFlags(campaignKeys, false);
+  }
+};
+
+const clearPostHogStoredContext = (posthog: PostHog) => {
+  // With posthog-js 1.438.1 the save_* options don't clear these persisted
+  // fields. Flags can use stored person properties without running before_send.
   posthog.unregister("$initial_person_info");
   posthog.unregister("$initial_referrer_info");
   posthog.unregister("$initial_campaign_params");
+  posthog.unregister("$fbc_persistence");
+  posthog.unregister("$fbp_persistence");
+  clearPostHogCampaignFlagProperties(posthog);
 };
 
 const clearPostHogSessionCookies = () => {
@@ -173,6 +191,7 @@ export function createBrowserAnalyticsSession(): BrowserAnalyticsSession {
     | { pathname: string; followedNavigation: boolean }
     | undefined;
   let lastCapturedPageviewPath: string | undefined;
+  let hasCapturedPageview = false;
   let lastReadyIdentity: SettledAnalyticsAccountIdentity | undefined;
   let lastSettledIdentity: SettledAnalyticsAccountIdentity | undefined;
   let hasReadyConsent = false;
@@ -345,7 +364,7 @@ export function createBrowserAnalyticsSession(): BrowserAnalyticsSession {
 
     recordReadyIdentity(identity);
     syncSessionCookies();
-    clearPostHogInitialPersonProperties(client);
+    clearPostHogStoredContext(client);
     resumeDelivery(client, identity);
   };
 
@@ -369,12 +388,27 @@ export function createBrowserAnalyticsSession(): BrowserAnalyticsSession {
           if (!event) return event;
           if (!isEventAllowed(event)) return null;
 
-          return preparePostHogEvent(event, posthogEnvironment);
+          // The SDK merges $set into its flag overrides before before_send.
+          clearPostHogCampaignFlagProperties(sdk);
+          const prepared = preparePostHogEvent(event, posthogEnvironment);
+          if (prepared.event === "$pageview") {
+            const campaign = readPageviewCampaignProperties(
+              new URL(window.location.href),
+              hasCapturedPageview
+                ? undefined
+                : () =>
+                    window.performance?.getEntriesByType?.("navigation")[0]
+                      ?.name
+            );
+            Object.assign(prepared.properties, campaign);
+            hasCapturedPageview = true;
+          }
+          return prepared;
         },
         optOutUseragentFilter: process.env.NODE_ENV === "development",
       })
     );
-    clearPostHogInitialPersonProperties(sdk);
+    clearPostHogStoredContext(sdk);
     posthog = sdk;
     browserLogSink = createWorkspaceBrowserLogSink(sdk, posthogEnvironment);
     sdk.stopSessionRecording();

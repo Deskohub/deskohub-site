@@ -68,6 +68,51 @@ const legacyInitialRawQueryToken = "posthog-identity-legacy-raw-query-token";
 const legacyInitialReferrerToken = "posthog-identity-legacy-referrer-token";
 const legacyInitialUtmToken = "posthog-identity-legacy-utm-token";
 const syntheticPinCanary = "583104729";
+const clickIdProperties = [
+  "_fbc",
+  "_fbp",
+  "_kx",
+  "dclid",
+  "epik",
+  "fbc",
+  "fbclid",
+  "fbp",
+  "fbc_persistence",
+  "fbp_persistence",
+  "gbraid",
+  "gclid",
+  "igshid",
+  "irclid",
+  "li_fat_id",
+  "mc_eid",
+  "msclkid",
+  "oppref",
+  "qclid",
+  "rdt_cid",
+  "sccid",
+  "srsltid",
+  "ttclid",
+  "twclid",
+  "wbraid",
+  "yclid",
+];
+const campaignProperties = {
+  utm_source: "posters",
+  utm_medium: "qr",
+  utm_campaign: "bud jako doma",
+  utm_id: "42",
+  utm_term: "sdílená kancelář",
+  utm_content: "leták-2",
+  utm_source_platform: "Deskohub",
+  utm_creative_format: "print",
+  utm_marketing_tactic: "local awareness",
+  gad_source: "1",
+  gad_campaignid: "12345678901",
+  gclsrc: "aw.ds",
+  mc_cid: "33a4a985ed",
+} as const;
+const campaignPropertyNames = Object.keys(campaignProperties);
+const campaignRejectedMarker = "synthetic-campaign-parameter-canary";
 const localCorsHeaders = {
   "Access-Control-Allow-Headers":
     "Authorization, Content-Type, X-PostHog-Session-Id",
@@ -92,6 +137,9 @@ const sensitivePayloadMarkers = [
   { code: "legacy-raw-query-token", value: legacyInitialRawQueryToken },
   { code: "legacy-referrer-token", value: legacyInitialReferrerToken },
   { code: "legacy-utm-token", value: legacyInitialUtmToken },
+  { code: "campaign-rejected-marker", value: campaignRejectedMarker },
+  { code: "legacy-meta-click-id", value: "synthetic-meta-click-id" },
+  { code: "legacy-meta-browser-id", value: "fb.1.1700000000000.1700000001" },
 ] as const;
 
 const forbiddenPayloadPropertyNames = [
@@ -115,6 +163,14 @@ const forbiddenPayloadPropertyNames = [
   "$session_entry_search_engine",
   "$session_entry_ph_keyword",
   "$prev_pageview_pathname",
+  "utm_unknown",
+  "private_campaign_param",
+  ...clickIdProperties.flatMap((key) => [key, `$${key}`]),
+  ...[...clickIdProperties, ...campaignPropertyNames].flatMap((key) => [
+    `$initial_${key}`,
+    `$session_entry_${key}`,
+    `$entry_${key}`,
+  ]),
 ] as const;
 
 const userIds = {
@@ -1112,8 +1168,10 @@ const waitForFixtureControl = (page: Page) =>
 type FixturePageOptions = {
   readonly consent: "on" | "off";
   readonly fixtureMode?: FixtureMode;
+  readonly marketingConsent?: boolean;
   readonly referrer?: string | null;
   readonly remoteFlags?: boolean;
+  readonly searchParams?: URLSearchParams;
 };
 
 const openPage = async (
@@ -1123,8 +1181,10 @@ const openPage = async (
   {
     consent,
     fixtureMode = "cross-host",
+    marketingConsent = false,
     referrer = fixtureSameOriginReferrer,
     remoteFlags = false,
+    searchParams = new URLSearchParams(),
   }: FixturePageOptions
 ) => {
   const page = await context.newPage();
@@ -1138,7 +1198,7 @@ const openPage = async (
 
   try {
     await page.goto(
-      `${fixtureBaseUrl}/?run=${encodeURIComponent(runId)}&consent=${consent}&fixtureMode=${fixtureMode}&remoteFlags=${remoteFlags}&query=${fixtureQueryToken}#hash=${fixtureHashToken}`,
+      `${fixtureBaseUrl}/?run=${encodeURIComponent(runId)}&consent=${consent}&fixtureMode=${fixtureMode}&remoteFlags=${remoteFlags}&marketing=${marketingConsent ? "on" : "off"}&query=${fixtureQueryToken}&${searchParams}#hash=${fixtureHashToken}`,
       {
         referer: referrer ?? undefined,
         timeout: 15_000,
@@ -1230,6 +1290,7 @@ const readConsentState = (page: Page) =>
   readControl<{
     readonly analyticsAccepted: boolean;
     readonly cookiePresent: boolean;
+    readonly marketingAccepted: boolean;
     readonly necessaryAccepted: boolean;
   }>(page, "readConsentState");
 
@@ -1436,7 +1497,23 @@ const findJsonPropertyPaths = (
       const nestedPath = `${candidatePath}.${key}`;
       if (propertyNames.includes(key)) paths.push(nestedPath);
       const nested = candidate[key];
-      if (nested !== undefined) visit(nested, nestedPath);
+      if (nested === undefined) continue;
+
+      if (
+        candidate.event === "$pageview" &&
+        key === "properties" &&
+        isJsonObject(nested)
+      ) {
+        // Approved campaign fields belong directly on pageviews only.
+        const otherProperties = Object.fromEntries(
+          Object.entries(nested).filter(
+            ([name]) => !campaignPropertyNames.includes(name)
+          )
+        );
+        visit(otherProperties, nestedPath);
+      } else {
+        visit(nested, nestedPath);
+      }
     }
   };
 
@@ -1487,7 +1564,10 @@ const findSensitivePostHogRequestHitsForRequests = (
       }
     }
     const forbiddenPropertyPaths = request.body.ok
-      ? findJsonPropertyPaths(request.body.value, forbiddenPayloadPropertyNames)
+      ? findJsonPropertyPaths(request.body.value, [
+          ...forbiddenPayloadPropertyNames,
+          ...campaignPropertyNames,
+        ])
       : forbiddenPayloadPropertyNames
           .filter((propertyName) =>
             request.body.searchText.includes(propertyName)
@@ -1627,10 +1707,13 @@ const waitForEvent = async (
 const waitForFixtureEvent = async (server: LocalPostHogServer) =>
   waitForEvent(server, "fixture-sensitive-event");
 
-const navigateWithinFixture = async (page: Page) => {
+const navigateWithinFixture = async (
+  page: Page,
+  pathname = "/fixture-navigation"
+) => {
   await page.locator("[data-fixture-navigate]").click();
   await page
-    .locator("main[data-fixture-pathname='/fixture-navigation']")
+    .locator(`main[data-fixture-pathname='${pathname}']`)
     .waitFor({ state: "attached", timeout: 5_000 });
 };
 
@@ -2073,6 +2156,130 @@ const runDelayedFirstPageviewScenario = async (
   assertBrowserProblems(fixture);
 };
 
+const runCampaignPageviewScenario = async (
+  browser: Browser,
+  server: LocalPostHogServer
+) => {
+  const tagged = new URLSearchParams(campaignProperties);
+  for (const name of clickIdProperties)
+    tagged.append(name, campaignRejectedMarker);
+  tagged.append("utm_unknown", campaignRejectedMarker);
+  tagged.append("private_campaign_param", campaignRejectedMarker);
+
+  const invalid = new URLSearchParams({
+    utm_source: "ignore first source",
+    utm_medium: "email",
+    utm_campaign: `https://example.invalid/${campaignRejectedMarker}`,
+    utm_id: "777123456",
+    utm_term: syntheticEmail,
+    utm_content: "line\nbreak",
+    utm_source_platform: "example.invalid",
+    utm_creative_format: "K82Fn0Zp23VtzSi9Yp",
+    utm_marketing_tactic: `Call 777-123-456`,
+    gad_source: "0001",
+    gad_campaignid: "campaign-name",
+    gclsrc: "unlisted",
+    mc_cid: "111a222b33",
+    mc_eid: "111a222b33",
+  });
+  invalid.append("utm_source", "ignore second source");
+  invalid.append("utm_unknown", campaignRejectedMarker);
+
+  for (const scenario of [
+    { consent: "on", searchParams: tagged, expected: campaignProperties },
+    { consent: "off", searchParams: tagged, expected: campaignProperties },
+    {
+      consent: "off",
+      searchParams: tagged,
+      expected: campaignProperties,
+      softNavigation: true,
+    },
+    { consent: "on", searchParams: invalid, expected: { utm_medium: "email" } },
+  ] as const) {
+    server.clearIngest();
+    const requestMark = server.allPostHogRequests().length;
+    const fixture = await openFixture(browser, server, {
+      consent: scenario.consent,
+      marketingConsent: scenario.consent === "on",
+      referrer: null,
+      remoteFlags: true,
+      searchParams: scenario.searchParams,
+      session: "A",
+    });
+    try {
+      const { page } = fixture;
+      const softNavigation = "softNavigation" in scenario;
+      await waitForAuthenticatedIdentity(page);
+      if (scenario.consent === "off") {
+        if (softNavigation) await navigateWithinFixture(page);
+        check(
+          !(await readSdkState(page)).loaded,
+          "campaign-sdk-without-consent"
+        );
+        check(
+          server.allPostHogRequests().length === requestMark,
+          "campaign-request-without-consent"
+        );
+        await grantConsent(page);
+      } else {
+        check(
+          (await readConsentState(page)).marketingAccepted,
+          "campaign-marketing-consent-missing"
+        );
+      }
+
+      await waitForEvent(server, "$pageview");
+      const [first] = eventNamed(server.allIngestRecords(), "$pageview");
+      check(first !== undefined, "campaign-first-pageview-missing");
+      check(
+        propertyString(first, "$current_url") ===
+          `${fixtureBaseUrl}/${softNavigation ? "fixture-navigation" : ""}`,
+        "campaign-current-url"
+      );
+      const expected: Readonly<Record<string, string>> = scenario.expected;
+      for (const name of campaignPropertyNames) {
+        check(
+          first.properties[name] === expected[name],
+          `campaign-first-${name}`
+        );
+      }
+
+      const nextPath = softNavigation
+        ? "/fixture-navigation-next"
+        : "/fixture-navigation";
+      await navigateWithinFixture(page, nextPath);
+      await waitFor(
+        () => eventNamed(server.allIngestRecords(), "$pageview").length === 2,
+        "campaign-next-pageview-missing"
+      );
+      const [, next] = eventNamed(server.allIngestRecords(), "$pageview");
+      check(next !== undefined, "campaign-next-pageview-missing");
+      check(
+        propertyString(next, "$current_url") === `${fixtureBaseUrl}${nextPath}`,
+        "campaign-next-url"
+      );
+      check(
+        campaignPropertyNames.every(
+          (name) => !Object.hasOwn(next.properties, name)
+        ),
+        "campaign-carried-to-untagged-pageview"
+      );
+
+      await captureFixtureEvent(page);
+      await waitForFixtureEvent(server);
+      check(
+        findSensitivePostHogRequestHitsForRequests(
+          server.allPostHogRequests().slice(requestMark)
+        ).length === 0,
+        "campaign-payload-leak"
+      );
+    } finally {
+      await closeFixture(fixture);
+    }
+    assertBrowserProblems(fixture);
+  }
+};
+
 const runAnonymousIdentifyScenario = async (
   browser: Browser,
   server: LocalPostHogServer
@@ -2256,6 +2463,13 @@ const runLegacyFlagsInitialPropertiesScenario = async (
       posthogRequestMark
     );
     assertFeatureFlagsRequestIsClean(flagsRequest);
+    check(
+      flagsRequest.body.ok &&
+        findJsonPropertyPaths(flagsRequest.body.value, [
+          "fixture_flag_property",
+        ]).length === 1,
+      "legacy-unrelated-flag-property-missing"
+    );
 
     const after = await readSdkState(fixture.page);
     check(after.distinctId === before.distinctId, "legacy-user-changed");
@@ -3507,6 +3721,7 @@ const main = async () => {
       ["consent-off", runConsentOffScenario],
       ["consent-cookie-gate", runConsentCookieGateScenario],
       ["delayed-first-pageview", runDelayedFirstPageviewScenario],
+      ["campaign-pageviews", runCampaignPageviewScenario],
       ["anonymous-identify", runAnonymousIdentifyScenario],
       ["same-identity-refresh", runSameIdentityRefreshScenario],
       [

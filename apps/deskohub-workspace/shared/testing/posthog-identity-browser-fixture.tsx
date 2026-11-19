@@ -35,16 +35,23 @@ const syntheticPin = "583104729";
 const legacyInitialRawQueryToken = "posthog-identity-legacy-raw-query-token";
 const legacyInitialReferrerToken = "posthog-identity-legacy-referrer-token";
 const legacyInitialUtmToken = "posthog-identity-legacy-utm-token";
+const legacyMetaClickId = "fb.1.1700000000000.synthetic-meta-click-id";
+const legacyMetaBrowserId = "fb.1.1700000000000.1700000001";
 
 // The fixture page serves no legal documents, so it binds a banner revision
 // of its own.
 const fixtureConsentRevision = 1;
 
 const writeAnalyticsConsentCookie = (accepted: boolean) => {
+  const categories = ["necessary"];
+  if (accepted) categories.push("analytics");
+  if (new URLSearchParams(window.location.search).get("marketing") === "on") {
+    categories.push("marketing");
+  }
   // biome-ignore lint/suspicious/noDocumentCookie: The browser fixture controls synthetic consent synchronously.
   document.cookie = `cc_cookie=${encodeURIComponent(
     JSON.stringify({
-      categories: accepted ? ["necessary", "analytics"] : ["necessary"],
+      categories,
       revision: fixtureConsentRevision,
     })
   )}; Path=/`;
@@ -123,6 +130,7 @@ declare global {
 type FixtureConsentState = {
   readonly analyticsAccepted: boolean;
   readonly cookiePresent: boolean;
+  readonly marketingAccepted: boolean;
   readonly necessaryAccepted: boolean;
 };
 
@@ -154,6 +162,7 @@ const readConsentState = (): FixtureConsentState => {
   return {
     analyticsAccepted: acceptedCategories.includes("analytics"),
     cookiePresent: getConsentCookieValuesFromCookie(document.cookie).length > 0,
+    marketingAccepted: acceptedCategories.includes("marketing"),
     necessaryAccepted: acceptedCategories.includes("necessary"),
   };
 };
@@ -214,6 +223,8 @@ const registerLegacyInitialProperties = () => {
   const referrerUrl = `https://synthetic.example.test/legacy-referrer?marker=${legacyInitialReferrerToken}`;
   const pageUrl = `https://synthetic.example.test/legacy-page?raw_query=${legacyInitialRawQueryToken}&utm_source=${legacyInitialUtmToken}#legacy-hash`;
   const properties = {
+    $fbc_persistence: { value: legacyMetaClickId, delivered: false },
+    $fbp_persistence: { value: legacyMetaBrowserId, delivered: false },
     $initial_campaign_params: { utm_source: legacyInitialUtmToken },
     $initial_person_info: { r: referrerUrl, u: pageUrl },
     $initial_referrer_info: {
@@ -226,6 +237,16 @@ const registerLegacyInitialProperties = () => {
   // get_initial_props() expands referrer/campaign objects and transforms the
   // { r, u } person-info object into $initial_* flag properties.
   posthog.register(properties);
+  posthog.setPersonPropertiesForFlags(
+    {
+      $fbc: legacyMetaClickId,
+      $fbp: legacyMetaBrowserId,
+      $entry_gclsrc: "ds",
+      utm_id: "legacy-attribution-id",
+      fixture_flag_property: "preserved",
+    },
+    false
+  );
   return Object.entries(properties).every(
     ([name, expected]) =>
       JSON.stringify(posthog.get_property(name)) === JSON.stringify(expected)
@@ -241,6 +262,7 @@ const captureSensitiveEvent = (): FixtureCaptureResult => {
   const capturedEventCountBefore = capturedEventCount;
   const captureResult = posthog.capture("fixture-sensitive-event", {
     fixture_surface: "readonly-dom",
+    $set: { $session_entry_fbp: legacyMetaBrowserId, gad_source: "2" },
   });
 
   return {
@@ -278,7 +300,10 @@ export function PostHogIdentityBrowserFixture() {
   );
 
   const navigate = () => {
-    const destination = "/fixture-navigation";
+    const destination =
+      pathname === "/fixture-navigation"
+        ? "/fixture-navigation-next"
+        : "/fixture-navigation";
     window.history.pushState(null, "", destination);
     setPathname(destination);
   };

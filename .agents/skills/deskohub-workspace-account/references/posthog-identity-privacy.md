@@ -243,7 +243,34 @@ non-production traffic apart:
   disabled so profile, billing, and PIN values never enter PostHog.
 - Redact URL query strings, hashes, credentials, and operational path
   identifiers from current, initial, and session-entry page URLs and paths.
-  Drop malformed metadata and remove saved UTM and click metadata.
+  Drop malformed metadata and strip campaign and click properties added by
+  the SDK, including person setters and initial, entry and session aliases.
+- After consent and identity settle, `before_send` adds campaign values only
+  to `$pageview` as bare event properties. The allowlist is `utm_source`,
+  `utm_medium`, `utm_campaign`, `utm_id`, `utm_term`, `utm_content`,
+  `utm_source_platform`, `utm_creative_format`, `utm_marketing_tactic`,
+  `gad_source`, `gad_campaignid`, `gclsrc`, and `mc_cid`.
+  Manual labels accept up to 128 UTF-16 code units of Unicode letters,
+  marks and numbers separated by spaces, hyphens or underscores. They must
+  contain a letter and exclude phone-like digit sequences and opaque ASCII
+  words. `utm_id` also accepts one to six ASCII digits. `gad_source` and
+  `gad_campaignid` accept positive decimal strings up to 3 and 19 digits,
+  respectively, without leading zeros. `gclsrc` accepts `aw.ds`, `ds`, or
+  `3p.ds`. `mc_cid` accepts ten hexadecimal digits. Discard duplicate and
+  malformed fields whole, along with values matching an excluded identifier
+  on the same URL. Keep `save_campaign_params: false`.
+- Read the current tagged URL only after the capture gate. On the first
+  eligible pageview in a document, an untagged URL may use the original
+  same-origin navigation timing URL if available. Use one URL per event.
+  Campaign values are never registered or carried to later untagged pageviews.
+- Exclude advertising click and recipient identifiers, including `gclid`,
+  `dclid`, `gbraid`, `wbraid`, `fbclid`, `msclkid`, `twclid`, `li_fat_id`,
+  `igshid`, `ttclid`, `rdt_cid`, `epik`, `qclid`, `sccid`, `oppref`,
+  `irclid`, `_kx`, `srsltid`, `yclid`, `mc_eid`, and Meta's `$fbc` and `$fbp`
+  and their persistence aliases. Google's campaign fields identify a traffic
+  source, campaign or click-ID system. Mailchimp `mc_cid` identifies the
+  campaign. Google and GTM advertising tags follow marketing consent
+  independently.
 - The consented browser `$pageview` sends `referrer_type` as `internal`,
   `external`, or `unavailable`. An observed client pathname transition takes
   precedence. Otherwise compare an HTTP(S) `document.referrer` to the current
@@ -482,11 +509,13 @@ Filter every step to `deployment.environment.name = production`.
 ## Flag-request gotcha
 
 The SDK's `/flags` request bypasses `before_send` and merges persisted
-`$initial_person_info`, `$initial_referrer_info`, and
-`$initial_campaign_params`, even with the `save_*` options off. Right after
-`init`, and again before re-enabling or reloading flags, call `unregister`
-for exactly those three keys. This keeps the `distinct_id` and history and
-doesn't touch remote data.
+`$initial_person_info`, `$initial_referrer_info`, `$initial_campaign_params`,
+and flag person overrides. Right after `init`, and again before re-enabling
+or reloading flags, unregister those three initial keys and the SDK's
+`$fbc_persistence` and `$fbp_persistence` keys. Remove campaign and click
+keys from stored flag person overrides, keeping the other overrides. Repeat
+that filter in `before_send` because the SDK merges event `$set` into the
+overrides before calling it. This preserves the `distinct_id` and history.
 
 ## Ingest host isolation
 

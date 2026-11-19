@@ -1,6 +1,7 @@
 import { Option, Predicate } from "effect";
 import type { Properties } from "posthog-js";
 import { sanitizeAnalyticsUrl } from "@/shared/utils/analytics-url";
+import { isPostHogCampaignProperty } from "./posthog-campaign";
 
 const POSTHOG_URL_PROPERTIES = [
   "$current_url",
@@ -32,38 +33,6 @@ const POSTHOG_REFERRER_PROPERTIES = new Set([
   "$session_entry_ph_keyword",
   "$prev_pageview_pathname",
 ]);
-
-const POSTHOG_CLICK_ID_PROPERTIES = new Set([
-  "gclid",
-  "dclid",
-  "gbraid",
-  "wbraid",
-  "fbclid",
-  "msclkid",
-  "twclid",
-  "li_fat_id",
-  "mc_cid",
-  "igshid",
-  "ttclid",
-]);
-
-function isPostHogCampaignProperty(property: string) {
-  if (
-    property.startsWith("utm_") ||
-    property.startsWith("$initial_utm_") ||
-    property.startsWith("$session_entry_utm_")
-  ) {
-    return true;
-  }
-
-  return (
-    POSTHOG_CLICK_ID_PROPERTIES.has(property) ||
-    (property.startsWith("$initial_") &&
-      POSTHOG_CLICK_ID_PROPERTIES.has(property.slice("$initial_".length))) ||
-    (property.startsWith("$session_entry_") &&
-      POSTHOG_CLICK_ID_PROPERTIES.has(property.slice("$session_entry_".length)))
-  );
-}
 
 function sanitizePostHogUrlObject(url: URL) {
   url.search = "";

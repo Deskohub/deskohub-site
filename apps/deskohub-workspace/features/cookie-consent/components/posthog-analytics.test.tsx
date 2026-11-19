@@ -780,11 +780,13 @@ describe("PostHogAnalytics", () => {
 
     expect(init).toHaveBeenCalledTimes(1);
     expect(seededInitialPersonProperties).toEqual({});
-    expect(posthogLifecycle.slice(0, 4)).toEqual([
+    expect(posthogLifecycle.slice(0, 6)).toEqual([
       "init",
       "unregister:$initial_person_info",
       "unregister:$initial_referrer_info",
       "unregister:$initial_campaign_params",
+      "unregister:$fbc_persistence",
+      "unregister:$fbp_persistence",
     ]);
     expect(currentDistinctId).toBe(anonymousDistinctIdBeforeInitialization);
     expect(reset).not.toHaveBeenCalled();
@@ -812,15 +814,17 @@ describe("PostHogAnalytics", () => {
     });
 
     expect(identify).toHaveBeenCalledWith("workspace-account:account-a");
-    expect(posthogLifecycle.slice(4)).toEqual([
+    expect(posthogLifecycle.slice(6)).toEqual([
       "identify",
       "unregister:$initial_person_info",
       "unregister:$initial_referrer_info",
       "unregister:$initial_campaign_params",
+      "unregister:$fbc_persistence",
+      "unregister:$fbp_persistence",
       "enable-feature-flags",
       "reload-feature-flags",
     ]);
-    expect(unregister).toHaveBeenCalledTimes(6);
+    expect(unregister).toHaveBeenCalledTimes(10);
     expect(seededInitialPersonProperties).toEqual({});
     expect(capturedEvents.map(({ event }) => event)).toEqual([
       "$identify",
