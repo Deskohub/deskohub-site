@@ -195,6 +195,10 @@ to `mock` or `fallback`. The Nexi health route reports the configured mode in
 `paymentProvider`. Keep Deployment Protection enabled and pass the automation
 bypass through the existing preview access flow.
 
+Production provides the Nexi-only Layer. The protected preview Layer loads
+the mock adapter when enabled. The mock hosted and webhook routes check
+availability before running a handler.
+
 In `fallback` mode a fresh checkout uses Nexi. Ordinary Try Again can admit
 one mock successor for a synthetic customer on that protected preview. The
 signed retry state must identify the newest terminal Nexi attempt, which must
