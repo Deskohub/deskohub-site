@@ -825,7 +825,7 @@ const legalDocuments = {
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
-    updatedAt: "8. November 2026",
+    updatedAt: "19. November 2026",
     sections: [
       {
         heading: "1. Was sind Cookies",
@@ -892,9 +892,20 @@ const legalDocuments = {
             Absenden von Reservierungen und die Wirksamkeit von Kampagnen zu
             verstehen. Je nach Kategorie des Dienstleisters können die
             verarbeiteten Daten Seitenaufrufe, Browser- und Geräteinformationen,
-            aus der IP-Adresse abgeleitete technische Daten, Ereignistypen und
-            Standard-Kampagnenparameter aus der URL umfassen: utm_source,
-            utm_medium, utm_campaign, utm_content und utm_term.
+            aus der IP-Adresse abgeleitete technische Daten und Ereignistypen
+            umfassen.
+          </>,
+          <>
+            Mit Ihrer Einwilligung in die Analyse können wir bei Seitenaufrufen
+            ausgewählte Kampagnenparameter aus der Seiten-URL an PostHog
+            übermitteln. Das sind die Standard-UTM-Parameter (utm_source,
+            utm_medium, utm_campaign, utm_id, utm_term, utm_content,
+            utm_source_platform, utm_creative_format und utm_marketing_tactic),
+            Google-Ads-Parameter zur Herkunft des Traffics und zur Kampagne
+            (gad_source, gad_campaignid und gclsrc) sowie die Mailchimp-Kennung
+            der Kampagne (mc_cid). Wir schließen Kennungen einzelner
+            Anzeigenklicks und von E-Mail-Empfängern aus den Daten zu
+            Seitenaufrufen für PostHog aus.
           </>,
           <>
             Mit Ihrer Analyse-Einwilligung ordnen wir dem Analyseprofil Ihres

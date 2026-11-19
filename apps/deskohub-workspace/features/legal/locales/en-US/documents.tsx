@@ -768,7 +768,7 @@ const legalDocuments = {
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
-    updatedAt: "8 November 2026",
+    updatedAt: "19 November 2026",
     sections: [
       {
         heading: "1. What cookies are",
@@ -828,9 +828,18 @@ const legalDocuments = {
             Analytics cookies help us understand site usage, reservation
             submission performance, and campaign effectiveness. Depending on the
             provider category, the processed data may include pageviews, browser
-            and device information, IP-derived technical data, event types, and
-            standard campaign parameters from URLs: utm_source, utm_medium,
-            utm_campaign, utm_content, and utm_term.
+            and device information, IP-derived technical data, and event types.
+          </>,
+          <>
+            With your consent to analytics, we may send selected campaign
+            parameters from the page URL to PostHog with pageviews. These are
+            the standard UTM parameters (utm_source, utm_medium, utm_campaign,
+            utm_id, utm_term, utm_content, utm_source_platform,
+            utm_creative_format, and utm_marketing_tactic), Google Ads
+            parameters for traffic source and campaign (gad_source,
+            gad_campaignid, and gclsrc), and the Mailchimp campaign identifier
+            (mc_cid). We exclude identifiers for individual ad clicks and email
+            recipients from PostHog pageview data.
           </>,
           <>
             With your analytics consent, we also add the records of your
