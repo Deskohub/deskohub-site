@@ -56,6 +56,7 @@ const agentPageRoutes = {
   "/[locale]/marketing-communications": true,
   "/[locale]/meeting-room": true,
   "/[locale]/operating-rules": true,
+  "/[locale]/passes/entry-pack": true,
   "/[locale]/post-order-invoice-preview": true,
   "/[locale]/pricing": true,
   "/[locale]/privacy-policy": true,

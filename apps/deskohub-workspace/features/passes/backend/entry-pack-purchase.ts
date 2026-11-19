@@ -535,7 +535,11 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
 
       const now = yield* currentInstant;
       if (isEntryPackQuoteExpired(now, purchase.validUntil)) {
-        return yield* new EntryPackPurchaseError({ reason: "quote-expired" });
+        return yield* new EntryPackPurchaseError({
+          reason: order.activePaymentAttemptId
+            ? "payment-in-progress"
+            : "quote-expired",
+        });
       }
 
       const discountService = yield* DiscountService;

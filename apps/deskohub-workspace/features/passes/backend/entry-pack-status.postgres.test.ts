@@ -11,7 +11,6 @@ import {
 } from "@/features/account/customer-account";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
-import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import {
   createWorkspacePostgresSuiteDatabase,
@@ -99,12 +98,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       orderId: OrderId,
       {
         viewer = buyer,
-        flag = true,
         finalize,
         recover,
       }: {
         readonly viewer?: CustomerAccountId | null;
-        readonly flag?: boolean;
         readonly finalize?: (
           id: OrderId
         ) => Effect.Effect<"awaiting_payment" | "pending">;
@@ -129,9 +126,6 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
                 ),
                 peek: Effect.succeed({ kind: "signed-out" } as const),
               }),
-              Layer.mock(WorkspaceFeatureFlagService, {
-                isEnabled: () => Effect.succeed(flag),
-              }),
               Layer.mock(ProviderPaymentFinalizationService, {
                 finalizePendingProviderPayment: ({ orderId: id }) =>
                   finalize?.(id) ??
@@ -151,9 +145,6 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const { orderId } = await seedOrder({
         paymentState: "pending",
         holderAccountId: holder,
-      });
-      expect(await view(orderId, { flag: false })).toEqual({
-        status: "not_found",
       });
       expect(await view(orderId, { viewer: holder })).toEqual({
         status: "not_found",

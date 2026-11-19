@@ -96,7 +96,7 @@ export function EntryPackPay({
         setError(m.checkoutDiscountCodeUnavailable({}, { locale }));
       } else if (data.status === "signed_out") {
         signIn();
-      } else {
+      } else if (data.status === "purchase_error") {
         handlePurchaseFailure(data.reason);
       }
     },
@@ -116,7 +116,7 @@ export function EntryPackPay({
         setError(m.checkoutPayPricingChangedLead({}, { locale }));
       } else if (data.status === "signed_out") {
         signIn();
-      } else {
+      } else if (data.status === "purchase_error") {
         handlePurchaseFailure(data.reason);
       }
     },

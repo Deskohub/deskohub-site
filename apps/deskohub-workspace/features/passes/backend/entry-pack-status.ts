@@ -13,7 +13,6 @@ import {
 } from "@/features/checkout/backend/checkout/reusable-payment-attempt";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
-import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { runWorkspaceEffect } from "@/shared/backend/workspace-effect";
 import { withWorkspaceRequestContext } from "@/shared/backend/workspace-request-context";
@@ -69,15 +68,6 @@ const verificationDeadline = "40 seconds";
 export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
   orderId: OrderId
 ) {
-  const flags = yield* WorkspaceFeatureFlagService;
-  const enabled = yield* flags.isEnabled("cowork_passes").pipe(
-    Effect.tapError(() =>
-      Effect.logWarning("Entry pack status flag unavailable")
-    ),
-    Effect.orElseSucceed(() => false)
-  );
-  if (!enabled) return { status: "not_found" } as const;
-
   const account = yield* CurrentCustomerAccount;
   const session = yield* Effect.option(account.requireActive);
   if (Option.isNone(session)) {
@@ -199,7 +189,6 @@ export const loadEntryPackStatusPage = (
       Layer.mergeAll(
         WorkspaceDatabase.Default,
         CurrentCustomerAccount.Live,
-        WorkspaceFeatureFlagService.Default,
         ProviderPaymentFinalizationService.Live,
         LatePaymentVerificationService.Live
       )

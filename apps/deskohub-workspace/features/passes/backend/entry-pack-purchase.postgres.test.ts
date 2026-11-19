@@ -67,6 +67,7 @@ import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-han
 import {
   beginEntryPackPurchase,
   getEntryPackPaymentDisclosure,
+  getEntryPackPriceFingerprint,
   payForEntryPack,
   recordEntryPackPaymentConsent,
 } from "./entry-pack-purchase";
@@ -164,6 +165,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           .returning()
       );
       const amount = currencyCZK(voucherValue);
+      let discountAvailable = true;
       const candidate: DiscountCandidate = {
         discount: {
           id: deriveOpaqueDiscountId({
@@ -328,7 +330,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               Effect.map(({ quote }) => quote)
             ),
           affirmDisplayedDiscounts: (input) =>
-            calculateDiscounts({ ...input, candidates: [candidate] }).pipe(
+            calculateDiscounts({
+              ...input,
+              candidates: discountAvailable ? [candidate] : [],
+            }).pipe(
               Effect.map(({ quote, applications }) => ({
                 quote,
                 commitment: makeDiscountCommitment({
@@ -488,9 +493,15 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         },
         providerOrders,
         notify,
+        removeDiscount: () => {
+          discountAvailable = false;
+        },
         pay: (
           at?: Temporal.Instant,
-          options?: { billing?: ReservationBillingSelection }
+          options?: {
+            billing?: ReservationBillingSelection;
+            displayedPriceFingerprint?: string;
+          }
         ) => {
           const pay = payForEntryPack({
             ...accept,
@@ -511,6 +522,54 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         country: "CZ",
       },
     } satisfies ReservationBillingSelection;
+
+    test("saves current pricing before the first attempt and requires the buyer to see it", async () => {
+      const payment = await integration(database!, 2_000);
+      payment.removeDiscount();
+
+      const refreshed = await payment.pay();
+      expect(refreshed.status).toBe("pricing_changed");
+      expect(payment.providerOrders).toHaveLength(0);
+      if (refreshed.status !== "pricing_changed")
+        throw new Error("Missing refreshed price");
+      const stale = await payment.pay(undefined, {
+        displayedPriceFingerprint: "0".repeat(64),
+      });
+      expect(stale).toEqual(refreshed);
+      expect(payment.providerOrders).toHaveLength(0);
+
+      expect(
+        await payment.pay(undefined, {
+          displayedPriceFingerprint: getEntryPackPriceFingerprint(
+            refreshed.quote
+          ),
+        })
+      ).toMatchObject({ status: "hosted" });
+      expect(payment.providerOrders).toHaveLength(1);
+      await payment.notify("failure");
+    });
+
+    test("keeps the first attempt's pricing and billing after an ended payment", async () => {
+      const payment = await integration(
+        database!,
+        2_000,
+        undefined,
+        requestedInvoice
+      );
+      expect(await payment.pay()).toMatchObject({ status: "hosted" });
+      await payment.notify("failure");
+      await expect(
+        payment.pay(undefined, {
+          billing: { purpose: "personal", invoice: "none" },
+        })
+      ).rejects.toMatchObject({ reason: "billing-changed" });
+
+      payment.removeDiscount();
+      await expect(payment.pay()).rejects.toMatchObject({
+        reason: "payment-in-progress",
+      });
+      expect(payment.providerOrders).toHaveLength(1);
+    });
 
     test("reconciliation rotates past an inconclusive Nexi order at batch size one", async () => {
       const db = database!;
