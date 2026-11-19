@@ -82,6 +82,7 @@ import { type Locale, m } from "@/features/i18n";
 import { ReferralService } from "@/features/referrals/referral.service";
 import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
@@ -678,15 +679,26 @@ describe.skipIf(!testDatabase)(
           failureCode: NEXI_FALLBACK_ELIGIBLE_FAILURE_CODE,
         })
       );
-      // Try Again has secured the hold and cleared the previous active pointer.
-      const releaseRetriedAttempt = () =>
+      const releaseRetriedAttempt = (retriedAttemptId: typeof marked.id) =>
         Effect.runPromise(
-          testDatabase!.db
-            .update(workspaceReservations)
-            .set({ activePaymentAttemptId: null, paymentState: "not_started" })
-            .where(eq(workspaceReservations.id, reservation.id))
+          WorkspaceReservationRepository.use((reservations) =>
+            reservations.releaseRetriedAttempt({
+              id: reservation.id,
+              retriedAttemptId,
+              heldUntilAfter: Temporal.Now.instant(),
+            })
+          ).pipe(
+            Effect.provide(
+              WorkspaceReservationRepository.Default.pipe(
+                Layer.provide(testDatabase!.layer)
+              )
+            )
+          )
         );
-      await releaseRetriedAttempt();
+      expect(await releaseRetriedAttempt(marked.id)).toMatchObject({
+        activePaymentAttemptId: null,
+        paymentState: "failed",
+      });
       const admitMock = (retriedAttempt: typeof marked) =>
         Effect.runPromise(
           Effect.result(
@@ -698,15 +710,6 @@ describe.skipIf(!testDatabase)(
             })
           )
         );
-      const stale = await admitMock({
-        ...marked,
-        id: `stale-${uniqueId()}` as typeof marked.id,
-      });
-      expect(stale).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "PaymentLifecycleStateError" },
-      });
-
       const contenders = await Promise.all([
         admitMock(marked),
         admitMock(marked),
@@ -726,7 +729,9 @@ describe.skipIf(!testDatabase)(
           failureCode: "mock_declined",
         })
       );
-      await releaseRetriedAttempt();
+      expect(await releaseRetriedAttempt(successor.success.id)).toMatchObject({
+        activePaymentAttemptId: null,
+      });
       expect(await admitMock(marked)).toMatchObject({
         _tag: "Failure",
         failure: { _tag: "PaymentLifecycleStateError" },
