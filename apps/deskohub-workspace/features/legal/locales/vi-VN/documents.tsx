@@ -815,7 +815,7 @@ const legalDocuments = {
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
-    updatedAt: "8 tháng 11, 2026",
+    updatedAt: "19 tháng 11, 2026",
     sections: [
       {
         heading: "1. Cookie là gì",
@@ -880,8 +880,19 @@ const legalDocuments = {
             hiệu suất của việc gửi đặt chỗ và hiệu quả của các chiến dịch. Tùy
             theo nhóm nhà cung cấp, dữ liệu được xử lý có thể bao gồm lượt xem
             trang, thông tin về trình duyệt và thiết bị, dữ liệu kỹ thuật suy ra
-            từ địa chỉ IP, loại sự kiện và các tham số chiến dịch tiêu chuẩn từ
-            URL: utm_source, utm_medium, utm_campaign, utm_content và utm_term.
+            từ địa chỉ IP và loại sự kiện.
+          </>,
+          <>
+            Khi Quý khách đồng ý cho phép phân tích, chúng tôi có thể gửi cho
+            PostHog một số tham số chiến dịch từ URL của trang cùng với dữ liệu
+            lượt xem trang. Các tham số này chỉ gồm tham số UTM tiêu chuẩn
+            (utm_source, utm_medium, utm_campaign, utm_id, utm_term,
+            utm_content, utm_source_platform, utm_creative_format và
+            utm_marketing_tactic), tham số Google Ads về nguồn lưu lượng truy
+            cập và chiến dịch (gad_source, gad_campaignid và gclsrc) và mã định
+            danh chiến dịch Mailchimp (mc_cid). Chúng tôi loại trừ mã định danh
+            của từng lượt nhấp vào quảng cáo và của người nhận email khỏi dữ
+            liệu lượt xem trang gửi cho PostHog.
           </>,
           <>
             Khi có sự đồng ý phân tích của Quý khách, chúng tôi cũng gắn các bản

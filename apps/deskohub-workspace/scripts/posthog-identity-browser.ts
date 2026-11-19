@@ -60,10 +60,60 @@ const posthogHostByFixtureMode = {
 const fixtureQueryToken = "posthog-identity-query-token";
 const fixtureHashToken = "posthog-identity-hash-token";
 const fixtureReferrerQueryToken = "posthog-identity-referrer-query-token";
+const fixtureReferrerPath = "/search/posthog-identity-referrer-path-token";
+const fixtureReferrerHost = "www.google.com";
+const fixtureSameOriginReferrer = `${fixtureBaseUrl}${fixtureReferrerPath}?q=${fixtureReferrerQueryToken}`;
+const fixtureExternalReferrer = `http://${fixtureReferrerHost}${fixtureReferrerPath}?q=${fixtureReferrerQueryToken}`;
 const legacyInitialRawQueryToken = "posthog-identity-legacy-raw-query-token";
 const legacyInitialReferrerToken = "posthog-identity-legacy-referrer-token";
 const legacyInitialUtmToken = "posthog-identity-legacy-utm-token";
 const syntheticPinCanary = "583104729";
+const clickIdProperties = [
+  "_fbc",
+  "_fbp",
+  "_kx",
+  "bfcid",
+  "dclid",
+  "epik",
+  "fbc",
+  "fbclid",
+  "fbp",
+  "fbc_persistence",
+  "fbp_persistence",
+  "gbraid",
+  "gclid",
+  "igshid",
+  "irclid",
+  "li_fat_id",
+  "mc_eid",
+  "msclkid",
+  "oppref",
+  "qclid",
+  "rdt_cid",
+  "sccid",
+  "srsltid",
+  "ttclid",
+  "twclid",
+  "wbraid",
+  "yclid",
+];
+const campaignProperties = {
+  utm_source: "posters",
+  utm_medium: "qr",
+  utm_campaign: "bud jako doma",
+  utm_id: "42",
+  utm_term: "sdílená kancelář",
+  utm_content: "leták-2",
+  utm_source_platform: "Deskohub",
+  utm_creative_format: "print",
+  utm_marketing_tactic: "local awareness",
+  gad_source: "1",
+  gad_campaignid: "12345678901",
+  gclsrc: "aw.ds",
+  mc_cid: "33a4a985ed",
+} as const;
+const campaignPropertyNames = Object.keys(campaignProperties);
+const campaignRejectedMarker = "synthetic-campaign-parameter-canary";
 const localCorsHeaders = {
   "Access-Control-Allow-Headers":
     "Authorization, Content-Type, X-PostHog-Session-Id",
@@ -83,12 +133,19 @@ const sensitivePayloadMarkers = [
   { code: "query-token", value: fixtureQueryToken },
   { code: "hash-token", value: fixtureHashToken },
   { code: "referrer-query-token", value: fixtureReferrerQueryToken },
+  { code: "referrer-path-token", value: fixtureReferrerPath },
+  { code: "referrer-host", value: fixtureReferrerHost },
   { code: "legacy-raw-query-token", value: legacyInitialRawQueryToken },
   { code: "legacy-referrer-token", value: legacyInitialReferrerToken },
   { code: "legacy-utm-token", value: legacyInitialUtmToken },
+  { code: "campaign-rejected-marker", value: campaignRejectedMarker },
+  { code: "bfcid-flag-canary", value: "synthetic-bfcid-flag-canary" },
+  { code: "bfcid-setter-canary", value: "synthetic-bfcid-setter-canary" },
+  { code: "legacy-meta-click-id", value: "synthetic-meta-click-id" },
+  { code: "legacy-meta-browser-id", value: "fb.1.1700000000000.1700000001" },
 ] as const;
 
-const legacyInitialPropertyNames = [
+const forbiddenPayloadPropertyNames = [
   "$initial_person_info",
   "$initial_referrer_info",
   "$initial_campaign_params",
@@ -98,6 +155,25 @@ const legacyInitialPropertyNames = [
   "$initial_host",
   "$initial_pathname",
   "$initial_utm_source",
+  "$referrer",
+  "$referring_domain",
+  "$session_entry_referrer",
+  "$session_entry_referring_domain",
+  "$search_engine",
+  "ph_keyword",
+  "$initial_search_engine",
+  "$initial_ph_keyword",
+  "$session_entry_search_engine",
+  "$session_entry_ph_keyword",
+  "$prev_pageview_pathname",
+  "utm_unknown",
+  "private_campaign_param",
+  ...clickIdProperties.flatMap((key) => [key, `$${key}`]),
+  ...[...clickIdProperties, ...campaignPropertyNames].flatMap((key) => [
+    `$initial_${key}`,
+    `$session_entry_${key}`,
+    `$entry_${key}`,
+  ]),
 ] as const;
 
 const userIds = {
@@ -1092,12 +1168,27 @@ const waitForFixtureControl = (page: Page) =>
     { timeout: 15_000 }
   );
 
+type FixturePageOptions = {
+  readonly consent: "on" | "off";
+  readonly fixtureMode?: FixtureMode;
+  readonly marketingConsent?: boolean;
+  readonly referrer?: string | null;
+  readonly remoteFlags?: boolean;
+  readonly searchParams?: URLSearchParams;
+};
+
 const openPage = async (
   context: BrowserContext,
   runId: string,
-  consent: "on" | "off",
   problems: FixtureBrowserProblems,
-  fixtureMode: FixtureMode = "cross-host"
+  {
+    consent,
+    fixtureMode = "cross-host",
+    marketingConsent = false,
+    referrer = fixtureSameOriginReferrer,
+    remoteFlags = false,
+    searchParams = new URLSearchParams(),
+  }: FixturePageOptions
 ) => {
   const page = await context.newPage();
   page.on("pageerror", (error) => {
@@ -1110,9 +1201,9 @@ const openPage = async (
 
   try {
     await page.goto(
-      `${fixtureBaseUrl}/?run=${encodeURIComponent(runId)}&consent=${consent}&fixtureMode=${fixtureMode}&query=${fixtureQueryToken}#hash=${fixtureHashToken}`,
+      `${fixtureBaseUrl}/?run=${encodeURIComponent(runId)}&consent=${consent}&fixtureMode=${fixtureMode}&remoteFlags=${remoteFlags}&marketing=${marketingConsent ? "on" : "off"}&query=${fixtureQueryToken}&${searchParams}#hash=${fixtureHashToken}`,
       {
-        referer: `${fixtureBaseUrl}/referrer?query=${fixtureReferrerQueryToken}`,
+        referer: referrer ?? undefined,
         timeout: 15_000,
         waitUntil: "load",
       }
@@ -1202,6 +1293,7 @@ const readConsentState = (page: Page) =>
   readControl<{
     readonly analyticsAccepted: boolean;
     readonly cookiePresent: boolean;
+    readonly marketingAccepted: boolean;
     readonly necessaryAccepted: boolean;
   }>(page, "readConsentState");
 
@@ -1408,7 +1500,23 @@ const findJsonPropertyPaths = (
       const nestedPath = `${candidatePath}.${key}`;
       if (propertyNames.includes(key)) paths.push(nestedPath);
       const nested = candidate[key];
-      if (nested !== undefined) visit(nested, nestedPath);
+      if (nested === undefined) continue;
+
+      if (
+        candidate.event === "$pageview" &&
+        key === "properties" &&
+        isJsonObject(nested)
+      ) {
+        // Approved campaign fields belong directly on pageviews only.
+        const otherProperties = Object.fromEntries(
+          Object.entries(nested).filter(
+            ([name]) => !campaignPropertyNames.includes(name)
+          )
+        );
+        visit(otherProperties, nestedPath);
+      } else {
+        visit(nested, nestedPath);
+      }
     }
   };
 
@@ -1453,20 +1561,23 @@ const findSensitivePostHogRequestHitsForRequests = (
       }
     }
 
-    for (const propertyName of legacyInitialPropertyNames) {
+    for (const propertyName of forbiddenPayloadPropertyNames) {
       if (request.urlText.includes(propertyName)) {
-        addHit("legacy-initial-property", endpoint, "$url");
+        addHit("forbidden-property", endpoint, "$url");
       }
     }
-    const legacyPropertyPaths = request.body.ok
-      ? findJsonPropertyPaths(request.body.value, legacyInitialPropertyNames)
-      : legacyInitialPropertyNames
+    const forbiddenPropertyPaths = request.body.ok
+      ? findJsonPropertyPaths(request.body.value, [
+          ...forbiddenPayloadPropertyNames,
+          ...campaignPropertyNames,
+        ])
+      : forbiddenPayloadPropertyNames
           .filter((propertyName) =>
             request.body.searchText.includes(propertyName)
           )
           .map(() => "$body");
-    for (const propertyPath of new Set(legacyPropertyPaths)) {
-      addHit("legacy-initial-property", endpoint, propertyPath);
+    for (const propertyPath of new Set(forbiddenPropertyPaths)) {
+      addHit("forbidden-property", endpoint, propertyPath);
     }
   }
 
@@ -1598,6 +1709,16 @@ const waitForEvent = async (
 
 const waitForFixtureEvent = async (server: LocalPostHogServer) =>
   waitForEvent(server, "fixture-sensitive-event");
+
+const navigateWithinFixture = async (
+  page: Page,
+  pathname = "/fixture-navigation"
+) => {
+  await page.locator("[data-fixture-navigate]").click();
+  await page
+    .locator(`main[data-fixture-pathname='${pathname}']`)
+    .waitFor({ state: "attached", timeout: 5_000 });
+};
 
 const browserLogsPath = "/i/v1/logs";
 
@@ -1793,9 +1914,7 @@ type FixtureHandle = {
 const openFixture = async (
   browser: Browser,
   server: LocalPostHogServer,
-  options: {
-    readonly consent: "on" | "off";
-    readonly fixtureMode?: FixtureMode;
+  options: FixturePageOptions & {
     readonly getSessionDelayMs?: number;
     readonly getSessionUnavailable?: boolean;
     readonly session: SyntheticSession;
@@ -1805,13 +1924,7 @@ const openFixture = async (
   const runId = server.createRun(options);
   const context = await createContext(browser, runnerProblems);
   try {
-    const page = await openPage(
-      context,
-      runId,
-      options.consent,
-      runnerProblems,
-      options.fixtureMode
-    );
+    const page = await openPage(context, runId, runnerProblems, options);
     await assertFixtureConsentCookie(page, options.consent === "on");
     return { context, page, problems: runnerProblems, runId };
   } catch (error) {
@@ -1882,6 +1995,7 @@ const runConsentOffScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "off",
+    referrer: fixtureExternalReferrer,
     session: "A",
   });
   try {
@@ -1897,6 +2011,20 @@ const runConsentOffScenario = async (
       "consent-off-capture"
     );
     check(server.ingestMark() === 0, "consent-off-capture");
+
+    await navigateWithinFixture(fixture.page);
+    check(server.ingestMark() === 0, "consent-off-navigation-ingest");
+    await grantConsent(fixture.page);
+    await waitForEvent(server, "$pageview");
+    const [firstPageview] = eventNamed(server.allIngestRecords(), "$pageview");
+    check(
+      firstPageview !== undefined &&
+        eventDistinctId(firstPageview) === accountDistinctIds.A &&
+        propertyString(firstPageview, "referrer_type") === "internal" &&
+        propertyString(firstPageview, "$current_url") ===
+          `${fixtureBaseUrl}/fixture-navigation`,
+      "first-pageview-after-consent-navigation"
+    );
   } finally {
     await closeFixture(fixture);
   }
@@ -1910,6 +2038,7 @@ const runConsentCookieGateScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "on",
+    referrer: fixtureExternalReferrer,
     session: "A",
   });
   try {
@@ -1945,6 +2074,15 @@ const runConsentCookieGateScenario = async (
     await waitForAuthenticatedIdentity(fixture.page);
     await waitForEvent(server, "$identify");
     await waitForEvent(server, "$pageview");
+    const [regrantedPageview] = eventNamed(
+      server.allIngestRecords(),
+      "$pageview"
+    );
+    check(
+      regrantedPageview !== undefined &&
+        propertyString(regrantedPageview, "referrer_type") === "external",
+      "consent-regrant-preserves-document-referrer-type"
+    );
     await captureFixtureEvent(fixture.page);
     await waitForFixtureEvent(server);
     check(
@@ -1998,6 +2136,10 @@ const runDelayedFirstPageviewScenario = async (
     const firstPageview = pageviews[0];
     check(firstPageview !== undefined, "delayed-pageview-missing");
     check(
+      propertyString(firstPageview, "referrer_type") === "internal",
+      "same-origin-document-referrer-type"
+    );
+    check(
       eventDistinctId(firstPageview) === accountDistinctIds.A,
       "delayed-pageview-identity"
     );
@@ -2017,6 +2159,130 @@ const runDelayedFirstPageviewScenario = async (
   assertBrowserProblems(fixture);
 };
 
+const runCampaignPageviewScenario = async (
+  browser: Browser,
+  server: LocalPostHogServer
+) => {
+  const tagged = new URLSearchParams(campaignProperties);
+  for (const name of clickIdProperties)
+    tagged.append(name, campaignRejectedMarker);
+  tagged.append("utm_unknown", campaignRejectedMarker);
+  tagged.append("private_campaign_param", campaignRejectedMarker);
+
+  const invalid = new URLSearchParams({
+    utm_source: "ignore first source",
+    utm_medium: "email",
+    utm_campaign: `https://example.invalid/${campaignRejectedMarker}`,
+    utm_id: "777123456",
+    utm_term: syntheticEmail,
+    utm_content: "line\nbreak",
+    utm_source_platform: "example.invalid",
+    utm_creative_format: "K82Fn0Zp23VtzSi9Yp",
+    utm_marketing_tactic: `Call 777-123-456`,
+    gad_source: "0001",
+    gad_campaignid: "campaign-name",
+    gclsrc: "unlisted",
+    mc_cid: "111a222b33",
+    mc_eid: "111a222b33",
+  });
+  invalid.append("utm_source", "ignore second source");
+  invalid.append("utm_unknown", campaignRejectedMarker);
+
+  for (const scenario of [
+    { consent: "on", searchParams: tagged, expected: campaignProperties },
+    { consent: "off", searchParams: tagged, expected: campaignProperties },
+    {
+      consent: "off",
+      searchParams: tagged,
+      expected: campaignProperties,
+      softNavigation: true,
+    },
+    { consent: "on", searchParams: invalid, expected: { utm_medium: "email" } },
+  ] as const) {
+    server.clearIngest();
+    const requestMark = server.allPostHogRequests().length;
+    const fixture = await openFixture(browser, server, {
+      consent: scenario.consent,
+      marketingConsent: scenario.consent === "on",
+      referrer: null,
+      remoteFlags: true,
+      searchParams: scenario.searchParams,
+      session: "A",
+    });
+    try {
+      const { page } = fixture;
+      const softNavigation = "softNavigation" in scenario;
+      await waitForAuthenticatedIdentity(page);
+      if (scenario.consent === "off") {
+        if (softNavigation) await navigateWithinFixture(page);
+        check(
+          !(await readSdkState(page)).loaded,
+          "campaign-sdk-without-consent"
+        );
+        check(
+          server.allPostHogRequests().length === requestMark,
+          "campaign-request-without-consent"
+        );
+        await grantConsent(page);
+      } else {
+        check(
+          (await readConsentState(page)).marketingAccepted,
+          "campaign-marketing-consent-missing"
+        );
+      }
+
+      await waitForEvent(server, "$pageview");
+      const [first] = eventNamed(server.allIngestRecords(), "$pageview");
+      check(first !== undefined, "campaign-first-pageview-missing");
+      check(
+        propertyString(first, "$current_url") ===
+          `${fixtureBaseUrl}/${softNavigation ? "fixture-navigation" : ""}`,
+        "campaign-current-url"
+      );
+      const expected: Readonly<Record<string, string>> = scenario.expected;
+      for (const name of campaignPropertyNames) {
+        check(
+          first.properties[name] === expected[name],
+          `campaign-first-${name}`
+        );
+      }
+
+      const nextPath = softNavigation
+        ? "/fixture-navigation-next"
+        : "/fixture-navigation";
+      await navigateWithinFixture(page, nextPath);
+      await waitFor(
+        () => eventNamed(server.allIngestRecords(), "$pageview").length === 2,
+        "campaign-next-pageview-missing"
+      );
+      const [, next] = eventNamed(server.allIngestRecords(), "$pageview");
+      check(next !== undefined, "campaign-next-pageview-missing");
+      check(
+        propertyString(next, "$current_url") === `${fixtureBaseUrl}${nextPath}`,
+        "campaign-next-url"
+      );
+      check(
+        campaignPropertyNames.every(
+          (name) => !Object.hasOwn(next.properties, name)
+        ),
+        "campaign-carried-to-untagged-pageview"
+      );
+
+      await captureFixtureEvent(page);
+      await waitForFixtureEvent(server);
+      check(
+        findSensitivePostHogRequestHitsForRequests(
+          server.allPostHogRequests().slice(requestMark)
+        ).length === 0,
+        "campaign-payload-leak"
+      );
+    } finally {
+      await closeFixture(fixture);
+    }
+    assertBrowserProblems(fixture);
+  }
+};
+
 const runAnonymousIdentifyScenario = async (
   browser: Browser,
   server: LocalPostHogServer
@@ -2024,11 +2290,52 @@ const runAnonymousIdentifyScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "on",
+    referrer: fixtureExternalReferrer,
     session: "anonymous",
   });
   try {
     await waitForAnonymous(fixture.page);
     await waitForEvent(server, "$pageview");
+    check(
+      (await fixture.page.evaluate(() => document.referrer)) ===
+        fixtureExternalReferrer,
+      "external-document-referrer-fixture"
+    );
+    const [entryPageview] = eventNamed(server.allIngestRecords(), "$pageview");
+    check(
+      entryPageview !== undefined &&
+        propertyString(entryPageview, "referrer_type") === "external",
+      "external-document-referrer-type"
+    );
+
+    await navigateWithinFixture(fixture.page);
+    await waitFor(
+      () => eventNamed(server.allIngestRecords(), "$pageview").length === 2,
+      "navigation-pageview"
+    );
+    const [, navigationPageview] = eventNamed(
+      server.allIngestRecords(),
+      "$pageview"
+    );
+    check(
+      navigationPageview !== undefined &&
+        propertyString(navigationPageview, "referrer_type") === "internal",
+      "navigation-referrer-type"
+    );
+    for (const property of ["$session_id", "$window_id"]) {
+      const id = propertyString(entryPageview, property);
+      check(
+        Boolean(id) && propertyString(navigationPageview, property) === id,
+        `navigation-preserves-${property}`
+      );
+    }
+    const entryPageviewId = propertyString(entryPageview, "$pageview_id");
+    check(
+      Boolean(entryPageviewId) &&
+        propertyString(navigationPageview, "$prev_pageview_id") ===
+          entryPageviewId,
+      "navigation-preserves-previous-pageview-id"
+    );
     await captureFixtureEvent(fixture.page);
     await waitForFixtureEvent(server);
     const anonymousEvents = fixtureEvents(server.allIngestRecords()).filter(
@@ -2036,6 +2343,10 @@ const runAnonymousIdentifyScenario = async (
     );
     check(anonymousEvents.length > 0, "anonymous-capture-missing");
     const anonymousDistinctId = eventDistinctId(anonymousEvents.at(-1)!);
+    check(
+      anonymousEvents.every((event) => !("referrer_type" in event.properties)),
+      "referrer-type-leaked-into-custom-event"
+    );
     check(anonymousDistinctId !== undefined, "anonymous-distinct-id-missing");
     check(
       anonymousDistinctId !== accountDistinctIds.A,
@@ -2070,11 +2381,23 @@ const runSameIdentityRefreshScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "on",
+    referrer: null,
     session: "A",
   });
   try {
     await waitForAuthenticated(fixture.page);
     await waitForEvent(server, "$identify");
+    await waitForEvent(server, "$pageview");
+    check(
+      (await fixture.page.evaluate(() => document.referrer)) === "",
+      "unavailable-document-referrer-fixture"
+    );
+    const [firstPageview] = eventNamed(server.allIngestRecords(), "$pageview");
+    check(
+      firstPageview !== undefined &&
+        propertyString(firstPageview, "referrer_type") === "unavailable",
+      "unavailable-document-referrer-type"
+    );
     server.clearIngest();
     await refreshAnalyticsAccountIdentity(fixture.page);
     await waitForSessionSettled(fixture.page);
@@ -2106,6 +2429,7 @@ const runLegacyFlagsInitialPropertiesScenario = async (
   server.clearIngest();
   const fixture = await openFixture(browser, server, {
     consent: "on",
+    remoteFlags: true,
     session: "A",
   });
   try {
@@ -2142,6 +2466,13 @@ const runLegacyFlagsInitialPropertiesScenario = async (
       posthogRequestMark
     );
     assertFeatureFlagsRequestIsClean(flagsRequest);
+    check(
+      flagsRequest.body.ok &&
+        findJsonPropertyPaths(flagsRequest.body.value, [
+          "fixture_flag_property",
+        ]).length === 1,
+      "legacy-unrelated-flag-property-missing"
+    );
 
     const after = await readSdkState(fixture.page);
     check(after.distinctId === before.distinctId, "legacy-user-changed");
@@ -2152,8 +2483,14 @@ const runLegacyFlagsInitialPropertiesScenario = async (
       "legacy-initial-properties-reset-identity"
     );
 
+    const captureRequestMark = server.allPostHogRequests().length;
     await captureFixtureEvent(fixture.page);
     await waitForFixtureEvent(server);
+    const flagsAfterCapture = await waitForNextFeatureFlagsRequest(
+      server,
+      captureRequestMark
+    );
+    assertFeatureFlagsRequestIsClean(flagsAfterCapture);
     check(
       fixtureEvents(server.allIngestRecords()).some(
         (event) => eventDistinctId(event) === accountDistinctIds.A
@@ -2714,8 +3051,8 @@ const runCrossTabAndFocusScenario = async (
   let pageOne: Page | undefined;
   let pageTwo: Page | undefined;
   try {
-    pageOne = await openPage(context, runId, "on", runnerProblems);
-    pageTwo = await openPage(context, runId, "on", runnerProblems);
+    pageOne = await openPage(context, runId, runnerProblems, { consent: "on" });
+    pageTwo = await openPage(context, runId, runnerProblems, { consent: "on" });
     await waitForAuthenticated(pageOne);
     await waitForAuthenticated(pageTwo);
     await waitForAuthenticatedIdentity(pageOne);
@@ -2792,8 +3129,8 @@ const runDomainNotificationIntegrationScenario = async (
   let pageOne: Page | undefined;
   let pageTwo: Page | undefined;
   try {
-    pageOne = await openPage(context, runId, "on", runnerProblems);
-    pageTwo = await openPage(context, runId, "on", runnerProblems);
+    pageOne = await openPage(context, runId, runnerProblems, { consent: "on" });
+    pageTwo = await openPage(context, runId, runnerProblems, { consent: "on" });
     await waitForAuthenticated(pageOne);
     await waitForAuthenticated(pageTwo);
     await waitForAuthenticatedIdentity(pageOne);
@@ -2883,11 +3220,13 @@ const runCrossTabConsentWithdrawalScenario = async (
   server.clearIngest();
   const runId = server.createRun({ session: "B" });
   const context = await createContext(browser, runnerProblems);
+  const initialRequestMark = server.allPostHogRequests().length;
+  const pageOptions = { consent: "on", remoteFlags: true } as const;
   let pageOne: Page | undefined;
   let pageTwo: Page | undefined;
   try {
-    pageOne = await openPage(context, runId, "on", runnerProblems);
-    pageTwo = await openPage(context, runId, "on", runnerProblems);
+    pageOne = await openPage(context, runId, runnerProblems, pageOptions);
+    pageTwo = await openPage(context, runId, runnerProblems, pageOptions);
     await waitForAuthenticated(pageOne);
     await waitForAuthenticated(pageTwo);
     await waitForAuthenticatedIdentity(pageOne);
@@ -2895,7 +3234,10 @@ const runCrossTabConsentWithdrawalScenario = async (
     await waitForEvent(server, "$identify");
     await waitFor(
       () =>
-        server.allPostHogRequests().filter(isFeatureFlagsRequest).length >= 2,
+        server
+          .allPostHogRequests()
+          .slice(initialRequestMark)
+          .filter(isFeatureFlagsRequest).length >= 2,
       "cross-tab-consent-initial-flags"
     );
     await waitForFixtureConsentView(pageOne, true);
@@ -3388,6 +3730,7 @@ const main = async () => {
       ["consent-off", runConsentOffScenario],
       ["consent-cookie-gate", runConsentCookieGateScenario],
       ["delayed-first-pageview", runDelayedFirstPageviewScenario],
+      ["campaign-pageviews", runCampaignPageviewScenario],
       ["anonymous-identify", runAnonymousIdentifyScenario],
       ["same-identity-refresh", runSameIdentityRefreshScenario],
       [

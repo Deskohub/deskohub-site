@@ -75,6 +75,13 @@ describe("public page content dates", () => {
     }
   });
 
+  test("date the cookie policy sitemap entries by the 2026-11-19 republication", () => {
+    const page = publicPageDefinitions["/cookie-policy"];
+    for (const locale of locales) {
+      expect(getPublicPageContentDate(page, locale)).toBe("2026-11-19");
+    }
+  });
+
   // A translated locale's legal text can change, as its translation notice
   // did, without a new Czech version or document date.
   test("date each legal page in a translated locale by its translation too", () => {

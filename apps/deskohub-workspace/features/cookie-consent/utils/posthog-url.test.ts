@@ -33,22 +33,16 @@ describe("createPostHogPageUrl", () => {
     ).toBe("https://deskohub.test/account");
   });
 
-  test("strips sensitive params from current, referrer, initial, and session-entry urls", () => {
+  test("strips sensitive params from current, initial, and session-entry page URLs", () => {
     expect(
       sanitizePostHogProperties(
         {
           $current_url:
             "https://deskohub.test/checkout/pay?payState=secret&step=pay",
-          $referrer:
-            "https://deskohub.test/checkout/pay/return/order-id?checkoutToken=secret&outcome=success",
           $initial_current_url:
             "https://deskohub.test/checkout/pay/return/order-id?payStateRef=secret",
-          $initial_referrer:
-            "https://deskohub.test/reservation/cowork?token=secret&step=details",
           $session_entry_url:
             "https://deskohub.test/checkout/pay?payState=secret#synthetic-fragment",
-          $session_entry_referrer:
-            "https://deskohub.test/checkout/pay/return/order-id?checkoutToken=secret",
           $session_entry_pathname:
             "/reservation/status/session-entry-order-id?statusToken=secret#synthetic-fragment",
           $initial_utm_source: "legacy-synthetic-campaign",
@@ -59,11 +53,8 @@ describe("createPostHogPageUrl", () => {
       )
     ).toEqual({
       $current_url: "https://deskohub.test/checkout/pay",
-      $referrer: "https://deskohub.test/checkout/pay/return/[id]",
       $initial_current_url: "https://deskohub.test/checkout/pay/return/[id]",
-      $initial_referrer: "https://deskohub.test/reservation/cowork",
       $session_entry_url: "https://deskohub.test/checkout/pay",
-      $session_entry_referrer: "https://deskohub.test/checkout/pay/return/[id]",
       $session_entry_pathname: "/reservation/status/[id]",
       "deployment.environment.name": "preview",
     });
@@ -74,13 +65,11 @@ describe("createPostHogPageUrl", () => {
       {
         $current_url: `${syntheticEmailAddress}?token=synthetic-token`,
         $initial_current_url: "not a URL",
-        $referrer: "$direct",
       },
       "preview"
     );
 
     expect(properties).toEqual({
-      $referrer: "$direct",
       "deployment.environment.name": "preview",
     });
     expect(JSON.stringify(properties)).not.toContain("synthetic-token");

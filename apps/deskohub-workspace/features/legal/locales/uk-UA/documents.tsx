@@ -805,7 +805,7 @@ const legalDocuments = {
     sections: termsAndConditionsSections,
   },
   "cookie-policy": {
-    updatedAt: "8 листопада 2026 р.",
+    updatedAt: "19 листопада 2026 р.",
     sections: [
       {
         heading: "1. Що таке файли cookie",
@@ -870,9 +870,18 @@ const legalDocuments = {
             вебсайту, показники надсилання бронювань і ефективність кампаній.
             Залежно від категорії постачальника оброблювані дані можуть включати
             перегляди сторінок, інформацію про браузер і пристрій, технічні
-            дані, отримані з IP-адреси, типи подій і стандартні параметри
-            кампаній з URL: utm_source, utm_medium, utm_campaign, utm_content та
-            utm_term.
+            дані, отримані з IP-адреси, і типи подій.
+          </>,
+          <>
+            За Вашої згоди на аналітику ми можемо надсилати до PostHog вибрані
+            параметри кампаній з URL сторінки разом із даними про її перегляд.
+            Це стандартні параметри UTM (utm_source, utm_medium, utm_campaign,
+            utm_id, utm_term, utm_content, utm_source_platform,
+            utm_creative_format і utm_marketing_tactic), параметри Google Ads
+            про джерело трафіку й кампанію (gad_source, gad_campaignid і gclsrc)
+            та ідентифікатор кампанії Mailchimp (mc_cid). З даних про перегляди
+            сторінок для PostHog ми виключаємо ідентифікатори окремих кліків на
+            рекламу й одержувачів електронних листів.
           </>,
           <>
             З Вашою аналітичною згодою ми також привʼязуємо до аналітичного
