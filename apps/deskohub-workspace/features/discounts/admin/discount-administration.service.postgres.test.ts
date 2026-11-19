@@ -16,12 +16,14 @@ import {
 } from "@deskohub/workspace-admin-api";
 import { Effect, Layer, Option, Schema } from "effect";
 import { storedDiscountIdSchema } from "@/features/discounts/persistence-contracts";
+import type { WorkspaceProductTarget } from "@/features/discounts/product-target";
 import {
   CalendarResourceConfig,
   salesCalendarIdSchema,
   workspaceLimitationsCalendarIdSchema,
 } from "@/shared/backend/config/calendar-resource.config";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import type { CreateDiscountAdminInput } from "./contracts";
 import { DiscountAdministration } from "./discount-administration.service";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
@@ -121,6 +123,59 @@ describe.skipIf(!testDatabase)(
 
     const uniqueSuffix = () =>
       crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase();
+
+    test("a v1 discount update preserves pass targets while the Workspace form can replace them", async () => {
+      const label = `Synthetic mixed discount ${uniqueSuffix()}`;
+      labels.push(label);
+
+      const result = await run(
+        Effect.fn(function* (administration) {
+          const definition = {
+            labels: { "cs-CZ": label, "en-US": label },
+            adjustment: { kind: "percentage", basisPoints: 1000 },
+          } satisfies Pick<CreateDiscountAdminInput, "labels" | "adjustment">;
+          const passTarget = {
+            kind: "entry-pack",
+            tier: "open-space",
+            size: 10,
+          } satisfies WorkspaceProductTarget;
+          const id = yield* administration.createDiscount({
+            ...definition,
+            products: [{ kind: "office" }, passTarget],
+          });
+          const readTargets = () =>
+            administration
+              .loadCodesPage()
+              .pipe(
+                Effect.map(
+                  ({ discounts }) =>
+                    discounts.find((discount) => discount.id === id)?.products
+                )
+              );
+          yield* administration.updateDiscount(
+            { id, ...definition, products: [{ kind: "meeting-room" }] },
+            "reservations"
+          );
+          const afterV1 = yield* readTargets();
+          yield* administration.updateDiscount({
+            id,
+            ...definition,
+            products: [{ kind: "cowork" }],
+          });
+          return { afterV1, afterWorkspaceForm: yield* readTargets() };
+        })
+      );
+
+      if (result._tag === "Failure") throw result.failure;
+      expect(result.success.afterV1).toHaveLength(2);
+      expect(result.success.afterV1).toContainEqual({ kind: "meeting-room" });
+      expect(result.success.afterV1).toContainEqual({
+        kind: "entry-pack",
+        tier: "open-space",
+        size: 10,
+      });
+      expect(result.success.afterWorkspaceForm).toEqual([{ kind: "cowork" }]);
+    });
 
     test("rejects a duplicate promotion code and rolls back its new discount", async () => {
       const code = `SYNTHETIC_${uniqueSuffix()}`;

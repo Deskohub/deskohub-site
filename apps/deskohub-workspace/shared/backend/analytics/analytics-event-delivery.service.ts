@@ -5,7 +5,7 @@ import type {
   PostHogEventId,
 } from "@deskohub/analytics-posthog/identifiers";
 import { waitUntil } from "@vercel/functions";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Predicate, Schema } from "effect";
 import { PostHog } from "posthog-node";
 import { postHogRuntimeConfig } from "@/shared/backend/config/posthog.config";
 import { runStandaloneWorkspaceEffect } from "@/shared/backend/standalone-workspace-effect";
@@ -45,19 +45,28 @@ export class AnalyticsEventDelivery extends Context.Service<
 /** The part of a `posthog-node` client that delivers events. */
 type PostHogCaptureClient = Pick<PostHog, "capture">;
 
+const isEventUuid = Schema.is(Schema.String.check(Schema.isGUID()));
+
 export const makePostHogEventDelivery = (
   client: PostHogCaptureClient
 ): IAnalyticsEventDelivery => ({
   send: (message) =>
-    Effect.try(() =>
+    Effect.try(() => {
+      const { $process_person_profile: processPersonProfile, ...properties } =
+        message.properties;
       client.capture({
         distinctId: message.distinctId,
         event: message.event,
-        properties: message.properties,
+        options: Predicate.isBoolean(processPersonProfile)
+          ? { process_person_profile: processPersonProfile }
+          : undefined,
+        properties,
         timestamp: temporalInstantToDate(message.timestamp),
-        uuid: message.uuid,
-      })
-    ).pipe(
+        // Occurrence keys correlate local logs. Let the SDK generate the
+        // wire UUID when the key has no UUID format.
+        uuid: isEventUuid(message.uuid) ? message.uuid : undefined,
+      });
+    }).pipe(
       Effect.catch((cause) =>
         Effect.logWarning("Server analytics event not queued", {
           event: message.event,
@@ -98,7 +107,7 @@ export const flushServerAnalytics: Effect.Effect<void> = Effect.suspend(() => {
           "Server analytics flush exceeded its post-response deadline"
         ),
     }),
-    // The client's error listener has logged the failed delivery.
+    // The client's error listener reports delivery failures.
     Effect.ignore
   );
 });

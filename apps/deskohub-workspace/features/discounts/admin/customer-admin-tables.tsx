@@ -64,7 +64,7 @@ export type ClaimHistoryItem = {
   /** When the claim was redeemed or released, if it was. */
   readonly completedAtLabel: string | null;
   readonly state: AdminDiscountCodeClaim["state"];
-  readonly workspaceReservationId: string;
+  readonly workspaceReservationId: string | null;
 };
 
 const getPromotionCodeKindLabel = (
@@ -341,17 +341,21 @@ export function ClaimHistoryTable({
       {
         accessorKey: "workspaceReservationId",
         header: m.discountsColumnReservation({}, { locale }),
-        cell: ({ row }) => (
-          <Link
-            className="font-semibold underline underline-offset-4"
-            href={administrationHref(
-              "/[locale]/admin/reservations/[reservationId]",
-              { reservationId: row.original.workspaceReservationId }
-            )}
-          >
-            {m.discountsOpenReservation({}, { locale })}
-          </Link>
-        ),
+        cell: ({ row }) => {
+          const reservationId = row.original.workspaceReservationId;
+          if (!reservationId) return "—";
+          return (
+            <Link
+              className="font-semibold underline underline-offset-4"
+              href={administrationHref(
+                "/[locale]/admin/reservations/[reservationId]",
+                { reservationId }
+              )}
+            >
+              {m.discountsOpenReservation({}, { locale })}
+            </Link>
+          );
+        },
       },
     ],
     [locale, subject]

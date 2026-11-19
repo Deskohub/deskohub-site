@@ -36,6 +36,7 @@
   "accountingInvoiceSourceAdminUi": "Administration",
   "accountingInvoiceSourceDhwCli": "dhw-CLI",
   "accountingInvoiceSourceAssistant": "KI-Assistent",
+  "accountingInvoiceSourcePassPurchase": "Kauf eines Eintrittspakets",
   "accountingInvoiceSourceLegacy": "Älterer Eintrag / unbekannt",
   "accountingInvoiceDeliveryNeedsResend": "Erneuter Versand nötig",
   "accountingInvoiceDeliverySent": "Gesendet",

@@ -98,13 +98,14 @@ const getNotificationUrl = Effect.fn("getPaymentNotificationUrl")(
 export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
   Kind extends OrderKind,
   PrepareError,
+  PrepareServices,
 >(
   input: PaymentAdmission<PaymentAdmissionDetailsFor<Kind>> & {
     readonly kind: Kind;
     readonly correlationId: string;
     readonly customer: PaymentCustomer;
     readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
-    readonly beforeAttempt: Effect.Effect<void, PrepareError>;
+    readonly beforeAttempt: Effect.Effect<void, PrepareError, PrepareServices>;
   }
 ) {
   const { byKind } = yield* OrderPaymentHandlers;

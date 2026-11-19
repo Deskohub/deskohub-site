@@ -6,7 +6,7 @@ import { type ActiveSale, discountIdSchema } from "@/features/discounts";
 import {
   type WorkspaceProductFamily,
   type WorkspaceProductTarget,
-  workspaceProductFamilies,
+  workspaceReservationProductFamilies,
 } from "@/features/discounts/product-target";
 import { m } from "@/features/i18n";
 import { getLandingPageSaleBannerLabel } from "./landing-page-sale-banner-content";
@@ -58,13 +58,13 @@ const sale = (
   products,
 });
 
-const bookableWithoutOffice = workspaceProductFamilies.filter(
+const bookableWithoutOffice = workspaceReservationProductFamilies.filter(
   (family) => family !== "office"
 );
 
 const advertisedLabel = (
   products: readonly WorkspaceProductTarget[],
-  bookableProducts: readonly WorkspaceProductFamily[] = workspaceProductFamilies
+  bookableProducts: readonly WorkspaceProductFamily[] = workspaceReservationProductFamilies
 ) =>
   getLandingPageSaleBannerLabel(
     {
@@ -136,6 +136,15 @@ describe("getActiveLandingPageSaleBanner", () => {
       href,
       label: expect.objectContaining({ title: "Summer focus" }),
     });
+  });
+
+  test("a pass-only sale does not suppress the reservation sale banner", async () => {
+    const { banner } = await getBanner([
+      sale([{ kind: "entry-pack" }]),
+      sale([coworkProduct, meetingRoomProduct, officeProduct]),
+    ]);
+    expect(banner?.href).toBe("/en-US/reservation/cowork");
+    expect(banner?.label.template).toBe(allProductsTemplate);
   });
 
   test("renders no office-only banner while office reservations are disabled", async () => {

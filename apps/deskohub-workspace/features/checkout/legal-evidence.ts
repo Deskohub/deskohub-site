@@ -29,6 +29,7 @@ export const paymentSubmitLegalEvidenceSource = "payment_submit" as const;
  */
 const legalEvidenceAcknowledgementsSchema = Schema.Struct({
   earlyPerformanceConsent: Schema.optionalKey(Schema.Literal(true)),
+  entryPackEarlyStartRequested: Schema.optionalKey(Schema.Literal(true)),
 }).annotate({
   identifier: "LegalEvidenceAcknowledgements",
   description:

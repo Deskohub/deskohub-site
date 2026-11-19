@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { Option } from "effect";
+import { AdministrationDiscountMutation } from "@deskohub/workspace-admin-api";
+import { Option, Schema } from "effect";
 import "@/shared/polyfills/temporal";
+import { discountAdminMutationStandardSchema } from "./contracts";
 import {
   toCreateDiscountCodeInput,
   toCreateDiscountInput,
@@ -22,7 +24,7 @@ const percentageDefinition = (
   percentage: "10.25",
   fixedAmountValue: "10000",
   fixedAmountCurrency: "CZK",
-  products: [],
+  products: ["cowork"],
   ...overrides,
 });
 
@@ -30,6 +32,79 @@ const createdDiscount = (values: DiscountDefinitionFormValues) =>
   Option.getOrThrow(toCreateDiscountInput(values));
 
 describe("discount administration form input", () => {
+  test("validates selected pass targets through the Workspace action schema", () => {
+    const discount = createdDiscount(
+      percentageDefinition({
+        products: ["entry-pack:reserved-desk:10", "unlimited"],
+      })
+    );
+    const mutation = { kind: "create-discount", discount };
+
+    expect(discount.products).toEqual([
+      { kind: "entry-pack", tier: "reserved-desk", size: 10 },
+      { kind: "unlimited" },
+    ]);
+    expect(
+      discountAdminMutationStandardSchema["~standard"].validate(mutation)
+    ).toEqual({
+      value: mutation,
+    });
+    expect(
+      Schema.decodeUnknownOption(AdministrationDiscountMutation)(mutation)
+    ).toEqual(Option.none());
+    expect(
+      discountAdminMutationStandardSchema["~standard"].validate({
+        ...mutation,
+        discount: {
+          ...discount,
+          products: [...discount.products, { kind: "entry-pack" }],
+        },
+      })
+    ).toHaveProperty("issues");
+  });
+
+  test("accepts pass targets in discount updates and inline code discounts", () => {
+    const discount = createdDiscount(
+      percentageDefinition({ products: ["entry-pack"] })
+    );
+    const code = {
+      code: "PACK10",
+      enabled: true,
+      validFrom: null,
+      validUntil: null,
+      maxUses: null,
+    };
+    const selection = { kind: "new", discount };
+    const mutations = [
+      {
+        kind: "update-discount",
+        discount: { ...discount, id: "01980000-0000-7000-8000-000000000001" },
+      },
+      { kind: "create-code", code, discount: selection },
+      {
+        kind: "create-customer-code",
+        customerId: "synthetic-customer",
+        code,
+        discount: selection,
+      },
+    ];
+
+    for (const mutation of mutations) {
+      expect(
+        discountAdminMutationStandardSchema["~standard"].validate(mutation)
+      ).toEqual({ value: mutation });
+      expect(
+        Schema.decodeUnknownOption(AdministrationDiscountMutation)(mutation)
+      ).toEqual(Option.none());
+    }
+  });
+
+  test("forms no discount without a product target", () => {
+    expect(
+      toCreateDiscountInput(percentageDefinition({ products: [] }))
+    ).toEqual(Option.none());
+  });
+
   test("converts a percentage value to stored basis points", () => {
     expect(createdDiscount(percentageDefinition()).adjustment).toEqual({
       kind: "percentage",

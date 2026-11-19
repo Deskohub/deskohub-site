@@ -56,7 +56,7 @@ const message = {
   event: "synthetic event",
   properties: { source: "test" },
   timestamp: Temporal.Instant.from("2026-06-01T10:00:00Z"),
-  uuid: "synthetic-event-id" as PostHogEventId,
+  uuid: "00000000-0000-4000-8000-000000000001" as PostHogEventId,
 };
 
 const sendThroughDefaultDelivery = () =>

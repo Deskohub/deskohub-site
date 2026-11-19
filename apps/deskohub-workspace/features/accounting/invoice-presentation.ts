@@ -1,8 +1,10 @@
 import { Match, Option } from "effect";
 import {
+  type EntryPackInvoiceDocument,
   type InvoiceDocument,
-  isManualInvoiceDocument,
+  isLineItemInvoiceDocument,
   type ManualInvoiceDocument,
+  type ReservationInvoiceDocument,
 } from "@/features/accounting/invoice";
 import {
   getInvoiceSettlement,
@@ -141,8 +143,8 @@ const getInvoiceCopy = (locale: Locale): InvoiceCopy => ({
 export const getInvoicePresentation = (
   document: InvoiceDocument
 ): InvoicePresentation => {
-  if (isManualInvoiceDocument(document)) {
-    return getManualInvoicePresentation(document);
+  if (isLineItemInvoiceDocument(document)) {
+    return getLineItemInvoicePresentation(document);
   }
 
   const { locale } = document;
@@ -202,8 +204,8 @@ export const getInvoicePresentation = (
   };
 };
 
-const getManualInvoicePresentation = (
-  document: ManualInvoiceDocument
+const getLineItemInvoicePresentation = (
+  document: ManualInvoiceDocument | EntryPackInvoiceDocument
 ): InvoicePresentation => {
   const copy = getInvoiceCopy(document.locale);
   const settlement = getSettlementPresentation(document, copy);
@@ -394,7 +396,7 @@ const getSupplierPresentation = (
 export const getInvoiceStatedLines = (
   document: InvoiceDocument
 ): readonly { readonly description: string; readonly amount: string }[] => {
-  if (isManualInvoiceDocument(document)) {
+  if (isLineItemInvoiceDocument(document)) {
     return document.lines.map(({ description, price }) => ({
       description,
       amount: price,
@@ -419,7 +421,7 @@ const getDiscountDescription = (copy: InvoiceCopy, label: string) =>
   `${copy.discount}: ${label}`;
 
 const getItemLines = (
-  document: Exclude<InvoiceDocument, ManualInvoiceDocument>,
+  document: ReservationInvoiceDocument,
   copy: InvoiceCopy
 ): readonly InvoicePresentationLine[] =>
   document.quote.items.map(

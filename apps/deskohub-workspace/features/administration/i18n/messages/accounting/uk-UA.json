@@ -38,6 +38,7 @@
   "accountingInvoiceSourceAdminUi": "Адміністрування",
   "accountingInvoiceSourceDhwCli": "CLI dhw",
   "accountingInvoiceSourceAssistant": "ШІ-асистент",
+  "accountingInvoiceSourcePassPurchase": "Купівля пакета відвідувань",
   "accountingInvoiceSourceLegacy": "Старий запис / невідомо",
   "accountingInvoiceDeliveryNeedsResend": "Потрібно надіслати повторно",
   "accountingInvoiceDeliverySent": "Надіслано",

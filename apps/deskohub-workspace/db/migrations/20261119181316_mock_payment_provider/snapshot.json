@@ -1,9 +1,9 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "9e4fdd36-7fdd-4d58-a128-a78e2fdb38a1",
+  "id": "a749fda9-9900-44b9-bab0-1c4781df61c7",
   "prevIds": [
-    "725e7841-cf8a-4923-9064-06f0bfcce77e"
+    "34df9c04-20db-4293-822c-31bb38f70fa9"
   ],
   "ddl": [
     {
@@ -355,6 +355,18 @@
     {
       "isRlsEnabled": false,
       "name": "orders",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "pass_entry_claims",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "pass_purchases",
       "entityType": "tables",
       "schema": "public"
     },
@@ -716,7 +728,7 @@
     {
       "type": "text",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -2445,7 +2457,7 @@
     {
       "type": "text",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -7384,6 +7396,214 @@
       "entityType": "columns",
       "schema": "public",
       "table": "orders"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "reservation_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_entry_claims"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "pass_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_entry_claims"
+    },
+    {
+      "type": "date",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "date",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_entry_claims"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_entry_claims"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "buyer_account_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "holder_account_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "product",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "tier",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "entry_count",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "date",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "valid_from",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "date",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "valid_until",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "quote",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "locale",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
     },
     {
       "type": "text",
@@ -14238,6 +14458,76 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "pass_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "date",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "pass_entry_claims_pass_date_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "pass_entry_claims"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "buyer_account_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "pass_purchases_buyer_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "holder_account_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "pass_purchases_holder_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "provider",
           "isExpression": false,
           "asc": true,
@@ -17508,6 +17798,91 @@
     {
       "nameExplicit": false,
       "columns": [
+        "reservation_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "workspace_reservations",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "pass_entry_claims_reservation_id_workspace_reservations_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "pass_entry_claims"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "pass_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "pass_purchases",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "pass_entry_claims_pass_id_pass_purchases_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "pass_entry_claims"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "orders",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "pass_purchases_id_orders_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "buyer_account_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "customer_accounts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "pass_purchases_buyer_account_id_customer_accounts_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "holder_account_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "customer_accounts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "pass_purchases_holder_account_id_customer_accounts_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
         "workspace_reservation_id"
       ],
       "schemaTo": "public",
@@ -18783,6 +19158,26 @@
       "name": "orders_pkey",
       "schema": "public",
       "table": "orders",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "reservation_id"
+      ],
+      "nameExplicit": false,
+      "name": "pass_entry_claims_pkey",
+      "schema": "public",
+      "table": "pass_entry_claims",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pass_purchases_pkey",
+      "schema": "public",
+      "table": "pass_purchases",
       "entityType": "pks"
     },
     {
@@ -20166,7 +20561,7 @@
       "table": "invoices"
     },
     {
-      "value": "(\"workspace_reservation_id\" is null) = (\"payment_attempt_id\" is null)",
+      "value": "\"workspace_reservation_id\" is null or \"payment_attempt_id\" is not null",
       "name": "invoices_source_reference_check",
       "entityType": "checks",
       "schema": "public",
@@ -20353,6 +20748,48 @@
       "entityType": "checks",
       "schema": "public",
       "table": "orders"
+    },
+    {
+      "value": "\"status\" in ('reserved', 'consumed', 'released')",
+      "name": "pass_entry_claims_status_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "pass_entry_claims"
+    },
+    {
+      "value": "\"product\" = 'entry-pack'",
+      "name": "pass_purchases_product_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "value": "\"tier\" in ('open-space', 'reserved-desk', 'reserved-desk-workstation')",
+      "name": "pass_purchases_tier_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "value": "\"entry_count\" in (5, 10)",
+      "name": "pass_purchases_entry_count_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "value": "\"status\" in ('pending_payment', 'active', 'depleted', 'expired', 'cancelled', 'withdrawn', 'void')",
+      "name": "pass_purchases_status_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "value": "\"valid_from\" < \"valid_until\"",
+      "name": "pass_purchases_validity_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "pass_purchases"
     },
     {
       "value": "\"provider\" in ('nexi', 'mock', 'internal')",

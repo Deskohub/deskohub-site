@@ -49,6 +49,8 @@ compatibility objects until every writer uses the canonical key.
 
 The Neon/Vercel integration creates and deletes Workspace preview branches for the PR lifecycle. Keep its automatic obsolete-branch deletion on. E2E and other repository workflows must not expire or delete integration-owned branches.
 
+The PR's implementer owns its Neon preview and has standing authorization to manage it. When a regenerated migration replaces one already applied there, confirm the branch ID matches the open PR's non-primary `preview/<internal-head-ref>` branch. Wait for any active E2E lease on the branch to release, then reset it to its parent. The reset discards preview-local changes. Verify the stale schema is gone, then migrate and test the new revision through Workspace E2E.
+
 `.github/workflows/workspace-e2e.yml` migrates each preview before E2E. When you change that flow, keep these properties:
 
 - Wait for the exact immutable Git preview to report success.

@@ -15,7 +15,7 @@ import {
   type DiscountAdjustment,
   discountIdSchema,
 } from "@/features/discounts/contracts";
-import { workspaceProductFamilies } from "@/features/discounts/product-target";
+import { workspaceReservationProductFamilies } from "@/features/discounts/product-target";
 import { type Locale, m } from "@/features/i18n";
 import { getConsentBannerRevision } from "@/features/legal/consent-banner-revision";
 import { savedConsentCookieValue } from "@/shared/testing/consent-cookie.test-utils";
@@ -87,7 +87,7 @@ const coworkSaleBannerContent = ({
   adjustment?: DiscountAdjustment;
 } = {}) =>
   getLandingPageSaleBannerContent({
-    bookableProducts: workspaceProductFamilies,
+    bookableProducts: workspaceReservationProductFamilies,
     locale,
     reservationKind: "cowork",
     sale: {

@@ -46,6 +46,7 @@ const invoice: InvoiceAdministrationTableRow = {
   paymentStatus: "overdue",
   source: "admin-ui",
   actor: null,
+  actorName: null,
   delivery: { customer: "failed", internal: "accepted" },
   needsAttention: true,
   cancellation: null,
@@ -98,6 +99,38 @@ test("renders the invoice table in Czech on a Czech route", () => {
   expect(
     view.getAllByRole("button", { name: "Znovu odeslat 2026000001" }).length
   ).toBeGreaterThan(0);
+});
+
+test("shows the issuer above the avenue when an invoice records an actor", () => {
+  workspaceUseAction.mockImplementation(
+    () => ({ execute: mock(), isExecuting: false }) as never
+  );
+  const actor = testEmailAddress("invoice-issuer");
+  const view = render(
+    <RouteLocaleProvider locale="en-US">
+      <InvoiceAdministrationTable
+        items={[
+          { ...invoice, actor, actorName: "Ada Novak" },
+          { ...cancelledInvoice, actor },
+        ]}
+        query={{}}
+      />
+    </RouteLocaleProvider>
+  );
+
+  const table = within(view.getByRole("table"));
+  expect(table.queryAllByText(actor)).toHaveLength(1);
+  for (const [number, issuer] of [
+    [invoice.invoiceNumber, "Ada Novak"],
+    [cancelledInvoice.invoiceNumber, actor],
+  ] as const) {
+    const row = within(table.getByRole("row", { name: new RegExp(number) }));
+    const lines = row.getByText("Admin UI").parentElement?.children;
+    expect(Array.from(lines ?? [], (line) => line.textContent)).toEqual([
+      issuer,
+      "Admin UI",
+    ]);
+  }
 });
 
 test("marks only cancelled rows, which offer hiding instead of cancelling", () => {

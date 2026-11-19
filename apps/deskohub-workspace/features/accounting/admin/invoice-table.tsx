@@ -20,6 +20,7 @@ import { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 import { retryAdministrationInvoice } from "./actions";
 import type {
   InvoiceAdministrationListItem,
+  InvoiceAdministrationTableItem,
   InvoiceAdministrationUnreadableListItem,
 } from "./invoice-administration.service";
 import { InvoiceArchive } from "./invoice-archive";
@@ -34,7 +35,7 @@ import { type InvoiceListQuery, invoiceListQuery } from "./invoice-list-query";
  * the client's ICU spaces date-times and amounts differently from Node's.
  */
 export type InvoiceAdministrationTableRow =
-  | (InvoiceAdministrationListItem & {
+  | (InvoiceAdministrationTableItem & {
       readonly issuedAtLabel: string;
       readonly totalLabel: string;
     })
@@ -153,15 +154,19 @@ const getInvoiceColumns = (
     accessorFn: (invoice) =>
       isUnreadableInvoiceListEntry(invoice) ? null : invoice.source,
     header: m.accountingInvoiceColumnProvenance({}, { locale }),
-    cell: ({ row }) =>
-      isUnreadableInvoiceListEntry(row.original) ? null : (
+    cell: ({ row }) => {
+      const invoice = row.original;
+      if (isUnreadableInvoiceListEntry(invoice)) return null;
+      const actor = invoice.actorName ?? invoice.actor;
+      return (
         <div>
-          <p>{getInvoiceSourceLabel(row.original.source, locale)}</p>
-          {row.original.actor && (
-            <p className="text-xs text-navy-blue/55">{row.original.actor}</p>
-          )}
+          {actor && <p>{actor}</p>}
+          <p className={actor ? "text-xs text-navy-blue/55" : undefined}>
+            {getInvoiceSourceLabel(invoice.source, locale)}
+          </p>
         </div>
-      ),
+      );
+    },
   },
   {
     id: "delivery",

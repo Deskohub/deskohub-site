@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
-import { WorkspaceTransaction } from "@/db/database.service";
+import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { paymentAttempts } from "@/db/schema";
 import { postgresUuidV7 } from "@/db/uuid-v7";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
@@ -8,7 +8,11 @@ import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
 import type { PaymentProvider } from "../payment/payment-provider";
-import type { NonTerminalPaymentAttemptState } from "./payment-lifecycle-state";
+import { toPaymentAttempt } from "./payment-attempt.repository";
+import {
+  type NonTerminalPaymentAttemptState,
+  PaymentLifecycleStateError,
+} from "./payment-lifecycle-state";
 
 type NewPaymentAttempt = {
   readonly orderId: OrderId;
@@ -121,4 +125,41 @@ export const markPaymentAttemptTerminal = Effect.fn(
     )
     .returning();
   return attempt;
+});
+
+export const attachPaymentProviderSession = Effect.fn(
+  "PaymentLifecycleRepository.attachProviderSession"
+)(function* (input: {
+  readonly id: PaymentAttemptId;
+  readonly securityToken: string;
+  readonly providerRedirectUrl: string;
+}) {
+  const { db } = yield* WorkspaceDatabase;
+  const providerOrderCreatedAt = Temporal.Now.instant();
+  const [attempt] = yield* db
+    .update(paymentAttempts)
+    .set({
+      state: "pending",
+      securityToken: input.securityToken,
+      providerRedirectUrl: input.providerRedirectUrl,
+      providerOrderCreatedAt,
+      updatedAt: providerOrderCreatedAt,
+    })
+    .where(
+      and(
+        eq(paymentAttempts.id, input.id),
+        eq(paymentAttempts.state, "created")
+      )
+    )
+    .returning();
+
+  if (!attempt) {
+    return yield* new PaymentLifecycleStateError({
+      operation: "PaymentLifecycleRepository.attachProviderSession",
+      paymentReference: { type: "paymentAttemptId", id: input.id },
+      message: "Only created payment attempts can attach a provider session.",
+    });
+  }
+
+  return toPaymentAttempt(attempt);
 });

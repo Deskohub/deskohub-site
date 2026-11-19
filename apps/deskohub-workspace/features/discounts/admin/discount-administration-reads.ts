@@ -568,7 +568,7 @@ export const toAdminDotyposCustomer = (
 const toAdminDiscountCodeClaim = (
   row: DiscountCodeRedemption & {
     readonly application: {
-      readonly workspaceReservationId: WorkspaceReservationId;
+      readonly workspaceReservationId: WorkspaceReservationId | null;
       readonly appliedAmountValue: number;
       readonly appliedAmountExponent: number;
       readonly appliedAmountCurrency: string;
@@ -596,7 +596,7 @@ const toAdminDiscountCodeClaim = (
 const toAdminVoucherClaim = (
   row: VoucherRedemption & {
     readonly application: {
-      readonly workspaceReservationId: WorkspaceReservationId;
+      readonly workspaceReservationId: WorkspaceReservationId | null;
       readonly appliedAmountValue: number;
       readonly appliedAmountExponent: number;
       readonly appliedAmountCurrency: string;

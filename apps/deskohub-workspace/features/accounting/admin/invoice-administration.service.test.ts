@@ -10,12 +10,14 @@ import {
 import { Effect, Layer, Logger, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import type { EntryPackInvoiceDocument } from "@/features/accounting/invoice";
 import {
   makeCoworkInvoiceDocument,
   makeTestManualInvoiceDocument,
 } from "@/features/accounting/invoice.test-utils";
 import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import { ReservationAdministrationService } from "@/features/administration/reservation-administration.service";
+import { orderIdSchema } from "@/features/order";
 import {
   type Invoice,
   InvoiceRepository,
@@ -133,13 +135,30 @@ describe("InvoiceAdministrationService", () => {
       document: manualDocument,
       ...liveInvoiceStanding,
     } satisfies Invoice;
+    const packInvoice = {
+      ...manualInvoice,
+      id: invoiceIdSchema.make("01980000-0000-7000-8000-00000000000a"),
+      paymentAttemptId: "pack-payment-attempt",
+      document: {
+        ...manualDocument,
+        documentKind: "pass-purchase",
+        orderId: orderIdSchema.make("01980000-0000-7000-8000-00000000000b"),
+        paymentAttemptId: "pack-payment-attempt",
+        payment: { status: "paid", date: manualDocument.serviceDate },
+        provenance: {
+          system: "deskohub-workspace",
+          generatedAt: manualDocument.issuedAt,
+        },
+      } satisfies EntryPackInvoiceDocument,
+    } satisfies Invoice;
     const layer = InvoiceAdministrationService.Default.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(DotyposService, {}),
           Layer.mock(InvoiceRepository, {
-            findById: () => Effect.succeed(invoice),
-            list: () => Effect.succeed([manualInvoice, invoice]),
+            findById: (id) =>
+              Effect.succeed(id === packInvoice.id ? packInvoice : invoice),
+            list: () => Effect.succeed([manualInvoice, invoice, packInvoice]),
           }),
           deliveryLedger((id) =>
             id === invoice.id ? failedInternally : deliveredEverywhere
@@ -157,6 +176,7 @@ describe("InvoiceAdministrationService", () => {
       return yield* Effect.all([
         service.list(),
         service.get(invoice.id, { includeArchived: true }),
+        service.get(packInvoice.id, { includeArchived: true }),
       ]);
     }).pipe(Effect.provide(layer), Effect.runPromise);
 
@@ -174,6 +194,13 @@ describe("InvoiceAdministrationService", () => {
       needsAttention: false,
     });
     expect(result[1].serviceDate).toBe("2026-08-11");
+    expect(
+      result[0].items.find(({ id }) => id === packInvoice.id)
+    ).toMatchObject({
+      source: "pass-purchase",
+      reservationId: null,
+    });
+    expect(result[2]).toMatchObject({ source: "pass-purchase" });
   });
 
   test("signals a searched customer without a name or email", async () => {
@@ -672,6 +699,7 @@ describe("InvoiceAdministrationService cancellation", () => {
                   null
               ),
             list: () => Effect.succeed([...(options.invoices ?? [])]),
+            findManualIssuerProfileLinks: () => Effect.succeed([]),
             listWithUnreadable: () =>
               Effect.succeed({
                 readable: [...(options.invoices ?? [])],

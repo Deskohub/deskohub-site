@@ -1,5 +1,12 @@
 import { Match, Schema } from "effect";
 import {
+  entryPackProductKeySchema,
+  entryPackProductSchema,
+  getPassProductKey,
+  unlimitedPassProductKeySchema,
+  unlimitedPassProductSchema,
+} from "@/features/passes/pass-offer";
+import {
   getWorkspaceCoworkProductKey,
   workspaceCoworkProductIdentitySchema,
   workspaceCoworkProductKeySchema,
@@ -19,6 +26,8 @@ export const workspaceProductIdentitySchema = Schema.Union([
   workspaceCoworkProductIdentitySchema,
   workspaceMeetingRoomProductIdentitySchema,
   workspaceOfficeProductIdentitySchema,
+  entryPackProductSchema,
+  unlimitedPassProductSchema,
 ]);
 
 export type WorkspaceProductIdentity =
@@ -28,6 +37,8 @@ export const workspaceProductKeySchema = Schema.Union([
   workspaceCoworkProductKeySchema,
   workspaceMeetingRoomProductKeySchema,
   workspaceOfficeProductKeySchema,
+  entryPackProductKeySchema,
+  unlimitedPassProductKeySchema,
 ]);
 
 export type WorkspaceProductKey = typeof workspaceProductKeySchema.Type;
@@ -40,6 +51,8 @@ export const getWorkspaceProductKey = (
       cowork: getWorkspaceCoworkProductKey,
       "meeting-room": getWorkspaceMeetingRoomProductKey,
       office: getWorkspaceOfficeProductKey,
+      "entry-pack": getPassProductKey,
+      unlimited: getPassProductKey,
     })
   );
 
@@ -54,5 +67,7 @@ export const getCanonicalWorkspaceProductIdentity = (
         duration,
       }),
       office: ({ dayCount, kind, seats }) => ({ kind, seats, dayCount }),
+      "entry-pack": ({ kind, size, tier }) => ({ kind, size, tier }),
+      unlimited: ({ kind, tier }) => ({ kind, tier }),
     })
   );

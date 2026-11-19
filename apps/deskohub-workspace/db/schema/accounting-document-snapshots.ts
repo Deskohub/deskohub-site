@@ -15,7 +15,6 @@ export const accountingDocumentSnapshots = pgTable(
       .$type<PaymentAttemptId>()
       .references(() => paymentAttempts.id),
     workspaceReservationId: text("workspace_reservation_id")
-      .notNull()
       .$type<WorkspaceReservationId>()
       .references(() => workspaceReservations.id),
     keyId: text("key_id").notNull().$type<AccountingSnapshotKeyId>(),

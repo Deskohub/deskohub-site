@@ -3,6 +3,7 @@ import { Data, Effect } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
 import { type PaymentAttemptState, workspaceReservations } from "@/db/schema";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { PaymentAttempt } from "./payment-attempt.repository";
 
@@ -15,6 +16,7 @@ import type { PaymentAttempt } from "./payment-attempt.repository";
 export type PaymentLifecycleReference =
   | { readonly type: "paymentAttemptId"; readonly id: PaymentAttemptId }
   | { readonly type: "providerOrderId"; readonly id: string }
+  | { readonly type: "orderId"; readonly id: OrderId }
   | {
       readonly type: "workspaceReservationId";
       readonly id: WorkspaceReservationId;

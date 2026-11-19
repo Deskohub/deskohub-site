@@ -1,4 +1,3 @@
-import { PaymentProvidersFromNexi } from "./payment-providers";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -13,6 +12,7 @@ import { Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { orders, paymentAttempts } from "@/db/schema";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import type { OrderId } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
@@ -31,6 +31,7 @@ import { LatePaymentVerificationService } from "./late-payment-verification.serv
 import { NexiWebhookService } from "./nexi-webhook.service";
 import type { AdmittingOrderPaymentHandler } from "./order-payment-handler";
 import { OrderPaymentHandlers } from "./order-payment-handlers.service";
+import { PaymentProvidersFromNexi } from "./payment-providers";
 import { PaymentRefundService } from "./payment-refund.service";
 import { startPaymentSession } from "./payment-session";
 import { ProviderPaymentFinalizationService } from "./provider-payment-finalization.service";
@@ -247,6 +248,9 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
                       operationId,
                       operationCount: 1,
                       amount: input.amount,
+                      authorizedAmount: undefined,
+                      capturedAmount:
+                        status === "success" ? input.amount : undefined,
                       currency: input.currency,
                       orderStatus:
                         status === "failure" ? "DECLINED" : "EXECUTED",
@@ -278,8 +282,16 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
       NexiWebhookService.Default
     ).pipe(Layer.provideMerge(dependencies));
 
-    const admit = (details: { description: string }) =>
-      startPaymentSession({
+    const admit = ({ description }: { description: string }) => {
+      const details = {
+        description,
+        commitment: makeDiscountCommitment({
+          product: { kind: "entry-pack", size: 5, tier: "open-space" },
+          firstServiceDate: "2026-01-01",
+          applications: [],
+        }),
+      };
+      return startPaymentSession({
         kind: order.kind,
         orderId: order.id,
         amount: { value: 29_000, exponent: 2, currency: "CZK" },
@@ -289,6 +301,7 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
         details,
         beforeAttempt: Effect.void,
       }).pipe(Effect.scoped);
+    };
 
     return {
       order,
@@ -322,8 +335,13 @@ describe.skipIf(!testDatabase)("Order payments without a reservation", () => {
     };
   });
 
-  const run = <A, E, R>(
-    scenario: (setup: Effect.Success<typeof fixture>) => Effect.Effect<A, E, R>
+  type ScenarioServices =
+    | Layer.Success<Effect.Success<typeof fixture>["entryPoints"]>
+    | WorkspaceDatabase;
+  const run = <A, E>(
+    scenario: (
+      setup: Effect.Success<typeof fixture>
+    ) => Effect.Effect<A, E, ScenarioServices>
   ) =>
     Effect.gen(function* () {
       const setup = yield* fixture;

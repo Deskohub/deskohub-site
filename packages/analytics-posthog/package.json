@@ -24,10 +24,10 @@
     "@deskohub/provider-request": "workspace:*",
     "effect": "4.1.4",
     "mustache": "^4.2.0",
-    "posthog-node": "^5.63.1"
+    "posthog-node": "^6.0.4"
   },
   "peerDependencies": {
-    "posthog-js": ">=1.257.2",
+    "posthog-js": "^1.336.0",
     "react": ">=16.8.0"
   },
   "devDependencies": {
@@ -35,7 +35,7 @@
     "@effect/openapi-generator": "4.1.4",
     "@types/mustache": "^4.2.6",
     "@types/react": "^19.3.0",
-    "posthog-js": "1.438.1",
+    "posthog-js": "1.452.0",
     "react": "19.3.0",
     "typescript": "npm:@typescript/typescript6@6.0.2"
   }

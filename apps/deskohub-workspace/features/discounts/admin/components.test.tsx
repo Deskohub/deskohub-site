@@ -1841,6 +1841,7 @@ describe("discount administration pages", () => {
     fireEvent.input(view.getByRole("textbox", { name: "Czech (cs-CZ)" }), {
       target: { value: "Jarní sleva" },
     });
+    fireEvent.click(view.getByRole("checkbox", { name: "Meeting room" }));
     fireEvent.submit(labelEn().closest("form")!);
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
 
@@ -2315,6 +2316,7 @@ describe("discount administration pages", () => {
     fireEvent.input(view.getByRole("textbox", { name: "Czech (cs-CZ)" }), {
       target: { value: "Pevná sleva" },
     });
+    fireEvent.click(view.getByRole("checkbox", { name: "Meeting room" }));
     fireEvent.input(view.getByRole("spinbutton", { name: "Percentage" }), {
       target: { value: "" },
     });
@@ -2331,7 +2333,7 @@ describe("discount administration pages", () => {
             kind: "fixed",
             amount: { value: 10000, exponent: 2, currency: "CZK" },
           },
-          products: [],
+          products: [{ kind: "meeting-room" }],
         },
       })
     );
@@ -2353,7 +2355,7 @@ describe("discount administration pages", () => {
         discount: {
           labels: { "cs-CZ": "Pevná sleva", "en-US": "Fixed promo" },
           adjustment: { kind: "percentage", basisPoints: 1000 },
-          products: [],
+          products: [{ kind: "meeting-room" }],
         },
       })
     );

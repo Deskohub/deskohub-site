@@ -1,5 +1,4 @@
 import { Option } from "effect";
-import type { WorkspaceProductTarget } from "@/features/discounts/product-target";
 import { unitOf } from "@/shared/money/currencies";
 import { type Money, moneyWithValue } from "@/shared/money/money";
 import {
@@ -21,21 +20,22 @@ import type {
 } from "./form-schemas";
 import { toDiscountProductTargets } from "./product-target-options";
 
-/** None when a fixed amount's currency is outside the catalog. */
+/** None when there is no known target or a fixed currency is outside the catalog. */
 export const toCreateDiscountInput = (
   values: DiscountDefinitionFormValues
-): Option.Option<CreateDiscountAdminInput> =>
-  Option.map(toDiscountAdjustment(values), (adjustment) => ({
+): Option.Option<CreateDiscountAdminInput> => {
+  const [first, ...rest] = toDiscountProductTargets(values.products);
+  if (first === undefined) return Option.none();
+
+  return Option.map(toDiscountAdjustment(values), (adjustment) => ({
     labels: {
       "cs-CZ": values.labelCs,
       "en-US": values.labelEn,
     },
     adjustment,
-    products: toDiscountProductTargets(values.products) as [
-      WorkspaceProductTarget,
-      ...WorkspaceProductTarget[],
-    ],
+    products: [first, ...rest],
   }));
+};
 
 const toDiscountAdjustment = (
   values: DiscountDefinitionFormValues

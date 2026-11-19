@@ -5,7 +5,7 @@ import {
   invoiceCancellationNoticeEmailTitle,
 } from "@/emails/invoice-cancellation-notice";
 import type { CorrectiveDocument } from "@/features/accounting/corrective-document";
-import { isManualInvoiceDocument } from "@/features/accounting/invoice";
+import { getInvoiceEmailReference } from "@/features/accounting/invoice";
 import type { InvoiceEmailDeliveryAudience } from "@/features/accounting/invoice-email-delivery";
 import { renderWorkspaceEmail } from "@/shared/backend/email/render-react-email";
 import { internalWorkspaceEmailSubject } from "@/shared/backend/email/workspace-email-recipients";
@@ -25,12 +25,7 @@ export const renderInvoiceCancellationNoticeEmail = (input: {
   const props: InvoiceCancellationNoticeEmailProps = {
     invoiceNumber: correctiveDocument.correctedInvoice.invoiceNumber,
     documentNumber: correctiveDocument.documentNumber,
-    invoice: isManualInvoiceDocument(input.invoice.document)
-      ? { source: "manual" }
-      : {
-          source: "reservation",
-          orderId: input.invoice.workspaceReservationId ?? "",
-        },
+    invoice: getInvoiceEmailReference(input.invoice.document),
     settlement: {
       currency: correctiveDocument.currency,
       settlement: correctiveDocument.settlement,

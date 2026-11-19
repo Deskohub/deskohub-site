@@ -4,7 +4,7 @@ import {
   type InvoiceDeliveryEmailProps,
   invoiceDeliveryEmailTitle,
 } from "@/emails/invoice-delivery";
-import { isManualInvoiceDocument } from "@/features/accounting/invoice";
+import { getInvoiceEmailReference } from "@/features/accounting/invoice";
 import type { InvoiceEmailDeliveryAudience } from "@/features/accounting/invoice-email-delivery";
 import {
   getInvoiceSettlement,
@@ -20,19 +20,18 @@ export const renderInvoiceDeliveryEmail = (input: {
   readonly audience: InvoiceEmailDeliveryAudience;
 }) => {
   const { document } = input.invoice;
+  const reference = getInvoiceEmailReference(document);
   const props: InvoiceDeliveryEmailProps = {
     invoiceNumber: input.invoice.invoiceNumber,
-    invoice: isManualInvoiceDocument(document)
-      ? {
-          source: "manual",
-          requestsPayment: InvoiceSettlement.$is("PaymentRequested")(
-            getInvoiceSettlement(document)
-          ),
-        }
-      : {
-          source: "reservation",
-          orderId: input.invoice.workspaceReservationId ?? "",
-        },
+    invoice:
+      reference.source === "manual"
+        ? {
+            ...reference,
+            requestsPayment: InvoiceSettlement.$is("PaymentRequested")(
+              getInvoiceSettlement(document)
+            ),
+          }
+        : reference,
     recipient:
       input.audience === "customer"
         ? { audience: "customer", locale: document.locale }

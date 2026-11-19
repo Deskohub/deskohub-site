@@ -1,5 +1,14 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { and, asc, desc, eq, isNull, type SQL, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { Effect, Option, Schema } from "effect";
 import {
@@ -9,14 +18,19 @@ import {
 import {
   accountingDocumentSnapshots,
   correctiveDocuments,
+  customerAccounts,
   invoiceArchives,
   invoiceCancellations,
   invoices,
+  manualInvoiceActors,
 } from "@/db/schema";
+import { authUser } from "@/db/schema/auth";
 import type { CorrectiveDocumentNumber } from "@/features/accounting/corrective-document";
 import {
   type InvoiceDocument,
   invoiceDocumentSchema,
+  isEntryPackInvoiceDocument,
+  isLineItemInvoiceDocument,
   isManualInvoiceDocument,
 } from "@/features/accounting/invoice";
 import type {
@@ -319,6 +333,36 @@ export const makeInvoiceReads = Effect.gen(function* () {
     }
   );
 
+  const findManualIssuerProfileLinks = Effect.fn(
+    "InvoiceRepository.findManualIssuerProfileLinks"
+  )((invoiceIds: readonly InvoiceId[]) =>
+    db
+      .select({
+        invoiceId: manualInvoiceActors.invoiceId,
+        customerId: customerAccounts.dotyposCustomerId,
+      })
+      .from(manualInvoiceActors)
+      .innerJoin(
+        customerAccounts,
+        eq(manualInvoiceActors.actorAccountId, customerAccounts.id)
+      )
+      .innerJoin(authUser, eq(customerAccounts.id, authUser.id))
+      .where(
+        and(
+          inArray(manualInvoiceActors.invoiceId, invoiceIds),
+          isNull(customerAccounts.deletedAt),
+          isNull(authUser.deletionRequestedAt)
+        )
+      )
+      .pipe(
+        Effect.map((rows) =>
+          rows.flatMap(({ invoiceId, customerId }) =>
+            customerId ? [{ invoiceId, customerId }] : []
+          )
+        )
+      )
+  );
+
   const listManualInvoiceProvenance = Effect.fn(
     "InvoiceRepository.listManualInvoiceProvenance"
   )(function* () {
@@ -472,6 +516,7 @@ export const makeInvoiceReads = Effect.gen(function* () {
     findLatestByReservationId,
     findLiveByPaymentAttemptId,
     findLiveByReservationId,
+    findManualIssuerProfileLinks,
     list,
     listForCustomer,
     listManualInvoiceProvenance,
@@ -535,8 +580,16 @@ const toCancellationFact = Effect.fn("InvoiceRepository.toCancellationFact")(
 
 /** The invoice when it is a reservation invoice, else `null`. */
 export const asReservationInvoice = (invoice: Invoice | null) =>
-  invoice && !isManualInvoiceDocument(invoice.document)
-    ? ({ ...invoice, document: invoice.document } as ReservationInvoice)
+  invoice &&
+  invoice.workspaceReservationId !== null &&
+  invoice.paymentAttemptId !== null &&
+  !isLineItemInvoiceDocument(invoice.document)
+    ? ({
+        ...invoice,
+        workspaceReservationId: invoice.workspaceReservationId,
+        paymentAttemptId: invoice.paymentAttemptId,
+        document: invoice.document,
+      } satisfies ReservationInvoice)
     : null;
 
 interface StoredInvoiceRow {
@@ -561,13 +614,22 @@ const matchesInvoiceIdentity = ({ document, row }: StoredInvoice) =>
     row.issuedAt
   ) === 0;
 
-const matchesInvoiceSource = ({ document, row }: StoredInvoice) =>
-  isManualInvoiceDocument(document)
-    ? document.invoiceId === row.id &&
+const matchesInvoiceSource = ({ document, row }: StoredInvoice) => {
+  if (isManualInvoiceDocument(document)) {
+    return (
+      document.invoiceId === row.id &&
       row.workspaceReservationId === null &&
       row.paymentAttemptId === null
-    : document.workspaceReservationId === row.workspaceReservationId &&
-      document.paymentAttemptId === row.paymentAttemptId;
+    );
+  }
+  const reservationId = isEntryPackInvoiceDocument(document)
+    ? null
+    : document.workspaceReservationId;
+  return (
+    reservationId === row.workspaceReservationId &&
+    document.paymentAttemptId === row.paymentAttemptId
+  );
+};
 
 const storedInvoiceReference = (
   row: StoredInvoiceRow

@@ -35,6 +35,7 @@
   "accountingInvoiceSourceAdminUi": "Trang quản trị",
   "accountingInvoiceSourceDhwCli": "CLI dhw",
   "accountingInvoiceSourceAssistant": "Trợ lý AI",
+  "accountingInvoiceSourcePassPurchase": "Mua gói lượt vào",
   "accountingInvoiceSourceLegacy": "Bản ghi cũ / không rõ",
   "accountingInvoiceDeliveryNeedsResend": "Cần gửi lại",
   "accountingInvoiceDeliverySent": "Đã gửi",

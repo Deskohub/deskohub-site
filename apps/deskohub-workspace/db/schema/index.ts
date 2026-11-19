@@ -118,6 +118,8 @@ export {
   mockPaymentSessions,
 } from "./mock-payment-sessions";
 export { type NewOrder, type Order, orders } from "./orders";
+export { passEntryClaims } from "./pass-entry-claims";
+export { passPurchases } from "./pass-purchases";
 export {
   type PaymentAttemptRow,
   type PaymentAttemptState,

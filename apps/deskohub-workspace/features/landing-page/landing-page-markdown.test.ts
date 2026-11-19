@@ -5,7 +5,7 @@ import {
   getWorkspaceProductTierTitle,
 } from "@/features/checkout/product-catalog.i18n";
 import { discountIdSchema } from "@/features/discounts/contracts";
-import { workspaceProductFamilies } from "@/features/discounts/product-target";
+import { workspaceReservationProductFamilies } from "@/features/discounts/product-target";
 import { getFaqQuestions } from "@/features/faq";
 import { locales, m } from "@/features/i18n";
 import type { PublicPageMarkdownSources } from "@/features/public-pages/public-page-markdown";
@@ -57,7 +57,7 @@ const renderLandingPage = async (
 /** The banner the HTML page shows for a 20% sale on every cowork product. */
 const coworkSaleBanner = (locale: (typeof locales)[number]) =>
   getLandingPageSaleBannerContent({
-    bookableProducts: workspaceProductFamilies,
+    bookableProducts: workspaceReservationProductFamilies,
     locale,
     reservationKind: "cowork",
     sale: {

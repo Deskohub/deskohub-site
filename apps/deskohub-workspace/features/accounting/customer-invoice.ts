@@ -4,7 +4,7 @@ import type { CorrectiveDocumentNumber } from "@/features/accounting/corrective-
 import {
   type InvoiceDocument,
   type InvoiceNumber,
-  isManualInvoiceDocument,
+  isLineItemInvoiceDocument,
 } from "@/features/accounting/invoice";
 import {
   getInvoicePaymentStatus,
@@ -98,7 +98,7 @@ const workspaceDays = (startsOn: string, endsOn: string) => {
 export const getInvoicedReservation = (
   document: InvoiceDocument
 ): InvoicedReservation | null => {
-  if (isManualInvoiceDocument(document)) return null;
+  if (isLineItemInvoiceDocument(document)) return null;
   return Match.value(document).pipe(
     Match.when(
       { reservation: { kind: "cowork" } },
