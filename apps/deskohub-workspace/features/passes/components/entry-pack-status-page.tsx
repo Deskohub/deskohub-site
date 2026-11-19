@@ -47,19 +47,18 @@ const statusIcons = {
 };
 
 export function EntryPackStatusPage({
+  allowNewPurchase,
   locale,
   status,
   presentation,
 }: {
+  readonly allowNewPurchase: boolean;
   readonly locale: Locale;
   readonly status: OrderStatus;
   readonly presentation: "page" | "modal";
 }) {
   const isPaid = status.status === "paid";
   const isPending = status.status === "pending";
-  const canStartOver = ["cancelled", "expired", "failed"].includes(
-    status.status
-  );
   const Icon = statusIcons[status.status];
   const title = statusTitles[status.status]({}, { locale });
   const lead = isPaid
@@ -154,7 +153,7 @@ export function EntryPackStatusPage({
             </a>
           </Button>
         )}
-        {canStartOver && (
+        {allowNewPurchase && (
           <Button asChild size="lg">
             <a href={`/${locale}/passes/entry-pack`}>
               {m.checkoutStatusTryAgain({}, { locale })}

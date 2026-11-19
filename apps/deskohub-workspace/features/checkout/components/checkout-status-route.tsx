@@ -23,6 +23,7 @@ import type { Locale } from "@/features/i18n";
 import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { loadOrderKind } from "@/features/order/backend/order-kind";
 import { orderIdSchema } from "@/features/order/order";
+import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { loadEntryPackStatusPage } from "@/features/passes/backend/entry-pack-status";
 import { EntryPackStatusPage } from "@/features/passes/components/entry-pack-status-page";
 import { resendReservationInvitation } from "@/features/reservation/actions/resend-reservation-invitation";
@@ -148,11 +149,20 @@ async function renderEntryPackStatus({
   }
 
   return (
-    <EntryPackStatusPage
-      locale={locale}
-      presentation={presentation}
-      status={status}
-    />
+    <>
+      <CheckoutPaymentWindowCoordinator />
+      <EntryPackStatusPage
+        allowNewPurchase={
+          (status.status === "failed" ||
+            status.status === "cancelled" ||
+            status.status === "expired") &&
+          (await isCoworkPassesPageOpenAfterConnection())
+        }
+        locale={locale}
+        presentation={presentation}
+        status={status}
+      />
+    </>
   );
 }
 

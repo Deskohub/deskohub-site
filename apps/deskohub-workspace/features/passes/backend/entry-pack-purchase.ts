@@ -310,6 +310,7 @@ export const readEntryPackCheckoutDraft = Effect.fn(
   }
   return {
     kind: "draft" as const,
+    locale: purchase.locale,
     product: {
       kind: "entry-pack",
       tier: purchase.tier,

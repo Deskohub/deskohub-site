@@ -1802,7 +1802,7 @@
   "entryPackCheckoutBuyer": "खरीदार",
   "entryPackCheckoutBuyerNote": "पैक का भुगतान आप करेंगे और आपके खाते की छूट लागू होगी।",
   "entryPackCheckoutHolder": "पैक धारक",
-  "entryPackCheckoutGift": "मैं किसी और के लिए खरीद रहा हूँ",
+  "entryPackCheckoutGift": "यह खरीदारी किसी और के लिए है",
   "entryPackCheckoutHolderEmail": "धारक का ईमेल",
   "entryPackCheckoutGiftNote": "हम पैक इस ईमेल पते को सौंपेंगे। केवल धारक ही इसका इस्तेमाल कर सकता है।",
   "entryPackCheckoutBilling": "बिल का विवरण",

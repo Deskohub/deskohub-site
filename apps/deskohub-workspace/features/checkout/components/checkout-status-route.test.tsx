@@ -252,6 +252,12 @@ mock.module("@/features/passes/backend/entry-pack-status", () => ({
     return Promise.resolve(passStatus);
   },
 }));
+mock.module(
+  "@/features/passes/backend/cowork-passes-release-gate.server",
+  () => ({
+    isCoworkPassesPageOpenAfterConnection: async () => true,
+  })
+);
 
 const { CheckoutStatusRoute } = await import("./checkout-status-route");
 const { getReservationStatusSignInPath } = signIn;

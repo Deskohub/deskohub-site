@@ -13,6 +13,7 @@ import { readEntryPackCheckoutDraft } from "@/features/passes/backend/entry-pack
 import { EntryPackCheckout } from "@/features/passes/components/entry-pack-checkout";
 import {
   type EntryPackBuyer,
+  getEntryPackDetailsPath,
   readEntryPackSelection,
 } from "@/features/passes/entry-pack-checkout";
 import {
@@ -44,11 +45,14 @@ export default async function EntryPackPage({
 }: {
   readonly searchParams: Promise<Query>;
 }) {
-  return runWithRequestLocale((locale) => (
-    <Suspense fallback={null}>
-      <EntryPackPageContent locale={locale} searchParams={searchParams} />
-    </Suspense>
-  ));
+  return runWithRequestLocale(async (locale) => {
+    if (!(await isCoworkPassesPageOpenAfterConnection())) notFound();
+    return (
+      <Suspense fallback={null}>
+        <EntryPackPageContent locale={locale} searchParams={searchParams} />
+      </Suspense>
+    );
+  });
 }
 
 const readBuyer = Effect.fn("readEntryPackBuyer")(function* () {
@@ -89,7 +93,6 @@ async function EntryPackPageContent({
   readonly locale: Locale;
   readonly searchParams: Promise<Query>;
 }) {
-  if (!(await isCoworkPassesPageOpenAfterConnection())) notFound();
   const query = await searchParams;
   const orderId = Schema.is(orderIdSchema)(query.order)
     ? query.order
@@ -138,6 +141,9 @@ async function EntryPackPageContent({
     )
   );
   if (draft?.kind === "missing") notFound();
+  if (orderId && draft?.kind === "draft" && draft.locale !== locale) {
+    redirect(getEntryPackDetailsPath(draft.locale, draft.product, orderId));
+  }
   if (orderId && draft?.kind === "status") {
     redirect(`/${locale}${reservationStatusPath}/${orderId}`);
   }
