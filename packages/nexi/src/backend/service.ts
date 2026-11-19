@@ -293,17 +293,24 @@ const makeNexiService = Effect.gen(function* () {
       );
       const orderId = reportedOrderId ?? input.orderId;
       const status: Omit<OrderStatus, "order"> = response.orderStatus ?? {};
+      const order = response.orderStatus?.order;
+      const amount = response.amount ?? order;
+      const amountMatchesOrder =
+        order === undefined ||
+        (amount?.amount === order.amount &&
+          amount?.currency === order.currency);
       const operations = yield* Effect.forEach(
         response.operations ?? [],
         (operation) => toNexiOperation(operation, orderId)
       );
       const result: NexiOrder = {
         orderId,
-        ...toNexiAmountFields(response.amount ?? response.orderStatus?.order),
+        ...toNexiAmountFields(amount),
         ...toNexiOrderProgress(status),
         operations,
         ...(reportedOrderId !== undefined &&
-          (response.orderId === undefined || response.orderId === orderId) && {
+          (response.orderId === undefined || response.orderId === orderId) &&
+          amountMatchesOrder && {
             reportedStatus: {
               orderId: reportedOrderId,
               authorizedAmount: status.authorizedAmount,

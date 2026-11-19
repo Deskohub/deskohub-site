@@ -275,6 +275,27 @@ describe("PaymentRetryProviderCheck", () => {
   });
 
   test.each([
+    ["different amounts", { ...reportedAmount, amount: "1" }, "may_settle"],
+    [
+      "different currencies",
+      { ...reportedAmount, currency: "USD" },
+      "may_settle",
+    ],
+    ["matching amount and currency", reportedAmount, "ended_unpaid"],
+  ] as const)(
+    "checks both reported amount fields with %s",
+    async (_description, orderAmount, decision) => {
+      expect(
+        await checkNexiResponse({
+          amount: reportedAmount,
+          orderStatus: { order: { ...orderAmount, orderId: providerOrderId } },
+          operations: [],
+        })
+      ).toMatchObject({ success: decision });
+    }
+  );
+
+  test.each([
     new Error("network"),
     new ExternalAPIError({
       service: "Nexi",
