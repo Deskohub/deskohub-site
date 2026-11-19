@@ -14,5 +14,4 @@ const coworkPassesRequest = releaseGateForRequest(CoworkPassesReleaseGate, {
   failureCode: "passes.cowork-passes-release-gate",
 });
 
-export const isCoworkPassesPageEnabled = coworkPassesRequest.decision;
 export const isCoworkPassesPageOpenAfterConnection = coworkPassesRequest.isOpen;

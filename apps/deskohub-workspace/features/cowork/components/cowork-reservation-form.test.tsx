@@ -2851,7 +2851,7 @@ describe("CoworkReservationFormFallback", () => {
       <CoworkReservationFormFallback locale="cs-CZ" />
     );
     // The shell HTML escapes text the way React writes it.
-    const shellText = (text: string) => renderToStaticMarkup(<>{text}</>);
+    const shellText = (text: string) => renderToStaticMarkup(text);
 
     for (const tier of workspaceCoworkCurrentTiers) {
       expect(html).toContain(

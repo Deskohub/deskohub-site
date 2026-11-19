@@ -12,7 +12,7 @@ import {
   passTiers,
 } from "./pass-offer";
 
-export const entryPackCheckoutPath = "/passes/entry-pack";
+const entryPackCheckoutPath = "/passes/entry-pack";
 
 export function readEntryPackSelection(query: {
   readonly tier?: string | string[];
