@@ -1840,6 +1840,8 @@
   "passEmailRefundTerms": "Erstattungsbedingungen",
   "passEmailPaidByCard": "Mit Karte bezahlt",
   "passEmailInvoice": "Ihre Rechnung erhalten Sie in einer separaten E-Mail.",
+  "entryPackStatusPaidTitle": "Dein Eintrittspaket ist bezahlt",
+  "entryPackStatusPaidGiftLead": "Du hast dieses Eintrittspaket für jemand anderen gekauft. Nur diese Person kann es nutzen.",
   "entryPackStatusPendingLead": "Wir warten auf die Zahlungsbestätigung von Nexi. Diese Seite aktualisiert sich automatisch. Falls die Zahlungsseite noch offen ist, schließ die Zahlung dort ab.",
   "entryPackStatusRetryLead": "Die Zahlung wurde nicht abgeschlossen. Du kannst ein neues Eintrittspaket kaufen.",
   "entryPackStatusRefundLead": "Deine Zahlung ging nach Abschluss der Bestellung ein. Wir konnten das Eintrittspaket nicht ausstellen und erstatten dir die Zahlung.",

@@ -1840,6 +1840,8 @@
   "passEmailRefundTerms": "Refund terms",
   "passEmailPaidByCard": "Paid by card",
   "passEmailInvoice": "Your invoice comes in a separate email.",
+  "entryPackStatusPaidTitle": "Your Entry pack is paid",
+  "entryPackStatusPaidGiftLead": "You bought this Entry pack for someone else. Only they can use it.",
   "entryPackStatusPendingLead": "We're waiting for Nexi to confirm your payment. This page updates automatically. If your payment page is still open, finish the payment there.",
   "entryPackStatusRetryLead": "The payment wasn't completed. You can start a new Entry pack purchase.",
   "entryPackStatusRefundLead": "Your payment arrived after the order ended. We couldn't issue the Entry pack and will refund the payment.",

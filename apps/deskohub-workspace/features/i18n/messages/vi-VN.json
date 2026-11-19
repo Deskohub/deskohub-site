@@ -1822,6 +1822,8 @@
   "passEmailRefundTerms": "Điều khoản hoàn tiền",
   "passEmailPaidByCard": "Đã thanh toán bằng thẻ",
   "passEmailInvoice": "Hóa đơn sẽ được gửi qua email riêng.",
+  "entryPackStatusPaidTitle": "Gói lượt vào của bạn đã được thanh toán",
+  "entryPackStatusPaidGiftLead": "Bạn đã mua gói này cho người khác. Chỉ người đó mới có thể sử dụng gói.",
   "entryPackStatusPendingLead": "Chúng tôi đang chờ Nexi xác nhận khoản thanh toán của bạn. Trang này tự cập nhật. Nếu trang thanh toán vẫn mở, hãy hoàn tất thanh toán ở đó.",
   "entryPackStatusRetryLead": "Thanh toán chưa hoàn tất. Bạn có thể bắt đầu mua gói lượt vào mới.",
   "entryPackStatusRefundLead": "Khoản thanh toán đến sau khi đơn hàng đã đóng. Chúng tôi không thể cấp gói lượt vào và sẽ hoàn tiền cho bạn.",

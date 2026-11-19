@@ -19,7 +19,7 @@ type OrderStatus = Exclude<
 >;
 
 const statusTitles = {
-  paid: m.passEmailSubject,
+  paid: m.entryPackStatusPaidTitle,
   pending: m.checkoutStatusPendingTitle,
   cancelled: m.checkoutStatusCancelledTitle,
   expired: m.checkoutStatusExpiredTitle,
@@ -63,7 +63,7 @@ export function EntryPackStatusPage({
   const Icon = statusIcons[status.status];
   const title = statusTitles[status.status]({}, { locale });
   const lead = isPaid
-    ? status.gift && m.passEmailGiftBody({}, { locale })
+    ? status.gift && m.entryPackStatusPaidGiftLead({}, { locale })
     : statusLeads[status.status]({}, { locale });
   const content = (
     <div

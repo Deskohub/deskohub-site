@@ -31,6 +31,7 @@ export function EntryPackPay({
   locale,
   orderId,
   state,
+  discountCodeEntryEnabled,
   headingRef,
   onExpire,
   onRequestPayment,
@@ -38,6 +39,7 @@ export function EntryPackPay({
   readonly locale: Locale;
   readonly orderId: OrderId;
   readonly state: EntryPackPayState;
+  readonly discountCodeEntryEnabled: boolean;
   readonly headingRef: Ref<HTMLHeadingElement>;
   readonly onExpire: () => void;
   readonly onRequestPayment: () => void;
@@ -205,54 +207,55 @@ export function EntryPackPay({
           />
         </CheckoutSummarySection>
       </CheckoutSummarySections>
-      {submittedCode ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-aquamarine-green/40 bg-aquamarine-green/15 p-3 text-sm">
-          <span>
-            {m.entryPackCheckoutCodeApplied(
-              { code: submittedCode },
-              { locale }
-            )}
-          </span>
-          <Button
-            disabled={busy || expired}
-            variant="link"
-            type="button"
-            onClick={() => updateCode()}
-          >
-            {m.checkoutDiscountCodeRemove({}, { locale })}
-          </Button>
-        </div>
-      ) : (
-        <form
-          className="space-y-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (draft.trim() && !busy && !expired) updateCode(draft);
-          }}
-        >
-          <label htmlFor={codeId} className="font-semibold text-sm">
-            {m.checkoutDiscountCodeLabel({}, { locale })}
-          </label>
-          <div className="flex flex-wrap gap-2">
-            <Input
-              id={codeId}
-              disabled={busy || expired}
-              className="min-w-40 flex-1"
-              autoComplete="off"
-              maxLength={160}
-              value={draft}
-              onChange={(event) => setDraft(event.currentTarget.value)}
-            />
+      {discountCodeEntryEnabled &&
+        (submittedCode ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-aquamarine-green/40 bg-aquamarine-green/15 p-3 text-sm">
+            <span>
+              {m.entryPackCheckoutCodeApplied(
+                { code: submittedCode },
+                { locale }
+              )}
+            </span>
             <Button
-              disabled={!draft.trim() || busy || expired}
-              variant="secondary"
-              type="submit"
+              disabled={busy || expired}
+              variant="link"
+              type="button"
+              onClick={() => updateCode()}
             >
-              {m.checkoutDiscountCodeApply({}, { locale })}
+              {m.checkoutDiscountCodeRemove({}, { locale })}
             </Button>
           </div>
-        </form>
-      )}
+        ) : (
+          <form
+            className="space-y-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (draft.trim() && !busy && !expired) updateCode(draft);
+            }}
+          >
+            <label htmlFor={codeId} className="font-semibold text-sm">
+              {m.checkoutDiscountCodeLabel({}, { locale })}
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                id={codeId}
+                disabled={busy || expired}
+                className="min-w-40 flex-1"
+                autoComplete="off"
+                maxLength={160}
+                value={draft}
+                onChange={(event) => setDraft(event.currentTarget.value)}
+              />
+              <Button
+                disabled={!draft.trim() || busy || expired}
+                variant="secondary"
+                type="submit"
+              >
+                {m.checkoutDiscountCodeApply({}, { locale })}
+              </Button>
+            </div>
+          </form>
+        ))}
       {price.total.value > 0 && <CheckoutPayProviderHandoff locale={locale} />}
       <div className="space-y-6">
         {error && (

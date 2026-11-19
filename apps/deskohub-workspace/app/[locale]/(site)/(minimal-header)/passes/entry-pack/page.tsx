@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
+import { getDiscountCodeEntryEnabled } from "@/features/discounts/discount-code-entry.server";
 import { type Locale, m } from "@/features/i18n";
 import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { orderIdSchema } from "@/features/order";
@@ -27,13 +28,6 @@ import { currentInstant } from "@/shared/utils/temporal";
 
 export const instant = false;
 
-export async function generateMetadata(): Promise<Metadata> {
-  return runWithRequestLocale((locale) => ({
-    title: m.entryPackCheckoutTitle({}, { locale }),
-    robots: { index: false, follow: false },
-  }));
-}
-
 type Query = {
   readonly tier?: string | string[];
   readonly size?: string | string[];
@@ -41,19 +35,39 @@ type Query = {
   readonly order?: string | string[];
 };
 
+const requireEntryPackPageOpen = async (
+  locale: Locale,
+  searchParams: Promise<Query>
+) => {
+  if (await isCoworkPassesPageOpenAfterConnection()) return;
+  const { order } = await searchParams;
+  if (Schema.is(orderIdSchema)(order)) {
+    redirect(`/${locale}${reservationStatusPath}/${order}`);
+  }
+  notFound();
+};
+
+export async function generateMetadata({
+  searchParams,
+}: {
+  readonly searchParams: Promise<Query>;
+}): Promise<Metadata> {
+  return runWithRequestLocale(async (locale) => {
+    await requireEntryPackPageOpen(locale, searchParams);
+    return {
+      title: m.entryPackCheckoutTitle({}, { locale }),
+      robots: { index: false, follow: false },
+    };
+  });
+}
+
 export default async function EntryPackPage({
   searchParams,
 }: {
   readonly searchParams: Promise<Query>;
 }) {
   return runWithRequestLocale(async (locale) => {
-    if (!(await isCoworkPassesPageOpenAfterConnection())) {
-      const { order } = await searchParams;
-      if (Schema.is(orderIdSchema)(order)) {
-        redirect(`/${locale}${reservationStatusPath}/${order}`);
-      }
-      notFound();
-    }
+    await requireEntryPackPageOpen(locale, searchParams);
     return (
       <Suspense fallback={null}>
         <EntryPackPageContent locale={locale} searchParams={searchParams} />
@@ -105,50 +119,53 @@ async function EntryPackPageContent({
     ? query.order
     : undefined;
   if (query.order !== undefined && !orderId) notFound();
-  const { buyer, validity, draft } = await runWorkspaceEffectOrElse(
-    "passes.entry-pack-page",
-    {
+  const { buyer, validity, draft, discountCodeEntryEnabled } =
+    await runWorkspaceEffectOrElse("passes.entry-pack-page", {
       failureCode: "entry_pack_page_unavailable",
       orElse: () => ({
         buyer: { kind: "unavailable" } as const,
         validity: {},
         draft: undefined,
+        discountCodeEntryEnabled: false,
       }),
-    }
-  )(
-    Effect.gen(function* () {
-      const now = yield* currentInstant;
-      const buyer = yield* readBuyer();
-      const draft =
-        orderId &&
-        (buyer.kind === "linked" || buyer.kind === "profile-required")
-          ? yield* readEntryPackCheckoutDraft(orderId).pipe(
-              Effect.catchTag("EntryPackPurchaseError", () =>
-                Effect.succeed({ kind: "missing" as const })
+    })(
+      Effect.gen(function* () {
+        const now = yield* currentInstant;
+        const buyer = yield* readBuyer();
+        const draft =
+          orderId &&
+          (buyer.kind === "linked" || buyer.kind === "profile-required")
+            ? yield* readEntryPackCheckoutDraft(orderId).pipe(
+                Effect.catchTag("EntryPackPurchaseError", () =>
+                  Effect.succeed({ kind: "missing" as const })
+                )
               )
-            )
-          : undefined;
-      const validity = Object.fromEntries(
-        entryPackOffers
-          .filter(({ product }) => product.tier === "open-space")
-          .map(({ product }) => [
-            product.size,
-            getEntryPackLastUsableDate(
-              getEntryPackValidity(now, product.size).validUntil
-            ).toString(),
-          ])
-      );
-      return { buyer, validity, draft };
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          WorkspaceDatabase.Default,
-          CurrentCustomerAccount.Live,
-          CustomerAccountContactService.Live
+            : undefined;
+        const validity = Object.fromEntries(
+          entryPackOffers
+            .filter(({ product }) => product.tier === "open-space")
+            .map(({ product }) => [
+              product.size,
+              getEntryPackLastUsableDate(
+                getEntryPackValidity(now, product.size).validUntil
+              ).toString(),
+            ])
+        );
+        const discountCodeEntryEnabled =
+          yield* getDiscountCodeEntryEnabled.pipe(
+            Effect.orElseSucceed(() => false)
+          );
+        return { buyer, validity, draft, discountCodeEntryEnabled };
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            WorkspaceDatabase.Default,
+            CurrentCustomerAccount.Live,
+            CustomerAccountContactService.Live
+          )
         )
       )
-    )
-  );
+    );
   if (draft?.kind === "missing") notFound();
   if (orderId && draft?.kind === "draft" && draft.locale !== locale) {
     redirect(getEntryPackDetailsPath(draft.locale, draft.product, orderId));
@@ -179,6 +196,7 @@ async function EntryPackPageContent({
           : undefined
       }
       validity={validity}
+      discountCodeEntryEnabled={discountCodeEntryEnabled}
     />
   );
 }

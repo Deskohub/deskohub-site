@@ -45,6 +45,7 @@ export function EntryPackCheckout({
   initialProduct,
   initialStep,
   validity,
+  discountCodeEntryEnabled,
   continuation,
 }: {
   readonly buyer: EntryPackBuyer;
@@ -52,6 +53,7 @@ export function EntryPackCheckout({
   readonly initialProduct: EntryPackProduct;
   readonly initialStep: Exclude<Step, "pay">;
   readonly validity: Partial<Record<EntryPackSize, string>>;
+  readonly discountCodeEntryEnabled: boolean;
   readonly continuation?: {
     readonly orderId: OrderId;
     readonly holderEmail?: string;
@@ -59,6 +61,7 @@ export function EntryPackCheckout({
   };
 }) {
   const [product, setProduct] = useState(initialProduct);
+  const [savedOrderId, setSavedOrderId] = useState(continuation?.orderId);
   const [confirmedValidity, setConfirmedValidity] = useState(
     continuation?.validUntil
   );
@@ -109,11 +112,6 @@ export function EntryPackCheckout({
     }
     const { orderId } = attempt.current;
     const revision = ++detailsRevision.current;
-    window.history.replaceState(
-      null,
-      "",
-      getEntryPackDetailsPath(locale, product, orderId)
-    );
     try {
       const result = await beginEntryPackCheckout({
         orderId,
@@ -130,7 +128,11 @@ export function EntryPackCheckout({
         window.location.assign(
           getAccountSignInPath(
             locale,
-            getEntryPackDetailsPath(locale, product, continuation?.orderId)
+            getEntryPackDetailsPath(
+              locale,
+              product,
+              savedOrderId === orderId ? savedOrderId : undefined
+            )
           )
         );
         return;
@@ -141,6 +143,7 @@ export function EntryPackCheckout({
           "",
           getEntryPackDetailsPath(locale, result.data.product, orderId)
         );
+        setSavedOrderId(orderId);
         setDetails(values);
         setConfirmedValidity(result.data.lastUsableDate);
         setPaymentRequested(false);
@@ -207,6 +210,7 @@ export function EntryPackCheckout({
           validity={displayedValidity}
           onChange={(next) => {
             attempt.current = undefined;
+            setSavedOrderId(undefined);
             setConfirmedValidity(undefined);
             window.history.replaceState(
               null,
@@ -225,7 +229,7 @@ export function EntryPackCheckout({
           product={product}
           validUntil={displayedValidity[product.size]}
           initialValues={details}
-          orderId={continuation?.orderId}
+          orderId={savedOrderId}
           error={error}
           onChangeSelection={() => moveTo("choose")}
           onSubmit={submitDetails}
@@ -236,10 +240,12 @@ export function EntryPackCheckout({
           locale={locale}
           orderId={payment.orderId}
           state={payment.state}
+          discountCodeEntryEnabled={discountCodeEntryEnabled}
           headingRef={heading}
           onRequestPayment={() => setPaymentRequested(true)}
           onExpire={() => {
             attempt.current = undefined;
+            setSavedOrderId(undefined);
             setConfirmedValidity(undefined);
             window.history.replaceState(
               null,
