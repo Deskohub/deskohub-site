@@ -1811,7 +1811,7 @@
   "entryPackCheckoutCodeApplied": "Code {code} applied",
   "entryPackCheckoutQuoteExpired": "This quote expired. Return to Details to get a new price.",
   "entryPackCheckoutRefreshQuote": "Back to details",
-  "entryPackCheckoutTermsChanged": "The terms changed. Return to Details and review the current terms before paying.",
+  "entryPackCheckoutTermsChanged": "The terms changed. Review the current terms and confirm them again before paying.",
   "passEntryPack": "Entry pack",
   "passUnlimited": "Unlimited pass",
   "passTierOpenSpace": "Open Space",

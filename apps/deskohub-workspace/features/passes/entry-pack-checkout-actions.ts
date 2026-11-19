@@ -13,11 +13,7 @@ import { checkoutSubmitDeadline } from "@/features/checkout/backend/checkout/che
 import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
-import {
-  canonicalPromotionCodeSchema,
-  type DiscountQuote,
-  discountQuoteCodec,
-} from "@/features/discounts/contracts";
+import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { normalizeSubmittedPromotionCode } from "@/features/discounts/promotion-code";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
@@ -40,6 +36,11 @@ import {
   payEntryPackCheckoutSchema,
   repriceEntryPackCheckoutSchema,
 } from "./entry-pack-checkout";
+import {
+  type EntryPackPurchaseQuote,
+  entryPackPurchaseQuoteCodec,
+} from "./entry-pack-purchase-quote";
+import { getEntryPackLastUsableDate } from "./pass-offer";
 
 const purchaseLayer = Layer.mergeAll(
   WorkspaceDatabase.Default,
@@ -72,10 +73,13 @@ const payLayer = Layer.mergeAll(
   WorkspaceNexiLayer
 );
 
-const displayPrice = (quote: DiscountQuote): EntryPackCheckoutPrice => ({
+const displayPrice = (
+  quote: EntryPackPurchaseQuote
+): EntryPackCheckoutPrice => ({
   fingerprint: getEntryPackPriceFingerprint(quote),
   subtotal: quote.discountableSubtotal,
   total: quote.discountedSubtotal,
+  submittedCode: quote.selection?.submittedCode,
   discounts: quote.discounts.map(({ discount, amount }) => ({
     id: discount.id,
     label: discount.label,
@@ -97,8 +101,15 @@ const purchaseFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.catchIf(
       (error): error is E & EntryPackPurchaseError =>
         error instanceof EntryPackPurchaseError,
-      ({ reason }) =>
-        Effect.succeed({ status: "purchase_error" as const, reason })
+      ({ reason, locale }) =>
+        Effect.succeed(
+          reason === "terms-changed" && locale
+            ? {
+                status: "terms_changed" as const,
+                disclosure: getEntryPackPaymentDisclosure(locale),
+              }
+            : { status: "purchase_error" as const, reason }
+        )
     ),
     Effect.catchIf(
       (error): error is typeof error & CustomerAccountAccessError =>
@@ -128,14 +139,21 @@ const beginAction = defineWorkspaceAction(
           ...input,
           ...(referralCode && { referralCode }),
         });
-        const quote = yield* Schema.decodeEffect(discountQuoteCodec)(
+        const quote = yield* Schema.decodeEffect(entryPackPurchaseQuoteCodec)(
           purchase.quote
         );
         return {
           status: "ready" as const,
+          product: {
+            kind: "entry-pack" as const,
+            tier: purchase.tier,
+            size: purchase.entryCount,
+          },
           price: displayPrice(quote),
           validFrom: purchase.validFrom.toString(),
-          validUntil: purchase.validUntil.toString(),
+          lastUsableDate: getEntryPackLastUsableDate(
+            purchase.validUntil
+          ).toString(),
           disclosure: getEntryPackPaymentDisclosure(purchase.locale),
         };
       })
@@ -167,7 +185,6 @@ const repriceAction = defineWorkspaceAction(
         return {
           status: result.status,
           price: displayPrice(result.quote),
-          submittedCode,
         };
       }).pipe(
         Effect.catchTag("PromotionCodeUnavailableError", () =>
@@ -187,17 +204,7 @@ const payAction = defineWorkspaceAction(
   (input) =>
     purchaseFailure(
       Effect.gen(function* () {
-        const referralCode = yield* readReferralCode;
-        const submittedCode = Option.getOrUndefined(
-          yield* normalizeSubmittedPromotionCode({
-            submittedCode: input.submittedCode,
-          })
-        );
-        const result = yield* payForEntryPack({
-          ...input,
-          ...(referralCode && { referralCode }),
-          submittedCode,
-        });
+        const result = yield* payForEntryPack(input);
         if (result.status === "pricing_changed") {
           return { status: result.status, price: displayPrice(result.quote) };
         }

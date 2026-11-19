@@ -1793,7 +1793,7 @@
   "entryPackCheckoutCodeApplied": "Đã áp dụng mã {code}",
   "entryPackCheckoutQuoteExpired": "Báo giá đã hết hạn. Quay lại phần thông tin để xem giá mới.",
   "entryPackCheckoutRefreshQuote": "Quay lại phần thông tin",
-  "entryPackCheckoutTermsChanged": "Điều khoản đã thay đổi. Quay lại phần thông tin và xem điều khoản hiện hành trước khi thanh toán.",
+  "entryPackCheckoutTermsChanged": "Điều khoản đã thay đổi. Hãy xem và xác nhận lại điều khoản hiện hành trước khi thanh toán.",
   "passEntryPack": "Gói lượt vào",
   "passUnlimited": "Thẻ không giới hạn",
   "passTierOpenSpace": "Open Space",

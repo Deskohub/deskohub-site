@@ -9,9 +9,9 @@ import {
   text,
 } from "drizzle-orm/pg-core";
 import type { CustomerAccountId } from "@/features/account/customer-account";
-import type { discountQuoteCodec } from "@/features/discounts/contracts";
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
+import type { entryPackPurchaseQuoteCodec } from "@/features/passes/entry-pack-purchase-quote";
 import { type PassStatus, passStatuses } from "@/features/passes/pass";
 import {
   type EntryPackSize,
@@ -49,7 +49,9 @@ export const passPurchases = pgTable(
     validUntil: date("valid_until", { mode: "string" })
       .notNull()
       .$type<PlainDate>(),
-    quote: jsonb("quote").notNull().$type<typeof discountQuoteCodec.Encoded>(),
+    quote: jsonb("quote")
+      .notNull()
+      .$type<typeof entryPackPurchaseQuoteCodec.Encoded>(),
     locale: text("locale").notNull().$type<Locale>(),
     createdAt: instant("created_at").notNull(),
   },

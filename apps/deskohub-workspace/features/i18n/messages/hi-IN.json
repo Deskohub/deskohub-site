@@ -1811,7 +1811,7 @@
   "entryPackCheckoutCodeApplied": "कोड {code} लागू हुआ",
   "entryPackCheckoutQuoteExpired": "यह कीमत अब मान्य नहीं है। नई कीमत देखने के लिए विवरण पर लौटें।",
   "entryPackCheckoutRefreshQuote": "विवरण पर लौटें",
-  "entryPackCheckoutTermsChanged": "शर्तें बदल गई हैं। विवरण पर लौटें और भुगतान से पहले मौजूदा शर्तें पढ़ें।",
+  "entryPackCheckoutTermsChanged": "शर्तें बदल गई हैं। भुगतान से पहले मौजूदा शर्तें पढ़ें और उनकी फिर से पुष्टि करें.",
   "passEntryPack": "प्रवेश पैक",
   "passUnlimited": "असीमित पास",
   "passTierOpenSpace": "Open Space",

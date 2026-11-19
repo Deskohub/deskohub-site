@@ -103,3 +103,7 @@ export const getEntryPackValidity = (
     ),
   };
 };
+
+/** The last Prague date covered by the pack's exclusive expiry boundary. */
+export const getEntryPackLastUsableDate = (validUntil: string) =>
+  Temporal.PlainDate.from(validUntil).subtract({ days: 1 });

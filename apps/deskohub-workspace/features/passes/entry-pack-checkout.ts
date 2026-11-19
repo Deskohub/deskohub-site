@@ -49,6 +49,7 @@ export type EntryPackCheckoutPrice = {
   readonly fingerprint: string;
   readonly subtotal: Money;
   readonly total: Money;
+  readonly submittedCode?: string;
   readonly discounts: ReadonlyArray<{
     readonly id: string;
     readonly label: string;
@@ -91,7 +92,6 @@ export const repriceEntryPackCheckoutSchema = Schema.Struct({
 
 export const payEntryPackCheckoutSchema = Schema.Struct({
   ...entryPackOrderFields,
-  submittedCode,
   accepted: Schema.Boolean,
   acceptedDocuments: Schema.Array(
     Schema.Struct({

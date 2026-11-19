@@ -75,11 +75,13 @@ export function EntryPackCheckout({
   const [error, setError] = useState<string>();
   const [paymentRequested, setPaymentRequested] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const detailsRevision = useRef(0);
   const attempt = useRef<{ orderId: OrderId; holderEmail?: string }>(
     continuation
   );
 
   const moveTo = (next: Step) => {
+    detailsRevision.current += 1;
     setError(undefined);
     setStep(next);
     // Focus the next heading after React commits the selected step.
@@ -100,6 +102,12 @@ export function EntryPackCheckout({
       };
     }
     const { orderId } = attempt.current;
+    const revision = ++detailsRevision.current;
+    window.history.replaceState(
+      null,
+      "",
+      getEntryPackDetailsPath(locale, product, orderId)
+    );
     try {
       const result = await beginEntryPackCheckout({
         orderId,
@@ -111,6 +119,7 @@ export function EntryPackCheckout({
           buyerProfile: values.buyerProfile,
         }),
       });
+      if (detailsRevision.current !== revision) return;
       if (result.data?.status === "signed_out") {
         window.location.assign(
           getAccountSignInPath(
@@ -124,7 +133,7 @@ export function EntryPackCheckout({
         window.history.replaceState(
           null,
           "",
-          getEntryPackDetailsPath(locale, product, orderId)
+          getEntryPackDetailsPath(locale, result.data.product, orderId)
         );
         setDetails(values);
         setPaymentRequested(false);
@@ -143,7 +152,9 @@ export function EntryPackCheckout({
         result.serverError ?? m.actionFailedUnexpectedly({}, { locale })
       );
     } catch {
-      setError(m.actionFailedUnexpectedly({}, { locale }));
+      if (detailsRevision.current === revision) {
+        setError(m.actionFailedUnexpectedly({}, { locale }));
+      }
     }
   };
 
@@ -220,7 +231,6 @@ export function EntryPackCheckout({
         <EntryPackPay
           locale={locale}
           orderId={payment.orderId}
-          product={product}
           state={payment.state}
           headingRef={heading}
           onRequestPayment={() => setPaymentRequested(true)}

@@ -10,6 +10,7 @@ import {
   formatPlainDateRange,
 } from "@/shared/utils/date-time-format";
 import type { EntryPackStatus } from "../backend/entry-pack-status";
+import { getEntryPackLastUsableDate } from "../pass-offer";
 import { getPassTierName } from "../pass-offer.i18n";
 
 type OrderStatus = Exclude<
@@ -105,9 +106,7 @@ export function EntryPackStatusPage({
                 dates: formatPlainDateRange({
                   locale,
                   start: Temporal.PlainDate.from(status.validFrom),
-                  end: Temporal.PlainDate.from(status.validUntil).subtract({
-                    days: 1,
-                  }),
+                  end: getEntryPackLastUsableDate(status.validUntil),
                 }),
               },
               { locale }

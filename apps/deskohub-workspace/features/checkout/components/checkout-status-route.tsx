@@ -149,20 +149,17 @@ async function renderEntryPackStatus({
   }
 
   return (
-    <>
-      <CheckoutPaymentWindowCoordinator />
-      <EntryPackStatusPage
-        allowNewPurchase={
-          (status.status === "failed" ||
-            status.status === "cancelled" ||
-            status.status === "expired") &&
-          (await isCoworkPassesPageOpenAfterConnection())
-        }
-        locale={locale}
-        presentation={presentation}
-        status={status}
-      />
-    </>
+    <EntryPackStatusPage
+      allowNewPurchase={
+        (status.status === "failed" ||
+          status.status === "cancelled" ||
+          status.status === "expired") &&
+        (await isCoworkPassesPageOpenAfterConnection())
+      }
+      locale={locale}
+      presentation={presentation}
+      status={status}
+    />
   );
 }
 

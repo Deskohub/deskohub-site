@@ -1829,7 +1829,7 @@
   "entryPackCheckoutCodeApplied": "Kód {code} byl uplatněn",
   "entryPackCheckoutQuoteExpired": "Platnost této nabídky vypršela. Vraťte se k údajům a získejte aktuální cenu.",
   "entryPackCheckoutRefreshQuote": "Zpět k údajům",
-  "entryPackCheckoutTermsChanged": "Podmínky se změnily. Vraťte se k údajům a před platbou si přečtěte aktuální podmínky.",
+  "entryPackCheckoutTermsChanged": "Podmínky se změnily. Před platbou si přečtěte aktuální znění a znovu je potvrďte.",
   "passEntryPack": "Balíček vstupů",
   "passUnlimited": "Neomezené členství",
   "passTierOpenSpace": "Open Space",

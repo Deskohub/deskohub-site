@@ -1,6 +1,7 @@
 import "@/shared/polyfills/temporal";
 
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Context, Effect, Layer } from "effect";
 import type { ReactNode } from "react";
 import { prerender } from "react-dom/static";
@@ -10,6 +11,7 @@ import { orderIdSchema } from "@/features/order";
 import type { EntryPackStatus } from "@/features/passes/backend/entry-pack-status";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
 import type { ReservationWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
+import { maskEmailAddress } from "@/shared/utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 
 mock.module("server-only", () => ({}));
@@ -458,12 +460,13 @@ describe("CheckoutStatusRoute", () => {
   });
 
   test("renders the paid gift details for the buyer", async () => {
+    const holder = maskEmailAddress(testEmailAddress("pack-holder"));
     orderKind = "pass-purchase";
     passStatus = {
       ...passOrder,
       status: "paid",
       gift: true,
-      maskedHolderEmail: "p…@example.invalid",
+      maskedHolderEmail: holder,
       paidAt: Temporal.Instant.from("2026-11-19T12:00:00Z"),
       validFrom: plainDateStringSchema.make("2026-11-19"),
       validUntil: plainDateStringSchema.make("2027-01-19"),
@@ -474,7 +477,8 @@ describe("CheckoutStatusRoute", () => {
     expect(errors).toEqual([]);
     expect(html).toContain('data-entry-pack-status="paid"');
     expect(html).toContain("Your Entry pack is paid");
-    expect(html).toContain("p…@example.invalid");
+    expect(html).toContain(holder);
+    expect(html.match(/data-payment-window=/g)).toHaveLength(1);
     expect(html).toContain("Paid on");
     expect(html).toContain('data-auto-refresh="false"');
     expect(html).not.toContain("Invitation sent");

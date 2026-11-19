@@ -26,11 +26,7 @@ import {
 import { startNexiPaymentSession } from "@/features/checkout/backend/payment/nexi-payment-session";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
-import {
-  type CanonicalPromotionCode,
-  type DiscountQuote,
-  discountQuoteCodec,
-} from "@/features/discounts/contracts";
+import type { CanonicalPromotionCode } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { type Locale, m } from "@/features/i18n";
@@ -51,6 +47,10 @@ import { reservationCustomerEmailSchema } from "@/features/reservation/reservati
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
+  type EntryPackPurchaseQuote,
+  entryPackPurchaseQuoteCodec,
+} from "../entry-pack-purchase-quote";
+import {
   type EntryPackProduct,
   getEntryPackPrice,
   isEntryPackQuoteExpired,
@@ -70,6 +70,7 @@ export class EntryPackPurchaseError extends Data.TaggedError(
     | "quote-expired"
     | "payment-in-progress"
     | "billing-changed";
+  readonly locale?: Locale;
 }> {}
 
 const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
@@ -78,13 +79,15 @@ const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
 const billingMatches = Schema.toEquivalence(reservationBillingSelectionSchema);
 
 /** The terms of a price the buyer has seen, independent of labels and timers. */
-export const getEntryPackPriceFingerprint = (quote: DiscountQuote) =>
+export const getEntryPackPriceFingerprint = (quote: EntryPackPurchaseQuote) =>
   createHash("sha256")
     .update(
       JSON.stringify([
         quote.discountableSubtotal,
         quote.discountedSubtotal,
         quote.discounts.map(({ discount, amount }) => [discount.id, amount]),
+        quote.selection?.submittedCode,
+        quote.selection?.referralCode,
       ])
     )
     .digest("hex");
@@ -198,8 +201,19 @@ export const beginEntryPackPurchase = Effect.fn("beginEntryPackPurchase")(
           buyer: dotyposCustomerId,
           purchasedAt,
         });
-        const acceptedQuote =
-          yield* Schema.encodeEffect(discountQuoteCodec)(quote);
+        const acceptedQuote = yield* Schema.encodeEffect(
+          entryPackPurchaseQuoteCodec
+        )({
+          ...quote,
+          selection: {
+            ...(input.submittedCode !== undefined && {
+              submittedCode: input.submittedCode,
+            }),
+            ...(input.referralCode !== undefined && {
+              referralCode: input.referralCode,
+            }),
+          },
+        });
 
         return yield* transaction(
           Effect.gen(function* () {
@@ -323,10 +337,12 @@ export const readEntryPackCheckoutDraft = Effect.fn(
 
 const saveEntryPackQuote = Effect.fn("saveEntryPackQuote")(function* (
   orderId: OrderId,
-  quote: DiscountQuote
+  quote: EntryPackPurchaseQuote
 ) {
   const { db } = yield* WorkspaceDatabase;
-  const encoded = yield* Schema.encodeEffect(discountQuoteCodec)(quote);
+  const encoded = yield* Schema.encodeEffect(entryPackPurchaseQuoteCodec)(
+    quote
+  );
   yield* db
     .update(passPurchases)
     .set({ quote: encoded })
@@ -366,7 +382,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
           return yield* new EntryPackPurchaseError({ reason: "quote-expired" });
         }
         const storedQuote = yield* Schema.decodeUnknownEffect(
-          discountQuoteCodec
+          entryPackPurchaseQuoteCodec
         )(purchase.quote);
         if (
           input.displayedPriceFingerprint !==
@@ -402,8 +418,19 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
             })).quote
           : baseQuote;
 
-        yield* saveEntryPackQuote(order.id, quote);
-        return { status: "ready" as const, quote };
+        const selectedQuote = {
+          ...quote,
+          selection: {
+            ...(input.submittedCode !== undefined && {
+              submittedCode: input.submittedCode,
+            }),
+            ...(input.referralCode !== undefined && {
+              referralCode: input.referralCode,
+            }),
+          },
+        };
+        yield* saveEntryPackQuote(order.id, selectedQuote);
+        return { status: "ready" as const, quote: selectedQuote };
       })
     );
   }
@@ -436,7 +463,10 @@ export const recordEntryPackPaymentConsent = Effect.fn(
       input.acceptedDocuments
     )
   ) {
-    return yield* new EntryPackPurchaseError({ reason: "terms-changed" });
+    return yield* new EntryPackPurchaseError({
+      reason: "terms-changed",
+      locale: purchase.locale,
+    });
   }
 
   const evidence = yield* LegalEvidenceEventRepository;
@@ -485,6 +515,18 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       const statusUrl = `/${purchase.locale}${reservationStatusPath}/${order.id}`;
       if (order.paymentState === "paid") {
         return { status: "paid" as const, statusUrl };
+      }
+      const accepted = yield* Schema.decodeEffect(entryPackPurchaseQuoteCodec)(
+        purchase.quote
+      );
+      const acceptedFingerprint = getEntryPackPriceFingerprint(accepted);
+      const stalePrice =
+        input.displayedPriceFingerprint !== undefined &&
+        input.displayedPriceFingerprint !== acceptedFingerprint;
+      if (stalePrice) {
+        return order.paymentState === "pending"
+          ? { status: "pending" as const, statusUrl }
+          : { status: "pricing_changed" as const, quote: accepted };
       }
       const snapshots = yield* AccountingDocumentSnapshots;
       const frozen = order.activePaymentAttemptId
@@ -549,16 +591,14 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         tier: purchase.tier,
         size: purchase.entryCount,
       } as const;
-      const accepted = yield* Schema.decodeUnknownEffect(discountQuoteCodec)(
-        purchase.quote
-      );
-      const acceptedFingerprint = getEntryPackPriceFingerprint(accepted);
-      if (
-        input.displayedPriceFingerprint !== undefined &&
-        input.displayedPriceFingerprint !== acceptedFingerprint
-      ) {
-        return { status: "pricing_changed" as const, quote: accepted };
-      }
+      const selection = accepted.selection ?? {
+        ...(input.submittedCode !== undefined && {
+          submittedCode: input.submittedCode,
+        }),
+        ...(input.referralCode !== undefined && {
+          referralCode: input.referralCode,
+        }),
+      };
       const { quote, commitment } =
         yield* discountService.affirmDisplayedDiscounts({
           product,
@@ -571,14 +611,13 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           displayedDiscountIds: accepted.discounts.map(
             ({ discount }) => discount.id
           ),
-          ...(input.submittedCode !== undefined && {
-            submittedCode: input.submittedCode,
-          }),
-          ...(input.referralCode !== undefined && {
-            referralCode: input.referralCode,
-          }),
+          ...selection,
         });
-      const currentFingerprint = getEntryPackPriceFingerprint(quote);
+      const refreshedQuote = {
+        ...quote,
+        ...(accepted.selection && { selection }),
+      };
+      const currentFingerprint = getEntryPackPriceFingerprint(refreshedQuote);
       if (acceptedFingerprint !== currentFingerprint) {
         // An ended attempt may still settle late at its original price.
         if (order.activePaymentAttemptId) {
@@ -586,8 +625,8 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
             reason: "payment-in-progress",
           });
         }
-        yield* saveEntryPackQuote(order.id, quote);
-        return { status: "pricing_changed" as const, quote };
+        yield* saveEntryPackQuote(order.id, refreshedQuote);
+        return { status: "pricing_changed" as const, quote: refreshedQuote };
       }
 
       const contacts = yield* CustomerAccountContactService;
@@ -600,10 +639,11 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return yield* new EntryPackPurchaseError({
           reason: "buyer-profile-required",
         });
-      const buyer = getReservationInvoiceBuyer({
-        billing,
-        customerName: contact.name,
-      }) ?? { kind: "person" as const, legalName: contact.name };
+      const buyer = frozen?.buyer ??
+        getReservationInvoiceBuyer({
+          billing,
+          customerName: contact.name,
+        }) ?? { kind: "person" as const, legalName: contact.name };
       const admission = {
         orderId: order.id,
         amount: quote.discountedSubtotal,
@@ -617,7 +657,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
             supplier: workspaceAccountingSupplier,
             buyer,
             billing,
-            delivery: { email: session.email },
+            delivery: frozen?.delivery ?? { email: session.email },
             serviceDate: purchase.validFrom,
             product,
             quote,

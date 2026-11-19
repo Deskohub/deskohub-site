@@ -1847,7 +1847,7 @@
   "entryPackCheckoutCodeApplied": "Kód {code} bol uplatnený",
   "entryPackCheckoutQuoteExpired": "Platnosť tejto ponuky vypršala. Vráťte sa k údajom a získajte aktuálnu cenu.",
   "entryPackCheckoutRefreshQuote": "Späť k údajom",
-  "entryPackCheckoutTermsChanged": "Podmienky sa zmenili. Vráťte sa k údajom a pred platbou si prečítajte aktuálne podmienky.",
+  "entryPackCheckoutTermsChanged": "Podmienky sa zmenili. Pred platbou si prečítajte aktuálne znenie a znova ho potvrďte.",
   "passEntryPack": "Balík vstupov",
   "passUnlimited": "Neobmedzený pas",
   "passTierOpenSpace": "Open Space",

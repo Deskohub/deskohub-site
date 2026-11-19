@@ -1847,7 +1847,7 @@
   "entryPackCheckoutCodeApplied": "Код {code} застосовано",
   "entryPackCheckoutQuoteExpired": "Термін дії пропозиції минув. Поверніться до даних, щоб отримати актуальну ціну.",
   "entryPackCheckoutRefreshQuote": "Повернутися до даних",
-  "entryPackCheckoutTermsChanged": "Умови змінилися. Поверніться до даних і перегляньте чинні умови перед оплатою.",
+  "entryPackCheckoutTermsChanged": "Умови змінилися. Перегляньте чинні умови й підтвердьте їх знову перед оплатою.",
   "passEntryPack": "Пакет відвідувань",
   "passUnlimited": "Безлімітний абонемент",
   "passTierOpenSpace": "Open Space",

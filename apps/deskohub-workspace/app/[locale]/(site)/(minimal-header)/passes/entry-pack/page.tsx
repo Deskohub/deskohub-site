@@ -18,6 +18,7 @@ import {
 } from "@/features/passes/entry-pack-checkout";
 import {
   entryPackOffers,
+  getEntryPackLastUsableDate,
   getEntryPackValidity,
 } from "@/features/passes/pass-offer";
 import { reservationStatusPath } from "@/features/reservation/routes";
@@ -46,7 +47,13 @@ export default async function EntryPackPage({
   readonly searchParams: Promise<Query>;
 }) {
   return runWithRequestLocale(async (locale) => {
-    if (!(await isCoworkPassesPageOpenAfterConnection())) notFound();
+    if (!(await isCoworkPassesPageOpenAfterConnection())) {
+      const { order } = await searchParams;
+      if (Schema.is(orderIdSchema)(order)) {
+        redirect(`/${locale}${reservationStatusPath}/${order}`);
+      }
+      notFound();
+    }
     return (
       <Suspense fallback={null}>
         <EntryPackPageContent locale={locale} searchParams={searchParams} />
@@ -126,7 +133,9 @@ async function EntryPackPageContent({
           .filter(({ product }) => product.tier === "open-space")
           .map(({ product }) => [
             product.size,
-            getEntryPackValidity(now, product.size).validUntil.toString(),
+            getEntryPackLastUsableDate(
+              getEntryPackValidity(now, product.size).validUntil
+            ).toString(),
           ])
       );
       return { buyer, validity, draft };
@@ -163,7 +172,9 @@ async function EntryPackPageContent({
               holderEmail:
                 draft?.kind === "draft" ? draft.holderEmail : undefined,
               validUntil:
-                draft?.kind === "draft" ? draft.validUntil : undefined,
+                draft?.kind === "draft"
+                  ? getEntryPackLastUsableDate(draft.validUntil).toString()
+                  : undefined,
             }
           : undefined
       }

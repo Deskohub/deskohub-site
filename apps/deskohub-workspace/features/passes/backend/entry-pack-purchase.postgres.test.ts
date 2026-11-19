@@ -14,7 +14,7 @@ import {
   NexiService,
 } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { promotionCodes, vouchers } from "@/db/schema";
@@ -63,6 +63,7 @@ import {
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
+import { entryPackPurchaseQuoteCodec } from "../entry-pack-purchase-quote";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
   beginEntryPackPurchase,
@@ -70,6 +71,7 @@ import {
   getEntryPackPriceFingerprint,
   payForEntryPack,
   recordEntryPackPaymentConsent,
+  repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
 import { settleEntryPack } from "./entry-pack-settlement";
 import { reconcilePassPurchases } from "./pass-purchase-reconciliation";
@@ -166,6 +168,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       const amount = currencyCZK(voucherValue);
       let discountAvailable = true;
+      let affirmedCode: typeof code | undefined;
       const candidate: DiscountCandidate = {
         discount: {
           id: deriveOpaqueDiscountId({
@@ -325,6 +328,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           paymentAbandoned: () => Effect.void,
         }),
         Layer.mock(DiscountService, {
+          applyDiscountCode: ({ baseQuote }) =>
+            Effect.succeed({
+              quote: baseQuote,
+              application: baseQuote.discounts[0]!,
+            }),
           quote: (input) =>
             calculateDiscounts({ ...input, candidates: [candidate] }).pipe(
               Effect.map(({ quote }) => quote)
@@ -342,7 +350,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
                   applications,
                 }),
               })),
-              Effect.tap(() => beforeAdmission)
+              Effect.tap(() => {
+                affirmedCode = input.submittedCode;
+                return beforeAdmission;
+              })
             ),
         }),
         Layer.mock(NexiService, {
@@ -407,8 +418,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         locale: "en-US",
         submittedCode: code,
       }).pipe(Effect.provide(services));
-      await Effect.runPromise(
+      const initialPurchase = await Effect.runPromise(
         purchasedAt ? begin.pipe(atInstant(purchasedAt)) : begin
+      );
+      const initialQuote = Schema.decodeSync(entryPackPurchaseQuoteCodec)(
+        initialPurchase.quote
       );
       const accept = {
         orderId,
@@ -416,7 +430,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         acceptedDocuments: getEntryPackPaymentDisclosure("en-US").documents,
         submittedCode: code,
       };
-      const notify = async (payment: "failure" | "success") => {
+      const notify = async (payment: "failure" | "success", attempt = 0) => {
         captured = payment === "success";
         abandoned = false;
         await Effect.runPromise(
@@ -425,7 +439,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               eventId: crypto.randomUUID(),
               securityToken: "synthetic-session",
               operation: {
-                orderId: providerOrders[0],
+                orderId: providerOrders[attempt],
                 operationId: crypto.randomUUID(),
                 operationType: "CAPTURE",
                 operationResult: captured ? "EXECUTED" : "DECLINED",
@@ -493,6 +507,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         },
         providerOrders,
         notify,
+        readAffirmedCode: () => affirmedCode,
+        initialFingerprint: getEntryPackPriceFingerprint(initialQuote),
+        reprice: (
+          displayedPriceFingerprint: string,
+          submittedCode?: typeof code
+        ) =>
+          Effect.runPromise(
+            repriceEntryPackPurchase({
+              orderId,
+              displayedPriceFingerprint,
+              ...(submittedCode && { submittedCode }),
+            }).pipe(Effect.provide(services))
+          ),
         removeDiscount: () => {
           discountAvailable = false;
         },
@@ -501,6 +528,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           options?: {
             billing?: ReservationBillingSelection;
             displayedPriceFingerprint?: string;
+            acceptedDocuments?: typeof accept.acceptedDocuments;
+            submittedCode?: typeof code;
           }
         ) => {
           const pay = payForEntryPack({
@@ -569,6 +598,74 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         reason: "payment-in-progress",
       });
       expect(payment.providerOrders).toHaveLength(1);
+    });
+
+    test("a same-price code change invalidates stale Remove and Pay, including hosted retries", async () => {
+      const payment = await integration(database!, 2_000);
+      const otherCode = canonicalPromotionCodeSchema.make("OTHER-CODE");
+      const updated = await payment.reprice(
+        payment.initialFingerprint,
+        otherCode
+      );
+      expect(updated.status).toBe("ready");
+      const fingerprint = getEntryPackPriceFingerprint(updated.quote);
+      expect(fingerprint).not.toBe(payment.initialFingerprint);
+      const staleRemove = await payment.reprice(payment.initialFingerprint);
+      expect(staleRemove).toEqual({
+        status: "pricing_changed",
+        quote: updated.quote,
+      });
+
+      const first = await payment.pay(undefined, {
+        displayedPriceFingerprint: fingerprint,
+      });
+      expect(first).toMatchObject({ status: "hosted" });
+      expect(payment.readAffirmedCode()).toBe(otherCode);
+      const stale = await payment.pay(undefined, {
+        displayedPriceFingerprint: payment.initialFingerprint,
+      });
+      expect(stale.status).toBe("pending");
+      expect(stale).not.toHaveProperty("redirectUrl");
+      expect(payment.providerOrders).toHaveLength(1);
+
+      await payment.notify("failure");
+      await expect(payment.reprice(fingerprint)).rejects.toMatchObject({
+        reason: "payment-in-progress",
+      });
+      expect(
+        await payment.pay(undefined, {
+          displayedPriceFingerprint: fingerprint,
+          submittedCode: canonicalPromotionCodeSchema.make("STALE-CODE"),
+        })
+      ).toMatchObject({ status: "hosted" });
+      expect(payment.readAffirmedCode()).toBe(otherCode);
+      await payment.notify("failure", 1);
+    });
+
+    test("a retry reviews current terms on the same order and keeps the first attempt's invoice buyer", async () => {
+      const db = database!;
+      const payment = await integration(db, 2_000, undefined, requestedInvoice);
+      expect(await payment.pay()).toMatchObject({ status: "hosted" });
+      await payment.notify("failure");
+      payment.changeBuyerName("Changed Fixture Name");
+      await expect(
+        payment.pay(undefined, { acceptedDocuments: [] })
+      ).rejects.toMatchObject({
+        reason: "terms-changed",
+        locale: "en-US",
+      });
+      expect(payment.providerOrders).toHaveLength(1);
+      expect(await payment.pay()).toMatchObject({ status: "hosted" });
+      const attempts = await db.pool.query<{ id: string }>(
+        "select id from payment_attempts where order_id = $1 order by created_at",
+        [payment.orderId]
+      );
+      expect(attempts.rows).toHaveLength(2);
+      const first = await payment.readAccounting(attempts.rows[0]!.id);
+      const second = await payment.readAccounting(attempts.rows[1]!.id);
+      expect(first.snapshot?.buyer).toBeDefined();
+      expect(second.snapshot?.buyer).toEqual(first.snapshot?.buyer);
+      await payment.notify("failure", 1);
     });
 
     test("reconciliation rotates past an inconclusive Nexi order at batch size one", async () => {

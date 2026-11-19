@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import {
   CurrentCustomerAccount,
@@ -25,7 +26,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
   () => {
     const buyer = customerAccountIdSchema.make(crypto.randomUUID());
     const holder = customerAccountIdSchema.make(crypto.randomUUID());
-    const holderEmail = "pack-holder@example.invalid";
+    const holderEmail = testEmailAddress("pack-holder");
     const now = Temporal.Instant.from("2026-11-19T12:00:00Z");
     const paymentPage = "https://payment.example.invalid/entry-pack";
     let database: WorkspacePostgresSuiteDatabase;
@@ -119,7 +120,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
                     ? null
                     : {
                         accountId: viewer,
-                        email: "pack-viewer@example.invalid",
+                        email: testEmailAddress("pack-viewer"),
                         deletionRequested: false,
                         ...testSessionProfile,
                       }

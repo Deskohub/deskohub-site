@@ -1811,7 +1811,7 @@
   "entryPackCheckoutCodeApplied": "Code {code} angewendet",
   "entryPackCheckoutQuoteExpired": "Dieses Angebot ist abgelaufen. Geh zurück zu den Angaben, um den aktuellen Preis zu sehen.",
   "entryPackCheckoutRefreshQuote": "Zurück zu den Angaben",
-  "entryPackCheckoutTermsChanged": "Die Bedingungen haben sich geändert. Geh zurück zu den Angaben und lies vor der Zahlung die aktuellen Bedingungen.",
+  "entryPackCheckoutTermsChanged": "Die Bedingungen haben sich geändert. Lies die aktuellen Bedingungen und bestätige sie erneut, bevor du bezahlst.",
   "passEntryPack": "Eintrittspaket",
   "passUnlimited": "Unbegrenzter Pass",
   "passTierOpenSpace": "Open Space",

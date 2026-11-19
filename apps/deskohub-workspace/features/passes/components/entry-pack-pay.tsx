@@ -24,14 +24,12 @@ import {
   payEntryPackCheckout,
   repriceEntryPackCheckout,
 } from "../entry-pack-checkout-actions";
-import type { EntryPackProduct } from "../pass-offer";
 import type { EntryPackPayState } from "./entry-pack-checkout";
 import { entryPackTierLabel, formatEntryPackDate } from "./entry-pack-choose";
 
 export function EntryPackPay({
   locale,
   orderId,
-  product,
   state,
   headingRef,
   onExpire,
@@ -39,15 +37,16 @@ export function EntryPackPay({
 }: {
   readonly locale: Locale;
   readonly orderId: OrderId;
-  readonly product: EntryPackProduct;
   readonly state: EntryPackPayState;
   readonly headingRef: Ref<HTMLHeadingElement>;
   readonly onExpire: () => void;
   readonly onRequestPayment: () => void;
 }) {
+  const { product } = state;
   const [price, setPrice] = useState(state.price);
+  const [disclosure, setDisclosure] = useState(state.disclosure);
   const [checked, setChecked] = useState(false);
-  const [submittedCode, setSubmittedCode] = useState<string>();
+  const submittedCode = price.submittedCode;
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string>();
   const [expired, setExpired] = useState(false);
@@ -68,13 +67,9 @@ export function EntryPackPay({
   function handlePurchaseFailure(reason: string) {
     if (reason === "billing-changed" || reason === "payment-in-progress") {
       goToStatus();
-    } else if (reason === "quote-expired" || reason === "terms-changed") {
+    } else if (reason === "quote-expired") {
       setExpired(true);
-      setError(
-        reason === "quote-expired"
-          ? m.entryPackCheckoutQuoteExpired({}, { locale })
-          : m.entryPackCheckoutTermsChanged({}, { locale })
-      );
+      setError(m.entryPackCheckoutQuoteExpired({}, { locale }));
     } else {
       showError();
     }
@@ -85,7 +80,6 @@ export function EntryPackPay({
     onSuccess({ data }) {
       if (data.status === "ready") {
         setPrice(data.price);
-        setSubmittedCode(data.submittedCode);
         setDraft("");
         setChecked(false);
       } else if (data.status === "pricing_changed") {
@@ -96,6 +90,10 @@ export function EntryPackPay({
         setError(m.checkoutDiscountCodeUnavailable({}, { locale }));
       } else if (data.status === "signed_out") {
         signIn();
+      } else if (data.status === "terms_changed") {
+        setDisclosure(data.disclosure);
+        setChecked(false);
+        setError(m.entryPackCheckoutTermsChanged({}, { locale }));
       } else if (data.status === "purchase_error") {
         handlePurchaseFailure(data.reason);
       }
@@ -116,6 +114,10 @@ export function EntryPackPay({
         setError(m.checkoutPayPricingChangedLead({}, { locale }));
       } else if (data.status === "signed_out") {
         signIn();
+      } else if (data.status === "terms_changed") {
+        setDisclosure(data.disclosure);
+        setChecked(false);
+        setError(m.entryPackCheckoutTermsChanged({}, { locale }));
       } else if (data.status === "purchase_error") {
         handlePurchaseFailure(data.reason);
       }
@@ -138,13 +140,12 @@ export function EntryPackPay({
     pay.execute({
       ...input,
       accepted: checked,
-      acceptedDocuments: state.disclosure.documents.map(({ key, hash }) => ({
+      acceptedDocuments: disclosure.documents.map(({ key, hash }) => ({
         key,
         hash,
       })),
       billing: state.billing,
       displayedPriceFingerprint: price.fingerprint,
-      ...(submittedCode !== undefined && { submittedCode }),
     });
   };
 
@@ -168,7 +169,7 @@ export function EntryPackPay({
               <>
                 <span className="block">
                   {formatEntryPackDate(state.validFrom, locale)} –{" "}
-                  {formatEntryPackDate(state.validUntil, locale)}
+                  {formatEntryPackDate(state.lastUsableDate, locale)}
                 </span>
                 {state.holderEmail && (
                   <span className="block break-all">
@@ -263,7 +264,7 @@ export function EntryPackPay({
         <CheckoutPayConsent
           checked={checked}
           disabled={busy || expired}
-          earlyStartRequest={state.disclosure.earlyStartRequest}
+          earlyStartRequest={disclosure.earlyStartRequest}
           id={consentId}
           locale={locale}
           onCheckedChange={setChecked}
