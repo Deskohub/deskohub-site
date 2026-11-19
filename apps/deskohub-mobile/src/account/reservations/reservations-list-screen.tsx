@@ -346,20 +346,6 @@ function ReservationsListSkeleton() {
   );
 }
 
-function preferredStatusTarget(groups: ReservationGroups) {
-  const rows = [
-    ...Option.toArray(groups.featured),
-    ...groups.moreCurrent,
-    ...groups.undated,
-    ...groups.past,
-  ];
-  for (const row of rows) {
-    const target = reservationStatusTarget(row);
-    if (Option.isSome(target)) return target.value;
-  }
-  return undefined;
-}
-
 function ReservationsListView<E extends CustomerRequestFailure>({
   result: list,
   onRefresh: refresh,
@@ -375,22 +361,24 @@ function ReservationsListView<E extends CustomerRequestFailure>({
   const { isExpanded } = useViewport();
   const open = useOpenReservation();
   const value = AsyncResult.value(list);
-  const preferred =
-    showPreferred && selection === undefined
-      ? Option.match(value, {
-          onNone: () => undefined,
-          onSome: ({ groups }) => preferredStatusTarget(groups),
-        })
-      : undefined;
-  const [hasOpenedDetails, setHasOpenedDetails] = useState(false);
-  // Keep the preview mounted after its first display so a resize cannot
-  // interrupt a ticket action. Its refresh follows visibility and route focus.
-  if (isExpanded && preferred !== undefined && !hasOpenedDetails) {
-    setHasOpenedDetails(true);
+  // Once shown, retain the featured order through resizing and list refreshes.
+  // null records that the customer returned from a missing preview.
+  const [preview, setPreview] = useState<CustomerReservationOrderId | null>();
+  if (
+    showPreferred &&
+    selection === undefined &&
+    isExpanded &&
+    preview === undefined
+  ) {
+    const featured = Option.flatMap(value, ({ groups }) =>
+      Option.flatMap(groups.featured, reservationStatusTarget)
+    );
+    if (Option.isSome(featured)) setPreview(featured.value);
   }
+  const previewOrderId = preview ?? undefined;
   const listSelection =
     selection ??
-    (isExpanded ? { orderId: preferred, onSelect: open } : undefined);
+    (isExpanded ? { orderId: previewOrderId, onSelect: open } : undefined);
   const savedAt = Option.flatMap(value, (shown) => shown.savedAt);
   // The saved list says it is the one on this device; a failed refresh
   // under it needs no second notice.
@@ -444,13 +432,16 @@ function ReservationsListView<E extends CustomerRequestFailure>({
     <ReservationsTabPanes
       list={content}
       detail={
-        hasOpenedDetails && preferred !== undefined ? (
+        previewOrderId !== undefined ? (
           <OrderStatusScreen
-            key={preferred}
-            orderId={preferred}
+            orderId={previewOrderId}
             visit="normal"
             active={isExpanded}
             heading={isExpanded ? <ReservationPaneHeading /> : undefined}
+            onMissingReturn={() => {
+              setPreview(null);
+              refresh();
+            }}
           />
         ) : undefined
       }

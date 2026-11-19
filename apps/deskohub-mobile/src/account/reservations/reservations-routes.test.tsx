@@ -2,7 +2,13 @@ import { expect, mock, spyOn, test } from "bun:test";
 import { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
 import { RegistryContext } from "@effect/atom-react";
 import type { NativeStackNavigationOptions } from "expo-router";
-import { type AriaAttributes, act, type ReactElement } from "react";
+import {
+  type AriaAttributes,
+  act,
+  createElement,
+  type ReactElement,
+  useEffect,
+} from "react";
 import type { PressableProps, ViewProps } from "react-native";
 import * as ReactNative from "react-native";
 import {
@@ -22,11 +28,13 @@ import { clientRoot } from "../../testing/client-root";
 import { expoRouterStandIn } from "../../testing/expo-router-stand-in";
 import { TestWindowDimensions } from "../../testing/window-dimensions";
 import { elementTree, find } from "../../ui/testing/element-tree";
+import { orderStatusAtoms } from "./order-status-state";
 import { reservationHistoryAtom } from "./reservations-list-state";
 
 let params: { orderId: string; after?: string } = { orderId: "" };
 let screenOptions: NativeStackNavigationOptions | undefined;
 let activeRoute: ReactElement | undefined;
+let runFocusEffects = false;
 const router = {
   push: mock((_href: unknown) => {}),
   replace: mock((_href: unknown) => {}),
@@ -37,6 +45,8 @@ const router = {
 
 mock.module("expo-router", () => ({
   ...expoRouterStandIn({
+    useFocusEffect: (effect: () => undefined | (() => void)) =>
+      useEffect(() => (runFocusEffects ? effect() : undefined), [effect]),
     useLocalSearchParams: () => params,
     useRouter: () => router,
   }),
@@ -73,20 +83,21 @@ mock.module("react-native", () => ({
     onPress,
     ...props
   }: Omit<PressableProps, "onPress"> &
-    Pick<AriaAttributes, "aria-current"> & { onPress?: () => void }) => (
-    <button
-      type="button"
-      role={props.role}
-      aria-label={props["aria-label"]}
-      aria-current={props["aria-current"]}
-      data-native-selected={props["aria-selected"]}
-      onClick={onPress}
-    >
-      {typeof children === "function"
+    Pick<AriaAttributes, "aria-current"> & { onPress?: () => void }) =>
+    createElement(
+      "div",
+      {
+        role: props.role,
+        "aria-label": props["aria-label"],
+        "aria-current": props["aria-current"],
+        "data-pressable": true,
+        "data-native-selected": props["aria-selected"],
+        onClick: onPress,
+      },
+      typeof children === "function"
         ? children({ pressed: false, hovered: false })
-        : children}
-    </button>
-  ),
+        : children
+    ),
 }));
 
 const { default: ReservationsRoute } = await import(
@@ -109,6 +120,8 @@ const { SplitPane } = await import("../../ui/split-pane");
 const { ToastProvider } = await import("../../ui/toast");
 
 const root = clientRoot({ keepFetch: true });
+const pressables = (selector = "[data-pressable]") =>
+  root.container().querySelectorAll<HTMLElement>(selector);
 
 const fixture = async (
   history: "upcoming" | "empty" | "four-past",
@@ -174,6 +187,7 @@ const fixture = async (
     }
   });
   return {
+    registry,
     workspace,
     within,
     statusBars,
@@ -220,16 +234,16 @@ test.each(["loading", "failed", "gated"] as const)(
 
 test("the past list stays expanded while opening one of its bookings", async () => {
   const screen = await fixture("four-past");
-  const bookings = () =>
-    root.container().querySelectorAll<HTMLButtonElement>('button[role="link"]');
+  const bookings = () => pressables('[data-pressable][role="link"]');
   try {
     activeRoute = <ReservationsRoute />;
     await screen.render(1024, <ReservationsLayout />);
     expect(bookings()).toHaveLength(2);
+    expect(root.container().querySelector("[aria-current]")).toBeNull();
     const label = m.reservations_show_all_past({}, { locale: "en-US" });
-    const showAll = Array.from(
-      root.container().querySelectorAll("button")
-    ).find((button) => button.textContent === label);
+    const showAll = Array.from(pressables()).find(
+      (button) => button.textContent === label
+    );
     if (showAll === undefined) throw new Error("Expected past list expansion");
     await act(async () => showAll.click());
     expect(bookings()).toHaveLength(4);
@@ -250,6 +264,69 @@ test("the past list stays expanded while opening one of its bookings", async () 
     router.push.mockClear();
     router.replace.mockClear();
     activeRoute = undefined;
+    await screen.dispose();
+  }
+});
+
+test("the featured preview keeps its order through a list change and resize", async () => {
+  const screen = await fixture("upcoming");
+  try {
+    await screen.render(1024, <ReservationsRoute />);
+    const preview = root.container().querySelectorAll("scrollview")[1];
+    expect(preview).toBeDefined();
+    expect(root.container().querySelector("[aria-current]")).not.toBeNull();
+    const { history } = screen.workspace.data;
+    screen.workspace.data = {
+      ...screen.workspace.data,
+      history: { ...history, current: history.current.slice(1) },
+    };
+    await act(async () => {
+      screen.registry.refresh(reservationHistoryAtom);
+      await settle(screen.registry, reservationHistoryAtom);
+    });
+    expect(root.container().querySelectorAll("scrollview")[1]).toBe(preview);
+    expect(root.container().querySelector("[aria-current]")).toBeNull();
+    await screen.render(600, <ReservationsRoute />);
+    expect(preview?.closest('[aria-hidden="true"]')).not.toBeNull();
+    await screen.render(1024, <ReservationsRoute />);
+    expect(root.container().querySelectorAll("scrollview")[1]).toBe(preview);
+  } finally {
+    await screen.dispose();
+  }
+});
+
+test("returning from a missing featured preview clears the selection and refreshes the list", async () => {
+  const screen = await fixture("upcoming");
+  const orderId = screen.workspace.data.history.current[0]?.orderId;
+  if (orderId === undefined) throw new Error("Expected a featured booking");
+  const orders = new Map(screen.workspace.data.orders);
+  orders.delete(orderId);
+  screen.workspace.data = { ...screen.workspace.data, orders };
+  const reads = (endpoint: string) =>
+    screen.workspace.calls.filter((call) => call === endpoint).length;
+  try {
+    runFocusEffects = true;
+    await screen.render(1024, <ReservationsRoute />);
+    await act(async () => {
+      await settle(screen.registry, orderStatusAtoms.status(orderId));
+    });
+    expect(root.container().querySelectorAll("scrollview")).toHaveLength(2);
+    const label = m.reservations_go_to_list({}, { locale: "en-US" });
+    const goToList = Array.from(pressables()).find(
+      (button) => button.textContent === label
+    );
+    if (goToList === undefined) throw new Error("Expected a missing preview");
+    const initialReads = reads("listReservations");
+    await act(async () => {
+      goToList.click();
+      await settle(screen.registry, reservationHistoryAtom);
+    });
+    expect(reads("listReservations")).toBeGreaterThan(initialReads);
+    expect(reads("getReservationStatus")).toBe(1);
+    expect(root.container().querySelector("[aria-current]")).toBeNull();
+    expect(root.container().querySelectorAll("scrollview")).toHaveLength(1);
+  } finally {
+    runFocusEffects = false;
     await screen.dispose();
   }
 });
@@ -291,12 +368,10 @@ test("selecting another wide booking replaces the route and payment return close
   params = { orderId: first.orderId, after: "payment" };
   try {
     await screen.render(1024, <ReservationStatusRoute />);
-    const close = root
-      .container()
-      .querySelector(
-        `button[aria-label="${m.navigation_close({}, { locale: "en-US" })}"]`
-      );
-    expect(close).not.toBeNull();
+    const close = pressables(
+      `[data-pressable][aria-label="${m.navigation_close({}, { locale: "en-US" })}"]`
+    )[0];
+    expect(close).toBeDefined();
     expect(close?.closest("scrollview")).toBeNull();
 
     const tree = elementTree(ReservationStatusRoute, {}, (node) =>

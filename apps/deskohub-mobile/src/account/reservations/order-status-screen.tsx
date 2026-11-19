@@ -439,7 +439,7 @@ function OrderTicket({
 }
 
 /** The order isn't the signed-in account's: say whose account this is. */
-function OrderNotFound() {
+function OrderNotFound({ onReturn }: { readonly onReturn?: () => void }) {
   const locale = useAppLocale();
   const router = useRouter();
   const account = AsyncResult.value(useAtomValue(accountAtom));
@@ -457,7 +457,7 @@ function OrderNotFound() {
       >
         <Button
           label={m.reservations_go_to_list({}, { locale })}
-          onPress={() => router.dismissTo(reservationsHref)}
+          onPress={onReturn ?? (() => router.dismissTo(reservationsHref))}
         />
         <Button
           variant="quiet"
@@ -520,11 +520,13 @@ export function OrderStatusScreen({
   visit,
   active = true,
   heading,
+  onMissingReturn,
 }: {
   readonly orderId: CustomerReservationOrderId;
   readonly visit: StatusVisit;
   readonly active?: boolean;
   readonly heading?: ReactNode;
+  readonly onMissingReturn?: () => void;
 }) {
   const locale = useAppLocale();
   const navigation = useNavigation();
@@ -596,7 +598,7 @@ export function OrderStatusScreen({
         onRefresh={refreshable ? refresh : undefined}
       >
         {isNotFound(result) ? (
-          <OrderNotFound />
+          <OrderNotFound onReturn={onMissingReturn} />
         ) : (
           <AsyncView
             result={shown}
