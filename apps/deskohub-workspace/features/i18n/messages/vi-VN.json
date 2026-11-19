@@ -1811,5 +1811,10 @@
   "passEmailEarlyStart": "Bạn đã yêu cầu sử dụng gói ngay trong thời hạn 14 ngày được rút khỏi hợp đồng. Nếu bạn rút khỏi hợp đồng hợp lệ, chúng tôi sẽ hoàn tiền cho phần chưa sử dụng.",
   "passEmailRefundTerms": "Điều khoản hoàn tiền",
   "passEmailPaidByCard": "Đã thanh toán bằng thẻ",
-  "passEmailInvoice": "Hóa đơn sẽ được gửi qua email riêng."
+  "passEmailInvoice": "Hóa đơn sẽ được gửi qua email riêng.",
+  "entryPackStatusPendingLead": "Chúng tôi đang chờ Nexi xác nhận khoản thanh toán của bạn. Trang này tự cập nhật. Nếu trang thanh toán vẫn mở, hãy hoàn tất thanh toán ở đó.",
+  "entryPackStatusRetryLead": "Thanh toán chưa hoàn tất. Bạn có thể bắt đầu mua gói lượt vào mới.",
+  "entryPackStatusRefundLead": "Khoản thanh toán đến sau khi đơn hàng đã đóng. Chúng tôi không thể cấp gói lượt vào và sẽ hoàn tiền cho bạn.",
+  "entryPackStatusRefundedTitle": "Khoản thanh toán của bạn đã được hoàn lại.",
+  "entryPackStatusRefundedLead": "Chúng tôi đã hoàn tiền qua phương thức thanh toán ban đầu của bạn."
 }

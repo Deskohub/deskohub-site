@@ -1829,5 +1829,10 @@
   "passEmailEarlyStart": "Sie haben die sofortige Nutzung innerhalb der 14-tägigen Widerrufsfrist verlangt. Bei einem wirksamen Widerruf erstatten wir den ungenutzten Teil.",
   "passEmailRefundTerms": "Erstattungsbedingungen",
   "passEmailPaidByCard": "Mit Karte bezahlt",
-  "passEmailInvoice": "Ihre Rechnung erhalten Sie in einer separaten E-Mail."
+  "passEmailInvoice": "Ihre Rechnung erhalten Sie in einer separaten E-Mail.",
+  "entryPackStatusPendingLead": "Wir warten auf die Zahlungsbestätigung von Nexi. Diese Seite aktualisiert sich automatisch. Falls die Zahlungsseite noch offen ist, schließ die Zahlung dort ab.",
+  "entryPackStatusRetryLead": "Die Zahlung wurde nicht abgeschlossen. Du kannst ein neues Eintrittspaket kaufen.",
+  "entryPackStatusRefundLead": "Deine Zahlung ging nach Abschluss der Bestellung ein. Wir konnten das Eintrittspaket nicht ausstellen und erstatten dir die Zahlung.",
+  "entryPackStatusRefundedTitle": "Deine Zahlung wurde erstattet.",
+  "entryPackStatusRefundedLead": "Wir haben die Zahlung auf dein ursprüngliches Zahlungsmittel zurückerstattet."
 }

@@ -6,8 +6,11 @@ import type { ReactNode } from "react";
 import { prerender } from "react-dom/static";
 import type { CheckoutStatusViewModel } from "@/features/checkout/backend/checkout";
 import type { OrderKind } from "@/features/order";
+import { orderIdSchema } from "@/features/order";
+import type { EntryPackStatus } from "@/features/passes/backend/entry-pack-status";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
 import type { ReservationWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 
 mock.module("server-only", () => ({}));
 let connections = 0;
@@ -235,6 +238,21 @@ mock.module("@/features/order/backend/order-kind", () => ({
   },
 }));
 
+const passOrderId = orderIdSchema.make("1d3c5b87-dedf-47dd-8e46-bf4923fc9662");
+const passOrder = {
+  orderId: passOrderId,
+  tier: "open-space",
+  entryCount: 5,
+} as const;
+let passStatus: EntryPackStatus = { status: "not_found" };
+const passStatusReads: [string, Headers][] = [];
+mock.module("@/features/passes/backend/entry-pack-status", () => ({
+  loadEntryPackStatusPage: (id: string, request: Headers) => {
+    passStatusReads.push([id, request]);
+    return Promise.resolve(passStatus);
+  },
+}));
+
 const { CheckoutStatusRoute } = await import("./checkout-status-route");
 const { getReservationStatusSignInPath } = signIn;
 
@@ -284,6 +302,8 @@ describe("CheckoutStatusRoute", () => {
     loadCalls.length = 0;
     orderKind = "reservation";
     orderKindReads.length = 0;
+    passStatusReads.length = 0;
+    passStatus = { status: "not_found" };
     readCookieNames.length = 0;
     connections = 0;
     signedOut = false;
@@ -414,14 +434,95 @@ describe("CheckoutStatusRoute", () => {
     expect(html).toContain('data-status="not_found"');
   });
 
-  test("answers a pass purchase order with not found without loading a reservation status", async () => {
+  test("renders a pending pass purchase without loading the reservation status", async () => {
     orderKind = "pass-purchase";
+    const paymentPage = "https://payment.example.invalid/entry-pack";
+    passStatus = { ...passOrder, status: "pending", paymentPage };
 
-    const { errors } = await renderRoute();
+    const { errors, html } = await renderRoute({ order: passOrderId });
 
+    expect(errors).toEqual([]);
+    expect(passStatusReads).toEqual([[passOrderId, requestHeaders]]);
+    expect(loadCalls).toEqual([]);
+    expect(withdrawalEntryReads).toEqual([]);
+    expect(readCookieNames).toEqual([]);
+    expect(html).toContain('data-entry-pack-status="pending"');
+    expect(html).toContain('data-auto-refresh="true"');
+    expect(html).toContain(`href="${paymentPage}"`);
+  });
+
+  test("renders the paid gift details for the buyer", async () => {
+    orderKind = "pass-purchase";
+    passStatus = {
+      ...passOrder,
+      status: "paid",
+      gift: true,
+      maskedHolderEmail: "p…@example.invalid",
+      paidAt: Temporal.Instant.from("2026-11-19T12:00:00Z"),
+      validFrom: plainDateStringSchema.make("2026-11-19"),
+      validUntil: plainDateStringSchema.make("2027-01-19"),
+    };
+
+    const { errors, html } = await renderRoute({ order: passOrderId });
+
+    expect(errors).toEqual([]);
+    expect(html).toContain('data-entry-pack-status="paid"');
+    expect(html).toContain("Your Entry pack is paid");
+    expect(html).toContain("p…@example.invalid");
+    expect(html).toContain("Paid on");
+    expect(html).toContain('data-auto-refresh="false"');
+    expect(html).not.toContain("Invitation sent");
+  });
+
+  test.each([
+    "failed",
+    "cancelled",
+    "expired",
+    "refund_required",
+    "refunded",
+  ] as const)(
+    "renders the terminal pass status %s with the appropriate action",
+    async (status) => {
+      orderKind = "pass-purchase";
+      passStatus = { ...passOrder, status };
+      const { errors, html } = await renderRoute({ order: passOrderId });
+
+      expect(errors).toEqual([]);
+      expect(html).toContain(`data-entry-pack-status="${status}"`);
+      expect(html).toContain('data-auto-refresh="false"');
+      expect(html.includes('href="/en-US/passes/entry-pack"')).toBe(
+        status !== "refund_required" && status !== "refunded"
+      );
+    }
+  );
+
+  test("preserves the return outcome when a pass purchase requires sign-in", async () => {
+    orderKind = "pass-purchase";
+    passStatus = { status: "sign_in" };
+    const { errors } = await renderRoute({
+      order: passOrderId,
+      searchParams: { outcome: "success" },
+    });
+
+    expect(loadCalls).toEqual([]);
+    expect(errors).toHaveLength(1);
+    const location = new URL(
+      (errors[0] as RedirectSignal).location,
+      "https://workspace.example.invalid"
+    );
+    expect(location.pathname).toBe("/en-US/auth/sign-in");
+    expect(location.searchParams.get("returnTo")).toBe(
+      `/en-US/reservation/status/${passOrderId}?outcome=success`
+    );
+  });
+
+  test("returns not found for an unavailable pass purchase without reservation fallback", async () => {
+    orderKind = "pass-purchase";
+    const { errors, html } = await renderRoute({ order: passOrderId });
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBeInstanceOf(NotFoundSignal);
     expect(loadCalls).toEqual([]);
+    expect(html).not.toContain("data-entry-pack-status");
   });
 
   test("answers an invalid order id with not found before loading", async () => {

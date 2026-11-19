@@ -1865,5 +1865,10 @@
   "passEmailEarlyStart": "Požiadali ste o okamžité využitie balíka počas 14-dňovej lehoty na odstúpenie. Pri platnom odstúpení vám vrátime nevyužitú časť.",
   "passEmailRefundTerms": "Podmienky vrátenia platby",
   "passEmailPaidByCard": "Zaplatené kartou",
-  "passEmailInvoice": "Faktúru vám pošleme v samostatnom e-maile."
+  "passEmailInvoice": "Faktúru vám pošleme v samostatnom e-maile.",
+  "entryPackStatusPendingLead": "Čakáme na potvrdenie platby od Nexi. Stránka sa aktualizuje automaticky. Ak máš platobnú stránku ešte otvorenú, dokonči platbu tam.",
+  "entryPackStatusRetryLead": "Platba sa nedokončila. Môžeš začať nový nákup balíka vstupov.",
+  "entryPackStatusRefundLead": "Platba prišla po ukončení objednávky. Balík vstupov sme nemohli vydať a platbu ti vrátime.",
+  "entryPackStatusRefundedTitle": "Platbu sme vrátili.",
+  "entryPackStatusRefundedLead": "Platbu sme vrátili pôvodným spôsobom platby."
 }

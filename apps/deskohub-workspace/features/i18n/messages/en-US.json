@@ -1829,5 +1829,10 @@
   "passEmailEarlyStart": "You asked to use the pack right away, within the 14-day withdrawal period. If you validly withdraw, we refund the unused part.",
   "passEmailRefundTerms": "Refund terms",
   "passEmailPaidByCard": "Paid by card",
-  "passEmailInvoice": "Your invoice comes in a separate email."
+  "passEmailInvoice": "Your invoice comes in a separate email.",
+  "entryPackStatusPendingLead": "We're waiting for Nexi to confirm your payment. This page updates automatically. If your payment page is still open, finish the payment there.",
+  "entryPackStatusRetryLead": "The payment wasn't completed. You can start a new Entry pack purchase.",
+  "entryPackStatusRefundLead": "Your payment arrived after the order ended. We couldn't issue the Entry pack and will refund the payment.",
+  "entryPackStatusRefundedTitle": "Your payment was refunded.",
+  "entryPackStatusRefundedLead": "We refunded the payment to your original payment method."
 }
