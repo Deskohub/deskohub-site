@@ -32,13 +32,13 @@ export interface PaymentSessionInput {
   readonly notificationUrl: string;
 }
 
-export interface HostedPaymentSession {
+interface HostedPaymentSession {
   readonly providerOrderId: string;
   readonly securityToken: string;
   readonly hostedPage: string;
 }
 
-export interface PreparedPaymentSession {
+interface PreparedPaymentSession {
   readonly logFields?: Readonly<Record<string, string>>;
   readonly providerOrderId: string;
   readonly create: Effect.Effect<HostedPaymentSession, PaymentProviderError>;
@@ -55,7 +55,7 @@ export interface VerifyPayment extends PaymentReference {
   readonly deadline?: Duration.Input;
 }
 
-export interface PaymentProviderOrder {
+interface PaymentProviderOrder {
   readonly hasActivity: boolean;
   readonly canRetry: boolean;
   /** The provider corroborates that the marked attempt never reached authorization. */

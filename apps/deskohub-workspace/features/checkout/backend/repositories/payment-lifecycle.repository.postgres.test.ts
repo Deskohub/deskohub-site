@@ -681,13 +681,14 @@ describe.skipIf(!testDatabase)(
       );
       const releaseRetriedAttempt = (retriedAttemptId: typeof marked.id) =>
         Effect.runPromise(
-          WorkspaceReservationRepository.use((reservations) =>
-            reservations.releaseRetriedAttempt({
+          Effect.gen(function* () {
+            const reservations = yield* WorkspaceReservationRepository;
+            return yield* reservations.releaseRetriedAttempt({
               id: reservation.id,
               retriedAttemptId,
               heldUntilAfter: Temporal.Now.instant(),
-            })
-          ).pipe(
+            });
+          }).pipe(
             Effect.provide(
               WorkspaceReservationRepository.Default.pipe(
                 Layer.provide(testDatabase!.layer)
