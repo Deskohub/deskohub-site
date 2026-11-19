@@ -4,7 +4,7 @@ import { openPage, waitForPageText, waitForPageUrl } from "../browser";
 import type { OpenE2EBrowserSession } from "../browser-session";
 import { getWorkspaceE2EDateInterval } from "../capacity";
 import type { WorkspaceE2EStepRunner } from "../case-runner";
-import { completeNexiHostedPayment } from "../checkout/nexi-hosted-payment";
+import { completeHostedPayment } from "../checkout/hosted-payment";
 import {
   prepareCheckoutPaymentAttempt,
   submitPaymentAndWaitForHostedPage,
@@ -17,7 +17,7 @@ import { tryWorkspaceE2ESync, type WorkspaceE2EError } from "../errors";
 import {
   markPreviewFulfillmentDeliveredForE2E,
   releaseReservationForLatePaymentRecoveryE2E,
-  replayNexiWebhook,
+  replayPaymentWebhook,
   requireProviderSessionRowAfterRedirect,
   validatePostgres,
   waitForLatePaymentRecoveryOutcome,
@@ -109,10 +109,7 @@ export const executeLatePaymentRecovery = ({
         Effect.gen(function* () {
           const hostedPaymentPage = yield* runStep({
             execute: Effect.flatMap(openSession, (browser) =>
-              submitPaymentAndWaitForHostedPage({
-                session: browser,
-                timeouts: config.timeouts,
-              })
+              submitPaymentAndWaitForHostedPage({ config, session: browser })
             ),
             id: "start-late-payment",
             timeoutMs: config.timeouts.providerTransition,
@@ -122,6 +119,7 @@ export const executeLatePaymentRecovery = ({
               onRow: (row) => {
                 state.checkoutRow = row;
               },
+              paymentProvider: hostedPaymentPage.provider,
               timeoutMs: config.timeouts.browserAction,
             }),
             id: "read-late-payment-provider-session",
@@ -179,11 +177,11 @@ export const executeLatePaymentRecovery = ({
 
           yield* runStep({
             execute: Effect.flatMap(openSession, (browser) =>
-              completeNexiHostedPayment({
+              completeHostedPayment({
+                config,
                 data,
                 hostedPaymentPage,
                 session: browser,
-                timeouts: config.timeouts,
               })
             ),
             id: "complete-late-hosted-payment",
@@ -206,15 +204,19 @@ export const executeLatePaymentRecovery = ({
 
     yield* runStep({
       permit: "provider-verification",
-      execute: replayNexiWebhook(config, providerSessionRow).pipe(
+      execute: replayPaymentWebhook(config, providerSessionRow).pipe(
         Effect.provideService(HttpClient.HttpClient, httpClient)
       ),
       id: "replay-late-payment-webhook",
       timeoutMs: config.timeouts.providerTransition,
     });
+    const paidDatasourceConfig = {
+      ...datasourceConfig,
+      paymentProvider: providerSessionRow.provider,
+    };
     const recoveredRow = yield* runStep({
       execute: waitForLatePaymentRecoveryOutcome(
-        datasourceConfig,
+        paidDatasourceConfig,
         orderId,
         providerSessionRow.payment_attempt_id,
         originalDotyposReservationId,
@@ -269,7 +271,7 @@ export const executeLatePaymentRecovery = ({
       timeoutMs: config.timeouts.datasource,
     });
     const checkoutRow = yield* runStep({
-      execute: validatePostgres(datasourceConfig, data, orderId, (row) => {
+      execute: validatePostgres(paidDatasourceConfig, data, orderId, (row) => {
         state.checkoutRow = row;
       }),
       id: "validate-recovered-postgres-state",

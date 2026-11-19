@@ -27,9 +27,9 @@ checkout-setup (teardown: checkout-cleanup)
 
 - Keep the global worker ceiling at six. It bounds whole cases, replacing the old reservation-start permit pool.
 - Dependency phases are barriers: every phase boundary stops all workers and starts new ones. Prepare the run in the one `checkout-setup` test, never in separate dependency projects, because each extra preparation project delays the case phase. Every case-phase project depends on `checkout-setup`, and `checkout-cleanup` reconciles as its teardown.
-- Inside `checkout-setup`, write the run context first. Then run preview readiness and fixture seeding concurrently, start cowork, meeting-room, and office availability preparation only after both finish (Calendar availability reads the seeded definitions), overlap provider preparation with all of them, and build and verify the plan last. Each keeps its own phase span.
+- Inside `checkout-setup`, write the run context first. Run preview readiness, then seed fixtures. Start cowork, meeting-room, and office availability preparation after seeding because Calendar availability reads the seeded definitions. Provider preparation overlaps these phases. Build and verify the plan last.
 - Register every checkout case statically in `e2e/playwright-checkout/case-catalog.ts`. `checkout-setup` asserts the prepared plan matches `workspaceE2ECaseIds`.
-- Paid and non-payment cases share the one `checkout-cases` pool. The [hosted-payment permit](#hosted-payment-permit), not serial Playwright lanes, bounds Nexi sessions.
+- Paid and non-payment cases share the one `checkout-cases` pool. The [hosted-payment permit](#hosted-payment-permit) bounds hosted sessions.
 - Referral cases are non-payment pool cases. `cases.pw.ts` binds them and the paid `checkout-referral-someone-else` to their run-scoped identities through `registerWorkspaceE2ECases`' `bindCase`; see [referral cases](referral-lane.md).
 - Every submitting checkout uses its own synthetic account identity. The default binder seeds and signs in a verified booker linked to a synthetic Dotypos profile, with a separate journal owner; referral and signed-out-verification cases bind their own identities. `checkout-cleanup` reconciles these journals. `contact-form`, `locale-switch`, the three `locale-smoke-*` cases, and the four `reservation-url-state-*` cases stay signed out and do not submit.
 - Locale coverage. `locale-switch` checks that an unserved Accept-Language (`ru`) lands on `unservedLanguageLocale`, then switches en-US to cs-CZ and back. Each locale after those two has a `locale-smoke-<locale>` case with a lowercase ID (`localeSmokeCaseId`; the CI failure annotation drops IDs that aren't lowercase) (`e2e/cases/locale-smoke.ts`, plans in `localeSmokePlans`): its Accept-Language values redirect to its prefix, the home page's `<html lang>` and h1 match the locale and its compiled `landingHeroTitle`, the hreflang alternates list every supported locale plus `x-default`, and the header language menu switches to the next smoke locale. A new locale needs a plan there. The redirect probes run outside the browser with the bypass header and an unfollowed redirect, so no locale cookie interferes. The sitemap is empty outside production, so `app/sitemap.test.ts`, not E2E, covers its locale URLs.
@@ -55,7 +55,7 @@ Run the synthetic scheduler harness from `apps/deskohub-workspace` with `bun run
 
 Unbounded hosted sessions produced Nexi sandbox error pages, and a one-session bound stretched the case phase past the case watchdog. Three sessions per suite is the measured operating bound, not a provider guarantee; three overlapping suites hold at most nine.
 
-- Bound only the Nexi hosted portion of a paid case, never the whole case. Paid cases run their preparation and post-payment validation in the shared pool.
+- Bound only the hosted portion of a paid case. Paid cases run their preparation and post-payment validation in the shared pool. Mock runs keep the same limit on open hosted sessions and the shared effects inside those steps.
 - Wrap the span from payment submission through the return to the checkout status page (for injected terminal cases, through the terminal-state preparation) in `WorkspaceE2EHostedPaymentPermitService.withPermit` (`e2e/coordination/hosted-payment-permit.service.ts`). The single [sandbox restart](nexi-sandbox.md#sandbox-restart) stays inside the same hold. Release it before `replay-payment-webhook` so it never nests with the webhook replay permit.
 - Playwright workers are separate processes, so the permit is a FIFO ticket queue in the run's `e2e-artifacts/checkout/hosted-payment-permit/` directory, keyed by run ID. It doesn't use the coordination database, so manual and local runs enforce it too.
 - `checkout-setup` creates the queue and its generation marker. The permit never recreates them; a missing or replaced marker fails every waiting and holding case.
@@ -115,7 +115,7 @@ Supported concurrency is three simultaneous exact-SHA runs (`workspaceE2EConcurr
 
 ## Webhook replay permit
 
-The synthetic `replay-payment-webhook` step confirms the Dotypos hold and sends the paid-reservation emails through the production route. It's the one distributed boundary:
+The synthetic `replay-payment-webhook` step confirms the Dotypos hold and sends the paid-reservation emails through the deployed handler. Nexi and mock replays both hold the distributed permit because they share Dotypos and fulfillment work.
 
 - Admit one replay across all suites with a transaction-scoped PostgreSQL advisory lock in the coordination database, through `WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL`.
 - Treat the permit as load control, not provider-side fencing. A lost coordinator connection releases the lock while the replay's HTTP request may still run, so keep unique order and idempotency identities on every protected operation.

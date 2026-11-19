@@ -15,6 +15,7 @@ import {
 } from "../browser";
 import type { E2EBrowserSession } from "../browser-session";
 import type { WorkspaceE2EConfig } from "../config";
+import type { E2EPaymentProvider } from "../e2e-env";
 import {
   failWorkspaceE2E,
   toWorkspaceE2EError,
@@ -34,8 +35,11 @@ import {
   workspaceE2EPollIntervalMs,
 } from "../timeouts";
 import type { CheckoutData } from "../types";
-import { isCheckoutStatusUrl } from "../urls";
-import type { HostedPaymentPage } from "./nexi-hosted-payment";
+import { isExpectedCheckoutStatusUrl } from "../urls";
+import {
+  addMockPaymentUrlRedactions,
+  readMockHostedPaymentUrl,
+} from "./mock-payment-url";
 import {
   prepareReservationForm,
   type ReservationFormPreparation,
@@ -545,23 +549,24 @@ const formatReservationStartDiagnostics = (
   );
 };
 
-/**
- * Submits the pay page and waits until Nexi's hosted payment page shows.
- * When the payment opened Nexi in its own page, it also waits for the
- * checkout page to reach the status page and leaves Nexi's page active.
- *
- * The Nexi URL is read from the active page, which becomes the popup only
- * once Playwright has reported it, so no page event can land after the
- * switch back to the checkout page.
- */
+export type HostedPaymentPage = {
+  readonly checkoutPage: Page;
+  readonly checkoutPageUrl: string;
+  readonly page: Page;
+  readonly provider: E2EPaymentProvider;
+  readonly url: string;
+};
+
+/** Waits for the selected hosted page, leaving its tab active. */
 export const submitPaymentAndWaitForHostedPage = ({
+  config,
   session,
-  timeouts,
 }: {
+  config: WorkspaceE2EConfig;
   session: E2EBrowserSession;
-  timeouts: WorkspaceE2ETimeouts;
 }): Effect.Effect<HostedPaymentPage, WorkspaceE2EError> =>
   Effect.gen(function* () {
+    const { timeouts, paymentProvider } = config;
     const checkoutPageUrl = yield* readPageUrl(session);
     if (!checkoutPageUrl) {
       return yield* failWorkspaceE2E("checkout pay page URL is unavailable", {
@@ -575,18 +580,26 @@ export const submitPaymentAndWaitForHostedPage = ({
     const checkoutPage = yield* submitCheckoutPayment(session, timeouts);
 
     const hostedPaymentUrl = yield* waitForPageUrl({
-      description: "Nexi hosted payment page",
+      description: `${paymentProvider} hosted payment page`,
       matches: (url) =>
-        url.includes("nexigroup.com") || url.includes("/hpp/nexi/"),
+        paymentProvider === "mock"
+          ? readMockHostedPaymentUrl(url, [config.baseUrl]) !== undefined
+          : url.includes("nexigroup.com") || url.includes("/hpp/nexi/"),
       session,
       timeoutMs: timeouts.providerTransition,
     });
+    if (paymentProvider === "mock") {
+      const mockUrl = readMockHostedPaymentUrl(hostedPaymentUrl, [
+        config.baseUrl,
+      ]);
+      if (mockUrl) addMockPaymentUrlRedactions(mockUrl);
+    }
     const hostedPage = yield* readActivePage(session);
     if (hostedPage !== checkoutPage) {
       yield* session.activate(checkoutPage);
       yield* waitForPageUrl({
         description: "checkout status page in original tab",
-        matches: isCheckoutStatusUrl,
+        matches: (url) => isExpectedCheckoutStatusUrl(url, config.expectedHost),
         session,
         timeoutMs: timeouts.providerTransition,
       });
@@ -596,9 +609,38 @@ export const submitPaymentAndWaitForHostedPage = ({
       checkoutPage,
       checkoutPageUrl,
       page: hostedPage,
+      provider: paymentProvider,
       url: hostedPaymentUrl,
     } satisfies HostedPaymentPage;
   });
+
+export const waitForReturnedPaymentTabToClose = ({
+  hostedPaymentPage: { checkoutPage, page },
+  session,
+  timeoutMs,
+}: {
+  readonly hostedPaymentPage: HostedPaymentPage;
+  readonly session: E2EBrowserSession;
+  readonly timeoutMs: number;
+}) =>
+  page === checkoutPage
+    ? Effect.void
+    : Effect.gen(function* () {
+        yield* pollUntil(
+          session.use("read browser tabs", async (active) => {
+            const pages = active.context().pages();
+            return pages.length === 1 && pages[0] === checkoutPage
+              ? true
+              : undefined;
+          }),
+          {
+            intervalMs: workspaceE2EPollIntervalMs.browser,
+            label: "returned payment tab to close",
+            timeoutMs,
+          }
+        );
+        yield* session.activate(checkoutPage);
+      });
 
 /**
  * Gives the pay page's legal consent and activates its enabled pay button

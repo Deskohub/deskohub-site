@@ -190,6 +190,7 @@ const assertStatusPage = (
     } as CheckoutRow,
     config: {
       expectedHost: server.url.host,
+      paymentProvider: "nexi",
       timeouts: workspaceE2ETimeouts,
     } as WorkspaceE2EConfig,
     data: {

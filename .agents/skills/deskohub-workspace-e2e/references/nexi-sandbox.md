@@ -1,5 +1,7 @@
 # Nexi sandbox
 
+Use the [preview mock payment setup](preview-workflow.md#run-e2e) when the sandbox is unavailable. The mock case driver uses the exact preview's hosted page and exercises approval, decline with checkout retry, and late payment through the same checkout cases. The classified restart described here applies to Nexi only.
+
 ## Environment boundary
 
 - Use the Nexi sandbox origin for local, preview, and automated testing and the live origin only in production. Pair each credential with its environment and terminal type, and keep the API key server-side.
@@ -49,4 +51,4 @@ The `restart-sandbox-rejected-payment` step:
 3. Closes the hosted popup within `browserAction`, activates the checkout page, and waits `nexiSandboxRetryDelayMs`.
 4. Reopens the saved checkout pay page URL, whose `payState` value is registered for redaction.
 
-Normal Pay then creates a new attempt and Nexi order, and the `-retry` steps assert both IDs changed. A second rejection fails the case; rerun the exact-SHA workflow.
+Normal Pay then creates a new attempt and Nexi order, and the `-retry` steps assert both IDs changed. In `nexi` mode, a second rejection fails the case.

@@ -12,6 +12,7 @@ import type { WorkspaceE2EConfig } from "../config";
 import { addRedaction, redact } from "../redaction";
 import { workspaceE2ETimeouts } from "../timeouts";
 import { makeCoworkCheckoutData } from "./data";
+import { completeHostedPayment } from "./hosted-payment";
 import {
   continueToReservationContactStep,
   prepareCheckoutPaymentAttempt,
@@ -56,6 +57,7 @@ type Submission = {
 
 type ScenarioState = {
   busyPriceStarts: number;
+  readonly mockOutcomes: string[];
   readonly submissions: Submission[];
   readonly paymentHandlers: string[];
 };
@@ -64,6 +66,7 @@ const states = new Map<string, ScenarioState>();
 const resetScenario = (scenario: string) => {
   const state: ScenarioState = {
     busyPriceStarts: 0,
+    mockOutcomes: [],
     paymentHandlers: [],
     submissions: [],
   };
@@ -72,12 +75,7 @@ const resetScenario = (scenario: string) => {
 };
 
 const stateFor = (scenario: string) => {
-  let state = states.get(scenario);
-  if (!state) {
-    state = { busyPriceStarts: 0, paymentHandlers: [], submissions: [] };
-    states.set(scenario, state);
-  }
-  return state;
+  return states.get(scenario) ?? resetScenario(scenario);
 };
 
 const json = (body: unknown) =>
@@ -155,10 +153,34 @@ const server = Bun.serve({
       });
     }
 
+    if (url.pathname === "/api/checkout/mock-payment") {
+      if (request.method === "POST") {
+        const form = await request.formData();
+        state.mockOutcomes.push(String(form.get("outcome")));
+        return Response.redirect(
+          new URL(
+            `/reservation/status/${orderId}?scenario=${scenario}&returned=true`,
+            url
+          ),
+          303
+        );
+      }
+      return new Response(
+        `<form method="post">
+          <button name="outcome" value="approved">Approve test payment</button>
+          <button name="outcome" value="declined">Decline test payment</button>
+        </form>`,
+        { headers: { "content-type": "text/html; charset=utf-8" } }
+      );
+    }
+
     if (url.pathname.includes("/reservation/status/")) {
-      return new Response("<main>Reservation status</main>", {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+      const closeReturnedPopup =
+        scenario === "mock-hosted-popup" && url.searchParams.has("returned");
+      return new Response(
+        `<main>Reservation status</main>${closeReturnedPopup ? "<script>window.close()</script>" : ""}`,
+        { headers: { "content-type": "text/html; charset=utf-8" } }
+      );
     }
 
     return new Response("Not found", { status: 404 });
@@ -278,6 +300,11 @@ function payPage(scenario: string, id: string) {
             setTimeout(() => location.assign('/reservation/status/${id}?scenario=' + scenario), scenario === 'hosted-popup-delayed-open' || scenario === 'hosted-popup-delayed-navigation' ? 600 : 100);
           } else if (scenario === 'hosted-same-tab') {
             location.assign('/hpp/nexi/${id}?scenario=' + scenario);
+          } else if (scenario === 'mock-hosted-same-tab') {
+            location.assign('/api/checkout/mock-payment?scenario=' + scenario);
+          } else if (scenario === 'mock-hosted-popup') {
+            window.open('/api/checkout/mock-payment?scenario=' + scenario, '_blank');
+            location.assign('/reservation/status/${id}?scenario=' + scenario);
           }
         });
       }
@@ -1132,14 +1159,69 @@ const runHostedCrossing = (scenario: string) => {
     drive: ({ session }) =>
       Effect.gen(function* () {
         const hosted = yield* submitPaymentAndWaitForHostedPage({
+          config: hostedCrossingConfig("nexi"),
           session,
-          timeouts: shortTimeouts,
         });
         const activePage = yield* readActivePage(session);
         return { ...hosted, activePage };
       }),
   });
 };
+
+const hostedCrossingConfig = (
+  paymentProvider: WorkspaceE2EConfig["paymentProvider"]
+): WorkspaceE2EConfig => ({
+  baseUrl: server.url.origin,
+  bypassSecret: undefined,
+  expectedHost: server.url.host,
+  paymentProvider,
+  timeouts: shortTimeouts,
+});
+
+for (const [outcome, scenario] of [
+  ["approved", "mock-hosted-same-tab"],
+  ["declined", "mock-hosted-popup"],
+] as const) {
+  test.skipIf(!chromiumAvailable)(
+    `submits a mock ${outcome} payment and returns to status`,
+    async () => {
+      const state = resetScenario(scenario);
+      const config = hostedCrossingConfig("mock");
+      const result = await runBrowserStep({
+        browser: requireBrowser(),
+        prepare: showPayPage(scenario),
+        drive: ({ session }) =>
+          Effect.gen(function* () {
+            const hostedPaymentPage = yield* submitPaymentAndWaitForHostedPage({
+              config,
+              session,
+            });
+            yield* completeHostedPayment({
+              config,
+              data: makeCoworkCheckoutData(config.baseUrl, date),
+              hostedPaymentPage,
+              outcome,
+              session,
+            });
+            const activePage = yield* readActivePage(session);
+            return { activePage, hostedPaymentPage };
+          }),
+      });
+
+      expectSucceeded(result);
+      expect(result.value?.hostedPaymentPage.url).toBe(
+        new URL(
+          `/api/checkout/mock-payment?scenario=${scenario}`,
+          config.baseUrl
+        ).href
+      );
+      expect(result.value?.activePage).toBe(
+        result.value?.hostedPaymentPage.checkoutPage
+      );
+      expect(state.mockOutcomes).toEqual([outcome]);
+    }
+  );
+}
 
 test.skipIf(!chromiumAvailable)(
   "tracks hosted payment in a popup and checkout status in its original tab",

@@ -4,10 +4,10 @@ import { workspaceE2ETimeouts } from "../timeouts";
 import { makeCoworkCheckoutData } from "./data";
 import {
   completeNexiHostedPayment,
-  type HostedPaymentPage,
   type NexiChallengeOutcome,
 } from "./nexi-hosted-payment";
 import { nexiSandboxTestCard } from "./nexi-sandbox-test-card";
+import type { HostedPaymentPage } from "./payment";
 
 export type HostedScenario = {
   readonly fallback?: boolean;
@@ -259,6 +259,7 @@ export const prepareHostedPayment = (id: string, options: HostedScenario) => {
         checkoutPage,
         checkoutPageUrl,
         page,
+        provider: "nexi",
         url: page.url(),
       };
     });
