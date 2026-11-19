@@ -18,7 +18,7 @@ import { runWorkspaceEffect } from "@/shared/backend/workspace-effect";
 import { withWorkspaceRequestContext } from "@/shared/backend/workspace-request-context";
 import { maskEmailAddress } from "@/shared/utils";
 import { currentInstant } from "@/shared/utils/temporal";
-import { getEntryPackRetryPath } from "../entry-pack-checkout";
+import { getEntryPackPayPath } from "../entry-pack-checkout";
 import { isEntryPackQuoteExpired } from "../pass-offer";
 
 const readBuyerOrder = Effect.fnUntraced(function* (
@@ -209,7 +209,7 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
         : "failed",
     retryPath:
       priorConfirmed && !isEntryPackQuoteExpired(now, validUntil)
-        ? getEntryPackRetryPath(row.locale, orderId)
+        ? getEntryPackPayPath(row.locale, orderId)
         : undefined,
   } as const;
 });

@@ -62,6 +62,7 @@ import {
   getEntryPackPrice,
   isEntryPackQuoteExpired,
 } from "../pass-offer";
+import { findOwnedEntryPackOrder } from "./entry-pack-order";
 import { quoteEntryPack } from "./entry-pack-quote";
 
 export class EntryPackPurchaseError extends Data.TaggedError(
@@ -291,32 +292,7 @@ export const getEntryPackPaymentDisclosure = (locale: Locale) => ({
 
 const readOwnedPurchaseOrder = Effect.fn("readOwnedEntryPackPurchaseOrder")(
   function* (orderId: OrderId, buyerAccountId: CustomerAccountId) {
-    const { db } = yield* WorkspaceDatabase;
-    const [entry] = yield* db
-      .select({
-        order: orders,
-        purchase: passPurchases,
-        activeAttempt: {
-          state: paymentAttempts.state,
-          refundState: paymentAttempts.refundState,
-        },
-      })
-      .from(passPurchases)
-      .innerJoin(orders, eq(orders.id, passPurchases.id))
-      .leftJoin(
-        paymentAttempts,
-        and(
-          eq(paymentAttempts.id, orders.activePaymentAttemptId),
-          eq(paymentAttempts.orderId, orders.id)
-        )
-      )
-      .where(
-        and(
-          eq(passPurchases.id, orderId),
-          eq(passPurchases.buyerAccountId, buyerAccountId),
-          eq(orders.kind, "pass-purchase")
-        )
-      );
+    const entry = yield* findOwnedEntryPackOrder(orderId, buyerAccountId);
     if (!entry)
       return yield* new EntryPackPurchaseError({ reason: "unavailable" });
     return entry;

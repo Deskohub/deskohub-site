@@ -92,15 +92,21 @@ Some URLs keep their issued locale, but only when they verify:
 - the Pay page with a Pay state;
 - the cowork, meeting-room, and office restoration pages with a Pay state of
   their kind;
-- the invoice page with its order's access token.
+- the invoice page with its order's access token;
+- the Entry pack checkout with an order owned by the active, verified buyer.
 
 Rules:
 
-- Take the first raw parameter value exactly as the page reads it (no
-  trimming; an empty value counts as absent). It must open with the page's own
-  validator and be bound to the URL locale. A Pay state is checked for
-  signature and expiry. The invoice access token is checked for signature,
-  order, and locale, and has no expiry.
+- For signed links, take the first raw parameter value as the page reads it.
+  Keep whitespace and treat an empty value as absent. A Pay state must match
+  the page's locale and pass signature and expiry checks. The invoice access
+  token must pass signature, order, and locale checks, and has no expiry.
+- Entry pack checkout takes exactly one `order` value, which must parse as an
+  order ID. The owned pass-purchase order must carry the URL locale. With
+  checkout off, only that buyer can reach private status through the checkout
+  URL, and the redirect uses the order's locale. Checkout responses with an
+  `order` parameter use `private, no-store` and keep same-origin referrers so
+  the Server Action can verify the continuation.
 - Any verifier failure (failed lazy import, typed failure, or defect) applies
   the preference and logs `i18n.locale-bound-continuation.verify-failed` once,
   without the token. `preferenceApplyingTo` handles this inside its Effect.
@@ -109,7 +115,8 @@ Rules:
   (`features/checkout/backend/locale-bound-continuation.server.ts`) verifies it
   with `PayState.open` given the page (locale and reservation kind), as the
   pages open it, or
-  with `openReservationAccessToken`. `pageLocalePreference` loads the verifier
+  with `openReservationAccessToken` or `readOwnedEntryPackOrderLocale`.
+  `pageLocalePreference` loads the verifier
   lazily, and only when the preference would move a candidate URL.
 - The Pay state fixes the language of the accepted terms, operating rules, and
   frozen accounting snapshot (the invoice language). The invoice page issues

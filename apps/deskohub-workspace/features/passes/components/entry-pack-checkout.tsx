@@ -17,7 +17,7 @@ import {
   type EntryPackBuyer,
   type entryPackDetailsSchema,
   getEntryPackDetailsPath,
-  getEntryPackRetryPath,
+  getEntryPackPayPath,
 } from "../entry-pack-checkout";
 import { beginEntryPackCheckout } from "../entry-pack-checkout-actions";
 import type { EntryPackProduct, EntryPackSize } from "../pass-offer";
@@ -254,7 +254,7 @@ export function EntryPackCheckout({
           discountCodeEntryEnabled={discountCodeEntryEnabled && !retryPayment}
           continuationPath={
             retryPayment
-              ? getEntryPackRetryPath(locale, payment.orderId)
+              ? getEntryPackPayPath(locale, payment.orderId)
               : undefined
           }
           headingRef={heading}

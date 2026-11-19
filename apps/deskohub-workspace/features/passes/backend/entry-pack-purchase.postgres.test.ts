@@ -18,13 +18,17 @@ import { Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { promotionCodes, vouchers } from "@/db/schema";
-import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import {
+  CurrentCustomerAccount,
+  requireVerifiedIdentity,
+} from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
 import {
   CustomerAccountSections,
   HeldCustomerAccount,
 } from "@/features/account/backend/customer-account-sections";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { accountingSnapshotKeyIdSchema } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
@@ -66,6 +70,7 @@ import {
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { entryPackPurchaseQuoteCodec } from "../entry-pack-purchase-quote";
+import { readOwnedEntryPackOrderLocale } from "./entry-pack-order";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
   beginEntryPackPurchase,
@@ -143,6 +148,47 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           ),
       })
     );
+
+    test("only the active buyer can resolve an Entry pack order's locale", async () => {
+      const db = database!;
+      const orderId = orderIdSchema.make(crypto.randomUUID());
+      await Effect.runPromise(
+        beginEntryPackPurchase({
+          orderId,
+          product: { kind: "entry-pack", tier: "open-space", size: 5 },
+          locale: "en-US",
+        }).pipe(Effect.provide(Layer.mergeAll(db.layer, purchaseServices)))
+      );
+
+      const localeFor = (viewer: typeof session | null, id = orderId) =>
+        Effect.runPromise(
+          readOwnedEntryPackOrderLocale(id).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                db.layer,
+                Layer.mock(CurrentCustomerAccount, {
+                  requireActive: requireVerifiedIdentity(viewer),
+                })
+              )
+            )
+          )
+        );
+
+      expect(await localeFor(session)).toBe("en-US");
+      expect(
+        await localeFor({
+          ...session,
+          accountId: customerAccountIdSchema.make(crypto.randomUUID()),
+        })
+      ).toBeUndefined();
+      expect(
+        await localeFor({ ...session, deletionRequested: true })
+      ).toBeUndefined();
+      expect(await localeFor(null)).toBeUndefined();
+      expect(
+        await localeFor(session, orderIdSchema.make(crypto.randomUUID()))
+      ).toBeUndefined();
+    });
 
     const integration = async (
       db: WorkspacePostgresSuiteDatabase,

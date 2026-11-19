@@ -1,7 +1,7 @@
 import { Effect, Layer, Schema } from "effect";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
-import { Suspense } from "react";
+import { cache, Suspense } from "react";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
@@ -12,8 +12,9 @@ import { LatePaymentVerificationService } from "@/features/checkout/backend/paym
 import { getDiscountCodeEntryEnabled } from "@/features/discounts/discount-code-entry.server";
 import { type Locale, m } from "@/features/i18n";
 import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
-import { orderIdSchema } from "@/features/order";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import { readOwnedEntryPackOrderLocale } from "@/features/passes/backend/entry-pack-order";
 import { displayEntryPackCheckoutPrice } from "@/features/passes/backend/entry-pack-checkout-price";
 import {
   getEntryPackPaymentDisclosure,
@@ -24,7 +25,7 @@ import { EntryPackCheckout } from "@/features/passes/components/entry-pack-check
 import {
   type EntryPackBuyer,
   getEntryPackDetailsPath,
-  getEntryPackRetryPath,
+  getEntryPackPayPath,
   readEntryPackSelection,
 } from "@/features/passes/entry-pack-checkout";
 import {
@@ -45,14 +46,25 @@ type Query = {
   readonly order?: string | string[];
 };
 
-const requireEntryPackPageOpen = async (
-  locale: Locale,
-  searchParams: Promise<Query>
-) => {
+const readOrderLocale = cache((orderId: OrderId) =>
+  readOwnedEntryPackOrderLocale(orderId).pipe(
+    Effect.provide(
+      Layer.mergeAll(WorkspaceDatabase.Default, CurrentCustomerAccount.Live)
+    ),
+    runWorkspaceEffectOrElse("passes.entry-pack-order-locale", {
+      failureCode: "entry_pack_page_unavailable",
+      orElse: () => undefined,
+    })
+  )
+);
+
+const requireEntryPackPageOpen = async (searchParams: Promise<Query>) => {
   if (await isCoworkPassesPageOpenAfterConnection()) return;
   const { order } = await searchParams;
   if (Schema.is(orderIdSchema)(order)) {
-    redirect(`/${locale}${reservationStatusPath}/${order}`);
+    const issuedLocale = await readOrderLocale(order);
+    if (issuedLocale)
+      redirect(`/${issuedLocale}${reservationStatusPath}/${order}`);
   }
   notFound();
 };
@@ -63,7 +75,7 @@ export async function generateMetadata({
   readonly searchParams: Promise<Query>;
 }): Promise<Metadata> {
   return runWithRequestLocale(async (locale) => {
-    await requireEntryPackPageOpen(locale, searchParams);
+    await requireEntryPackPageOpen(searchParams);
     return {
       title: m.entryPackCheckoutTitle({}, { locale }),
       robots: { index: false, follow: false },
@@ -77,7 +89,7 @@ export default async function EntryPackPage({
   readonly searchParams: Promise<Query>;
 }) {
   return runWithRequestLocale(async (locale) => {
-    await requireEntryPackPageOpen(locale, searchParams);
+    await requireEntryPackPageOpen(searchParams);
     return (
       <Suspense fallback={null}>
         <EntryPackPageContent locale={locale} searchParams={searchParams} />
@@ -199,7 +211,7 @@ async function EntryPackPageContent({
   if (isPaymentRetry) {
     if (buyer.kind === "signed-out") {
       redirect(
-        getAccountSignInPath(locale, getEntryPackRetryPath(locale, orderId))
+        getAccountSignInPath(locale, getEntryPackPayPath(locale, orderId))
       );
     }
     if (draft?.kind !== "retry") {
@@ -208,7 +220,7 @@ async function EntryPackPageContent({
       );
     }
     if (draft.locale !== locale)
-      redirect(getEntryPackRetryPath(draft.locale, orderId));
+      redirect(getEntryPackPayPath(draft.locale, orderId));
   }
   if (orderId && draft?.kind === "draft" && draft.locale !== locale) {
     redirect(getEntryPackDetailsPath(draft.locale, draft.product, orderId));

@@ -6,10 +6,12 @@ import { sealSyntheticCoworkPayState } from "@/features/checkout/backend/checkou
 import { payStateTokenQueryParam } from "@/features/checkout/pay-state-token-query";
 import type { Locale } from "@/features/i18n";
 import { localeCookieName } from "@/features/i18n/routing";
+import type { OrderId } from "@/features/order";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
 import { createReservationAccessToken } from "@/features/reservation/backend/reservation-access-token";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { reservationAccessTokenQueryParam } from "@/features/reservation/reservation-access-token";
+import { CurrentWorkspaceRequestHeaders } from "@/shared/backend/workspace-request-context";
 import { captureWorkspaceLogs } from "@/shared/testing/workspace-telemetry.test-utils";
 
 // The saved preference goes through the real reader over a fake session read
@@ -23,6 +25,26 @@ const {
 const reader = makeFakeSavedLocalePreference();
 mock.module("@/features/account/server/saved-locale-preference.server", () => ({
   savedLocalePreference: reader.savedLocalePreference,
+}));
+
+const ownedPackOrder = "5413f44e-80ef-430e-9663-ddd7242a2ed0";
+const entryPackOrders = await import(
+  "@/features/passes/backend/entry-pack-order"
+);
+const readOwnedEntryPackOrderLocale = mock((orderId: OrderId) =>
+  Effect.gen(function* () {
+    const headers = yield* CurrentWorkspaceRequestHeaders;
+    if (
+      headers?.get("cookie") === signedInCookie &&
+      orderId === ownedPackOrder
+    ) {
+      return "en-US" as const;
+    }
+  })
+);
+mock.module("@/features/passes/backend/entry-pack-order", () => ({
+  ...entryPackOrders,
+  readOwnedEntryPackOrderLocale,
 }));
 
 // Keep the real verifier, but let one test make it throw.
@@ -59,6 +81,7 @@ beforeEach(() => {
   reader.fake.sessionReadFailure = undefined;
   reader.fake.sessionReads.length = 0;
   verifierThrows = false;
+  readOwnedEntryPackOrderLocale.mockClear();
   workspaceLogs.reset();
 });
 
@@ -195,6 +218,39 @@ describe("signed-in customer's saved language preference", () => {
         await proxy(request(path, { cookie: signedInCookie }))
       );
     }
+  });
+
+  test("keeps the issued locale of an owned Entry pack order across a saved preference change", async () => {
+    for (const step of ["details", "pay"]) {
+      const response = await proxy(
+        request(
+          `/en-US/passes/entry-pack?order=${ownedPackOrder}&step=${step}`,
+          {
+            cookie: signedInCookie,
+          }
+        )
+      );
+      expectKeptInEnglish(response);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("referrer-policy")).toBe("same-origin");
+    }
+    expect(readOwnedEntryPackOrderLocale).toHaveBeenCalledTimes(2);
+  });
+
+  test("applies the preference to an Entry pack URL without a verified order in its locale", async () => {
+    for (const path of [
+      "/en-US/passes/entry-pack",
+      "/en-US/passes/entry-pack?order=malformed",
+      `/en-US/passes/entry-pack?order=${ownedPackOrder}&order=duplicate`,
+      "/en-US/passes/entry-pack?order=ec53ffbb-eae2-477c-b9ae-7b29e4525b25",
+      `/de-DE/passes/entry-pack?order=${ownedPackOrder}`,
+      `/en-US/gallery?order=${ownedPackOrder}`,
+    ]) {
+      expectMovedToCzech(
+        await proxy(request(path, { cookie: signedInCookie }))
+      );
+    }
+    expect(readOwnedEntryPackOrderLocale).toHaveBeenCalledTimes(2);
   });
 
   test("redirects an invalid, expired, wrong-family or wrong-locale Pay state to the preference", async () => {

@@ -12,12 +12,7 @@ import {
   passTiers,
 } from "./pass-offer";
 
-const entryPackCheckoutPath = "/passes/entry-pack";
-
-export function getEntryPackRetryPath(locale: Locale, orderId: OrderId) {
-  const query = new URLSearchParams({ order: orderId, step: "pay" });
-  return `/${locale}${entryPackCheckoutPath}?${query}`;
-}
+import { entryPackCheckoutPath } from "./routes";
 
 export function readEntryPackSelection(query: {
   readonly tier?: string | string[];
@@ -41,6 +36,11 @@ export function getEntryPackDetailsPath(
     step: "details",
     ...(orderId !== undefined && { order: orderId }),
   });
+  return `/${locale}${entryPackCheckoutPath}?${query}`;
+}
+
+export function getEntryPackPayPath(locale: Locale, orderId: OrderId) {
+  const query = new URLSearchParams({ order: orderId, step: "pay" });
   return `/${locale}${entryPackCheckoutPath}?${query}`;
 }
 
