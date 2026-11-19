@@ -36,6 +36,7 @@ import {
   toReservationStep,
 } from "../checkout/reservation-form-preparation";
 import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
+import { initialE2EPaymentProvider } from "../e2e-env";
 import {
   toWorkspaceE2EError,
   tryWorkspaceE2ESync,
@@ -178,9 +179,9 @@ export const makeMeetingRoomE2ECases = ({
     const cancelledScenario = yield* tryWorkspaceE2ESync(
       "select cancelled meeting-room payment scenario",
       () => {
-        const scenario = getPaymentTerminalScenarios().find(
-          ({ state }) => state === "cancelled"
-        );
+        const scenario = getPaymentTerminalScenarios(
+          initialE2EPaymentProvider(config.paymentProvider)
+        ).find(({ state }) => state === "cancelled");
         assert(scenario, "cancelled payment scenario missing");
         return scenario;
       }

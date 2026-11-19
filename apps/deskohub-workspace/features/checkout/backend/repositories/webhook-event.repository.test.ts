@@ -18,6 +18,7 @@ describe("WebhookEventRepository.insertReceived", () => {
         Effect.gen(function* () {
           const repository = yield* WebhookEventRepository;
           return yield* repository.insertReceived({
+            provider: "nexi",
             eventId,
             receivedAt: Temporal.Instant.from("2026-10-20T08:00:00Z"),
           });
@@ -33,6 +34,6 @@ describe("WebhookEventRepository.insertReceived", () => {
       "insert",
       "select",
     ]);
-    expect(recording.statements[1]?.params).toEqual([eventId, 1]);
+    expect(recording.statements[1]?.params).toEqual(["nexi", eventId, 1]);
   });
 });

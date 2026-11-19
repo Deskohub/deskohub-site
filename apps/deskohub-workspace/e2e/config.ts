@@ -16,6 +16,7 @@ export const getConfig = (environment: E2EEnvironment) => {
   return {
     ...target,
     bypassSecret,
+    paymentProvider: environment.WORKSPACE_E2E_PAYMENT_PROVIDER,
     timeouts: workspaceE2ETimeouts,
   };
 };

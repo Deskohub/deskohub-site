@@ -47,8 +47,11 @@ export const makeReservationOrderPaymentHandler = Effect.gen(function* () {
               }
           )
         ),
-      admitNexi: ({ details: { commitment, accountingSnapshot }, ...input }) =>
-        lifecycle.createPendingNexiAttempt({
+      admitProvider: ({
+        details: { commitment, accountingSnapshot },
+        ...input
+      }) =>
+        lifecycle.createPendingProviderAttempt({
           ...input,
           commitment,
           accountingSnapshot,

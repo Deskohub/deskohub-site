@@ -16,6 +16,7 @@ import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import type { SealedStateTokenError } from "@/shared/backend/sealed-state";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { currentInstant } from "@/shared/utils/temporal";
+import type { RetriedPaymentAttempt } from "../payment/payment-provider";
 import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
 import { deriveCheckoutSessionKeys } from "./checkout-lookup-keys.server";
 import {
@@ -57,6 +58,8 @@ export type OpenCheckout = {
   readonly kind: Extract<OrderKind, "reservation">;
   readonly state: PayStateWithHoldExpiry;
   readonly reservation: PayableReservation;
+  /** The newest attempt bound by this signed retry state. */
+  readonly retriedAttempt?: RetriedPaymentAttempt;
 };
 
 /** What reading the order's reservation, locally or in Dotypos, can fail with. */
@@ -133,13 +136,14 @@ export class PayableCheckout extends Context.Service<
           return yield* refuse("missing_checkout_session");
         }
 
+        const retriedAttempt =
+          binding.kind === "order"
+            ? yield* paymentAttempts.findNewestForReservation(reservation.id)
+            : null;
         const attemptRefusal = findPayStateAttemptRefusal(
           binding,
           reservation,
-          binding.kind === "order"
-            ? ((yield* paymentAttempts.findNewestForReservation(reservation.id))
-                ?.id ?? null)
-            : null
+          retriedAttempt?.id ?? null
         );
         if (attemptRefusal) return yield* refuse(attemptRefusal);
         // An order-bound state carries no raw session id: only the order's
@@ -162,13 +166,14 @@ export class PayableCheckout extends Context.Service<
         if (current?.id !== reservation.id) {
           return yield* refuse("not_current");
         }
-        return reservation;
+        return { reservation, retriedAttempt };
       });
 
       const reconfirm: IPayableCheckout["reconfirm"] = Effect.fn(
         "payableCheckout.reconfirm"
       )(function* (state) {
-        const reservation = yield* findSessionReservation(state);
+        const { reservation, retriedAttempt } =
+          yield* findSessionReservation(state);
         const refuse = (reason: CheckoutUnavailableReason) =>
           unavailable(state, reason, reservation);
 
@@ -217,6 +222,14 @@ export class PayableCheckout extends Context.Service<
           kind: "reservation",
           state: withPayStateHoldExpiry(state, payable),
           reservation: payable,
+          ...(retriedAttempt && {
+            retriedAttempt: {
+              id: retriedAttempt.id,
+              provider: retriedAttempt.provider,
+              state: retriedAttempt.state,
+              failureCode: retriedAttempt.failureCode,
+            },
+          }),
         };
         return checkout;
       });

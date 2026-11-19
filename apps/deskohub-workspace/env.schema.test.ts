@@ -443,3 +443,44 @@ describe("workspace environment schemas", () => {
     }
   });
 });
+
+describe("payment provider deployment policy", () => {
+  test.each(["mock", "fallback"])("rejects %s outside preview", (mode) => {
+    for (const stage of ["production", "development"]) {
+      expect(
+        invalidVariables({
+          WORKSPACE_PAYMENT_PROVIDER: mode,
+          VERCEL_ENV: stage,
+          VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-automation",
+        })
+      ).toContain("WORKSPACE_PAYMENT_PROVIDER");
+    }
+  });
+
+  test.each(["mock", "fallback"])(
+    "requires preview protection configuration for %s",
+    (mode) => {
+      expect(
+        invalidVariables({
+          WORKSPACE_PAYMENT_PROVIDER: mode,
+          VERCEL_ENV: "preview",
+          VERCEL_AUTOMATION_BYPASS_SECRET: undefined,
+        })
+      ).toContain("WORKSPACE_PAYMENT_PROVIDER");
+    }
+  );
+
+  test.each(["mock", "fallback"])(
+    "enables %s on a protected preview",
+    (mode) => {
+      const enabled = createWorkspaceEnv(
+        workspaceRuntimeEnv({
+          WORKSPACE_PAYMENT_PROVIDER: mode,
+          VERCEL_ENV: "preview",
+          VERCEL_AUTOMATION_BYPASS_SECRET: "synthetic-automation",
+        })
+      );
+      expect(enabled.WORKSPACE_PAYMENT_PROVIDER).toBe(mode);
+    }
+  );
+});

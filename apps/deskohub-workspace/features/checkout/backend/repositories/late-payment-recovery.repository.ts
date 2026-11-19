@@ -1,7 +1,6 @@
 import "@/shared/polyfills/temporal";
 
 import type { DotyposReservationId } from "@deskohub/dotypos";
-import type { NexiOperationId, NexiWebhookEventId } from "@deskohub/nexi";
 import { and, asc, desc, eq, gt, inArray, lte, ne, or, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer } from "effect";
@@ -62,8 +61,8 @@ export class OriginalHoldNotReusableError extends Data.TaggedError(
 
 type LatePaymentProviderFacts = {
   /** Absent when the status page's provider verification found the payment. */
-  readonly webhookEventId?: NexiWebhookEventId;
-  readonly providerOperationId?: NexiOperationId;
+  readonly webhookEventId?: string;
+  readonly providerOperationId?: string;
   readonly providerStatus?: string;
   readonly verifiedPaidAt: Temporal.Instant;
 };

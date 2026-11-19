@@ -10,7 +10,7 @@ import {
   failedStepAnnotation,
   runBrowserStep,
 } from "../case-runner.browser.test-utils";
-import type { HostedPaymentPage } from "../checkout/nexi-hosted-payment";
+import type { HostedPaymentPage } from "../checkout/payment";
 import { retryPaymentInPlace } from "../checkout/payment-retry";
 import { workspaceE2ETimeouts } from "../timeouts";
 import { leaveRejectedHostedPayment } from "./checkout";
@@ -225,6 +225,7 @@ for (const mode of [
               checkoutPage,
               checkoutPageUrl: new URL(payPath, server.url).href,
               page,
+              provider: "nexi",
               url: page.url(),
             };
             if (mode === "closed-popup") await page.close();

@@ -70,6 +70,7 @@ import {
   invoiceCancellations,
   invoices,
   manualInvoiceActors,
+  mockPaymentSessions,
   paymentAttempts,
   promotionCodes,
   reservationAccessGrants,
@@ -399,6 +400,18 @@ const rowFixtures = new Map([
     row: (db) =>
       Effect.gen(function* () {
         return { invoiceId: yield* syntheticInvoice(db) };
+      }),
+  }),
+  rowFixture(mockPaymentSessions, {
+    values: {
+      capabilityHash: hexDigest,
+      returnUrl: (seed) => `https://synthetic.invalid/return/${seed}`,
+    },
+    row: () =>
+      Effect.succeed({
+        paymentId: syntheticId("mock-payment"),
+        amountMinor: 100,
+        currency: "CZK",
       }),
   }),
   rowFixture(paymentAttempts, {

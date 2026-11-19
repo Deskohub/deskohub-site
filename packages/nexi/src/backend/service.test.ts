@@ -810,6 +810,13 @@ describe("NexiService administration reads", () => {
       capturedAmount: "5000",
       lastOperationTime: "2026-08-06T08:01:00.000Z",
       lastOperationType: "REFUND",
+      reportedStatus: {
+        orderId: nexiOrderId("order#id"),
+        authorizedAmount: "5000",
+        capturedAmount: "5000",
+        lastOperationTime: "2026-08-06 10:01:00.000",
+        lastOperationType: "REFUND",
+      },
       operations: [
         {
           orderId: nexiOrderId("order#id"),

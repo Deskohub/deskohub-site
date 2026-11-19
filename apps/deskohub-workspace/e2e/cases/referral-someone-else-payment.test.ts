@@ -22,6 +22,7 @@ const config: WorkspaceE2EConfig = {
   baseUrl: "https://workspace.example.test",
   bypassSecret: undefined,
   expectedHost: "workspace.example.test",
+  paymentProvider: "nexi",
   timeouts: workspaceE2ETimeouts,
 };
 

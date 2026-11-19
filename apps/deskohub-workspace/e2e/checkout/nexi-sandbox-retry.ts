@@ -66,6 +66,7 @@ export const classifyNexiSandboxRejection = (
 export const decideNexiSandboxRetry = ({
   authorizationRequested,
   error,
+  requireNoAuthorization = false,
 }: {
   // Whether the driver activated Pay, the only authorization request.
   readonly authorizationRequested: boolean;
@@ -73,10 +74,13 @@ export const decideNexiSandboxRetry = ({
     WorkspaceE2EError,
     "diagnosticCode" | "reason" | "cause"
   >;
+  readonly requireNoAuthorization?: boolean;
 }): NexiSandboxRetryDecision => {
   const rejection = classifyNexiSandboxRejection(error);
   if (!rejection)
     return decline("the failure is not a terminal Nexi sandbox page");
+  if (requireNoAuthorization && authorizationRequested !== false)
+    return decline("Nexi may have authorized the payment");
   if (nexiPreAuthorizationSteps.some((step) => step === rejection.step))
     return { rejection, retry: true };
   if (rejection.step !== "pay")

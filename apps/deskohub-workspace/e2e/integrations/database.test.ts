@@ -13,7 +13,7 @@ import {
   assertLegalEvidenceRows,
   getPreviewFulfillmentMarkerDiagnosticCode,
   getProviderSessionRowDiagnosticCode,
-  replayNexiWebhook,
+  replayPaymentWebhook,
   waitForProviderSessionRowAfterRedirect,
 } from "./database";
 import { E2EDatabase } from "./database.service";
@@ -324,12 +324,22 @@ test("replays Nexi notification against the exact protected preview", async () =
   );
 
   await Effect.runPromise(
-    replayNexiWebhook(makeConfig(), makeCheckoutRow()).pipe(
+    replayPaymentWebhook(makeConfig(), makeCheckoutRow()).pipe(
+      Effect.andThen(
+        replayPaymentWebhook(
+          { ...makeConfig(), paymentProvider: "fallback" },
+          makeCheckoutRow()
+        )
+      ),
       Effect.provide(httpClientLayer)
     )
   );
 
-  expect(requests).toHaveLength(1);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]?.url).toBe(requests[0]?.url);
+  expect(JSON.parse(requests[1]?.body ?? "{}")).toMatchObject({
+    operation: { orderId: "provider-order-1" },
+  });
   const request = requests[0];
   expect(request?.url).toBe(
     "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app/api/webhooks/nexi"
@@ -372,7 +382,7 @@ test.each([
     );
 
     const exit = await Effect.runPromiseExit(
-      replayNexiWebhook(makeConfig(), makeCheckoutRow()).pipe(
+      replayPaymentWebhook(makeConfig(), makeCheckoutRow()).pipe(
         Effect.provide(httpClientLayer)
       )
     );
@@ -391,6 +401,54 @@ test.each([
     );
   }
 );
+
+test("replays mock payment on the protected preview with a stable event ID", async () => {
+  const requests: { request: Request; body: unknown }[] = [];
+  const fetchMock = mock(
+    async (input: URL | RequestInfo, init?: RequestInit) => {
+      const request = new Request(input, init);
+      requests.push({ request, body: await request.json() });
+      return new Response(null, { status: 200 });
+    }
+  );
+  const httpClientLayer = FetchHttpClient.layer.pipe(
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
+  );
+  const config = { ...makeConfig(), paymentProvider: "mock" } as const;
+  const row = { ...makeCheckoutRow(), provider: "mock" };
+
+  await Effect.runPromise(
+    replayPaymentWebhook(config, row).pipe(
+      Effect.andThen(
+        replayPaymentWebhook({ ...config, paymentProvider: "fallback" }, row)
+      ),
+      Effect.provide(httpClientLayer)
+    )
+  );
+  const rejectedReplay = await Effect.runPromiseExit(
+    replayPaymentWebhook(config, makeCheckoutRow()).pipe(
+      Effect.provide(httpClientLayer)
+    )
+  );
+
+  expect(Exit.isFailure(rejectedReplay)).toBe(true);
+  expect(requests).toHaveLength(2);
+  for (const { request, body } of requests) {
+    expect(request.url).toBe(
+      new URL("/api/webhooks/mock-payment", config.baseUrl).href
+    );
+    expect(request.method).toBe("POST");
+    expect(request.headers.get("x-vercel-protection-bypass")).toBe(
+      "test-protection-bypass"
+    );
+    expect(body).toEqual({
+      eventId: expect.any(String),
+      paymentId: row.provider_order_id,
+      token: row.security_token,
+    });
+  }
+  expect(requests[0]?.body).toEqual(requests[1]?.body);
+});
 
 test("accepts automatic discounts stacked before the redeemed zero-total code", () => {
   expect(() =>
@@ -492,6 +550,7 @@ const makeConfig = (): WorkspaceE2EConfig => ({
   baseUrl: "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
   bypassSecret: "test-protection-bypass",
   expectedHost: "deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
+  paymentProvider: "nexi",
   timeouts: workspaceE2ETimeouts,
 });
 
@@ -519,6 +578,8 @@ const makeCheckoutRow = () =>
     amount_value: 100,
     currency: "EUR",
     last_provider_operation_id: "provider-operation-1",
+    payment_attempt_id: "payment-attempt-1",
+    provider: "nexi",
     provider_order_id: "provider-order-1",
     reservation_id: "reservation-1",
     security_token: "test-security-token",

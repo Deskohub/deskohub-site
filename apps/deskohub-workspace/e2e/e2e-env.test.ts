@@ -18,6 +18,8 @@ describe("Workspace E2E environment", () => {
       NEXI_API_KEY: "app-only-key",
       WORKSPACE_E2E_ALLOCATION_SHARD: "1",
       WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS: "true",
+      WORKSPACE_E2E_PAYMENT_PROVIDER: "mock",
+      WORKSPACE_PAYMENT_PROVIDER: "nexi",
     });
     const playwrightEnvironment = toPlaywrightEnvironment(environment);
 
@@ -27,6 +29,10 @@ describe("Workspace E2E environment", () => {
       playwrightEnvironment.WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS
     ).toBe("true");
     expect(playwrightEnvironment).not.toHaveProperty("NEXI_API_KEY");
+    expect(playwrightEnvironment).not.toHaveProperty(
+      "WORKSPACE_PAYMENT_PROVIDER"
+    );
+    expect(playwrightEnvironment.WORKSPACE_E2E_PAYMENT_PROVIDER).toBe("mock");
     expect(playwrightEnvironment).not.toHaveProperty("WORKSPACE_E2E_PR_NUMBER");
     expect(makeWorkspaceE2EEnvironment(playwrightEnvironment)).toEqual(
       environment
@@ -77,7 +83,31 @@ describe("Workspace E2E environment", () => {
     }
   });
 
+  test("defaults to Nexi and accepts fallback", () => {
+    expect(makeTestE2EEnvironment({}).WORKSPACE_E2E_PAYMENT_PROVIDER).toBe(
+      "nexi"
+    );
+    expect(
+      makeTestE2EEnvironment({ WORKSPACE_E2E_PAYMENT_PROVIDER: "fallback" })
+        .WORKSPACE_E2E_PAYMENT_PROVIDER
+    ).toBe("fallback");
+  });
+
+  test.each(["mock", "fallback"] as const)(
+    "requires shared replay coordination for %s",
+    (paymentProvider) => {
+      expect(() =>
+        makeWorkspaceE2EEnvironment({
+          ...validE2ERuntimeEnvironment,
+          WORKSPACE_E2E_PAYMENT_PROVIDER: paymentProvider,
+          WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL: undefined,
+        })
+      ).toThrow("Invalid workspace E2E environment variables.");
+    }
+  );
+
   test.each([
+    { WORKSPACE_E2E_PAYMENT_PROVIDER: "unsupported" },
     { WORKSPACE_E2E_PROVIDER_PERMIT_REQUIRED: "false" },
     { WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS: "false" },
     { WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL: "https://example.test" },

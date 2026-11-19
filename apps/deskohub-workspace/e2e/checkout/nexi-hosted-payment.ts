@@ -43,20 +43,14 @@ import {
   toNexiHostedPageStateCode,
 } from "./nexi-hosted-page";
 import { nexiSandboxTestCard } from "./nexi-sandbox-test-card";
+import {
+  type HostedPaymentPage,
+  waitForReturnedPaymentTabToClose,
+} from "./payment";
 
 const cardFieldFillAttemptCount = 3;
 const optionalCardFieldTimeoutMs = 10_000;
 const continueAbsentAfterMs = 15_000;
-
-export type HostedPaymentPage = {
-  // The checkout pay page that started this hosted payment.
-  readonly checkoutPage: Page;
-  readonly checkoutPageUrl: string;
-  // The page showing Nexi: a page of its own, or the checkout page when Nexi
-  // opened in the same tab.
-  readonly page: Page;
-  readonly url: string;
-};
 
 type NexiHostedPaymentSession = {
   // Card-data rejections already in the session log before this payment.
@@ -519,34 +513,6 @@ const activateNexiControl = (
 
 // Nexi's own page closes itself once it has returned to the checkout status
 // page; the checkout page is driven again after that.
-const waitForReturnedPaymentTabToClose = ({
-  hostedPaymentPage: { checkoutPage, page },
-  session,
-  timeoutMs,
-}: {
-  readonly hostedPaymentPage: HostedPaymentPage;
-  readonly session: E2EBrowserSession;
-  readonly timeoutMs: number;
-}) =>
-  page === checkoutPage
-    ? Effect.void
-    : Effect.gen(function* () {
-        yield* pollUntil(
-          session.use("read browser tabs", async (active) => {
-            const pages = active.context().pages();
-            return pages.length === 1 && pages[0] === checkoutPage
-              ? true
-              : undefined;
-          }),
-          {
-            intervalMs: workspaceE2EPollIntervalMs.browser,
-            label: "returned payment tab to close",
-            timeoutMs,
-          }
-        );
-        yield* session.activate(checkoutPage);
-      });
-
 const summarizeHostedPaymentSnapshot = (snapshot: string) => {
   const lines = snapshot
     .split("\n")

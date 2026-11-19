@@ -1,8 +1,3 @@
-import type {
-  NexiOperationId,
-  NexiOrderId,
-  NexiWebhookEventId,
-} from "@deskohub/nexi";
 import { and, eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
@@ -12,6 +7,7 @@ import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers"
 import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
+import type { PaymentProvider } from "../payment/payment-provider";
 import { toPaymentAttempt } from "./payment-attempt.repository";
 import {
   type NonTerminalPaymentAttemptState,
@@ -23,7 +19,7 @@ type NewPaymentAttempt = {
   readonly workspaceReservationId: WorkspaceReservationId | null;
   readonly amount: Money;
 } & (
-  | { readonly provider: "nexi"; readonly providerOrderId: NexiOrderId }
+  | { readonly provider: PaymentProvider; readonly providerOrderId: string }
   | { readonly provider: "internal"; readonly paidAt: Temporal.Instant }
 );
 
@@ -40,9 +36,9 @@ export const insertPaymentAttempt = Effect.fn("paymentAttempts.insert")(
         amountValue: input.amount.value,
         amountExponent: input.amount.exponent,
         currency: input.amount.currency,
-        ...(input.provider === "nexi"
+        ...(input.provider !== "internal"
           ? {
-              provider: "nexi",
+              provider: input.provider,
               providerOrderId: input.providerOrderId,
               state: "created",
             }
@@ -63,8 +59,8 @@ export const insertPaymentAttempt = Effect.fn("paymentAttempts.insert")(
 type AttemptSettlement = {
   readonly orderId: OrderId;
   readonly id: PaymentAttemptId;
-  readonly webhookEventId?: NexiWebhookEventId;
-  readonly providerOperationId?: NexiOperationId;
+  readonly webhookEventId?: string;
+  readonly providerOperationId?: string;
   readonly providerStatus?: string;
 };
 
@@ -100,6 +96,7 @@ export const markPaymentAttemptTerminal = Effect.fn(
     readonly state: "failed" | "cancelled" | "expired";
     readonly failureCode: string;
     readonly fromAttemptStates: readonly NonTerminalPaymentAttemptState[];
+    readonly requireTransition?: boolean;
     readonly terminalAt: Temporal.Instant;
   }
 ) {
@@ -118,10 +115,12 @@ export const markPaymentAttemptTerminal = Effect.fn(
       and(
         eq(paymentAttempts.orderId, input.orderId),
         eq(paymentAttempts.id, input.id),
-        inArray(paymentAttempts.state, [
-          ...input.fromAttemptStates,
-          input.state,
-        ])
+        inArray(
+          paymentAttempts.state,
+          input.requireTransition
+            ? input.fromAttemptStates
+            : [...input.fromAttemptStates, input.state]
+        )
       )
     )
     .returning();

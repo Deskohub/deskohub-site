@@ -7,6 +7,10 @@ import {
   sanitizeHarEntry,
   sanitizeHarNamedValues,
 } from "./artifact-sanitization";
+import {
+  addMockPaymentUrlRedactions,
+  readMockHostedPaymentUrl,
+} from "./checkout/mock-payment-url";
 import { addRedaction, redact, redactJsonValue } from "./redaction";
 
 /**
@@ -59,7 +63,8 @@ const sanitizePlaywrightTrace = (
   for (const [name, bytes] of Object.entries(entries)) {
     if (isTraceEventFile(name)) events.set(name, parseTraceEvents(bytes));
   }
-  for (const fileEvents of events.values()) registerTraceSecrets(fileEvents);
+  for (const fileEvents of events.values())
+    registerTraceSecrets(fileEvents, source.origins);
 
   const droppedBodies = new Set<string>();
   const sanitized: Record<string, Uint8Array> = {};
@@ -147,7 +152,10 @@ const credentialHeaderNames = new Set([
  * `Set-Cookie` headers, authorization and bypass headers, and HTTP
  * credentials.
  */
-const registerTraceSecrets = (events: readonly unknown[]) => {
+const registerTraceSecrets = (
+  events: readonly unknown[],
+  previewOrigins: readonly string[]
+) => {
   const visit = (value: unknown, key?: string) => {
     if (Array.isArray(value)) {
       for (const item of value) {
@@ -172,7 +180,17 @@ const registerTraceSecrets = (events: readonly unknown[]) => {
     for (const [childKey, child] of Object.entries(record))
       visit(child, childKey);
   };
-  for (const event of events) visit(event);
+  for (const event of events) {
+    const snapshot = asRecord(asRecord(event)?.snapshot);
+    const recordedUrl =
+      stringField(snapshot, "frameUrl") ??
+      stringField(snapshot?.request, "url");
+    if (recordedUrl) {
+      const url = readMockHostedPaymentUrl(recordedUrl, previewOrigins);
+      if (url) addMockPaymentUrlRedactions(url);
+    }
+    visit(event);
+  }
 };
 
 const registerHeader = (

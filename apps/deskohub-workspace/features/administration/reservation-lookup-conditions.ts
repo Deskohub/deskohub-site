@@ -5,7 +5,7 @@ import {
   NexiOrderIdSchema,
   NexiWebhookEventIdSchema,
 } from "@deskohub/nexi";
-import { type Column, eq, or, type SQL, sql } from "drizzle-orm";
+import { and, type Column, eq, or, type SQL, sql } from "drizzle-orm";
 import { Option, Schema } from "effect";
 import {
   discountApplications,
@@ -129,14 +129,19 @@ export const getReservationLookupConditions = (identifier: string) => {
     ),
     paymentAttempts: anyLookupMatch(
       matchesLookupId(paymentAttempts.id, ids.paymentAttemptId),
-      matchesLookupId(paymentAttempts.providerOrderId, ids.nexiOrderId),
-      matchesLookupId(
-        paymentAttempts.lastWebhookEventId,
-        ids.nexiWebhookEventId
-      ),
-      matchesLookupId(
-        paymentAttempts.lastProviderOperationId,
-        ids.nexiOperationId
+      and(
+        eq(paymentAttempts.provider, "nexi"),
+        anyLookupMatch(
+          matchesLookupId(paymentAttempts.providerOrderId, ids.nexiOrderId),
+          matchesLookupId(
+            paymentAttempts.lastWebhookEventId,
+            ids.nexiWebhookEventId
+          ),
+          matchesLookupId(
+            paymentAttempts.lastProviderOperationId,
+            ids.nexiOperationId
+          )
+        )
       )
     ),
     discountApplications: anyLookupMatch(
@@ -147,8 +152,13 @@ export const getReservationLookupConditions = (identifier: string) => {
     ),
     webhookEvents: anyLookupMatch(
       matchesLookupId(webhookEvents.id, ids.storedWebhookEventId),
-      matchesLookupId(webhookEvents.eventId, ids.nexiWebhookEventId),
-      matchesLookupId(webhookEvents.providerOrderId, ids.nexiOrderId)
+      and(
+        eq(webhookEvents.provider, "nexi"),
+        anyLookupMatch(
+          matchesLookupId(webhookEvents.eventId, ids.nexiWebhookEventId),
+          matchesLookupId(webhookEvents.providerOrderId, ids.nexiOrderId)
+        )
+      )
     ),
   };
 };

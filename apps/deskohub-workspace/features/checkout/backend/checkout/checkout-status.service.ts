@@ -56,10 +56,10 @@ import {
 } from "@/features/reservation-invitees/reservation-people-view";
 import { ReviewSandbox } from "@/features/review-accounts";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
-import { nexiRequestTimeout } from "@/shared/backend/config/nexi.config";
 import type { Money } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
 import { LatePaymentVerificationService } from "../payment/late-payment-verification.service";
+import { paymentVerificationRequestTimeout } from "../payment/payment-providers";
 import {
   type ProviderPaymentFinalizationResult,
   ProviderPaymentFinalizationService,
@@ -341,8 +341,8 @@ const toStatusReservation = ({
 const summaryTimeout = "8 seconds";
 
 /**
- * Bounds all Nexi payment verification in one status refresh, retries
- * included. It fits one full sandbox-length Nexi request and leaves time, with
+ * Bounds all payment verification in one status refresh, retries included.
+ * It fits the longest single provider request and leaves time, with
  * the 8-second summary cap, to render the stored status within the status
  * page's 60-second `maxDuration`. Production lookups (5 seconds each) keep
  * their usual retries.
@@ -967,10 +967,12 @@ const implementation = Effect.gen(function* () {
         if (result === "not_pending") {
           // A slow finalization lookup can lose a race with a concurrent
           // terminal transition. Start the late-payment lookup only when one
-          // full Nexi request still fits the shared budget; otherwise the
+          // full provider request still fits the shared budget; otherwise the
           // success notification or a later refresh verifies it.
           const remaining = yield* remainingVerificationBudget;
-          if (Duration.isLessThan(remaining, nexiRequestTimeout)) {
+          if (
+            Duration.isLessThan(remaining, paymentVerificationRequestTimeout)
+          ) {
             yield* Effect.logWarning(
               "Checkout status refresh deferred late-payment verification",
               { remainingMilliseconds: Duration.toMillis(remaining) }

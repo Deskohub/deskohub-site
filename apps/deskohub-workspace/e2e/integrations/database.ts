@@ -20,6 +20,7 @@ import {
 } from "drizzle-orm";
 import { Effect } from "effect";
 import {
+  FetchHttpClient,
   HttpClient,
   HttpClientRequest,
   type HttpClientResponse,
@@ -55,6 +56,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import type { Money } from "@/shared/money/money";
 import { matchesExpectedReservationDetails } from "../checkout/reservation-details";
 import type { DatasourceConfig, WorkspaceE2EConfig } from "../config";
+import type { E2EPaymentProvider } from "../e2e-env";
 import {
   isNexiWebhookDiagnosticCode,
   toWorkspaceE2EError,
@@ -86,9 +88,10 @@ export const requireProviderSessionRowAfterRedirect = (
   orderId: WorkspaceReservationId,
   options: {
     readonly onRow?: (row: CheckoutRow) => void;
+    readonly paymentProvider: E2EPaymentProvider;
     readonly timeoutMs: number;
   }
-): Effect.Effect<ProviderSessionRow, WorkspaceE2EError, E2EDatabase> =>
+): Effect.Effect<HostedProviderSessionRow, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {
     const { db } = yield* E2EDatabase;
     return yield* waitForProviderSessionRowAfterRedirect(
@@ -102,6 +105,16 @@ export const requireProviderSessionRowAfterRedirect = (
         initialIntervalMs: workspaceE2EPollInitialIntervalMs.database,
         intervalMs: workspaceE2EPollIntervalMs.datasource,
       }
+    ).pipe(
+      Effect.flatMap((row) =>
+        tryWorkspaceE2ESync("check hosted payment attempt provider", () => {
+          assert(
+            row.provider === options.paymentProvider,
+            `expected a ${options.paymentProvider} payment attempt after the hosted redirect`
+          );
+          return { ...row, provider: options.paymentProvider };
+        })
+      )
     );
   });
 
@@ -179,65 +192,98 @@ type ProviderSessionRow = CheckoutRow & {
   readonly security_token: string;
 };
 
+export type HostedProviderSessionRow = ProviderSessionRow & {
+  readonly provider: E2EPaymentProvider;
+};
+
 const isProviderSessionRow = (
   row: CheckoutRow | undefined
 ): row is ProviderSessionRow =>
   row !== undefined && getProviderSessionRowDiagnosticCode(row) === undefined;
 
-export const replayNexiWebhook = (
+export const replayPaymentWebhook = (
   config: WorkspaceE2EConfig,
   row: CheckoutRow
 ): Effect.Effect<void, WorkspaceE2EError, HttpClient.HttpClient> =>
   Effect.gen(function* () {
-    yield* tryWorkspaceE2ESync("assert Nexi replay row", () => {
+    const paymentProvider = row.provider;
+    const isNexi = paymentProvider === "nexi";
+    const providerName = isNexi ? "Nexi" : "Mock payment";
+    const operation = `replay ${providerName} webhook`;
+    yield* tryWorkspaceE2ESync("assert payment webhook replay row", () => {
+      assert(
+        (paymentProvider === "nexi" || paymentProvider === "mock") &&
+          (config.paymentProvider === "fallback" ||
+            config.paymentProvider === paymentProvider),
+        "webhook replay provider mismatch"
+      );
+      assert(
+        row.payment_attempt_id,
+        "payment attempt id missing before replay"
+      );
       assert(row.provider_order_id, "provider order id missing before replay");
       assert(row.security_token, "security token missing before replay");
-      assert(row.amount_value, "amount missing before replay");
-      assert(row.currency, "currency missing before replay");
+      if (isNexi) {
+        assert(row.amount_value, "amount missing before replay");
+        assert(row.currency, "currency missing before replay");
+      }
     });
 
     const webhookUrl = yield* makeUrl(
-      "build Nexi webhook replay URL",
-      "/api/webhooks/nexi",
+      "build payment webhook replay URL",
+      isNexi ? "/api/webhooks/nexi" : "/api/webhooks/mock-payment",
       config.baseUrl
     );
     const httpClient = yield* HttpClient.HttpClient;
     const response = yield* HttpClientRequest.post(webhookUrl).pipe(
       HttpClientRequest.setHeaders(previewWebhookHeaders(config)),
-      HttpClientRequest.bodyJson({
-        eventId: NexiWebhookEventIdSchema.make(
-          `workspace-e2e-nexi-${row.reservation_id}`
-        ),
-        eventTime: new Date().toISOString(),
-        securityToken: row.security_token,
-        operation: {
-          orderId: row.provider_order_id,
-          operationId:
-            row.last_provider_operation_id ??
-            NexiOperationIdSchema.make(`workspace-e2e-${row.reservation_id}`),
-          operationType: "CAPTURE",
-          operationResult: "EXECUTED",
-          operationTime: new Date().toISOString(),
-          operationAmount: String(row.amount_value),
-          operationCurrency: row.currency,
-        },
-      }),
+      HttpClientRequest.bodyJson(
+        isNexi
+          ? {
+              eventId: NexiWebhookEventIdSchema.make(
+                `workspace-e2e-nexi-${row.reservation_id}`
+              ),
+              eventTime: new Date().toISOString(),
+              securityToken: row.security_token,
+              operation: {
+                orderId: row.provider_order_id,
+                operationId:
+                  row.last_provider_operation_id ??
+                  NexiOperationIdSchema.make(
+                    `workspace-e2e-${row.reservation_id}`
+                  ),
+                operationType: "CAPTURE",
+                operationResult: "EXECUTED",
+                operationTime: new Date().toISOString(),
+                operationAmount: String(row.amount_value),
+                operationCurrency: row.currency,
+              },
+            }
+          : {
+              eventId: `workspace-e2e-mock-${row.payment_attempt_id}`,
+              paymentId: row.provider_order_id,
+              token: row.security_token,
+            }
+      ),
       Effect.flatMap(httpClient.execute),
-      Effect.mapError((cause) =>
-        toWorkspaceE2EError("replay Nexi webhook", cause)
-      )
+      Effect.provideService(FetchHttpClient.RequestInit, {
+        redirect: "manual",
+      }),
+      Effect.mapError((cause) => toWorkspaceE2EError(operation, cause))
     );
     if (response.status < 200 || response.status >= 300) {
-      const diagnosticCode = yield* readNexiWebhookDiagnosticCode(response);
+      const diagnosticCode = isNexi
+        ? yield* readNexiWebhookDiagnosticCode(response)
+        : undefined;
       return yield* workspaceE2EError(
-        `Nexi webhook replay failed with ${response.status}`,
+        `${providerName} webhook replay failed with ${response.status}`,
         {
           ...(diagnosticCode ? { diagnosticCode } : {}),
-          operation: "replay Nexi webhook",
+          operation,
         }
       );
     }
-    log("Nexi webhook replay accepted");
+    log(`${providerName} webhook replay accepted`);
   });
 
 const readNexiWebhookDiagnosticCode = (
@@ -261,7 +307,7 @@ const previewWebhookHeaders = (config: WorkspaceE2EConfig) => ({
 });
 
 export const validatePostgres = (
-  config: DatasourceConfig,
+  config: DatasourceConfig & { readonly paymentProvider: E2EPaymentProvider },
   data: CheckoutData,
   orderId: WorkspaceReservationId,
   onRow?: (row: CheckoutRow) => void
@@ -759,7 +805,10 @@ const readCheckoutRowFromDatabase = (
       )
       .leftJoin(
         webhookEvents,
-        eq(webhookEvents.eventId, paymentAttempts.lastWebhookEventId)
+        and(
+          eq(webhookEvents.provider, paymentAttempts.provider),
+          eq(webhookEvents.eventId, paymentAttempts.lastWebhookEventId)
+        )
       )
       .where(eq(workspaceReservations.id, orderId))
       .limit(1)
@@ -1145,7 +1194,7 @@ type ObservedLatePaymentRecovery = {
 };
 
 export const waitForLatePaymentRecoveryOutcome = (
-  config: DatasourceConfig,
+  config: DatasourceConfig & { readonly paymentProvider: E2EPaymentProvider },
   orderId: WorkspaceReservationId,
   paymentAttemptId: PaymentAttemptId,
   originalDotyposReservationId: NonNullable<
@@ -1193,6 +1242,9 @@ export const waitForLatePaymentRecoveryOutcome = (
       observed,
       originalDotyposReservationId,
       expected
+    );
+    yield* tryWorkspaceE2ESync("check late payment providers", () =>
+      assertCheckoutProviders(observed.checkoutRow, config.paymentProvider)
     );
     log(`Late payment recovery reached ${expected.state}`);
     return observed.checkoutRow;
@@ -1408,9 +1460,14 @@ const isInternalPostgresComplete = (
 
 export const assertPaymentTerminalRow = (
   row: CheckoutRow,
-  scenario: PaymentTerminalScenario
+  scenario: PaymentTerminalScenario,
+  paymentProvider: E2EPaymentProvider
 ): Effect.Effect<void, WorkspaceE2EError> =>
   tryWorkspaceE2ESync("assert payment terminal row", () => {
+    assert(
+      row.provider === paymentProvider,
+      "terminal payment provider mismatch"
+    );
     assert(
       row.payment_state === scenario.state,
       `reservation payment state was not ${scenario.state}`
@@ -1436,7 +1493,7 @@ export const assertPaymentTerminalRow = (
 const assertPostgresRow = (
   row: CheckoutRow,
   data: CheckoutData,
-  config: DatasourceConfig
+  config: DatasourceConfig & { readonly paymentProvider: E2EPaymentProvider }
 ): Effect.Effect<void, WorkspaceE2EError> =>
   tryWorkspaceE2ESync("assert Postgres checkout row", () => {
     assert(
@@ -1491,7 +1548,7 @@ const assertPostgresRow = (
       row.payment_attempt_id === row.active_payment_attempt_id,
       "active attempt mismatch"
     );
-    assert(row.provider === "nexi", "payment provider should be nexi");
+    assertCheckoutProviders(row, config.paymentProvider);
     assert(row.provider_order_id, "provider order id missing");
     assert(row.security_token, "security token missing");
     assert(
@@ -1510,9 +1567,11 @@ const assertPostgresRow = (
       row.last_provider_operation_id,
       "last provider operation id missing"
     );
+    const executedStatus =
+      config.paymentProvider === "nexi" ? "EXECUTED" : "succeeded";
     assert(
-      row.last_provider_status === "EXECUTED",
-      "last provider status was not EXECUTED"
+      row.last_provider_status === executedStatus,
+      `last provider status was not ${executedStatus}`
     );
     assert(
       row.payment_failure_code === null,
@@ -1523,7 +1582,6 @@ const assertPostgresRow = (
       row.webhook_event_id === row.last_webhook_event_id,
       "webhook event id mismatch"
     );
-    assert(row.webhook_provider === "nexi", "webhook provider should be nexi");
     assert(
       row.webhook_provider_order_id === row.provider_order_id,
       "webhook order id mismatch"
@@ -1535,6 +1593,14 @@ const assertPostgresRow = (
       "webhook error code should be null"
     );
   });
+
+const assertCheckoutProviders = (
+  row: CheckoutRow,
+  paymentProvider: E2EPaymentProvider
+) => {
+  assert(row.provider === paymentProvider, "payment attempt provider mismatch");
+  assert(row.webhook_provider === paymentProvider, "webhook provider mismatch");
+};
 
 const assertInternalPostgresRow = (
   row: CheckoutRow,

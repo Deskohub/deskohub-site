@@ -2,12 +2,6 @@ import type {
   DotyposCustomerId,
   DotyposReservationId,
 } from "@deskohub/dotypos";
-import type {
-  NexiCorrelationId,
-  NexiOperationId,
-  NexiOrderId,
-  NexiWebhookEventId,
-} from "@deskohub/nexi";
 import type { Effect } from "effect";
 import type {
   FulfillmentState,
@@ -42,7 +36,7 @@ export type CheckoutRow = {
   reservation_id: WorkspaceReservationId;
   checkout_session_key: CheckoutSessionKey;
   checkout_attempt_key: CheckoutAttemptKey;
-  correlation_id: NexiCorrelationId;
+  correlation_id: string;
   dotypos_customer_id: DotyposCustomerId | null;
   dotypos_reservation_id: DotyposReservationId | null;
   reservation_state: ReservationState;
@@ -63,21 +57,21 @@ export type CheckoutRow = {
   fulfillment_failure_code: string | null;
   payment_attempt_id: PaymentAttemptId | null;
   provider: string | null;
-  provider_order_id: NexiOrderId | null;
+  provider_order_id: string | null;
   security_token: string | null;
   payment_attempt_state: PaymentAttemptState | null;
   amount_value: number | null;
   amount_exponent: number | null;
   currency: string | null;
   provider_redirect_url: string | null;
-  last_webhook_event_id: NexiWebhookEventId | null;
-  last_provider_operation_id: NexiOperationId | null;
+  last_webhook_event_id: string | null;
+  last_provider_operation_id: string | null;
   last_provider_status: string | null;
   payment_failure_code: string | null;
   webhook_id: StoredWebhookEventId | null;
   webhook_provider: string | null;
-  webhook_event_id: NexiWebhookEventId | null;
-  webhook_provider_order_id: NexiOrderId | null;
+  webhook_event_id: string | null;
+  webhook_provider_order_id: string | null;
   webhook_processed_at: Temporal.Instant | null;
   webhook_state: WebhookEventState | null;
   webhook_error_code: string | null;
@@ -135,12 +129,10 @@ export type PaymentTerminalScenario = {
   readonly state: "cancelled" | "failed";
   readonly titlePattern: RegExp;
   /**
-   * How the payment attempt ends. `hosted_authentication_failure` fails the
-   * 3-D Secure challenge on the Nexi hosted page and returns through the
-   * provider; `injected` writes the terminal state after Nexi opens, because
-   * the hosted page offers no cancellation that Nexi records.
+   * A hosted failure uses the provider's failure control. An injected
+   * terminal state is written after the hosted payment opens.
    */
-  readonly trigger: "hosted_authentication_failure" | "injected";
+  readonly trigger: "hosted_failure" | "injected";
 };
 
 /** What a running case gets from the case pool. */

@@ -121,6 +121,7 @@ const makeCases = (withOffice: boolean) =>
         baseUrl,
         bypassSecret: undefined,
         expectedHost: new URL(baseUrl).host,
+        paymentProvider: "nexi",
         timeouts: workspaceE2ETimeouts,
       } satisfies WorkspaceE2EConfig,
       datasourceConfig: {} as DatasourceConfig,

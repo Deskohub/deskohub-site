@@ -12,6 +12,7 @@ import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkou
 import { checkoutSubmitDeadline } from "@/features/checkout/backend/checkout/checkout-submit-deadline";
 import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
+import { PaymentProvidersLive } from "@/features/checkout/backend/payment/payment-providers";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
 import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
@@ -20,7 +21,6 @@ import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/wo
 import { ReferralService } from "@/features/referrals";
 import { ReferralReleaseGateRequest } from "@/features/referrals/referral-release-gate.server";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
-import { WorkspaceNexiLayer } from "@/shared/backend/config/nexi.config";
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 import {
   beginEntryPackPurchase,
@@ -70,7 +70,7 @@ const payLayer = Layer.mergeAll(
   PaymentPageProviderStatus.Live,
   LegalEvidenceEventRepository.Live,
   CheckoutAnalytics.Live,
-  WorkspaceNexiLayer
+  PaymentProvidersLive
 );
 
 const displayPrice = (

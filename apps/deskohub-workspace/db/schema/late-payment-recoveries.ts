@@ -1,5 +1,4 @@
 import type { DotyposReservationId } from "@deskohub/dotypos";
-import type { NexiOperationId, NexiWebhookEventId } from "@deskohub/nexi";
 import { sql } from "drizzle-orm";
 import { check, index, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
@@ -31,8 +30,8 @@ export const latePaymentRecoveries = pgTable(
       .notNull()
       .$type<WorkspaceReservationId>()
       .references(() => workspaceReservations.id),
-    webhookEventId: text("webhook_event_id").$type<NexiWebhookEventId>(),
-    providerOperationId: text("provider_operation_id").$type<NexiOperationId>(),
+    webhookEventId: text("webhook_event_id"),
+    providerOperationId: text("provider_operation_id"),
     providerStatus: text("provider_status"),
     state: text("state").notNull().$type<LatePaymentRecoveryState>(),
     originalDotyposReservationId: text("original_dotypos_reservation_id")

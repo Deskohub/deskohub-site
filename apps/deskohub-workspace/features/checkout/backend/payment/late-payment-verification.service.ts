@@ -1,28 +1,19 @@
-import "@/shared/polyfills/temporal";
-
-import {
-  getNexiPaymentMetadata,
-  type NexiCorrelationId,
-  NexiCurrencySchema,
-  NexiService,
-  type PaymentVerificationResult,
-} from "@deskohub/nexi";
-import { Context, type Duration, Effect, Layer, Schema } from "effect";
+import { Context, type Duration, Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { OrderId } from "@/features/order";
-import { WorkspaceNexiLayer } from "@/shared/backend/config/nexi.config";
 import {
   type PaymentAttempt,
   PaymentAttemptRepository,
 } from "../repositories/payment-attempt.repository";
-import { getNexiCurrencyOverride } from "./nexi-currency";
 import type { OrderPaymentHandler } from "./order-payment-handler";
 import { OrderPaymentHandlers } from "./order-payment-handlers.service";
+import { PaymentProviders, type PaymentVerification } from "./payment-provider";
+import { PaymentProvidersLive } from "./payment-providers";
 import {
-  isVerifiableNexiPaymentAttempt,
-  type VerifiableNexiPaymentAttempt,
-} from "./verifiable-nexi-payment-attempt";
+  isVerifiableProviderPaymentAttempt,
+  type VerifiableProviderPaymentAttempt,
+} from "./verifiable-provider-payment-attempt";
 
 type LatePaymentVerificationResult =
   | "not_applicable"
@@ -35,23 +26,23 @@ type LatePaymentVerificationResult =
 const isTerminalPaymentState = (state: string) =>
   state === "failed" || state === "cancelled" || state === "expired";
 
-/** A terminal Nexi attempt Nexi can verify with its stored security token. */
+/** A terminal attempt that can be verified with its stored security token. */
 const isVerifiableTerminalAttempt = (
   attempt: PaymentAttempt | null
-): attempt is VerifiableNexiPaymentAttempt =>
-  isVerifiableNexiPaymentAttempt(attempt) &&
+): attempt is VerifiableProviderPaymentAttempt =>
+  isVerifiableProviderPaymentAttempt(attempt) &&
   isTerminalPaymentState(attempt.state);
 
 export interface ILatePaymentVerificationService {
   /**
-   * Verifies the order's terminal Nexi attempt and starts durable
-   * late-payment recovery when Nexi settled it after the local attempt ended.
+   * Verifies the order's terminal provider attempt and starts durable
+   * late-payment recovery if the provider settled it after the attempt ended.
    * Provider and database failures are logged and reported as a result so the
    * customer status page still renders the stored status.
    */
   readonly startRecoveryIfSettled: (input: {
     readonly orderId: OrderId;
-    /** Bounds the Nexi payment verification, retries included. */
+    /** Bounds payment verification, retries included. */
     readonly verificationDeadline?: Duration.Input;
   }) => Effect.Effect<LatePaymentVerificationResult>;
 }
@@ -65,35 +56,32 @@ export class LatePaymentVerificationService extends Context.Service<
     Effect.gen(function* () {
       const handlers = yield* OrderPaymentHandlers;
       const paymentAttempts = yield* PaymentAttemptRepository;
-      const nexi = yield* NexiService;
+      const providers = yield* PaymentProviders;
 
-      /** Nexi's verification of the attempt, or undefined when it failed. */
+      /** The provider's verification, or undefined when the lookup failed. */
       const verifyAttemptOutcome = Effect.fnUntraced(function* (
-        attempt: VerifiableNexiPaymentAttempt,
-        correlationId: NexiCorrelationId,
+        attempt: VerifiableProviderPaymentAttempt,
+        correlationId: string,
         verificationDeadline: Duration.Input | undefined
       ) {
-        const currency = yield* Schema.decodeUnknownEffect(NexiCurrencySchema)(
-          attempt.amount.currency
-        );
-
-        return yield* nexi
-          .verifyPaymentOutcome({
-            orderId: attempt.providerOrderId,
+        return yield* providers
+          .forAttempt(attempt.provider)
+          .verify({
+            providerOrderId: attempt.providerOrderId,
             correlationId,
-            amount: String(attempt.amount.value),
-            currency: getNexiCurrencyOverride() ?? currency,
+            amount: attempt.amount,
             securityToken: attempt.securityToken,
             deadline: verificationDeadline,
           })
           .pipe(
-            Effect.tapError((cause) =>
-              Effect.logWarning(
-                "Late-payment verification provider lookup failed",
-                { cause }
-              )
-            ),
-            Effect.orElseSucceed(() => undefined)
+            Effect.catchIf(
+              (cause) => !cause.invalidInput,
+              (cause) =>
+                Effect.logWarning(
+                  "Late-payment verification provider lookup failed",
+                  { cause }
+                ).pipe(Effect.as(undefined))
+            )
           );
       });
 
@@ -101,7 +89,7 @@ export class LatePaymentVerificationService extends Context.Service<
         paymentAttemptId: PaymentAttemptId,
         orderId: OrderId,
         handler: OrderPaymentHandler,
-        verification: PaymentVerificationResult | undefined
+        verification: PaymentVerification | undefined
       ) {
         if (!verification) return "provider_verification_failed" as const;
         if (verification.mismatches.length > 0) {
@@ -116,10 +104,9 @@ export class LatePaymentVerificationService extends Context.Service<
         }
 
         yield* Effect.logWarning(
-          "Nexi payment settled after the local payment attempt became terminal"
+          "Provider payment settled after the local payment attempt became terminal"
         );
-        const { providerOperationId, providerStatus } =
-          getNexiPaymentMetadata(verification);
+        const { providerOperationId, providerStatus } = verification;
         yield* handler.startRecovery({
           orderId,
           paymentAttemptId,
@@ -197,7 +184,7 @@ export class LatePaymentVerificationService extends Context.Service<
       Layer.mergeAll(
         OrderPaymentHandlers.Live,
         PaymentAttemptRepository.Default,
-        WorkspaceNexiLayer
+        PaymentProvidersLive
       )
     ),
     Layer.provide(WorkspaceDatabase.Default)

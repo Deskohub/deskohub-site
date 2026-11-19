@@ -56,6 +56,12 @@ Nightly cases never run against a PR (D38). `resolve-target` passes `include_nig
 ## Run E2E
 
 - **Manual dispatch.** Run the workflow with `sha` (40 characters), `url` (immutable HTTPS deployment URL), and `ref` (internal PR head branch). The same PR guards apply, and the job fails before it allocates or mutates shared state unless GitHub deployment metadata records that URL as a successful Workspace deployment for that SHA. Set `cleanup_stale_e2e_reservations` only for an intentional stale-reservation cleanup (see [suite orchestration](suite-orchestration.md#dotypos-capacity-and-stale-reservations)).
+- **Preview payment modes.** Set the Vercel Preview variable `WORKSPACE_PAYMENT_PROVIDER` before building the exact Git SHA. Use `mock` to verify the mock directly or `fallback` to start with Nexi and allow a qualifying checkout to continue with mock in the same run. Set the repository Actions variable `WORKSPACE_E2E_PAYMENT_PROVIDER` to the matching value for automatic runs. For a manual run, use `payment_provider` to override the repository variable. Before the workflow change merges, manually dispatch from the PR branch whose workflow defines the input. Repository dispatch loads the workflow from `main`. [Nexi sandbox restart](nexi-sandbox.md#sandbox-restart)
+
+  ```bash
+  gh workflow run workspace-e2e.yml --ref <branch> -f sha=<head> -f url=<immutable preview URL> -f ref=<branch> -f payment_provider=mock
+  ```
+
 - **Review screenshots.** To capture the opt-in synthetic account and administration screenshots, set `review_screenshots=true`. Campaign composer captures use the separate `campaign_screenshots=true` input. Dispatch using a workflow ref that contains the input you need (for a PR preview, the PR branch), and keep `sha`, `url`, and `ref` bound to the exact PR head and its immutable deployment. Wait for the Vercel-triggered run for that PR SHA to finish first: both runs share a PR-and-SHA concurrency group with cancellation enabled. This runs the full suite, re-posts the `Workspace E2E` and `Workspace E2E allocation` statuses, and uploads screenshots in the dedicated `workspace-account-review-<run>-<attempt>` artifact; the separate general E2E artifact is uploaded on failure. If the screenshot run fails, rerun it and confirm the required status is green before merging.
 - If Vercel finishes a preview before an open internal PR exists for its SHA, the `repository_dispatch` E2E run skips with `No eligible open internal PR matches the exact deployment SHA`. Once the PR exists, restart it with the manual dispatch from `main`, using the exact SHA, immutable preview URL, and branch:
 
@@ -76,6 +82,7 @@ Inspect settings and deployment metadata without printing values.
 
 - Neon integration-managed `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.
 - Nexi sandbox `NEXI_API_ORIGIN` and `NEXI_API_KEY`, plus `NEXI_CHECKOUT_CURRENCY_OVERRIDE=EUR` for the current sandbox merchant.
+- `WORKSPACE_PAYMENT_PROVIDER` defaults to `nexi`. The app accepts `mock` and `fallback` only on a protected Preview.
 - E2E Dotypos URL, credentials, and tenant IDs. The E2E cloud needs at least one active percentage discount group between 0.01% and 90%; the runner picks one deterministically and fails closed when none exists.
 - `EMAIL_API_KEY`. Env validation requires it in Preview and production. Recipient routing sends mail for `EMAIL_TEST_DOMAIN` recipients to Console, so E2E sends no real mail; a real person using a preview gets real mail.
 - `EMAIL_CAMPAIGN_ADMIN_INBOX` set to an `@deskohub.test` address, so campaign test sends and their confirmation codes stay on Console and in the server logs. `EMAIL_CAMPAIGN_FROM` and `EMAIL_CAMPAIGN_REPLY_TO` are optional in Preview.
@@ -103,7 +110,8 @@ Never put production Nexi, Dotypos, or database credentials in Preview. Never ad
 
 `e2e/e2e-env.ts` selects, validates, and decodes these once and passes typed config to telemetry, Layers, and child processes. The `test:e2e` entry in the root `turbo.json` lists them in `passThroughEnv`.
 
-- `WORKSPACE_E2E_BASE_URL`: the one target origin. The runner validates it as an immutable HTTPS Vercel deployment and uses it for browser cases, availability, Nexi result and status host checks, readiness, webhook replays to `/api/webhooks/nexi`, and status pages.
+- `WORKSPACE_E2E_BASE_URL`: the one target origin. The runner validates it as an immutable HTTPS Vercel deployment and uses it for browser cases, availability, readiness, webhook replays, and checkout status.
+- `WORKSPACE_E2E_PAYMENT_PROVIDER`: the expected preview mode, `nexi` by default. A manual run can choose `nexi`, `mock`, or `fallback` to override the repository Actions variable of the same name. Checkout and administrator navigation setup verify the value returned by the protected `GET /api/webhooks/nexi` before seeding data. A mismatch requires a preview built with the matching application setting or a run whose expected value matches that preview.
 - `DATABASE_URL` (pooled), `WORKSPACE_E2E_DATABASE_URL_UNPOOLED`, `WORKSPACE_E2E_DATABASE_ALLOWLIST` (direct): must identify the database behind that same preview.
 - `NEXI_API_ORIGIN`: the sandbox origin, supplied explicitly.
 - `WORKSPACE_E2E_ALLOCATION_SHARD`, `WORKSPACE_E2E_PROVIDER_PERMIT_REQUIRED`, `WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL`: see [suite orchestration](suite-orchestration.md).
@@ -130,13 +138,13 @@ Put database integration assertions inside the normal E2E runner and use its sco
 
 ## Protection and callbacks
 
-- Browser navigation sets the bypass cookie, readiness checks send the bypass header, and direct Nexi webhook replays send `x-vercel-protection-bypass`. Workspace appends the bypass query parameter to preview Nexi result and notification URLs.
+- Browser navigation sets the bypass cookie. Readiness checks and direct webhook replays send `x-vercel-protection-bypass`. Workspace appends the bypass query parameter to preview Nexi result and notification URLs.
 - Prime the bypass cookie with a stable public asset the app ships, and require success. A missing asset returns 404 even with a valid bypass.
 - Playwright code primes it only through `primePreviewAccess` or `enablePreviewAccess` in `e2e/preview-access.ts`, or through `session.primePreviewAccess` on an `E2EBrowserSession`, which uses the same exchange once per origin. They send the secret only to an immutable Workspace deployment origin, exchange it for Vercel's `_vercel_jwt` cookie with a Node `fetch` outside Playwright, and add that cookie to the context. Never pass the secret to `context.request`, `extraHTTPHeaders`, or any other Playwright API: Playwright error messages echo request headers, and traces record them in the `.trace` and `.network` files. A raw trace still holds the cookie and the preview origin, so it never leaves the runner: see the Playwright trace rule below.
 - Non-production callback origins come from `VERCEL_URL`; production uses `VERCEL_PROJECT_PRODUCTION_URL`.
 - Preview visitor GET and HEAD navigation redirects to the immutable callback origin before sign-in and reservation preparation, so host-only session and checkout cookies live on the host Nexi returns to. The immutable-host suite doesn't cover this; when you change the boundary, check direct alias page loads and client navigation by hand.
 - BotID runs only in Vercel production. Read the `deskohub-workspace-botid` skill before changing that boundary.
-- Webhook replay only triggers the handler. The handler must still read authoritative order state from Nexi.
+- Replay targets `/api/webhooks/nexi` or `/api/webhooks/mock-payment` according to the provider persisted for the attempt. The handler reads authoritative payment state from that provider.
 
 ## CI workflow rules
 
@@ -169,5 +177,5 @@ For a deployed run, record only non-secret evidence:
 1. The tested SHA equals the deployment SHA, and the target is the immutable deployment URL.
 2. No deployment, alias, or domain change happened inside E2E.
 3. The migrated Neon branch backs that preview and is neither production nor shared development.
-4. Navigation passed Deployment Protection, Nexi returned to the same preview host, and replays reached that preview's `/api/webhooks/nexi`.
+4. Navigation passed Deployment Protection, the reported provider matched the run's selection before fixture seeding, and the hosted return and webhook replay reached that preview.
 5. A deliberate case failure stops new admissions while running tests close their own browser contexts and clean up exactly.

@@ -1,6 +1,10 @@
+import { Effect } from "effect";
+import { FetchHttpClient } from "effect/http";
 import { resolveWorkspaceE2ESessionSigningSecret } from "../account/seeded-session";
 import { makeWorkspaceE2EAdministrationIdentities } from "../administrators/identities";
+import { getConfig } from "../config";
 import { resolveWorkspaceE2ERunContext } from "../playwright-checkout/run-context";
+import { assertPreviewPaymentProvider } from "../preview-readiness";
 import {
   instantNavigationAdministratorJournalOwner,
   instantNavigationAdministratorLabel,
@@ -22,6 +26,12 @@ test("seed the instant navigation administrator", async ({
   administratorRuntime,
 }) => {
   const { environment, runEffect } = administratorRuntime;
+  const config = getConfig(environment);
+  await runEffect(
+    assertPreviewPaymentProvider(config).pipe(
+      Effect.provide(FetchHttpClient.layer)
+    )
+  );
   const { runId } = resolveWorkspaceE2ERunContext(environment);
   await writeInstantNavigationAdministratorRunId(runId);
   const identities = makeWorkspaceE2EAdministrationIdentities<

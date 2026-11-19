@@ -137,6 +137,7 @@ describe.skipIf(!testDatabase)(
       const checkedAt = input.checkedAt ?? Temporal.Now.instant();
       return run((repository) =>
         repository.claimRefundChecks({
+          providers: ["nexi"],
           limit: input.limit,
           checkedAt,
           lastCheckedBefore: input.lastCheckedBefore ?? checkedAt,
@@ -399,6 +400,7 @@ describe.skipIf(!testDatabase)(
             const repository = yield* PaymentRefundRepository;
             const checkedAt = Temporal.Now.instant();
             return yield* repository.claimRefundChecks({
+              providers: ["nexi"],
               limit,
               checkedAt,
               lastCheckedBefore: checkedAt,
