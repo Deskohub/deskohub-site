@@ -71,6 +71,7 @@ mock.module("react-native", () => ({
         aria-hidden={props["aria-hidden"]}
         style={{
           display: flat?.display,
+          flexDirection: flat?.flexDirection,
           width: typeof flat?.width === "number" ? flat.width : undefined,
         }}
       >
@@ -163,10 +164,8 @@ const fixture = async (
     statusBars.set(owner, style);
     return () => statusBars.delete(owner);
   };
-  const within = (width: number, node: ReactElement) => (
-    <TestWindowDimensions
-      value={{ width, height: 800, scale: 2, fontScale: 2 }}
-    >
+  const within = (width: number, node: ReactElement, fontScale = 2) => (
+    <TestWindowDimensions value={{ width, height: 800, scale: 2, fontScale }}>
       <RegistryContext.Provider value={registry}>
         <AppLocaleProvider locale="en-US">
           <StatusBarObserverContext value={observe}>
@@ -191,8 +190,8 @@ const fixture = async (
     workspace,
     within,
     statusBars,
-    render: (width: number, node: ReactElement) =>
-      root.render(within(width, node)),
+    render: (width: number, node: ReactElement, fontScale?: number) =>
+      root.render(within(width, node, fontScale)),
     dispose: async () => {
       await root.render(null);
       warnings.mockRestore();
@@ -327,6 +326,24 @@ test("returning from a missing featured preview clears the selection and refresh
     expect(root.container().querySelectorAll("scrollview")).toHaveLength(1);
   } finally {
     runFocusEffects = false;
+    await screen.dispose();
+  }
+});
+
+test("split-pane reservation titles have full row width at large text sizes", async () => {
+  const screen = await fixture("upcoming");
+  const stacked = () =>
+    root
+      .container()
+      .querySelector(
+        '[data-pressable][role="link"] > div > div[style*="flex-direction: column"]'
+      );
+  try {
+    await screen.render(1280, <ReservationsRoute />, 1);
+    expect(stacked()).toBeNull();
+    await screen.render(1280, <ReservationsRoute />, 2);
+    expect(stacked()).not.toBeNull();
+  } finally {
     await screen.dispose();
   }
 });

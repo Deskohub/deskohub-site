@@ -670,6 +670,7 @@ function ReservationRow({
   const locale = useAppLocale();
   const open = useOpenReservation();
   const selection = useContext(SelectionContext);
+  const { isExpanded, fontScale } = useViewport();
   const view = reservationRowView(row, place, locale);
   const target = reservationStatusTarget(row);
   const selected = Option.exists(target, (id) => id === selection?.orderId);
@@ -677,6 +678,7 @@ function ReservationRow({
   const past = place === "past";
   const dateTone = past ? "dim" : "soft";
   const badge = Option.map(view.badge, (kind) => ticketBadge(kind, locale));
+  const stackedBadge = Option.isSome(badge) && isExpanded && fontScale >= 1.3;
   // The badge's height: the chevron centres in the space below it.
   const [badgeHeight, setBadgeHeight] = useState(0);
   const content = (
@@ -693,10 +695,10 @@ function ReservationRow({
         onNone: () => <DateTilePlaceholder />,
       })}
       <View style={styles.rowText}>
-        {/* Title and badge share one row, laid out in one pass: only the
-            title line gives the badge room, the badge reaches over the
-            chevron's column, and the lines below start under both. */}
-        <View style={styles.rowTitleLine}>
+        {/* Give enlarged titles the full width of the fixed list pane. */}
+        <View
+          style={[styles.rowTitleLine, stackedBadge && styles.stackedBadge]}
+        >
           <Text
             variant="bodyStrong"
             style={[styles.rowTitle, past ? styles.pastTitle : undefined]}
@@ -967,6 +969,7 @@ const styles = StyleSheet.create({
     gap: space.sm,
     justifyContent: "space-between",
   },
+  stackedBadge: { flexDirection: "column", gap: space.xxs },
   rowTitle: { flexShrink: 1 },
   rowBadge: { marginRight: -rowChevronColumn },
   rowWithdrawal: { alignSelf: "flex-start", marginTop: 2 },
