@@ -56,7 +56,7 @@ Nightly cases never run against a PR (D38). `resolve-target` passes `include_nig
 ## Run E2E
 
 - **Manual dispatch.** Run the workflow with `sha` (40 characters), `url` (immutable HTTPS deployment URL), and `ref` (internal PR head branch). The same PR guards apply, and the job fails before it allocates or mutates shared state unless GitHub deployment metadata records that URL as a successful Workspace deployment for that SHA. Set `cleanup_stale_e2e_reservations` only for an intentional stale-reservation cleanup (see [suite orchestration](suite-orchestration.md#dotypos-capacity-and-stale-reservations)).
-- **Mock payment during a Nexi sandbox outage.** Set the Vercel Preview variable `WORKSPACE_PAYMENT_PROVIDER=mock` before building the exact Git SHA. Set the repository Actions variable `WORKSPACE_E2E_PAYMENT_PROVIDER=mock` for automatic runs on previews configured that way. For a manual run, set `payment_provider=mock` to override the repository variable. Before the workflow change merges, manually dispatch from the PR branch whose workflow defines the input. Repository dispatch loads the workflow from `main`.
+- **Preview payment modes.** Set the Vercel Preview variable `WORKSPACE_PAYMENT_PROVIDER` before building the exact Git SHA. Use `mock` to verify the mock directly or `fallback` to start with Nexi and allow a qualifying checkout to continue with mock in the same run. Set the repository Actions variable `WORKSPACE_E2E_PAYMENT_PROVIDER` to the matching value for automatic runs. For a manual run, use `payment_provider` to override the repository variable. Before the workflow change merges, manually dispatch from the PR branch whose workflow defines the input. Repository dispatch loads the workflow from `main`. [Nexi sandbox restart](nexi-sandbox.md#sandbox-restart)
 
   ```bash
   gh workflow run workspace-e2e.yml --ref <branch> -f sha=<head> -f url=<immutable preview URL> -f ref=<branch> -f payment_provider=mock
@@ -82,7 +82,7 @@ Inspect settings and deployment metadata without printing values.
 
 - Neon integration-managed `DATABASE_URL` and `DATABASE_URL_UNPOOLED`.
 - Nexi sandbox `NEXI_API_ORIGIN` and `NEXI_API_KEY`, plus `NEXI_CHECKOUT_CURRENCY_OVERRIDE=EUR` for the current sandbox merchant.
-- `WORKSPACE_PAYMENT_PROVIDER` defaults to `nexi`. The app accepts `mock` only in Preview.
+- `WORKSPACE_PAYMENT_PROVIDER` defaults to `nexi`. The app accepts `mock` and `fallback` only on a protected Preview.
 - E2E Dotypos URL, credentials, and tenant IDs. The E2E cloud needs at least one active percentage discount group between 0.01% and 90%; the runner picks one deterministically and fails closed when none exists.
 - `EMAIL_API_KEY`. Env validation requires it in Preview and production. Recipient routing sends mail for `EMAIL_TEST_DOMAIN` recipients to Console, so E2E sends no real mail; a real person using a preview gets real mail.
 - `EMAIL_CAMPAIGN_ADMIN_INBOX` set to an `@deskohub.test` address, so campaign test sends and their confirmation codes stay on Console and in the server logs. `EMAIL_CAMPAIGN_FROM` and `EMAIL_CAMPAIGN_REPLY_TO` are optional in Preview.
@@ -111,7 +111,7 @@ Never put production Nexi, Dotypos, or database credentials in Preview. Never ad
 `e2e/e2e-env.ts` selects, validates, and decodes these once and passes typed config to telemetry, Layers, and child processes. The `test:e2e` entry in the root `turbo.json` lists them in `passThroughEnv`.
 
 - `WORKSPACE_E2E_BASE_URL`: the one target origin. The runner validates it as an immutable HTTPS Vercel deployment and uses it for browser cases, availability, readiness, webhook replays, and checkout status.
-- `WORKSPACE_E2E_PAYMENT_PROVIDER`: the expected preview mode, `nexi` by default. The workflow uses the repository Actions variable of the same name unless a manual run chooses `nexi` or `mock` explicitly. Checkout and administrator navigation setup verify the value returned by the protected `GET /api/webhooks/nexi` before seeding data. A mismatch requires a preview built with the matching application setting or a run whose expected value matches that preview.
+- `WORKSPACE_E2E_PAYMENT_PROVIDER`: the expected preview mode, `nexi` by default. A manual run can choose `nexi`, `mock`, or `fallback` to override the repository Actions variable of the same name. Checkout and administrator navigation setup verify the value returned by the protected `GET /api/webhooks/nexi` before seeding data. A mismatch requires a preview built with the matching application setting or a run whose expected value matches that preview.
 - `DATABASE_URL` (pooled), `WORKSPACE_E2E_DATABASE_URL_UNPOOLED`, `WORKSPACE_E2E_DATABASE_ALLOWLIST` (direct): must identify the database behind that same preview.
 - `NEXI_API_ORIGIN`: the sandbox origin, supplied explicitly.
 - `WORKSPACE_E2E_ALLOCATION_SHARD`, `WORKSPACE_E2E_PROVIDER_PERMIT_REQUIRED`, `WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL`: see [suite orchestration](suite-orchestration.md).

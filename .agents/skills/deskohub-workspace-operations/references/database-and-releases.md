@@ -37,9 +37,11 @@ Don't add a custom Vercel Ignored Build Step for documentation-, test-, CI-, or 
 
 ## Payment provider migration compatibility
 
-The payment webhook migration keeps the legacy Nexi `event_id` unique key
-and backfills the canonical provider-scoped `provider_event_id`. A trigger
-keeps both Nexi columns equal and takes a per-event transaction advisory lock
+Apply the payment webhook migration before promoting the application. The
+database must already have `webhook_events_event_id_unique` on the legacy
+Nexi `event_id`. The migration keeps that key and backfills the canonical
+provider-scoped `provider_event_id`. A trigger keeps both Nexi columns equal
+and takes a per-event transaction advisory lock
 so old and new conflict targets can coexist during promotion. Preserve those
 compatibility objects until every writer uses the canonical key.
 

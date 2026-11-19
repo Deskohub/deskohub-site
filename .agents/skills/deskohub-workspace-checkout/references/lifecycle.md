@@ -195,12 +195,14 @@ to `mock` or `fallback`. The Nexi health route reports the configured mode in
 `paymentProvider`. Keep Deployment Protection enabled and pass the automation
 bypass through the existing preview access flow.
 
-In `fallback` mode a new synthetic checkout uses Nexi until the E2E runner
-activates the gate for that immutable deployment. The runner holds the preview
-database lease, resets the gate before seeding and activates it only after the
-classified Nexi retry budget is exhausted. The application checks the gate
-before admitting a new attempt and never switches adapters after admission.
-Existing attempts use their stored provider, including after a gate reset.
+In `fallback` mode a fresh checkout uses Nexi. Ordinary Try Again can admit
+one mock successor for a synthetic customer on that protected preview. The
+signed retry state must identify the newest terminal Nexi attempt, which must
+carry `workspace_e2e_nexi_fallback_eligible`. Nexi must report the expected
+order amount and currency with no payment activity. Admission checks that
+the checkout is still unpaid, has no unresolved recovery, and still has
+the marked attempt as its newest attempt. Every attempt uses its stored
+provider for later operations.
 
 The mock payment page requires a session capability. Its database table holds
 the capability digest and the first approved or declined outcome, independently
