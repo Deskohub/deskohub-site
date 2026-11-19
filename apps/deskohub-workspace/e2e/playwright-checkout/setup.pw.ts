@@ -69,45 +69,44 @@ test("prepare the workspace checkout run", async ({ browser }) => {
           // Availability preparation reads the preview and the seeded
           // discount rows, so it waits for both; provider preparation reads
           // only Dotypos and overlaps them.
-          const availability = Effect.all(
-            [
-              telemetry.tracePhase({
-                effect: assertPreviewEndpointsReady(config),
-                phaseId: "preview-readiness",
-              }),
-              telemetry.tracePhase({
-                effect: seedDiscountE2EFixtures,
-                phaseId: "fixture-seeding",
-              }),
-            ],
-            { concurrency: "unbounded" }
-          ).pipe(
-            Effect.andThen(
-              Effect.all(
-                {
-                  discounts: telemetry.tracePhase({
-                    effect: prepareDiscountAvailabilityE2E(
-                      config,
-                      runContext.allocation
-                    ),
-                    phaseId: "cowork-availability-preparation",
-                  }),
-                  meetingRoom: telemetry.tracePhase({
-                    effect: prepareMeetingRoomE2E(
-                      config,
-                      runContext.allocation
-                    ),
-                    phaseId: "meeting-room-availability-preparation",
-                  }),
-                  office: telemetry.tracePhase({
-                    effect: prepareOfficeE2E(config, runContext.allocation),
-                    phaseId: "office-availability-preparation",
-                  }),
-                },
-                { concurrency: "unbounded" }
+          const availability = telemetry
+            .tracePhase({
+              effect: assertPreviewEndpointsReady(config),
+              phaseId: "preview-readiness",
+            })
+            .pipe(
+              Effect.andThen(
+                telemetry.tracePhase({
+                  effect: seedDiscountE2EFixtures,
+                  phaseId: "fixture-seeding",
+                })
+              ),
+              Effect.andThen(
+                Effect.all(
+                  {
+                    discounts: telemetry.tracePhase({
+                      effect: prepareDiscountAvailabilityE2E(
+                        config,
+                        runContext.allocation
+                      ),
+                      phaseId: "cowork-availability-preparation",
+                    }),
+                    meetingRoom: telemetry.tracePhase({
+                      effect: prepareMeetingRoomE2E(
+                        config,
+                        runContext.allocation
+                      ),
+                      phaseId: "meeting-room-availability-preparation",
+                    }),
+                    office: telemetry.tracePhase({
+                      effect: prepareOfficeE2E(config, runContext.allocation),
+                      phaseId: "office-availability-preparation",
+                    }),
+                  },
+                  { concurrency: "unbounded" }
+                )
               )
-            )
-          );
+            );
           const { availability: prepared, customerDiscountGroup } =
             yield* Effect.all(
               {

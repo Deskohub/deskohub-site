@@ -178,9 +178,9 @@ export const makeMeetingRoomE2ECases = ({
     const cancelledScenario = yield* tryWorkspaceE2ESync(
       "select cancelled meeting-room payment scenario",
       () => {
-        const scenario = getPaymentTerminalScenarios().find(
-          ({ state }) => state === "cancelled"
-        );
+        const scenario = getPaymentTerminalScenarios(
+          config.paymentProvider
+        ).find(({ state }) => state === "cancelled");
         assert(scenario, "cancelled payment scenario missing");
         return scenario;
       }

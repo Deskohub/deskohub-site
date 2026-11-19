@@ -1,6 +1,7 @@
-import { Effect } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { Effect, Option, Schema } from "effect";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import type { WorkspaceE2EConfig } from "./config";
+import { e2ePaymentProviderSchema } from "./e2e-env";
 import {
   toWorkspaceE2EError,
   type WorkspaceE2EError,
@@ -10,19 +11,61 @@ import { isNotFoundPage } from "./not-found-page";
 import { makeUrl } from "./urls";
 
 const previewAuthSessionCacheControl = "private, no-store";
+const decodePreviewPaymentProvider = Schema.decodeUnknownOption(
+  Schema.Struct({ paymentProvider: e2ePaymentProviderSchema })
+);
 
 export const assertPreviewEndpointsReady = (
   config: WorkspaceE2EConfig
 ): Effect.Effect<void, WorkspaceE2EError, HttpClient.HttpClient> =>
   Effect.all(
     [
-      assertPreviewEndpointReady(config, "/api/webhooks/nexi"),
+      assertPreviewPaymentProvider(config),
       assertPreviewEndpointReady(config, "/api/webhooks/resend"),
       assertPreviewJpegReady(config, "/workspace-location-map.jpeg"),
       assertPreviewAuthSessionReady(config),
     ],
     { concurrency: "unbounded", discard: true }
   );
+
+export const assertPreviewPaymentProvider = Effect.fn(
+  "previewReadiness.assertPaymentProvider"
+)(function* (config: WorkspaceE2EConfig) {
+  const path = "/api/webhooks/nexi";
+  const operation = "check preview payment provider";
+  const response = yield* requestPreviewEndpoint(config, path).pipe(
+    Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" })
+  );
+  if (response.status !== 200) {
+    return yield* workspaceE2EError(
+      `${path} preview readiness check failed with ${response.status}`,
+      { operation }
+    );
+  }
+  const body = yield* response.json.pipe(
+    Effect.mapError(() =>
+      workspaceE2EError(
+        "Preview returned an invalid payment provider response",
+        {
+          operation,
+        }
+      )
+    )
+  );
+  const selection = decodePreviewPaymentProvider(body);
+  if (Option.isNone(selection)) {
+    return yield* workspaceE2EError(
+      "Preview did not report a recognized payment provider",
+      { operation }
+    );
+  }
+  if (selection.value.paymentProvider !== config.paymentProvider) {
+    return yield* workspaceE2EError(
+      `Preview payment provider is ${selection.value.paymentProvider}, expected ${config.paymentProvider}`,
+      { operation }
+    );
+  }
+});
 
 /**
  * Anonymous Better Auth readiness: the exact protected preview must answer
@@ -107,7 +150,7 @@ export const isPreviewPageAvailable = (
     );
   });
 
-export const assertPreviewEndpointReady = (
+const assertPreviewEndpointReady = (
   config: WorkspaceE2EConfig,
   path: string
 ): Effect.Effect<void, WorkspaceE2EError, HttpClient.HttpClient> =>
@@ -170,27 +213,29 @@ export const assertPreviewJpegReady = (
     );
   });
 
-const requestPreviewEndpoint = (config: WorkspaceE2EConfig, path: string) =>
-  Effect.gen(function* () {
-    const url = yield* makeUrl(
-      `build ${path} preview readiness URL`,
-      path,
-      config.baseUrl
-    );
-    const httpClient = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.get(url).pipe(
-      HttpClientRequest.setHeaders(
-        config.bypassSecret
-          ? { "x-vercel-protection-bypass": config.bypassSecret }
-          : {}
+const requestPreviewEndpoint = Effect.fnUntraced(function* (
+  config: WorkspaceE2EConfig,
+  path: string
+) {
+  const url = yield* makeUrl(
+    `build ${path} preview readiness URL`,
+    path,
+    config.baseUrl
+  );
+  const httpClient = yield* HttpClient.HttpClient;
+  const request = HttpClientRequest.get(url).pipe(
+    HttpClientRequest.setHeaders(
+      config.bypassSecret
+        ? { "x-vercel-protection-bypass": config.bypassSecret }
+        : {}
+    )
+  );
+
+  return yield* httpClient
+    .execute(request)
+    .pipe(
+      Effect.mapError((cause) =>
+        toWorkspaceE2EError(`check ${path} preview endpoint`, cause)
       )
     );
-
-    return yield* httpClient
-      .execute(request)
-      .pipe(
-        Effect.mapError((cause) =>
-          toWorkspaceE2EError(`check ${path} preview endpoint`, cause)
-        )
-      );
-  });
+});

@@ -492,5 +492,6 @@ const makeConfig = (): WorkspaceE2EConfig => ({
   baseUrl: "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
   bypassSecret: "test-protection-bypass",
   expectedHost: "deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
+  paymentProvider: "nexi",
   timeouts: workspaceE2ETimeouts,
 });

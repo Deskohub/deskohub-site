@@ -125,6 +125,7 @@ const config: WorkspaceE2EConfig = {
   baseUrl,
   bypassSecret: undefined,
   expectedHost: new URL(baseUrl).host,
+  paymentProvider: "nexi",
   timeouts: {
     ...workspaceE2ETimeouts,
     // Long enough for a loaded machine; the failure paths wait them out.

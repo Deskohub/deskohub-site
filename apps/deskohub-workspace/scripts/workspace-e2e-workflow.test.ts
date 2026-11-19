@@ -192,6 +192,7 @@ const repositoryDispatchContext = (): WorkflowExpressionContext => ({
   contexts: screenshotOptInContexts,
   values: new Map([
     ["github.event_name", workflowExpressionString("repository_dispatch")],
+    ["inputs.payment_provider", workflowExpressionString("")],
   ]),
 });
 
@@ -220,6 +221,44 @@ const workflowDispatchContext = (
 };
 
 describe("workspace E2E workflow", () => {
+  test.each([
+    ["repository_dispatch", undefined, undefined, "nexi"],
+    ["repository_dispatch", undefined, "mock", "mock"],
+    ["workflow_dispatch", undefined, "mock", "mock"],
+    ["workflow_dispatch", "mock", "nexi", "mock"],
+    ["workflow_dispatch", "nexi", "mock", "nexi"],
+  ] as const)(
+    "selects the expected payment provider for the trigger",
+    (event, manualProvider, configuredProvider, expected) => {
+      const { contexts, values } =
+        event === "repository_dispatch"
+          ? repositoryDispatchContext()
+          : workflowDispatchContext({});
+      const providerValues = new Map(values);
+      if (manualProvider) {
+        providerValues.set(
+          "inputs.payment_provider",
+          workflowExpressionString(manualProvider)
+        );
+      }
+      if (configuredProvider) {
+        providerValues.set(
+          "vars.WORKSPACE_E2E_PAYMENT_PROVIDER",
+          workflowExpressionString(configuredProvider)
+        );
+      }
+      const provider = evaluateWorkflowValue(
+        testJob?.env?.WORKSPACE_E2E_PAYMENT_PROVIDER ?? "",
+        {
+          contexts: [...contexts, "vars"],
+          values: providerValues,
+        }
+      );
+
+      expect(provider).toBe(expected);
+    }
+  );
+
   test("keeps the atomic allocator isolated from exact-SHA test code", () => {
     const tokenCheckouts = allSteps.filter((step) =>
       (step.uses ?? "").startsWith("actions/checkout")

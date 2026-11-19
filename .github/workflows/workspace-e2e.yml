@@ -20,6 +20,14 @@ on:
         required: false
         default: false
         type: boolean
+      payment_provider:
+        description: Payment provider expected on the preview
+        type: choice
+        default: repository-default
+        options:
+          - repository-default
+          - nexi
+          - mock
       review_screenshots:
         description: Capture synthetic PR review screenshots into the review artifact
         required: false
@@ -485,6 +493,7 @@ jobs:
       TURBO_TEAM: ${{ vars.TURBO_TEAM }}
       WORKSPACE_E2E_BASE_URL: ${{ needs.resolve-target.outputs.url }}
       WORKSPACE_E2E_EXECUTION_CONTEXT: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'ci' }}
+      WORKSPACE_E2E_PAYMENT_PROVIDER: ${{ github.event_name == 'workflow_dispatch' && inputs.payment_provider != 'repository-default' && inputs.payment_provider || vars.WORKSPACE_E2E_PAYMENT_PROVIDER || 'nexi' }}
       WORKSPACE_E2E_PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
 
     steps:

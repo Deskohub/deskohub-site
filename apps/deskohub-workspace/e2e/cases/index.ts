@@ -92,7 +92,9 @@ export const makeWorkspaceE2ECases = ({
 
     const construction = Effect.gen(function* () {
       const httpClient = yield* HttpClient.HttpClient;
-      const terminalScenarios = getPaymentTerminalScenarios();
+      const terminalScenarios = getPaymentTerminalScenarios(
+        config.paymentProvider
+      );
       const checkoutDates = yield* selectCoworkDates(
         discountPreparation.availableBasicDates,
         checkoutFlows.length +

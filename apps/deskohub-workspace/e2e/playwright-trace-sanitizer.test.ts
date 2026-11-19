@@ -71,6 +71,9 @@ test("replaces the trace with a sanitized copy", async () => {
   const cookie = `cookie-${randomUUID()}`;
   const bearer = `bearer-${randomUUID()}`;
   const password = `password-${randomUUID()}`;
+  const paymentId = `mock-${randomUUID()}`;
+  const mockToken = randomUUID().replaceAll("-", "");
+  const mockPageUrl = `${origin}/api/checkout/mock-payment?paymentId=${paymentId}&token=${mockToken}`;
   addRedaction(secret);
   // A screenshot's bytes around an embedded secret survive unchanged.
   const screenshot = Uint8Array.from([
@@ -109,6 +112,18 @@ test("replaces the trace with a sanitized copy", async () => {
           html: ["HTML", {}, ["BODY", {}, ["P", {}, secret]]],
           resourceOverrides: [
             { sha1: "style.css", url: `${origin}/style.css?v=${secret}` },
+          ],
+        },
+      },
+      {
+        type: "frame-snapshot",
+        snapshot: {
+          frameUrl: mockPageUrl,
+          html: [
+            "FORM",
+            {},
+            ["INPUT", { type: "hidden", name: "paymentId", value: paymentId }],
+            ["INPUT", { type: "hidden", name: "token", value: mockToken }],
           ],
         },
       }
@@ -159,7 +174,15 @@ test("replaces the trace with a sanitized copy", async () => {
   ]);
   for (const [name, bytes] of Object.entries(entries)) {
     const text = Buffer.from(bytes).toString("latin1");
-    for (const value of [secret, cookie, bearer, password, host])
+    for (const value of [
+      secret,
+      cookie,
+      bearer,
+      password,
+      host,
+      paymentId,
+      mockToken,
+    ])
       expect({ name, leaked: text.includes(value) }).toEqual({
         name,
         leaked: false,

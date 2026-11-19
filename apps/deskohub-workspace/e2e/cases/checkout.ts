@@ -27,16 +27,12 @@ import type {
   OpenE2EBrowserSession,
 } from "../browser-session";
 import type { WorkspaceE2EStep, WorkspaceE2EStepRunner } from "../case-runner";
+import { completeHostedPayment } from "../checkout/hosted-payment";
 import { retireRejectedAttempt } from "../checkout/lifecycle-fixtures";
 import {
   formatNexiBuildFailureCodes,
   parseNexiBuildFailures,
 } from "../checkout/nexi-build-api";
-import {
-  completeNexiHostedPayment,
-  type HostedPaymentPage,
-  type NexiChallengeOutcome,
-} from "../checkout/nexi-hosted-payment";
 import {
   classifyNexiSandboxRejection,
   decideNexiSandboxRetry,
@@ -44,6 +40,7 @@ import {
   nexiSandboxRetryDelayMs,
 } from "../checkout/nexi-sandbox-retry";
 import {
+  type HostedPaymentPage,
   submitPaymentAndWaitForHostedPage,
   submitReservationForPayPage,
 } from "../checkout/payment";
@@ -60,9 +57,10 @@ import type { WorkspaceE2EProviderVerificationPermitService } from "../coordinat
 import { tryWorkspaceE2ESync, type WorkspaceE2EError } from "../errors";
 import {
   type ExpectedDiscountApplication,
+  type HostedProviderSessionRow,
   markFulfillmentFailedForE2E,
   markPreviewFulfillmentDeliveredForE2E,
-  replayNexiWebhook,
+  replayPaymentWebhook,
   requireProviderSessionRowAfterRedirect,
   validateDiscountApplications,
   validatePostgres,
@@ -180,11 +178,10 @@ export const executeCheckoutFlow = ({
     });
     state.orderId = orderId;
 
-    // Nexi verification happens inside the deployed webhook handler. The runner
-    // validates the resulting payment/webhook state without holding Nexi secrets.
+    // The deployed webhook handler verifies the selected provider's state.
     yield* runStep({
       permit: "provider-verification",
-      execute: replayNexiWebhook(config, providerSessionRow).pipe(
+      execute: replayPaymentWebhook(config, providerSessionRow).pipe(
         Effect.provideService(HttpClient.HttpClient, httpClient)
       ),
       id: "replay-payment-webhook",
@@ -196,9 +193,17 @@ export const executeCheckoutFlow = ({
       timeoutMs: config.timeouts.datasource,
     });
     const checkoutRow = yield* runStep({
-      execute: validatePostgres(datasourceConfig, data, orderId, (row) => {
-        state.checkoutRow = row;
-      }),
+      execute: validatePostgres(
+        {
+          ...datasourceConfig,
+          paymentProvider: providerSessionRow.provider,
+        },
+        data,
+        orderId,
+        (row) => {
+          state.checkoutRow = row;
+        }
+      ),
       id: "validate-postgres-state",
       timeoutMs: config.timeouts.datasource,
     });
@@ -309,8 +314,7 @@ export type CheckoutFlowStart =
     };
 
 export type HostedCheckoutPaymentOptions = {
-  // Defaults to an authenticated payment.
-  readonly challengeOutcome?: NexiChallengeOutcome;
+  readonly outcome?: "approved" | "declined";
   readonly config: WorkspaceE2EConfig;
   readonly data: CheckoutData;
   readonly orderId: CheckoutRow["reservation_id"];
@@ -320,24 +324,23 @@ export type HostedCheckoutPaymentOptions = {
 };
 
 type HostedPaymentAttempt =
-  | { readonly kind: "completed"; readonly row: CheckoutRow }
+  | { readonly kind: "completed"; readonly row: HostedProviderSessionRow }
   | {
       readonly authorizationRequested: boolean;
       readonly error: WorkspaceE2EError;
       readonly hostedPaymentPage: HostedPaymentPage;
       readonly kind: "sandbox-rejected";
       readonly rejection: NexiSandboxRejection;
-      readonly row: CheckoutRow;
+      readonly row: HostedProviderSessionRow;
     };
 
-// Pays on the Nexi hosted page. The shared Nexi sandbox sometimes rejects a
+// Drives the selected hosted page. The shared Nexi sandbox sometimes rejects a
 // payment on its own side; when that happened before Nexi could authorize
-// anything, the payment restarts once through a fresh payment attempt. The
-// hosted-payment permit covers both attempts and ends at the status page.
+// anything, the runner restarts the attempt once within the hosted-payment permit.
 export const completeHostedCheckoutPayment = (
   options: HostedCheckoutPaymentOptions
 ): Effect.Effect<
-  CheckoutRow,
+  HostedProviderSessionRow,
   WorkspaceE2EError,
   E2EDatabase | WorkspaceE2EHostedPaymentPermitService
 > =>
@@ -359,7 +362,6 @@ export const completeHostedCheckoutPayment = (
         });
         if (!restarted) return yield* first.error;
 
-        // The restarted attempt never restarts again, so it completes or fails.
         const retry = yield* runHostedPaymentAttempt(options, first.row);
         if (retry.kind === "sandbox-rejected") return yield* retry.error;
         return retry.row;
@@ -369,7 +371,7 @@ export const completeHostedCheckoutPayment = (
 
 const runHostedPaymentAttempt = (
   {
-    challengeOutcome,
+    outcome,
     config,
     data,
     orderId,
@@ -377,17 +379,13 @@ const runHostedPaymentAttempt = (
     openSession,
     state,
   }: HostedCheckoutPaymentOptions,
-  // The first attempt's row when this attempt restarts a rejected payment.
   rejectedRow?: CheckoutRow
 ): Effect.Effect<HostedPaymentAttempt, WorkspaceE2EError, E2EDatabase> =>
   Effect.gen(function* () {
     const stepId = (id: string) => (rejectedRow ? `${id}-retry` : id);
     const hostedPaymentPage = yield* runStep({
       execute: Effect.flatMap(openSession, (browser) =>
-        submitPaymentAndWaitForHostedPage({
-          session: browser,
-          timeouts: config.timeouts,
-        })
+        submitPaymentAndWaitForHostedPage({ config, session: browser })
       ),
       id: stepId("start-checkout-payment"),
       timeoutMs: config.timeouts.providerTransition,
@@ -397,6 +395,7 @@ const runHostedPaymentAttempt = (
         onRow: (value) => {
           state.checkoutRow = value;
         },
+        paymentProvider: hostedPaymentPage.provider,
         timeoutMs: config.timeouts.browserAction,
       }).pipe(
         Effect.tap((value) =>
@@ -414,15 +413,15 @@ const runHostedPaymentAttempt = (
     let authorizationRequested = false;
     const rejected = yield* runStep({
       execute: Effect.flatMap(openSession, (browser) =>
-        completeNexiHostedPayment({
-          ...(challengeOutcome ? { challengeOutcome } : {}),
+        completeHostedPayment({
+          config,
           data,
           hostedPaymentPage,
-          onPaymentAuthorizationRequested: () => {
+          ...(outcome === undefined ? {} : { outcome }),
+          onNexiAuthorizationRequested: () => {
             authorizationRequested = true;
           },
           session: browser,
-          timeouts: config.timeouts,
         })
       ),
       id: stepId("complete-hosted-payment"),
@@ -430,8 +429,11 @@ const runHostedPaymentAttempt = (
     }).pipe(
       Effect.as(undefined),
       Effect.catch((error) => {
-        const rejection = classifyNexiSandboxRejection(error);
-        return !rejectedRow && rejection && hostedPaymentPage
+        const rejection =
+          hostedPaymentPage?.provider === "nexi"
+            ? classifyNexiSandboxRejection(error)
+            : undefined;
+        return rejection && hostedPaymentPage
           ? Effect.succeed({
               authorizationRequested,
               error,
@@ -463,7 +465,7 @@ export const assertFreshPaymentAttempt = (
   );
   assert(
     row.provider_order_id !== rejectedRow.provider_order_id,
-    "restarted payment reused the rejected Nexi order"
+    "restarted payment reused the rejected provider order"
   );
 };
 

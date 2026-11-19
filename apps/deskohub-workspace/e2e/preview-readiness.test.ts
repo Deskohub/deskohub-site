@@ -4,50 +4,72 @@ import { FetchHttpClient } from "effect/http";
 import type { WorkspaceE2EConfig } from "./config";
 import {
   assertPreviewAuthSessionReady,
-  assertPreviewEndpointReady,
   assertPreviewEndpointsReady,
   assertPreviewJpegReady,
+  assertPreviewPaymentProvider,
   isPreviewPageAvailable,
 } from "./preview-readiness";
 import { workspaceE2ETimeouts } from "./timeouts";
 
-test("checks webhook readiness on the exact protected preview origin", async () => {
-  const requests: Array<{ headers: Headers; url: string }> = [];
-  const fetchMock = mock(
-    async (input: URL | RequestInfo, init?: RequestInit) => {
-      const request =
-        input instanceof Request ? input : new Request(input, init);
-      requests.push({
-        headers: request.headers,
-        url: request.url,
-      });
-      return new Response(null, { status: 200 });
-    }
-  );
-  const httpClientLayer = FetchHttpClient.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        FetchHttpClient.Fetch,
-        fetchMock as unknown as typeof globalThis.fetch
+test.each(["nexi", "mock"] as const)(
+  "checks %s readiness on the exact protected preview origin",
+  async (paymentProvider) => {
+    const requests: Array<{ headers: Headers; url: string }> = [];
+    const fetchMock = mock(
+      async (input: URL | RequestInfo, init?: RequestInit) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init);
+        requests.push({
+          headers: request.headers,
+          url: request.url,
+        });
+        return Response.json({ paymentProvider, status: "ok" });
+      }
+    );
+    await Effect.runPromise(
+      assertPreviewPaymentProvider({
+        ...makeConfig("test-protection-bypass"),
+        paymentProvider,
+      }).pipe(Effect.provide(makeFetchHttpClientLayer(fetchMock)))
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url).toBe(
+      "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app/api/webhooks/nexi"
+    );
+    expect(requests[0]?.headers.get("x-vercel-protection-bypass")).toBe(
+      "test-protection-bypass"
+    );
+  }
+);
+
+test.each([
+  [Response.json({ paymentProvider: "mock" }), "is mock, expected nexi"],
+  [
+    Response.json({ paymentProvider: "unsupported" }),
+    "recognized payment provider",
+  ],
+  [Response.json({ status: "ok" }), "recognized payment provider"],
+  [new Response("not JSON"), "invalid payment provider response"],
+  [new Response(null, { status: 302 }), "readiness check failed with 302"],
+] as const)(
+  "rejects an unverified preview provider",
+  async (response, message) => {
+    const fetchMock = mock(
+      async (_input: URL | RequestInfo, init?: RequestInit) => {
+        expect(init?.redirect).toBe("manual");
+        return response;
+      }
+    );
+    const exit = await Effect.runPromiseExit(
+      assertPreviewPaymentProvider(makeConfig()).pipe(
+        Effect.provide(makeFetchHttpClientLayer(fetchMock))
       )
-    )
-  );
-
-  await Effect.runPromise(
-    assertPreviewEndpointReady(
-      makeConfig("test-protection-bypass"),
-      "/api/webhooks/nexi"
-    ).pipe(Effect.provide(httpClientLayer))
-  );
-
-  expect(requests).toHaveLength(1);
-  expect(requests[0]?.url).toBe(
-    "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app/api/webhooks/nexi"
-  );
-  expect(requests[0]?.headers.get("x-vercel-protection-bypass")).toBe(
-    "test-protection-bypass"
-  );
-});
+    );
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") expect(String(exit.cause)).toContain(message);
+  }
+);
 
 test("checks that the generated map endpoint returns a JPEG payload", async () => {
   const fetchMock = mock(
@@ -90,6 +112,9 @@ test("starts all preview readiness requests before any request completes", async
         status: 200,
         headers: { "cache-control": "private, no-store" },
       });
+    }
+    if (String(input).endsWith("/api/webhooks/nexi")) {
+      return Response.json({ paymentProvider: "nexi" });
     }
     return new Response(null, { status: 200 });
   });
@@ -256,5 +281,6 @@ const makeConfig = (bypassSecret?: string): WorkspaceE2EConfig => ({
   baseUrl: "https://deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
   bypassSecret,
   expectedHost: "deskohub-workspace-a1b2c3d4e-deskohub-bar.vercel.app",
+  paymentProvider: "nexi",
   timeouts: workspaceE2ETimeouts,
 });
