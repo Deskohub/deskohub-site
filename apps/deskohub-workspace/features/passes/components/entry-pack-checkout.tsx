@@ -59,6 +59,12 @@ export function EntryPackCheckout({
   };
 }) {
   const [product, setProduct] = useState(initialProduct);
+  const [confirmedValidity, setConfirmedValidity] = useState(
+    continuation?.validUntil
+  );
+  const displayedValidity = confirmedValidity
+    ? { ...validity, [product.size]: confirmedValidity }
+    : validity;
   const [step, setStep] = useState<Step>(initialStep);
   const [details, setDetails] = useState<DetailsSchema["Encoded"] | undefined>(
     continuation?.holderEmail === undefined
@@ -136,6 +142,7 @@ export function EntryPackCheckout({
           getEntryPackDetailsPath(locale, result.data.product, orderId)
         );
         setDetails(values);
+        setConfirmedValidity(result.data.lastUsableDate);
         setPaymentRequested(false);
         setPayment({
           orderId,
@@ -197,9 +204,10 @@ export function EntryPackCheckout({
         <EntryPackChoose
           locale={locale}
           product={product}
-          validity={validity}
+          validity={displayedValidity}
           onChange={(next) => {
             attempt.current = undefined;
+            setConfirmedValidity(undefined);
             window.history.replaceState(
               null,
               "",
@@ -215,11 +223,7 @@ export function EntryPackCheckout({
           buyer={buyer}
           locale={locale}
           product={product}
-          validUntil={
-            product.size === initialProduct.size
-              ? (continuation?.validUntil ?? validity[product.size])
-              : validity[product.size]
-          }
+          validUntil={displayedValidity[product.size]}
           initialValues={details}
           orderId={continuation?.orderId}
           error={error}
@@ -236,6 +240,7 @@ export function EntryPackCheckout({
           onRequestPayment={() => setPaymentRequested(true)}
           onExpire={() => {
             attempt.current = undefined;
+            setConfirmedValidity(undefined);
             window.history.replaceState(
               null,
               "",

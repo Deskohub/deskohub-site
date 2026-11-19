@@ -168,6 +168,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       const amount = currencyCZK(voucherValue);
       let discountAvailable = true;
+      let replacementProviderReference: string | undefined;
       let affirmedCode: typeof code | undefined;
       const candidate: DiscountCandidate = {
         discount: {
@@ -340,7 +341,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           affirmDisplayedDiscounts: (input) =>
             calculateDiscounts({
               ...input,
-              candidates: discountAvailable ? [candidate] : [],
+              candidates: discountAvailable
+                ? [
+                    {
+                      ...candidate,
+                      provenance: {
+                        ...candidate.provenance,
+                        providerReference:
+                          replacementProviderReference ??
+                          candidate.provenance.providerReference,
+                      },
+                    },
+                  ]
+                : [],
             }).pipe(
               Effect.map(({ quote, applications }) => ({
                 quote,
@@ -523,6 +536,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         removeDiscount: () => {
           discountAvailable = false;
         },
+        reassignCode: () => {
+          replacementProviderReference = crypto.randomUUID();
+        },
         pay: (
           at?: Temporal.Instant,
           options?: {
@@ -666,6 +682,17 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(first.snapshot?.buyer).toBeDefined();
       expect(second.snapshot?.buyer).toEqual(first.snapshot?.buyer);
       await payment.notify("failure", 1);
+    });
+
+    test("an ended attempt cannot reserve a different promotion with the same code and price", async () => {
+      const payment = await integration(database!, 2_000);
+      expect(await payment.pay()).toMatchObject({ status: "hosted" });
+      await payment.notify("failure");
+      payment.reassignCode();
+      await expect(payment.pay()).rejects.toMatchObject({
+        reason: "payment-in-progress",
+      });
+      expect(payment.providerOrders).toHaveLength(1);
     });
 
     test("reconciliation rotates past an inconclusive Nexi order at batch size one", async () => {

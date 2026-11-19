@@ -1,10 +1,15 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { orders, passPurchases, paymentAttempts } from "@/db/schema";
+import {
+  discountApplications,
+  orders,
+  passPurchases,
+  paymentAttempts,
+} from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
   ensurePassHolderAccount,
@@ -26,6 +31,7 @@ import {
 import { startNexiPaymentSession } from "@/features/checkout/backend/payment/nexi-payment-session";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
+import { getDiscountCommitmentPayload } from "@/features/discounts/commitment";
 import type { CanonicalPromotionCode } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
@@ -627,6 +633,43 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         }
         yield* saveEntryPackQuote(order.id, refreshedQuote);
         return { status: "pricing_changed" as const, quote: refreshedQuote };
+      }
+
+      if (order.activePaymentAttemptId) {
+        // A code can be renamed or reassigned without changing its displayed
+        // text or price. Use the sources recorded when the first charge started.
+        const priorSources = yield* db
+          .select({
+            namespace: sql<
+              string | null
+            >`${discountApplications.provenance}->>'providerNamespace'`,
+            reference: sql<
+              string | null
+            >`${discountApplications.provenance}->>'providerReference'`,
+          })
+          .from(discountApplications)
+          .where(
+            eq(
+              discountApplications.paymentAttemptId,
+              order.activePaymentAttemptId
+            )
+          )
+          .orderBy(discountApplications.sequence);
+        const { applications } = getDiscountCommitmentPayload(commitment);
+        if (
+          priorSources.length !== applications.length ||
+          priorSources.some((source, index) => {
+            const next = applications[index]?.provenance;
+            return (
+              source.namespace !== next?.providerNamespace ||
+              source.reference !== next?.providerReference
+            );
+          })
+        ) {
+          return yield* new EntryPackPurchaseError({
+            reason: "payment-in-progress",
+          });
+        }
       }
 
       const contacts = yield* CustomerAccountContactService;

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { m } from "@/features/i18n";
+import { orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
 import {
   registerWorkspaceComponentTestEnv,
@@ -76,4 +77,34 @@ test("an earlier Details response cannot open Pay after the buyer changes packs"
     (view.getByRole("radio", { name: /10 entries/i }) as HTMLInputElement)
       .checked
   ).toBe(true);
+});
+
+test("Choose and Details keep an owned draft's date until the selected pack changes", () => {
+  const view = render(
+    <EntryPackCheckout
+      locale={locale}
+      buyer={{
+        kind: "linked",
+        email: testEmailAddress("pack-resume-buyer"),
+        name: "Fixture Buyer",
+      }}
+      initialProduct={product}
+      initialStep="details"
+      continuation={{
+        orderId: orderIdSchema.make(crypto.randomUUID()),
+        validUntil: "2027-01-18",
+      }}
+      validity={{ 5: "2027-01-19", 10: "2027-02-19" }}
+    />
+  );
+  expect(view.getByText("Jan 18, 2027")).toBeDefined();
+  fireEvent.click(view.getByRole("button", { name: /choose your pack/i }));
+  expect(view.getByText(/until Jan 18, 2027/)).toBeDefined();
+  fireEvent.click(view.getByRole("radio", { name: /^Reserved Desk from/ }));
+  expect(view.getByText(/until Jan 19, 2027/)).toBeDefined();
+  fireEvent.click(
+    view.getByRole("button", { name: m.checkoutContinueButton({}, { locale }) })
+  );
+  expect(view.getByText("Jan 19, 2027")).toBeDefined();
+  expect(view.queryByText("Jan 18, 2027")).toBeNull();
 });
