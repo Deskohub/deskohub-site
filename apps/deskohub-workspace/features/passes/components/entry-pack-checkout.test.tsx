@@ -1,6 +1,7 @@
 import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { m } from "@/features/i18n";
+import { getPaymentSubmitLegalDocuments } from "@/features/legal/payment-submit-evidence";
 import { orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
 import {
@@ -12,9 +13,15 @@ const locale = "en-US";
 const product = { kind: "entry-pack", tier: "open-space", size: 5 } as const;
 const begin = Promise.withResolvers<unknown>();
 const beginCheckout = mock(() => begin.promise);
+type PayInput = Parameters<
+  typeof import("../entry-pack-checkout-actions").payEntryPackCheckout
+>[0];
+const payCheckout = mock(async (_input: PayInput) => ({
+  data: { status: "purchase_error", reason: "unavailable" },
+}));
 mock.module("../entry-pack-checkout-actions", () => ({
   beginEntryPackCheckout: beginCheckout,
-  payEntryPackCheckout: mock(),
+  payEntryPackCheckout: payCheckout,
   repriceEntryPackCheckout: mock(),
 }));
 mock.module("next/image", () => ({ default: () => null }));
@@ -24,6 +31,7 @@ const { act, cleanup, fireEvent, render, waitFor } = await import(
   "@testing-library/react"
 );
 const { EntryPackCheckout } = await import("./entry-pack-checkout");
+const { EntryPackPay } = await import("./entry-pack-pay");
 afterEach(cleanup);
 afterAll(unregisterWorkspaceComponentTestEnv);
 
@@ -107,4 +115,52 @@ test("Choose and Details keep an owned draft's date until the selected pack chan
   );
   expect(view.getByText("Jan 19, 2027")).toBeDefined();
   expect(view.queryByText("Jan 18, 2027")).toBeNull();
+});
+
+test("clicking the enabled Pay button submits the selected billing and current legal evidence", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const documents = getPaymentSubmitLegalDocuments(locale);
+  const billing = { purpose: "personal", invoice: "none" } as const;
+  const fingerprint = "0".repeat(64);
+  const view = render(
+    <EntryPackPay
+      locale={locale}
+      orderId={orderId}
+      state={{
+        status: "ready",
+        product,
+        price: {
+          fingerprint,
+          subtotal: currencyCZK(115_000),
+          total: currencyCZK(115_000),
+          discounts: [],
+        },
+        validFrom: "2026-11-19",
+        lastUsableDate: "2027-01-18",
+        disclosure: {
+          documents,
+          earlyStartRequest: m.passEarlyStartConsent({}, { locale }),
+        },
+        billing,
+      }}
+      headingRef={null}
+      onExpire={() => {}}
+      onRequestPayment={() => {}}
+    />
+  );
+  const pay = view.getByRole("button", { name: /order and pay/i });
+  expect(pay).toHaveProperty("disabled", true);
+  expect(view.getAllByRole("checkbox")).toHaveLength(1);
+  fireEvent.click(view.getByRole("checkbox"));
+  fireEvent.click(pay);
+  await waitFor(() =>
+    expect(payCheckout).toHaveBeenCalledWith({
+      orderId,
+      locale,
+      accepted: true,
+      acceptedDocuments: documents.map(({ key, hash }) => ({ key, hash })),
+      billing,
+      displayedPriceFingerprint: fingerprint,
+    })
+  );
 });

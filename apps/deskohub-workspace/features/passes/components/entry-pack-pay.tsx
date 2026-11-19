@@ -1,4 +1,4 @@
-import { type FormEvent, type Ref, useId, useState } from "react";
+import { type Ref, useId, useState } from "react";
 import { getAccountSignInPath } from "@/features/account/routes";
 import {
   CheckoutPayCard,
@@ -132,8 +132,7 @@ export function EntryPackPay({
       ...(code !== undefined && { submittedCode: code }),
     });
   };
-  const submitPayment = (event: FormEvent) => {
-    event.preventDefault();
+  const submitPayment = () => {
     if (!checked || busy || expired) return;
     setError(undefined);
     onRequestPayment();
@@ -255,7 +254,7 @@ export function EntryPackPay({
         </form>
       )}
       {price.total.value > 0 && <CheckoutPayProviderHandoff locale={locale} />}
-      <form className="space-y-6" onSubmit={submitPayment}>
+      <div className="space-y-6">
         {error && (
           <p role="alert" className="text-sm font-semibold text-burned-orange">
             {error}
@@ -278,12 +277,13 @@ export function EntryPackPay({
           <CheckoutPaySubmitButton
             disabled={!checked || busy}
             locale={locale}
+            onClick={submitPayment}
             pending={pay.isPending}
             total={price.total}
             variant="pay"
           />
         )}
-      </form>
+      </div>
     </CheckoutPayCard>
   );
 }
