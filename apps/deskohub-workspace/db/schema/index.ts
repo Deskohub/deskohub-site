@@ -127,6 +127,7 @@ export {
   paymentProviders,
   paymentRefundStates,
 } from "./payment-attempts";
+export { paymentProviderFallbacks } from "./payment-provider-fallbacks";
 export {
   type PostHogEmailDeliveryStatus,
   postHogEmailDeliveries,
