@@ -1,4 +1,3 @@
-import type { NexiOperationId, NexiWebhookEventId } from "@deskohub/nexi";
 import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
@@ -33,8 +32,8 @@ export interface IPaymentTerminalTransitions {
     readonly orderId: OrderId;
     readonly state: "failed" | "cancelled" | "expired";
     readonly failureCode: string;
-    readonly webhookEventId?: NexiWebhookEventId;
-    readonly providerOperationId?: NexiOperationId;
+    readonly webhookEventId?: string;
+    readonly providerOperationId?: string;
     readonly providerStatus?: string;
     /**
      * Non-terminal attempt states the transition may start from; defaults to

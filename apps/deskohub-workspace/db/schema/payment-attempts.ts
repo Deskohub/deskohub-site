@@ -1,8 +1,3 @@
-import type {
-  NexiOperationId,
-  NexiOrderId,
-  NexiWebhookEventId,
-} from "@deskohub/nexi";
 import { sql } from "drizzle-orm";
 import {
   check,
@@ -82,7 +77,7 @@ export const paymentAttempts = pgTable(
       .$type<OrderId>()
       .references(() => orders.id, { onDelete: "cascade" }),
     provider: text("provider").notNull().$type<PaymentProvider>(),
-    providerOrderId: text("provider_order_id").$type<NexiOrderId>(),
+    providerOrderId: text("provider_order_id"),
     securityToken: sensitiveText("security_token"),
     state: text("state").notNull().$type<PaymentAttemptState>(),
     refundState: text("refund_state")
@@ -113,12 +108,8 @@ export const paymentAttempts = pgTable(
     amountExponent: integer("amount_exponent").notNull(),
     currency: text("currency").notNull(),
     providerRedirectUrl: sensitiveText("provider_redirect_url"),
-    lastWebhookEventId: text(
-      "last_webhook_event_id"
-    ).$type<NexiWebhookEventId>(),
-    lastProviderOperationId: text(
-      "last_provider_operation_id"
-    ).$type<NexiOperationId>(),
+    lastWebhookEventId: text("last_webhook_event_id"),
+    lastProviderOperationId: text("last_provider_operation_id"),
     lastProviderStatus: text("last_provider_status"),
     failureCode: text("failure_code"),
     providerOrderCreatedAt: instant("provider_order_created_at"),

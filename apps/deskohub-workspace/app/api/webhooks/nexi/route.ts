@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, type Schema } from "effect";
 import { NextResponse } from "next/server";
 import {
   NexiWebhookProcessingError,
@@ -6,14 +6,14 @@ import {
   nexiWebhookRefusal,
   nexiWebhookResultLogFields,
 } from "@/features/checkout/backend/payment";
-import { WorkspaceNexiLayer } from "@/shared/backend/config/nexi.config";
+import { configuredPaymentProvider } from "@/features/checkout/backend/payment/payment-provider-selection";
 import { defineWebhookRoute } from "@/shared/backend/service-route";
 
 const processWebhookRequest = Effect.fn("processNexiWebhookRequest")(function* (
   request: Request
 ) {
   const payload = yield* Effect.tryPromise({
-    try: () => request.json() as Promise<unknown>,
+    try: () => request.json() as Promise<Schema.Json>,
     catch: (cause) =>
       new NexiWebhookProcessingError({
         errorCode: "nexi_webhook_parse_failed",
@@ -47,9 +47,7 @@ export const POST = defineWebhookRoute(
         Effect.logInfo("Nexi webhook response ready", { result })
       ),
       Effect.mapError(nexiWebhookRefusal),
-      Effect.provide(
-        NexiWebhookService.Live.pipe(Layer.provide(WorkspaceNexiLayer))
-      )
+      Effect.provide(NexiWebhookService.Live)
     )
 );
 
@@ -62,5 +60,6 @@ export async function GET() {
   return NextResponse.json({
     status: "ok",
     endpoint: "/api/webhooks/nexi",
+    paymentProvider: configuredPaymentProvider(),
   });
 }

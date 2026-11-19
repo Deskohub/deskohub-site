@@ -2,6 +2,7 @@ import "@/shared/testing/workspace-test-env";
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Context, Effect, Layer } from "effect";
+import { env } from "@/env";
 import type { INexiWebhookService } from "@/features/checkout/backend/payment/nexi-webhook.service";
 
 const nexiWebhookModule = await import(
@@ -44,7 +45,25 @@ mock.module("@/features/checkout/backend/payment/nexi-webhook.service", () => ({
   NexiWebhookService: FakeNexiWebhookService,
 }));
 
-const { POST } = await import("./route");
+const { GET, POST } = await import("./route");
+
+test("reports the configured provider mode to preview readiness checks", async () => {
+  const previous = env.WORKSPACE_PAYMENT_PROVIDER;
+  try {
+    for (const mode of [undefined, "mock", "fallback"] as const) {
+      Object.assign(env, { WORKSPACE_PAYMENT_PROVIDER: mode });
+      const response = await GET();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        status: "ok",
+        endpoint: "/api/webhooks/nexi",
+        paymentProvider: mode ?? "nexi",
+      });
+    }
+  } finally {
+    Object.assign(env, { WORKSPACE_PAYMENT_PROVIDER: previous });
+  }
+});
 
 const notify = (body: string) =>
   POST(

@@ -68,22 +68,28 @@ describe.skipIf(!testDatabase)(
     const receivedAt = Temporal.Instant.from("2026-10-20T08:00:00Z");
 
     const eventColumns =
-      '"id", "provider", "event_id", "payment_attempt_id", "provider_order_id", "received_at"::text, "processed_at"::text, "state", "error_code", "created_at"::text, "updated_at"::text';
-    const insertQuery = `insert into "webhook_events" ("id", "provider", "event_id", "payment_attempt_id", "provider_order_id", "received_at", "processed_at", "state", "error_code", "created_at", "updated_at") values (uuid_generate_v7()::text, $1, $2, default, default, $3, default, $4, default, default, default) on conflict ("event_id") do nothing returning ${eventColumns}`;
-    const insertWithOrderQuery = `insert into "webhook_events" ("id", "provider", "event_id", "payment_attempt_id", "provider_order_id", "received_at", "processed_at", "state", "error_code", "created_at", "updated_at") values (uuid_generate_v7()::text, $1, $2, default, $3, $4, default, $5, default, default, default) on conflict ("event_id") do nothing returning ${eventColumns}`;
-    const duplicateQuery = `select ${eventColumns} from "webhook_events" where "webhook_events"."event_id" = $1 limit $2`;
+      '"id", "provider", "provider_event_id", "event_id", "payment_attempt_id", "provider_order_id", "received_at"::text, "processed_at"::text, "state", "error_code", "created_at"::text, "updated_at"::text';
+    const insertQuery = `insert into "webhook_events" ("id", "provider", "provider_event_id", "event_id", "payment_attempt_id", "provider_order_id", "received_at", "processed_at", "state", "error_code", "created_at", "updated_at") values (uuid_generate_v7()::text, $1, $2, default, default, default, $3, default, $4, default, default, default) on conflict ("provider","provider_event_id") do nothing returning ${eventColumns}`;
+    const insertWithOrderQuery = `insert into "webhook_events" ("id", "provider", "provider_event_id", "event_id", "payment_attempt_id", "provider_order_id", "received_at", "processed_at", "state", "error_code", "created_at", "updated_at") values (uuid_generate_v7()::text, $1, $2, default, default, $3, $4, default, $5, default, default, default) on conflict ("provider","provider_event_id") do nothing returning ${eventColumns}`;
+    const duplicateQuery = `select ${eventColumns} from "webhook_events" where (("webhook_events"."provider" = $1) and ("webhook_events"."provider_event_id" = $2)) limit $3`;
     const claimQuery = (column: "id" | "event_id") =>
-      `update "webhook_events" set "processed_at" = $1, "state" = $2, "error_code" = $3 where (("webhook_events"."${column}" = $4) and ("webhook_events"."state" <> $5)) returning "id"`;
+      column === "id"
+        ? 'update "webhook_events" set "processed_at" = $1, "state" = $2, "error_code" = $3 where (("webhook_events"."id" = $4) and ("webhook_events"."state" <> $5)) returning "id"'
+        : 'update "webhook_events" set "processed_at" = $1, "state" = $2, "error_code" = $3 where (((("webhook_events"."provider" = $4) and ("webhook_events"."provider_event_id" = $5))) and ("webhook_events"."state" <> $6)) returning "id"';
     const processedQuery = (column: "id" | "event_id") =>
-      `select "id" from "webhook_events" where (("webhook_events"."${column}" = $1) and ("webhook_events"."state" = $2)) limit $3`;
+      column === "id"
+        ? 'select "id" from "webhook_events" where (("webhook_events"."id" = $1) and ("webhook_events"."state" = $2)) limit $3'
+        : 'select "id" from "webhook_events" where (((("webhook_events"."provider" = $1) and ("webhook_events"."provider_event_id" = $2))) and ("webhook_events"."state" = $3)) limit $4';
 
     const insert = (
       eventId: ReturnType<typeof newEventId>,
       at: Temporal.Instant = receivedAt,
-      providerOrderId?: string
+      providerOrderId?: string,
+      provider: "nexi" | "mock" = "nexi"
     ) =>
       run((repository) =>
         repository.insertReceived({
+          provider,
           eventId,
           receivedAt: at,
           ...(providerOrderId && {
@@ -157,11 +163,40 @@ describe.skipIf(!testDatabase)(
       expect(count).toBe(1);
     });
 
+    test("deduplicates the same event ID separately for each provider", async () => {
+      const eventId = newEventId();
+      const { value: nexi } = await insert(eventId, receivedAt, "shared-order");
+      const { value: mock } = await insert(
+        eventId,
+        receivedAt,
+        "shared-order",
+        "mock"
+      );
+      const { value: replay } = await insert(
+        eventId,
+        receivedAt,
+        "shared-order",
+        "mock"
+      );
+
+      expect(nexi.status).toBe("inserted");
+      expect(mock.status).toBe("inserted");
+      expect(mock.event.id).not.toBe(nexi.event.id);
+      expect(mock.event.legacyEventId).toBeNull();
+      expect(nexi.event.legacyEventId).toBe(eventId);
+      expect(replay.status).toBe("duplicate");
+      expect(replay.event.id).toBe(mock.event.id);
+    });
+
     test("claims a received event for retry by its Nexi event id", async () => {
       const eventId = newEventId();
       const { value: inserted } = await insert(eventId);
 
-      const { value, queries } = await claim({ type: "eventId", eventId });
+      const { value, queries } = await claim({
+        type: "eventId",
+        provider: "nexi",
+        eventId,
+      });
 
       expect(value).toBe("claimed");
       expect(queries).toEqual([claimQuery("event_id")]);
@@ -209,12 +244,19 @@ describe.skipIf(!testDatabase)(
         const { value: inserted } = await insert(eventId);
         const processedAt = receivedAt.add({ seconds: 30 });
         await run((repository) =>
-          repository.markProcessed({ type: "eventId", eventId, processedAt })
+          repository.markProcessed({
+            type: "eventId",
+            provider: "nexi",
+            eventId,
+            processedAt,
+          })
         );
         const processed = await readEvent(eventId);
 
         const { value, queries } = await claim(
-          type === "id" ? { type, id: inserted.event.id } : { type, eventId }
+          type === "id"
+            ? { type, id: inserted.event.id }
+            : { type, provider: "nexi", eventId }
         );
 
         expect(value).toBe("processed");
@@ -228,7 +270,11 @@ describe.skipIf(!testDatabase)(
     test("claims an event it has no record of", async () => {
       const eventId = newEventId();
 
-      const { value, queries } = await claim({ type: "eventId", eventId });
+      const { value, queries } = await claim({
+        type: "eventId",
+        provider: "nexi",
+        eventId,
+      });
 
       expect(value).toBe("claimed");
       expect(queries).toEqual([

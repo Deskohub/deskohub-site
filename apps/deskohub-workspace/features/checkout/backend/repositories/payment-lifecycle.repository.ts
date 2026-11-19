@@ -1,9 +1,4 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import type {
-  NexiOperationId,
-  NexiOrderId,
-  NexiWebhookEventId,
-} from "@deskohub/nexi";
 import { and, eq, inArray, notExists, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer } from "effect";
@@ -47,6 +42,7 @@ import {
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
 import { type Money, moneyEquals, moneyWithValue } from "@/shared/money/money";
+import type { PaymentProvider } from "../payment/payment-provider";
 import {
   type PaymentAttempt,
   toPaymentAttempt,
@@ -75,9 +71,10 @@ export const administrationForcedPaymentCancellationFailureCode =
   "admin_forced_payment_cancellation";
 
 export interface IPaymentLifecycleRepository {
-  readonly createPendingNexiAttempt: (input: {
+  readonly createPendingProviderAttempt: (input: {
     readonly orderId: OrderId;
-    readonly providerOrderId: NexiOrderId;
+    readonly provider: PaymentProvider;
+    readonly providerOrderId: string;
     readonly amount: Money;
     readonly commitment: DiscountCommitment;
     readonly locale: Locale;
@@ -104,8 +101,8 @@ export interface IPaymentLifecycleRepository {
   readonly markPaid: (input: {
     readonly id: PaymentAttemptId;
     readonly orderId: OrderId;
-    readonly webhookEventId?: NexiWebhookEventId;
-    readonly providerOperationId?: NexiOperationId;
+    readonly webhookEventId?: string;
+    readonly providerOperationId?: string;
     readonly providerStatus?: string;
     readonly paidAt: Temporal.Instant;
   }) => Effect.Effect<
@@ -117,8 +114,8 @@ export interface IPaymentLifecycleRepository {
     readonly orderId: OrderId;
     readonly state: "failed" | "cancelled" | "expired";
     readonly failureCode: string;
-    readonly webhookEventId?: NexiWebhookEventId;
-    readonly providerOperationId?: NexiOperationId;
+    readonly webhookEventId?: string;
+    readonly providerOperationId?: string;
     readonly providerStatus?: string;
     /**
      * Non-terminal attempt states the transition may start from; defaults to
@@ -158,11 +155,12 @@ export class PaymentLifecycleRepository extends Context.Service<
       const accountingSnapshots = yield* AccountingDocumentSnapshots;
       const terminalTransitions = yield* PaymentTerminalTransitions;
 
-      const createPendingNexiAttempt = Effect.fn(
-        "PaymentLifecycleRepository.createPendingNexiAttempt"
+      const createPendingProviderAttempt = Effect.fn(
+        "PaymentLifecycleRepository.createPendingProviderAttempt"
       )(function* (input: {
         readonly orderId: OrderId;
-        readonly providerOrderId: NexiOrderId;
+        readonly provider: PaymentProvider;
+        readonly providerOrderId: string;
         readonly amount: Money;
         readonly commitment: DiscountCommitment;
         readonly locale: Locale;
@@ -187,7 +185,7 @@ export class PaymentLifecycleRepository extends Context.Service<
         return yield* transaction(
           Effect.gen(function* () {
             const dotyposCustomerId = yield* findPaymentReservationCustomer(
-              "createPendingNexiAttempt",
+              "createPendingProviderAttempt",
               workspaceReservationId
             );
             yield* ReferralInvitationLedger.lockFirstBooking({
@@ -231,7 +229,7 @@ export class PaymentLifecycleRepository extends Context.Service<
             ) {
               return yield* new PaymentLifecycleStateError({
                 operation:
-                  "PaymentLifecycleRepository.createPendingNexiAttempt",
+                  "PaymentLifecycleRepository.createPendingProviderAttempt",
                 paymentReference: {
                   type: "providerOrderId",
                   id: input.providerOrderId,
@@ -245,14 +243,14 @@ export class PaymentLifecycleRepository extends Context.Service<
               dotyposCustomerId: reservation.dotyposCustomerId,
               workspaceReservationId,
               admitsInvitation: claimedApplications.referral !== undefined,
-              operation: "createPendingNexiAttempt",
+              operation: "createPendingProviderAttempt",
             });
 
             const attemptRow = yield* insertPaymentAttempt({
               workspaceReservationId,
               orderId: input.orderId,
               amount: input.amount,
-              provider: "nexi",
+              provider: input.provider,
               providerOrderId: input.providerOrderId,
             });
 
@@ -287,7 +285,7 @@ export class PaymentLifecycleRepository extends Context.Service<
             if (!linked) {
               return yield* new PaymentLifecycleStateError({
                 operation:
-                  "PaymentLifecycleRepository.createPendingNexiAttempt",
+                  "PaymentLifecycleRepository.createPendingProviderAttempt",
                 paymentReference: {
                   type: "paymentAttemptId",
                   id: attemptRow.id,
@@ -534,8 +532,8 @@ export class PaymentLifecycleRepository extends Context.Service<
         function* (input: {
           readonly id: PaymentAttemptId;
           readonly orderId: OrderId;
-          readonly webhookEventId?: NexiWebhookEventId;
-          readonly providerOperationId?: NexiOperationId;
+          readonly webhookEventId?: string;
+          readonly providerOperationId?: string;
           readonly providerStatus?: string;
           readonly paidAt: Temporal.Instant;
         }) {
@@ -649,7 +647,7 @@ export class PaymentLifecycleRepository extends Context.Service<
       );
 
       return {
-        createPendingNexiAttempt,
+        createPendingProviderAttempt,
         completeInternalPayment,
         attachProviderSession,
         markPaid,
@@ -902,7 +900,9 @@ const admitFirstBookingPayment = (input: {
   readonly dotyposCustomerId: DotyposCustomerId;
   readonly workspaceReservationId: WorkspaceReservationId;
   readonly admitsInvitation: boolean;
-  readonly operation: "createPendingNexiAttempt" | "completeInternalPayment";
+  readonly operation:
+    | "createPendingProviderAttempt"
+    | "completeInternalPayment";
 }) =>
   ReferralInvitationLedger.admitFirstBooking(input).pipe(
     Effect.catchTag("ReferralFirstBookingAdmittedError", ({ message }) =>

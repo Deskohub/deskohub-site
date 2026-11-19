@@ -1,4 +1,3 @@
-import type { NexiOrderId, NexiWebhookEventId } from "@deskohub/nexi";
 import { sql } from "drizzle-orm";
 import { check, index, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
 import type {
@@ -26,13 +25,13 @@ export const webhookEvents = pgTable(
       .default(postgresUuidV7)
       .$type<StoredWebhookEventId>(),
     provider: text("provider").notNull().$type<WebhookProvider>(),
-    eventId: text("provider_event_id").notNull().$type<NexiWebhookEventId>(),
+    eventId: text("provider_event_id").notNull(),
     /** Conflict target for older Nexi writers. The database mirrors Nexi event IDs here. */
-    legacyEventId: text("event_id").unique().$type<NexiWebhookEventId>(),
+    legacyEventId: text("event_id").unique(),
     paymentAttemptId: text("payment_attempt_id")
       .$type<PaymentAttemptId>()
       .references(() => paymentAttempts.id),
-    providerOrderId: text("provider_order_id").$type<NexiOrderId>(),
+    providerOrderId: text("provider_order_id"),
     receivedAt: instant("received_at").notNull(),
     processedAt: instant("processed_at"),
     state: text("state").notNull().$type<WebhookEventState>(),

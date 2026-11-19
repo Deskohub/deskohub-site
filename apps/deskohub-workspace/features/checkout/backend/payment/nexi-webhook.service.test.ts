@@ -1,3 +1,4 @@
+import { PaymentProvidersFromNexi } from "./payment-providers";
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, mock, test } from "bun:test";
@@ -160,7 +161,9 @@ const buildWebhookEffect = async (
               cancelOrderHold: mock(() => Effect.die("unused")),
               sweepExpiredHolds: mock(() => Effect.die("unused")),
             }),
-            Layer.mock(NexiService, services.nexi),
+            PaymentProvidersFromNexi.pipe(
+              Layer.provide(Layer.mock(NexiService, services.nexi))
+            ),
             Layer.mock(ReservationFulfillment, services.fulfillment),
             Layer.mock(LatePaymentRecoveryRepository, {
               start: mock(() => Effect.die("unused")),
@@ -226,7 +229,7 @@ describe("NexiWebhookService", () => {
           findByProviderOrderId: mock(() => Effect.succeed(attempt)),
         },
         paymentLifecycle: {
-          createPendingNexiAttempt: mock(() => Effect.die("unused")),
+          createPendingProviderAttempt: mock(() => Effect.die("unused")),
           attachProviderSession: mock(() => Effect.die("unused")),
           markPaid: markPaidForReservation,
           markTerminal: mock(() => Effect.die("unused")),
@@ -251,6 +254,7 @@ describe("NexiWebhookService", () => {
     });
     expect(linkPaymentAttempt).toHaveBeenCalledWith({
       type: "eventId",
+      provider: "nexi",
       eventId: "event-id",
       paymentAttemptId: "attempt-id",
     });
@@ -270,7 +274,11 @@ describe("NexiWebhookService", () => {
     );
     expect(fulfillPaidOrder).toHaveBeenCalledWith("reservation-id");
     expect(markProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "eventId", eventId: "event-id" })
+      expect.objectContaining({
+        type: "eventId",
+        provider: "nexi",
+        eventId: "event-id",
+      })
     );
     expect(markFailed).not.toHaveBeenCalled();
     expect(analytics.messages).toContainEqual(
@@ -312,7 +320,7 @@ describe("NexiWebhookService", () => {
           ),
         },
         paymentLifecycle: {
-          createPendingNexiAttempt: mock(() => Effect.die("unused")),
+          createPendingProviderAttempt: mock(() => Effect.die("unused")),
           attachProviderSession: mock(() => Effect.die("unused")),
           markPaid: markPaidForReservation,
           markTerminal: mock(() => Effect.die("unused")),
@@ -392,7 +400,7 @@ describe("NexiWebhookService", () => {
             ),
           },
           paymentLifecycle: {
-            createPendingNexiAttempt: mock(() => Effect.die("unused")),
+            createPendingProviderAttempt: mock(() => Effect.die("unused")),
             attachProviderSession: mock(() => Effect.die("unused")),
             markPaid: mock(() => Effect.die("unused")),
             markTerminal,
@@ -425,7 +433,11 @@ describe("NexiWebhookService", () => {
     );
     expect(result._tag).toBe("Success");
     expect(markProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "eventId", eventId: "event-id" })
+      expect.objectContaining({
+        type: "eventId",
+        provider: "nexi",
+        eventId: "event-id",
+      })
     );
     expect(markFailed).not.toHaveBeenCalled();
   });
@@ -453,7 +465,7 @@ describe("NexiWebhookService", () => {
         findByProviderOrderId: mock(() => Effect.succeed(attempt)),
       },
       paymentLifecycle: {
-        createPendingNexiAttempt: mock(() => Effect.die("unused")),
+        createPendingProviderAttempt: mock(() => Effect.die("unused")),
         attachProviderSession: mock(() => Effect.die("unused")),
         markPaid,
         markTerminal,
@@ -597,7 +609,7 @@ describe("NexiWebhookService", () => {
             findByProviderOrderId: mock(() => Effect.succeed(attempt)),
           },
           paymentLifecycle: {
-            createPendingNexiAttempt: mock(() => Effect.die("unused")),
+            createPendingProviderAttempt: mock(() => Effect.die("unused")),
             attachProviderSession: mock(() => Effect.die("unused")),
             markPaid: mock(() =>
               Effect.succeed({
@@ -634,6 +646,7 @@ describe("NexiWebhookService", () => {
     expect(result.failure.errorCode).toBe("nexi_webhook_fulfillment_failed");
     expect(markFailed).toHaveBeenCalledWith({
       type: "eventId",
+      provider: "nexi",
       eventId: "event-id",
       errorCode: "nexi_webhook_fulfillment_failed",
     });
@@ -681,7 +694,7 @@ describe("NexiWebhookService", () => {
         findByProviderOrderId: mock(() => Effect.succeed(paidAttempt)),
       },
       paymentLifecycle: {
-        createPendingNexiAttempt: mock(() => Effect.die("unused")),
+        createPendingProviderAttempt: mock(() => Effect.die("unused")),
         attachProviderSession: mock(() => Effect.die("unused")),
         markPaid: overrides.markPaid,
         markTerminal: mock(() => Effect.die("unused")),
@@ -732,7 +745,11 @@ describe("NexiWebhookService", () => {
     expect(markPaid).not.toHaveBeenCalled();
     expect(fulfillPaidOrder).not.toHaveBeenCalled();
     expect(markProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "eventId", eventId: "refund-event-id" })
+      expect.objectContaining({
+        type: "eventId",
+        provider: "nexi",
+        eventId: "refund-event-id",
+      })
     );
     expect(markFailed).not.toHaveBeenCalled();
   });
@@ -773,6 +790,7 @@ describe("NexiWebhookService", () => {
     );
     expect(markFailed).toHaveBeenCalledWith({
       type: "eventId",
+      provider: "nexi",
       eventId: "refund-event-id",
       errorCode: "nexi_webhook_refund_reconciliation_failed",
     });
@@ -801,7 +819,7 @@ describe("NexiWebhookService", () => {
             findByProviderOrderId: mock(() => Effect.succeed(attempt)),
           },
           paymentLifecycle: {
-            createPendingNexiAttempt: mock(() => Effect.die("unused")),
+            createPendingProviderAttempt: mock(() => Effect.die("unused")),
             attachProviderSession: mock(() => Effect.die("unused")),
             markPaid: mock(() =>
               Effect.succeed({
@@ -873,7 +891,7 @@ describe("NexiWebhookService", () => {
             findByProviderOrderId: mock(() => Effect.succeed(null)),
           },
           paymentLifecycle: {
-            createPendingNexiAttempt: mock(() => Effect.die("unused")),
+            createPendingProviderAttempt: mock(() => Effect.die("unused")),
             attachProviderSession: mock(() => Effect.die("unused")),
             markPaid: mock(() => Effect.die("unused")),
             markTerminal: mock(() => Effect.die("unused")),

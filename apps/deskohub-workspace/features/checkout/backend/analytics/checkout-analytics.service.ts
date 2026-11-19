@@ -13,6 +13,7 @@ import {
 } from "@/shared/backend/analytics/server-analytics.service";
 import { catchRecoverableCause } from "@/shared/backend/workspace-effect";
 import { moneyMajorAmount } from "@/shared/money/money";
+import type { ProviderPaymentFailureCode } from "../payment/payment-provider";
 import { ReservationAnalyticsPerson } from "./reservation-analytics-person";
 
 type CheckoutEventTimestamp = WorkspaceReservationRow["createdAt"];
@@ -33,11 +34,6 @@ interface PaymentEventInput {
   readonly attempt: PaymentLifecycleAttempt;
   readonly timestamp: CheckoutEventTimestamp;
 }
-
-type PaymentFailureReason =
-  | "nexi_hpp_create_failed"
-  | "nexi_hpp_create_unconfirmed"
-  | "nexi_payment_failed";
 
 /**
  * The checkout's analytics. Reservation and payment lifecycle events go out
@@ -65,7 +61,9 @@ export interface ICheckoutAnalytics {
   readonly paymentCompleted: (input: PaymentEventInput) => Effect.Effect<void>;
   readonly paymentAbandoned: (input: PaymentEventInput) => Effect.Effect<void>;
   readonly paymentFailed: (
-    input: PaymentEventInput & { readonly failureReason: PaymentFailureReason }
+    input: PaymentEventInput & {
+      readonly failureReason: ProviderPaymentFailureCode;
+    }
   ) => Effect.Effect<void>;
   readonly availabilityResult: (input: {
     readonly checkoutAttemptId: CheckoutAttemptId;
