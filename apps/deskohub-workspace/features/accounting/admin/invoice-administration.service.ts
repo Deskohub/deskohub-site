@@ -38,6 +38,8 @@ import {
   type InvoiceBuyer,
   invoiceBuyerSchema,
   invoiceNumberSchema,
+  isEntryPackInvoiceDocument,
+  isLineItemInvoiceDocument,
   isManualInvoiceDocument,
   makeManualInvoiceDocument,
 } from "@/features/accounting/invoice";
@@ -167,6 +169,7 @@ type InvoiceAdministrationDelivery = Readonly<
 >;
 
 type InvoiceAdministrationSource =
+  | "pass-purchase"
   | "reservation-request"
   | "post-order-link"
   | "admin-ui"
@@ -1196,8 +1199,8 @@ const toListItem = (
     total: total.amount,
     currency: total.currency,
     paymentStatus: getInvoicePaymentStatus(document, today),
-    source: manual
-      ? document.provenance.source
+    source: isEntryPackInvoiceDocument(document)
+      ? "pass-purchase"
       : (document.provenance?.source ?? "legacy"),
     actor: manual ? document.provenance.actor : null,
     delivery: { customer, internal },
@@ -1242,7 +1245,7 @@ const toDetail = (
       }),
     })
   );
-  if (isManualInvoiceDocument(document)) {
+  if (isLineItemInvoiceDocument(document)) {
     return {
       ...summary,
       locale: document.locale,

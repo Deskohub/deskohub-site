@@ -58,7 +58,7 @@ export const invoices = pgTable(
     check("invoices_numbering_sequence_check", sql`${t.numberingSequence} > 0`),
     check(
       "invoices_source_reference_check",
-      sql`(${t.workspaceReservationId} is null) = (${t.paymentAttemptId} is null)`
+      sql`${t.workspaceReservationId} is null or ${t.paymentAttemptId} is not null`
     ),
     check("invoices_key_id_check", sql`${t.keyId} ~ '^[A-Z][A-Z0-9_]{2,31}$'`),
     check(

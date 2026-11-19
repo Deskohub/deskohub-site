@@ -1,9 +1,9 @@
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { equalsAny } from "@/db/equals-any";
-import { discountApplications } from "@/db/schema";
+import { discountApplications, workspaceReservations } from "@/db/schema";
 import type { DiscountId } from "@/features/discounts";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import {
@@ -70,7 +70,7 @@ export class DiscountApplicationRepository extends Context.Service<
 
         const rows = yield* db
           .select({
-            workspaceReservationId: discountApplications.workspaceReservationId,
+            workspaceReservationId: workspaceReservations.id,
             sequence: discountApplications.sequence,
             publicDiscountId: discountApplications.publicDiscountId,
             label: discountApplications.label,
@@ -86,11 +86,15 @@ export class DiscountApplicationRepository extends Context.Service<
             createdAt: discountApplications.createdAt,
           })
           .from(discountApplications)
-          .where(
-            equalsAny(
-              discountApplications.workspaceReservationId,
-              input.workspaceReservationIds
+          .innerJoin(
+            workspaceReservations,
+            eq(
+              workspaceReservations.id,
+              discountApplications.workspaceReservationId
             )
+          )
+          .where(
+            equalsAny(workspaceReservations.id, input.workspaceReservationIds)
           )
           .orderBy(
             asc(discountApplications.createdAt),

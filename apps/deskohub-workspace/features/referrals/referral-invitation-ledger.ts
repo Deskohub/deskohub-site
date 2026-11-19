@@ -1,8 +1,9 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, ne, or } from "drizzle-orm";
 import { Data, Duration, Effect, Option } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
 import {
+  orders,
   referralAttributions,
   referralInvitationClaims,
   workspaceReservations,
@@ -20,8 +21,12 @@ import type {
   PromotionCodeId,
 } from "@/features/discounts/persistence-contracts";
 import type { Locale } from "@/features/i18n";
+import type { OrderId } from "@/features/order";
 import { isPaidBooking } from "@/features/referrals/first-booking-history";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import {
+  reservationOrderId,
+  type WorkspaceReservationId,
+} from "@/features/reservation/persistence-contracts";
 import { evaluateReferralAttribution } from "./attribution";
 import {
   isAttributedToAnotherReferral,
@@ -120,13 +125,23 @@ const lockFirstBooking = Effect.fn("ReferralInvitationLedger.lockFirstBooking")(
  * with `ReferralFirstBookingAdmittedError`, or passes after a paid booking.
  * Runs under `lockFirstBooking`.
  */
+type PaymentOrderIdentity =
+  | { readonly orderId: OrderId }
+  | { readonly workspaceReservationId: WorkspaceReservationId };
+
+const paymentOrderId = (input: PaymentOrderIdentity) =>
+  "orderId" in input
+    ? input.orderId
+    : reservationOrderId(input.workspaceReservationId);
+
 const admitFirstBooking = Effect.fn(
   "ReferralInvitationLedger.admitFirstBooking"
-)(function* (input: {
-  readonly dotyposCustomerId: DotyposCustomerId;
-  readonly workspaceReservationId: WorkspaceReservationId;
-  readonly admitsInvitation: boolean;
-}) {
+)(function* (
+  input: {
+    readonly dotyposCustomerId: DotyposCustomerId;
+    readonly admitsInvitation: boolean;
+  } & PaymentOrderIdentity
+) {
   const { db } = yield* WorkspaceTransaction;
   const [attribution] = yield* db
     .select({
@@ -141,9 +156,9 @@ const admitFirstBooking = Effect.fn(
 
   if (!attribution && !activeClaim && !input.admitsInvitation) return;
 
-  const previousPayment = yield* findOtherReservationWithPayment(
+  const previousPayment = yield* findOtherOrderWithPayment(
     input.dotyposCustomerId,
-    input.workspaceReservationId,
+    paymentOrderId(input),
     "paid"
   );
 
@@ -163,9 +178,9 @@ const admitFirstBooking = Effect.fn(
     return yield* firstPaymentAlreadyAdmitted(input);
   }
 
-  const pendingPayment = yield* findOtherReservationWithPayment(
+  const pendingPayment = yield* findOtherOrderWithPayment(
     input.dotyposCustomerId,
-    input.workspaceReservationId,
+    paymentOrderId(input),
     "pending"
   );
   if (pendingPayment) {
@@ -267,11 +282,12 @@ const admit = Effect.fn("ReferralInvitationLedger.admit")(function* (input: {
  * booking pass. Runs under `lockFirstBooking`.
  */
 const ensureFirstPaid = Effect.fn("ReferralInvitationLedger.ensureFirstPaid")(
-  function* (input: {
-    readonly dotyposCustomerId: DotyposCustomerId;
-    readonly workspaceReservationId: WorkspaceReservationId;
-    readonly paymentAttemptId: PaymentAttemptId;
-  }) {
+  function* (
+    input: {
+      readonly dotyposCustomerId: DotyposCustomerId;
+      readonly paymentAttemptId: PaymentAttemptId;
+    } & PaymentOrderIdentity
+  ) {
     const { db } = yield* WorkspaceTransaction;
     const [claim] = yield* db
       .select({
@@ -312,9 +328,9 @@ const ensureFirstPaid = Effect.fn("ReferralInvitationLedger.ensureFirstPaid")(
       });
     }
 
-    const previousPayment = yield* findOtherReservationWithPayment(
+    const previousPayment = yield* findOtherOrderWithPayment(
       input.dotyposCustomerId,
-      input.workspaceReservationId,
+      paymentOrderId(input),
       "paid"
     );
     if (previousPayment) {
@@ -339,12 +355,13 @@ const ensureFirstPaid = Effect.fn("ReferralInvitationLedger.ensureFirstPaid")(
  * the invitation. The caller holds the locks `lockFirstBooking` took for the
  * paid attempt.
  */
-const redeem = Effect.fn("ReferralInvitationLedger.redeem")(function* (input: {
-  readonly paymentAttemptId: PaymentAttemptId;
-  readonly workspaceReservationId: WorkspaceReservationId;
-  readonly redeemedAt: Temporal.Instant;
-  readonly readmitReleased?: boolean;
-}) {
+const redeem = Effect.fn("ReferralInvitationLedger.redeem")(function* (
+  input: {
+    readonly paymentAttemptId: PaymentAttemptId;
+    readonly redeemedAt: Temporal.Instant;
+    readonly readmitReleased?: boolean;
+  } & PaymentOrderIdentity
+) {
   const { paymentAttemptId, redeemedAt } = input;
   const allowReleased = input.readmitReleased ?? false;
   const { db } = yield* WorkspaceTransaction;
@@ -375,7 +392,7 @@ const redeem = Effect.fn("ReferralInvitationLedger.redeem")(function* (input: {
     yield* requireReleasedInvitationUnconsumed({
       invitedDotyposCustomerId: claim.invitedDotyposCustomerId,
       paymentAttemptId,
-      workspaceReservationId: input.workspaceReservationId,
+      orderId: paymentOrderId(input),
     });
   }
 
@@ -524,9 +541,11 @@ const findActiveInvitationClaim = (
  * Another payment of the invited customer holds their first booking: a
  * referral claim conflicts, an ordinary payment waits for that booking.
  */
-const firstPaymentAlreadyAdmitted = (input: {
-  readonly admitsInvitation: boolean;
-}): Effect.Effect<
+const firstPaymentAlreadyAdmitted = (
+  input: {
+    readonly admitsInvitation: boolean;
+  } & PaymentOrderIdentity
+): Effect.Effect<
   never,
   DiscountClaimError | ReferralFirstBookingAdmittedError
 > =>
@@ -543,26 +562,27 @@ const firstPaymentAlreadyAdmitted = (input: {
   );
 
 /**
- * Another of the customer's reservations in `paymentState`, if any. A paid
- * one counts only as `isPaidBooking` does, so a booking withdrawn in full
- * leaves the invitation open.
+ * Another order in this payment state. A reservation withdrawn in full
+ * only stops counting once cancelled.
  */
-const findOtherReservationWithPayment = (
+const findOtherOrderWithPayment = (
   dotyposCustomerId: DotyposCustomerId,
-  workspaceReservationId: WorkspaceReservationId,
+  orderId: OrderId,
   paymentState: "paid" | "pending"
 ) =>
   Effect.flatMap(WorkspaceTransaction, ({ db }) =>
     db
-      .select({ id: workspaceReservations.id })
-      .from(workspaceReservations)
+      .select({ id: orders.id })
+      .from(orders)
+      .leftJoin(workspaceReservations, eq(workspaceReservations.id, orders.id))
       .where(
         and(
-          eq(workspaceReservations.dotyposCustomerId, dotyposCustomerId),
+          eq(orders.dotyposCustomerId, dotyposCustomerId),
+          eq(orders.paymentState, paymentState),
+          ne(orders.id, orderId),
           paymentState === "paid"
-            ? isPaidBooking
-            : eq(workspaceReservations.paymentState, paymentState),
-          ne(workspaceReservations.id, workspaceReservationId)
+            ? or(eq(orders.kind, "pass-purchase"), isPaidBooking)
+            : undefined
         )
       )
       .limit(1)
@@ -604,13 +624,12 @@ const claimLostItsAttribution = (
 const requireNoOtherAdmittedFirstBooking = Effect.fnUntraced(function* (
   input: {
     readonly dotyposCustomerId: DotyposCustomerId;
-    readonly workspaceReservationId: WorkspaceReservationId;
-  },
+  } & PaymentOrderIdentity,
   otherActiveClaim: ActiveInvitationClaim | undefined
 ) {
-  const otherPendingPayment = yield* findOtherReservationWithPayment(
+  const otherPendingPayment = yield* findOtherOrderWithPayment(
     input.dotyposCustomerId,
-    input.workspaceReservationId,
+    paymentOrderId(input),
     "pending"
   );
   if (otherActiveClaim || otherPendingPayment) {
@@ -627,42 +646,40 @@ const redeemableClaimStates = (allowReleased: boolean) =>
   allowReleased ? (["reserved", "released"] as const) : (["reserved"] as const);
 
 /** A released invitation redeems again only for the invitee's first booking. */
-const requireReleasedInvitationUnconsumed = Effect.fnUntraced(
-  function* (input: {
+const requireReleasedInvitationUnconsumed = Effect.fnUntraced(function* (
+  input: {
     readonly invitedDotyposCustomerId: DotyposCustomerId;
     readonly paymentAttemptId: PaymentAttemptId;
-    readonly workspaceReservationId: WorkspaceReservationId;
-  }) {
-    const { db } = yield* WorkspaceTransaction;
-    const previousPayment = yield* findOtherReservationWithPayment(
-      input.invitedDotyposCustomerId,
-      input.workspaceReservationId,
-      "paid"
-    );
-    const [otherActiveClaim] = yield* db
-      .select({ id: referralInvitationClaims.id })
-      .from(referralInvitationClaims)
-      .where(
-        and(
-          eq(
-            referralInvitationClaims.invitedDotyposCustomerId,
-            input.invitedDotyposCustomerId
-          ),
-          ne(referralInvitationClaims.paymentAttemptId, input.paymentAttemptId),
-          inArray(referralInvitationClaims.state, ["reserved", "redeemed"])
-        )
+  } & PaymentOrderIdentity
+) {
+  const { db } = yield* WorkspaceTransaction;
+  const previousPayment = yield* findOtherOrderWithPayment(
+    input.invitedDotyposCustomerId,
+    paymentOrderId(input),
+    "paid"
+  );
+  const [otherActiveClaim] = yield* db
+    .select({ id: referralInvitationClaims.id })
+    .from(referralInvitationClaims)
+    .where(
+      and(
+        eq(
+          referralInvitationClaims.invitedDotyposCustomerId,
+          input.invitedDotyposCustomerId
+        ),
+        ne(referralInvitationClaims.paymentAttemptId, input.paymentAttemptId),
+        inArray(referralInvitationClaims.state, ["reserved", "redeemed"])
       )
-      .limit(1);
-    if (previousPayment || otherActiveClaim) {
-      return yield* new DiscountClaimError({
-        operation: "redeem",
-        reason: "claim_conflict",
-        message:
-          "The referral invitation was consumed by another paid booking.",
-      });
-    }
+    )
+    .limit(1);
+  if (previousPayment || otherActiveClaim) {
+    return yield* new DiscountClaimError({
+      operation: "redeem",
+      reason: "claim_conflict",
+      message: "The referral invitation was consumed by another paid booking.",
+    });
   }
-);
+});
 
 /**
  * Records the attribution a checkout referral claim carries, in the

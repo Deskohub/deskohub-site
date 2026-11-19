@@ -11,13 +11,13 @@ import {
 } from "./payment-submit-evidence";
 
 const termsHash =
-  "e5d0f197dd0541b20d5bbf041d1858e369b413b4b8bc58c615df522cdb961d29";
+  "de75ea2a10fff4dbdd526fdba1403b03d94f6249acd9ac9f4ff6ca7648400eae";
 const operatingRulesHash =
   "05cefdd98d32159cfce228b230931f9cc257643d90f83f327589732476c8ba56";
-const acceptedAt = "2026-10-29T10:00:00Z";
+const acceptedAt = "2026-11-18T10:00:00Z";
 
-// The records checkout built by hand before the builder took them over.
-const getCheckoutBuiltEvidence = (earlyPerformanceConsent: boolean) =>
+// The payment evidence stored for the published documents.
+const expectedEvidence = (earlyPerformanceConsent: boolean) =>
   Schema.decodeUnknownSync(legalEvidenceMapSchema, {
     onExcessProperty: "error",
   })({
@@ -62,13 +62,9 @@ describe("getPaymentSubmitLegalEvidence", () => {
         earlyPerformanceConsent,
       });
 
-      const checkoutBuiltEvidence = getCheckoutBuiltEvidence(
-        earlyPerformanceConsent
-      );
-      expect(evidence).toStrictEqual(checkoutBuiltEvidence);
-      expect(JSON.stringify(evidence)).toBe(
-        JSON.stringify(checkoutBuiltEvidence)
-      );
+      const expected = expectedEvidence(earlyPerformanceConsent);
+      expect(evidence).toStrictEqual(expected);
+      expect(JSON.stringify(evidence)).toBe(JSON.stringify(expected));
       expect(Object.keys(evidence)).toEqual([termsHash, operatingRulesHash]);
       expect(
         Object.values(evidence).map(({ documentKey }) => documentKey)
@@ -157,7 +153,13 @@ describe("isCurrentPaymentSubmitLegalAcceptance", () => {
     ["only the terms", current.slice(0, 1)],
     [
       "a superseded terms version",
-      [{ key: "terms-and-conditions", hash: "0".repeat(64) }, current[1]],
+      [
+        {
+          key: "terms-and-conditions",
+          hash: "d56d9e83196b802aee01393512cff46d0fef6e01449c72b229db535b0bf095c6",
+        },
+        current[1],
+      ],
     ],
     [
       "one document twice",

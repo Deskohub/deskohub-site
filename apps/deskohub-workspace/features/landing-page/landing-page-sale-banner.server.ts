@@ -4,7 +4,7 @@ import type { ActiveSale } from "@/features/discounts";
 import { getActivePublicSales } from "@/features/discounts/active-public-sales.server";
 import {
   type WorkspaceProductFamily,
-  workspaceProductFamilies,
+  workspaceReservationProductFamilies,
 } from "@/features/discounts/product-target";
 import type { Locale } from "@/features/i18n";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
@@ -41,10 +41,18 @@ export const getLandingPageSaleBanner = Effect.fn("LandingPage.getSaleBanner")(
   (input: {
     readonly activeSales: readonly ActiveSale[];
     readonly locale: Locale;
-  }) =>
-    logAmbiguousActiveSales(input).pipe(
-      Effect.andThen(getEligibleLandingPageSaleBanner(input))
-    )
+  }) => {
+    const activeSales = input.activeSales.filter(({ products }) =>
+      products.some(({ kind }) =>
+        workspaceReservationProductFamilies.includes(kind)
+      )
+    );
+    return logAmbiguousActiveSales({ activeSales }).pipe(
+      Effect.andThen(
+        getEligibleLandingPageSaleBanner({ activeSales, locale: input.locale })
+      )
+    );
+  }
 );
 
 const getEligibleLandingPageSaleBanner = Effect.fn(
@@ -73,9 +81,12 @@ const getEligibleLandingPageSaleBanner = Effect.fn(
 /** The product families visitors can reserve; offices only while switched on. */
 const getBookableProducts = Effect.fn("LandingPage.getBookableProducts")(
   function* () {
-    if (yield* OfficeReleaseGate.isOpen) return workspaceProductFamilies;
+    if (yield* OfficeReleaseGate.isOpen)
+      return workspaceReservationProductFamilies;
 
-    return workspaceProductFamilies.filter((family) => family !== "office");
+    return workspaceReservationProductFamilies.filter(
+      (family) => family !== "office"
+    );
   }
 );
 

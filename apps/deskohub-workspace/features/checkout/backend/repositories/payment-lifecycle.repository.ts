@@ -52,6 +52,7 @@ import {
   toPaymentAttempt,
 } from "./payment-attempt.repository";
 import {
+  attachPaymentProviderSession,
   insertPaymentAttempt,
   markPaymentAttemptPaid,
 } from "./payment-attempt-writes";
@@ -306,7 +307,6 @@ export class PaymentLifecycleRepository extends Context.Service<
               claimedApplications,
               applicationRows,
               paymentAttemptId: attemptRow.id,
-              workspaceReservationId,
               locale: input.locale,
               reservationCustomerId: reservation.dotyposCustomerId,
               reservationExpiresAt: reservation.reservationHoldExpiresAt,
@@ -472,7 +472,6 @@ export class PaymentLifecycleRepository extends Context.Service<
               claimedApplications,
               applicationRows,
               paymentAttemptId: attemptRow.id,
-              workspaceReservationId,
               locale: input.locale,
               reservationCustomerId: reservation.dotyposCustomerId,
               reservationExpiresAt: reservation.reservationHoldExpiresAt,
@@ -491,43 +490,6 @@ export class PaymentLifecycleRepository extends Context.Service<
             };
           })
         );
-      });
-
-      const attachProviderSession = Effect.fn(
-        "PaymentLifecycleRepository.attachProviderSession"
-      )(function* (input: {
-        readonly id: PaymentAttemptId;
-        readonly securityToken: string;
-        readonly providerRedirectUrl: string;
-      }) {
-        const providerOrderCreatedAt = Temporal.Now.instant();
-        const [attempt] = yield* db
-          .update(paymentAttempts)
-          .set({
-            state: "pending",
-            securityToken: input.securityToken,
-            providerRedirectUrl: input.providerRedirectUrl,
-            providerOrderCreatedAt,
-            updatedAt: providerOrderCreatedAt,
-          })
-          .where(
-            and(
-              eq(paymentAttempts.id, input.id),
-              eq(paymentAttempts.state, "created")
-            )
-          )
-          .returning();
-
-        if (!attempt) {
-          return yield* new PaymentLifecycleStateError({
-            operation: "PaymentLifecycleRepository.attachProviderSession",
-            paymentReference: { type: "paymentAttemptId", id: input.id },
-            message:
-              "Only created payment attempts can attach a provider session.",
-          });
-        }
-
-        return toPaymentAttempt(attempt);
       });
 
       const markPaid = Effect.fn("PaymentLifecycleRepository.markPaid")(
@@ -651,7 +613,10 @@ export class PaymentLifecycleRepository extends Context.Service<
       return {
         createPendingNexiAttempt,
         completeInternalPayment,
-        attachProviderSession,
+        attachProviderSession: (input) =>
+          attachPaymentProviderSession(input).pipe(
+            Effect.provideService(WorkspaceDatabase, { db, transaction })
+          ),
         markPaid,
         markTerminal,
       } satisfies IPaymentLifecycleRepository;
@@ -939,12 +904,12 @@ type PersistedApplication = {
   readonly sequence: number;
 };
 
-const persistDiscountApplications = Effect.fn(
+export const persistDiscountApplications = Effect.fn(
   "PaymentLifecycle.persistDiscountApplications"
 )(function* (input: {
   readonly commitment: CommitmentPayload;
   readonly paymentAttemptId: PaymentAttemptId;
-  readonly workspaceReservationId: WorkspaceReservationId;
+  readonly workspaceReservationId: WorkspaceReservationId | null;
 }) {
   const { db } = yield* WorkspaceTransaction;
   if (input.commitment.applications.length === 0) {
@@ -989,13 +954,12 @@ const persistDiscountApplications = Effect.fn(
     });
 });
 
-const reserveCommittedClaims = Effect.fn(
+export const reserveCommittedClaims = Effect.fn(
   "PaymentLifecycle.reserveCommittedClaims"
 )(function* (input: {
   readonly claimedApplications: ClaimedApplications;
   readonly applicationRows: readonly PersistedApplication[];
   readonly paymentAttemptId: PaymentAttemptId;
-  readonly workspaceReservationId: WorkspaceReservationId;
   readonly locale: Locale;
   readonly reservationCustomerId: DotyposCustomerId;
   readonly reservationExpiresAt: Temporal.Instant;

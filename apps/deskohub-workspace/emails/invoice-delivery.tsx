@@ -12,6 +12,7 @@ export type InvoiceDeliveryEmailProps = {
   readonly invoiceNumber: string;
   readonly invoice:
     | { readonly source: "reservation"; readonly orderId: string }
+    | { readonly source: "pass-purchase"; readonly orderId: string }
     | { readonly source: "manual"; readonly requestsPayment: boolean };
   /** Customers read it in the invoice's locale, staff in the staff locale. */
   readonly recipient:
@@ -34,8 +35,11 @@ const invoiceDeliveryEmailCopy = (props: InvoiceDeliveryEmailProps) => {
     Match.when("customer", () => ({
       heading: m.invoiceEmailHeading({}, { locale }),
       body: Match.value(invoice).pipe(
-        Match.when({ source: "reservation" }, ({ orderId }) =>
-          m.invoiceEmailBody({ invoiceNumber, orderId }, { locale })
+        Match.whenOr(
+          { source: "reservation" },
+          { source: "pass-purchase" },
+          ({ orderId }) =>
+            m.invoiceEmailBody({ invoiceNumber, orderId }, { locale })
         ),
         Match.when({ source: "manual", requestsPayment: true }, () =>
           m.invoiceManualEmailBodyPaymentDetails({ invoiceNumber }, { locale })
@@ -49,8 +53,11 @@ const invoiceDeliveryEmailCopy = (props: InvoiceDeliveryEmailProps) => {
     Match.when("internal", () => ({
       heading: m.invoiceEmailInternalHeading({}, { locale }),
       body: Match.value(invoice).pipe(
-        Match.when({ source: "reservation" }, ({ orderId }) =>
-          m.invoiceEmailInternalBody({ invoiceNumber, orderId }, { locale })
+        Match.whenOr(
+          { source: "reservation" },
+          { source: "pass-purchase" },
+          ({ orderId }) =>
+            m.invoiceEmailInternalBody({ invoiceNumber, orderId }, { locale })
         ),
         Match.when({ source: "manual" }, () =>
           m.invoiceManualEmailInternalBody({ invoiceNumber }, { locale })

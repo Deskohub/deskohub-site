@@ -27,7 +27,10 @@ import {
   StandaloneAccessCodeAdministration,
   type StandaloneAccessCodeCreationError,
 } from "@/features/access-codes";
-import { InvoiceAdministrationService } from "@/features/accounting/admin/invoice-administration.service";
+import {
+  type InvoiceAdministrationListItem,
+  InvoiceAdministrationService,
+} from "@/features/accounting/admin/invoice-administration.service";
 import { InvoiceAdministrationNotFoundError } from "@/features/accounting/admin/invoice-administration-identifier";
 import type { InvoiceArchiveError } from "@/features/accounting/invoice-archive";
 import type { InvoiceCancellationError } from "@/features/accounting/invoice-cancellation";
@@ -72,6 +75,7 @@ import {
   DiscountRequestLedger,
   makeDiscountOperations,
 } from "@/features/discounts/admin/discount-operations.service";
+import { isReservationProductTarget } from "@/features/discounts/product-target";
 import { CampaignOperations } from "@/features/email-campaigns/backend/campaign-operations.service";
 import { ReservationProductDetailsBackfill } from "@/features/reservation/backend/reservation-product-details-backfill.service";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
@@ -165,7 +169,7 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
     const reservationAccess = yield* ReservationAccessAdministration;
     const authentication = yield* CliAuthentication;
     const discounts = yield* DiscountAdministration;
-    const discountOperations = yield* makeDiscountOperations;
+    const discountOperations = yield* makeDiscountOperations("reservations");
     const customerDirectory = yield* AdministrationCustomerDirectory;
     const invoices = yield* InvoiceAdministrationService;
     const standaloneAccessCodes = yield* StandaloneAccessCodeAdministration;
@@ -464,12 +468,21 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
         )
       )
       .handle("listInvoices", ({ query }) =>
-        invoices.list(query).pipe(mapServiceFailure)
+        invoices.list(query).pipe(
+          Effect.map((page) => ({
+            ...page,
+            items: page.items.map(toV1Invoice),
+          })),
+          mapServiceFailure
+        )
       )
       .handle("getInvoice", ({ params }) =>
         invoices
           .get(params.invoiceId, { includeArchived: true })
-          .pipe(mapAdministrationApiFailure(mapInvoiceReadFailure))
+          .pipe(
+            Effect.map(toV1Invoice),
+            mapAdministrationApiFailure(mapInvoiceReadFailure)
+          )
       )
       .handle("getInvoicePdf", ({ params }) =>
         invoices.getPdf(params.invoiceId, { includeArchived: true }).pipe(
@@ -598,10 +611,9 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
         invokeAsCliCaller(
           discountOperations.invoke("mutateDiscounts", payload.mutation),
           DiscountRequestLedger,
-          (caller) =>
-            cliDiscountRequestLedger(ledger, caller, payload.requestId)
+          (caller) => cliDiscountRequestLedger(ledger, caller, payload)
         ).pipe(
-          // The endpoint decoded the payload with the port's strict schema.
+          // The endpoint decoded the payload with the strict v1 schema.
           Effect.catchTag("CliInputInvalid", (invalid) => Effect.die(invalid))
         )
       )
@@ -706,6 +718,17 @@ export const CliSessionAdministrationAuthenticationLive = Layer.effect(
 );
 
 type InvoiceAdministration = typeof InvoiceAdministrationService.Service;
+
+// Released v1 clients validate a closed set of invoice sources.
+const toV1Invoice = <
+  Invoice extends Pick<InvoiceAdministrationListItem, "source">,
+>(
+  invoice: Invoice
+) => ({
+  ...invoice,
+  source:
+    invoice.source === "pass-purchase" ? ("legacy" as const) : invoice.source,
+});
 
 const mapInvoiceReadFailure = (
   cause: Effect.Error<ReturnType<InvoiceAdministration["get" | "getPdf"]>>
@@ -942,9 +965,9 @@ const toCliReservationAccessGrant = (grant: ReservationAccessGrant) => ({
 const toCliCustomerProfile = (profile: AdminCustomerProfile) => ({
   ...profile,
   codes: profile.codes.map(toCliDiscountCode),
-  claims: profile.claims.map(toCliDiscountCodeClaim),
+  claims: profile.claims.flatMap(toCliReservationClaim),
   vouchers: profile.vouchers.map(toCliVoucher),
-  voucherClaims: profile.voucherClaims.map(toCliVoucherClaim),
+  voucherClaims: profile.voucherClaims.flatMap(toCliReservationClaim),
 });
 
 const toCliDiscountCode = <Code extends AdminDiscountCode>(code: Code) => ({
@@ -955,13 +978,26 @@ const toCliDiscountCode = <Code extends AdminDiscountCode>(code: Code) => ({
   updatedAt: code.updatedAt.toString(),
 });
 
-const toCliDiscountCodeClaim = (claim: AdminDiscountCodeClaim) => ({
-  ...claim,
-  reservationExpiresAt: claim.reservationExpiresAt.toString(),
-  reservedAt: claim.reservedAt.toString(),
-  redeemedAt: claim.redeemedAt?.toString() ?? null,
-  releasedAt: claim.releasedAt?.toString() ?? null,
-});
+/** v1 claims link to a reservation. Pass claims still count in code balances. */
+const toCliReservationClaim = <
+  Claim extends AdminDiscountCodeClaim | AdminVoucherClaim,
+>(
+  claim: Claim
+) => {
+  const { workspaceReservationId } = claim;
+  if (workspaceReservationId === null) return [];
+
+  return [
+    {
+      ...claim,
+      workspaceReservationId,
+      reservationExpiresAt: claim.reservationExpiresAt.toString(),
+      reservedAt: claim.reservedAt.toString(),
+      redeemedAt: claim.redeemedAt?.toString() ?? null,
+      releasedAt: claim.releasedAt?.toString() ?? null,
+    },
+  ];
+};
 
 const toCliVoucher = <Voucher extends AdminVoucher>(voucher: Voucher) => ({
   ...voucher,
@@ -971,18 +1007,11 @@ const toCliVoucher = <Voucher extends AdminVoucher>(voucher: Voucher) => ({
   updatedAt: voucher.updatedAt.toString(),
 });
 
-const toCliVoucherClaim = (claim: AdminVoucherClaim) => ({
-  ...claim,
-  reservationExpiresAt: claim.reservationExpiresAt.toString(),
-  reservedAt: claim.reservedAt.toString(),
-  redeemedAt: claim.redeemedAt?.toString() ?? null,
-  releasedAt: claim.releasedAt?.toString() ?? null,
-});
-
 const toCliDiscountDashboard = (dashboard: DiscountAdminDashboard) => ({
   ...dashboard,
   discounts: dashboard.discounts.map((discount) => ({
     ...discount,
+    products: discount.products.filter(isReservationProductTarget),
     createdAt: discount.createdAt.toString(),
     updatedAt: discount.updatedAt.toString(),
   })),
@@ -993,13 +1022,13 @@ const toCliDiscountDashboard = (dashboard: DiscountAdminDashboard) => ({
 const toCliDiscountCodeDetail = (detail: AdminDiscountCodeDetail) => ({
   ...detail,
   code: toCliDiscountCode(detail.code),
-  claims: detail.claims.map(toCliDiscountCodeClaim),
+  claims: detail.claims.flatMap(toCliReservationClaim),
 });
 
 const toCliVoucherDetail = (detail: AdminVoucherDetail) => ({
   ...detail,
   voucher: toCliVoucher(detail.voucher),
-  claims: detail.claims.map(toCliVoucherClaim),
+  claims: detail.claims.flatMap(toCliReservationClaim),
 });
 
 const noStore = HttpRouter.middleware(

@@ -36,6 +36,7 @@
   "accountingInvoiceSourceAdminUi": "Admin UI",
   "accountingInvoiceSourceDhwCli": "dhw CLI",
   "accountingInvoiceSourceAssistant": "AI assistant",
+  "accountingInvoiceSourcePassPurchase": "Entry pack purchase",
   "accountingInvoiceSourceLegacy": "Legacy / unknown",
   "accountingInvoiceDeliveryNeedsResend": "Needs resend",
   "accountingInvoiceDeliverySent": "Sent",

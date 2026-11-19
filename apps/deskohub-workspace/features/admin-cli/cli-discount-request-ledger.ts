@@ -29,16 +29,19 @@ import { toOperationLedgerFailure } from "./cli-administration-operations.server
 export const cliDiscountRequestLedger = (
   ledger: AdministrationRequestLedger["Service"],
   caller: CurrentAdministrationCaller["Service"],
-  requestId: CliMutationRequestIdType
+  payload: {
+    readonly requestId: CliMutationRequestIdType;
+    readonly mutation: AdministrationDiscountMutationType;
+  }
 ): DiscountRequestLedger["Service"] => ({
-  applyOnce: ({ input, apply }) =>
+  applyOnce: ({ apply }) =>
     // The port hands its one ledger operation over failing with port errors
     // and needing no services; a generic entry can't express either.
     applyDiscountMutation(
       ledger,
       caller,
-      requestId,
-      input,
+      payload.requestId,
+      payload.mutation,
       apply as never
     ) as never,
 });

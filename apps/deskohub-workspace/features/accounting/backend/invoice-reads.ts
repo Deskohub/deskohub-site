@@ -29,6 +29,8 @@ import type { CorrectiveDocumentNumber } from "@/features/accounting/corrective-
 import {
   type InvoiceDocument,
   invoiceDocumentSchema,
+  isEntryPackInvoiceDocument,
+  isLineItemInvoiceDocument,
   isManualInvoiceDocument,
 } from "@/features/accounting/invoice";
 import type {
@@ -578,8 +580,16 @@ const toCancellationFact = Effect.fn("InvoiceRepository.toCancellationFact")(
 
 /** The invoice when it is a reservation invoice, else `null`. */
 export const asReservationInvoice = (invoice: Invoice | null) =>
-  invoice && !isManualInvoiceDocument(invoice.document)
-    ? ({ ...invoice, document: invoice.document } as ReservationInvoice)
+  invoice &&
+  invoice.workspaceReservationId !== null &&
+  invoice.paymentAttemptId !== null &&
+  !isLineItemInvoiceDocument(invoice.document)
+    ? ({
+        ...invoice,
+        workspaceReservationId: invoice.workspaceReservationId,
+        paymentAttemptId: invoice.paymentAttemptId,
+        document: invoice.document,
+      } satisfies ReservationInvoice)
     : null;
 
 interface StoredInvoiceRow {
@@ -604,13 +614,22 @@ const matchesInvoiceIdentity = ({ document, row }: StoredInvoice) =>
     row.issuedAt
   ) === 0;
 
-const matchesInvoiceSource = ({ document, row }: StoredInvoice) =>
-  isManualInvoiceDocument(document)
-    ? document.invoiceId === row.id &&
+const matchesInvoiceSource = ({ document, row }: StoredInvoice) => {
+  if (isManualInvoiceDocument(document)) {
+    return (
+      document.invoiceId === row.id &&
       row.workspaceReservationId === null &&
       row.paymentAttemptId === null
-    : document.workspaceReservationId === row.workspaceReservationId &&
-      document.paymentAttemptId === row.paymentAttemptId;
+    );
+  }
+  const reservationId = isEntryPackInvoiceDocument(document)
+    ? null
+    : document.workspaceReservationId;
+  return (
+    reservationId === row.workspaceReservationId &&
+    document.paymentAttemptId === row.paymentAttemptId
+  );
+};
 
 const storedInvoiceReference = (
   row: StoredInvoiceRow

@@ -9,6 +9,7 @@ import {
   invoiceNumberCounters,
   invoices,
   manualInvoiceActors,
+  orders,
   paymentAttempts,
   workspaceReservations,
 } from "@/db/schema";
@@ -24,8 +25,10 @@ import {
   invoiceDocumentSchema,
   isManualInvoiceDocument,
   type ManualInvoiceDocument,
+  makeEntryPackInvoiceDocument,
   makeInvoiceDocument,
   makeManualInvoiceDocument,
+  type ReservationInvoiceDocument,
 } from "@/features/accounting/invoice";
 import type { InvoiceCancellationFact } from "@/features/accounting/invoice-cancellation";
 import {
@@ -44,7 +47,9 @@ import {
   type PaymentAttemptId,
   paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
+import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { getReservationInvoiceBuyer } from "@/features/reservation/reservation-billing";
 import type { ReadLimitExceededError } from "@/shared/backend/read-limit";
 import { AccountingDocumentSnapshots } from "./accounting-document-snapshots";
 import { allocateAnnualNumber } from "./document-numbering";
@@ -139,7 +144,7 @@ interface InvoiceIssuance {
 export interface ReservationInvoice extends Invoice {
   readonly workspaceReservationId: string;
   readonly paymentAttemptId: string;
-  readonly document: Exclude<InvoiceDocument, ManualInvoiceDocument>;
+  readonly document: ReservationInvoiceDocument;
 }
 
 interface ReservationInvoiceIssuance extends InvoiceIssuance {
@@ -167,6 +172,10 @@ type ManualInvoiceIssueInput = ManualInvoiceInput & {
 };
 
 export interface IInvoiceRepository {
+  readonly issueEntryPack: (input: {
+    readonly orderId: OrderId;
+    readonly paymentAttemptId: PaymentAttemptId;
+  }) => Effect.Effect<InvoiceId | null, InvoiceRepositoryError>;
   readonly findById: (
     invoiceId: string
   ) => Effect.Effect<
@@ -384,6 +393,96 @@ export class InvoiceRepository extends Context.Service<
               })
               .returning({ id: invoices.id }),
         });
+
+      const issueEntryPack = Effect.fn("InvoiceRepository.issueEntryPack")(
+        function* ({
+          orderId,
+          paymentAttemptId,
+        }: Parameters<IInvoiceRepository["issueEntryPack"]>[0]) {
+          const source =
+            yield* accountingSnapshots.findEntryPack(paymentAttemptId);
+          if (!source || source.orderId !== orderId) {
+            return yield* wrapInvoiceEligibilityError(
+              paymentAttemptId,
+              "The Entry pack accounting snapshot is unavailable."
+            );
+          }
+          const buyer = getReservationInvoiceBuyer({
+            billing: source.billing,
+            customerName: source.buyer.legalName,
+          });
+          if (!buyer) return null;
+
+          return yield* transaction(
+            Effect.gen(function* () {
+              const [paid] = yield* db
+                .select({ paidAt: orders.paidAt })
+                .from(orders)
+                .innerJoin(
+                  paymentAttempts,
+                  and(
+                    eq(paymentAttempts.id, orders.activePaymentAttemptId),
+                    eq(paymentAttempts.orderId, orders.id)
+                  )
+                )
+                .where(
+                  and(
+                    eq(orders.id, orderId),
+                    eq(orders.kind, "pass-purchase"),
+                    eq(orders.paymentState, "paid"),
+                    eq(orders.dotyposCustomerId, source.dotyposCustomerId),
+                    eq(paymentAttempts.id, paymentAttemptId),
+                    eq(paymentAttempts.state, "paid")
+                  )
+                )
+                .for("no key update", { of: orders });
+              if (!paid?.paidAt) {
+                return yield* wrapInvoiceEligibilityError(
+                  paymentAttemptId,
+                  "Only the active paid Entry pack attempt can be invoiced."
+                );
+              }
+              const [issued] = yield* db
+                .select({ id: invoices.id })
+                .from(invoices)
+                .where(eq(invoices.paymentAttemptId, paymentAttemptId))
+                .limit(1);
+              if (issued) return invoiceIdSchema.make(issued.id);
+
+              const reference = {
+                type: "paymentAttemptId",
+                id: paymentAttemptId,
+              } satisfies AccountingRecordReference;
+              const numbering = yield* allocateInvoiceNumber(reference);
+              const document = makeEntryPackInvoiceDocument({
+                source,
+                buyer,
+                paymentAttemptId,
+                invoiceNumber: numbering.invoiceNumber,
+                issuedAt: numbering.issuedAt,
+                paidAt: paid.paidAt,
+              });
+              const [inserted] = yield* insertEncryptedInvoice({
+                reference,
+                source: {
+                  paymentAttemptId,
+                  dotyposCustomerId: source.dotyposCustomerId,
+                },
+                numbering,
+                document,
+              });
+              if (!inserted) {
+                return yield* new AccountingRecordUnavailable({
+                  operation: "load",
+                  reference,
+                  message: "Issued Entry pack invoice returned no row.",
+                });
+              }
+              return invoiceIdSchema.make(inserted.id);
+            })
+          );
+        }
+      );
 
       const issue = Effect.fn("InvoiceRepository.issue")(function* (input: {
         readonly paymentAttemptId: string;
@@ -719,6 +818,7 @@ export class InvoiceRepository extends Context.Service<
       return {
         ...reads,
         issue,
+        issueEntryPack,
         issueManual,
         getSuggestedVariableSymbol,
       } satisfies IInvoiceRepository;

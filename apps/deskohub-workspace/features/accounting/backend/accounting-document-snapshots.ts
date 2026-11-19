@@ -2,7 +2,7 @@ import type {
   DotyposCustomerId,
   DotyposReservationId,
 } from "@deskohub/dotypos";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Schema } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
@@ -10,7 +10,9 @@ import { accountingDocumentSnapshots } from "@/db/schema";
 import {
   type AccountingDocumentSnapshot,
   accountingDocumentSnapshotSchema,
+  type EntryPackAccountingSnapshot,
   encodeStoredAccountingDocumentSnapshot,
+  entryPackAccountingSnapshotSchema,
 } from "@/features/accounting/accounting-document-snapshot";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { Locale } from "@/features/i18n";
@@ -47,6 +49,20 @@ interface PreparedAccountingDocumentSnapshot {
 }
 
 export interface IAccountingDocumentSnapshots {
+  readonly findEntryPack: (
+    paymentAttemptId: PaymentAttemptId
+  ) => Effect.Effect<
+    EntryPackAccountingSnapshot | null,
+    AccountingRecordUnavailable | EffectDrizzleQueryError
+  >;
+  readonly recordEntryPack: (input: {
+    readonly snapshot: EntryPackAccountingSnapshot;
+    readonly paymentAttemptId: PaymentAttemptId;
+    readonly orderId: OrderId;
+    readonly dotyposCustomerId: DotyposCustomerId;
+    readonly locale: Locale;
+    readonly amount: Money;
+  }) => Effect.Effect<void, AccountingRecordUnavailable, WorkspaceTransaction>;
   /** The snapshot recorded for the attempt, or `null` when it has none. */
   readonly find: (
     paymentAttemptId: PaymentAttemptId
@@ -88,6 +104,16 @@ export const sealedAccountingDocumentSnapshots = sealedAccountingJson({
   schema: accountingDocumentSnapshotSchema,
 });
 
+const sealedEntryPackSnapshots = sealedAccountingJson({
+  label: "Entry pack accounting snapshot",
+  table: accountingDocumentSnapshots,
+  keyId: accountingDocumentSnapshots.keyId,
+  ciphertext: accountingDocumentSnapshots.encryptedSnapshot,
+  plaintext: {},
+  encode: Schema.encodeSync(entryPackAccountingSnapshotSchema),
+  schema: entryPackAccountingSnapshotSchema,
+});
+
 /** The immutable source snapshot every payment attempt records. */
 export class AccountingDocumentSnapshots extends Context.Service<
   AccountingDocumentSnapshots,
@@ -97,18 +123,74 @@ export class AccountingDocumentSnapshots extends Context.Service<
     this,
     Effect.gen(function* () {
       const snapshots = yield* sealedAccountingDocumentSnapshots;
+      const entryPacks = yield* sealedEntryPackSnapshots;
 
       const find = Effect.fn("AccountingDocumentSnapshots.find")(function* (
         paymentAttemptId: PaymentAttemptId
       ) {
         const opened = yield* snapshots.open({
           reference: { type: "paymentAttemptId", id: paymentAttemptId },
-          where: eq(
-            accountingDocumentSnapshots.paymentAttemptId,
-            paymentAttemptId
-          ),
+          where: and(
+            eq(accountingDocumentSnapshots.paymentAttemptId, paymentAttemptId),
+            isNotNull(accountingDocumentSnapshots.workspaceReservationId)
+          )!,
         });
         return opened?.value ?? null;
+      });
+
+      const findEntryPack = Effect.fn(
+        "AccountingDocumentSnapshots.findEntryPack"
+      )(function* (paymentAttemptId: PaymentAttemptId) {
+        const opened = yield* entryPacks.open({
+          reference: { type: "paymentAttemptId", id: paymentAttemptId },
+          where: and(
+            eq(accountingDocumentSnapshots.paymentAttemptId, paymentAttemptId),
+            isNull(accountingDocumentSnapshots.workspaceReservationId)
+          )!,
+        });
+        return opened?.value ?? null;
+      });
+
+      const recordEntryPack = Effect.fn(
+        "AccountingDocumentSnapshots.recordEntryPack"
+      )(function* (
+        input: Parameters<IAccountingDocumentSnapshots["recordEntryPack"]>[0]
+      ) {
+        const { db } = yield* WorkspaceTransaction;
+        const reference = {
+          type: "paymentAttemptId",
+          id: input.paymentAttemptId,
+        } satisfies AccountingRecordReference;
+        const invalid = () =>
+          new AccountingRecordUnavailable({
+            operation: "validate",
+            reference,
+            message:
+              "Entry pack accounting snapshot does not match the payment attempt.",
+          });
+        const snapshot = yield* Schema.decodeUnknownEffect(
+          Schema.toType(entryPackAccountingSnapshotSchema),
+          { onExcessProperty: "error" }
+        )(input.snapshot).pipe(Effect.mapError(invalid));
+        if (
+          snapshot.orderId !== input.orderId ||
+          snapshot.dotyposCustomerId !== input.dotyposCustomerId ||
+          snapshot.locale !== input.locale ||
+          !moneyEquals(snapshot.quote.discountedSubtotal, input.amount)
+        ) {
+          return yield* invalid();
+        }
+        const sealer = yield* entryPacks.sealer(reference);
+        yield* sealer.seal({
+          reference,
+          value: snapshot,
+          insert: (sealed) =>
+            db.insert(accountingDocumentSnapshots).values({
+              paymentAttemptId: input.paymentAttemptId,
+              keyId: sealed.keyId,
+              encryptedSnapshot: sealed.ciphertext,
+            }),
+        });
       });
 
       const prepare = Effect.fn("AccountingDocumentSnapshots.prepare")(
@@ -167,7 +249,12 @@ export class AccountingDocumentSnapshots extends Context.Service<
         }
       );
 
-      const service: IAccountingDocumentSnapshots = { find, prepare };
+      const service: IAccountingDocumentSnapshots = {
+        find,
+        prepare,
+        findEntryPack,
+        recordEntryPack,
+      };
       return service;
     })
   );

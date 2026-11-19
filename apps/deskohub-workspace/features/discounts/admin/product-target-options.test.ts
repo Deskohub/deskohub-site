@@ -3,14 +3,18 @@ import {
   discountProductTargetOptions,
   formatDiscountProductTargets,
   getDiscountProductTargetLabel,
+  toDiscountProductTargets,
 } from "./product-target-options";
 
 describe("discount product target labels", () => {
-  test("name each cowork tier with its catalog title in the route locale", () => {
+  test("label reservation targets in the route locale", () => {
     const labels = (locale: "cs-CZ" | "en-US") =>
-      discountProductTargetOptions.map(({ target }) =>
-        getDiscountProductTargetLabel(target, locale)
-      );
+      discountProductTargetOptions
+        .filter(
+          ({ target }) =>
+            target.kind !== "entry-pack" && target.kind !== "unlimited"
+        )
+        .map(({ target }) => getDiscountProductTargetLabel(target, locale));
 
     expect(labels("en-US")).toEqual([
       "All cowork tiers",
@@ -26,6 +30,27 @@ describe("discount product target labels", () => {
       "Zasedačka",
       "Soukromá kancelář",
     ]);
+  });
+
+  test("offers both pass families and the nine priced offers as distinct targets", () => {
+    const passOptions = discountProductTargetOptions.filter(
+      ({ target }) =>
+        target.kind === "entry-pack" || target.kind === "unlimited"
+    );
+
+    expect(passOptions).toHaveLength(11);
+    expect(new Set(passOptions.map(({ key }) => key)).size).toBe(11);
+    const targets = toDiscountProductTargets([
+      "entry-pack:reserved-desk:10",
+      "unlimited",
+    ]);
+    expect(targets).toEqual([
+      { kind: "entry-pack", tier: "reserved-desk", size: 10 },
+      { kind: "unlimited" },
+    ]);
+    expect(formatDiscountProductTargets(targets, "cs-CZ")).toBe(
+      "Balíček vstupů · Rezervovaný stůl · 10 vstupů, Neomezené členství"
+    );
   });
 
   test("join a product summary in the route locale", () => {
