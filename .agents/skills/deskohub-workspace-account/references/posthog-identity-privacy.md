@@ -266,8 +266,8 @@ non-production traffic apart:
 - Exclude advertising click and recipient identifiers, including `gclid`,
   `dclid`, `gbraid`, `wbraid`, `fbclid`, `msclkid`, `twclid`, `li_fat_id`,
   `igshid`, `ttclid`, `rdt_cid`, `epik`, `qclid`, `sccid`, `oppref`,
-  `irclid`, `_kx`, `srsltid`, `yclid`, `mc_eid`, and Meta's `$fbc` and `$fbp`
-  and their persistence aliases. Google's campaign fields identify a traffic
+  `irclid`, `_kx`, `srsltid`, `bfcid`, `yclid`, `mc_eid`, and Meta's `$fbc`
+  and `$fbp` and their persistence aliases. Google's campaign fields identify a traffic
   source, campaign or click-ID system. Mailchimp `mc_cid` identifies the
   campaign. Google and GTM advertising tags follow marketing consent
   independently.
@@ -299,7 +299,7 @@ non-production traffic apart:
   typed email, so the booker's browser isn't linked to it: anyone can type
   another customer's email. Join that customer's activity through the
   reservation ID on server events and `workspace_reservations` instead.
-- Server events set `$process_person_profile: false`, except person-linked
+- Server events set `options.process_person_profile: false`, except person-linked
   lifecycle events. The reservation and payment lifecycle events follow the
   contract in
   [Reservation and payment lifecycle events](#reservation-and-payment-lifecycle-events).
@@ -349,10 +349,10 @@ they carry the traffic category and the name of a recognized assistant.
   event (`ServerAnalytics` subject `account`) has the distinct ID
   `workspace-account:<authorAccountId>` from `getPostHogAccountDistinctId`,
   the browser's identity for the same account. It omits
-  `$process_person_profile`, so PostHog processes the person, and keeps
+  `options.process_person_profile`, so PostHog processes the person, and keeps
   `reservation_id` as a property. A reservation-keyed event (subject
   `record`) has the Workspace reservation ID as distinct ID and sets
-  `$process_person_profile: false`. Neither carries `$session_id`.
+  `options.process_person_profile: false`. Neither carries `$session_id`.
 - The capture-time rule picks the branch for every event, webhook captures
   included. `ReservationAnalyticsPerson.linkedAccount`
   (`features/checkout/backend/analytics/reservation-analytics-person.ts`)
@@ -363,10 +363,9 @@ they carry the traffic category and the name of a recognized assistant.
   failed read does too, and logs a warning. So a withdrawal after
   `reservation started` makes events captured in later runs
   reservation-keyed, and a reservation's events can mix both branches.
-- The capture hands `posthog-node` the
-  event UUID `<reservation or payment attempt ID>:<event>`, but the SDK sends
-  a random UUIDv7 in place of any value that isn't a UUID, so PostHog doesn't
-  deduplicate a repeated capture by it.
+- The capture keeps `<reservation or payment attempt ID>:<event>` as a local
+  correlation key. `posthog-node` generates a fresh UUIDv7 for each capture
+  of these events, so PostHog records repeat captures separately.
 - The event names live in `features/checkout/reservation-lifecycle-events.ts`,
   which the administration's reservation history
   (`features/administration/posthog-reservation-history.ts`) reads them back
@@ -488,7 +487,7 @@ Filter every step to `deployment.environment.name = production`.
   `agent tool call` (each MCP tool call, from `agent-tool-mcp-handler.ts`),
   and `bot protection rejection` (BotID) events go out after the response,
   regardless of consent, from `shared/backend/agent-traffic/agent-traffic-events.ts`
-  with a random per-event distinct ID and `$process_person_profile: false`.
+  with a random per-event distinct ID and `options.process_person_profile: false`.
   They carry only the agent fields, route template, locale, tool name,
   outcome (`success` or the tool's error code), call site, and
   `verified_bot`. The page route is a template Next generated from the app
@@ -508,8 +507,8 @@ Filter every step to `deployment.environment.name = production`.
 
 ## Flag-request gotcha
 
-The SDK's `/flags` request bypasses `before_send` and merges persisted
-`$initial_person_info`, `$initial_referrer_info`, `$initial_campaign_params`,
+The `posthog-js` 1.452.0 `/flags` request bypasses `before_send` and merges
+persisted `$initial_person_info`, `$initial_referrer_info`, `$initial_campaign_params`,
 and flag person overrides. Right after `init`, and again before re-enabling
 or reloading flags, unregister those three initial keys and the SDK's
 `$fbc_persistence` and `$fbp_persistence` keys. Remove campaign and click

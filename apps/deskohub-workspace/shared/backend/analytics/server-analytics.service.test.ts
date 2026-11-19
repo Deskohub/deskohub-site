@@ -260,20 +260,24 @@ describe("ServerAnalytics", () => {
 describe("PostHog event delivery", () => {
   test("sends the event the history reads, with no person profile or GeoIP", async () => {
     const requests: {
+      authorization: string | null;
       url: string;
       body: { batch: { properties: object; uuid: string }[] };
     }[] = [];
+    const errors: unknown[] = [];
     const client = new PostHog("phc_synthetic", {
       host: "https://ingest.posthog.example",
       disableCompression: true,
       fetch: async (url, options) => {
         requests.push({
+          authorization: new Headers(options?.headers).get("authorization"),
           url: String(url),
           body: JSON.parse(String(options?.body)),
         });
-        return new Response("{}", { status: 200 });
+        return Response.json({ results: {} });
       },
     });
+    client.on("error", (error) => errors.push(error));
     const layer = ServerAnalytics.Default.pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -305,19 +309,22 @@ describe("PostHog event delivery", () => {
     await client.flush();
     await client.shutdown();
 
+    expect(errors).toEqual([]);
     expect(requests).toHaveLength(1);
-    expect(requests[0]?.url).toBe("https://ingest.posthog.example/batch/");
+    expect(requests[0]?.authorization).toBe("Bearer phc_synthetic");
+    expect(requests[0]?.url).toBe(
+      "https://ingest.posthog.example/i/v1/analytics/events"
+    );
     expect(requests[0]?.body).toMatchObject({
-      api_key: "phc_synthetic",
       batch: [
         {
           distinct_id: "reservation-id",
           event: "payment completed",
+          options: { process_person_profile: false },
           timestamp: "2026-06-17T10:00:00.000Z",
           properties: {
             $geoip_disable: true,
             $lib: "posthog-node",
-            $process_person_profile: false,
             agent_category: "unclassified",
             "deployment.environment.name": "development",
             reservation_id: "reservation-id",
@@ -329,10 +336,9 @@ describe("PostHog event delivery", () => {
       ],
     });
     const sent = requests[0]?.body.batch[0];
-    expect(Object.keys(sent?.properties ?? {})).not.toContain("$set");
-    // The SDK sends a random UUIDv7 in place of an event UUID that isn't a
-    // UUID, such as `<attempt>:<event>`, so PostHog doesn't deduplicate a
-    // repeated capture by it.
+    expect(sent?.properties).not.toHaveProperty("$set");
+    expect(sent?.properties).not.toHaveProperty("$process_person_profile");
+    // The occurrence key is <attempt>:<event>. The SDK generates a wire UUID.
     expect(sent?.uuid).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/
     );

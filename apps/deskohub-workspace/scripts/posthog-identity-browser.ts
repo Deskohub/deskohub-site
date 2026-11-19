@@ -72,6 +72,7 @@ const clickIdProperties = [
   "_fbc",
   "_fbp",
   "_kx",
+  "bfcid",
   "dclid",
   "epik",
   "fbc",
@@ -138,6 +139,8 @@ const sensitivePayloadMarkers = [
   { code: "legacy-referrer-token", value: legacyInitialReferrerToken },
   { code: "legacy-utm-token", value: legacyInitialUtmToken },
   { code: "campaign-rejected-marker", value: campaignRejectedMarker },
+  { code: "bfcid-flag-canary", value: "synthetic-bfcid-flag-canary" },
+  { code: "bfcid-setter-canary", value: "synthetic-bfcid-setter-canary" },
   { code: "legacy-meta-click-id", value: "synthetic-meta-click-id" },
   { code: "legacy-meta-browser-id", value: "fb.1.1700000000000.1700000001" },
 ] as const;
@@ -2480,8 +2483,14 @@ const runLegacyFlagsInitialPropertiesScenario = async (
       "legacy-initial-properties-reset-identity"
     );
 
+    const captureRequestMark = server.allPostHogRequests().length;
     await captureFixtureEvent(fixture.page);
     await waitForFixtureEvent(server);
+    const flagsAfterCapture = await waitForNextFeatureFlagsRequest(
+      server,
+      captureRequestMark
+    );
+    assertFeatureFlagsRequestIsClean(flagsAfterCapture);
     check(
       fixtureEvents(server.allIngestRecords()).some(
         (event) => eventDistinctId(event) === accountDistinctIds.A

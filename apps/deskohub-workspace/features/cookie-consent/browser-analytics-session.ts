@@ -123,8 +123,8 @@ const clearPostHogCampaignFlagProperties = (posthog: PostHog) => {
 };
 
 const clearPostHogStoredContext = (posthog: PostHog) => {
-  // With posthog-js 1.438.1 the save_* options don't clear these persisted
-  // fields. Flags can use stored person properties without running before_send.
+  // These are the posthog-js 1.452.0 persistence keys. Re-audit the keys when
+  // upgrading the SDK; save_referrer/save_campaign_params do not clear old data.
   posthog.unregister("$initial_person_info");
   posthog.unregister("$initial_referrer_info");
   posthog.unregister("$initial_campaign_params");

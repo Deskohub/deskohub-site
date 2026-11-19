@@ -17,10 +17,11 @@ const campaignProperties = {
   mc_cid: (value: string) => /^[0-9a-f]{10}$/i.test(value),
 };
 
-// Includes every personal-data campaign key in @posthog/browser-common 0.9.2
-// and known click, recipient and Meta identifier keys outside its URL list.
+// Personal-data campaign keys from @posthog/browser-common 0.12.1, except
+// allowlisted gclsrc codes, plus known click, recipient and Meta identifiers.
 const identifierProperties = new Set([
   "_kx",
+  "bfcid",
   "dclid",
   "epik",
   "fbc",

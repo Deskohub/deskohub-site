@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "build:generate": "MIMALLOC_PURGE_DELAY=0 next build --turbo --experimental-build-mode=generate",
     "build:compile": "rm -rf .next/cache/turbopack && MIMALLOC_PURGE_DELAY=0 next build --turbo --experimental-build-mode=compile",
@@ -158,8 +161,8 @@
     "next-safe-action": "^8.5.2",
     "osm": "workspace:*",
     "pg": "^8.23.1",
-    "posthog-js": "1.438.1",
-    "posthog-node": "^5.63.1",
+    "posthog-js": "1.452.0",
+    "posthog-node": "^6.0.4",
     "react": "19.3.0",
     "react-day-picker": "^9.14.0",
     "react-dom": "19.3.0",

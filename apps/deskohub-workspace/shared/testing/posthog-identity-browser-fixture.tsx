@@ -242,6 +242,7 @@ const registerLegacyInitialProperties = () => {
       $fbc: legacyMetaClickId,
       $fbp: legacyMetaBrowserId,
       $entry_gclsrc: "ds",
+      $initial_bfcid: "synthetic-bfcid-flag-canary",
       utm_id: "legacy-attribution-id",
       fixture_flag_property: "preserved",
     },
@@ -262,7 +263,11 @@ const captureSensitiveEvent = (): FixtureCaptureResult => {
   const capturedEventCountBefore = capturedEventCount;
   const captureResult = posthog.capture("fixture-sensitive-event", {
     fixture_surface: "readonly-dom",
-    $set: { $session_entry_fbp: legacyMetaBrowserId, gad_source: "2" },
+    $set: {
+      $session_entry_bfcid: "synthetic-bfcid-setter-canary",
+      $session_entry_fbp: legacyMetaBrowserId,
+      gad_source: "2",
+    },
   });
 
   return {
@@ -292,7 +297,7 @@ const signOut = async () => (await signOutOfAccount()) === "signed-out";
 export function PostHogIdentityBrowserFixture() {
   const analyticsAccepted = useVisitorConsent("analytics");
   const [pathname, setPathname] = useState(window.location.pathname);
-  // The flag privacy scenario uses the production flag gate with fake ingest.
+  // Scenarios that assert remote flag behavior use the production flag gate.
   const [posthogEnvironment] = useState<"development" | "production">(() =>
     new URLSearchParams(window.location.search).get("remoteFlags") === "true"
       ? "production"
