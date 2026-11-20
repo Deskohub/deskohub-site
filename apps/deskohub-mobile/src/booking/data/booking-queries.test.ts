@@ -1,7 +1,16 @@
-import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  jest,
+  spyOn,
+  test,
+} from "bun:test";
 import {
   type CustomerBookingSelection,
   CustomerBookingSelectionInvalid,
+  customerAvailabilityReplacementHeader,
 } from "@deskohub/workspace-customer-api";
 import { Duration, Effect, Layer } from "effect";
 import { AsyncResult, type Atom, type AtomRegistry } from "effect/reactivity";
@@ -10,6 +19,7 @@ import {
   AccountReadBudget,
   accountReadAllowance,
 } from "../../customer-api/account-read-budget";
+import { CustomerApi } from "../../customer-api/customer-api.service";
 import { customerDataRuntime } from "../../customer-api/customer-data-runtime";
 import {
   makeCustomerDataRegistry,
@@ -25,6 +35,7 @@ import {
   type BookingEndpointName,
   fakeBooking,
 } from "../testing/fake-booking-api";
+import { sampleOfferings } from "../testing/sample-booking-catalog";
 import {
   bookingAvailabilityAtom,
   bookingOfferingsAtom,
@@ -147,18 +158,25 @@ const catalogReads: CatalogRead[] = [
 ];
 
 describe("booking catalog queries", () => {
-  test("reads the offerings through the real client", async () => {
+  test("returns the advertised offerings without spending the account read budget", async () => {
     const { registry, workspace } = makeFakeCustomerData("linked");
+    const booking = fakeBooking(workspace);
+    booking.now = () => new Date("2026-11-20T09:00:00Z");
+    const advertisedOn = booking.today();
 
     const result = await settle(registry, bookingOfferingsAtom("en-US"));
 
-    expect(result._tag === "Success" && result.success.offerings.length).toBe(
-      6
-    );
-    expect(fakeBooking(workspace).endpoints).toEqual(["listOfferings"]);
+    expect(result).toMatchObject({
+      _tag: "Success",
+      success: { offerings: sampleOfferings("en-US", advertisedOn).offerings },
+    });
+    expect(booking.endpoints).toEqual(["listOfferings"]);
+    expect(await remainingReads(registry)).toBe(accountReadAllowance.reads);
   });
 
-  test.each(catalogReads)(
+  test.each(
+    catalogReads.filter(({ endpoint }) => endpoint !== "listOfferings")
+  )(
     "reads the $name as a catalog read, without spending the account read budget",
     async ({ endpoint, atom }) => {
       const { registry, workspace } = makeFakeCustomerData("linked");
@@ -206,33 +224,56 @@ describe("booking catalog queries", () => {
     expect(first).toMatchObject({
       success: { unavailableCoworkTiers: ["reserved-desk"] },
     });
-    expect(bookingAvailabilityAtom({ query })).toBe(
-      bookingAvailabilityAtom({ query: { ...query } })
-    );
     expect(
       booking.endpoints.filter((endpoint) => endpoint === "getAvailability")
     ).toHaveLength(2);
   });
 
-  test("sends the replaced pay state with availability", async () => {
+  test("sends the replacement pay state header with availability and start times", async () => {
     const { registry, workspace } = makeFakeCustomerData("linked");
     const booking = fakeBooking(workspace);
+    const runtime = customerDataRuntime.atom(Effect.service(CustomerApi));
+    const result = await settle(registry, runtime);
+    if (result._tag !== "Success") throw new Error("no customer API");
+    const availability = spyOn(result.success.booking, "getAvailability");
+    const starts = spyOn(result.success.booking, "getMeetingRoomStartTimes");
+    const date = booking.dateIn(1);
+    const replacingPayStateToken = "ps1.held";
 
-    await settle(
-      registry,
-      meetingRoomStartTimesAtom({
-        date: booking.dateIn(1),
-        duration: "hour:4",
-        replacingPayStateToken: "ps1.held",
-      })
-    );
-
-    expect(booking.calls).toMatchObject([
-      {
-        endpoint: "getMeetingRoomStartTimes",
-        input: { date: booking.dateIn(1), duration: "hour:4" },
-      },
-    ]);
+    try {
+      await settle(
+        registry,
+        bookingAvailabilityAtom({
+          query: { kind: "meeting-room", date },
+          replacingPayStateToken,
+        })
+      );
+      await settle(
+        registry,
+        meetingRoomStartTimesAtom({
+          date,
+          duration: "hour:4",
+          replacingPayStateToken,
+        })
+      );
+      expect(availability.mock.calls[0]?.[0]?.headers).toEqual({
+        [customerAvailabilityReplacementHeader]: replacingPayStateToken,
+      });
+      expect(starts.mock.calls[0]?.[0]?.headers).toEqual({
+        [customerAvailabilityReplacementHeader]: replacingPayStateToken,
+      });
+      expect(booking.calls).toMatchObject([
+        { endpoint: "getAvailability", input: { kind: "meeting-room", date } },
+        {
+          endpoint: "getMeetingRoomStartTimes",
+          input: { date, duration: "hour:4" },
+        },
+      ]);
+    } finally {
+      availability.mockRestore();
+      starts.mockRestore();
+      registry.dispose();
+    }
   });
 
   test("keys meeting-room start times by date and duration", async () => {
@@ -249,17 +290,30 @@ describe("booking catalog queries", () => {
       meetingRoomStartTimesAtom({ date, duration: "day:1" })
     );
 
-    expect(hour).toMatchObject({ success: { duration: "hour:1" } });
-    expect(hour._tag === "Success" && hour.success.startTimes.length).toBe(10);
-    expect(day._tag === "Success" && day.success.startTimes.length).toBe(1);
+    const nextDate = booking.dateIn(2);
+    const nextHour = await settle(
+      registry,
+      meetingRoomStartTimesAtom({ date: nextDate, duration: "hour:1" })
+    );
+
+    expect(hour).toMatchObject({ success: { date, duration: "hour:1" } });
+    expect(hour._tag === "Success" && hour.success.startTimes).toHaveLength(10);
+    expect(day).toMatchObject({
+      success: {
+        date,
+        duration: "day:1",
+        startTimes: [{ startDateTime: `${date}T00:00` }],
+      },
+    });
+    expect(nextHour).toMatchObject({
+      success: { date: nextDate, duration: "hour:1" },
+    });
   });
 
-  test("shares one quote between equal selections", () => {
-    // The quote family is module-wide and the first selection of a key is the
-    // one its atom reads, which can't encode an explicit `undefined`. A past
-    // date keeps this key apart from the refresh tests' `dateIn` quotes, and
-    // asking for the plain selection first keeps the cached atom readable.
-    const date = "2020-01-06";
+  test("reuses a quote for equal selections and reads it separately by locale", async () => {
+    const { registry, workspace } = makeFakeCustomerData("linked");
+    const booking = fakeBooking(workspace);
+    const date = booking.dateIn(19);
     const selection = coworkSelection(date);
     const reordered: CustomerBookingSelection = {
       coffee: true,
@@ -268,12 +322,14 @@ describe("booking catalog queries", () => {
       family: "cowork",
       monitorOption: undefined,
     };
-    const shared = bookingQuoteAtom(selection, "en-US");
+    await settle(registry, bookingQuoteAtom(selection, "en-US"));
+    await settle(registry, bookingQuoteAtom(reordered, "en-US"));
+    await settle(registry, bookingQuoteAtom(selection, "cs-CZ"));
 
-    expect(bookingQuoteAtom(reordered, "en-US")).toBe(shared);
-    expect(bookingQuoteAtom(selection, "cs-CZ")).not.toBe(
-      bookingQuoteAtom(selection, "en-US")
-    );
+    expect(booking.calls).toMatchObject([
+      { endpoint: "getQuote", input: { date, locale: "en-US" } },
+      { endpoint: "getQuote", input: { date, locale: "cs-CZ" } },
+    ]);
   });
 });
 
@@ -304,24 +360,18 @@ describe("bookingQuoteAtom early setup", () => {
     duration: "hour:1",
   });
 
-  test("keeps a quote with early setup apart from one without", () => {
-    const selection = meetingRoom("2020-01-06");
-    expect(bookingQuoteAtom(selection, "en-US", { earlySetup: true })).not.toBe(
-      bookingQuoteAtom(selection, "en-US")
-    );
-    expect(bookingQuoteAtom(selection, "en-US", { earlySetup: false })).toBe(
-      bookingQuoteAtom(selection, "en-US")
-    );
-  });
-
   test("asks for the early setup, which the quote's room line then lists", async () => {
     const harness = withTestClock();
     const selection = meetingRoom(harness.booking.dateIn(20));
-    const earlySetupOf = async (earlySetup: boolean) => {
-      const atom = bookingQuoteAtom(selection, "en-US", { earlySetup });
-      const unmount = harness.registry.mount(atom);
-      const result = await settle(harness.registry, atom);
-      unmount();
+    const earlySetupOf = async (earlySetup?: boolean) => {
+      const result = await settle(
+        harness.registry,
+        bookingQuoteAtom(
+          selection,
+          "en-US",
+          earlySetup === undefined ? undefined : { earlySetup }
+        )
+      );
       return result._tag === "Success"
         ? result.success.summary.sections[0]?.items[0]?.earlySetup
         : "failed";
@@ -331,6 +381,8 @@ describe("bookingQuoteAtom early setup", () => {
       startsAt: expect.any(String),
     });
     expect(await earlySetupOf(false)).toBeUndefined();
+    expect(await earlySetupOf()).toBeUndefined();
+    expect(quoteCalls(harness)).toBe(2);
   });
 });
 
