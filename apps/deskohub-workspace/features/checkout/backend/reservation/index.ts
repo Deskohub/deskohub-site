@@ -2,8 +2,12 @@ export { splitCustomerName } from "./dotypos-customer-policy";
 export {
   createWorkspaceDotyposReservation,
   dotyposReservationLogFields,
+  withWorkspaceReservationCapacity,
 } from "./dotypos-reservation.adapter";
-export { WorkspaceTableAssignmentService } from "./workspace-table-assignment.service";
+export {
+  getWorkspaceReservationInterval,
+  WorkspaceTableAssignmentService,
+} from "./workspace-table-assignment.service";
 export {
   excludeDotyposReservationsById,
   getOccupancyWindow,

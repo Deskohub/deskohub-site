@@ -1,14 +1,15 @@
 import {
   type DotyposReadFailure,
   type DotyposReservationId,
-  type DotyposReservationInterval,
   DotyposService,
   type DotyposTable,
   type DotyposTableId,
 } from "@deskohub/dotypos";
+import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer, Match, Option } from "effect";
 import { workspaceStatementConcurrency } from "@/db/database.service";
 import { workspaceProductMonitorOptionTableTags } from "@/features/checkout/product-catalog";
+import { getBookingsWithPassDayIntents } from "@/features/passes/backend/pass-day-capacity-bookings";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
 import type { ReservationRecord } from "@/features/reservation/backend/reservation-record";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -24,6 +25,7 @@ import {
   getOfficeReservationIntervalInput,
   type OfficeReservationDetails,
 } from "@/features/reservation/office-reservation";
+import { getTouchedWorkspaceDateBounds } from "@/features/reservation/reservation-date";
 import {
   getReservationDate,
   getReservationIntervalNormalization,
@@ -34,12 +36,11 @@ import type { WorkspaceReservationKind } from "@/features/reservation/reservatio
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
   excludeDotyposReservationsById,
+  getOccupancyWindow,
   getOccupancyWindowDates,
   getTableBookingOccupancyById,
-  getWorkspaceReservationIntervalDates,
-  getWorkspaceTableOccupancyById,
+  type OccupancyWindow,
   type TableBooking,
-  toTableBookings,
   workspaceBookingSeatCount,
 } from "./workspace-table-occupancy";
 import {
@@ -189,6 +190,7 @@ export interface IWorkspaceTableAssignmentService {
   ) => Effect.Effect<
     DotyposTableId,
     | DotyposReadFailure
+    | EffectDrizzleQueryError
     | InvalidDotyposTableSeats
     | ReservationIntervalValidationError
     | TableAssignmentUnavailableError
@@ -206,7 +208,7 @@ export interface IWorkspaceTableAssignmentService {
     readonly kind: WorkspaceReservationKind;
   }) => Effect.Effect<
     AssignedTableAvailability,
-    DotyposReadFailure | InvalidDotyposTableSeats
+    DotyposReadFailure | EffectDrizzleQueryError | InvalidDotyposTableSeats
   >;
 }
 
@@ -222,33 +224,40 @@ export class WorkspaceTableAssignmentService extends Context.Service<
 
       const loadInventory = Effect.fn(
         "WorkspaceTableAssignmentService.loadInventory"
-      )((reservationInterval: DotyposReservationInterval) =>
-        Effect.flatMap(workspaceStatementConcurrency, (concurrency) =>
-          Effect.all(
-            {
-              tables: dotypos.getTables(),
-              reservations:
-                dotypos.listActiveReservationsOverlapping(reservationInterval),
-              expiredDotyposReservationIds: workspaceReservations
-                .selectExpiredHoldDotyposReservationIds({
-                  now: Temporal.Now.instant(),
-                })
-                .pipe(
-                  Effect.tapError((cause) =>
-                    Effect.logWarning(
-                      "Workspace table assignment expired hold filter failed",
-                      { cause }
-                    )
-                  ),
-                  Effect.orElseSucceed(
-                    (): readonly DotyposReservationId[] => []
+      )(function* (window: OccupancyWindow) {
+        const dates = getTouchedWorkspaceDateBounds({
+          startsAt: Temporal.Instant.fromEpochMilliseconds(window.startsAt),
+          endsAt: Temporal.Instant.fromEpochMilliseconds(window.endsAt),
+        });
+        // Read local intents before provider reservations so an attaching
+        // pass day remains visible on at least one side of the handover.
+        const passDayIntents =
+          yield* workspaceReservations.selectPendingPassDayCapacity(dates);
+        const concurrency = yield* workspaceStatementConcurrency;
+        const inventory = yield* Effect.all(
+          {
+            tables: dotypos.getTables(),
+            reservations: dotypos.listActiveReservationsOverlapping(
+              getOccupancyWindowDates(window)
+            ),
+            expiredDotyposReservationIds: workspaceReservations
+              .selectExpiredHoldDotyposReservationIds({
+                now: Temporal.Now.instant(),
+              })
+              .pipe(
+                Effect.tapError((cause) =>
+                  Effect.logWarning(
+                    "Workspace table assignment expired hold filter failed",
+                    { cause }
                   )
                 ),
-            },
-            { concurrency }
-          )
-        )
-      );
+                Effect.orElseSucceed((): readonly DotyposReservationId[] => [])
+              ),
+          },
+          { concurrency }
+        );
+        return { ...inventory, passDayIntents };
+      });
 
       const assignTableId = Effect.fn(
         "WorkspaceTableAssignmentService.assignTableId"
@@ -265,11 +274,14 @@ export class WorkspaceTableAssignmentService extends Context.Service<
               requiredTags: assignment.requiredTags,
             })
           ),
-          Effect.bind("occupancyInput", ({ reservation }) =>
-            getReservationOccupancyInput(reservation)
+          Effect.bind("occupancyWindow", ({ reservation }) =>
+            Effect.map(
+              getWorkspaceOccupiedInterval(reservation),
+              getOccupancyWindow
+            )
           ),
-          Effect.bind("inventory", ({ occupancyInput }) =>
-            loadInventory(getWorkspaceReservationIntervalDates(occupancyInput))
+          Effect.bind("inventory", ({ occupancyWindow }) =>
+            loadInventory(occupancyWindow)
           ),
           Effect.let("activeReservations", ({ inventory }) =>
             excludeDotyposReservationsById(
@@ -285,8 +297,14 @@ export class WorkspaceTableAssignmentService extends Context.Service<
           ),
           Effect.let(
             "occupancyByTableId",
-            ({ activeReservations, occupancyInput }) =>
-              getWorkspaceTableOccupancyById(activeReservations, occupancyInput)
+            ({ activeReservations, occupancyWindow, inventory }) =>
+              getTableBookingOccupancyById(
+                getBookingsWithPassDayIntents(
+                  activeReservations,
+                  inventory.passDayIntents
+                ),
+                occupancyWindow
+              )
           ),
           Effect.bind(
             "rankingOccupancyByTableId",
@@ -354,9 +372,7 @@ export class WorkspaceTableAssignmentService extends Context.Service<
             return "unavailable" as const;
           }
 
-          const inventory = yield* loadInventory(
-            getOccupancyWindowDates(booking.value)
-          );
+          const inventory = yield* loadInventory(booking.value);
           const table = inventory.tables.find(
             ({ id, enabled, display }) =>
               id === booking.value.tableId &&
@@ -380,7 +396,10 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                 ]
           );
           const occupancyByTableId = getTableBookingOccupancyById(
-            toTableBookings(otherReservations),
+            getBookingsWithPassDayIntents(
+              otherReservations,
+              inventory.passDayIntents
+            ),
             booking.value
           );
           const seatCapacity = yield* getWorkspaceTableSeatCapacity(table);
@@ -458,12 +477,9 @@ const getReservationAssignment = (
     })
   );
 
-const getReservationOccupancyInput = (
+const getWorkspaceOccupiedInterval = (
   reservation: WorkspaceTableAssignmentReservation
-): Effect.Effect<
-  Temporal.PlainDate | ReservationInterval,
-  ReservationIntervalValidationError
-> =>
+): Effect.Effect<ReservationInterval, ReservationIntervalValidationError> =>
   Match.value(reservation).pipe(
     Match.discriminatorsExhaustive("kind")({
       // Occupancy must use the tier's authoritative reservation interval

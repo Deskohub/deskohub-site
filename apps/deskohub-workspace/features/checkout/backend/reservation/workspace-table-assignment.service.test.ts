@@ -182,6 +182,7 @@ const makeAssignmentLayer = (
       Layer.mergeAll(
         Layer.succeed(DotyposService, dotyposService),
         Layer.succeed(WorkspaceReservationRepository, {
+          selectPendingPassDayCapacity: () => Effect.succeed([]),
           selectExpiredHoldDotyposReservationIds: mock(() =>
             Effect.succeed([...expiredHoldDotyposReservationIds])
           ),

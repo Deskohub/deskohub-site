@@ -12,6 +12,7 @@ import { EmailRecipientDomainServiceMock } from "@deskohub/email/backend/recipie
 import { testEmailAddress } from "@deskohub/test-email";
 import { asc, eq } from "drizzle-orm";
 import { Effect, Layer, Result, Schema } from "effect";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { workspaceReservations } from "@/db/schema";
 import type {
   CustomerAgentClientId,
@@ -213,6 +214,7 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
       }),
   });
   const services = Layer.mergeAll(
+    WorkspaceDatabaseAdvisoryLock.makeLayer(database.databasePool),
     makeCustomerAccountSections({ session: {}, activityState: "active" }).layer,
     Layer.mergeAll(
       WorkspaceReservationRepository.Default,

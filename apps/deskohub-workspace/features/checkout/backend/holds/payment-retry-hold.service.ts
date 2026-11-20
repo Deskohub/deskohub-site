@@ -22,6 +22,7 @@ import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { currentInstant } from "@/shared/utils/temporal";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
+import { withWorkspaceReservationCapacity } from "../reservation/dotypos-reservation.adapter";
 import {
   findOrderDotyposReservations,
   type RecreatedReservation,
@@ -197,66 +198,73 @@ const bookAgain = Effect.fnUntraced(function* (input: {
   if (hasReservationIntervalEnded(interval, input.now)) {
     return refused("not_retryable");
   }
-  // Only a NEW reservation an interrupted earlier retry of this order created
-  // is taken over; a confirmed one, or more than one, is left alone.
-  const found = yield* findOrderDotyposReservations({
-    orderId: order.id,
-    interval,
-  });
-  if (found.length > 1 || found.some(({ status }) => status !== "NEW")) {
-    return refused("changed");
-  }
-  const settled = yield* resumeOrCreateOrderDotyposReservation({
-    order,
-    recreated: request.recreated,
-    found,
-    status: "NEW",
-  });
-  if (!settled) return { kind: "spot_unavailable" } as const;
-
-  const reservations = yield* WorkspaceReservationRepository;
   const reservationHoldExpiresAt = getReservationHoldExpiresAt(input.now);
-  const attached = yield* reservations
-    .attachRetryHold({
-      id: order.id,
-      retriedAttemptId: request.retriedAttemptId,
-      dotyposReservationId: settled.id,
-      reservationHoldExpiresAt,
+  const result = yield* withWorkspaceReservationCapacity(
+    interval,
+    Effect.gen(function* () {
+      // Only a NEW reservation an interrupted earlier retry of this order created
+      // is taken over; a confirmed one, or more than one, is left alone.
+      const found = yield* findOrderDotyposReservations({
+        orderId: order.id,
+        interval,
+      });
+      if (found.length > 1 || found.some(({ status }) => status !== "NEW")) {
+        return refused("changed");
+      }
+      const settled = yield* resumeOrCreateOrderDotyposReservation({
+        order,
+        recreated: request.recreated,
+        found,
+        status: "NEW",
+      });
+      if (!settled) return { kind: "spot_unavailable" } as const;
+
+      const reservations = yield* WorkspaceReservationRepository;
+      const attached = yield* reservations
+        .attachRetryHold({
+          id: order.id,
+          retriedAttemptId: request.retriedAttemptId,
+          dotyposReservationId: settled.id,
+          reservationHoldExpiresAt,
+        })
+        .pipe(
+          Effect.catchTags({
+            EntryPackUnavailableError: () =>
+              Effect.succeed("entry_pack_unavailable" as const),
+            WorkspaceReservationSessionTakenError: () =>
+              Effect.succeed("session_taken" as const),
+          })
+        );
+      if (
+        !attached ||
+        attached === "entry_pack_unavailable" ||
+        attached === "session_taken"
+      ) {
+        // The order lock gives this run ownership of an earlier NEW hold when
+        // the Entry pack can no longer attach it. Other races retain the
+        // existing behavior for resumed holds.
+        if (!settled.resumed || attached) {
+          const dotypos = yield* DotyposService;
+          yield* dotypos.cancelReservation(settled.id);
+        }
+        return attached === "entry_pack_unavailable"
+          ? ({ kind: "spot_unavailable" } as const)
+          : refused("changed");
+      }
+      return {
+        kind: "reacquired",
+        reservation: attached,
+      } satisfies PaymentRetryHold;
     })
-    .pipe(
-      Effect.catchTags({
-        EntryPackUnavailableError: () =>
-          Effect.succeed("entry_pack_unavailable" as const),
-        WorkspaceReservationSessionTakenError: () =>
-          Effect.succeed("session_taken" as const),
-      })
-    );
-  if (
-    !attached ||
-    attached === "entry_pack_unavailable" ||
-    attached === "session_taken"
-  ) {
-    // The order lock gives this run ownership of an earlier NEW hold when
-    // the Entry pack can no longer attach it. Other races retain the
-    // existing behavior for resumed holds.
-    if (!settled.resumed || attached) {
-      const dotypos = yield* DotyposService;
-      yield* dotypos.cancelReservation(settled.id);
-    }
-    return attached === "entry_pack_unavailable"
-      ? ({ kind: "spot_unavailable" } as const)
-      : refused("changed");
+  );
+  if (result.kind === "reacquired") {
+    // The periodic recovery finds an expired hold if its job was not scheduled.
+    yield* enqueueReservationHoldCleanup({
+      orderId: order.id,
+      reservationHoldExpiresAt,
+    });
   }
-  // Hold cleanup's periodic recovery also finds an expired hold whose job
-  // could not be scheduled.
-  yield* enqueueReservationHoldCleanup({
-    orderId: order.id,
-    reservationHoldExpiresAt,
-  });
-  return {
-    kind: "reacquired",
-    reservation: attached,
-  } satisfies PaymentRetryHold;
+  return result;
 });
 
 const secure = Effect.fn("PaymentRetryHoldService.secure")(

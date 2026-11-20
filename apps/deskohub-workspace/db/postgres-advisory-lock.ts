@@ -26,6 +26,82 @@ export const postgresAdvisoryTransactionLockStatement = (
 const beginSql = "begin";
 const lockSql = "select pg_advisory_xact_lock(hashtext($1), hashtext($2))";
 const rollbackSql = "rollback";
+const lockSavepointSql = "savepoint workspace_advisory_locks";
+const rollbackLockSavepointSql =
+  "rollback to savepoint workspace_advisory_locks";
+const releaseLockSavepointSql = "release savepoint workspace_advisory_locks";
+
+type LockStatement = (
+  statement: string,
+  params?: ReadonlyArray<unknown>
+) => Effect.Effect<ReadonlyArray<unknown>, SqlError.SqlError>;
+
+const makeLockFrame = (
+  client: PostgresAdvisoryLockConnections,
+  run: LockStatement,
+  health: { failure: SqlError.SqlError | undefined } = { failure: undefined }
+) => ({ client, run, health, open: true, children: Semaphore.makeUnsafe(1) });
+
+type LockFrame = ReturnType<typeof makeLockFrame>;
+
+const CurrentLockFrame = Context.Reference<LockFrame | undefined>(
+  "@deskohub-workspace/db/CurrentAdvisoryLockFrame",
+  { defaultValue: () => undefined }
+);
+
+const closeLockFrame = (frame: LockFrame, cleanup: Effect.Effect<unknown>) =>
+  Effect.sync(() => {
+    frame.open = false;
+  }).pipe(Effect.andThen(frame.children.withPermits(1)(cleanup)));
+
+const takeLocks = (
+  run: LockStatement,
+  keys: readonly PostgresAdvisoryLockKey[]
+) => Effect.forEach(keys, (key) => run(lockSql, key), { discard: true });
+
+const withNestedLocks = <A, E, R>(
+  parent: LockFrame,
+  keys: readonly PostgresAdvisoryLockKey[],
+  effect: Effect.Effect<A, E, R>
+) =>
+  parent.children.withPermits(1)(
+    Effect.uninterruptibleMask(
+      Effect.fnUntraced(function* (restore) {
+        if (!parent.open) {
+          return yield* Effect.die(
+            new Error("The enclosing advisory lock section has closed")
+          );
+        }
+        if (parent.health.failure) return yield* parent.health.failure;
+
+        const { run } = parent;
+        const markFailed = (failure: SqlError.SqlError) =>
+          Effect.sync(() => {
+            parent.health.failure = failure;
+          });
+        yield* run(lockSavepointSql).pipe(Effect.tapError(markFailed));
+
+        const frame = makeLockFrame(parent.client, run, parent.health);
+        const cleanup = closeLockFrame(
+          frame,
+          run(rollbackLockSavepointSql).pipe(
+            Effect.andThen(run(releaseLockSavepointSql)),
+            Effect.tapError(markFailed),
+            Effect.orDie
+          )
+        );
+        // Siblings serialize their entire scope. A child has its own gate,
+        // so a higher-ranked descendant can enter before its parent exits.
+        return yield* restore(
+          takeLocks(run, keys).pipe(
+            Effect.andThen(
+              Effect.provideService(effect, CurrentLockFrame, frame)
+            )
+          )
+        ).pipe(Effect.ensuring(cleanup));
+      })
+    )
+  );
 
 /**
  * Opens the section's transaction and takes its locks on a reserved
@@ -44,11 +120,13 @@ const holdTransactionLocks = Effect.fnUntraced(function* (
   const bounded = boundStatement(statementTimeoutOf(connections));
   const run = (statement: string, params: ReadonlyArray<unknown> = []) =>
     bounded(connection.executeUnprepared(statement, params, undefined));
-  yield* Effect.addFinalizer(() => Effect.ignore(run(rollbackSql)));
+  const frame = makeLockFrame(connections, run);
+  yield* Effect.addFinalizer(() =>
+    closeLockFrame(frame, Effect.ignore(run(rollbackSql)))
+  );
   yield* run(beginSql);
-  for (const key of keys) {
-    yield* run(lockSql, key);
-  }
+  yield* takeLocks(run, keys);
+  return frame;
 });
 
 /**
@@ -84,7 +162,16 @@ export const withPostgresAdvisoryLocks = <A, E, R>(
       restore(
         Scope.provide(holdTransactionLocks(connections, keys), scope)
       ).pipe(
-        Effect.andThen(restore(effect)),
+        Effect.flatMap((frame) =>
+          restore(effect).pipe(
+            Effect.provideService(CurrentLockFrame, frame),
+            Effect.tap(() =>
+              frame.health.failure
+                ? Effect.fail(frame.health.failure)
+                : Effect.void
+            )
+          )
+        ),
         Effect.onExit((exit) => Scope.close(scope, exit))
       )
     )
@@ -155,6 +242,20 @@ export class WorkspaceDatabaseAdvisoryLock extends Context.Service<
   }): IWorkspaceDatabaseAdvisoryLock => {
     const semaphore = makeAdvisoryLockSemaphore(client, maxConnections);
 
+    const withLocks = <A, E, R>(
+      keys: readonly PostgresAdvisoryLockKey[],
+      effect: Effect.Effect<A, E, R>
+    ) =>
+      Effect.flatMap(CurrentLockFrame, (frame) => {
+        if (frame?.client === client)
+          return withNestedLocks(frame, keys, effect);
+        if (semaphore === undefined)
+          return Effect.fail(advisoryLockPoolCapacityError);
+        return semaphore.withPermits(1)(
+          withPostgresAdvisoryLocks(client, keys, effect)
+        );
+      });
+
     return WorkspaceDatabaseAdvisoryLock.of({
       withTransactionPermit: (effect) => {
         if (semaphore === undefined) {
@@ -163,24 +264,8 @@ export class WorkspaceDatabaseAdvisoryLock extends Context.Service<
 
         return semaphore.withPermits(1)(effect);
       },
-      withLock: (key, effect) => {
-        if (semaphore === undefined) {
-          return Effect.fail(advisoryLockPoolCapacityError);
-        }
-
-        return semaphore.withPermits(1)(
-          withPostgresAdvisoryLock(client, key, effect)
-        );
-      },
-      withLocks: (keys, effect) => {
-        if (semaphore === undefined) {
-          return Effect.fail(advisoryLockPoolCapacityError);
-        }
-
-        return semaphore.withPermits(1)(
-          withPostgresAdvisoryLocks(client, keys, effect)
-        );
-      },
+      withLock: (key, effect) => withLocks([key], effect),
+      withLocks,
     });
   };
 

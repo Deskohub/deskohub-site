@@ -23,6 +23,15 @@ export const getWorkspaceDate = (instant: Temporal.Instant) =>
 export const getCurrentWorkspaceDate = (now = Temporal.Now.instant()) =>
   getWorkspaceDate(now);
 
+/** The first and last Prague dates touched by a nonempty half-open interval. */
+export const getTouchedWorkspaceDateBounds = (interval: {
+  readonly startsAt: Temporal.Instant;
+  readonly endsAt: Temporal.Instant;
+}) => ({
+  first: getWorkspaceDate(interval.startsAt),
+  last: getWorkspaceDate(interval.endsAt.subtract({ nanoseconds: 1 })),
+});
+
 /**
  * Whether an interval holds some moment between `now` and the end of the
  * workspace date (Prague) `now` falls on: it starts by that date and hasn't
