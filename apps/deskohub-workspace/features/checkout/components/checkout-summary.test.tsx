@@ -269,8 +269,9 @@ describe("CheckoutSummary", () => {
 
     await act(async () => detailsButton.focus());
     expect(document.activeElement).toBe(detailsButton);
-    expect(detailsButton.getAttribute("data-state")).toBe("instant-open");
-    expect(detailsButton.getAttribute("aria-describedby")).toMatch(/^radix-/);
+    const hint = view.getByRole("tooltip", { hidden: true });
+    expect(detailsButton.getAttribute("aria-describedby")).toBe(hint.id);
+    expect(hint.textContent).toContain("Summer sale");
   });
 
   test("shows stacked discounts in application order", () => {

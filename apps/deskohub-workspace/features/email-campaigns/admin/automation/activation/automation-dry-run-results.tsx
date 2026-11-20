@@ -39,12 +39,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/shared/components/ui/table";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import { formatCount } from "@/shared/utils/number";
 import type {
   AutomationDryRunCustomerWithLifecycle,
@@ -273,14 +268,12 @@ function DryRunRowsSection({
           {noRowsLabel({ cursor, replay, locale })}
         </p>
       ) : (
-        <TooltipProvider>
-          <DryRunRows
-            dryRun={dryRun}
-            flow={flow}
-            locale={locale}
-            replay={replay}
-          />
-        </TooltipProvider>
+        <DryRunRows
+          dryRun={dryRun}
+          flow={flow}
+          locale={locale}
+          replay={replay}
+        />
       )}
       <DryRunPages cursor={cursor} dryRun={dryRun} locale={locale} />
     </AdministrationDetailSection>
@@ -551,13 +544,15 @@ function RowFlag({
   readonly label: string;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
+    <Tooltip
+      contentClassName="max-w-xs"
+      trigger={
         <Badge className="cursor-help" tabIndex={0} variant="subtle">
           {label}
         </Badge>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">{description}</TooltipContent>
+      }
+    >
+      {description}
     </Tooltip>
   );
 }

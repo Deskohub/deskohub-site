@@ -2,7 +2,7 @@
 
 import { type Editor, useEditorState } from "@tiptap/react";
 import { Bold, Braces, Italic, Link2 } from "lucide-react";
-import { type ReactNode, useId, useRef, useState } from "react";
+import { type ReactElement, useRef, useState } from "react";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
@@ -20,12 +20,7 @@ import {
   SearchablePickerItem,
 } from "@/shared/components/ui/searchable-picker";
 import { Toggle } from "@/shared/components/ui/toggle";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import type { EmailDraftValueDefinition } from "./email-draft-form";
 import {
   emailInlineLinkKey,
@@ -64,26 +59,20 @@ export function EmailInlineTextToolbar({
 }) {
   const locale = useRouteLocale();
   return (
-    <TooltipProvider>
-      <div
-        aria-label={m.emailsEditorInlineToolbarLabel({}, { locale })}
-        className="flex shrink-0 items-center gap-0.5 py-0.5"
-        role="toolbar"
-      >
-        {mode === "rich" && (
-          <EmailInlineFormatting
-            editor={editor}
-            links={links}
-            locale={locale}
-          />
-        )}
-        <EmailInlineValuePicker
-          definitions={definitions}
-          editor={editor}
-          locale={locale}
-        />
-      </div>
-    </TooltipProvider>
+    <div
+      aria-label={m.emailsEditorInlineToolbarLabel({}, { locale })}
+      className="flex shrink-0 items-center gap-0.5 py-0.5"
+      role="toolbar"
+    >
+      {mode === "rich" && (
+        <EmailInlineFormatting editor={editor} links={links} locale={locale} />
+      )}
+      <EmailInlineValuePicker
+        definitions={definitions}
+        editor={editor}
+        locale={locale}
+      />
+    </div>
   );
 }
 
@@ -91,15 +80,10 @@ function ToolbarHint({
   children,
   label,
 }: {
-  readonly children: ReactNode;
+  readonly children: ReactElement;
   readonly label: string;
 }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
+  return <Tooltip trigger={children}>{label}</Tooltip>;
 }
 
 function EmailInlineFormatting({
@@ -164,7 +148,6 @@ function EmailInlineLinkPicker({
   const [open, setOpen] = useState(false);
   // Whether the menu closes on a choice, which hands focus back to the text.
   const chose = useRef(false);
-  const hintId = useId();
   const destinations = Object.entries(links);
   const hasDestinations = destinations.length > 0;
   // A link to a removed destination can still be removed.
@@ -194,7 +177,6 @@ function EmailInlineLinkPicker({
           {/* Pressed while the caret is in a link. It stays focusable when the
           block has no destinations, so its hint can explain why. */}
           <Toggle
-            aria-describedby={hasDestinations ? undefined : hintId}
             aria-disabled={!available || undefined}
             aria-label={label}
             className="aria-disabled:opacity-50"
@@ -204,9 +186,6 @@ function EmailInlineLinkPicker({
           </Toggle>
         </DropdownMenuTrigger>
       </ToolbarHint>
-      <span className="sr-only" id={hintId}>
-        {!hasDestinations && unavailableHint}
-      </span>
       <DropdownMenuContent
         align="end"
         className="max-w-80"

@@ -73,9 +73,9 @@ export function Header() {
             {m["nav.contact"]()}
           </LocalizedLink>
         </nav>
-        <div className="flex items-center space-x-4">
-          <div className="hidden xl:flex items-center space-x-4">
-            <LanguageSwitcher />
+        <div className="flex items-center gap-4">
+          <LanguageSwitcher triggerClassName="hidden xl:inline-flex" />
+          <div className="hidden xl:flex">
             <ReservationButton />
           </div>
           {/* Mobile reservation button - visible on smaller screens */}

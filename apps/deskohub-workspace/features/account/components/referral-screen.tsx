@@ -15,12 +15,7 @@ import {
   referrerDiscountBasisPointsPerInvitee,
 } from "@/features/referrals/program";
 import { Button } from "@/shared/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import { formatMoney } from "@/shared/money/money";
 import { formatDuration } from "@/shared/utils/format-duration";
 
@@ -250,28 +245,24 @@ function InfoTooltip({
   readonly label: string;
 }) {
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            aria-label={label}
-            size="icon-sm"
-            tone="muted"
-            type="button"
-            variant="ghost"
-          >
-            <Info aria-hidden="true" className="size-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent
-          align="end"
-          className="w-[min(20rem,calc(100vw-2rem))] break-words whitespace-normal"
-          collisionPadding={16}
+    <Tooltip
+      align="end"
+      contentClassName="w-[min(20rem,calc(100vw-2rem))] break-words whitespace-normal"
+      collisionPadding={16}
+      trigger={
+        <Button
+          aria-label={label}
+          size="icon-sm"
+          tone="muted"
+          type="button"
+          variant="ghost"
         >
-          {children}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+          <Info aria-hidden="true" className="size-4" />
+        </Button>
+      }
+    >
+      {children}
+    </Tooltip>
   );
 }
 
@@ -307,29 +298,28 @@ function CopyableValue({
     <>
       <div className="flex min-w-0 flex-1 items-end gap-3">
         <div className="min-w-0 flex-1 self-start">{children}</div>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label={label}
-                className="shrink-0"
-                onClick={copy}
-                size="icon"
-                type="button"
-                variant="secondary"
-              >
-                {copyStatus === "copied" ? (
-                  <Check aria-hidden="true" className="size-4" />
-                ) : (
-                  <Copy aria-hidden="true" className="size-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent align="end" collisionPadding={16}>
-              {label}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip
+          align="end"
+          collisionPadding={16}
+          trigger={
+            <Button
+              aria-label={label}
+              className="shrink-0"
+              onClick={copy}
+              size="icon"
+              type="button"
+              variant="secondary"
+            >
+              {copyStatus === "copied" ? (
+                <Check aria-hidden="true" className="size-4" />
+              ) : (
+                <Copy aria-hidden="true" className="size-4" />
+              )}
+            </Button>
+          }
+        >
+          {label}
+        </Tooltip>
       </div>
       <p className="text-sm leading-5 text-burned-orange-ink" role="status">
         {copyStatus === "copied" && (

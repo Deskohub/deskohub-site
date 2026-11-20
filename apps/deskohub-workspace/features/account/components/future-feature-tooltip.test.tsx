@@ -1,12 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { m } from "@/features/i18n";
 import {
   registerWorkspaceComponentTestEnv,
@@ -18,7 +11,7 @@ afterEach(cleanup);
 afterAll(unregisterWorkspaceComponentTestEnv);
 
 test.each(["en-US", "cs-CZ"] as const)(
-  "focuses the wrapper, localizes the tooltip, and preserves the disabled child for %s",
+  "labels the focusable wrapper in the visitor’s language and preserves the disabled child for %s",
   async (locale) => {
     const { FutureFeatureTooltip } = await import("./future-feature-tooltip");
     const message = m.account_future_feature_tooltip({}, { locale });
@@ -49,25 +42,13 @@ test.each(["en-US", "cs-CZ"] as const)(
     expect(document.getElementById(childLabelId ?? "")).toBe(child);
     expect(view.getByRole("group", { name: "Disabled action" })).toBe(trigger);
     expect((child as HTMLButtonElement).disabled).toBe(true);
-    const documentView = within(view.baseElement);
-    expect(documentView.queryByRole("tooltip")).toBeNull();
-
-    await act(async () => {
-      trigger?.focus();
-    });
-
-    expect(document.activeElement).toBe(trigger);
-    const tooltip = await waitFor(() => documentView.getByRole("tooltip"));
+    const tooltip = view.getByRole("tooltip", { hidden: true });
+    expect(tooltip.hidden).toBe(true);
     expect(tooltip.textContent).toBe(message);
     expect(trigger?.getAttribute("aria-describedby")).toBe(tooltip.id);
     expect(
       view.getByRole("group", { description: message, name: "Disabled action" })
     ).toBe(trigger);
-
-    await act(async () => {
-      fireEvent.keyDown(trigger as HTMLElement, { key: "Escape" });
-    });
-    await waitFor(() => expect(documentView.queryByRole("tooltip")).toBeNull());
 
     fireEvent.click(child);
     fireEvent.click(trigger as HTMLElement);

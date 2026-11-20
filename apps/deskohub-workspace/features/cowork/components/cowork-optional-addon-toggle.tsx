@@ -12,12 +12,7 @@ import {
   useFormField,
 } from "@/shared/components/ui/form";
 import { Switch } from "@/shared/components/ui/switch";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 
 type CoworkOptionalAddonToggleProps = {
   readonly addon: "coffee" | "workstation";
@@ -94,30 +89,26 @@ export function CoworkOptionalAddonToggle({
           </span>
         </ChoiceCard>
         {info && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  tone="muted"
-                  size="icon-lg"
-                  aria-label={info.triggerLabel}
-                  className="shrink-0"
-                >
-                  <Info aria-hidden="true" className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent
-                align="end"
-                collisionPadding={16}
-                className="w-[min(22rem,calc(100vw-2rem))] p-4"
-                side="top"
+          <Tooltip
+            align="end"
+            collisionPadding={16}
+            contentClassName="w-[min(22rem,calc(100vw-2rem))] p-4"
+            side="top"
+            trigger={
+              <Button
+                type="button"
+                variant="ghost"
+                tone="muted"
+                size="icon-lg"
+                aria-label={info.triggerLabel}
+                className="shrink-0"
               >
-                <p>{info.content}</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                <Info aria-hidden="true" className="size-4" />
+              </Button>
+            }
+          >
+            <p>{info.content}</p>
+          </Tooltip>
         )}
       </div>
       {children}

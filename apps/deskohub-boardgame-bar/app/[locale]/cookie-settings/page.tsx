@@ -1,5 +1,7 @@
 "use client";
 
+import { Checkbox, CheckboxIndicator } from "@ui-sdk/react/checkbox";
+import { Check } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -8,7 +10,6 @@ import { useCookieConsent } from "@/features/cookie-consent";
 import { getLocale } from "@/features/i18n";
 import * as messages from "@/features/i18n/paraglide/messages";
 import { Button } from "@/shared/components/ui/button";
-import { Checkbox } from "@/shared/components/ui/checkbox";
 import {
   type ConsentPreferences,
   toggleConsentPreference,
@@ -103,11 +104,16 @@ export default function CookieSettingsPage() {
                 </div>
                 <div className="ml-4">
                   <Checkbox
+                    className="peer h-4 w-4 shrink-0 rounded-sm border border-primary ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 data-[checked]:bg-primary data-[checked]:text-primary-foreground"
                     checked={preferences[category]}
                     onCheckedChange={() => handleToggle(category)}
                     disabled={category === "necessary"}
                     aria-label={`Toggle ${category} cookies`}
-                  />
+                  >
+                    <CheckboxIndicator className="flex items-center justify-center text-current">
+                      <Check className="h-4 w-4" />
+                    </CheckboxIndicator>
+                  </Checkbox>
                 </div>
               </div>
             </div>

@@ -10,12 +10,7 @@ import { ConfirmDialog } from "@/features/administration/confirm-dialog";
 import { m } from "@/features/administration/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { Button } from "@/shared/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import { useCampaignOperation } from "../../use-campaign-operation";
 import {
   archiveFailureCopy,
@@ -71,95 +66,88 @@ export function AutomationLifecycleActions({
 
   return (
     <div className="flex flex-col items-start gap-2 sm:items-end">
-      <TooltipProvider>
-        <div className="flex flex-wrap items-center gap-2">
-          {status === "draft" && (
-            <Button asChild size="sm">
-              <AdministrationLink href={previewHref}>
-                <Rocket aria-hidden className="size-4" />
-                {m.emailAutomationActivationPreviewAndActivate({}, { locale })}
-              </AdministrationLink>
-            </Button>
-          )}
-          {status !== "draft" && automation.pendingChanges && (
-            <Button asChild size="sm" variant="secondary">
-              <AdministrationLink href={previewHref}>
-                <Eye aria-hidden className="size-4" />
-                {m.emailAutomationActivationPreviewChanges({}, { locale })}
-              </AdministrationLink>
-            </Button>
-          )}
-          {status === "active" && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  disabled={pending}
-                  onClick={() => pause.execute({ campaignId })}
-                  pending={pause.isExecuting}
-                  size="sm"
-                  type="button"
-                  variant="secondary"
-                >
-                  <Pause aria-hidden className="size-4" />
-                  {m.emailAutomationActivationPause({}, { locale })}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                {m.emailAutomationActivationPauseHint({}, { locale })}
-              </TooltipContent>
-            </Tooltip>
-          )}
-          {status === "paused" && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  disabled={pending}
-                  onClick={() => resume.execute({ campaignId })}
-                  pending={resume.isExecuting}
-                  size="sm"
-                  type="button"
-                >
-                  <Play aria-hidden className="size-4" />
-                  {m.emailAutomationActivationResume({}, { locale })}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                {m.emailAutomationActivationResumeHint({}, { locale })}
-              </TooltipContent>
-            </Tooltip>
-          )}
-          <ConfirmDialog
-            confirmLabel={m.emailAutomationActivationArchiveConfirm(
-              {},
-              { locale }
-            )}
-            description={m.emailAutomationActivationArchiveDescription(
-              {},
-              { locale }
-            )}
-            error={archiveError}
-            onConfirm={() => archive.execute({ campaignId })}
-            onOpenChange={(open) => {
-              setArchiveOpen(open);
-              setArchiveError(null);
-            }}
-            open={archiveOpen}
-            pending={archive.isExecuting}
-            title={m.emailAutomationActivationArchiveTitle({}, { locale })}
+      <div className="flex flex-wrap items-center gap-2">
+        {status === "draft" && (
+          <Button asChild size="sm">
+            <AdministrationLink href={previewHref}>
+              <Rocket aria-hidden className="size-4" />
+              {m.emailAutomationActivationPreviewAndActivate({}, { locale })}
+            </AdministrationLink>
+          </Button>
+        )}
+        {status !== "draft" && automation.pendingChanges && (
+          <Button asChild size="sm" variant="secondary">
+            <AdministrationLink href={previewHref}>
+              <Eye aria-hidden className="size-4" />
+              {m.emailAutomationActivationPreviewChanges({}, { locale })}
+            </AdministrationLink>
+          </Button>
+        )}
+        {status === "active" && (
+          <Tooltip
+            contentClassName="max-w-xs"
             trigger={
               <Button
                 disabled={pending}
+                onClick={() => pause.execute({ campaignId })}
+                pending={pause.isExecuting}
                 size="sm"
                 type="button"
-                variant="ghost"
+                variant="secondary"
               >
-                <Archive aria-hidden className="size-4" />
-                {m.emailAutomationActivationArchive({}, { locale })}
+                <Pause aria-hidden className="size-4" />
+                {m.emailAutomationActivationPause({}, { locale })}
               </Button>
             }
-          />
-        </div>
-      </TooltipProvider>
+          >
+            {m.emailAutomationActivationPauseHint({}, { locale })}
+          </Tooltip>
+        )}
+        {status === "paused" && (
+          <Tooltip
+            contentClassName="max-w-xs"
+            trigger={
+              <Button
+                disabled={pending}
+                onClick={() => resume.execute({ campaignId })}
+                pending={resume.isExecuting}
+                size="sm"
+                type="button"
+              >
+                <Play aria-hidden className="size-4" />
+                {m.emailAutomationActivationResume({}, { locale })}
+              </Button>
+            }
+          >
+            {m.emailAutomationActivationResumeHint({}, { locale })}
+          </Tooltip>
+        )}
+        <ConfirmDialog
+          confirmLabel={m.emailAutomationActivationArchiveConfirm(
+            {},
+            { locale }
+          )}
+          description={m.emailAutomationActivationArchiveDescription(
+            {},
+            { locale }
+          )}
+          error={archiveError}
+          onConfirm={() => archive.execute({ campaignId })}
+          onOpenChange={(open) => {
+            setArchiveOpen(open);
+            setArchiveError(null);
+          }}
+          open={archiveOpen}
+          pending={archive.isExecuting}
+          title={m.emailAutomationActivationArchiveTitle({}, { locale })}
+          trigger={
+            <Button disabled={pending} size="sm" type="button" variant="ghost">
+              <Archive aria-hidden className="size-4" />
+              {m.emailAutomationActivationArchive({}, { locale })}
+            </Button>
+          }
+        />
+      </div>
       <p className="text-burned-orange-ink text-sm empty:hidden" role="alert">
         {error}
       </p>
