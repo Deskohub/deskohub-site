@@ -791,7 +791,7 @@
   "checkoutPayConsent": "Súhlasím s dokumentmi <terms>Všeobecné obchodné podmienky</terms>, <operatingRules>Prevádzkový poriadok</operatingRules>.<earlyPerformance> Žiadam o poskytnutie služby v rezervovanom termíne, počas lehoty na odstúpenie od zmluvy, a beriem na vedomie, že po jej úplnom poskytnutí moje právo odstúpiť od zmluvy zaniká.</earlyPerformance>",
   "checkoutPayOrderAndPayButton": "Objednať s povinnosťou platby",
   "checkoutPayOrderAndPayAmountButton": "Objednať s povinnosťou platby ({amount})",
-  "checkoutPayMethodsTotal": "Objednať s povinnosťou platby ({amount})",
+  "checkoutPayMethodsTitle": "Objednať a zaplatiť",
   "checkoutPayByCard": "Objednať s povinnosťou platby kartou",
   "checkoutPayByQr": "Objednať s povinnosťou platby cez QR kód",
   "checkoutPayMethodQr": "QR platbou",

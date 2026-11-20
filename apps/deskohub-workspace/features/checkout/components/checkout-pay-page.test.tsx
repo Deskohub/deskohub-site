@@ -286,6 +286,16 @@ describe("CheckoutPayPage payment navigation", () => {
     expect(card.disabled).toBe(true);
     expect(qr.disabled).toBe(true);
     expect(qr.getAttribute("aria-describedby")).toBe(heading.id);
+    expect(
+      view
+        .getAllByRole("button", { name: /^Pay by / })
+        .map((button) => button.textContent)
+    ).toEqual(["Pay by QR", "Pay by card"]);
+    const disclaimer = view.getByText(/Card payment opens in a new tab/);
+    expect(disclaimer.closest("section")).toBe(card.closest("section"));
+    expect(card.compareDocumentPosition(disclaimer)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
     expect(execute).not.toHaveBeenCalled();
     fireEvent.click(view.getByRole("checkbox"));
     fireEvent.click(qr);
@@ -337,7 +347,7 @@ describe("CheckoutPayPage payment navigation", () => {
 
     expect(
       view.getByRole("heading", {
-        name: /^Für 175\sCZK bestellen und bezahlen$/,
+        name: /^Bestellen und bezahlen\s175\sCZK$/,
       })
     ).toBeDefined();
   });

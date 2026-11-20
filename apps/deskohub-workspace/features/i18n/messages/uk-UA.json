@@ -791,7 +791,7 @@
   "checkoutPayConsent": "Я погоджуюся з документами <terms>Загальні умови надання послуг</terms>, <operatingRules>Правила внутрішнього розпорядку</operatingRules>.<earlyPerformance> Я прошу надати послугу в заброньовану дату, протягом строку для відмови від договору, і беру до відома, що моє право на відмову від договору припиняється після її повного надання.</earlyPerformance>",
   "checkoutPayOrderAndPayButton": "Замовити й оплатити",
   "checkoutPayOrderAndPayAmountButton": "Замовити й оплатити {amount}",
-  "checkoutPayMethodsTotal": "Замовити й оплатити {amount}",
+  "checkoutPayMethodsTitle": "Замовити й оплатити",
   "checkoutPayByCard": "Оплатити карткою",
   "checkoutPayByQr": "Оплатити за QR-кодом",
   "checkoutPayMethodQr": "Переказ за QR-кодом",

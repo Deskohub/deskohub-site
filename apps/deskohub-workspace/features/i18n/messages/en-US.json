@@ -781,7 +781,7 @@
   "checkoutPayConsent": "I agree to the <terms>General Terms and Conditions</terms>, <operatingRules>Operating Rules</operatingRules>.<earlyPerformance> I request the service on the reserved date, within the withdrawal period, and acknowledge my right to withdraw ends once it is fully provided.</earlyPerformance>",
   "checkoutPayOrderAndPayButton": "Order and pay",
   "checkoutPayOrderAndPayAmountButton": "Order and pay {amount}",
-  "checkoutPayMethodsTotal": "Order and pay {amount}",
+  "checkoutPayMethodsTitle": "Order and pay",
   "checkoutPayByCard": "Pay by card",
   "checkoutPayByQr": "Pay by QR",
   "checkoutPayMethodQr": "QR bank transfer",

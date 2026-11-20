@@ -91,6 +91,7 @@ const buttonClasses = cva(
         default: "h-11 min-h-11",
         lg: "h-12 min-h-12 px-6",
         xl: "h-13 min-h-13 px-6",
+        "xl-compact": "h-13 min-h-13 px-6 @max-[18rem]:px-3",
         "2xl": "h-14 min-h-14 px-8 text-base",
         "icon-xs": "size-6 min-h-6 p-0",
         "icon-sm": "size-8 min-h-8 p-0",
@@ -137,7 +138,7 @@ const buttonClasses = cva(
         variant: "primary",
         tone: "nexi",
         class:
-          "bg-[#2D32AA] bg-none text-white [--button-tint:#2D32AA] hover:bg-[#212861] @max-[18rem]:px-3",
+          "bg-[#2D32AA] bg-none text-white [--button-tint:#2D32AA] hover:bg-[#212861]",
       },
       {
         variant: "primary",
@@ -240,7 +241,7 @@ const buttonClasses = cva(
         tone: "muted",
         class: "border-[#cbd7e5] text-[#53657f] hover:border-[#a9b8cb]",
       },
-      { size: "xl", caps: true, class: "tracking-[0.18em]" },
+      { size: ["xl", "xl-compact"], caps: true, class: "tracking-[0.18em]" },
       {
         variant: "link",
         class: "h-auto min-h-0 rounded-none px-0 py-0",
@@ -269,6 +270,7 @@ type ButtonSize =
   | "default"
   | "lg"
   | "xl"
+  | "xl-compact"
   | "2xl"
   | "icon-xs"
   | "icon-sm"
@@ -278,7 +280,8 @@ type ButtonSize =
 type ButtonStyleOptions = ButtonAppearance & {
   /**
    * Height, padding and type scale. `icon*` sizes are square; `icon-xs` fits
-   * inside a chip, such as a recipient's remove action.
+   * inside a chip, such as a recipient's remove action. `xl-compact` reduces
+   * inline padding in narrow containers while keeping the XL touch target.
    */
   readonly size?: ButtonSize;
   /** `pill` (default) is fully round; `rounded` uses the card radius. */

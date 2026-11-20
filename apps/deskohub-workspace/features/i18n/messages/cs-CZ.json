@@ -786,7 +786,7 @@
   "checkoutPayConsent": "Souhlasím s dokumenty <terms>Všeobecné obchodní podmínky</terms>, <operatingRules>Provozní řád</operatingRules>.<earlyPerformance> Žádám o poskytnutí služby v rezervovaném termínu, během lhůty pro odstoupení od smlouvy, a beru na vědomí, že po jejím úplném poskytnutí mé právo odstoupit od smlouvy zaniká.</earlyPerformance>",
   "checkoutPayOrderAndPayButton": "Objednat a zaplatit",
   "checkoutPayOrderAndPayAmountButton": "Objednat a zaplatit {amount}",
-  "checkoutPayMethodsTotal": "Objednat a zaplatit {amount}",
+  "checkoutPayMethodsTitle": "Objednat a zaplatit",
   "checkoutPayByCard": "Zaplatit kartou",
   "checkoutPayByQr": "Zaplatit QR kódem",
   "checkoutPayMethodQr": "QR platbou",

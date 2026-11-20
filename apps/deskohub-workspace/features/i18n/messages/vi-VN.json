@@ -776,7 +776,7 @@
   "checkoutPayConsent": "Tôi đồng ý với <terms>Điều kiện Giao dịch Chung</terms> và <operatingRules>Nội quy</operatingRules>.<earlyPerformance> Tôi yêu cầu được cung cấp dịch vụ vào ngày đã đặt, trong thời hạn rút khỏi hợp đồng, và xác nhận rằng quyền rút khỏi hợp đồng của tôi chấm dứt khi dịch vụ đã được cung cấp đầy đủ.</earlyPerformance>",
   "checkoutPayOrderAndPayButton": "Đặt và thanh toán",
   "checkoutPayOrderAndPayAmountButton": "Đặt và thanh toán ({amount})",
-  "checkoutPayMethodsTotal": "Đặt và thanh toán ({amount})",
+  "checkoutPayMethodsTitle": "Đặt và thanh toán",
   "checkoutPayByCard": "Thanh toán bằng thẻ",
   "checkoutPayByQr": "Thanh toán bằng mã QR",
   "checkoutPayMethodQr": "Chuyển khoản qua mã QR",

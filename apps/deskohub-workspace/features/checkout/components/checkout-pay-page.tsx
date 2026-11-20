@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type ReactNode, useId } from "react";
+import type { ReactNode } from "react";
 import type {
   CheckoutSummaryChangedKeys,
   CheckoutSummary as CheckoutSummaryData,
@@ -59,7 +59,6 @@ export function CheckoutPayPage({
   summary,
   variant,
 }: CheckoutPayPageProps) {
-  const cardHandoffId = useId();
   const providerTotal = summary.total.value > 0 ? summary.total : undefined;
   const dualPaymentTotal =
     startPaymentAction &&
@@ -162,24 +161,24 @@ export function CheckoutPayPage({
 
           {dualPaymentTotal ? (
             <CheckoutPayMethodButtons
-              cardHandoffId={cardHandoffId}
               disabled={!legalConsent || isSubmitPending}
               locale={locale}
               pendingMethod={pendingMethod}
               total={dualPaymentTotal}
             />
           ) : (
-            <CheckoutPaySubmitButton
-              disabled={!legalConsent || isSubmitPending}
-              locale={locale}
-              pending={isSubmitPending}
-              total={providerTotal}
-              variant={actionVariant}
-            />
-          )}
-
-          {!!providerTotal && (
-            <CheckoutPayProviderHandoff id={cardHandoffId} locale={locale} />
+            <>
+              <CheckoutPaySubmitButton
+                disabled={!legalConsent || isSubmitPending}
+                locale={locale}
+                pending={isSubmitPending}
+                total={providerTotal}
+                variant={actionVariant}
+              />
+              {!!providerTotal && (
+                <CheckoutPayProviderHandoff locale={locale} />
+              )}
+            </>
           )}
         </form>
       )}

@@ -781,7 +781,7 @@
   "checkoutPayConsent": "मैं इन दस्तावेज़ों से सहमत हूँ: <terms>सामान्य नियम और शर्तें</terms>, <operatingRules>परिसर नियमावली</operatingRules>।<earlyPerformance> मेरा अनुरोध है कि सेवा बुक की गई तारीख पर, अनुबंध से हटने की अवधि के भीतर, दी जाए, और मुझे जानकारी है कि सेवा पूरी तरह दिए जाने के बाद अनुबंध से हटने का मेरा अधिकार समाप्त हो जाता है।</earlyPerformance>",
   "checkoutPayOrderAndPayButton": "ऑर्डर करें और भुगतान करें",
   "checkoutPayOrderAndPayAmountButton": "ऑर्डर करें और {amount} का भुगतान करें",
-  "checkoutPayMethodsTotal": "ऑर्डर करें और {amount} का भुगतान करें",
+  "checkoutPayMethodsTitle": "ऑर्डर करें और भुगतान करें",
   "checkoutPayByCard": "कार्ड से भुगतान करें",
   "checkoutPayByQr": "QR कोड से भुगतान करें",
   "checkoutPayMethodQr": "QR कोड से बैंक ट्रांसफ़र",

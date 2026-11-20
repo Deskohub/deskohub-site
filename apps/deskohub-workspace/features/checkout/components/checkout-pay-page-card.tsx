@@ -233,51 +233,59 @@ export function CheckoutPaySubmitButton({
 }
 
 export function CheckoutPayMethodButtons({
-  cardHandoffId,
   disabled,
   locale,
   pendingMethod,
   total,
 }: {
-  readonly cardHandoffId: string;
   readonly disabled?: boolean;
   readonly locale: Locale;
   readonly pendingMethod?: CheckoutPaymentMethod;
   readonly total: Money;
 }) {
   const totalId = useId();
+  const cardHandoffId = useId();
   return (
-    <section aria-labelledby={totalId} className="@container space-y-2">
+    <section
+      aria-labelledby={totalId}
+      className="@container mx-auto grid w-full max-w-lg gap-3 border-t border-navy-blue/15 pt-4"
+    >
       <h2
-        className="mb-3 text-center text-lg font-semibold text-balance"
+        className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 text-base font-semibold"
         id={totalId}
       >
-        {m.checkoutPayMethodsTotal(
-          { amount: formatMoney(total, locale).replaceAll(" ", "\u00a0") },
-          { locale }
-        )}
+        <span>{m.checkoutPayMethodsTitle({}, { locale })}</span>{" "}
+        <span className="text-end text-lg whitespace-nowrap tabular-nums @max-[18rem]:text-base">
+          {formatMoney(total, locale)}
+        </span>
       </h2>
-      <CheckoutPayButton
-        describedBy={`${totalId} ${cardHandoffId}`}
-        disabled={disabled}
-        label={m.checkoutPayByCard({}, { locale })}
-        locale={locale}
-        pending={pendingMethod === "card"}
-        payment="card"
-      />
-      <CheckoutPayButton
-        describedBy={totalId}
-        disabled={disabled}
-        label={m.checkoutPayByQr({}, { locale })}
-        locale={locale}
-        pending={pendingMethod === "qr"}
-        payment="qr"
-      />
+      <div className="grid gap-2">
+        <CheckoutPayButton
+          align="start"
+          describedBy={totalId}
+          disabled={disabled}
+          label={m.checkoutPayByQr({}, { locale })}
+          locale={locale}
+          pending={pendingMethod === "qr"}
+          payment="qr"
+        />
+        <CheckoutPayButton
+          align="start"
+          describedBy={`${totalId} ${cardHandoffId}`}
+          disabled={disabled}
+          label={m.checkoutPayByCard({}, { locale })}
+          locale={locale}
+          pending={pendingMethod === "card"}
+          payment="card"
+        />
+      </div>
+      <CheckoutPayProviderHandoff id={cardHandoffId} locale={locale} />
     </section>
   );
 }
 
 function CheckoutPayButton({
+  align = "center",
   describedBy,
   disabled,
   label,
@@ -286,6 +294,7 @@ function CheckoutPayButton({
   payment,
   pending,
 }: {
+  readonly align?: "center" | "start";
   readonly describedBy?: string;
   readonly disabled?: boolean;
   readonly label: string;
@@ -295,6 +304,25 @@ function CheckoutPayButton({
   readonly pending?: boolean;
 }) {
   const iconClassName = "size-4 shrink-0";
+  const compact = align === "start" || payment === "card";
+  const icon = pending
+    ? null
+    : {
+        card: (
+          // The wordmark has 14px of transparent padding on the right at this size.
+          // biome-ignore lint/performance/noImgElement: The fixed-size provider wordmark is served at its authored resolution.
+          <img
+            alt=""
+            className="-mr-3.5 shrink-0"
+            height={15}
+            src="/payment/nexi-wordmark-white.png"
+            width={48}
+          />
+        ),
+        free: <CreditCard aria-hidden="true" className={iconClassName} />,
+        qr: <QrCode aria-hidden="true" className={iconClassName} />,
+        retry: <RotateCcw aria-hidden="true" className={iconClassName} />,
+      }[payment];
   return (
     <Button
       aria-describedby={describedBy}
@@ -304,7 +332,7 @@ function CheckoutPayButton({
       name="method"
       onClick={onClick}
       pending={pending}
-      size="xl"
+      size={compact ? "xl-compact" : "xl"}
       tone={payment === "card" ? "nexi" : undefined}
       type={onClick ? "button" : "submit"}
       value={payment}
@@ -312,32 +340,27 @@ function CheckoutPayButton({
     >
       <span
         className={cn(
-          "flex min-w-0 items-center justify-center gap-3",
-          payment === "card" && "@max-[18rem]:gap-1"
+          align === "start"
+            ? "grid w-full grid-cols-[3rem_minmax(0,1fr)] items-center gap-x-2 text-start @max-[18rem]:gap-x-1"
+            : "flex min-w-0 items-center justify-center gap-3",
+          align === "center" && compact && "@max-[18rem]:gap-1"
         )}
       >
-        {!pending &&
-          {
-            card: (
-              // biome-ignore lint/performance/noImgElement: The fixed-size provider wordmark is served at its authored resolution.
-              <img
-                alt=""
-                className="shrink-0"
-                height={15}
-                src="/payment/nexi-wordmark-white.png"
-                width={48}
-              />
-            ),
-            free: <CreditCard aria-hidden="true" className={iconClassName} />,
-            qr: <QrCode aria-hidden="true" className={iconClassName} />,
-            retry: <RotateCcw aria-hidden="true" className={iconClassName} />,
-          }[payment]}
+        {align === "start" ? (
+          <span className="flex justify-center" aria-hidden="true">
+            {icon}
+          </span>
+        ) : (
+          icon
+        )}
         <span
-          className={
-            payment === "card"
-              ? "min-w-0 text-balance @max-[21rem]:text-xs @max-[21rem]:tracking-[0.08em]"
-              : "min-w-0 text-balance @max-[18rem]:text-xs @max-[18rem]:tracking-[0.08em]"
-          }
+          className={cn(
+            "min-w-0",
+            align === "center" && "text-balance",
+            compact
+              ? "@max-[21rem]:text-xs @max-[21rem]:tracking-[0.08em]"
+              : "@max-[18rem]:text-xs @max-[18rem]:tracking-[0.08em]"
+          )}
           data-checkout-pay-label=""
         >
           {pending ? m.checkoutPaymentRetryPending({}, { locale }) : label}
