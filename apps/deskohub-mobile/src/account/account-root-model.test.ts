@@ -4,7 +4,6 @@ import {
   type SampleAccountKind,
   sampleWorkspaceData,
 } from "../customer-api/testing/sample-fixtures";
-import { accountIndexModel } from "./account-gating";
 import { type AccountRootModel, accountRootModel } from "./account-root-model";
 
 const accountOf = (kind: SampleAccountKind): CustomerAccountState =>
@@ -64,9 +63,6 @@ describe("accountRootModel", () => {
       "invoices",
       "language",
     ]);
-    expect(firstRows(false)).toEqual(
-      layout(accountRootModel(linked()))[0]?.[1]
-    );
     expect(firstRows(false)).not.toContain("payment-methods");
     // Neither row says anything about its section yet.
     const model = accountRootModel(linked(), { paymentMethods: true });
@@ -87,19 +83,27 @@ describe("accountRootModel", () => {
   });
 
   test.each([
-    "support-required",
-    "authenticated-unavailable",
-    "review-account",
-    "deletion-pending",
-  ] as const)("a %s account shows exactly the gated sections", (kind) => {
-    const account = accountOf(kind);
-    const model = accountRootModel(account);
+    [
+      "support-required",
+      ["security", "assistants", "language", "legal", "danger"],
+    ],
+    [
+      "authenticated-unavailable",
+      ["security", "assistants", "language", "legal", "danger"],
+    ],
+    ["review-account", ["security", "assistants", "language", "legal"]],
+    ["deletion-pending", ["security", "legal", "danger"]],
+  ] as const)(
+    "a %s account shows its reachable rows without a completion card",
+    (kind, sections) => {
+      const model = accountRootModel(accountOf(kind));
 
-    expect(model.completionCard).toBe(false);
-    expect<ReadonlyArray<string>>(
-      model.groups.flatMap((group) => group.rows.map((row) => row.section))
-    ).toEqual(accountIndexModel(account).sections);
-  });
+      expect(model.completionCard).toBe(false);
+      expect<ReadonlyArray<string>>(
+        model.groups.flatMap((group) => group.rows.map((row) => row.section))
+      ).toEqual(sections);
+    }
+  );
 
   test("rows say the section's current state", () => {
     const account = linked();

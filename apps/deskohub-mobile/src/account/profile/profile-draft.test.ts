@@ -231,10 +231,20 @@ describe("validateProfileDraft", () => {
   test("maps nested billing issues to the flat fields, first in screen order", () => {
     expect(
       invalidFields(
-        validDraft({ companyName: "", country: "CZE", zip: "1".repeat(21) })
+        validDraft({
+          companyName: " ",
+          city: "x".repeat(101),
+          country: "CZE",
+          zip: "1".repeat(21),
+        })
       )
     ).toEqual({
-      fields: { companyName: "required", zip: "invalid", country: "invalid" },
+      fields: {
+        companyName: "required",
+        city: "invalid",
+        zip: "invalid",
+        country: "invalid",
+      },
       first: Option.some("companyName"),
     });
   });
