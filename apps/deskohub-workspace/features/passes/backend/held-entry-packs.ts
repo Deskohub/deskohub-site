@@ -92,6 +92,7 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
     .where(
       and(
         eq(passPurchases.holderAccountId, accountId),
+        eq(passPurchases.product, "entry-pack"),
         isNotNull(orders.paidAt),
         ne(passPurchases.status, "void")
       )
@@ -99,16 +100,14 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
     .groupBy(passPurchases.id, orders.paidAt)
     .orderBy(asc(passPurchases.validUntil), asc(passPurchases.id));
 
-  return rows.flatMap(({ paidAt, ...pack }): HeldEntryPack[] =>
-    paidAt
+  return rows.flatMap(({ paidAt, entryCount, ...pack }): HeldEntryPack[] =>
+    paidAt && entryCount !== null
       ? [
           {
             ...pack,
+            entryCount,
             paidAt,
-            entriesLeft: Math.max(
-              0,
-              pack.entryCount - pack.claimedDates.length
-            ),
+            entriesLeft: Math.max(0, entryCount - pack.claimedDates.length),
           },
         ]
       : []
