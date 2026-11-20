@@ -1,7 +1,7 @@
 import "server-only";
 
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Context, Effect, Result } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -43,9 +43,12 @@ import {
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
 import { isEntryPackQuoteExpired } from "../pass-offer";
+import { recordConfirmationInvitationState } from "./entry-pack-gift";
+import { deliverPendingEntryPackInvitation } from "./entry-pack-gift-delivery";
 import { sendEntryPackPurchaseEmail } from "./entry-pack-purchase-email";
 import { settleEntryPack } from "./entry-pack-settlement";
 
@@ -149,7 +152,8 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   const services = Context.make(WorkspaceDatabase, { db, transaction });
   const sendingServices = services.pipe(
     Context.add(EmailServiceTag, email),
-    Context.add(EmailConfigTag, emailConfig)
+    Context.add(EmailConfigTag, emailConfig),
+    Context.add(AccountingDocumentSnapshots, snapshots)
   );
 
   const readOrder = (orderId: OrderId) =>
@@ -315,16 +319,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         .select({ order: orders, purchase: passPurchases })
         .from(orders)
         .innerJoin(passPurchases, eq(orders.id, passPurchases.id))
-        .where(
-          and(
-            eq(orders.id, orderId),
-            eq(orders.paymentState, "paid"),
-            inArray(orders.fulfillmentState, [
-              "not_started",
-              "awaiting_delivery",
-            ])
-          )
-        );
+        .where(and(eq(orders.id, orderId), eq(orders.paymentState, "paid")));
       if (!paid) return;
       const {
         purchase,
@@ -335,6 +330,26 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           orderId,
           "Paid Entry pack has no active payment attempt."
         );
+      const gift = purchase.buyerAccountId !== purchase.holderAccountId;
+      if (gift) {
+        yield* deliverPendingEntryPackInvitation(
+          orderId,
+          activePaymentAttemptId
+        ).pipe(
+          Effect.provide(sendingServices),
+          Effect.provide(SealedStateKeys.Default),
+          Effect.timeout("10 seconds"),
+          Effect.catch(() =>
+            Effect.logWarning("Entry pack gift fulfillment could not complete")
+          )
+        );
+      }
+      if (
+        fulfillmentState !== "not_started" &&
+        fulfillmentState !== "awaiting_delivery"
+      ) {
+        return;
+      }
       const attemptIsActive = and(
         eq(orders.id, orderId),
         eq(orders.paymentState, "paid"),
@@ -353,16 +368,22 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           purchase.buyerAccountId
         ).pipe(Effect.provide(services));
         if (buyer) {
-          const holderEmail =
-            purchase.buyerAccountId === purchase.holderAccountId
-              ? null
-              : ((yield* findPurchaseLoginEmail(purchase.holderAccountId).pipe(
-                  Effect.provide(services)
-                )) ?? null);
+          const holderEmail = gift
+            ? ((yield* findPurchaseLoginEmail(purchase.holderAccountId).pipe(
+                Effect.provide(services)
+              )) ?? null)
+            : null;
+          const invitationSent = gift
+            ? yield* recordConfirmationInvitationState(orderId).pipe(
+                Effect.provide(services)
+              )
+            : false;
           yield* sendEntryPackPurchaseEmail({
             purchase,
             buyer: { email: buyer },
             holderEmail,
+            gift,
+            invitationSent,
             paidAt,
             invoiceRequested: snapshot.billing.invoice !== "none",
           }).pipe(Effect.provide(sendingServices));

@@ -26,6 +26,8 @@ export type HeldEntryPack = {
   readonly validFrom: PlainDate;
   readonly validUntil: PlainDate;
   readonly status: PassStatus;
+  readonly giftIssuedAt: Temporal.Instant | null;
+  readonly giftClaimedAt: Temporal.Instant | null;
   readonly claimedDates: readonly PlainDate[];
   /** Server-only lookup for editing a signed draft that already holds an entry. */
   readonly reservedEntryDates: Readonly<
@@ -58,6 +60,8 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
       validFrom: passPurchases.validFrom,
       validUntil: passPurchases.validUntil,
       status: passPurchases.status,
+      giftIssuedAt: passPurchases.giftIssuedAt,
+      giftClaimedAt: passPurchases.giftClaimedAt,
       claimedDates: sql<PlainDate[]>`coalesce(
         array_agg(${passEntryClaims.date}::text order by ${passEntryClaims.date})
           filter (where ${passEntryClaims.date} is not null),

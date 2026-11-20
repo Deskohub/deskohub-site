@@ -1,10 +1,11 @@
 import "server-only";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { orders, passPurchases } from "@/db/schema";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
+import { currentInstant } from "@/shared/utils/temporal";
 import { queueInitialEntryPackGift } from "./entry-pack-gift";
 
 /** Reconcile the pack from the authoritative order after shared settlement. */
@@ -23,9 +24,14 @@ export const settleEntryPack = Effect.fn("settleEntryPack")(function* (
       if (!order) return undefined;
 
       if (order.paymentState === "paid") {
+        const activatedAt = yield* currentInstant;
         const [purchase] = yield* db
           .update(passPurchases)
-          .set({ status: "active" })
+          .set({
+            status: "active",
+            giftIssuedAt: sql`case when ${passPurchases.buyerAccountId} <> ${passPurchases.holderAccountId}
+              then ${activatedAt.toString()}::timestamptz end`,
+          })
           .where(
             and(
               eq(passPurchases.id, id),
@@ -33,7 +39,7 @@ export const settleEntryPack = Effect.fn("settleEntryPack")(function* (
             )
           )
           .returning();
-        if (purchase) yield* queueInitialEntryPackGift(purchase);
+        if (purchase) yield* queueInitialEntryPackGift(purchase, activatedAt);
         return purchase;
       }
 

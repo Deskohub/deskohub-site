@@ -1,6 +1,16 @@
 import "server-only";
 
-import { and, eq, inArray, isNotNull, isNull, lte, ne } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  ne,
+  or,
+} from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
@@ -14,10 +24,7 @@ import {
   findActiveCustomerAccountByEmail,
   findPurchaseLoginEmail,
 } from "@/features/account/backend/customer-account-by-email";
-import {
-  type CustomerAccountId,
-  customerAccountIdSchema,
-} from "@/features/account/customer-account";
+import type { CustomerAccountId } from "@/features/account/customer-account";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import {
   deriveSealedStateSubkey,
@@ -39,8 +46,8 @@ const giftClaims = makeSignedClaims({
   purpose: "entry-pack-gift-invitation",
   schema: Schema.Struct({
     orderId: orderIdSchema,
-    holderAccountId: customerAccountIdSchema,
     generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    requestedAt: Schema.Int,
   }),
 });
 
@@ -54,8 +61,8 @@ export const makeEntryPackInvitationContext = (
   giftClaims.sign(
     {
       orderId: invitation.orderId,
-      holderAccountId: invitation.holderAccountId,
       generation: invitation.generation,
+      requestedAt: invitation.requestedAt.epochMilliseconds,
     },
     [invitationSigningKey(key)]
   );
@@ -176,12 +183,12 @@ export const readEntryPackGiftState = (orderId: OrderId) =>
 
 /** Queue the first invitation in the transaction that issues the gift. */
 export const queueInitialEntryPackGift = Effect.fnUntraced(function* (
-  purchase: Purchase
+  purchase: Purchase,
+  requestedAt: Temporal.Instant
 ) {
   if (purchase.buyerAccountId === purchase.holderAccountId) return;
 
   const { db } = yield* WorkspaceTransaction;
-  const requestedAt = yield* currentInstant;
   yield* db
     .insert(entryPackGiftInvitations)
     .values({
@@ -226,6 +233,7 @@ export const queueEntryPackGiftResend = Effect.fnUntraced(function* (
       locale: purchase.locale,
       requestedAt: now,
       nextAttemptAt: now,
+      confirmationInvited: false,
     })
     .onConflictDoUpdate({
       target: entryPackGiftInvitations.orderId,
@@ -273,7 +281,13 @@ export const claimEntryPackGifts = Effect.fn("claimEntryPackGifts")(function* (
               and(
                 eq(orders.kind, "pass-purchase"),
                 eq(orders.paymentState, "paid"),
-                lte(orders.paidAt, signedInAt)
+                or(
+                  lt(passPurchases.giftIssuedAt, signedInAt),
+                  and(
+                    isNull(passPurchases.giftIssuedAt),
+                    lt(orders.paidAt, signedInAt)
+                  )
+                )
               )
             )
         )
@@ -307,8 +321,8 @@ export const resolveEntryPackGiftInvitation = Effect.fnUntraced(function* (
   if (
     !row ||
     !invitation?.keyId ||
-    claims.holderAccountId !== row.purchase.holderAccountId ||
     claims.generation !== invitation.generation ||
+    claims.requestedAt !== invitation.requestedAt.epochMilliseconds ||
     !canInvite(row, now) ||
     Temporal.Instant.compare(
       now,
@@ -341,7 +355,11 @@ export const readPendingEntryPackInvitation = Effect.fnUntraced(function* (
   ) {
     return undefined;
   }
-  return { invitation, deliverable: canInvite(row, now) };
+  return {
+    invitation,
+    purchase: row.purchase,
+    deliverable: canInvite(row, now),
+  };
 });
 
 export const entryPackGiftInvitationDue = (now: Temporal.Instant) =>

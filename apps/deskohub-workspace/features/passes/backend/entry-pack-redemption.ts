@@ -1,4 +1,4 @@
-import { and, count, eq, ne, sql } from "drizzle-orm";
+import { and, count, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { Data, Effect } from "effect";
 import {
   type WorkspaceDatabaseClient,
@@ -34,6 +34,10 @@ const passForBooking = (request: EntryPackRequest) =>
     eq(passPurchases.id, request.passId),
     eq(passPurchases.holderAccountId, request.holderAccountId),
     eq(passPurchases.status, "active"),
+    or(
+      isNull(passPurchases.giftIssuedAt),
+      isNotNull(passPurchases.giftClaimedAt)
+    ),
     sql`${passPurchases.validFrom} <= ${request.date} and ${request.date} < ${passPurchases.validUntil}`
   );
 

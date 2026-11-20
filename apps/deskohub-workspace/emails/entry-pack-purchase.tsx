@@ -11,6 +11,7 @@ import {
   formatPlainDateRange,
 } from "@/shared/utils/date-time-format";
 import type { PlainDate } from "@/shared/utils/temporal";
+import { EntryPackEmailCard } from "./_components/entry-pack-email-card";
 import {
   WorkspaceEmailBody,
   WorkspaceEmailHeading,
@@ -29,6 +30,8 @@ export type EntryPackPurchaseEmailProps = {
   readonly paidAt: Temporal.Instant;
   readonly quote: DiscountQuote;
   readonly holderEmail: string | null;
+  readonly gift?: boolean;
+  readonly invitationSent?: boolean;
   readonly invoiceRequested: boolean;
   readonly locale: Locale;
   readonly statusUrl: string;
@@ -46,6 +49,11 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
   const title = entryPackPurchaseEmailSubject(props);
   const product = m.passEntryPack({}, options);
   const count = m.passEntryCount({ count: props.entryCount }, options);
+  const invited = props.invitationSent && holderEmail;
+  const paidBody =
+    props.gift || holderEmail
+      ? m.passEmailGiftBody({}, options)
+      : m.passEmailSelfBody({}, options);
   const dates = formatPlainDateRange({
     start: Temporal.PlainDate.from(props.validFrom),
     end: Temporal.PlainDate.from(props.validUntil).subtract({ days: 1 }),
@@ -58,33 +66,46 @@ export function EntryPackPurchaseEmail(props: EntryPackPurchaseEmailProps) {
     <WorkspaceEmailLayout locale={locale} preview={title}>
       <WorkspaceEmailHeading>{title}</WorkspaceEmailHeading>
       <WorkspaceEmailBody>
-        {holderEmail
-          ? m.passEmailGiftBody({}, options)
-          : m.passEmailSelfBody({}, options)}
+        {invited
+          ? m.passGiftMailBuyerInvited({ email: invited }, options)
+          : paidBody}
       </WorkspaceEmailBody>
 
-      <Section className="mt-6 overflow-hidden rounded-[22px] border border-[#d8d9e4]">
-        <Section bgcolor="#00024f" className="bg-navy px-4 py-6 text-center">
-          <Link
-            className="inline-block rounded-full px-7 py-3 text-[14px] font-bold text-navy no-underline"
-            href={props.statusUrl}
-            style={{ backgroundColor: "#00df99", color: "#00024f" }}
-          >
-            {m.passEmailOpen({}, options)}
-          </Link>
+      {invited ? (
+        <EntryPackEmailCard
+          action={{
+            label: m.passGiftMailBuyerOpen({}, options),
+            url: props.statusUrl,
+          }}
+          dates={m.passEmailValid({ dates }, options)}
+          entryCount={props.entryCount}
+          locale={locale}
+          tier={props.tier}
+        />
+      ) : (
+        <Section className="mt-6 overflow-hidden rounded-[22px] border border-[#d8d9e4]">
+          <Section bgcolor="#00024f" className="bg-navy px-4 py-6 text-center">
+            <Link
+              className="inline-block rounded-full px-7 py-3 text-[14px] font-bold text-navy no-underline"
+              href={props.statusUrl}
+              style={{ backgroundColor: "#00df99", color: "#00024f" }}
+            >
+              {m.passEmailOpen({}, options)}
+            </Link>
+          </Section>
+          <Section className="border-t-4 border-aquamarine bg-[#e9fff6] px-5 py-5 text-center">
+            <WorkspaceEmailLabel>
+              {product} · {getPassTierName(props.tier, locale)}
+            </WorkspaceEmailLabel>
+            <Text className="m-0 mt-1 text-[38px] font-bold leading-[46px] text-navy">
+              {count}
+            </Text>
+            <Text className="m-0 mt-1 text-[14px] text-navy">
+              {m.passEmailValid({ dates }, options)}
+            </Text>
+          </Section>
         </Section>
-        <Section className="border-t-4 border-aquamarine bg-[#e9fff6] px-5 py-5 text-center">
-          <WorkspaceEmailLabel>
-            {product} · {getPassTierName(props.tier, locale)}
-          </WorkspaceEmailLabel>
-          <Text className="m-0 mt-1 text-[38px] font-bold leading-[46px] text-navy">
-            {count}
-          </Text>
-          <Text className="m-0 mt-1 text-[14px] text-navy">
-            {m.passEmailValid({ dates }, options)}
-          </Text>
-        </Section>
-      </Section>
+      )}
 
       <WorkspaceEmailDetails
         details={[

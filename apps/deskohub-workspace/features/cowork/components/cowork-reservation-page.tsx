@@ -94,6 +94,7 @@ const getBookingPasses = (
     }
     const entriesLeft = pack.entriesLeft + Number(editedDate !== undefined);
     return pack.status === "active" &&
+      (pack.giftIssuedAt === null || pack.giftClaimedAt !== null) &&
       entriesLeft > 0 &&
       today < pack.validUntil
       ? [
