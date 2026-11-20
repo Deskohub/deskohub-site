@@ -188,7 +188,7 @@ const createHarness = () => {
     start,
     consume: (job: FioPollJob) =>
       Effect.runPromise(
-        FioAccountPoller.use((poller) => poller.consume(job)).pipe(
+        Effect.flatMap(FioAccountPoller, (poller) => poller.consume(job)).pipe(
           Effect.provide(worker)
         )
       ),
@@ -229,7 +229,7 @@ const createHarness = () => {
       ),
     evidence: () =>
       Effect.runPromise(
-        FioPaymentSettlementService.use((service) =>
+        Effect.flatMap(FioPaymentSettlementService, (service) =>
           service.listForAccount({ accountKey })
         ).pipe(Effect.provide(settlements))
       ),
@@ -415,7 +415,7 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     ).toEqual(["latest-discrepancy", "older-discrepancy"]);
   });
 
-  test("an immediate first delivery waits for admission to commit or roll back", async () => {
+  test("an immediate first delivery waits and discards a rolled-back admission's job", async () => {
     const h = createHarness();
     const published = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
@@ -426,7 +426,7 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
         return release.promise;
       },
     });
-    const rolledBack = admission.catch((error: unknown) => error);
+    const rolledBack = admission.catch((error) => String(error));
     await published.promise;
     const stale = h.take();
     const delivery = h.consume(stale);
