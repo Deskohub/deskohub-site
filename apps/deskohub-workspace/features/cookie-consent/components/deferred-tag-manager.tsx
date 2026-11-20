@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { isEntryPackGiftSignInDocument } from "@/features/passes/entry-pack-gift-sign-in.browser";
 import { scheduleTagManagerLoad } from "../utils/tag-manager";
 
 type DeferredTagManagerProps = {
@@ -8,7 +9,9 @@ type DeferredTagManagerProps = {
 };
 
 export function DeferredTagManager({ gtmId }: DeferredTagManagerProps) {
-  useEffect(() => scheduleTagManagerLoad(gtmId), [gtmId]);
+  useEffect(() => {
+    if (!isEntryPackGiftSignInDocument()) return scheduleTagManagerLoad(gtmId);
+  }, [gtmId]);
 
   return null;
 }

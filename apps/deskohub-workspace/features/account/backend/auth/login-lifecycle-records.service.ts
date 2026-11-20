@@ -3,6 +3,7 @@ import { Context, Effect, Layer } from "effect";
 import type { SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { Locale } from "@/features/i18n";
+import { claimEntryPackGifts } from "@/features/passes/backend/entry-pack-gift";
 import type { CustomerAccountId } from "../../customer-account";
 import { ensureCustomerAccount } from "../customer-account.repository";
 import { captureAccountLocalePreference } from "../customer-locale-preference";
@@ -24,6 +25,11 @@ interface ILoginLifecycleRecords {
   readonly captureLocalePreference: (
     accountId: CustomerAccountId,
     locale: Locale
+  ) => Effect.Effect<void, EffectDrizzleQueryError>;
+  /** Claims pending gifts issued before this account's verified sign-in. */
+  readonly recordEntryPackGiftSignIn: (
+    accountId: CustomerAccountId,
+    signedInAt: Temporal.Instant
   ) => Effect.Effect<void, EffectDrizzleQueryError>;
   /**
    * Deletes an agent's tokens that carry the administration scope although
@@ -53,6 +59,8 @@ export class LoginLifecycleRecords extends Context.Service<
           ensureCustomerAccount(accountId).pipe(onDatabase),
         captureLocalePreference: (accountId, locale) =>
           captureAccountLocalePreference(accountId, locale).pipe(onDatabase),
+        recordEntryPackGiftSignIn: (accountId, signedInAt) =>
+          claimEntryPackGifts(accountId, signedInAt).pipe(onDatabase),
         revokeUnconsentedAdministrationTokens: (input) =>
           revokeUnconsentedAdministrationTokens(input).pipe(onDatabase),
       };

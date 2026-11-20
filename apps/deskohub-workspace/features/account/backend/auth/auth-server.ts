@@ -414,6 +414,45 @@ class DeletingAccountIdInvalidError extends Data.TaggedError(
 const decodeAccountId = (userId: string) =>
   Option.getOrUndefined(Schema.decodeOption(customerAccountIdSchema)(userId));
 
+const verifiedSignInPaths = new Set([
+  "/magic-link/verify",
+  "/sign-in/email-otp",
+  "/passkey/verify-authentication",
+  "/sign-in/email",
+]);
+
+function recordEntryPackGiftSignIn(
+  ctx: {
+    readonly path: string;
+    readonly context: Pick<AuthContext, "newSession">;
+  },
+  services: WorkspaceAuthConfig["services"]
+) {
+  if (!verifiedSignInPaths.has(ctx.path)) return;
+  // Better Auth sets newSession after setting the cookie on a successful
+  // sign-in, including a magic-link redirect. Session handoffs reuse the
+  // original proof and are excluded by the endpoint allowlist.
+  const signedIn = ctx.context.newSession;
+  if (signedIn?.user.emailVerified !== true) return;
+  const accountId = decodeAccountId(signedIn.user.id);
+  if (!accountId || signedIn.session.userId !== accountId) return;
+
+  return runWorkspaceEffectOrElse("account.sign-in.claim-entry-pack-gifts", {
+    boundary: "route",
+    failureCode: "account.sign-in.claim-entry-pack-gifts-failed",
+    orElse: () => undefined,
+  })(
+    Effect.flatMap(LoginLifecycleRecords, (records) =>
+      records.recordEntryPackGiftSignIn(
+        accountId,
+        Temporal.Instant.fromEpochMilliseconds(
+          signedIn.session.createdAt.getTime()
+        )
+      )
+    ).pipe(Effect.provide(services))
+  );
+}
+
 /** Decodes the auth request context, the hooks' I/O boundary. */
 const decodeAuthContext = Schema.decodeUnknownOption(authContextSchema);
 
@@ -1218,8 +1257,9 @@ export const makeWorkspaceAuth = (config: WorkspaceAuthConfig) => {
           )
         )
       ),
-      after: createAuthMiddleware(
-        async (ctx) =>
+      after: createAuthMiddleware(async (ctx) => {
+        await recordEntryPackGiftSignIn(ctx, config.services);
+        return (
           completeAuthRequest(ctx) ??
           (await runWorkspaceEffect("account.agent-consent.narrow", {
             boundary: "route",
@@ -1231,7 +1271,8 @@ export const makeWorkspaceAuth = (config: WorkspaceAuthConfig) => {
           runWorkspaceEffect("account.passkey.reauthentication-options", {
             boundary: "route",
           })(requireReauthenticationUserVerification(ctx))
-      ),
+        );
+      }),
     },
     plugins: [
       magicLink({

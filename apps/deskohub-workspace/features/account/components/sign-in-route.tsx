@@ -1,4 +1,5 @@
 import { connection } from "next/server";
+import { continueEntryPackGiftSignIn } from "@/features/account/actions/continue-entry-pack-gift-sign-in";
 import { SignInCard } from "@/features/account/components/sign-in-card";
 import {
   parseSignInPurpose,
@@ -47,6 +48,7 @@ export async function SignInRouteCard({
       }
       passkeysEnabled={passkeysEnabled}
       purpose={parseSignInPurpose(getSearchParam(query, signInPurposeParam))}
+      resolveGiftSignIn={continueEntryPackGiftSignIn}
       returnTo={returnTo}
     />
   );

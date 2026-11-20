@@ -54,9 +54,12 @@ export type SignInEmailForm = UseFormReturn<
 >;
 
 /** The sign-in email form, validated in the visitor's locale on submit. */
-export function useSignInEmailForm(locale: Locale): SignInEmailForm {
+export function useSignInEmailForm(
+  locale: Locale,
+  email = ""
+): SignInEmailForm {
   return useForm<SignInFormInput, unknown, SignInFormValues>({
-    defaultValues: { email: "" },
+    defaultValues: { email },
     mode: "onSubmit",
     reValidateMode: "onChange",
     resolver: effectSchemaResolver(createSignInFormSchema(locale)),
@@ -72,6 +75,7 @@ type SignInEmailStepProps = {
   readonly ready: boolean;
   readonly failure: SignInEmailFailure | null;
   readonly passkeysEnabled: boolean;
+  readonly privateEmail?: boolean;
   readonly purpose: SignInPurpose | undefined;
   readonly returnTo: string | undefined;
   /** Shows the no-longer-waiting notice and describes the field with it. */
@@ -92,6 +96,7 @@ export function SignInEmailStep({
   ready,
   failure,
   passkeysEnabled,
+  privateEmail = false,
   purpose,
   returnTo,
   showNoLongerWaiting,
@@ -134,7 +139,7 @@ export function SignInEmailStep({
           <FormField
             control={form.control}
             name="email"
-            render={({ field }) => (
+            render={({ field: { value, ...field } }) => (
               <FormItem className="space-y-2">
                 <FormLabel htmlFor="account-sign-in-email">
                   {m.accountSignInEmailLabel({}, { locale })}
@@ -149,7 +154,16 @@ export function SignInEmailStep({
                     <Input
                       className="min-w-0 sm:flex-1"
                       {...field}
+                      value={privateEmail ? undefined : value}
                       ref={(element) => {
+                        // A gift address belongs in the live field only, without a value attribute.
+                        if (
+                          privateEmail &&
+                          element &&
+                          element.value !== value
+                        ) {
+                          element.value = value;
+                        }
                         field.ref(element);
                         emailRef(element);
                       }}

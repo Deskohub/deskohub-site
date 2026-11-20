@@ -83,6 +83,61 @@ const signInWithCode = (
 
 const wrongCode = (code: string) => (code === "000000" ? "111111" : "000000");
 
+describe("verified sign-in gift recording", () => {
+  test.each(["link", "code"] as const)(
+    "records the durable account and new session time once after %s sign-in",
+    async (method) => {
+      const sentLinks: CapturedMagicLink[] = [];
+      const signIns: { accountId: string; at: Temporal.Instant }[] = [];
+      const { auth, store } = makeMemoryTestAuth({
+        sentLinks,
+        signInCodeFlag: Effect.succeed(true),
+        recordEntryPackGiftSignIn: (accountId, at) =>
+          Effect.sync(() => {
+            signIns.push({ accountId, at });
+          }),
+      });
+      const email = uniqueEmail("gift-holder");
+      expect((await sendSignInEmail(auth, email)).status).toBe(200);
+      expect(signIns).toEqual([]);
+
+      const link = sentLinks[0]!;
+      const verify = () =>
+        method === "link"
+          ? verifyMagicLink(auth, link)
+          : signInWithCode(auth, email, link.code!);
+      const verified = await verify();
+      expect(getSessionCookie(verified)).toBeDefined();
+      expect(signIns).toEqual([
+        {
+          accountId: store.session[0]!.userId,
+          at: Temporal.Instant.fromEpochMilliseconds(
+            store.session[0]!.createdAt.getTime()
+          ),
+        },
+      ]);
+
+      expect(getSessionCookie(await verify())).toBeUndefined();
+      expect(signIns).toHaveLength(1);
+    }
+  );
+
+  test("keeps the verified session when gift recording fails", async () => {
+    const sentLinks: CapturedMagicLink[] = [];
+    const { auth } = makeMemoryTestAuth({
+      sentLinks,
+      recordEntryPackGiftSignIn: () =>
+        Effect.die("synthetic gift write failure"),
+    });
+    expect(
+      (await sendSignInEmail(auth, uniqueEmail("gift-recorder-failed"))).status
+    ).toBe(200);
+    const verified = await verifyMagicLink(auth, sentLinks[0]!);
+    expect(verified.status).toBe(302);
+    expect(getSessionCookie(verified)).toBeDefined();
+  });
+});
+
 const expectedSignInBotCheck: VerifyHumanInput = {
   verificationFailurePolicy: "allow",
   verifiedBots: { allow: customerAgentNames },
