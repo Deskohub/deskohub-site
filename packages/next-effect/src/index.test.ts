@@ -18,7 +18,12 @@ class TestService extends Context.Service<
 >()("@deskohub/next-effect/test/RunnerService") {}
 
 describe("NextEffect", () => {
-  test("run maps fallible layer setup failures", async () => {
+  test("run rejects typed failures unchanged and maps layer setup failures", async () => {
+    const failure = { _tag: "DomainError" } as const;
+    await expect(NextEffect.make().run(Effect.fail(failure))).rejects.toBe(
+      failure
+    );
+
     const mapped = new Error("mapped");
     const next = NextEffect.make({
       layer: Layer.effect(TestService, Effect.fail("setup")),

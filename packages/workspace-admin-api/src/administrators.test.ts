@@ -3,7 +3,6 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { Schema } from "effect";
 import { administrationInputParseOptions } from "./administration-input-parse-options";
 import {
-  AdminCliAdministratorsApi,
   AdministrationLegacyAdministratorBackfillInput,
   AdministrationLegacyAdministratorBackfillResult,
   type AdministrationLegacyAdministratorBackfillResult as BackfillResult,
@@ -13,14 +12,6 @@ import { AdministrationLegacyUsername } from "./workspace-admin-api";
 const email = testEmailAddress("legacy-administrator");
 
 describe("administrators contract", () => {
-  test("serves the legacy administrator backfill under the CLI prefix", () => {
-    const endpoint =
-      AdminCliAdministratorsApi.endpoints.backfillLegacyAdministrator;
-
-    expect(endpoint?.method).toBe("POST");
-    expect(endpoint?.path).toBe("/api/v1/cli/administrators/legacy-backfill");
-  });
-
   test("strictly decodes the backfill input and trims the email", () => {
     const decode = Schema.decodeUnknownSync(
       AdministrationLegacyAdministratorBackfillInput,

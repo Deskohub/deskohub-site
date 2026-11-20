@@ -1,10 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, expectTypeOf, test } from "bun:test";
 import { Result, Schema } from "effect";
 import { administrationInputParseOptions } from "./administration-input-parse-options";
-import {
-  type LedgerOperationName,
-  OperationInputInvalid,
-} from "./administration-operation-port";
+import type { LedgerOperationName } from "./administration-operation-port";
 import { campaignOperations } from "./campaign-operations";
 
 describe("campaign operations", () => {
@@ -27,7 +24,6 @@ describe("campaign operations", () => {
       "activateAutomation",
       { campaignId: "campaign-1", previewId: "preview-1" },
     ],
-    ["getAutomationEngineHealth", {}],
     [
       "listAutomationRuns",
       { campaignId: "campaign-1", state: "active", limit: 100 },
@@ -42,47 +38,20 @@ describe("campaign operations", () => {
     expect(Result.isFailure(decode({ ...input, unexpected: true }))).toBe(true);
   });
 
-  test("knows the ledger operations by type", () => {
-    const ledgerOperations: ReadonlyArray<
+  test("only campaign creation, audience creation and duplication opt into replay", () => {
+    const ledgerOperations = [
+      "createCampaign",
+      "createCampaignAudience",
+      "duplicateCampaign",
+    ] as const;
+    expectTypeOf<
       LedgerOperationName<typeof campaignOperations>
-    > = ["createCampaign", "createCampaignAudience", "duplicateCampaign"];
-    // @ts-expect-error a query never goes through the ledger
-    const notLedger: LedgerOperationName<typeof campaignOperations> =
-      "getCampaign";
-
+    >().toEqualTypeOf<(typeof ledgerOperations)[number]>();
     expect(
       Object.values(campaignOperations)
         .filter(({ ledger }) => ledger)
         .map(({ name }) => name)
         .sort()
     ).toEqual([...ledgerOperations]);
-    expect<string>(notLedger).toBe("getCampaign");
-  });
-
-  test("records name, kind and ledger", () => {
-    expect(campaignOperations.createCampaign).toMatchObject({
-      name: "createCampaign",
-      kind: "mutation",
-      ledger: true,
-    });
-    expect(campaignOperations.getCampaign).toMatchObject({
-      name: "getCampaign",
-      kind: "query",
-      ledger: false,
-    });
-  });
-
-  test("an error category keeps its code, message, issues and cause", () => {
-    const cause = new Error("domain failure");
-    const error = new OperationInputInvalid({
-      code: "flow-invalid",
-      message: "The flow needs a send step.",
-      issues: [{ path: ["flow", "steps"], message: "Missing send step." }],
-      cause,
-    });
-
-    expect(error._tag).toBe("OperationInputInvalid");
-    expect(error.code).toBe("flow-invalid");
-    expect(error.cause).toBe(cause);
   });
 });

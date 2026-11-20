@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { createMiddleware, createSafeActionClient } from "next-safe-action";
 import { useAction, useStateAction } from "next-safe-action/hooks";
 import { EffectAction } from "./effect-action";
@@ -8,6 +8,10 @@ class TestService extends Context.Service<
   TestService,
   { readonly multiplier: number }
 >()("@deskohub/next-effect/test/ActionService") {}
+
+class ActionUnavailable extends Data.TaggedError("ActionUnavailable")<{
+  readonly message: string;
+}> {}
 
 const localeMiddleware = createMiddleware<{ ctx: object }>().define<{
   locale: "en-US";
@@ -34,25 +38,28 @@ const SeatsSchema = Schema.toStandardSchemaV1(
 
 describe("EffectAction", () => {
   test("uses a real next-safe-action client schema and utils", async () => {
-    const seen: string[] = [];
+    const successData: (string | undefined)[] = [];
+    let validationCalls = 0;
     const action = EffectAction.fromClient(makeActionClient())
       .inputSchema(Schema.toStandardSchemaV1(Schema.NonEmptyString), {
         async handleValidationErrorsShape() {
-          seen.push("input-utils");
+          validationCalls += 1;
           return { formErrors: ["Invalid input"], fieldErrors: {} };
         },
       })
       .action(({ parsedInput }) => Effect.succeed(parsedInput), {
-        async onSuccess() {
-          seen.push("action-utils");
+        async onSuccess({ data }) {
+          successData.push(data);
         },
       });
 
     await expect(action("value")).resolves.toEqual({ data: "value" });
-    await expect(action("")).resolves.toMatchObject({
-      validationErrors: expect.any(Object),
+    expect(validationCalls).toBe(0);
+    await expect(action("")).resolves.toEqual({
+      validationErrors: { formErrors: ["Invalid input"], fieldErrors: {} },
     });
-    expect(seen).toEqual(["action-utils", "input-utils"]);
+    expect(validationCalls).toBe(1);
+    expect(successData).toEqual(["value"]);
   });
 
   test("runs Effect Schema-decoded input with ctx and layers", async () => {
@@ -76,15 +83,24 @@ describe("EffectAction", () => {
     });
   });
 
-  test("maps typed failures and fallible layer setup failures", async () => {
+  test("returns typed failures and maps fallible layer setup failures", async () => {
+    const schema = Schema.toStandardSchemaV1(Schema.String);
+    const failedAction = EffectAction.fromClient(makeActionClient())
+      .inputSchema(schema)
+      .action(() =>
+        Effect.fail(new ActionUnavailable({ message: "unavailable" }))
+      );
+
+    await expect(failedAction("anything")).resolves.toEqual({
+      serverError: "unavailable",
+    });
+
     const mapped = new Error("public");
     const client = EffectAction.fromClient(makeActionClient(), {
       layer: Layer.effect(TestService, Effect.fail("setup")),
       mapError: () => mapped,
     });
-    const action = client
-      .inputSchema(Schema.toStandardSchemaV1(Schema.String))
-      .action(() => TestService);
+    const action = client.inputSchema(schema).action(() => TestService);
 
     await expect(action("anything")).resolves.toEqual({
       serverError: "public",

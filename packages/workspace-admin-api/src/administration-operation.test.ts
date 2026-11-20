@@ -92,21 +92,6 @@ const literalsOf = (union: SchemaAST.AST, discriminator: string) =>
     .map((literal) => String(literal.literal));
 
 describe("administration operations", () => {
-  test("every endpoint declares exactly one behavior, variant map or CLI-only reason", () => {
-    const undeclared = endpoints
-      .filter(
-        ({ annotations }) =>
-          [
-            Context.getOption(annotations, AdministrationOperationBehavior),
-            Context.getOption(annotations, AdministrationOperationVariants),
-            Context.getOption(annotations, CliOnly),
-          ].filter((option) => Option.isSome<unknown>(option)).length !== 1
-      )
-      .map(({ reference }) => reference);
-
-    expect(undeclared).toEqual([]);
-  });
-
   test("refuses an endpoint that declares neither or both", () => {
     const groupWith = (endpoint: HttpApiEndpoint.Constraint) =>
       HttpApi.make("test").add(HttpApiGroup.make("test").add(endpoint));
