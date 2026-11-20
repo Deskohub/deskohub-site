@@ -5,23 +5,14 @@ import {
   type InSavedAudienceType as InSavedAudience,
 } from "@deskohub/workspace-admin-api";
 import { ChevronDown } from "lucide-react";
-import { useId, useState } from "react";
+import { useId } from "react";
 import { m } from "@/features/administration/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/shared/components/ui/command";
 import { fieldTriggerVariants } from "@/shared/components/ui/field-trigger";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/shared/components/ui/popover";
+  SearchablePicker,
+  SearchablePickerItem,
+} from "@/shared/components/ui/searchable-picker";
 import {
   Select,
   SelectContent,
@@ -130,21 +121,27 @@ function SavedAudiencePicker({
   readonly missingErrorId: string;
 }) {
   const locale = useRouteLocale();
-  const [open, setOpen] = useState(false);
   const chosen =
     condition.audienceId === unchosenSavedAudience
       ? undefined
       : condition.audienceId;
   const chosenAudience = savedAudiences.find(({ id }) => id === chosen);
-  const search = m.emailAutomationFlowSavedAudienceSearch({}, { locale });
   const unknown = m.emailAutomationFlowSavedAudienceUnknown({}, { locale });
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <SearchablePicker
+      empty={m.emailAutomationFlowSavedAudienceEmpty({}, { locale })}
+      onPick={(audienceId) =>
+        onChange({
+          ...condition,
+          audienceId: AdministrationCampaignAudienceId.make(audienceId),
+        })
+      }
+      search={m.emailAutomationFlowSavedAudienceSearch({}, { locale })}
+      value={chosen}
+      triggerRole="combobox"
+      trigger={
         <button
           type="button"
-          role="combobox"
-          aria-expanded={open}
           {...fieldErrorAttributes(missingErrorId, missing)}
           aria-label={m.emailAutomationFlowSavedAudiencePickerLabel(
             {},
@@ -171,84 +168,26 @@ function SavedAudiencePicker({
               : (chosenAudience?.name ?? unknown)}
           </span>
           <ChevronDown
-            className="h-4 w-4 shrink-0 text-navy-blue/60"
+            className="size-4 shrink-0 text-navy-blue/60"
             aria-hidden
           />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="w-[min(22rem,calc(100vw-2rem))] overflow-hidden p-0"
-      >
-        <Command label={search}>
-          <CommandInput placeholder={search} />
-          <CommandList>
-            <SavedAudienceOptions
-              savedAudiences={savedAudiences}
-              chosen={chosen}
-              lost={chosen !== undefined && chosenAudience === undefined}
-              unknown={unknown}
-              onPick={(audienceId) => {
-                onChange({
-                  ...condition,
-                  audienceId: AdministrationCampaignAudienceId.make(audienceId),
-                });
-                setOpen(false);
-              }}
-              onKeep={() => setOpen(false)}
-            />
-          </CommandList>
-          <CommandEmpty>
-            {m.emailAutomationFlowSavedAudienceEmpty({}, { locale })}
-          </CommandEmpty>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/** The picker's options: the lost chosen audience, then each listed one. */
-function SavedAudienceOptions({
-  savedAudiences,
-  chosen,
-  lost,
-  unknown,
-  onPick,
-  onKeep,
-}: {
-  readonly savedAudiences: readonly AudienceValueOption[];
-  readonly chosen: string | undefined;
-  /** The chosen audience is missing from the list, such as a deleted one. */
-  readonly lost: boolean;
-  /** The lost audience's label. */
-  readonly unknown: string;
-  readonly onPick: (audienceId: string) => void;
-  /** Closes the picker on the lost audience, which stays chosen. */
-  readonly onKeep: () => void;
-}) {
-  return (
-    <CommandGroup>
-      {lost && (
-        <CommandItem
-          value={chosen}
-          keywords={[unknown]}
-          selected
-          onSelect={onKeep}
-        >
+      }
+    >
+      {chosen !== undefined && !chosenAudience && (
+        <SearchablePickerItem label={unknown} value={chosen}>
           {unknown}
-        </CommandItem>
+        </SearchablePickerItem>
       )}
       {savedAudiences.map((audience) => (
-        <CommandItem
+        <SearchablePickerItem
           key={audience.id}
+          label={audience.name}
           value={audience.id}
-          keywords={[audience.name]}
-          selected={audience.id === chosen}
-          onSelect={() => onPick(audience.id)}
         >
           <span className="min-w-0 flex-1 truncate">{audience.name}</span>
-        </CommandItem>
+        </SearchablePickerItem>
       ))}
-    </CommandGroup>
+    </SearchablePicker>
   );
 }
