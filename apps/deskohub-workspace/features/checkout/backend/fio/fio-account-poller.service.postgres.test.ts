@@ -17,6 +17,10 @@ import { PaymentLifecycleRepository } from "@/features/checkout/backend/reposito
 import { QrPaymentRepository } from "@/features/checkout/backend/repositories/qr-payment.repository";
 import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { makeMemoryQueue } from "@/shared/backend/queue/memory-queue.test-utils";
+import {
+  QueueMessageSendError,
+  QueuePublisher,
+} from "@/shared/backend/queue/queue-publisher";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
@@ -42,6 +46,17 @@ const createHarness = () => {
   const account = { accountNumber: "1234567890", bankCode: "2010" };
   const readToken = Redacted.make("synthetic-fio-poll-token");
   const queue = makeMemoryQueue();
+  const dispatchQueue = makeMemoryQueue();
+  let failDispatch = false;
+  const dispatchPublisher = Layer.effect(
+    QueuePublisher,
+    Effect.map(QueuePublisher, (publisher) => ({
+      publish: (message) =>
+        failDispatch
+          ? Effect.fail(new QueueMessageSendError({ topic: message.topic }))
+          : publisher.publish(message),
+    }))
+  ).pipe(Layer.provide(dispatchQueue.layer));
   const reads: Array<Pick<FioPeriod, "from" | "to">> = [];
   let readPeriod: FioMovements["Service"]["readPeriod"] = () =>
     Effect.succeed([]);
@@ -64,10 +79,12 @@ const createHarness = () => {
         PaymentLifecycleRepository.Default.pipe(
           Layer.provide(Layer.merge(db, Layer.mock(AccountingStorage, {})))
         ),
-        Layer.mock(PaidFulfillmentQueueService, { enqueue: () => Effect.void }),
-        Layer.mock(LatePaymentRecoveryQueueService, {
-          enqueue: () => Effect.void,
-        })
+        PaidFulfillmentQueueService.Default.pipe(
+          Layer.provide(dispatchPublisher)
+        ),
+        LatePaymentRecoveryQueueService.Default.pipe(
+          Layer.provide(dispatchPublisher)
+        )
       )
     )
   );
@@ -155,6 +172,10 @@ const createHarness = () => {
 
   return {
     queue,
+    dispatchQueue,
+    failDispatch: (fail: boolean) => {
+      failDispatch = fail;
+    },
     reads,
     start,
     consume: (job: FioPollJob) =>
@@ -216,6 +237,38 @@ const credit = (
 });
 
 describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
+  test("redelivery replays the last QR winner's failed dispatch with no payable demand or bank read", async () => {
+    const h = createHarness();
+    const order = await h.start();
+    const job = h.take();
+    h.setRead(({ to }) =>
+      Effect.succeed([credit("last-winner", to, order.variableSymbol)])
+    );
+    h.failDispatch(true);
+    await expect(h.consume(job)).rejects.toMatchObject({
+      _tag: "PaidFulfillmentQueueError",
+    });
+    expect((await h.state())?.delivery_id).toBe(job.deliveryId);
+    expect((await h.state())?.covered_through).toBeNull();
+    expect(h.reads).toHaveLength(1);
+    expect(await h.evidence()).toMatchObject([
+      { movementId: "last-winner", disposition: "winner" },
+    ]);
+
+    await expect(h.consume(job)).rejects.toMatchObject({
+      _tag: "PaidFulfillmentQueueError",
+    });
+    expect((await h.state())?.delivery_id).toBe(job.deliveryId);
+    expect(h.reads).toHaveLength(1);
+    h.failDispatch(false);
+    await h.consume(job);
+    await h.consume(job);
+    expect(h.reads).toHaveLength(1);
+    expect(h.queue.pending()).toEqual([]);
+    expect(h.dispatchQueue.pending()).toHaveLength(1);
+    expect((await h.state())?.delivery_id).toBeNull();
+  });
+
   test("one payable account sequence stays awake after selecting card and fences deliveries", async () => {
     const h = createHarness();
     const attempt = await h.start({ selectedCard: true });

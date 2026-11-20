@@ -75,7 +75,8 @@ export class FioAccountPoller extends Context.Service<
       const publisher = yield* QueuePublisher;
 
       const claim = Effect.fn("FioAccountPoller.claim")(function* (
-        job: FioPollJob
+        job: FioPollJob,
+        dispatchReplayed = false
       ) {
         return yield* transaction(
           Effect.gen(function* () {
@@ -84,6 +85,7 @@ export class FioAccountPoller extends Context.Service<
             if (poll?.deliveryId !== deliveryId) return;
 
             if (!(yield* attempts.hasPayableAttempts(accountKey))) {
+              if (!dispatchReplayed) return "replayDispatch" as const;
               yield* polls.update(accountKey, idleDelivery);
               return;
             }
@@ -202,8 +204,18 @@ export class FioAccountPoller extends Context.Service<
 
       return {
         consume: Effect.fn("FioAccountPoller.consume")(function* (job) {
-          const read = yield* claim(job);
-          if (!read) return;
+          const candidate = yield* claim(job);
+          if (candidate === "replayDispatch") {
+            // A previous delivery can settle the last attempt before its
+            // fulfillment/recovery publish fails. Replay that durable work
+            // without reading Fio and keep this delivery if replay fails.
+            yield* settlements.retryPendingDispatch(job.accountKey);
+          }
+          const read =
+            candidate === "replayDispatch"
+              ? yield* claim(job, true)
+              : candidate;
+          if (!read || read === "replayDispatch") return;
 
           const { account, readToken } = read.receivingAccount;
           const response = yield* provider
