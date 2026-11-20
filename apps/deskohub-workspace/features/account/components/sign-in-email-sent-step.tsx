@@ -15,6 +15,7 @@ type SignInEmailSentStepProps = {
   readonly locale: Locale;
   readonly authReturn: AuthReturnLifecycle;
   readonly request: EmailSignInRequest;
+  readonly checkExistingSessionOnFocus?: boolean;
   /** Replaces the request after a new email, or drops it. */
   readonly onRequestChange: (request: EmailSignInRequest) => void;
   readonly onUseDifferentEmail: () => void;
@@ -33,6 +34,7 @@ export function SignInEmailSentStep({
   locale,
   authReturn,
   request,
+  checkExistingSessionOnFocus = true,
   onRequestChange,
   onUseDifferentEmail,
   headingRef,
@@ -40,6 +42,7 @@ export function SignInEmailSentStep({
   // The link may be opened in another tab after this one reloaded and lost
   // its hand-off listener; coming back to this tab then continues.
   useEffect(() => {
+    if (!checkExistingSessionOnFocus) return;
     const continueIfSignedIn = () => {
       if (document.visibilityState !== "visible") return;
       void authReturn.continueIfSignedIn();
@@ -50,7 +53,7 @@ export function SignInEmailSentStep({
       window.removeEventListener("focus", continueIfSignedIn);
       document.removeEventListener("visibilitychange", continueIfSignedIn);
     };
-  }, [authReturn]);
+  }, [authReturn, checkExistingSessionOnFocus]);
 
   if (!hasSignInCode(request)) {
     return (

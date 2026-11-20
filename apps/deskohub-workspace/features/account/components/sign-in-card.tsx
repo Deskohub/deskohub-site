@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { continueEntryPackGiftSignIn } from "@/features/account/actions/continue-entry-pack-gift-sign-in";
 import {
   createAuthReturnLifecycle,
   type SignInEmailFailure,
@@ -15,12 +16,17 @@ import {
 } from "@/features/account/components/sign-in-email-step";
 import { SignInPasswordStep } from "@/features/account/components/sign-in-password-step";
 import {
+  type EmailSignInRequest,
   hasSignInCode,
   signsInWithPassword,
   useEmailSignInRequest,
 } from "@/features/account/email-sign-in-request";
 import type { SignInPurpose } from "@/features/account/routes";
 import type { Locale } from "@/features/i18n";
+import {
+  isEntryPackGiftSignInHash,
+  readEntryPackGiftSignInSecret,
+} from "@/features/passes/entry-pack-gift-sign-in";
 import { useClientReady } from "@/shared/browser/use-client-ready";
 import { parseSameOriginPath } from "@/shared/utils/same-origin-path";
 
@@ -40,15 +46,83 @@ type SignInCardProps = {
    * gone, until the visitor sends a new email.
    */
   readonly noLongerWaiting?: boolean;
+  readonly resolveGiftSignIn?: typeof continueEntryPackGiftSignIn;
 };
 
-export function SignInCard({
+type GiftSignIn = NonNullable<
+  Awaited<ReturnType<typeof continueEntryPackGiftSignIn>>["data"]
+>;
+
+export function SignInCard({ resolveGiftSignIn, ...props }: SignInCardProps) {
+  const gift = useGiftSignIn(resolveGiftSignIn);
+  return (
+    <SignInCardForm
+      {...props}
+      key={gift ? "gift" : "sign-in"}
+      gift={gift ?? undefined}
+      giftLoading={Boolean(resolveGiftSignIn && gift === undefined)}
+    />
+  );
+}
+
+function useGiftSignIn(resolve: SignInCardProps["resolveGiftSignIn"]) {
+  const [gift, setGift] = useState<GiftSignIn | null>();
+  // Strict Mode can repeat the effect after the URL fragment was removed.
+  const lookup = useRef<ReturnType<NonNullable<typeof resolve>> | null>(
+    undefined
+  );
+
+  useEffect(() => {
+    if (!resolve) return;
+    if (lookup.current === undefined) {
+      lookup.current = null;
+      const { hash, pathname, search } = window.location;
+      if (isEntryPackGiftSignInHash(hash)) {
+        try {
+          window.history.replaceState(
+            window.history.state,
+            "",
+            pathname + search
+          );
+          const secret = readEntryPackGiftSignInSecret(hash);
+          if (secret) lookup.current = resolve({ secret });
+        } catch {
+          // Only exchange a fragment after removing it from the address bar.
+        }
+      }
+    }
+    if (lookup.current === null) {
+      setGift(null);
+      return;
+    }
+    let active = true;
+    void lookup.current.then(
+      (result) => {
+        if (active) setGift(result?.data ?? null);
+      },
+      () => {
+        if (active) setGift(null);
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [resolve]);
+  return gift;
+}
+
+function SignInCardForm({
   locale,
   returnTo,
   passkeysEnabled = false,
   purpose,
   noLongerWaiting = false,
-}: SignInCardProps) {
+  gift,
+  giftLoading,
+}: Omit<SignInCardProps, "resolveGiftSignIn"> & {
+  readonly gift?: GiftSignIn;
+  readonly giftLoading: boolean;
+}) {
   const [failure, setFailure] = useState<SignInEmailFailure | null>(null);
   const [showNoLongerWaiting, setShowNoLongerWaiting] =
     useState(noLongerWaiting);
@@ -65,8 +139,10 @@ export function SignInCard({
     const frame = requestAnimationFrame(() => setNoticeRegionMounted(true));
     return () => cancelAnimationFrame(frame);
   }, [noticeRegionMounted]);
-  const { request, destination, setRequest } =
-    useContinuingSignInRequest(returnTo);
+  const { request, destination, setRequest } = useContinuingSignInRequest(
+    returnTo,
+    gift?.returnTo
+  );
   const submissionInProgress = useRef(false);
   // The control that switched the view unmounts with it, so the next view
   // takes focus once it mounts.
@@ -81,7 +157,7 @@ export function SignInCard({
     () => createAuthReturnLifecycle({ locale, returnTo: destination }),
     [locale, destination]
   );
-  const form = useSignInEmailForm(locale);
+  const form = useSignInEmailForm(locale, gift?.email);
 
   useEffect(() => authReturn.cancel, [authReturn]);
 
@@ -113,7 +189,7 @@ export function SignInCard({
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    if (submissionInProgress.current) {
+    if (giftLoading || submissionInProgress.current) {
       event.preventDefault();
       return;
     }
@@ -139,7 +215,7 @@ export function SignInCard({
     setFailure(null);
   };
 
-  if (request && signsInWithPassword(request)) {
+  if (!giftLoading && request && signsInWithPassword(request)) {
     return (
       <AuthCard>
         <SignInPasswordStep
@@ -152,12 +228,13 @@ export function SignInCard({
     );
   }
 
-  if (request) {
+  if (!giftLoading && request) {
     return (
       <AuthCard>
         <SignInEmailSentStep
           locale={locale}
           authReturn={authReturn}
+          checkExistingSessionOnFocus={!gift?.alreadySignedIn}
           request={request}
           headingRef={focusOnMount("accepted")}
           onRequestChange={(next) => {
@@ -179,9 +256,10 @@ export function SignInCard({
       noticeRegionMounted={noticeRegionMounted}
       onSubmit={handleSubmit}
       passkeysEnabled={passkeysEnabled}
+      privateEmail={gift !== undefined}
       purpose={purpose}
-      ready={clientReady}
-      returnTo={returnTo}
+      ready={clientReady && !giftLoading}
+      returnTo={gift?.returnTo ?? returnTo}
       showNoLongerWaiting={showNoLongerWaiting}
     />
   );
@@ -191,8 +269,22 @@ export function SignInCard({
 // already lands there. A card opened without one takes the request's; a
 // card opened for another one starts a fresh request. A hook, so the React
 // Compiler treats the destination as frozen and keeps the card's memoization.
-function useContinuingSignInRequest(returnTo: string | undefined) {
+function useContinuingSignInRequest(
+  returnTo: string | undefined,
+  giftReturnTo: string | undefined
+) {
   const [storedRequest, setRequest] = useEmailSignInRequest();
+  const [giftRequest, setGiftRequest] = useState<EmailSignInRequest | null>(
+    null
+  );
+  // The gift context and its email stay in this tab's memory.
+  if (giftReturnTo !== undefined) {
+    return {
+      request: giftRequest,
+      destination: giftReturnTo,
+      setRequest: setGiftRequest,
+    };
+  }
   const requestedReturnTo = parseSameOriginPath(returnTo);
   const request =
     storedRequest &&

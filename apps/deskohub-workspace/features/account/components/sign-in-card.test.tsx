@@ -9,6 +9,7 @@ import {
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/browser";
+import { StrictMode } from "react";
 import { m } from "@/features/i18n";
 import {
   registerWorkspaceComponentTestEnv,
@@ -233,6 +234,9 @@ describe("account components", () => {
 
   afterEach(async () => {
     cleanup();
+    if (window.location.hash) {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
     // Settle what a test left pending, so no attempt outlives it.
     for (const request of passkeyRequests) {
       request.reject(new DOMException("Aborted", "AbortError"));
@@ -566,6 +570,64 @@ describe("account components", () => {
     expect(document.activeElement).toBe(
       view.getByLabelText(m.accountSignInEmailLabel({}, { locale }))
     );
+  });
+
+  test("exchanges a gift fragment once and keeps its prefill out of HTML and storage", async () => {
+    const { SignInCard } = await import("./sign-in-card");
+    const secret = `synthetic.${"a".repeat(43)}`;
+    const returnTo = "/en-US/account/passes?pass=synthetic-order";
+    const resolveGiftSignIn = mock(
+      async (_input: { readonly secret: string }) => {
+        expect(window.location.hash).toBe("");
+        return { data: { email: adaAddress, returnTo, alreadySignedIn: true } };
+      }
+    );
+    window.history.replaceState(null, "", `#gift=${secret}`);
+    const card = (
+      <StrictMode>
+        <SignInCard locale={locale} resolveGiftSignIn={resolveGiftSignIn} />
+      </StrictMode>
+    );
+    expect(renderToStaticMarkup(card)).not.toContain(adaAddress);
+
+    const view = render(card);
+    await act(async () => {});
+    const email = (await view.findByDisplayValue(
+      adaAddress
+    )) as HTMLInputElement;
+    expect(resolveGiftSignIn).toHaveBeenCalledTimes(1);
+    expect(resolveGiftSignIn).toHaveBeenCalledWith({ secret });
+    expect(email.getAttribute("value")).toBeNull();
+    expect(view.container.innerHTML).not.toContain(adaAddress);
+
+    await act(async () => {
+      fireEvent.submit(view.container.querySelector("#account-sign-in-form")!);
+    });
+    expect(signInMagicLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: adaAddress,
+        callbackURL: getAuthCallbackPath(locale, { returnTo }),
+      })
+    );
+    expect(sessionStorage.length).toBe(0);
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(getSession).not.toHaveBeenCalled();
+  });
+
+  test("clears a malformed gift fragment and leaves the usual sign-in available", async () => {
+    const { SignInCard } = await import("./sign-in-card");
+    const resolveGiftSignIn = mock(async () => ({}));
+    window.history.replaceState(null, "", "#gift=malformed");
+    const view = render(
+      <SignInCard locale={locale} resolveGiftSignIn={resolveGiftSignIn} />
+    );
+
+    expect(window.location.hash).toBe("");
+    expect(resolveGiftSignIn).not.toHaveBeenCalled();
+    const email = view.getByLabelText(
+      m.accountSignInEmailLabel({}, { locale })
+    );
+    expect((email as HTMLInputElement).disabled).toBe(false);
   });
 
   test("sign-in card shows a visible pending submit and sends only once", async () => {
