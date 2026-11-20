@@ -11,10 +11,8 @@ import { Button } from "@/shared/components/ui/button";
 import { cn } from "@/shared/utils";
 
 export function LanguageSwitcher({
-  onOpenChange,
   triggerClassName,
 }: {
-  onOpenChange?: (open: boolean) => void;
   triggerClassName?: string;
 }) {
   const router = useRouter();
@@ -34,7 +32,7 @@ export function LanguageSwitcher({
   };
 
   return (
-    <Menu modal loop={false} onOpenChange={onOpenChange}>
+    <Menu modal loop={false}>
       <MenuTrigger
         render={
           <Button

@@ -36,17 +36,12 @@ const navigationItems = [
 
 export function MobileMenu() {
   const [isOpen, setIsOpen] = useState(false);
-  const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
   const locale = useLocale();
   const ttrpgRoomHref = `https://workspace.deskohub.cz/${locale}/ttrpg-room`;
   setLocale(locale, { reload: false });
 
   return (
-    <Dialog
-      open={isOpen}
-      onOpenChange={setIsOpen}
-      closeOnOutsidePress={!isLanguageMenuOpen}
-    >
+    <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger
         render={
           <Button
@@ -123,7 +118,7 @@ export function MobileMenu() {
           </div>
 
           <div className="px-4">
-            <LanguageSwitcher onOpenChange={setIsLanguageMenuOpen} />
+            <LanguageSwitcher />
           </div>
 
           <div className="px-4">
