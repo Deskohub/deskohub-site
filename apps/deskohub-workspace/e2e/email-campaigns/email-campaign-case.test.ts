@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { EMAIL_TEST_DOMAIN } from "@deskohub/test-email";
 import { Effect, Exit } from "effect";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
@@ -10,13 +8,33 @@ import {
   retainServerActionSubmission,
 } from "../admin-case";
 import { pollUntil } from "../polling";
-import { workspaceE2EEmailCampaignMutationBarrierCount } from "../timeouts";
+import {
+  workspaceE2EEmailCampaignCleanupTimeout,
+  workspaceE2EEmailCampaignPlaywrightTimeout,
+  workspaceE2ETimeouts,
+} from "../timeouts";
 import {
   planEmailCampaignPreview,
   releaseEmailCampaignFixture,
 } from "./email-campaign-case";
 
 describe("email campaign preview case planning", () => {
+  test("allows both campaign action barriers and the remaining cleanup after the case deadline", () => {
+    const minimumCleanupTime =
+      workspaceE2ETimeouts.browserAction +
+      (workspaceE2ETimeouts.uiTransition + workspaceE2ETimeouts.datasource) *
+        2 +
+      workspaceE2ETimeouts.cleanupAction * 2;
+
+    expect(workspaceE2EEmailCampaignCleanupTimeout).toBeGreaterThanOrEqual(
+      minimumCleanupTime
+    );
+    expect(workspaceE2EEmailCampaignPlaywrightTimeout).toBeGreaterThanOrEqual(
+      workspaceE2ETimeouts.emailCampaignCase +
+        workspaceE2EEmailCampaignCleanupTimeout
+    );
+  });
+
   test("scopes every synthetic identifier to the run", () => {
     const first = planEmailCampaignPreview();
     const second = planEmailCampaignPreview();
@@ -26,27 +44,6 @@ describe("email campaign preview case planning", () => {
     expect(first.campaignTitle).not.toBe(second.campaignTitle);
     expect(first.recipientEmail).not.toBe(second.recipientEmail);
     expect(first.recipientEmail.endsWith(`@${EMAIL_TEST_DOMAIN}`)).toBe(true);
-  });
-});
-
-describe("email campaign cleanup budget", () => {
-  test("budgets every mutation barrier the case waits on", () => {
-    const caseSource = readFileSync(
-      resolve(import.meta.dir, "email-campaign-case.ts"),
-      "utf8"
-    );
-    // Comment-aware: a commented-out barrier call must not count as a wait.
-    const activeCaseSource = caseSource
-      .split("\n")
-      .map((line) => {
-        const commentAt = line.indexOf("//");
-        return commentAt === -1 ? line : line.slice(0, commentAt);
-      })
-      .join("\n");
-    const barrierWaits =
-      activeCaseSource.split("awaitActionQuiescence(").length - 1;
-
-    expect(barrierWaits).toBe(workspaceE2EEmailCampaignMutationBarrierCount);
   });
 });
 

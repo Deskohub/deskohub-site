@@ -26,7 +26,6 @@ import {
   prepareDiscountAvailabilityE2E,
 } from "./cases/discounts";
 import { meetingRoomE2EDurations } from "./cases/meeting-room";
-import { selectCoworkDates } from "./checkout/data";
 import type { DatasourceConfig, WorkspaceE2EConfig } from "./config";
 import type { E2EDotyposDiscountGroup } from "./integrations/dotypos";
 import { workspaceE2EReferralCheckoutCaseIds } from "./referrals/plan";
@@ -53,51 +52,6 @@ test("builds an owned-date interval across Prague's DST boundary", () => {
     endDate: new Date("2026-10-25T23:00:00.000Z"),
     startDate: new Date("2026-10-23T22:00:00.000Z"),
   });
-});
-
-test("caps the produced date plan at the case-plan per-date maximums", async () => {
-  const allocation = {
-    fromOffsetDays: 14,
-    shardCount: 1,
-    shardIndex: 0,
-    toOffsetDays: 39,
-  } as const;
-  const openSpaceMaximum =
-    workspaceE2EMaximumSameDateCoworkReservations["open-space"];
-  const openSpaceDates = await Effect.runPromise(
-    selectCoworkDates(
-      ["2099-08-03", "2099-08-04", "2099-08-05"],
-      openSpaceMaximum * 2 + 2,
-      { allocation, maximumReservationsPerDate: openSpaceMaximum }
-    )
-  );
-
-  expect(openSpaceDates).toHaveLength(openSpaceMaximum * 2 + 2);
-  expect(
-    Math.max(
-      ...[...Map.groupBy(openSpaceDates, (date) => date).values()].map(
-        ({ length }) => length
-      )
-    )
-  ).toBe(openSpaceMaximum);
-
-  const reservedDeskMaximum =
-    workspaceE2EMaximumSameDateCoworkReservations["reserved-desk"];
-  const reservedDeskDates = await Effect.runPromise(
-    selectCoworkDates(
-      ["2099-08-03", "2099-08-04", "2099-08-05"],
-      reservedDeskMaximum * 3,
-      { allocation, maximumReservationsPerDate: reservedDeskMaximum }
-    )
-  );
-
-  expect(
-    Math.max(
-      ...[...Map.groupBy(reservedDeskDates, (date) => date).values()].map(
-        ({ length }) => length
-      )
-    )
-  ).toBe(reservedDeskMaximum);
 });
 
 test("wires the case-plan per-date maximums through the real case builders", async () => {

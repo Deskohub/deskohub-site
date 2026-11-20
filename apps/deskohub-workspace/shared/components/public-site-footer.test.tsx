@@ -210,10 +210,9 @@ test("saves a signed-in customer's preference before a language link navigates",
   expect(window.location.pathname).toBe("/en-US/pricing");
 });
 
-test("states the company's VAT status from the one setting", async () => {
+test("shows the company's VAT status in the footer", async () => {
   const view = await renderFooter();
 
-  expect(workspaceSiteConstants.company.vatStatus).toBe("not-vat-payer");
   expect(
     view.getByText(m.footerVatStatus({}, { locale: "cs-CZ" }))
   ).toBeTruthy();

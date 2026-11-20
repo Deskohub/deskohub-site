@@ -125,7 +125,7 @@ const accountWatchdogRequirement =
 // Cleanup waits on one completion barrier per sequential mutation (initial
 // form action + replayed action) plus the initial action's stale convergence
 // fallback, so the barrier count must grow with every new mutation barrier.
-export const workspaceE2EAccessCodeMutationBarrierCount = 2;
+const workspaceE2EAccessCodeMutationBarrierCount = 2;
 
 export const workspaceE2EAccessCodeCleanupTimeout =
   workspaceE2ETimeouts.accessCodeActionBarrier *
@@ -142,7 +142,7 @@ export const workspaceE2EAccessCodePlaywrightTimeout =
 // each with a bounded fallback that converges on the persisted row, then
 // clears the Dotypos profile's tags, expires it, and deletes the synthetic
 // rows.
-export const workspaceE2EEmailCampaignMutationBarrierCount = 2;
+const workspaceE2EEmailCampaignMutationBarrierCount = 2;
 
 export const workspaceE2EEmailCampaignCleanupTimeout =
   workspaceE2ETimeouts.browserAction +

@@ -1,6 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
+import {
+  evaluateWorkflowValue,
+  findStepByName,
+  parseWorkflow,
+  workflowExpressionString,
+} from "./shared/workflow-contract";
 import {
   createWorkflowStepRunner,
   type GhFixtures,
@@ -48,11 +53,21 @@ const testJobCompleted = {
   },
 };
 
-const renderGroup = (sha: string) =>
+const renderGroup = (pr: string, sha: string, runId: string) =>
   String(testJob?.concurrency?.group).replaceAll(
-    /\$\{\{ needs\.resolve-target\.outputs\.(\w+) \}\}/g,
-    (_, output: string) =>
-      ({ pr_number: prNumber, sha })[output] ?? `<${output}>`
+    /\$\{\{[^}]*\}\}/g,
+    (expression) =>
+      evaluateWorkflowValue(expression, {
+        contexts: ["needs", "github"],
+        values: new Map([
+          [
+            "needs.resolve-target.outputs.pr_number",
+            workflowExpressionString(pr),
+          ],
+          ["needs.resolve-target.outputs.sha", workflowExpressionString(sha)],
+          ["github.run_id", workflowExpressionString(runId)],
+        ]),
+      })
   );
 
 const checkHead = (targetSha: string) =>
@@ -95,11 +110,13 @@ const statusPosts = (calls: readonly string[]) =>
   calls.filter((call) => call.includes("/statuses/"));
 
 describe("Workspace E2E run superseded before its test job", () => {
-  test("puts runs for different heads of a PR in different concurrency groups", () => {
+  test("cancels in-progress runs only on the same PR and SHA", () => {
     expect(testJob?.concurrency?.["cancel-in-progress"]).toBe(true);
-    expect(renderGroup(shaA)).toBe(`workspace-e2e-pr-${prNumber}-${shaA}`);
+    const group = renderGroup(prNumber, shaA, "100");
+    expect(group).toBe(renderGroup(prNumber, shaA, "101"));
     // Run A entering test-e2e after run B can't cancel B, whatever the order.
-    expect(renderGroup(shaA)).not.toBe(renderGroup(shaB));
+    expect(group).not.toBe(renderGroup(prNumber, shaB, "100"));
+    expect(group).not.toBe(renderGroup("8", shaA, "100"));
   });
 
   test("stops run A at the start of its test job before it touches shared state", async () => {
