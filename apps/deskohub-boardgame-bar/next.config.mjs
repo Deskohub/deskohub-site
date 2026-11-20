@@ -10,6 +10,7 @@ const nextConfig = {
     "@deskohub/email",
     "@deskohub/games",
     "@deskohub/reservation",
+    "@deskohub/tooltip",
   ],
   experimental: {
     // Next's TS CLI integration needs bin tsc, which the official TS6 wrapper (tsc6-only) must not provide; API-worker type checking still runs.

@@ -2,7 +2,7 @@
 
 import { type Editor, useEditorState } from "@tiptap/react";
 import { Bold, Braces, Italic, Link2 } from "lucide-react";
-import { type ReactNode, useId, useRef, useState } from "react";
+import { type ReactElement, useId, useRef, useState } from "react";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
@@ -28,12 +28,7 @@ import {
   PopoverTrigger,
 } from "@/shared/components/ui/popover";
 import { Toggle } from "@/shared/components/ui/toggle";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import type { EmailDraftValueDefinition } from "./email-draft-form";
 import {
   emailInlineLinkKey,
@@ -72,26 +67,20 @@ export function EmailInlineTextToolbar({
 }) {
   const locale = useRouteLocale();
   return (
-    <TooltipProvider>
-      <div
-        aria-label={m.emailsEditorInlineToolbarLabel({}, { locale })}
-        className="flex shrink-0 items-center gap-0.5 py-0.5"
-        role="toolbar"
-      >
-        {mode === "rich" && (
-          <EmailInlineFormatting
-            editor={editor}
-            links={links}
-            locale={locale}
-          />
-        )}
-        <EmailInlineValuePicker
-          definitions={definitions}
-          editor={editor}
-          locale={locale}
-        />
-      </div>
-    </TooltipProvider>
+    <div
+      aria-label={m.emailsEditorInlineToolbarLabel({}, { locale })}
+      className="flex shrink-0 items-center gap-0.5 py-0.5"
+      role="toolbar"
+    >
+      {mode === "rich" && (
+        <EmailInlineFormatting editor={editor} links={links} locale={locale} />
+      )}
+      <EmailInlineValuePicker
+        definitions={definitions}
+        editor={editor}
+        locale={locale}
+      />
+    </div>
   );
 }
 
@@ -99,15 +88,10 @@ function ToolbarHint({
   children,
   label,
 }: {
-  readonly children: ReactNode;
+  readonly children: ReactElement;
   readonly label: string;
 }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
+  return <Tooltip trigger={children}>{label}</Tooltip>;
 }
 
 function EmailInlineFormatting({
