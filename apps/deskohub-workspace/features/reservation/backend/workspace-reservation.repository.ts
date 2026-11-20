@@ -33,6 +33,7 @@ import {
   fioPaymentSettlements,
   latePaymentRecoveries,
   type PaymentAttemptRow,
+  passEntryClaims,
   paymentAttempts,
   type ReservationCancellationCause,
   reservationAccessGrants,
@@ -56,8 +57,10 @@ import type { DiscountClaimError } from "@/features/discounts/errors";
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
 import { endedUnpaidPaymentStates } from "@/features/order";
 import {
+  checkEntryPackClaim,
   type EntryPackRedemption,
   type EntryPackUnavailableError,
+  type entryPackUnavailableFailureCode,
   findReservationEntryClaim,
   releaseReservedEntryPackClaim,
   reserveEntryPackClaim,
@@ -328,26 +331,34 @@ export interface IWorkspaceReservationRepository {
     id: WorkspaceReservationId
   ) => ReturnType<typeof findReservationEntryClaim>;
   readonly claimHoldCreation: (
+    id: WorkspaceReservationId
+  ) => Effect.Effect<boolean, EffectDrizzleQueryError>;
+  readonly checkEntryPackAvailable: (
     id: WorkspaceReservationId,
-    entryPack?: EntryPackRedemption
+    entryPack: EntryPackRedemption
   ) => Effect.Effect<
-    boolean,
+    void,
     EffectDrizzleQueryError | EntryPackUnavailableError | SqlError.SqlError
   >;
   readonly releaseHoldCreation: (
-    id: WorkspaceReservationId
+    id: WorkspaceReservationId,
+    reason?: typeof entryPackUnavailableFailureCode
   ) => Effect.Effect<
     void,
-    EffectDrizzleQueryError | SqlError.SqlError | WorkspaceReservationStateError
+    EffectDrizzleQueryError | WorkspaceReservationStateError
   >;
   readonly attachHold: (input: {
     readonly id: WorkspaceReservationId;
     readonly dotyposReservationId: DotyposReservationId;
     readonly reservationCreatedAt: Temporal.Instant;
     readonly reservationHoldExpiresAt: Temporal.Instant;
+    readonly entryPack?: EntryPackRedemption;
   }) => Effect.Effect<
     void,
-    EffectDrizzleQueryError | WorkspaceReservationStateError
+    | EffectDrizzleQueryError
+    | EntryPackUnavailableError
+    | SqlError.SqlError
+    | WorkspaceReservationStateError
   >;
   readonly markAttachFailedCancellationRequired: (input: {
     readonly id: WorkspaceReservationId;
@@ -1504,9 +1515,11 @@ export class WorkspaceReservationRepository extends Context.Service<
             effect.pipe(Effect.annotateLogs({ reservationId }))
         ),
         findEntryPackClaim: (id) => findReservationEntryClaim(db, id),
+        checkEntryPackAvailable: (id, entryPack) =>
+          transaction(checkEntryPackClaim(id, entryPack)),
         claimHoldCreation: Effect.fn("workspaceReservations.claimHoldCreation")(
-          function* (id, entryPack) {
-            const claim = db
+          function* (id) {
+            const updated = yield* db
               .update(workspaceReservations)
               .set({
                 reservationState: "creating_hold",
@@ -1515,51 +1528,23 @@ export class WorkspaceReservationRepository extends Context.Service<
               .where(
                 and(
                   eq(workspaceReservations.id, id),
-                  eq(workspaceReservations.reservationState, "draft"),
-                  entryPack &&
-                    eq(
-                      workspaceReservations.authorAccountId,
-                      entryPack.holderAccountId
-                    )
+                  eq(workspaceReservations.reservationState, "draft")
                 )
               )
               .returning({ id: workspaceReservations.id });
-            if (!entryPack) return (yield* claim).length > 0;
-            const result = yield* transaction(
-              Effect.gen(function* () {
-                const [updated] = yield* claim;
-                if (!updated) return false;
-                return yield* reserveEntryPackClaim(id, entryPack).pipe(
-                  Effect.as(true),
-                  Effect.catchTag("EntryPackUnavailableError", (unavailable) =>
-                    Effect.gen(function* () {
-                      const cancelledAt = Temporal.Now.instant();
-                      yield* db
-                        .update(workspaceReservations)
-                        .set({
-                          reservationState: "cancelled",
-                          reservationCancelledAt: cancelledAt,
-                          updatedAt: cancelledAt,
-                        })
-                        .where(eq(workspaceReservations.id, id));
-                      return unavailable;
-                    })
-                  )
-                );
-              })
-            );
-            return typeof result === "boolean" ? result : yield* result;
+            return updated.length > 0;
           },
           (effect, reservationId) =>
             effect.pipe(Effect.annotateLogs({ reservationId }))
         ),
         releaseHoldCreation: Effect.fn(
           "workspaceReservations.releaseHoldCreation"
-        )(function* (id) {
+        )(function* (id, reason) {
           const updated = yield* db
             .update(workspaceReservations)
             .set({
               reservationState: "draft",
+              ...(reason && { failureCode: reason }),
               updatedAt: Temporal.Now.instant(),
             })
             .where(
@@ -1576,31 +1561,47 @@ export class WorkspaceReservationRepository extends Context.Service<
             id,
             "Only unattached creating_hold reservations can be released."
           );
-          yield* releaseReservedEntryPackClaim(id);
-        }, transaction),
+        }),
         attachHold: Effect.fn("workspaceReservations.attachHold")(
           function* (input) {
-            const updated = yield* db
+            const { entryPack } = input;
+            const attach = db
               .update(workspaceReservations)
               .set({
                 dotyposReservationId: input.dotyposReservationId,
                 reservationState: "held",
                 reservationCreatedAt: input.reservationCreatedAt,
                 reservationHoldExpiresAt: input.reservationHoldExpiresAt,
+                ...(entryPack && { failureCode: null }),
                 updatedAt: Temporal.Now.instant(),
               })
               .where(
                 and(
                   eq(workspaceReservations.id, input.id),
-                  eq(workspaceReservations.reservationState, "creating_hold")
+                  eq(workspaceReservations.reservationState, "creating_hold"),
+                  entryPack &&
+                    eq(
+                      workspaceReservations.authorAccountId,
+                      entryPack.holderAccountId
+                    )
                 )
               )
-              .returning({ id: workspaceReservations.id });
-            yield* ensureUpdated(
-              updated,
-              "workspaceReservations.attachHold",
-              input.id,
-              "Only creating_hold reservations can attach a Dotypos hold."
+              .returning({ id: workspaceReservations.id })
+              .pipe(
+                Effect.flatMap((updated) =>
+                  ensureUpdated(
+                    updated,
+                    "workspaceReservations.attachHold",
+                    input.id,
+                    "Only creating_hold reservations can attach a Dotypos hold."
+                  )
+                )
+              );
+            if (!entryPack) return yield* attach;
+            return yield* transaction(
+              attach.pipe(
+                Effect.andThen(reserveEntryPackClaim(input.id, entryPack))
+              )
             );
           }
         ),
@@ -1649,6 +1650,22 @@ export class WorkspaceReservationRepository extends Context.Service<
                   ]),
                   sql`${workspaceReservations.paymentState} <> 'paid'`,
                   sql`${workspaceReservations.reservationState} <> 'confirmed'`,
+                  input.cause === "hold_expired"
+                    ? or(
+                        ne(workspaceReservations.paymentState, "pending"),
+                        notExists(
+                          db
+                            .select({ id: passEntryClaims.reservationId })
+                            .from(passEntryClaims)
+                            .where(
+                              eq(
+                                passEntryClaims.reservationId,
+                                workspaceReservations.id
+                              )
+                            )
+                        )
+                      )
+                    : undefined,
                   // A retry releases only the hold of a payment that ended,
                   // never one a payment admitted meanwhile is using.
                   input.cause === "payment_retry"

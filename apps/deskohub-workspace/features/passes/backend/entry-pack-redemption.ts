@@ -18,6 +18,8 @@ export class EntryPackUnavailableError extends Data.TaggedError(
   "EntryPackUnavailableError"
 )<Record<string, never>> {}
 
+export const entryPackUnavailableFailureCode = "entry_pack_unavailable";
+
 export type EntryPackRedemption = {
   readonly passId: OrderId;
   readonly holderAccountId: CustomerAccountId;
@@ -65,64 +67,71 @@ export const findReservationEntryClaim = Effect.fn("findReservationEntryClaim")(
  * serializes a date across packs. Lock the pack row before counting entries,
  * so an update to the pass cannot change its terms during admission.
  */
+export const checkEntryPackClaim = Effect.fn("checkEntryPackClaim")(function* (
+  reservationId: WorkspaceReservationId,
+  request: EntryPackRequest & { readonly tier?: PassTier }
+) {
+  const { db } = yield* WorkspaceTransaction;
+  yield* WorkspaceLocks.entryPackHolder(request.holderAccountId);
+  const [pass] = yield* db
+    .select({
+      tier: passPurchases.tier,
+      entryCount: passPurchases.entryCount,
+    })
+    .from(passPurchases)
+    .where(passForBooking(request))
+    .for("no key update");
+  if (!pass || (request.tier && pass.tier !== request.tier)) {
+    return yield* new EntryPackUnavailableError({});
+  }
+
+  const [existing] = yield* db
+    .select()
+    .from(passEntryClaims)
+    .where(eq(passEntryClaims.reservationId, reservationId));
+  if (
+    existing &&
+    (existing.passId !== request.passId ||
+      existing.date !== request.date ||
+      existing.status === "consumed")
+  ) {
+    return yield* new EntryPackUnavailableError({});
+  }
+  if (existing?.status === "reserved") return;
+
+  const [used] = yield* db
+    .select({ entries: count() })
+    .from(passEntryClaims)
+    .where(
+      and(
+        eq(passEntryClaims.passId, request.passId),
+        ne(passEntryClaims.status, "released")
+      )
+    );
+  const [sameDate] = yield* db
+    .select({ reservationId: passEntryClaims.reservationId })
+    .from(passEntryClaims)
+    .innerJoin(passPurchases, eq(passPurchases.id, passEntryClaims.passId))
+    .where(
+      and(
+        eq(passPurchases.holderAccountId, request.holderAccountId),
+        eq(passEntryClaims.date, request.date),
+        ne(passEntryClaims.status, "released")
+      )
+    )
+    .limit(1);
+  if ((used?.entries ?? 0) >= pass.entryCount || sameDate) {
+    return yield* new EntryPackUnavailableError({});
+  }
+});
+
 export const reserveEntryPackClaim = Effect.fn("reserveEntryPackClaim")(
   function* (
     reservationId: WorkspaceReservationId,
     request: EntryPackRequest & { readonly tier?: PassTier }
   ) {
     const { db } = yield* WorkspaceTransaction;
-    yield* WorkspaceLocks.entryPackHolder(request.holderAccountId);
-    const [pass] = yield* db
-      .select({
-        tier: passPurchases.tier,
-        entryCount: passPurchases.entryCount,
-      })
-      .from(passPurchases)
-      .where(passForBooking(request))
-      .for("no key update");
-    if (!pass || (request.tier && pass.tier !== request.tier)) {
-      return yield* new EntryPackUnavailableError({});
-    }
-
-    const [existing] = yield* db
-      .select()
-      .from(passEntryClaims)
-      .where(eq(passEntryClaims.reservationId, reservationId));
-    if (
-      existing &&
-      (existing.passId !== request.passId ||
-        existing.date !== request.date ||
-        existing.status === "consumed")
-    ) {
-      return yield* new EntryPackUnavailableError({});
-    }
-    if (existing?.status === "reserved") return;
-
-    const [used] = yield* db
-      .select({ entries: count() })
-      .from(passEntryClaims)
-      .where(
-        and(
-          eq(passEntryClaims.passId, request.passId),
-          ne(passEntryClaims.status, "released")
-        )
-      );
-    const [sameDate] = yield* db
-      .select({ reservationId: passEntryClaims.reservationId })
-      .from(passEntryClaims)
-      .innerJoin(passPurchases, eq(passPurchases.id, passEntryClaims.passId))
-      .where(
-        and(
-          eq(passPurchases.holderAccountId, request.holderAccountId),
-          eq(passEntryClaims.date, request.date),
-          ne(passEntryClaims.status, "released")
-        )
-      )
-      .limit(1);
-    if ((used?.entries ?? 0) >= pass.entryCount || sameDate) {
-      return yield* new EntryPackUnavailableError({});
-    }
-
+    yield* checkEntryPackClaim(reservationId, request);
     yield* db
       .insert(passEntryClaims)
       .values({
@@ -188,7 +197,17 @@ export const releaseReservedEntryPackClaim = Effect.fn(
 export const consumeEntryPackClaim = Effect.fn("consumeEntryPackClaim")(
   function* (reservationId: WorkspaceReservationId) {
     const { db } = yield* WorkspaceTransaction;
-    const [claim] = yield* db
+    const claim = yield* findReservationEntryClaim(db, reservationId);
+    if (claim?.status === "released") {
+      return yield* new EntryPackUnavailableError({});
+    }
+    if (claim?.status !== "reserved") return;
+    yield* db
+      .select({ id: passPurchases.id })
+      .from(passPurchases)
+      .where(eq(passPurchases.id, claim.passId))
+      .for("no key update");
+    yield* db
       .update(passEntryClaims)
       .set({ status: "consumed" })
       .where(
@@ -196,12 +215,20 @@ export const consumeEntryPackClaim = Effect.fn("consumeEntryPackClaim")(
           eq(passEntryClaims.reservationId, reservationId),
           eq(passEntryClaims.status, "reserved")
         )
-      )
-      .returning({ reservationId: passEntryClaims.reservationId });
-    if (claim) return;
-    const existing = yield* findReservationEntryClaim(db, reservationId);
-    if (existing?.status === "released") {
-      return yield* new EntryPackUnavailableError({});
-    }
+      );
+    yield* db
+      .update(passPurchases)
+      .set({ status: "depleted" })
+      .where(
+        and(
+          eq(passPurchases.id, claim.passId),
+          eq(passPurchases.status, "active"),
+          sql`${passPurchases.entryCount} = (
+            select count(*) from ${passEntryClaims}
+            where ${passEntryClaims.passId} = ${claim.passId}
+              and ${passEntryClaims.status} = 'consumed'
+          )`
+        )
+      );
   }
 );

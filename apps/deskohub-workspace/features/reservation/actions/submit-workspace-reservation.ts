@@ -51,7 +51,10 @@ export const submitWorkspaceReservation = Effect.fn(
             })
         )
       ));
-    if (!selectedPayment && (defaultAccount || method === "qr")) {
+    if (
+      (method === "qr" && selectedPayment?.kind === "card_only") ||
+      (!selectedPayment && (defaultAccount || method === "qr"))
+    ) {
       return yield* new CheckoutError({
         code: "checkout_failed",
         message: "The selected payment method is unavailable.",

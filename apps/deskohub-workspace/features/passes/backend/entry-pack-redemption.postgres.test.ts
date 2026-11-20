@@ -4,13 +4,18 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { makeAccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
+import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
 import { testAccountingStorage } from "@/features/accounting/backend/accounting-storage.test-utils";
 import { quoteCoworkEntryPack } from "@/features/checkout/backend/checkout/cowork-checkout-pricing";
+import { LatePaymentRecoveryRepository } from "@/features/checkout/backend/repositories/late-payment-recovery.repository";
 import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { orderIdSchema } from "@/features/order";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import {
+  getStoredWorkspaceReservationDetails,
+  reservationOrderId,
+} from "@/features/reservation/persistence-contracts";
 import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
@@ -48,8 +53,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const passId = orderIdSchema.make(crypto.randomUUID());
       await database.pool.query(
         `insert into orders
-          (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
-          values ($1, 'pass-purchase', 'fixture-buyer', 'paid', 'fulfilled', now())`,
+          (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at, fulfilled_at)
+          values ($1, 'pass-purchase', 'fixture-buyer', 'paid', 'fulfilled', now(), now())`,
         [passId]
       );
       await database.pool.query(
@@ -78,12 +83,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         workspaceFixtures(database.db).reservation({
           stage: { reservation: "draft" },
           author,
-          details: {
-            kind: "cowork",
-            entryTier: "open-space",
-            date: date(serviceDate),
-            coffee: false,
-          },
+          details: getStoredWorkspaceReservationDetails(selection(serviceDate)),
         })
       );
     const runReservations = (f) =>
@@ -98,15 +98,29 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       reservation,
       passId,
       serviceDate,
-      holderAccountId = holder
+      holderAccountId = holder,
+      dotyposReservationId = DotyposReservationIdSchema.make(
+        crypto.randomUUID()
+      )
     ) =>
       runReservations((repository) =>
-        repository.claimHoldCreation(reservation.id, {
-          passId,
-          holderAccountId,
-          date: date(serviceDate),
-          tier: "open-space",
-        })
+        repository.claimHoldCreation(reservation.id).pipe(
+          Effect.andThen(
+            repository.attachHold({
+              id: reservation.id,
+              dotyposReservationId,
+              reservationCreatedAt: now(),
+              reservationHoldExpiresAt: now().add({ minutes: 30 }),
+              entryPack: {
+                passId,
+                holderAccountId,
+                date: date(serviceDate),
+                tier: "open-space",
+              },
+            })
+          ),
+          Effect.as(true)
+        )
       );
     const status = (reservation) =>
       runReservations((repository) =>
@@ -154,10 +168,13 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await status(rejected)).toBeUndefined();
       expect(
         await runReservations((repository) => repository.findById(rejected.id))
-      ).toMatchObject({ reservationState: "cancelled" });
+      ).toMatchObject({
+        reservationState: "creating_hold",
+        dotyposReservationId: null,
+      });
     });
 
-    test("admits one last entry and makes a provider hold failure reusable", async () => {
+    test("serializes the last entry of one pack across dates", async () => {
       const passId = await seedPack();
       for (const day of [10, 11, 12, 13]) {
         const serviceDate = `2099-06-${day}`;
@@ -174,29 +191,55 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(
         results.filter(({ status }) => status === "fulfilled")
       ).toHaveLength(1);
-      const held = results[0].status === "fulfilled" ? first : second;
+    });
+
+    test("a reservation interrupted before attachment holds no entry", async () => {
+      const serviceDate = "2099-06-16";
+      const reservation = await draft(serviceDate);
       await runReservations((repository) =>
-        repository.releaseHoldCreation(held.id)
+        repository.claimHoldCreation(reservation.id)
       );
-      expect(await status(held)).toBe("released");
-      const replacement = await draft("2099-06-16");
-      expect(await claim(replacement, passId, "2099-06-16")).toBe(true);
+      expect(await status(reservation)).toBeUndefined();
+      const second = await draft(serviceDate);
+      expect(await claim(second, await seedPack(), serviceDate)).toBe(true);
+    });
+
+    test("releases an expired unpaid hold so a replacement can use its entry", async () => {
+      const serviceDate = "2099-06-19";
+      const reservation = await draft(serviceDate);
+      const passId = await seedPack();
+      await claim(reservation, passId, serviceDate);
+      const cancellation = await runReservations((repository) =>
+        repository.claimCancellation({
+          id: reservation.id,
+          cause: "hold_expired",
+        })
+      );
+      await runReservations((repository) =>
+        repository.markCancelled({
+          id: reservation.id,
+          claimedAt: cancellation!.updatedAt,
+          cancelledAt: now(),
+        })
+      );
+      expect(await status(reservation)).toBe("released");
+      expect(await claim(await draft(serviceDate), passId, serviceDate)).toBe(
+        true
+      );
     });
 
     const exercisePayment = async ({ serviceDate, coffee, outcome }) => {
       const passId = await seedPack();
       const reservation = await draft(serviceDate);
-      await claim(reservation, passId, serviceDate);
       const dotyposReservationId = DotyposReservationIdSchema.make(
         crypto.randomUUID()
       );
-      await runReservations((repository) =>
-        repository.attachHold({
-          id: reservation.id,
-          dotyposReservationId,
-          reservationCreatedAt: now(),
-          reservationHoldExpiresAt: now().add({ minutes: 30 }),
-        })
+      await claim(
+        reservation,
+        passId,
+        serviceDate,
+        holder,
+        dotyposReservationId
       );
 
       const result = await Effect.runPromise(
@@ -234,11 +277,12 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           expect(yield* Effect.promise(() => status(reservation))).toBe(
             "reserved"
           );
-          yield* lifecycle.attachProviderSession({
+          const pending = yield* lifecycle.attachProviderSession({
             id: attempt.id,
             securityToken: "synthetic",
             providerRedirectUrl: "https://payment.example.invalid/",
           });
+          if (outcome === "pending") return pending;
           if (outcome === "failed") {
             return (yield* lifecycle.markTerminal({
               id: attempt.id,
@@ -258,7 +302,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               Layer.provide(
                 Layer.merge(
                   database.layer,
-                  testAccountingStorage(database.layer)
+                  testAccountingStorage(
+                    database.layer,
+                    AccountingSnapshotKeyService.Default
+                  )
                 )
               )
             )
@@ -300,6 +347,95 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       });
       expect(result).toMatchObject({ provider: "nexi", state: "failed" });
       expect(await status(reservation)).toBe("released");
+    });
+
+    test("keeps an unresolved Nexi entry through a date replacement request", async () => {
+      const serviceDate = "2099-06-23";
+      const { reservation, result } = await exercisePayment({
+        serviceDate,
+        coffee: true,
+        outcome: "pending",
+      });
+      expect(result).toMatchObject({ provider: "nexi", state: "pending" });
+      expect(
+        await runReservations((repository) =>
+          repository.claimSupersessionCancellation(reservation.id)
+        )
+      ).toBeNull();
+      expect(
+        await runReservations((repository) =>
+          repository.claimCancellation({
+            id: reservation.id,
+            cause: "hold_expired",
+          })
+        )
+      ).toBeNull();
+      const second = await draft(serviceDate);
+      await expect(
+        claim(second, await seedPack(), serviceDate)
+      ).rejects.toMatchObject({
+        _tag: "EntryPackUnavailableError",
+      });
+      expect(await status(reservation)).toBe("reserved");
+    });
+
+    test("refunds late money when another pack has already booked the date", async () => {
+      const serviceDate = "2099-06-24";
+      const { reservation, result } = await exercisePayment({
+        serviceDate,
+        coffee: true,
+        outcome: "failed",
+      });
+      const second = await draft(serviceDate);
+      expect(await claim(second, await seedPack(), serviceDate)).toBe(true);
+      const runRecovery = (f) =>
+        Effect.runPromise(
+          LatePaymentRecoveryRepository.pipe(
+            Effect.flatMap(f),
+            Effect.provide(LatePaymentRecoveryRepository.Default),
+            Effect.provide(database.layer)
+          )
+        );
+      const input = {
+        workspaceReservationId: reservation.id,
+        paymentAttemptId: result.id,
+      };
+      await runRecovery((repository) =>
+        repository.start({
+          ...input,
+          verifiedPaidAt: now(),
+          providerStatus: "EXECUTED",
+        })
+      );
+      await runRecovery((repository) =>
+        repository.claim({
+          paymentAttemptId: result.id,
+          staleProcessingBefore: now(),
+        })
+      );
+      await expect(
+        runRecovery((repository) =>
+          repository.completeUsingOriginalReservation({
+            ...input,
+            completedAt: now(),
+            reservationState: "held",
+          })
+        )
+      ).rejects.toMatchObject({ _tag: "EntryPackUnavailableError" });
+      await runRecovery((repository) =>
+        repository.requireRefund({
+          ...input,
+          completedAt: now(),
+          failureCode: "late_payment_entry_pack_unavailable",
+        })
+      );
+      expect(
+        await runRecovery((repository) =>
+          repository.findByPaymentAttemptId(result.id)
+        )
+      ).toMatchObject({ state: "refund_required" });
+      expect(await status(reservation)).toBe("released");
+      expect(await status(second)).toBe("reserved");
     });
   }
 );

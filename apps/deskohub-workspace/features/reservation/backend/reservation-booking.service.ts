@@ -880,7 +880,7 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
               },
               entryPack,
             });
-            return { ...quoted, changedKeys: [] } satisfies PreparedPayState;
+            return { ...quoted, changedKeys: undefined };
           }
           return yield* quotePreparedReservation({
             advertisement: at.equals(bookedAt)

@@ -1094,8 +1094,16 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           yield* Effect.logInfo("Hosted payment checkout pay state opened");
 
           const data = state.reservation;
+          const entryPackFunded =
+            "entryPack" in state.quote && Boolean(state.quote.entryPack);
+          if (entryPackFunded && input.method === "qr") {
+            return yield* new CheckoutError({
+              code: "checkout_failed",
+              message: "Entry pack add-ons are payable by card.",
+            });
+          }
 
-          if (input.method) {
+          if (input.method && !entryPackFunded) {
             const resumed = yield* resumePublicPayment(
               {
                 reservationId: reservation.id,
@@ -1265,9 +1273,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 const eligibleFio =
                   input.method &&
                   input.fio &&
-                  !(
-                    "entryPack" in prepared.quote && prepared.quote.entryPack
-                  ) &&
+                  !entryPackFunded &&
                   !lockedReservation.agentClientId &&
                   !checkout.retriedAttempt &&
                   expectedPrice.currency === "CZK" &&

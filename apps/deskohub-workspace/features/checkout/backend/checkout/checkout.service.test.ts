@@ -952,6 +952,48 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
 };
 
 describe("CheckoutService", () => {
+  test("rejects QR and opens Nexi for only the Entry pack workstation add-on", async () => {
+    const { quoteCoworkEntryPack } = await import("./cowork-checkout-pricing");
+    const { orderIdSchema } = await import("@/features/order");
+    const { quote } = await Effect.runPromise(
+      quoteCoworkEntryPack({
+        reservation: reservationData,
+        entryPack: {
+          passId: orderIdSchema.make(crypto.randomUUID()),
+          tier: "reserved-desk",
+        },
+      })
+    );
+    const payment = (method: "card" | "qr") =>
+      createCheckoutHarness({
+        orderId: "entry-pack-workstation-payment",
+        acceptedQuote: quote,
+        affirm: mock(() =>
+          Effect.succeed({ quote, commitment: emptyCommitment })
+        ),
+        startPayment: { method, fio: { accountKey: "receiving-account" } },
+      });
+
+    const qr = await payment("qr");
+    await expect(Effect.runPromise(qr.effect)).rejects.toMatchObject({
+      code: "checkout_failed",
+    });
+    expect(qr.createHostedPaymentPage).not.toHaveBeenCalled();
+
+    const card = await payment("card");
+    expect(await Effect.runPromise(card.effect)).toMatchObject({
+      status: "redirect",
+    });
+    expect(card.createPendingProviderAttempt).toHaveBeenCalledTimes(1);
+    const [admission] = card.createPendingProviderAttempt.mock.calls[0]!;
+    expect(admission).toMatchObject({
+      provider: "nexi",
+      amount: { value: 12_000, exponent: 2, currency: "CZK" },
+    });
+    expect(admission).not.toHaveProperty("publicPayment");
+    expect(card.createHostedPaymentPage).toHaveBeenCalledTimes(1);
+  });
+
   test("starts a public QR payment against the accepted reservation", async () => {
     const harness = await createCheckoutHarness({
       orderId: "public-qr-reservation",

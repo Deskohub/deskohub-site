@@ -42,7 +42,10 @@ import {
 import type { DiscountClaimInstruction } from "@/features/discounts/provider";
 import type { Locale } from "@/features/i18n";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
-import { consumeEntryPackClaim } from "@/features/passes/backend/entry-pack-redemption";
+import {
+  consumeEntryPackClaim,
+  findReservationEntryClaim,
+} from "@/features/passes/backend/entry-pack-redemption";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import {
   reservationIdForOrder,
@@ -88,6 +91,36 @@ export type PaymentLifecycleRepositoryError =
 
 export const administrationForcedPaymentCancellationFailureCode =
   "admin_forced_payment_cancellation";
+
+const ensureEntryPackPayment = Effect.fnUntraced(function* (input: {
+  readonly reservationId: WorkspaceReservationId;
+  readonly snapshot: AccountingDocumentSnapshot;
+  readonly commitment: ReturnType<typeof getDiscountCommitmentPayload>;
+  readonly operation:
+    | "completeInternalPayment"
+    | "createPendingProviderAttempt";
+}) {
+  const { db } = yield* WorkspaceTransaction;
+  const claim = yield* findReservationEntryClaim(db, input.reservationId);
+  const { quote } = input.snapshot;
+  const entryPack = "entryPack" in quote ? quote.entryPack : undefined;
+  if (!claim && !entryPack) return;
+  if (
+    !entryPack ||
+    claim?.status !== "reserved" ||
+    claim.passId !== entryPack.passId ||
+    claim.date !==
+      getAccountingDocumentSnapshotFirstServiceDate(input.snapshot) ||
+    input.commitment.applications.length > 0 ||
+    quote.payment.discounts.length > 0
+  ) {
+    return yield* lifecycleStateError(
+      input.operation,
+      { type: "workspaceReservationId", id: input.reservationId },
+      "The reserved Entry pack claim must match the checkout price."
+    );
+  }
+});
 
 type PublicPayment = { readonly accountKey: string };
 
@@ -529,6 +562,12 @@ export class PaymentLifecycleRepository extends Context.Service<
                   "Payment attempts can only be created for a current held reservation.",
               });
             }
+            yield* ensureEntryPackPayment({
+              reservationId: workspaceReservationId,
+              snapshot: accountingSnapshot.snapshot,
+              commitment,
+              operation: "createPendingProviderAttempt",
+            });
 
             // The checkout read happened before this row lock. A later
             // attempt may already have started and ended in that gap.
@@ -706,6 +745,11 @@ export class PaymentLifecycleRepository extends Context.Service<
             ) {
               return yield* unavailable(
                 "The public reservation payment window is closed."
+              );
+            }
+            if (yield* findReservationEntryClaim(db, workspaceReservationId)) {
+              return yield* unavailable(
+                "Entry pack add-ons are payable by card."
               );
             }
 
@@ -894,10 +938,11 @@ export class PaymentLifecycleRepository extends Context.Service<
           },
         });
         const commitment = getDiscountCommitmentPayload(input.commitment);
-        const claimedApplications = yield* validateInternalPaymentCommitment(
-          commitment,
-          input.amount
-        );
+        const { quote } = accountingSnapshot.snapshot;
+        const claimedApplications = yield* "entryPack" in quote &&
+        quote.entryPack
+          ? validateDiscountCommitment(commitment)
+          : validateInternalPaymentCommitment(commitment, input.amount);
         const firstServiceDate = yield* validateCommitmentFirstServiceDate(
           commitment,
           accountingSnapshot.snapshot
@@ -964,6 +1009,12 @@ export class PaymentLifecycleRepository extends Context.Service<
                 "Internal payments can only complete a current held unpaid reservation."
               );
             }
+            yield* ensureEntryPackPayment({
+              reservationId: workspaceReservationId,
+              snapshot: accountingSnapshot.snapshot,
+              commitment,
+              operation: "completeInternalPayment",
+            });
 
             yield* admitFirstBookingPayment({
               dotyposCustomerId: reservation.dotyposCustomerId,
