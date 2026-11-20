@@ -277,11 +277,17 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         })
       );
       const deliveryAttempts: string[] = [];
+      // Use the smallest supported lock permit budget. A nested account/order
+      // acquisition exhausts it even when SQL queries have spare connections.
+      const fulfillmentLockLayer = WorkspaceDatabaseAdvisoryLock.makeLayer({
+        ...db.databasePool,
+        maxConnections: 2,
+      });
       const backgroundAccountSections = CustomerAccountSections.Default.pipe(
         Layer.provide(
           Layer.mergeAll(
             CustomerAccountLinkRepository.Default.pipe(Layer.provide(db.layer)),
-            WorkspaceDatabaseAdvisoryLock.makeLayer(db.databasePool),
+            fulfillmentLockLayer,
             Layer.mock(CustomerAuthentication, {
               currentUser: Effect.succeed(null),
             })
@@ -383,7 +389,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               invoiceDelivery,
               emailLayer,
               backgroundAccountSections,
-              WorkspaceDatabaseAdvisoryLock.makeLayer(db.databasePool)
+              fulfillmentLockLayer
             )
           )
         )
@@ -755,14 +761,17 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             displayedPriceFingerprint?: string;
             acceptedDocuments?: typeof accept.acceptedDocuments;
             submittedCode?: typeof code;
-          }
+          },
+          signal?: AbortSignal
         ) => {
           const pay = payForEntryPack({
             ...accept,
             ...(billing && { billing }),
             ...options,
           }).pipe(Effect.provide(services));
-          return Effect.runPromise(at ? pay.pipe(atInstant(at)) : pay);
+          return Effect.runPromise(at ? pay.pipe(atInstant(at)) : pay, {
+            signal,
+          });
         },
       };
     };
@@ -1536,6 +1545,32 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       ).toEqual([{ provider: "internal", amount_value: 0, state: "redeemed" }]);
     });
 
+    test("fulfills simultaneous gifts when the pool has one lock permit", async () => {
+      const db = database!;
+      const recipients = [
+        "concurrent-gift-first",
+        "concurrent-gift-second",
+      ].map(testEmailAddress);
+      const purchases = await Promise.all(
+        recipients.map((holderEmail) =>
+          integration(db, 115_000, undefined, undefined, undefined, holderEmail)
+        )
+      );
+      const signal = AbortSignal.timeout(5_000);
+      const paid = await Promise.all(
+        purchases.map((purchase) => purchase.pay(undefined, undefined, signal))
+      );
+      expect(paid.map(({ status }) => status)).toEqual(["paid", "paid"]);
+      for (const [index, purchase] of purchases.entries()) {
+        expect(purchase.invitations).toHaveLength(1);
+        expect(purchase.invitations[0]?.to).toEqual({
+          email: recipients[index],
+        });
+        expect(purchase.mail).toHaveLength(1);
+        expect(purchase.mail[0]?.to).toEqual({ email });
+      }
+    });
+
     test.each([2_000, 115_000])(
       "issues a holder-only gift after paid settlement with voucher value %i",
       async (voucherValue) => {
@@ -1544,6 +1579,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         const holderEmail = testEmailAddress(
           internal ? "internal-gift-recipient" : "provider-gift-recipient"
         );
+        const existingHolder = internal
+          ? undefined
+          : customerAccountIdSchema.make(crypto.randomUUID());
+        if (existingHolder) {
+          await db.pool.query(
+            "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
+            [existingHolder, "synthetic-linked-gift-holder"]
+          );
+          await db.pool.query(
+            'insert into auth."user" (id, name, email, email_verified) values ($1, $2, $3, true)',
+            [existingHolder, "", holderEmail]
+          );
+        }
         const payment = await integration(
           db,
           voucherValue,
@@ -1556,6 +1604,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           orderId,
           initialPurchase: { holderAccountId, validFrom },
         } = payment;
+        if (existingHolder) expect(holderAccountId).toBe(existingHolder);
         const readGift = () =>
           Effect.runPromise(
             readEntryPackGiftState(orderId).pipe(Effect.provide(db.layer))
@@ -1669,7 +1718,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         ).toBeUndefined();
         expect(await resend(holderAccountId, later)).toBe(false);
         await expect(quote(holderAccountId)).rejects.toBeDefined();
-        await markClaimed(holderAccountId, later);
+        if (internal) await markClaimed(holderAccountId, later);
         expect((await readGift()).claimed).toBe(false);
 
         if (internal) {
@@ -1727,6 +1776,25 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         }
       }
     );
+
+    test("allows the paid buyer confirmation when holder deletion blocks the invitation", async () => {
+      const db = database!;
+      const payment = await integration(
+        db,
+        115_000,
+        undefined,
+        undefined,
+        undefined,
+        testEmailAddress("deleting-gift-recipient")
+      );
+      await db.pool.query(
+        'update auth."user" set deletion_requested_at = now() where id = $1',
+        [payment.initialPurchase.holderAccountId]
+      );
+      expect(await payment.pay()).toMatchObject({ status: "paid" });
+      expect(payment.invitations).toHaveLength(0);
+      expect(payment.mail).toHaveLength(1);
+    });
 
     test("preserves bookability of a paid gift from before gift activation tracking", async () => {
       const db = database!;

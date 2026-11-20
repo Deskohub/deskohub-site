@@ -284,12 +284,11 @@ const withLockTimeout = <A, E, R>(
  * (`lockOrder`: declaration order, then key order); and a section
  * entered inside itself, since sections are not reentrant.
  */
-export const holdSection =
-  (section: {
-    readonly name: string;
-    readonly rank: number;
-    readonly pair: PostgresAdvisoryLockKey;
-  }) =>
+type SectionRequest = Extract<Lock, { readonly pair: PostgresAdvisoryLockKey }>;
+
+/** Holds every requested key in order on one reserved connection. */
+export const holdSections =
+  (requests: readonly [SectionRequest, ...SectionRequest[]]) =>
   <A, E, R>(
     effect: Effect.Effect<A, E, R>
   ): Effect.Effect<
@@ -302,36 +301,41 @@ export const holdSection =
       if (Option.isSome(transaction)) {
         return yield* lockViolation(
           "A Workspace lock section was entered inside a Workspace transaction",
-          section,
+          requests[0],
           "after",
           transaction.value.held
         );
       }
-      const sections = yield* HeldSections;
-      const enclosingAbove = sections.filter((held) =>
-        Order.isGreaterThan(lockOrder)(held, section)
-      );
-      if (enclosingAbove.length > 0) {
-        return yield* lockViolation(
-          "A Workspace lock section was entered out of section order",
-          section,
-          "inside",
-          enclosingAbove
+      const sections = [...(yield* HeldSections)];
+      for (const section of requests) {
+        const enclosingAbove = sections.filter((held) =>
+          Order.isGreaterThan(lockOrder)(held, section)
         );
-      }
-      if (sections.some((held) => isSameKey(held, section))) {
-        return yield* Effect.die(
-          new Error(
-            `The Workspace lock section ${section.name} was entered inside itself; sections are not reentrant`
-          )
-        );
+        if (enclosingAbove.length > 0) {
+          return yield* lockViolation(
+            "A Workspace lock section was entered out of section order",
+            section,
+            "inside",
+            enclosingAbove
+          );
+        }
+        if (sections.some((held) => isSameKey(held, section))) {
+          return yield* Effect.die(
+            new Error(
+              `The Workspace lock section ${section.name} was entered inside itself; sections are not reentrant`
+            )
+          );
+        }
+        sections.push({ ...section, holder: "section" });
       }
       const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
-      return yield* advisoryLock.withLock(
-        section.pair,
-        Effect.provideService(effect, HeldSections, [
-          ...sections,
-          { ...section, holder: "section" },
-        ])
-      );
+      const heldWork = Effect.provideService(effect, HeldSections, sections);
+      return yield* requests.length === 1
+        ? advisoryLock.withLock(requests[0].pair, heldWork)
+        : advisoryLock.withLocks(
+            requests.map(({ pair }) => pair),
+            heldWork
+          );
     });
+
+export const holdSection = (request: SectionRequest) => holdSections([request]);

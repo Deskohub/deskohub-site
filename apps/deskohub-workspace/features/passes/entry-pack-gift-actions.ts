@@ -2,8 +2,6 @@
 
 import { Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
 import { type Locale, locales } from "@/features/i18n";
@@ -39,9 +37,8 @@ const resendAction = defineWorkspaceAction(
       const sections = yield* CustomerAccountSections;
       const queued = yield* sections.withActiveAccount(
         accountId,
-        queueEntryPackGiftResend(orderId, accountId).pipe(
-          WorkspaceLockSections.passPurchaseFulfillment(orderId)
-        )
+        queueEntryPackGiftResend(orderId, accountId),
+        { passPurchaseOrderId: orderId }
       );
       return queued ? ("queued" as const) : ("unavailable" as const);
     },
@@ -52,8 +49,7 @@ const resendAction = defineWorkspaceAction(
             CoworkPassesReleaseGate.Live,
             CurrentCustomerAccount.Live,
             CustomerAccountSections.Live,
-            WorkspaceDatabase.Default,
-            WorkspaceDatabaseAdvisoryLock.Default
+            WorkspaceDatabase.Default
           )
         )
       )

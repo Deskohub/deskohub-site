@@ -475,11 +475,9 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         ).pipe(
           Effect.provide(sendingServices),
           Effect.provide(SealedStateKeys.Default),
-          Effect.timeout("10 seconds"),
-          WorkspaceLockSections.passPurchaseFulfillment(orderId),
-          Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock)
+          Effect.timeout("10 seconds")
         ),
-        { recheck: "active" }
+        { recheck: "active", passPurchaseOrderId: orderId }
       )
       .pipe(
         Effect.catchTag("CustomerAccountAccessError", (failure) =>

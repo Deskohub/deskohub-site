@@ -1,6 +1,7 @@
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
+import type { OrderId } from "@/features/order";
 import {
   CustomerAccountAccessError,
   type CustomerAccountId,
@@ -40,6 +41,8 @@ type CustomerAccountRecheck = "session" | "active" | "present";
 type CustomerAccountSectionOptions = {
   /** Defaults to `session`. */
   readonly recheck?: CustomerAccountRecheck;
+  /** Take this pass order key with the account key on the same connection. */
+  readonly passPurchaseOrderId?: OrderId;
 };
 
 /**
@@ -143,7 +146,9 @@ export class CustomerAccountSections extends Context.Service<
         Effect.flatMap(
           Effect.serviceOption(HeldCustomerAccount),
           (enclosing) =>
-            Option.isSome(enclosing) && enclosing.value.accountId === accountId
+            !options?.passPurchaseOrderId &&
+            Option.isSome(enclosing) &&
+            enclosing.value.accountId === accountId
               ? Effect.provideService(
                   section,
                   HeldCustomerAccount,
@@ -155,7 +160,8 @@ export class CustomerAccountSections extends Context.Service<
                     Effect.flatMap((held) =>
                       Effect.provideService(section, HeldCustomerAccount, held)
                     )
-                  )
+                  ),
+                  options?.passPurchaseOrderId
                 )
         );
 
@@ -166,9 +172,15 @@ export class CustomerAccountSections extends Context.Service<
        */
       const holdAccount = <A, E, R>(
         accountId: CustomerAccountId,
-        work: Effect.Effect<A, E, R>
+        work: Effect.Effect<A, E, R>,
+        passPurchaseOrderId?: OrderId
       ): Effect.Effect<A, E | CustomerAccountAccessError, R> =>
-        WorkspaceLockSections.customerAccount(accountId)(
+        (passPurchaseOrderId
+          ? WorkspaceLockSections.customerAccountAndPassPurchase(
+              accountId,
+              passPurchaseOrderId
+            )
+          : WorkspaceLockSections.customerAccount(accountId))(
           work.pipe(Effect.mapError((error) => new SectionFailure({ error })))
         ).pipe(
           Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock),
