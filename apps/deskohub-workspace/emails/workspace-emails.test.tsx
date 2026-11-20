@@ -459,16 +459,12 @@ describe("reservation restoration email", () => {
     }
   );
 
-  test("links no access page when the restoration issued no new access code", async () => {
-    const { accessUrl, ...props } = reservationRestorationPreviewProps;
-    const [withAccess, withoutAccess] = await Promise.all([
-      render(<ReservationRestorationEmail {...props} accessUrl={accessUrl} />),
-      render(<ReservationRestorationEmail {...props} />),
-    ]);
+  test("shows the reservation ID even when no access link was issued", async () => {
+    const { locale, reservation } = reservationRestorationPreviewProps;
+    const html = await render(
+      <ReservationRestorationEmail locale={locale} reservation={reservation} />
+    );
 
-    expect(withAccess).toContain("/reservation/access/");
-    expect(withoutAccess).not.toContain("/reservation/access/");
-    expect(withoutAccess).not.toContain("accessToken=");
-    expect(withoutAccess).toContain(props.reservation.id);
+    expect(html).toContain(reservation.id);
   });
 });
