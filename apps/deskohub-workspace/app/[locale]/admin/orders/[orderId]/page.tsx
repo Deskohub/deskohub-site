@@ -8,6 +8,8 @@ import {
   AdministrationPageHeader,
   NexiOrderLink,
 } from "@/features/administration/components";
+import { FioMovementEvidence } from "@/features/administration/fio-movement-evidence";
+import { loadAdministrationFioMovements } from "@/features/administration/fio-settlement-page-data.server";
 import { m } from "@/features/administration/i18n";
 import { AdministrationDetailLoading } from "@/features/administration/loading";
 import { loadAdministrationOrder } from "@/features/administration/page-data.server";
@@ -63,6 +65,22 @@ export async function OrderAdministrationDetail({
   readonly params: Promise<{ readonly orderId: string }>;
 }) {
   const { orderId } = await params;
+  const movements = await loadAdministrationFioMovements(orderId);
+  if (movements.length) {
+    return (
+      <>
+        <AdministrationPageHeader title={orderId} />
+        <FioMovementEvidence
+          locale={locale}
+          movements={movements}
+          source="order"
+        />
+        <div className="mt-6">
+          <OrderRelatedReservation locale={locale} reservationId={orderId} />
+        </div>
+      </>
+    );
+  }
   const order = await loadAdministrationOrder(orderId);
   return (
     <>
@@ -90,7 +108,10 @@ export async function OrderAdministrationDetail({
           <OrderOperations locale={locale} order={order} />
         </div>
         <aside className="space-y-5 xl:sticky xl:top-24 xl:h-fit">
-          <OrderRelatedReservation link={order.link} locale={locale} />
+          <OrderRelatedReservation
+            locale={locale}
+            reservationId={order.link?.reservationId}
+          />
           {order.link && (
             <OrderLocalAttempt link={order.link} locale={locale} />
           )}
@@ -227,29 +248,29 @@ function OrderOperations({
 }
 
 function OrderRelatedReservation({
-  link,
   locale,
+  reservationId,
 }: {
-  readonly link: Order["link"];
   readonly locale: Locale;
+  readonly reservationId: string | undefined;
 }) {
   return (
     <section className="rounded-xl border border-navy-blue/10 bg-white p-3">
       <h2 className="px-3 pb-2 pt-1 text-xs font-semibold uppercase tracking-[0.12em] text-navy-blue/65">
         {m.administrationOrderRelatedReservation({}, { locale })}
       </h2>
-      {link ? (
+      {reservationId ? (
         <AdministrationRecordLink
           href={administrationHref(
             "/[locale]/admin/reservations/[reservationId]",
-            { reservationId: link.reservationId }
+            { reservationId }
           )}
         >
           <span className="block font-semibold">
             {m.administrationOrderViewReservation({}, { locale })}
           </span>
           <span className="mt-1 block font-mono text-xs text-navy-blue/65">
-            {link.reservationId}
+            {reservationId}
           </span>
         </AdministrationRecordLink>
       ) : (

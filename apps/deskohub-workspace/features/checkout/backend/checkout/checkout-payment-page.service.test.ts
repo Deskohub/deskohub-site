@@ -24,7 +24,10 @@ import {
   type PaymentPageReopeningInput,
 } from "./checkout-payment-page.service";
 import type { PaymentPageProviderObservation } from "./payment-page-provider-status";
-import { observePaymentPagesAs } from "./payment-page-provider-status.test-utils";
+import {
+  observePaymentPagesAs,
+  testReservationPaymentWindow,
+} from "./payment-page-provider-status.test-utils";
 
 const instant = (value: string) => Temporal.Instant.from(value);
 
@@ -77,6 +80,7 @@ type Harness = {
   readonly attempt?: PaymentAttempt | null;
   readonly latePaymentRecovery?: LatePaymentRecovery | null;
   readonly now?: Temporal.Instant;
+  readonly sharedWindowExpiresAt?: Temporal.Instant;
   /** What the provider's order shows; it can't be asked by default. */
   readonly observation?: PaymentPageProviderObservation;
   /** How long the provider takes to answer, on the test clock. */
@@ -132,6 +136,7 @@ const createHarness = (harness: Harness = {}) => {
           recordPaymentReturnTarget,
         }),
         Layer.mock(PaymentAttemptRepository, { findById: findAttempt }),
+        testReservationPaymentWindow(harness.sharedWindowExpiresAt),
         Layer.mock(LatePaymentRecoveryRepository, {
           findLatestByWorkspaceReservationId: findLatePaymentRecovery,
         })
@@ -161,6 +166,24 @@ const createHarness = (harness: Harness = {}) => {
 };
 
 describe("CheckoutPaymentPageService.reopen", () => {
+  test.each(["2026-06-01T10:03:59Z", "2026-06-01T10:04:00Z"])(
+    "denies legacy access-cookie reopening for a shared window at %s",
+    async (now) => {
+      const harness = createHarness({
+        now: instant(now),
+        observation: "no_activity",
+        sharedWindowExpiresAt: instant("2026-06-01T10:04:00Z"),
+      });
+
+      expect(await harness.reopen()).toEqual({
+        state: "closed",
+        reason: "window_elapsed",
+      });
+      expect(harness.observeProvider).not.toHaveBeenCalled();
+      expect(harness.recordPaymentReturnTarget).not.toHaveBeenCalled();
+    }
+  );
+
   test("opens the stored payment page again, the same page each time, past the hold's own expiry", async () => {
     const harness = createHarness();
 

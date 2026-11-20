@@ -12,6 +12,7 @@ import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import type { SealedStateTokenError } from "@/shared/backend/sealed-state";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
@@ -69,6 +70,10 @@ export type PayableCheckoutReadError =
   | WorkspaceReservationDetailsMalformedError
   | DotyposReadFailure;
 
+type PaymentRetryGuard = (
+  reservationId: WorkspaceReservationId
+) => Effect.Effect<boolean, EffectDrizzleQueryError>;
+
 export interface IPayableCheckout {
   /**
    * Opens a Pay state and confirms its order is payable, as `reconfirm` does.
@@ -79,6 +84,7 @@ export interface IPayableCheckout {
   readonly open: (input: {
     readonly payStateToken: string;
     readonly page?: PayStatePage;
+    readonly blockPaymentRetry?: PaymentRetryGuard | undefined;
   }) => Effect.Effect<
     OpenCheckout,
     PayStateTokenError | CheckoutUnavailableError | PayableCheckoutReadError
@@ -123,7 +129,8 @@ export class PayableCheckout extends Context.Service<
        * state may still start a payment (`findPayStateAttemptRefusal`).
        */
       const findSessionReservation = Effect.fnUntraced(function* (
-        state: SignedPayState
+        state: SignedPayState,
+        blockPaymentRetry?: PaymentRetryGuard
       ) {
         const reservation = yield* reservations.findById(state.orderId);
         if (!reservation) {
@@ -134,6 +141,14 @@ export class PayableCheckout extends Context.Service<
         const binding = getPayStateBinding(state);
         if (!binding) {
           return yield* refuse("missing_checkout_session");
+        }
+
+        if (
+          binding.kind === "order" &&
+          blockPaymentRetry &&
+          (yield* blockPaymentRetry(reservation.id))
+        ) {
+          return yield* refuse("payment_ended");
         }
 
         const retriedAttempt =
@@ -169,11 +184,14 @@ export class PayableCheckout extends Context.Service<
         return { reservation, retriedAttempt };
       });
 
-      const reconfirm: IPayableCheckout["reconfirm"] = Effect.fn(
-        "payableCheckout.reconfirm"
-      )(function* (state) {
-        const { reservation, retriedAttempt } =
-          yield* findSessionReservation(state);
+      const reconfirm = Effect.fn("payableCheckout.reconfirm")(function* (
+        state: SignedPayState,
+        blockPaymentRetry?: PaymentRetryGuard
+      ) {
+        const { reservation, retriedAttempt } = yield* findSessionReservation(
+          state,
+          blockPaymentRetry
+        );
         const refuse = (reason: CheckoutUnavailableReason) =>
           unavailable(state, reason, reservation);
 
@@ -240,7 +258,7 @@ export class PayableCheckout extends Context.Service<
             input.payStateToken,
             input.page
           ).pipe(provideSealedStateKeys);
-          return yield* reconfirm(state);
+          return yield* reconfirm(state, input.blockPaymentRetry);
         }),
         reconfirm,
       });

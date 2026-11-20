@@ -4,6 +4,7 @@ import { Duration, Effect, Layer, Option } from "effect";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { TestClock } from "effect/testing";
 import { customerDataRuntime } from "../../customer-api/customer-data-runtime";
+import { toCustomerViewError } from "../../customer-api/customer-view-error";
 import { makeCustomerDataRegistry } from "../../customer-api/testing/customer-data-test-registry";
 import {
   fakeCustomerDataLayer,
@@ -15,11 +16,37 @@ import { eventually, quietly } from "../../testing/eventually";
 import {
   focusGained,
   focusLost,
+  focusVisibility,
   makeOrderStatusAtoms,
+  restartStatusVisit,
 } from "./order-status-state";
 import { reservationHistoryAtom } from "./reservations-list-state";
 import { canRefreshManually, type StatusRefreshState } from "./status-refresh";
 import type { StatusVisit } from "./status-refresh-rules";
+
+test("an earlier detail cannot release the current detail's refresh", () => {
+  const preview = Symbol("preview");
+  const detail = Symbol("detail");
+  const previewFocus = focusGained(
+    "normal",
+    preview
+  )({
+    owner: undefined,
+    visible: false,
+    session: 0,
+    visit: "normal",
+  });
+  const detailFocus = focusGained("after-payment", detail)(previewFocus);
+
+  expect(focusLost(preview)(detailFocus)).toBe(detailFocus);
+  expect(focusVisibility(preview, false)(detailFocus)).toBe(detailFocus);
+  expect(focusLost(detail)(detailFocus)).toEqual({
+    owner: undefined,
+    visible: false,
+    session: 2,
+    visit: "after-payment",
+  });
+});
 
 const harness = (
   visit: StatusVisit = "normal",
@@ -87,6 +114,7 @@ const harness = (
       )
     );
   const settle = (effect: Effect.Effect<void>) => Effect.runPromise(effect);
+  const focusOwner = Symbol("status screen");
   return {
     workspace,
     registry,
@@ -102,8 +130,15 @@ const harness = (
     focus: (focused: boolean) =>
       registry.update(
         atoms.focus(orderId),
-        focused ? focusGained(visit) : focusLost
+        focused ? focusGained(visit, focusOwner) : focusLost(focusOwner)
       ),
+    show: (visible: boolean) =>
+      registry.update(
+        atoms.focus(orderId),
+        focusVisibility(focusOwner, visible)
+      ),
+    retry: () =>
+      registry.update(atoms.focus(orderId), restartStatusVisit(focusOwner)),
     tap: () => registry.update(atoms.refreshRequests(orderId), (n) => n + 1),
     dispose: () => {
       unmount();
@@ -183,6 +218,61 @@ describe("order status atoms", () => {
     h.dispose();
   });
 
+  test("hiding and restoring the preview preserves its stopped refresh session", async () => {
+    const h = harness();
+    h.focus(true);
+    await h.readsSettled(1);
+    h.workspace.fail("getReservationStatus", "rate-limited");
+    await h.adjust("10 seconds");
+    await h.readsSettled(2);
+
+    const initialFocus = h.registry.get(h.atoms.focus(h.orderId));
+    h.show(false);
+    await h.adjust("30 minutes");
+    h.show(true);
+    await h.adjust("30 minutes");
+    await h.quietly();
+
+    expect(h.registry.get(h.atoms.focus(h.orderId))).toEqual(initialFocus);
+    expect(h.reads()).toBe(2);
+    h.dispose();
+  });
+
+  test.each(["retry", "new visit"] as const)(
+    "hiding and restoring keeps a failed first read until %s",
+    async (restart) => {
+      const h = harness();
+      h.workspace.fail("getReservationStatus", "rate-limited");
+      h.focus(true);
+      await h.settle(
+        eventually(() => AsyncResult.isFailure(h.registry.get(h.status)))
+      );
+      const failure = AsyncResult.error(h.registry.get(h.status));
+      expect(Option.map(failure, toCustomerViewError)).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "RateLimited" },
+      });
+      expect(h.reads()).toBe(1);
+
+      h.show(false);
+      await h.quietly();
+      expect(AsyncResult.error(h.registry.get(h.status))).toEqual(failure);
+      h.show(true);
+      await h.quietly();
+      expect(h.reads()).toBe(1);
+      expect(AsyncResult.error(h.registry.get(h.status))).toEqual(failure);
+
+      if (restart === "retry") h.retry();
+      else {
+        h.focus(false);
+        h.focus(true);
+      }
+      await h.readsSettled(2);
+      expect(AsyncResult.isSuccess(h.registry.get(h.status))).toBe(true);
+      h.dispose();
+    }
+  );
+
   test("shows the screen as waiting only while a read is under way", async () => {
     const h = harness();
     h.focus(true);
@@ -190,6 +280,24 @@ describe("order status atoms", () => {
 
     const shown = h.registry.get(h.status);
     expect(AsyncResult.isSuccess(shown) && shown.waiting).toBe(false);
+    h.dispose();
+  });
+
+  test("a payment recheck requested while hidden starts on reveal", async () => {
+    const h = harness("normal", sampleOrderIds.fulfilled);
+    h.focus(true);
+    await h.readsSettled(1);
+
+    h.show(false);
+    h.retry();
+    await h.adjust("30 minutes");
+    await h.quietly();
+    expect(h.reads()).toBe(1);
+
+    h.show(true);
+    await h.readsSettled(2);
+    await h.adjust("30 minutes");
+    expect(h.reads()).toBe(2);
     h.dispose();
   });
 
@@ -329,7 +437,7 @@ describe("order status atoms", () => {
     );
 
     h.workspace.fail("getReservationStatus", "hang");
-    h.registry.refresh(h.atoms.progress(h.orderId));
+    h.retry();
     await Effect.runPromise(eventually(() => h.reads() === 3));
     expect(
       Option.map(
@@ -338,7 +446,7 @@ describe("order status atoms", () => {
       )
     ).toEqual(Option.some(false));
 
-    h.registry.refresh(h.atoms.progress(h.orderId));
+    h.retry();
     await h.readsSettled(4);
     expect(AsyncResult.isSuccess(h.registry.get(h.status))).toBe(true);
     h.dispose();

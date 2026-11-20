@@ -97,16 +97,20 @@ export const makeReservationOrderPaymentHandler = Effect.gen(function* () {
           )
         );
       }),
-      resumeRecovery: Effect.fnUntraced(function* ({ paymentAttemptId }) {
+      resumeRecovery: Effect.fnUntraced(function* ({
+        paymentAttemptId,
+        requeue,
+      }) {
         const existing =
           yield* recoveries.findByPaymentAttemptId(paymentAttemptId);
         if (!existing) return false;
         if (
           existing.state === "pending" &&
-          Temporal.Instant.compare(
-            existing.createdAt,
-            Temporal.Now.instant().subtract(stalledRecoveryEnqueueAfter)
-          ) < 0
+          (requeue ||
+            Temporal.Instant.compare(
+              existing.createdAt,
+              Temporal.Now.instant().subtract(stalledRecoveryEnqueueAfter)
+            ) < 0)
         ) {
           yield* recoveryQueue.enqueue({ paymentAttemptId });
         }

@@ -1,5 +1,6 @@
 import { Effect, type Schema } from "effect";
 import type { PaymentAttemptState, WebhookEvent } from "@/db/schema";
+import { currentPreciseInstant } from "@/shared/utils/temporal";
 import {
   CheckoutAnalytics,
   type ICheckoutAnalytics,
@@ -110,6 +111,7 @@ interface NotificationIdentity {
 /** A notification resolved to its authenticated attempt and owning order. */
 interface PaymentNotification extends NotificationIdentity {
   readonly attempt: VerifiableProviderPaymentAttempt;
+  readonly isSharedWindowCard: boolean;
   readonly order: PaymentOrder;
   readonly handler: OrderPaymentHandler;
 }
@@ -682,8 +684,13 @@ export const makePaymentWebhookProcessor = <
         webhookEventId: eventId,
         providerOperationId,
         providerStatus,
-        paidAt: Temporal.Now.instant(),
+        paidAt: yield* currentPreciseInstant,
       });
+      if (transition.settlement === "refund_required") return;
+      if (transition.settlement === "recovery_pending") {
+        yield* startLatePaymentRecovery(payment);
+        return;
+      }
       if (transition.changed) {
         yield* checkoutAnalytics.paymentCompleted({
           attempt: transition.attempt,
@@ -751,22 +758,18 @@ export const makePaymentWebhookProcessor = <
       yield* Effect.logInfo(`${label} webhook payment attempt marked terminal`);
     });
 
-    /**
-     * Applies the verified outcome: a success on a terminal attempt
-     * starts late-payment recovery, a success on a live attempt marks it
-     * paid and fulfills, and a failure marks it terminal.
-     */
     const applyVerifiedOutcome = Effect.fnUntraced(function* (
       payment: VerifiedPaymentNotification
     ) {
-      const settled = payment.verification.status === "success";
-      const attemptEnded = isTerminalPaymentAttemptState(payment.attempt.state);
-      if (settled && attemptEnded) {
-        yield* startLatePaymentRecovery(payment);
-      }
-
-      if (settled && !attemptEnded) {
-        yield* markPaidAndFulfill(payment);
+      if (payment.verification.status === "success") {
+        const attemptEnded = isTerminalPaymentAttemptState(
+          payment.attempt.state
+        );
+        if (attemptEnded && !payment.isSharedWindowCard) {
+          yield* startLatePaymentRecovery(payment);
+        } else {
+          yield* markPaidAndFulfill(payment);
+        }
       } else if (payment.verification.status === "failure") {
         yield* markPaymentTerminal(payment);
       } else {
@@ -807,6 +810,7 @@ export const makePaymentWebhookProcessor = <
           const settlement = yield* resolveSettlement(attempt, notification);
           const payment: PaymentNotification = {
             ...notification,
+            isSharedWindowCard: attempt.isSharedWindowCard,
             attempt: yield* authenticateAttempt(
               envelope,
               attempt,

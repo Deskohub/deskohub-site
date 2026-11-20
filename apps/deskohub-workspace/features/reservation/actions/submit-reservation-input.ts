@@ -6,6 +6,7 @@ const submitReservationInputSchema = Schema.Struct({
   payStateToken: Schema.NonEmptyString,
   legalConsent: Schema.optionalKey(Schema.Boolean),
   earlyPerformanceConsent: Schema.optionalKey(Schema.Boolean),
+  method: Schema.optionalKey(Schema.Literals(["card", "qr"])),
 });
 
 export const submitReservationSchema = Schema.toStandardSchemaV1(

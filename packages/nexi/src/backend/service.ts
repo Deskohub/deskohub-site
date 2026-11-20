@@ -480,7 +480,7 @@ const getDecidingOperationId = ({
   executedPaymentOperation,
   failedOperation,
 }: PaymentOperations) =>
-  executedPaymentOperation?.operationId ?? failedOperation?.operationId;
+  (executedPaymentOperation ?? failedOperation)?.operationId;
 
 /** The executed or failed operation's result, else the last operation type. */
 const getProviderPaymentStatus = (

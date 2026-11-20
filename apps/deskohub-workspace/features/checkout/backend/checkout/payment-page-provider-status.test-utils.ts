@@ -1,10 +1,27 @@
 import { mock } from "bun:test";
 import { type Duration, Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
+import { QrPaymentRepository } from "../repositories/qr-payment.repository";
 import {
   type PaymentPageProviderObservation,
   PaymentPageProviderStatus,
 } from "./payment-page-provider-status";
+
+export const testReservationPaymentWindow = (expiresAt?: Temporal.Instant) =>
+  Layer.mock(QrPaymentRepository, {
+    findPaymentWindow: (orderId) =>
+      Effect.succeed(
+        expiresAt
+          ? {
+              orderId,
+              accountKey: "synthetic-account",
+              expiresAt,
+              cardAttemptId: null,
+              qrAttemptId: null,
+            }
+          : null
+      ),
+  });
 
 /**
  * The provider status of every payment page reads as `observation`;

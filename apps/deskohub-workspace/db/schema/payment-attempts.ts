@@ -41,7 +41,7 @@ export const paymentRefundStates = [
 
 export type PaymentRefundState = (typeof paymentRefundStates)[number];
 
-const externalPaymentProviders = ["nexi", "mock"] as const;
+const externalPaymentProviders = ["nexi", "mock", "fio"] as const;
 
 export const paymentProviders = [
   ...externalPaymentProviders,

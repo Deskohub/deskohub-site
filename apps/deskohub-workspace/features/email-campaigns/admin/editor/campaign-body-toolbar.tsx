@@ -18,7 +18,14 @@ import {
   Redo2,
   Undo2,
 } from "lucide-react";
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import {
+  type ReactElement,
+  type ReactNode,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { m } from "@/features/administration/i18n";
 import {
   type EmailImageUploadStage,
@@ -43,12 +50,7 @@ import {
   SelectValue,
 } from "@/shared/components/ui/select";
 import { Toggle } from "@/shared/components/ui/toggle";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import { cn } from "@/shared/utils";
 import type { CampaignBodyAttributeValue } from "../../body/campaign-body-document";
 import {
@@ -129,7 +131,7 @@ export function CampaignBodyToolbar({
   const toolbar = state ?? idleToolbarState;
 
   return (
-    <TooltipProvider>
+    <>
       <div
         aria-label={m.emailCampaignsEditorToolbar({}, { locale })}
         className="flex items-start gap-1 border-navy-blue/10 border-b bg-navy-blue/[0.03] px-2 py-1.5"
@@ -251,7 +253,7 @@ export function CampaignBodyToolbar({
         open={ctaDialogOpen}
         toolbar={toolbar}
       />
-    </TooltipProvider>
+    </>
   );
 }
 
@@ -359,15 +361,10 @@ function ToolbarHint({
   children,
   label,
 }: {
-  readonly children: ReactNode;
+  readonly children: ReactElement;
   readonly label: string;
 }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
+  return <Tooltip trigger={children}>{label}</Tooltip>;
 }
 
 function ToolbarToggle({

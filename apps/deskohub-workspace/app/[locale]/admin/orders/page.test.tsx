@@ -10,6 +10,11 @@ import {
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { within } from "@testing-library/react";
 import { prerender } from "react-dom/static";
+import {
+  fioDiscrepancy,
+  fioPendingRefund,
+} from "@/features/administration/fio-settlement.fixtures";
+import type { FioStaffQueue } from "@/features/administration/fio-settlement-page-data.server";
 import { m } from "@/features/administration/i18n";
 import { orderListQuery } from "@/features/administration/order-list-query";
 import type { loadAdministrationOrdersPage } from "@/features/administration/page-data.server";
@@ -50,19 +55,37 @@ let result: ListResult = listedResult;
 const administrationPageData = await import(
   "@/features/administration/page-data.server"
 );
+const loadNexiOrders = mock(() => ({
+  range: Promise.resolve(orderListQuery.parse({})),
+  result: Promise.resolve(result),
+}));
 mock.module("@/features/administration/page-data.server", () => ({
   ...administrationPageData,
-  loadAdministrationOrdersPage: () => ({
-    range: Promise.resolve(orderListQuery.parse({})),
-    result: Promise.resolve(result),
-  }),
+  loadAdministrationOrdersPage: loadNexiOrders,
 }));
 
-async function prerenderListPage() {
+const loadFioQueue = mock((kind: FioStaffQueue, _cursor: string | undefined) =>
+  Promise.resolve({
+    movements: [kind === "unmatched" ? fioDiscrepancy : fioPendingRefund],
+    beforeId: undefined,
+    nextCursor: fioDiscrepancy.id,
+  })
+);
+mock.module(
+  "@/features/administration/fio-settlement-page-data.server",
+  () => ({
+    loadAdministrationFioQueue: loadFioQueue,
+  })
+);
+mock.module("@/features/administration/fio-refund-action", () => ({
+  recordFioManualRefund: mock(),
+}));
+
+async function prerenderListPage(searchParams: Record<string, string> = {}) {
   const { default: OrdersAdministrationPage } = await import("./page");
   const { prelude } = await prerender(
     <RouteLocaleProvider locale={locale}>
-      <OrdersAdministrationPage searchParams={Promise.resolve({})} />
+      <OrdersAdministrationPage searchParams={Promise.resolve(searchParams)} />
     </RouteLocaleProvider>,
     { progressiveChunkSize: Number.POSITIVE_INFINITY }
   );
@@ -81,6 +104,8 @@ describe("OrdersAdministrationPage", () => {
   beforeAll(() => registerWorkspaceComponentTestEnv());
   afterEach(() => {
     result = listedResult;
+    loadNexiOrders.mockClear();
+    loadFioQueue.mockClear();
   });
   afterAll(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -109,5 +134,39 @@ describe("OrdersAdministrationPage", () => {
 
     expect(view.getByText(providerUnavailable)).toBeDefined();
     expect(view.getByText(truncated)).toBeDefined();
+  });
+
+  test("lists unmatched Fio evidence without attaching it to an order or calling Nexi", async () => {
+    const view = await prerenderListPage({ fio: "unmatched" });
+    expect(
+      view.getByRole("heading", { name: "Unmatched Fio transfers" })
+    ).toBeTruthy();
+    expect(view.getByText("Invalid payment reference")).toBeTruthy();
+    expect(view.getByText("100.2500 EUR")).toBeTruthy();
+    expect(view.queryByRole("link", { name: "View order" })).toBeNull();
+    expect(
+      view.queryByRole("button", { name: "Record manual refund" })
+    ).toBeNull();
+    expect(
+      view.getByRole("link", { name: "Older movements" }).getAttribute("href")
+    ).toBe(`/en-US/admin/orders?fio=unmatched&fioBefore=${fioDiscrepancy.id}`);
+    expect(loadNexiOrders).not.toHaveBeenCalled();
+    expect(loadFioQueue).toHaveBeenCalledWith("unmatched", undefined);
+  });
+
+  test("links pending refund work to the relevant order and forwards pagination", async () => {
+    const view = await prerenderListPage({
+      fio: "refund_required",
+      fioBefore: fioPendingRefund.id,
+    });
+    expect(view.getByText("Manual refund required")).toBeTruthy();
+    expect(
+      view.getByRole("link", { name: "View order" }).getAttribute("href")
+    ).toBe(`/en-US/admin/orders/${fioPendingRefund.orderId}`);
+    expect(loadNexiOrders).not.toHaveBeenCalled();
+    expect(loadFioQueue).toHaveBeenCalledWith(
+      "refund_required",
+      fioPendingRefund.id
+    );
   });
 });

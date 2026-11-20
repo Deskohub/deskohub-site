@@ -1,7 +1,7 @@
 "use client";
 
 import Interpolate from "@doist/react-interpolate";
-import { CreditCard, RotateCcw, ShieldCheck } from "lucide-react";
+import { CreditCard, QrCode, RotateCcw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { type ReactNode, type Ref, useId } from "react";
 import { type Locale, m } from "@/features/i18n";
@@ -18,6 +18,7 @@ import { Checkbox } from "@/shared/components/ui/checkbox";
 import { ChoiceCard } from "@/shared/components/ui/choice-card";
 import { formatMoney, type Money } from "@/shared/money/money";
 import { CheckoutSummaryLine } from "./checkout-summary-line";
+import type { CheckoutPaymentMethod } from "./use-checkout-pay-submission";
 
 type CheckoutPayActionVariant = "pay" | "retry";
 
@@ -177,6 +178,7 @@ const payLabelNamesAmount = (locale: Locale) =>
 export function CheckoutPaySubmitButton({
   disabled,
   locale,
+  method = "card",
   onClick,
   pending,
   total,
@@ -184,6 +186,7 @@ export function CheckoutPaySubmitButton({
 }: {
   readonly disabled?: boolean;
   readonly locale: Locale;
+  readonly method?: CheckoutPaymentMethod;
   readonly onClick?: () => void;
   readonly pending?: boolean;
   /** The amount the provider charges; a free order omits it. */
@@ -206,6 +209,10 @@ export function CheckoutPaySubmitButton({
   const label = pending
     ? m.checkoutPaymentRetryPending({}, { locale })
     : orderLabel;
+  const Icon = {
+    pay: { card: CreditCard, qr: QrCode }[method],
+    retry: RotateCcw,
+  }[variant];
 
   return (
     <div className="@container space-y-3">
@@ -237,15 +244,7 @@ export function CheckoutPaySubmitButton({
             ("Zahlungspflichtig", about 206px) beside the icon needs a
             278px button. */}
         <span className="flex min-w-0 items-center justify-center gap-3">
-          {!pending &&
-            {
-              pay: (
-                <CreditCard aria-hidden="true" className={payIconClassName} />
-              ),
-              retry: (
-                <RotateCcw aria-hidden="true" className={payIconClassName} />
-              ),
-            }[variant]}
+          {!pending && <Icon aria-hidden="true" className={payIconClassName} />}
           <span
             className="min-w-0 text-balance @max-[18rem]:text-xs @max-[18rem]:tracking-[0.08em]"
             data-checkout-pay-label=""

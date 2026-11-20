@@ -57,7 +57,7 @@ import { canRestoreReservation } from "./reservation-status";
 
 export type ReservationRestorationInput = {
   readonly reservationId: WorkspaceReservationId;
-  /** The administrator saw what Nexi already refunded and restores anyway. */
+  /** The administrator saw the recorded refund and restores anyway. */
   readonly acknowledgeRefundedPayment: boolean;
   /** Tell the customer, when they were told about the cancellation. */
   readonly sendRestorationEmail: boolean;
@@ -935,7 +935,7 @@ const restorationError = (reason: RestorationRefusalReason, cause?: unknown) =>
     ...(cause !== undefined && { cause }),
   });
 
-/** Refuses a restore of a payment Nexi refunded, until the administrator acknowledges the refund. */
+/** Refuses a restore of a refunded payment until the administrator acknowledges the refund. */
 const requireRefundAcknowledgement = ({
   attempts,
   acknowledgeRefundedPayment,
@@ -959,5 +959,5 @@ const refundAcknowledgementRequired = (
     code: restorationErrorCodes.refund_acknowledgement_required,
     reason: "refund_acknowledgement_required",
     refundedPayment,
-    message: `Nexi already refunded ${formatMoney(refundedPayment.amount, baseLocale)} of this reservation (${refundedPayment.coverage} refund). Acknowledge the refunded payment to restore it.`,
+    message: `A refund of ${formatMoney(refundedPayment.amount, baseLocale)} is recorded for this reservation (${refundedPayment.coverage} refund). Acknowledge the refunded payment to restore it.`,
   });

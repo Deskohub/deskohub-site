@@ -5,12 +5,7 @@ import type { CheckoutSummaryDiscount } from "@/features/checkout/checkout-summa
 import { formatDiscountAdjustment } from "@/features/checkout/format-discount-adjustment";
 import { type Locale, m } from "@/features/i18n";
 import { Button } from "@/shared/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import { formatMoney, moneyWithValue } from "@/shared/money/money";
 import { CheckoutSummaryDiscountCountdown } from "./checkout-summary-discount-countdown";
 
@@ -24,37 +19,33 @@ export function CheckoutSummaryDiscountDetails({
   readonly productLabel: string;
 }) {
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            tone="muted"
-            size="icon-sm"
-            data-checkout-discount-details
-            aria-label={m.checkoutSummaryDiscountDetailsTrigger(
-              { product: productLabel },
-              { locale }
-            )}
-            className="shrink-0"
-          >
-            <Info aria-hidden="true" className="size-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent
-          align="end"
-          collisionPadding={16}
-          className="w-[min(22rem,calc(100vw-2rem))] p-4"
-          side="top"
+    <Tooltip
+      align="end"
+      collisionPadding={16}
+      contentClassName="w-[min(22rem,calc(100vw-2rem))] p-4"
+      side="top"
+      trigger={
+        <Button
+          type="button"
+          variant="ghost"
+          tone="muted"
+          size="icon-sm"
+          data-checkout-discount-details
+          aria-label={m.checkoutSummaryDiscountDetailsTrigger(
+            { product: productLabel },
+            { locale }
+          )}
+          className="shrink-0"
         >
-          <CheckoutSummaryDiscountDetailsContent
-            discounts={discounts}
-            locale={locale}
-          />
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+          <Info aria-hidden="true" className="size-4" />
+        </Button>
+      }
+    >
+      <CheckoutSummaryDiscountDetailsContent
+        discounts={discounts}
+        locale={locale}
+      />
+    </Tooltip>
   );
 }
 

@@ -1,7 +1,7 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
-import { paymentAttempts } from "@/db/schema";
+import { type PaymentAttemptRow, paymentAttempts } from "@/db/schema";
 import { postgresUuidV7 } from "@/db/uuid-v7";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { OrderId } from "@/features/order";
@@ -19,7 +19,10 @@ type NewPaymentAttempt = {
   readonly workspaceReservationId: WorkspaceReservationId | null;
   readonly amount: Money;
 } & (
-  | { readonly provider: PaymentProvider; readonly providerOrderId: string }
+  | {
+      readonly provider: PaymentProvider | "fio";
+      readonly providerOrderId: string;
+    }
   | { readonly provider: "internal"; readonly paidAt: Temporal.Instant }
 );
 
@@ -64,16 +67,44 @@ type AttemptSettlement = {
   readonly providerStatus?: string;
 };
 
+/** A new settlement replaces earlier attempt facts. A replay fills gaps. */
+export const verifiedSettlementEvidence = (
+  input: AttemptSettlement,
+  attempt: PaymentAttemptRow
+) => {
+  const settled = attempt.state === "paid" ? attempt : undefined;
+  return {
+    lastWebhookEventId:
+      settled?.lastWebhookEventId ?? input.webhookEventId ?? null,
+    lastProviderOperationId:
+      settled?.lastProviderOperationId ?? input.providerOperationId ?? null,
+    lastProviderStatus:
+      settled?.lastProviderStatus ?? input.providerStatus ?? null,
+  };
+};
+
+export type SharedCardSettlement = {
+  readonly attempt: PaymentAttemptRow;
+  readonly windowEligible: boolean;
+};
+
 export const markPaymentAttemptPaid = Effect.fn("paymentAttempts.markPaid")(
-  function* (input: AttemptSettlement & { readonly paidAt: Temporal.Instant }) {
+  function* (
+    input: AttemptSettlement & { readonly paidAt: Temporal.Instant },
+    sharedCard?: SharedCardSettlement
+  ) {
     const { db } = yield* WorkspaceTransaction;
     const [attempt] = yield* db
       .update(paymentAttempts)
       .set({
         state: "paid",
-        lastWebhookEventId: input.webhookEventId,
-        lastProviderOperationId: input.providerOperationId,
-        lastProviderStatus: input.providerStatus,
+        ...(sharedCard
+          ? verifiedSettlementEvidence(input, sharedCard.attempt)
+          : {
+              lastWebhookEventId: input.webhookEventId,
+              lastProviderOperationId: input.providerOperationId,
+              lastProviderStatus: input.providerStatus,
+            }),
         failureCode: null,
         updatedAt: input.paidAt,
       })
@@ -81,7 +112,20 @@ export const markPaymentAttemptPaid = Effect.fn("paymentAttempts.markPaid")(
         and(
           eq(paymentAttempts.orderId, input.orderId),
           eq(paymentAttempts.id, input.id),
-          inArray(paymentAttempts.state, ["created", "pending", "paid"])
+          or(
+            inArray(paymentAttempts.state, ["created", "pending", "paid"]),
+            sharedCard?.windowEligible
+              ? and(
+                  eq(paymentAttempts.provider, "nexi"),
+                  isNotNull(paymentAttempts.securityToken),
+                  inArray(paymentAttempts.state, [
+                    "failed",
+                    "cancelled",
+                    "expired",
+                  ])
+                )
+              : undefined
+          )
         )
       )
       .returning();

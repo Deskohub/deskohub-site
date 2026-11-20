@@ -146,6 +146,7 @@
         "@deskohub/secret-comparison#test",
         "@deskohub/standard-schema#test",
         "@deskohub/test-email#test",
+        "@deskohub/tooltip#test",
         "@deskohub/workspace-admin-api#test",
         "@deskohub/workspace-customer-api#test",
         "osm#test"

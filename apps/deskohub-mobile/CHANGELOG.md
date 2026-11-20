@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.6](https://github.com/totalolage/deskohub-site/compare/mobile-v0.2.5...mobile-v0.2.6) (2026-11-19)
+
+### Features
+
+* **mobile:** browse reservations and view the selected booking side by side on wide screens
+
 ## [0.2.5](https://github.com/totalolage/deskohub-site/compare/mobile-v0.2.4...mobile-v0.2.5) (2026-11-19)
 
 ### Bug Fixes

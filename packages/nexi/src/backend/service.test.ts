@@ -658,6 +658,29 @@ describe("NexiService verifyPaymentOutcome evidence", () => {
     expect(result.provider.operationCount).toBe(2);
   });
 
+  test("keeps the operation ID absent when the successful capture omits it", async () => {
+    const result = await verify({
+      orderStatus: {
+        order: { orderId: "order-id", amount: "5000", currency: "CZK" },
+      },
+      operations: [
+        {
+          operationId: "declined-id",
+          operationType: "AUTHORIZATION",
+          operationResult: "DECLINED",
+        },
+        {
+          operationType: "CAPTURE",
+          operationResult: "EXECUTED",
+        },
+      ],
+    });
+
+    expect(result.status).toBe("success");
+    expect(result.provider.orderStatus).toBe("EXECUTED");
+    expect(result.provider.operationId).toBeUndefined();
+  });
+
   test("reads an executed authorization's amount and the response order ID without an order status", async () => {
     const result = await verify(
       {

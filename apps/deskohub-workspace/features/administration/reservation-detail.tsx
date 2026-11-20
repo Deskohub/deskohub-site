@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import type { Locale } from "@/features/i18n";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
+import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { formatMoney } from "@/shared/money/money";
 import { restoreAdministrationReservation } from "./actions";
 import { AdministrationLink as Link } from "./admin-link";
@@ -27,6 +28,8 @@ import {
   AdministrationFact,
 } from "./detail-components";
 import { EmptyState } from "./empty-state";
+import { FioMovementEvidence } from "./fio-movement-evidence";
+import { loadAdministrationFioMovements } from "./fio-settlement-page-data.server";
 import { formatAdministrationDateTime } from "./formatters";
 import { m } from "./i18n";
 import { AdministrationDetailLoading } from "./loading";
@@ -77,6 +80,9 @@ async function ReservationDetailContent({
   const { reservationId } = await params;
   const detail = await loadAdministrationReservation(reservationId);
   const { reservation } = detail;
+  const fioMovements = loadAdministrationFioMovements(
+    reservationOrderId(reservation.id)
+  );
   return (
     <>
       <h1 className="sr-only">
@@ -111,6 +117,13 @@ async function ReservationDetailContent({
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-6">
           <ReservationSummarySection detail={detail} locale={locale} />
+
+          <Suspense fallback={null}>
+            <ReservationFioMovementEvidence
+              locale={locale}
+              movements={fioMovements}
+            />
+          </Suspense>
 
           <ReservationAccessAdministration
             grant={detail.accessGrant}
@@ -591,5 +604,21 @@ function ReservationOperatorNotice({
       <p className="font-semibold">{title({}, { locale })}</p>
       <p>{message({}, { locale })}</p>
     </AdministrationAlert>
+  );
+}
+
+async function ReservationFioMovementEvidence({
+  locale,
+  movements,
+}: {
+  readonly locale: Locale;
+  readonly movements: ReturnType<typeof loadAdministrationFioMovements>;
+}) {
+  return (
+    <FioMovementEvidence
+      locale={locale}
+      movements={await movements}
+      source="reservation"
+    />
   );
 }

@@ -8,12 +8,7 @@ import {
   useId,
 } from "react";
 import { type Locale, m } from "@/features/i18n";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import { cn } from "@/shared/utils";
 
 type FutureFeatureTooltipProps = {
@@ -42,34 +37,28 @@ export function FutureFeatureTooltip({
       : child;
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        {/* biome-ignore-start lint/a11y/noNoninteractiveTabindex: The non-button group must be keyboard-focusable to expose a tooltip for a disabled child. */}
-        {/* biome-ignore-start lint/a11y/useSemanticElements: A span preserves inline placement around disabled account controls. */}
-        <TooltipTrigger asChild>
-          <span
-            aria-labelledby={childId}
-            className={cn(
-              "inline-flex min-w-0 max-w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-burned-orange focus-visible:ring-offset-2",
-              className
-            )}
-            role="group"
-            tabIndex={0}
-          >
-            <span className="pointer-events-none contents">
-              {labelledChild ?? children}
-            </span>
-          </span>
-        </TooltipTrigger>
-        {/* biome-ignore-end lint/a11y/useSemanticElements: A span preserves inline placement around disabled account controls. */}
-        {/* biome-ignore-end lint/a11y/noNoninteractiveTabindex: The non-button group must be keyboard-focusable to expose a tooltip for a disabled child. */}
-        <TooltipContent
-          collisionPadding={16}
-          className="w-[min(20rem,calc(100vw-2rem))] max-w-[320px] break-words whitespace-normal"
+    <Tooltip
+      collisionPadding={16}
+      contentClassName="w-[min(20rem,calc(100vw-2rem))] max-w-[320px] break-words whitespace-normal"
+      trigger={
+        // biome-ignore lint/a11y/useSemanticElements: A span preserves inline placement around disabled account controls.
+        <span
+          aria-labelledby={childId}
+          className={cn(
+            "inline-flex min-w-0 max-w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-burned-orange focus-visible:ring-offset-2",
+            className
+          )}
+          role="group"
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: The group exposes a tooltip for a disabled child to keyboard users.
+          tabIndex={0}
         >
-          {message}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+          <span className="pointer-events-none contents">
+            {labelledChild ?? children}
+          </span>
+        </span>
+      }
+    >
+      {message}
+    </Tooltip>
   );
 }

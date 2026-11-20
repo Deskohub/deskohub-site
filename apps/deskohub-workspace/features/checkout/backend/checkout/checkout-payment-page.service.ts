@@ -12,13 +12,17 @@ import {
   type WorkspaceReservation,
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import {
+  reservationOrderId,
+  type WorkspaceReservationId,
+} from "@/features/reservation/persistence-contracts";
 import { currentInstant } from "@/shared/utils/temporal";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import {
   type PaymentAttempt,
   PaymentAttemptRepository,
 } from "../repositories/payment-attempt.repository";
+import { QrPaymentRepository } from "../repositories/qr-payment.repository";
 import { getLatePaymentStatusKind } from "./checkout-reservation-status-kind";
 import { PaymentPageProviderStatus } from "./payment-page-provider-status";
 import {
@@ -92,6 +96,7 @@ const implementation = Effect.gen(function* () {
   const authorization = yield* ReservationAuthorizationService;
   const reservations = yield* WorkspaceReservationRepository;
   const paymentAttempts = yield* PaymentAttemptRepository;
+  const qrPayments = yield* QrPaymentRepository;
   const latePaymentRecoveries = yield* LatePaymentRecoveryRepository;
   const providerStatus = yield* PaymentPageProviderStatus;
 
@@ -151,6 +156,13 @@ const implementation = Effect.gen(function* () {
       if (!reservation.activePaymentAttemptId) {
         return closed("no_active_attempt");
       }
+      // A shared window replaces the legacy reopening path even after expiry
+      // or after the public QR release gate closes.
+      if (
+        yield* qrPayments.findPaymentWindow(reservationOrderId(reservation.id))
+      ) {
+        return closed("window_elapsed");
+      }
 
       const attempt = yield* paymentAttempts.findById(
         reservation.activePaymentAttemptId
@@ -198,6 +210,7 @@ export class CheckoutPaymentPageService extends Context.Service<
           authorization,
           WorkspaceReservationRepository.Default,
           PaymentAttemptRepository.Default,
+          QrPaymentRepository.Default,
           LatePaymentRecoveryRepository.Default,
           PaymentPageProviderStatus.Live
         )
