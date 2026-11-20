@@ -58,6 +58,8 @@ describe("campaign image", () => {
     `![Zasedačka](${cloudinaryImage}){align=left width=240}`,
     `![Zasedačka](${cloudinaryImage}){align=right width=1200}`,
     `![Zasedačka](${cloudinaryImage} "Podzim"){align=left}`,
+    `![Zasedačka](${cloudinaryImage}){roundedCorners=false}`,
+    `![Zasedačka](${cloudinaryImage}){align=left width=240 roundedCorners=false}`,
   ])("round-trips %s", async (markdown) => {
     const read = await readMarkdown(markdown);
 
@@ -68,9 +70,9 @@ describe("campaign image", () => {
   test("reads an attribute list in any order", async () => {
     expect(
       await imageAttrs(
-        `![Zasedačka](${cloudinaryImage}){width=240 align=right}`
+        `![Zasedačka](${cloudinaryImage}){roundedCorners=false width=240 align=right}`
       )
-    ).toMatchObject({ align: "right", width: 240 });
+    ).toMatchObject({ align: "right", width: 240, roundedCorners: false });
   });
 
   test("keeps an image between paragraphs its own block", async () => {
@@ -120,6 +122,12 @@ describe("campaign image", () => {
       expect(imageIssuePaths(attrs)).toEqual([]);
     }
   );
+
+  test("reports a non-boolean rounded corners setting", () => {
+    expect(imageIssuePaths({ roundedCorners: "false" })).toEqual([
+      ["ImageRoundedCornersInvalid", "roundedCorners"],
+    ]);
+  });
 
   test("round-trips the widest accepted width", async () => {
     const markdown = `![Zasedačka](${cloudinaryImage}){width=65535}`;

@@ -205,6 +205,35 @@ test("aligns the selected image and keeps its width", async () => {
   });
 });
 
+test("changes corners only for a single selected image and keeps them in copied HTML", async () => {
+  const image = { type: "image", attrs: { src: cloudinaryImage } };
+  const { editor, view, changes } = await renderEditor({
+    type: "doc",
+    content: [image, image],
+  });
+  const name = m.emailCampaignsImageRoundCorners({}, { locale });
+
+  act(() => editor.commands.selectAll());
+  expect(editor.isActive("image")).toBe(true);
+  expect(view.queryByRole("checkbox", { name })).toBeNull();
+
+  act(() => editor.commands.setNodeSelection(0));
+  const corners = await view.findByRole("checkbox", { name });
+  expect(corners.getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(corners);
+
+  expect(
+    changes.at(-1)?.content?.map((node) => node.attrs?.roundedCorners)
+  ).toEqual([false, null]);
+
+  const copied = editor.getHTML();
+  expect(copied).toContain('data-rounded-corners="false"');
+  act(() => editor.commands.setContent(copied));
+  expect(
+    editor.getJSON().content?.map((node) => node.attrs?.roundedCorners)
+  ).toEqual([false, null]);
+});
+
 test("resizes the selected image, keeps input focus, and reopens the emitted document", async () => {
   const { editor, view, changes } = await renderEditor(
     bodyWithImage({ width: 480, height: 320, align: "right" })

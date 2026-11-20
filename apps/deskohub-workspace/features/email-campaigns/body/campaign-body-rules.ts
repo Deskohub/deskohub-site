@@ -24,6 +24,7 @@ export type CampaignBodyIssue = Data.TaggedEnum<{
   ImageSourceInvalid: { readonly path: IssuePath };
   /** The alignment isn't left, center or right, or the width isn't whole pixels. */
   ImageLayoutInvalid: { readonly path: IssuePath };
+  ImageRoundedCornersInvalid: { readonly path: IssuePath };
   ButtonLabelMissing: { readonly path: IssuePath };
   /** Markdown turns carriage returns into line breaks, losing them on export. */
   ButtonLabelLineBreaks: { readonly path: IssuePath };
@@ -47,6 +48,8 @@ export const englishCampaignBodyIssueMessage = (
       "An image must come from the Deskohub Cloudinary account.",
     ImageLayoutInvalid: () =>
       "An image must align left, center or right, and give its width in whole pixels.",
+    ImageRoundedCornersInvalid: () =>
+      "An image's rounded corners setting must be true or false.",
     ButtonLabelMissing: () => "A button needs a label.",
     ButtonLabelLineBreaks: () =>
       "A button label must break lines with line feeds only.",
@@ -157,6 +160,13 @@ const imageIssues = (
         ]
       : []
   ),
+  ...(isImageLayoutInvalid(node.attrs?.roundedCorners, Predicate.isBoolean)
+    ? [
+        CampaignBodyIssue.ImageRoundedCornersInvalid({
+          path: [...path, "attrs", "roundedCorners"],
+        }),
+      ]
+    : []),
 ];
 
 /** A button needs a label and an allowed URL. */
