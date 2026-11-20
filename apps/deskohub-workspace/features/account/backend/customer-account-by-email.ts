@@ -1,8 +1,9 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { Data, Effect, Option } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { authUser } from "@/db/schema/auth";
 import { customerAccounts } from "@/db/schema/customer-accounts";
+import type { Locale } from "@/features/i18n";
 import {
   type CustomerAccountId,
   customerAccountIdSchema,
@@ -112,4 +113,47 @@ export const findPurchaseLoginEmail = Effect.fn(
       and(eq(authUser.id, accountId), isNull(authUser.deletionRequestedAt))
     );
   return login?.email;
+});
+
+/** Reads contact data for the parties to purchases the caller has authorized. */
+export const findEntryPackPurchasePartyContacts = Effect.fn(
+  "CustomerAccount.findEntryPackPurchasePartyContacts"
+)(function* (accountIds: readonly CustomerAccountId[]) {
+  const contacts = new Map<
+    CustomerAccountId,
+    {
+      email: string;
+      name: string | null;
+      locale: Locale | null;
+      dotyposCustomerId: (typeof customerAccounts.$inferSelect)["dotyposCustomerId"];
+    }
+  >();
+  if (accountIds.length === 0) return contacts;
+
+  const { db } = yield* WorkspaceDatabase;
+  const rows = yield* db
+    .select({
+      id: customerAccounts.id,
+      dotyposCustomerId: customerAccounts.dotyposCustomerId,
+      email: authUser.email,
+      name: authUser.name,
+      locale: authUser.locale,
+    })
+    .from(customerAccounts)
+    .innerJoin(authUser, eq(authUser.id, customerAccounts.id))
+    .where(
+      and(
+        inArray(customerAccounts.id, [...new Set(accountIds)]),
+        isNull(customerAccounts.deletedAt),
+        isNull(authUser.deletionRequestedAt)
+      )
+    );
+  for (const { id, name, ...row } of rows) {
+    const displayName = name.trim();
+    contacts.set(id, {
+      ...row,
+      name: displayName && !displayName.includes("@") ? displayName : null,
+    });
+  }
+  return contacts;
 });

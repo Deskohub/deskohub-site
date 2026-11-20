@@ -3,12 +3,13 @@ import "server-only";
 import { and, asc, eq, inArray, isNull, lte, or } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { orders, paymentAttempts } from "@/db/schema";
+import { entryPackGiftInvitations, orders, paymentAttempts } from "@/db/schema";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
 import { PaymentProvidersLive } from "@/features/checkout/backend/payment/payment-providers";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
 import { providerOrderAbandonmentTimeoutMinutes } from "@/features/checkout/provider-order-abandonment";
+import { entryPackGiftInvitationDue } from "./entry-pack-gift";
 
 /** Retries paid fulfillment and resolves abandoned attempts from provider facts. */
 export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
@@ -69,20 +70,27 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
         const unfulfilled = yield* db
           .select({ orderId: orders.id })
           .from(orders)
+          .leftJoin(
+            entryPackGiftInvitations,
+            eq(entryPackGiftInvitations.orderId, orders.id)
+          )
           .where(
             and(
               eq(orders.kind, "pass-purchase"),
               eq(orders.paymentState, "paid"),
-              inArray(orders.fulfillmentState, [
-                "not_started",
-                "awaiting_delivery",
-              ]),
+              or(
+                inArray(orders.fulfillmentState, [
+                  "not_started",
+                  "awaiting_delivery",
+                ]),
+                entryPackGiftInvitationDue(input.now)
+              ),
               lte(orders.updatedAt, retryBefore)
             )
           )
           .orderBy(asc(orders.updatedAt), asc(orders.id))
           .limit(input.limit)
-          .for("no key update", { skipLocked: true });
+          .for("no key update", { of: orders, skipLocked: true });
         const claimed = [...expired, ...unfulfilled].map(
           ({ orderId }) => orderId
         );
@@ -123,10 +131,9 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
     }
     for (const { orderId } of unfulfilled) {
       yield* handler.fulfill(orderId).pipe(
-        Effect.catch((cause) =>
+        Effect.catch(() =>
           Effect.logWarning("Pass fulfillment retry failed", {
             orderId,
-            cause,
           })
         )
       );

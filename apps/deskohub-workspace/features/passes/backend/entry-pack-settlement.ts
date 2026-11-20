@@ -5,6 +5,7 @@ import { Effect } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { orders, passPurchases } from "@/db/schema";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
+import { queueInitialEntryPackGift } from "./entry-pack-gift";
 
 /** Reconcile the pack from the authoritative order after shared settlement. */
 export const settleEntryPack = Effect.fn("settleEntryPack")(function* (
@@ -32,6 +33,7 @@ export const settleEntryPack = Effect.fn("settleEntryPack")(function* (
             )
           )
           .returning();
+        if (purchase) yield* queueInitialEntryPackGift(purchase);
         return purchase;
       }
 
