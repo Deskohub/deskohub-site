@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { CustomerReservationFamily } from "@deskohub/workspace-customer-api";
-import { Option } from "effect";
 import { m } from "../../i18n/messages";
 import { formatMoney } from "../../i18n/money-format";
 import {
@@ -10,8 +9,11 @@ import {
   hostTree,
   textOf,
 } from "../../ui/testing/element-tree";
-import { sampleOfferings } from "../testing/sample-booking-catalog";
-import { familyTitle } from "./booking-family-copy";
+import {
+  czk,
+  sampleOfferings,
+  samplePrices,
+} from "../testing/sample-booking-catalog";
 import { SpaceCards, SpaceCardsSkeleton } from "./space-cards";
 import { spaceCards } from "./space-chooser";
 
@@ -35,7 +37,7 @@ const render = (
   const pictures = findAll(tree, "View")
     .filter((view) => view.props["aria-hidden"] === true)
     .map((view) => flatStyle(view.props.style).height);
-  return { tree, buttons, pictures, onOpen };
+  return { buttons, pictures, onOpen };
 };
 
 describe("SpaceCards", () => {
@@ -65,53 +67,45 @@ describe("SpaceCards", () => {
     expect(render(["meeting-room", "cowork"]).pictures).toEqual([148, 148]);
     expect(render(["office", "cowork"]).pictures).toEqual([148, 148]);
   });
-
-  test("shows the catalog's names and price on each card", () => {
-    const { tree } = render(["office", "meeting-room", "cowork"]);
-    const texts = findAll(tree, "Text").map((text) => textOf(text));
-    for (const family of ["office", "meeting-room"] as const) {
-      const name = catalog.find((each) => each.family === family)?.name;
-      expect(texts).toContain(name ?? "");
-    }
-  });
 });
 
 describe("SpaceCards prices", () => {
-  test("each card shows its own from-price with the unit it is charged in", () => {
-    const families = ["office", "meeting-room", "cowork"] as const;
-    const { buttons } = render(families);
-    const cards = spaceCards(
-      catalog.filter(({ family }) => families.includes(family))
+  test("each card shows its own name, from-price and billing unit", () => {
+    const { buttons } = render(["office", "meeting-room", "cowork"]);
+    const locale = "en-US";
+    const perDay = m.booking_tier_price_per_day({}, { locale });
+    const expected = [
+      {
+        name: catalog.find(({ family }) => family === "office")?.name,
+        amount: samplePrices.officeDay + samplePrices.officeSeat,
+        unit: perDay,
+      },
+      {
+        name: catalog.find(({ family }) => family === "meeting-room")?.name,
+        amount: samplePrices.meetingRoom["hour:1"],
+        unit: m.booking_space_per_hour({}, { locale }),
+      },
+      {
+        name: m.booking_family_cowork_title({}, { locale }),
+        amount: samplePrices.openSpace,
+        unit: perDay,
+      },
+    ];
+    const cardTexts = buttons.map((button) =>
+      findAll(button, "Text").map(textOf)
     );
-    expect(cards).toHaveLength(families.length);
-    const unitOf = (card: (typeof cards)[number]) => {
-      switch (card.unit.kind) {
-        case "day":
-          return m.booking_tier_price_per_day({}, { locale: "en-US" });
-        case "hour":
-          return m.booking_space_per_hour({}, { locale: "en-US" });
-        case "length":
-          return m.booking_space_per_length(
-            { length: card.unit.label },
-            { locale: "en-US" }
-          );
-      }
-    };
-    for (const card of cards) {
-      const name = Option.getOrElse(card.name, () =>
-        familyTitle(card.family, "en-US")
+    for (const { name, amount, unit } of expected) {
+      const texts = cardTexts.find(
+        (texts) => name !== undefined && texts.includes(name)
       );
-      const own = buttons
-        .map((button) => findAll(button, "Text").map((text) => textOf(text)))
-        .find((texts) => texts.includes(name));
-      expect(own).toContain(formatMoney(card.fromPrice, "en-US"));
-      expect(own).toContain(unitOf(card));
+      expect(texts).toContain(formatMoney(czk(amount), locale));
+      expect(texts).toContain(unit);
     }
   });
 });
 
 describe("SpaceCardsSkeleton", () => {
-  test("is one busy element in the cards' final layout", () => {
+  test("is one busy element with no interactive cards", () => {
     const tree = hostTree(
       elementTree(SpaceCardsSkeleton, { label: "Loading" })
     );

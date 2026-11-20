@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { m } from "../../i18n/messages";
 import {
   elementTree,
   findAll,
@@ -68,16 +69,29 @@ describe("MeetingRoomStartTimes", () => {
     expect(disclosure?.["aria-expanded"]).toBe(false);
   });
 
-  test("a taken start is disabled, named as taken and never chosen", () => {
+  test("a taken start is disabled, named as taken and skipped by keyboard navigation", () => {
     const onSelect = mock((_startTime: string) => undefined);
-    const { chips } = render("09:00", onSelect);
+    const { chips, tree } = render("09:00", onSelect);
     const taken = chips[1];
 
     expect(taken?.disabled).toBe(true);
     expect(taken?.["aria-disabled"]).toBe(true);
     expect(taken?.["aria-checked"]).toBe(false);
-    expect(taken?.["aria-label"]).toEqual(expect.any(String));
-    expect(chips[0]?.["aria-label"]).toBeUndefined();
+    expect(taken?.["aria-label"]).toBe(
+      m.booking_meeting_room_taken_start({ time: "09:00" }, { locale: "en-US" })
+    );
+    expect(
+      chips[0]?.["aria-label"] ??
+        chips[0]?.accessibilityLabel ??
+        timesOf(tree)[0]
+    ).toBe("08:00");
+
+    const onKeyDown = chips[0]?.onKeyDown;
+    if (typeof onKeyDown !== "function") {
+      throw new Error("The start chip has no keyboard handler");
+    }
+    onKeyDown({ nativeEvent: { key: "ArrowRight" }, preventDefault: () => {} });
+    expect(onSelect.mock.calls).toEqual([["10:00"]]);
   });
 
   test("checks the chosen start and chooses a free one on press", () => {

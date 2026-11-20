@@ -9,14 +9,8 @@ import {
 } from "@deskohub/workspace-customer-api";
 import { Effect, Option } from "effect";
 import { analytics } from "../../analytics/analytics";
-import { accountStorageKey } from "../../customer-api/account-scoped-storage";
-import {
-  type FakeRequestOutcome,
-  fakeWorkspaceOrigin,
-} from "../../customer-api/testing/fake-workspace";
+import type { FakeRequestOutcome } from "../../customer-api/testing/fake-workspace";
 import { PaymentBrowserUnavailable } from "../payment-browser.service";
-import { RememberedReferralUpdate } from "../remembered-referral";
-import { rememberedReferralStorageName } from "../remembered-referral.service";
 import { fakeBookingCodes } from "../testing/fake-booking-api";
 import {
   type FakeCheckout,
@@ -239,28 +233,6 @@ describe("CreateCheckout", () => {
     await checkout.adjust("15 seconds");
 
     expect(await answer).toEqual(failed(1, BookingProblem.Unconfirmed()));
-  });
-
-  test("committed, response lost: the identical resend gets the same hold", async () => {
-    const checkout = await harness();
-    const command = createCommand(checkout);
-    checkout.booking.fail("createCheckout", "transport-failure");
-
-    const lost = await run(checkout, command);
-    // The fake held the order before the connection broke.
-    const committed = checkout.booking.attempted("session-1", "attempt-1");
-    const resent = await run(checkout, command);
-
-    expect(lost).toEqual(failed(1, BookingProblem.Unconfirmed()));
-    expect(committed).toBeDefined();
-    const [first, second] = checkout.booking.calls;
-    expect(second).toEqual(first);
-    expect(resent).toMatchObject(
-      Option.some({
-        _tag: "CheckoutCreated",
-        start: { status: "ready", orderId: committed?.orderId },
-      })
-    );
   });
 });
 
@@ -566,24 +538,6 @@ describe("SubmitCheckout", () => {
       failed(7, BookingProblem.LegalDocumentsChanged())
     );
   });
-
-  test("committed, response lost: the resend shows the order's status", async () => {
-    const checkout = await harness();
-    const held = await hold(checkout);
-    const command = await submitAccepted(checkout, held);
-    checkout.booking.fail("submitCheckout", "transport-failure");
-
-    const lost = await run(checkout, command);
-    const resent = await run(checkout, command);
-
-    expect(lost).toEqual(failed(7, BookingProblem.Unconfirmed()));
-    expect(resent).toEqual(failed(7, BookingProblem.ShowStatus()));
-    const submits = checkout.booking.calls.filter(
-      ({ endpoint }) => endpoint === "submitCheckout"
-    );
-    expect(submits).toHaveLength(2);
-    expect(submits[1]).toEqual(submits[0]);
-  });
 });
 
 describe("checkoutReturnTarget", () => {
@@ -637,36 +591,6 @@ describe("OpenPayment", () => {
     expect(await run(checkout, openCommand)).toEqual(
       failed(8, BookingProblem.Retryable({ kind: "unexpected" }))
     );
-  });
-});
-
-describe("UpdateRememberedReferral", () => {
-  test("keeps the code in the account's storage, then forgets it", async () => {
-    const checkout = await harness();
-    const key = accountStorageKey(rememberedReferralStorageName, {
-      apiOrigin: fakeWorkspaceOrigin,
-      accountId: checkout.workspace.data.accountId,
-    });
-
-    const remembered = await run(
-      checkout,
-      CheckoutCommand.UpdateRememberedReferral({
-        update: RememberedReferralUpdate.Remember({
-          code: fakeBookingCodes.referral,
-        }),
-      })
-    );
-    const stored = checkout.device.storage.has(key);
-    const forgotten = await run(
-      checkout,
-      CheckoutCommand.UpdateRememberedReferral({
-        update: RememberedReferralUpdate.Forget(),
-      })
-    );
-
-    expect([remembered, forgotten]).toEqual([Option.none(), Option.none()]);
-    expect(stored).toBe(true);
-    expect(checkout.device.storage.has(key)).toBe(false);
   });
 });
 

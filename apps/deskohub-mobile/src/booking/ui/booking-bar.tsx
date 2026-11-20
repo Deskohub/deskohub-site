@@ -96,7 +96,7 @@ export interface BookingBarAction {
 }
 
 /** A finger's travel since it touched the bar, in dp. */
-export interface SwipeTravel {
+interface SwipeTravel {
   readonly dx: number;
   readonly dy: number;
 }
@@ -107,14 +107,11 @@ const swipeSlop = 10;
 const swipeDistance = 24;
 
 /** Whether a finger's travel is a vertical swipe the bar takes over from a press. */
-export const claimsSwipe = ({ dx, dy }: SwipeTravel): boolean =>
+const claimsSwipe = ({ dx, dy }: SwipeTravel): boolean =>
   Math.abs(dy) > swipeSlop && Math.abs(dy) > Math.abs(dx);
 
 /** What a finished swipe asks for: up opens, down closes, a short or sideways one nothing. */
-export const swipeIntent = ({
-  dx,
-  dy,
-}: SwipeTravel): "open" | "close" | undefined => {
+const swipeIntent = ({ dx, dy }: SwipeTravel): "open" | "close" | undefined => {
   if (Math.abs(dy) <= Math.abs(dx)) return undefined;
   if (dy <= -swipeDistance) return "open";
   if (dy >= swipeDistance) return "close";

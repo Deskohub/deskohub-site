@@ -8,7 +8,6 @@ import {
   type PriceLine,
   priceBreakdown,
   priceLineAmount,
-  summaryItemSubject,
 } from "./price-breakdown";
 import {
   meetingRoomHour,
@@ -136,7 +135,7 @@ describe("priceBreakdown", () => {
   });
 });
 
-describe("summaryItemSubject", () => {
+describe("priceBreakdown line subjects", () => {
   test.each([
     [
       { key: "product:cowork:open-space" },
@@ -149,8 +148,14 @@ describe("summaryItemSubject", () => {
       { _tag: "Workstation", monitorOption: "2x27-qhd" },
     ],
     [{ key: "addon:parking" }, { _tag: "Other", key: "addon:parking" }],
-  ] as const)("%o", (item, subject) => {
-    expect(summaryItemSubject(item)).toEqual(subject);
+  ] as const)("names a charge for %o", (item, subject) => {
+    const amount = czk(100);
+    const { lines } = priceBreakdown({
+      total: amount,
+      vatStatus: "not-vat-payer",
+      sections: [{ key: "order", total: amount, items: [{ ...item, amount }] }],
+    });
+    expect(lines).toEqual([{ _tag: "Charge", key: item.key, subject, amount }]);
   });
 });
 
