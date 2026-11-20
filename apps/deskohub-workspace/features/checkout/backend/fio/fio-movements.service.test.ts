@@ -1,14 +1,15 @@
 import "next/dist/server/node-environment-baseline";
 
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { context } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { isTracingSuppressed } from "@opentelemetry/core";
 import { Effect, Fiber, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
-import { workAsyncStorage } from "next/dist/server/app-render/work-async-storage.external";
-import { workUnitAsyncStorage } from "next/dist/server/app-render/work-unit-async-storage.external";
+import type { WorkStore } from "next/dist/server/app-render/work-async-storage.external";
+import type { WorkUnitStore } from "next/dist/server/app-render/work-unit-async-storage.external";
 import { createWorkStore } from "next/dist/server/async-storage/work-store";
 import { createPatchedFetcher } from "next/dist/server/lib/patch-fetch";
 import {
@@ -449,6 +450,8 @@ test("caps streamed response bytes even without a content length", async () => {
 });
 
 test("live reads keep the token-bearing URL out of Next fetch metrics and transport tracing", async () => {
+  const workAsyncStorage = new AsyncLocalStorage<WorkStore>();
+  const workUnitAsyncStorage = new AsyncLocalStorage<WorkUnitStore>();
   const path =
     "/v1/rest/periods/synthetic-fio-read-token/2026-07-12/2026-07-13/transactions.json";
   const workStore = createWorkStore({
