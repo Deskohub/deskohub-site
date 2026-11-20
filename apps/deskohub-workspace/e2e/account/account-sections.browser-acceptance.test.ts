@@ -18,6 +18,7 @@ import {
   accountSectionLandmarks,
   selectAccountSection,
   selectAccountSectionInSession,
+  waitForSelectedAccountSection,
 } from "./account-sections";
 import { buildAccountSectionsHarness } from "./account-sections.browser-harness.test-utils";
 
@@ -211,6 +212,39 @@ test.skipIf(!chromiumAvailable)(
     expect(after.currentHrefs).toEqual([
       getAccountSectionPath("en-US", "reservations"),
     ]);
+  }
+);
+
+test.skipIf(!chromiumAvailable)(
+  "rejects a selected section whose label only starts with the expected label",
+  async () => {
+    const failure = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* openAccountSections();
+          yield* session.use("wait for the reservations section", (page) =>
+            waitForSelectedAccountSection(page, "reservations")
+          );
+          yield* session.use("change the selected link label", (page) =>
+            page
+              .locator('a[data-account-sidebar-section="reservations"]')
+              .getByText("Reservations", { exact: true })
+              .evaluate((label) => {
+                label.textContent = "Reservations and billing";
+              })
+          );
+          return yield* session
+            .use(
+              "wait for the renamed reservations section",
+              (page) => waitForSelectedAccountSection(page, "reservations"),
+              { timeoutMs: 1000 }
+            )
+            .pipe(Effect.flip);
+        })
+      )
+    );
+
+    expect(isWorkspaceE2ETimeout(failure)).toBe(true);
   }
 );
 
