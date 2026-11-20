@@ -1,9 +1,10 @@
-import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
   latePaymentRecoveries,
   orders,
+  paymentAttempts,
   workspaceReservations,
 } from "@/db/schema";
 import {
@@ -79,7 +80,7 @@ export class FioPaymentSettlementRepository extends Context.Service<
   static Default = Layer.effect(
     this,
     Effect.gen(function* () {
-      const { db } = yield* WorkspaceDatabase;
+      const { db, transaction } = yield* WorkspaceDatabase;
       return FioPaymentSettlementRepository.of({
         claimMovement: Effect.fn("fioPaymentSettlements.claimMovement")(
           function* (input) {
@@ -250,28 +251,67 @@ export class FioPaymentSettlementRepository extends Context.Service<
         markManualRefunded: Effect.fn(
           "fioPaymentSettlements.markManualRefunded"
         )(function* (settlementId, refundedAt) {
-          const [updated] = yield* db
-            .update(fioPaymentSettlements)
-            .set({ disposition: "refunded", refundedAt })
-            .where(
-              and(
-                eq(fioPaymentSettlements.id, settlementId),
-                eq(fioPaymentSettlements.disposition, "refund_required")
-              )
-            )
-            .returning();
-          if (updated) return updated;
+          return yield* transaction(
+            Effect.gen(function* () {
+              const findSettlement = () =>
+                db
+                  .select()
+                  .from(fioPaymentSettlements)
+                  .where(eq(fioPaymentSettlements.id, settlementId))
+                  .limit(1);
+              const [settlement] = yield* findSettlement();
+              if (settlement?.disposition === "refunded") return settlement;
+              if (settlement?.disposition !== "refund_required") return null;
 
-          const [refunded] = yield* db
-            .select()
-            .from(fioPaymentSettlements)
-            .where(
-              and(
-                eq(fioPaymentSettlements.id, settlementId),
-                eq(fioPaymentSettlements.disposition, "refunded")
-              )
-            );
-          return refunded ?? null;
+              // Cancellation and restoration update the attempt before its
+              // evidence. Keep that lock order while recording a manual refund.
+              const [attempt] = settlement.paymentAttemptId
+                ? yield* db
+                    .select()
+                    .from(paymentAttempts)
+                    .where(
+                      and(
+                        eq(paymentAttempts.id, settlement.paymentAttemptId),
+                        eq(paymentAttempts.provider, "fio"),
+                        eq(paymentAttempts.state, "paid")
+                      )
+                    )
+                    .limit(1)
+                    .for("update")
+                : [];
+              const [updated] = yield* db
+                .update(fioPaymentSettlements)
+                .set({ disposition: "refunded", refundedAt })
+                .where(
+                  and(
+                    eq(fioPaymentSettlements.id, settlementId),
+                    eq(fioPaymentSettlements.disposition, "refund_required")
+                  )
+                )
+                .returning();
+
+              if (!updated) {
+                const [current] = yield* findSettlement();
+                return current?.disposition === "refunded" ? current : null;
+              }
+
+              if (
+                attempt?.refundState === "required" &&
+                attempt.lastProviderOperationId === updated.movementId
+              ) {
+                yield* db
+                  .update(paymentAttempts)
+                  .set({
+                    refundState: "refunded",
+                    refundedAt,
+                    refundedAmountValue: sql`coalesce(${paymentAttempts.refundTargetValue}, ${paymentAttempts.amountValue})`,
+                    updatedAt: refundedAt,
+                  })
+                  .where(eq(paymentAttempts.id, attempt.id));
+              }
+              return updated;
+            })
+          );
         }),
       });
     })

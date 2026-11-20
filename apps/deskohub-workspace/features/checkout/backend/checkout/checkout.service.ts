@@ -1155,42 +1155,43 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                     .pipe(Effect.provideService(FioPollWake, fioWake));
                   return yield* readQrPayment(reservation.id);
                 });
-                const startPayment =
-                  expectedPrice.value === 0
-                    ? completeInternalPayment({
-                        workspaceReservationId: reservation.id,
-                        locale,
-                        total: expectedPrice,
-                        commitment: prepared.commitment,
-                        accountingSnapshot,
-                        reservation: state.reservation,
-                        checkout,
-                      })
-                    : input.method === "qr"
-                      ? startQrPayment
-                      : startProviderSession({
-                          workspaceReservationId: reservation.id,
-                          correlationId: reservation.correlationId,
-                          locale,
-                          total: expectedPrice,
-                          commitment: prepared.commitment,
-                          customer: getPaymentCustomer({
-                            id: dotyposCustomerId,
-                            name: data.name,
-                            email: data.email,
-                            // Read in the region of the locale the Pay
-                            // state was prepared, and its phone validated, in.
-                            phone: parsePhoneNumber(
-                              data.phone,
-                              defaultPhoneRegion(state.locale)
-                            ),
-                          }),
-                          accountingSnapshot,
-                          reservation: state.reservation,
-                          returnTarget: input.returnTarget,
-                          checkout,
-                          fio: eligibleFio,
-                        });
+                const startPayment = Effect.gen(function* () {
+                  if (expectedPrice.value === 0) {
+                    return yield* completeInternalPayment({
+                      workspaceReservationId: reservation.id,
+                      locale,
+                      total: expectedPrice,
+                      commitment: prepared.commitment,
+                      accountingSnapshot,
+                      reservation: state.reservation,
+                      checkout,
+                    });
+                  }
+                  if (input.method === "qr") return yield* startQrPayment;
+                  return yield* startProviderSession({
+                    workspaceReservationId: reservation.id,
+                    correlationId: reservation.correlationId,
+                    locale,
+                    total: expectedPrice,
+                    commitment: prepared.commitment,
+                    customer: getPaymentCustomer({
+                      id: dotyposCustomerId,
+                      name: data.name,
+                      email: data.email,
+                      // Read in the region of the locale the Pay
+                      // state was prepared, and its phone validated, in.
+                      phone: parsePhoneNumber(
+                        data.phone,
+                        defaultPhoneRegion(state.locale)
+                      ),
+                    }),
+                    accountingSnapshot,
+                    reservation: state.reservation,
+                    returnTarget: input.returnTarget,
+                    checkout,
+                    fio: eligibleFio,
+                  });
+                });
 
                 return yield* startPayment.pipe(
                   Effect.catchTag(

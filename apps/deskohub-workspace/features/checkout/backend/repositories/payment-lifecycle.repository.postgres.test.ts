@@ -708,6 +708,69 @@ describe.skipIf(!testDatabase)(
       });
     });
 
+    test("a concurrent verified card settlement and QR credit produce one winner", async () => {
+      const repository = await makeRepository();
+      const customer = customerId();
+      const reservation = await createHeldReservation(customer);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        customer
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const accountKey = "synthetic-fio-account";
+      const qr = await Effect.runPromise(
+        repository
+          .createPendingQrAttempt({
+            ...admission,
+            orderId,
+            locale,
+            accountingSnapshot: snapshot,
+            publicPayment: { accountKey },
+          })
+          .pipe(Effect.provideService(FioPollWake, { wake: () => Effect.void }))
+      );
+      const card = await Effect.runPromise(
+        repository.createPendingProviderAttempt({
+          orderId,
+          amount: admission.amount,
+          locale,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+          publicPayment: { accountKey, useAcceptedCommitment: true },
+        })
+      );
+
+      const paidAt = Temporal.Now.instant();
+      const [cardSettlement, qrSettlement] = await Promise.all([
+        Effect.runPromise(
+          repository.markPaid({
+            orderId,
+            id: card.id,
+            paidAt,
+            providerOperationId: "synthetic-card-race",
+          })
+        ),
+        Effect.runPromise(
+          repository.recordVerifiedQrPayment({
+            orderId,
+            id: qr.id,
+            paidAt,
+            providerOperationId: "synthetic-fio-race",
+          })
+        ),
+      ]);
+      if (cardSettlement.changed) {
+        expect(cardSettlement.attempt.refundState).toBe("not_required");
+        expect(qrSettlement.status).toBe("refund");
+      } else {
+        expect(cardSettlement.attempt.refundState).toBe("required");
+        expect(qrSettlement).toMatchObject({
+          status: "winner",
+          transition: { changed: true, attempt: { id: qr.id } },
+        });
+      }
+    });
+
     test("expires a QR-first window and admits only one durable late receipt for recovery", async () => {
       const repository = await makeRepository();
       const customer = customerId();
