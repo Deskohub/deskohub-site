@@ -52,7 +52,7 @@ export function LanguageSwitcher() {
             value={locale}
             onSelect={() => handleLanguageChange(locale)}
             className={cn(
-              "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+              "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
               currentLocale === locale && "bg-accent"
             )}
           >

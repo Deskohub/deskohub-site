@@ -1,6 +1,9 @@
+import { Schema } from "effect";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { FutureFeatureTooltip } from "@/features/account/components/future-feature-tooltip";
+import { CheckoutSummaryDiscountDetails } from "@/features/checkout/components/checkout-summary-discount-details";
+import { discountIdSchema } from "@/features/discounts/contracts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -60,6 +63,20 @@ function Fixture() {
             <DropdownMenuItem>Customer name</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <CheckoutSummaryDiscountDetails
+          discounts={[
+            {
+              amount: { currency: "CZK", exponent: 2, value: 27_500 },
+              discount: {
+                adjustment: { basisPoints: 5000, kind: "percentage" },
+                id: Schema.decodeUnknownSync(discountIdSchema)("summer-sale"),
+                label: "Summer sale",
+              },
+            },
+          ]}
+          locale="en-US"
+          productLabel="Reserved Desk"
+        />
         <output aria-label="Submissions">{submissions}</output>
       </div>
       <div data-testid="outside" style={{ height: 1000 }} />

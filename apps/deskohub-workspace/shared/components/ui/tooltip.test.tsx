@@ -65,6 +65,27 @@ describe("Workspace tooltips", () => {
   });
 
   tooltipTest(
+    "tab focuses the checkout discount button and shows the offer",
+    async (page) => {
+      const hint = page.getByRole("tooltip");
+      await expectPage(hint).toBeHidden();
+      await page.getByRole("button", { name: "Insert value" }).focus();
+      await page.keyboard.press("Tab");
+      const discount = page.getByRole("button", {
+        name: m.checkoutSummaryDiscountDetailsTrigger(
+          { product: "Reserved Desk" },
+          { locale: "en-US" }
+        ),
+      });
+      await expectPage(discount).toBeFocused();
+      await expectPage(hint.getByText("Summer sale")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expectPage(hint).toBeHidden();
+      await expectPage(discount).toBeFocused();
+    }
+  );
+
+  tooltipTest(
     "touch toggles the hint and still runs a composed control",
     async (page) => {
       const toggle = page.getByRole("button", { name: "Format" });
