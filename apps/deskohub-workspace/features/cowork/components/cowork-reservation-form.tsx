@@ -254,6 +254,7 @@ export function CoworkReservationForm({
     packSelection?.kind === "unavailable" ||
     (packSelection?.kind === "applied" &&
       (!appliedPack ||
+        getEntryPackCoworkTier(appliedPack.tier) !== selectedTier ||
         !entryPackCoversDate(appliedPack, selection.date) ||
         bookingPasses?.claimedDates.some((date) => date === selection.date)));
   const offeredPack =

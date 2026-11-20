@@ -20,6 +20,7 @@ import {
   normalizedOpenSpaceCoworkReservationOrderSchema,
   normalizedReservedDeskCoworkReservationOrderSchema,
 } from "@/features/reservation/cowork-reservation";
+import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import type { CustomerLastReservationForKind } from "@/features/reservation/reservation-existing-customer";
 import { getCoworkAvailabilityQueries } from "@/features/reservation/workspace-availability";
@@ -468,6 +469,63 @@ describe("a linked Entry pack", () => {
       expect(form.initialValues.date).toBe("2099-09-09");
       expect(form.initialValues.initialEntryPack?.kind).toBe("applied");
     }));
+
+  test.each([true, false])(
+    "restores the last held entry only for an editable claim: %s",
+    async (editable) =>
+      stubWorkspaceInstant(async () => {
+        const date = plainDateStringSchema.make("2099-07-30");
+        const reservationId = workspaceReservationIdSchema.make(
+          "d38aa11b-02ae-4819-94a9-4ed582be94f6"
+        );
+        const form = await renderCoworkReservationForm({
+          locale: "en-US",
+          pageData: {
+            ...pageData,
+            heldEntryPacks: [
+              {
+                ...pack,
+                entriesLeft: 0,
+                claimedDates: [date],
+                reservedEntryDates: editable ? { [reservationId]: date } : {},
+              },
+            ],
+          },
+          restoredReservation: {
+            entryPack: { passId: pack.id, reservationId },
+            replacementToken: "signed-replacement-token",
+            reservation: decodeReservedDeskReservation({
+              kind: "cowork",
+              name: "Jan Novák",
+              email: janEmail,
+              phone: "+420712345678",
+              billing: defaultReservationBillingSelection,
+              entryTier: "reserved-desk",
+              coffee: true,
+              monitorOption: "2x27-qhd",
+              date,
+            }),
+          },
+          searchParams: { pass: "other-pass-id", entryTier: "open-space" },
+        });
+        if (editable) {
+          expect(form.initialValues).toMatchObject({
+            initialEntryPack: { kind: "applied", packId: pack.id },
+            entryTier: "reserved-desk",
+            monitorOption: "2x27-qhd",
+            bookingPasses: {
+              claimedDates: [],
+              packs: [{ id: pack.id, entriesLeft: 1 }],
+            },
+          });
+        } else {
+          expect(form.initialValues.initialEntryPack).toEqual({
+            kind: "unavailable",
+          });
+          expect(form.initialValues.bookingPasses.claimedDates).toEqual([date]);
+        }
+      })
+  );
 });
 
 describe("a linked overnight stay", () => {

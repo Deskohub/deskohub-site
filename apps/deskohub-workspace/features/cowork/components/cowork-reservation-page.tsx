@@ -203,13 +203,10 @@ export const coworkReservationPage = createReservationPage({
       today,
       entryPack
     );
+    const signedValues = getCoworkReservationDefaultValues(reservation);
     const values = withOfferedStay(
       withWorkspaceDate(
-        coworkSelectionLink.restore(
-          getCoworkReservationDefaultValues(reservation),
-          searchParams,
-          { locale }
-        ),
+        coworkSelectionLink.restore(signedValues, searchParams, { locale }),
         today
       ),
       pageData
@@ -217,8 +214,14 @@ export const coworkReservationPage = createReservationPage({
     const restoredPack =
       entryPack &&
       bookingPasses.packs.find(({ id }) => id === entryPack.passId);
+    const keepsPackTier =
+      !restoredPack ||
+      (values.entryTier === getEntryPackCoworkTier(restoredPack.tier) &&
+        (restoredPack.tier !== "reserved-desk-workstation" ||
+          values.monitorOption));
     const initialValues: CoworkPageSelection = {
-      ...values,
+      ...(keepsPackTier ? values : withOfferedStay(signedValues, pageData)),
+      date: values.date,
       bookingPasses,
       initialEntryPack: restoredPack
         ? { kind: "applied", packId: restoredPack.id }
