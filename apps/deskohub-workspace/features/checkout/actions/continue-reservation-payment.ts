@@ -12,6 +12,11 @@ import {
   continueReservationPaymentSchema,
 } from "./continue-reservation-payment.server";
 
+const continueReservationPaymentServices = Layer.merge(
+  CheckoutService.Live,
+  publicReservationPaymentStatusServices
+).pipe(Layer.provide(ReferralReleaseGateRequest));
+
 const continueReservationPaymentAction = defineWorkspaceAction(
   {
     operation: "checkout.continue-reservation-payment",
@@ -21,13 +26,7 @@ const continueReservationPaymentAction = defineWorkspaceAction(
   },
   (input) =>
     continueReservationPaymentForAuthor(input).pipe(
-      Effect.provide(
-        Layer.merge(
-          CheckoutService.Live,
-          publicReservationPaymentStatusServices
-        )
-      ),
-      Effect.provide(ReferralReleaseGateRequest)
+      Effect.provide(continueReservationPaymentServices)
     )
 );
 
