@@ -186,7 +186,7 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
     [m.reservationBillingPostalCodeLabel({}, { locale }), "18000"],
   ] as const;
   for (const [label, value] of billingFields) {
-    fireEvent.change(view.getByLabelText(label, { exact: false }), {
+    fireEvent.change(view.getByLabelText(label), {
       target: { value },
     });
   }

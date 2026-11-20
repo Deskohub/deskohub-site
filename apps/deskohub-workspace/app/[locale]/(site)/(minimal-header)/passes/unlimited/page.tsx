@@ -30,17 +30,13 @@ import {
   type UnlimitedPassOrderLink,
 } from "@/features/passes/unlimited-pass-checkout";
 import { createNoindexedPageMetadata } from "@/features/public-pages/page-metadata";
+import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import { QueryProvider } from "@/shared/components/query-provider";
-import { workspaceSiteConstants } from "@/shared/utils";
 import { formatCount } from "@/shared/utils/number";
-import {
-  currentInstant,
-  plainDateStringSchema,
-  temporalInstantToPlainDate,
-} from "@/shared/utils/temporal";
+import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 
 export const instant = false;
 export const maxDuration = 240;
@@ -56,6 +52,9 @@ const customerServices = Layer.mergeAll(
   CurrentCustomerAccount.Live,
   CustomerAccountContactService.Live
 );
+
+const workspaceDate = (instant: Temporal.Instant) =>
+  plainDateStringSchema.make(getCurrentWorkspaceDate(instant).toString());
 
 const readContinuation = cache((orderId: OrderId, retry: boolean) =>
   loadUnlimitedCheckoutContinuation(orderId, retry).pipe(
@@ -165,6 +164,7 @@ async function UnlimitedPassPageContent({
   const [checkout, continuation] = await Promise.all([
     Effect.all({
       buyer: readPassPurchaseBuyer(),
+      today: currentInstant.pipe(Effect.map(workspaceDate)),
       discountCodeEntryEnabled: getDiscountCodeEntryEnabled.pipe(
         Effect.orElseSucceed(() => false)
       ),
@@ -174,6 +174,7 @@ async function UnlimitedPassPageContent({
         failureCode: "unlimited_checkout_unavailable",
         orElse: () => ({
           buyer: { kind: "unavailable" as const },
+          today: workspaceDate(Temporal.Now.instant()),
           discountCodeEntryEnabled: false,
         }),
       })
@@ -187,8 +188,12 @@ async function UnlimitedPassPageContent({
 
   const selection =
     order?.kind === "resume" ? continuation?.selection : requestedSelection;
+  const retryPayment =
+    continuation && "retryPayment" in continuation
+      ? continuation.retryPayment
+      : undefined;
   if (orderId && continuation) {
-    if (isRetry && !continuation.retryPayment) {
+    if (isRetry && !retryPayment) {
       redirect(`/${continuation.locale}${reservationStatusPath}/${orderId}`);
     }
     if (continuation.locale !== locale) {
@@ -196,10 +201,7 @@ async function UnlimitedPassPageContent({
     }
   }
 
-  const today = temporalInstantToPlainDate({
-    instant: currentInstant(),
-    timeZone: workspaceSiteConstants.location.timeZone,
-  });
+  const { today } = checkout;
 
   return (
     <QueryProvider>
@@ -224,12 +226,12 @@ async function UnlimitedPassPageContent({
           }
         }
         retryPayment={
-          orderId && isRetry && continuation?.retryPayment
+          orderId && isRetry && continuation && retryPayment
             ? {
                 orderId,
                 selection: continuation.selection,
                 state: {
-                  ...continuation.retryPayment,
+                  ...retryPayment,
                   holderEmail: continuation.holderEmail ?? undefined,
                 },
               }
