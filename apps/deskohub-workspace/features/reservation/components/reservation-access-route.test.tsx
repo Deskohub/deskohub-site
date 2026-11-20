@@ -4,9 +4,11 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { Context, Effect, Layer } from "effect";
 import { prerender } from "react-dom/static";
 import type { OrderKind } from "@/features/order";
+import type { UnlimitedAccessView } from "@/features/passes/unlimited-access";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
 import { getReservationInvitationCookieName } from "@/features/reservation/backend/reservation-invitation-capability";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 
 mock.module("server-only", () => ({}));
 const nextServer = await import("next/server");
@@ -20,11 +22,15 @@ mock.module("next/root-params", () => ({
 
 /** What `notFound` throws. */
 class NotFoundSignal extends Error {}
+class RedirectSignal extends Error {}
 const navigation = await import("next/navigation");
 mock.module("next/navigation", () => ({
   ...navigation,
   notFound: () => {
     throw new NotFoundSignal("Not found");
+  },
+  redirect: (path: string) => {
+    throw new RedirectSignal(path);
   },
 }));
 
@@ -48,6 +54,25 @@ mock.module("@/features/order/backend/order-kind", () => ({
   loadOrderKind: async (id: string) => {
     orderKindReads.push(id);
     return orderKind;
+  },
+}));
+
+let passesEnabled = false;
+let unlimitedAccess: UnlimitedAccessView | { state: "sign-in" | "not-found" } =
+  {
+    state: "not-found",
+  };
+const unlimitedReads: string[] = [];
+mock.module(
+  "@/features/passes/backend/cowork-passes-release-gate.server",
+  () => ({
+    isCoworkPassesPageOpenAfterConnection: async () => passesEnabled,
+  })
+);
+mock.module("@/features/passes/backend/unlimited-access", () => ({
+  loadUnlimitedAccessPage: async (id: string) => {
+    unlimitedReads.push(id);
+    return unlimitedAccess;
   },
 }));
 
@@ -101,6 +126,7 @@ mock.module(
 const { ReservationAccessRoute } = await import("./reservation-access-route");
 
 const orderId = workspaceReservationIdSchema.make("reservation-access-route");
+const passOrderId = "01900000-0000-7000-8000-000000000014";
 
 const renderRoute = async (order: string = orderId) => {
   const errors: unknown[] = [];
@@ -124,6 +150,9 @@ describe("ReservationAccessRoute", () => {
     accessReads.length = 0;
     readAccessCookies.length = 0;
     requestCookies.clear();
+    passesEnabled = false;
+    unlimitedReads.length = 0;
+    unlimitedAccess = { state: "not-found" };
   });
 
   test("serves the reservation access page for a reservation order", async () => {
@@ -170,13 +199,61 @@ describe("ReservationAccessRoute", () => {
     ]);
   });
 
-  test("answers a pass purchase order with not found without reading reservation access", async () => {
+  test("answers a pass purchase order with not found while passes are disabled", async () => {
     orderKind = "pass-purchase";
 
-    const { errors } = await renderRoute();
+    const { errors } = await renderRoute(passOrderId);
 
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBeInstanceOf(NotFoundSignal);
+    expect(accessReads).toEqual([]);
+    expect(unlimitedReads).toEqual([]);
+  });
+
+  test("renders the Unlimited purchase access route without consulting ordinary reservation authorization", async () => {
+    orderKind = "pass-purchase";
+    passesEnabled = true;
+    unlimitedAccess = {
+      state: "available",
+      tier: "reserved-desk",
+      validFrom: plainDateStringSchema.make("2030-03-29"),
+      validUntil: plainDateStringSchema.make("2030-04-28"),
+      date: Temporal.PlainDate.from("2030-03-31"),
+      day: 3,
+      continuesTomorrow: true,
+      endsAt: Temporal.Instant.from("2030-03-31T22:00Z"),
+      deskLabel: "Desk 14",
+      code: "246813579",
+    };
+
+    const { errors, html } = await renderRoute(passOrderId);
+
+    expect(errors).toEqual([]);
+    expect(unlimitedReads).toEqual([passOrderId]);
+    expect(accessReads).toEqual([]);
+    expect(html).toContain("Today’s door code");
+    expect(html).toContain("Day 3 of 30");
+    expect(html).toContain("Desk 14");
+    expect(html).toContain("until midnight");
+  });
+
+  test("continues sign-in to the same pass access URL", async () => {
+    orderKind = "pass-purchase";
+    passesEnabled = true;
+    unlimitedAccess = { state: "sign-in" };
+
+    const { errors } = await renderRoute(passOrderId);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(RedirectSignal);
+    const redirectPath = new URL(
+      (errors[0] as Error).message,
+      "https://example.invalid"
+    );
+    expect(redirectPath.pathname).toEqual("/en-US/auth/sign-in");
+    expect(redirectPath.searchParams.get("returnTo")).toEqual(
+      `/en-US/reservation/access/${passOrderId}`
+    );
     expect(accessReads).toEqual([]);
   });
 

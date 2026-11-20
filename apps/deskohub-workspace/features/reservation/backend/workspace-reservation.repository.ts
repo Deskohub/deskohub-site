@@ -271,6 +271,7 @@ export interface IWorkspaceReservationRepository {
     | SqlError.SqlError
     | WorkspaceReservationDetailsMalformedError
   >;
+  /** Finds a reservation order. An Unlimited pass day belongs to its pass order. */
   readonly findById: (
     id: WorkspaceReservationId
   ) => Effect.Effect<
@@ -1122,7 +1123,12 @@ export class WorkspaceReservationRepository extends Context.Service<
           const [reservation] = yield* db
             .select()
             .from(workspaceReservations)
-            .where(eq(workspaceReservations.id, id))
+            .where(
+              and(
+                eq(workspaceReservations.id, id),
+                isNull(workspaceReservations.passId)
+              )
+            )
             .limit(1);
           return yield* decodeOptionalWorkspaceReservation(reservation);
         },
