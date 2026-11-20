@@ -342,6 +342,11 @@ test("preserves reference wire type and treats padded quoted IDs as the same mov
       Response.json({
         accountStatement: {
           ...statement.accountStatement,
+          info: {
+            ...statement.accountStatement.info,
+            idFrom: "08412000001",
+            idTo: "08412000001",
+          },
           transactionList: { transaction: rows },
         },
       })
@@ -352,6 +357,9 @@ test("preserves reference wire type and treats padded quoted IDs as the same mov
   ).toMatchObject([
     { movementId: "8412000001", reference: { _tag: "Invalid" } },
   ]);
+  expect(
+    await Effect.runPromise(readPeriod(() => reply([movement])))
+  ).toMatchObject([{ movementId: "8412000001" }]);
   expect(
     await Effect.runPromise(
       Effect.flip(readPeriod(() => reply([movement, quoted])))
@@ -451,7 +459,7 @@ test("live reads keep the token-bearing URL out of Next fetch metrics and transp
     renderOpts: {
       assetPrefix: "",
       cacheComponents: false,
-      cacheLifeProfiles: {},
+      cacheLifeProfiles: { default: { stale: 0, revalidate: 60, expire: 120 } },
       staticPageGenerationTimeout: 60,
       isBuildTimePrerendering: false,
       isDebugDynamicAccesses: false,
