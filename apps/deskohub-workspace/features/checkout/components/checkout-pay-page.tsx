@@ -14,6 +14,7 @@ import {
   type OfficeCheckoutPeople,
   OfficeCheckoutPeopleReview,
 } from "@/features/office/components/office-checkout-people";
+import { EntryPackBookingNotice } from "@/features/passes/components/entry-pack-booking-notice";
 import { getCoworkReservationPath } from "@/features/reservation/routes";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -139,6 +140,7 @@ export function CheckoutPayPage({
       )}
 
       {variant === "pay" && discountCodeForm}
+      {usesEntryPack && <EntryPackBookingNotice locale={locale} />}
 
       {isPricingChanged ? (
         <CheckoutPayUpdatedPriceLink

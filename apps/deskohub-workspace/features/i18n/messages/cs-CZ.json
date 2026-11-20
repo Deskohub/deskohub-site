@@ -1888,6 +1888,7 @@
   "coworkEntryPackToPay": "K zaplacení",
   "coworkEntryPackPayAddon": "Zaplať za doplněk",
   "coworkEntryPackBookWithEntry": "Rezervovat za 1 vstup",
+  "coworkEntryPackBookingNotice": "Dny rezervované z balíčku vstupů nelze zrušit ani přesunout.",
   "passEarlyStartConsent": "Žádám, abych mohl/a balíček vstupů využít ihned, ještě během zákonné lhůty pro odstoupení.",
   "passEmailSubject": "Váš balíček vstupů je zaplacený",
   "passEmailSelfBody": "Vstupy najdete ve svém účtu. Každá návštěva čerpá jeden vstup.",

@@ -339,8 +339,8 @@ export function ReservationCheckoutForm<
     onEntryPackUnavailable:
       onEntryPackUnavailable &&
       (() => {
-        onEntryPackUnavailable();
         checkoutStep.goTo("selection");
+        onEntryPackUnavailable();
       }),
   });
   const submission = {

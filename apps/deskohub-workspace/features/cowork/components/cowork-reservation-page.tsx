@@ -1,6 +1,8 @@
 import { Effect, Layer, Option } from "effect";
+import { redirect } from "next/navigation";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import { getAccountSignInPath } from "@/features/account/routes";
 import {
   isWorkspaceCoworkCurrentProductTier,
   workspaceProductMonitorOptions,
@@ -22,6 +24,7 @@ import {
 } from "@/features/reservation/cowork-reservation";
 import { coworkSelectionLink } from "@/features/reservation/cowork-selection-link";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { reservationCheckoutStepQueryParam } from "@/features/reservation/reservation-checkout-step";
 import { getCoworkPageOfferings } from "@/features/reservation/reservation-page-offerings";
 import {
   coworkReservationPath,
@@ -37,6 +40,7 @@ import {
   CardTitle,
 } from "@/shared/components/ui/card";
 import { getSearchParam } from "@/shared/utils";
+import { toURLSearchParams } from "@/shared/utils/search-params";
 import {
   type CoworkEntryPacks,
   firstEntryPackDate,
@@ -169,8 +173,32 @@ export const coworkReservationPage = createReservationPage({
     ]);
     return { entryPackOffered, heldEntryPacks: [], overnightStayOffered };
   },
-  loadFormPageData: async (pageData) => {
+  loadFormPageData: async (pageData, request) => {
     if (!pageData.entryPackOffered) return pageData;
+    const {
+      checkoutAccount,
+      locale,
+      restoredReservation,
+      searchParams,
+      verifiedContactReturn,
+    } = request;
+    if (
+      !restoredReservation &&
+      getSearchParam(searchParams, "pass") !== undefined
+    ) {
+      const params = toURLSearchParams(searchParams);
+      const bookingPath = getCoworkReservationPath(locale);
+      if (checkoutAccount.status === "signed-out") {
+        redirect(getAccountSignInPath(locale, `${bookingPath}?${params}`));
+      }
+      if (
+        verifiedContactReturn &&
+        params.get(reservationCheckoutStepQueryParam) === "contact"
+      ) {
+        params.delete(reservationCheckoutStepQueryParam);
+        redirect(`${bookingPath}?${params}`);
+      }
+    }
     const heldEntryPacks = await loadHeldEntryPacks().pipe(
       Effect.provide(
         Layer.mergeAll(WorkspaceDatabase.Default, CurrentCustomerAccount.Live)

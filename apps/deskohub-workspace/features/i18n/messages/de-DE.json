@@ -1870,6 +1870,7 @@
   "coworkEntryPackToPay": "Zu zahlen",
   "coworkEntryPackPayAddon": "Bezahle deine Zusatzleistung",
   "coworkEntryPackBookWithEntry": "Mit 1 Eintritt buchen",
+  "coworkEntryPackBookingNotice": "Tage, die du mit einem Eintrittspaket buchst, kannst du weder stornieren noch verschieben.",
   "passEarlyStartConsent": "Ich verlange, dass mein Eintrittspaket sofort innerhalb der gesetzlichen Widerrufsfrist genutzt werden kann.",
   "passEmailSubject": "Ihr Eintrittspaket ist bezahlt",
   "passEmailSelfBody": "Sie finden Ihre Eintritte in Ihrem Konto. Jeder Besuch verbraucht einen Eintritt.",

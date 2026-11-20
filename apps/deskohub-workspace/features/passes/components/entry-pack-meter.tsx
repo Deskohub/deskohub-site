@@ -6,12 +6,14 @@ export function EntryPackMeter({
   className,
   entriesLeft,
   entryCount,
+  inline = false,
   locale,
 }: {
   readonly applying?: boolean;
   readonly className?: string;
   readonly entriesLeft: number;
   readonly entryCount: number;
+  readonly inline?: boolean;
   readonly locale: Locale;
 }) {
   const selected = applying && entriesLeft > 0 ? 1 : 0;
@@ -24,8 +26,16 @@ export function EntryPackMeter({
   ];
 
   return (
-    <div className={cn("min-w-0 space-y-2", className)}>
-      <p className="font-semibold leading-tight">
+    <div
+      className={cn(
+        "min-w-0",
+        inline
+          ? "flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+          : "space-y-2",
+        className
+      )}
+    >
+      <p className={cn("font-semibold leading-tight", inline && "order-2")}>
         {applying
           ? m.entryPackEntriesLeftAfter({ left: available }, { locale })
           : m.entryPackEntriesLeft(
@@ -33,7 +43,13 @@ export function EntryPackMeter({
               { locale }
             )}
       </p>
-      <div aria-hidden="true" className="flex gap-1">
+      <div
+        aria-hidden="true"
+        className={cn(
+          "flex gap-1",
+          inline && "order-1 min-w-16 max-w-32 flex-1 basis-16"
+        )}
+      >
         {segments.flatMap(({ color, count }) =>
           Array.from({ length: count }, (_, position) => (
             <span

@@ -227,7 +227,15 @@ type ReservationPageDefinition<
     form: ReservationPageForm<PageData, Values>
   ) => ReactNode;
   /** Resolves visitor-specific data before selecting and preloading the form. */
-  readonly loadFormPageData?: (pageData: PageData) => Promise<PageData>;
+  readonly loadFormPageData?: (
+    pageData: PageData,
+    context: Pick<
+      ReservationPageRequest<Kind, PageData>,
+      "checkoutAccount" | "locale" | "restoredReservation" | "searchParams"
+    > & {
+      readonly verifiedContactReturn: boolean;
+    }
+  ) => Promise<PageData>;
 } & ([PageData] extends [undefined]
   ? { readonly loadPageData?: undefined }
   : {
@@ -493,7 +501,13 @@ async function ReservationPageRequestContent<
     }
 
     const formPageData = definition.loadFormPageData
-      ? await definition.loadFormPageData(pageData as PageData)
+      ? await definition.loadFormPageData(pageData as PageData, {
+          checkoutAccount,
+          locale,
+          restoredReservation,
+          searchParams: resolvedSearchParams,
+          verifiedContactReturn: contactMatchesAccount,
+        })
       : pageData;
     const content = await loadReservationPageContent(definition, {
       checkoutAccount,

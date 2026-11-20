@@ -462,6 +462,24 @@ describe.skipIf(!testDatabase)(
       }
       expect(summaries.some((summary) => "party" in summary)).toBe(false);
 
+      const reservedEntry = workspaceReservationIdSchema.make(uniqueId());
+      const releasedEntry = workspaceReservationIdSchema.make(uniqueId());
+      for (const id of [reservedEntry, releasedEntry]) {
+        await insertWorkspaceReservation({
+          id,
+          dotyposCustomerId,
+          dotyposReservationId: DotyposReservationIdSchema.make(
+            `dotypos-${uniqueId()}`
+          ),
+          authorAccountId: account,
+        });
+      }
+      await testDatabase!.pool.query(
+        `insert into pass_entry_claims (reservation_id, pass_id, date, status)
+         values ($1, $3, '2000-01-02', 'reserved'), ($2, $3, '2000-01-03', 'released')`,
+        [reservedEntry, releasedEntry, passId]
+      );
+
       const paidAt = Temporal.Instant.from("2000-01-01T00:00:00Z");
       const [lastDay, expiry] = await Effect.runPromise(
         Effect.gen(function* () {
@@ -500,6 +518,7 @@ describe.skipIf(!testDatabase)(
       expect(lastDay).toEqual([
         expect.objectContaining({
           status: "active",
+          entriesLeft: 2,
           lastUsableDay: "Feb 29, 2000",
           bookPath: `/en-US/reservation/cowork?pass=${passId}`,
         }),

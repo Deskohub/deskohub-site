@@ -59,6 +59,7 @@ export function CoworkEntryPackBanner({
               applying={applying}
               entriesLeft={pack.entriesLeft}
               entryCount={pack.entryCount}
+              inline
               locale={locale}
             />
           </div>

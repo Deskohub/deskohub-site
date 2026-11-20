@@ -11,7 +11,7 @@ import {
   Wifi,
 } from "lucide-react";
 import Image, { getImageProps } from "next/image";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useId, useState } from "react";
 import { preload } from "react-dom";
 import { type Control, useForm } from "react-hook-form";
@@ -41,6 +41,7 @@ import reservedDeskWorkstationArtwork from "@/features/cowork/assets/reserved-de
 import type { CanonicalPromotionCode } from "@/features/discounts";
 import { defaultPhoneRegion, type Locale, m } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
+import { EntryPackBookingNotice } from "@/features/passes/components/entry-pack-booking-notice";
 import {
   getEntryPackPurchasePath,
   minimumEntryPackPricePerDay,
@@ -197,6 +198,7 @@ export function CoworkReservationForm({
   today,
 }: CoworkReservationFormProps) {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const defaultValues =
     initialValues ??
     (initialReservation
@@ -215,6 +217,7 @@ export function CoworkReservationForm({
     InitialCoworkEntryPack | { readonly kind: "card" } | undefined
   >(initialEntryPack);
   const [cardChange, setCardChange] = useState<(() => void) | undefined>();
+  const [rejectedDate, setRejectedDate] = useState<string>();
   const {
     entryTier: selectedTier,
     monitorOption: selectedMonitorOption,
@@ -245,21 +248,30 @@ export function CoworkReservationForm({
     today,
   });
   const { workstation } = selectionAvailability;
+  const availability = selectionAvailability.checkoutAvailability;
   const isWorkstationRequired = workstation.requiredMonitorOption !== undefined;
   const appliedPack =
     packSelection?.kind === "applied"
       ? bookingPasses?.packs.find((pack) => pack.id === packSelection.packId)
       : undefined;
+  const workstationCovered = appliedPack?.tier === "reserved-desk-workstation";
+  const selectedDateRejected =
+    rejectedDate !== undefined && rejectedDate === selection.date;
   const packUnavailable =
     packSelection?.kind === "unavailable" ||
     (packSelection?.kind === "applied" &&
       (!appliedPack ||
+        selectedDateRejected ||
+        (workstationCovered && !selectedMonitorOption) ||
         getEntryPackCoworkTier(appliedPack.tier) !== selectedTier ||
         !entryPackCoversDate(appliedPack, selection.date) ||
         bookingPasses?.claimedDates.some((date) => date === selection.date)));
   const offeredPack =
     bookingPasses &&
-    !packSelection &&
+    (!packSelection || packSelection.kind === "card") &&
+    !selectedDateRejected &&
+    !availability.isPending &&
+    !availability.unavailableMessage &&
     isWorkspaceCoworkCurrentProductTier(selectedTier)
       ? getOfferedEntryPack(bookingPasses, {
           date: selection.date,
@@ -269,7 +281,6 @@ export function CoworkReservationForm({
         })
       : undefined;
   const pack = appliedPack ?? offeredPack;
-  const workstationCovered = appliedPack?.tier === "reserved-desk-workstation";
   const coffeeCharge =
     appliedPack && selection.coffee
       ? (getCoworkAddOnAmount(selectedPrice, "coffee") ??
@@ -306,6 +317,7 @@ export function CoworkReservationForm({
     form,
     selection,
     workstation,
+    workstationIncluded: workstationCovered,
     workstationOnlyWhenRequired: appliedPack?.tier === "reserved-desk",
   });
 
@@ -324,20 +336,23 @@ export function CoworkReservationForm({
       availability={
         packUnavailable
           ? {
-              ...selectionAvailability.checkoutAvailability,
+              ...availability,
               unavailableMessage: m.coworkEntryPackUnavailableDescription(
                 {},
                 { locale }
               ),
             }
-          : selectionAvailability.checkoutAvailability
+          : availability
       }
       checkoutSessionId={checkoutSessionId}
       entryPackId={appliedPack?.id}
       form={form}
       getReservation={getCoworkCurrentReservationOrder}
       locale={locale}
-      onEntryPackUnavailable={() => setPackSelection({ kind: "unavailable" })}
+      onEntryPackUnavailable={() => {
+        setRejectedDate(selection.date);
+        router.refresh();
+      }}
       selectionSummary={getCoworkReservationSelectionSummary(selection, locale)}
       selection={{
         kind: coworkSelectionLink.kind,
@@ -594,12 +609,13 @@ export function CoworkReservationForm({
             control={form.control}
             locale={locale}
             priceLabel={
-              appliedPack
+              coffeePriceLabel ??
+              (appliedPack
                 ? formatMoney(
                     getWorkspaceProductCoffeeLinePriceForTier(selectedTier),
                     locale
                   )
-                : coffeePriceLabel
+                : undefined)
             }
           />
         )}
@@ -619,26 +635,27 @@ export function CoworkReservationForm({
                 : undefined
             }
             priceLabel={
-              appliedPack
-                ? formatMoney(
-                    workstationCovered
-                      ? currencyCZK(0)
-                      : workspaceProductWorkstationAddonPrice,
-                    locale
-                  )
-                : workstationPriceLabel
+              workstationCovered
+                ? formatMoney(currencyCZK(0), locale)
+                : (workstationPriceLabel ??
+                  (appliedPack
+                    ? formatMoney(workspaceProductWorkstationAddonPrice, locale)
+                    : undefined))
             }
             unavailableMonitorOptions={workstation.unavailableMonitorOptions}
           />
         )}
       </div>
       {appliedPack && !packUnavailable && (
-        <CoworkEntryPackPrice
-          coffee={coffeeCharge}
-          locale={locale}
-          total={packTotal}
-          workstation={workstationCharge}
-        />
+        <>
+          <CoworkEntryPackPrice
+            coffee={coffeeCharge}
+            locale={locale}
+            total={packTotal}
+            workstation={workstationCharge}
+          />
+          <EntryPackBookingNotice locale={locale} />
+        </>
       )}
     </ReservationCheckoutForm>
   );

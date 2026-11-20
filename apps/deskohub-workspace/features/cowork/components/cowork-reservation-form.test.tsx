@@ -70,6 +70,7 @@ import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import {
   workspaceRouterPush as push,
+  workspaceRouterRefresh,
   workspaceUseAction,
   workspaceUseSearchParams,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -521,8 +522,11 @@ describe("CoworkReservationForm advertised pricing", () => {
     };
 
     test("applies the offered pack and keeps the ordinary tier enabled", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(jsonResponse(availabilityResponse))
+      ) as typeof fetch;
       const view = renderForm({ bookingPasses, initialValues });
-      fireEvent.click(view.getByRole("button", { name: "Use pass" }));
+      fireEvent.click(await view.findByRole("button", { name: "Use pass" }));
 
       expect(view.getByText("Booking with your Entry pack")).toBeDefined();
       expect(view.getByText("2 left after this")).toBeDefined();
@@ -562,6 +566,85 @@ describe("CoworkReservationForm advertised pricing", () => {
         initialValues,
       });
       expect(view.queryByRole("button", { name: "Use pass" })).toBeNull();
+    });
+
+    test("keeps the pack after a conflicting date is rejected and another day is selected", async () => {
+      const { preparePayState } = await import(
+        "@/features/reservation/actions/prepare-pay-state"
+      );
+      workspaceRouterRefresh.mockClear();
+      const view = renderForm({
+        bookingPasses,
+        initialEntryPack: { kind: "applied", packId: openSpacePack.id },
+        initialValues,
+      });
+      const runCallback = workspaceUseAction.mock.calls.findLast(
+        ([action]) => action === preparePayState
+      )?.[1] as {
+        readonly onSuccess: (result: {
+          readonly data: {
+            readonly status: "error";
+            readonly reason: "entry_pack_unavailable";
+            readonly message: string;
+          };
+        }) => void;
+      };
+      act(() =>
+        runCallback.onSuccess({
+          data: {
+            status: "error",
+            reason: "entry_pack_unavailable",
+            message: "fixture",
+          },
+        })
+      );
+      expect(
+        view.getByText("This pass can’t be used for booking")
+      ).toBeDefined();
+      expect(workspaceRouterRefresh).toHaveBeenCalled();
+      await selectCalendarDate(view, "2099-07-31");
+      expect(view.getByText("Booking with your Entry pack")).toBeDefined();
+    });
+
+    test("keeps the selected workstation from a covered pack when changing dates", async () => {
+      const date = dateOffsetFromToday(1);
+      const nextDate = dateOffsetFromToday(2);
+      globalThis.fetch = mock((request: RequestInfo | URL) => {
+        const url = new URL(String(request), "http://localhost");
+        if (!url.pathname.startsWith("/api/workspace/availability")) {
+          return Promise.reject(new Error("Unexpected availability request"));
+        }
+        const monitor = url.searchParams.get("monitorOption") as
+          | "2x32-qhd"
+          | null;
+        const response =
+          url.searchParams.get("date") === date
+            ? requiredWorkstationAvailability(date, monitor)
+            : {
+                ...availabilityResponse,
+                reservedDeskWorkstationRequiredDates: [date],
+              };
+        return Promise.resolve(jsonResponse(response));
+      }) as typeof fetch;
+      const pack = {
+        ...openSpacePack,
+        tier: "reserved-desk-workstation" as const,
+        validFrom: plainDateStringSchema.make(date),
+        validUntil: plainDateStringSchema.make(dateOffsetFromToday(30)),
+      };
+      const view = renderForm({
+        bookingPasses: { packs: [pack], claimedDates: [] },
+        initialValues: reservedDeskFormValues(date),
+      });
+      fireEvent.click(await view.findByRole("button", { name: "Use pass" }));
+      await selectCalendarDate(view, nextDate);
+      await waitFor(() =>
+        expect(
+          (view.getByRole("radio", { name: /32.*QHD/i }) as HTMLInputElement)
+            .checked
+        ).toBe(true)
+      );
+      expect(view.getByText("Booking with your Entry pack")).toBeDefined();
     });
 
     test("shows the same dismissible notice for an unusable link and leaves cash booking available", () => {
