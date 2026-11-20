@@ -19,12 +19,15 @@ export const accountReviewTargetBySection = {
   billing: "linked-billing-desktop",
   legal: "linked-legal-desktop",
   danger: "linked-danger-desktop",
-} as const satisfies Readonly<Record<AccountSection, AccountReviewTarget>>;
+} as const satisfies Readonly<
+  Record<Exclude<AccountSection, "passes">, AccountReviewTarget>
+>;
 
 export const mobileAccountReviewTargetBySection: Readonly<
   Record<AccountSection, AccountReviewTarget | undefined>
 > = {
   reservations: "linked-reservations-mobile",
+  passes: undefined,
   referrals: "linked-referrals-mobile",
   billing: "linked-billing-mobile",
   danger: "linked-danger-mobile",

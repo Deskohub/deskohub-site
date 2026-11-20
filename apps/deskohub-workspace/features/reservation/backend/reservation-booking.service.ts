@@ -11,7 +11,10 @@ import {
   Ref,
   Schema,
 } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
+import {
+  WorkspaceDatabase,
+  type WorkspaceDatabaseClient,
+} from "@/db/database.service";
 import {
   CustomerAccountAccessError,
   CustomerAccountContactService,
@@ -35,6 +38,7 @@ import {
   deriveCheckoutAttemptKeys,
   deriveCheckoutSessionKeys,
 } from "@/features/checkout/backend/checkout/checkout-lookup-keys.server";
+import { quoteCoworkEntryPackForContinue } from "@/features/checkout/backend/checkout/cowork-checkout-pricing";
 import { splitCustomerName } from "@/features/checkout/backend/reservation";
 import type { CheckoutSessionId } from "@/features/checkout/checkout-identifiers";
 import {
@@ -58,6 +62,10 @@ import {
   ensureOfficeReservationsEnabled,
   OfficeReleaseGate,
 } from "@/features/office/backend/office-release-gate";
+import {
+  EntryPackUnavailableError,
+  loadEntryPackRedemption,
+} from "@/features/passes/backend/entry-pack-redemption";
 import { ReferralService } from "@/features/referrals";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import {
@@ -191,9 +199,12 @@ export class ReservationBooking extends Context.Service<
       const context = Context.pick(...bookingCapabilities)(
         yield* Effect.context<BookingCapabilities>()
       );
+      const database = yield* Effect.serviceOption(WorkspaceDatabase);
       return ReservationBooking.of({
         book: (submission) =>
-          bookSubmission(submission).pipe(Effect.provideContext(context)),
+          bookSubmission(submission, Option.getOrUndefined(database)?.db).pipe(
+            Effect.provideContext(context)
+          ),
       });
     })
   );
@@ -207,6 +218,7 @@ export class ReservationBooking extends Context.Service<
     Layer.provide(
       Layer.mergeAll(
         ReservationHolds.Live,
+        WorkspaceDatabase.Default,
         Layer.mergeAll(
           MarketingConsentLedger.Default,
           AnalyticsConsentLedger.Default,
@@ -506,7 +518,8 @@ const prepareReviewSandboxHold = Effect.fn(
 
 /** {@link ReservationBooking}'s `book`, with the services it was built with. */
 const bookSubmission = Effect.fn("prepareWorkspacePayState")(function* (
-  input: PayStateSubmission
+  input: PayStateSubmission,
+  db: WorkspaceDatabaseClient | undefined
 ) {
   // A review account books in its sandbox, which captures no checkout
   // analytics, whatever the outcome.
@@ -525,7 +538,7 @@ const bookSubmission = Effect.fn("prepareWorkspacePayState")(function* (
         )
       );
 
-  return yield* prepareSubmission(input, inReviewSandbox).pipe(
+  return yield* prepareSubmission(input, inReviewSandbox, db).pipe(
     Effect.scoped,
     Effect.tap((result) =>
       Match.value(result).pipe(
@@ -548,6 +561,9 @@ const bookSubmission = Effect.fn("prepareWorkspacePayState")(function* (
           captureOutcome("validation")
         ),
         Match.tag("OfficePeopleRejectedError", () =>
+          captureOutcome("validation")
+        ),
+        Match.tag("EntryPackUnavailableError", () =>
           captureOutcome("validation")
         ),
         Match.tag("CheckoutAttemptUnavailableError", () =>
@@ -681,7 +697,11 @@ const mirrorBookingDeviceAnalyticsConsent = Effect.fnUntraced(
 );
 
 const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
-  function* (input: PayStateSubmission, inReviewSandbox: Ref.Ref<boolean>) {
+  function* (
+    input: PayStateSubmission,
+    inReviewSandbox: Ref.Ref<boolean>,
+    db: WorkspaceDatabaseClient | undefined
+  ) {
     const bookingAgent = yield* Effect.serviceOption(BookingAgent);
     const accountSections = yield* CustomerAccountSections;
     const rememberedReferral = yield* RememberedReferral;
@@ -713,6 +733,32 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
           Effect.flatMap((accounts) => accounts.isReviewAccount(accountId))
         );
         yield* Ref.set(inReviewSandbox, reviewAccount);
+        const { entryPackId } = input;
+        const entryPackBooking = yield* Effect.gen(function* () {
+          if (!entryPackId) return undefined;
+          const { reservation } = input;
+          if (
+            !db ||
+            reviewAccount ||
+            Option.isSome(bookingAgent) ||
+            input.customer !== "account" ||
+            reservation.kind !== "cowork"
+          ) {
+            return yield* new EntryPackUnavailableError({});
+          }
+          const entryPack = yield* loadEntryPackRedemption(db, {
+            passId: entryPackId,
+            holderAccountId: accountId,
+            date: reservation.date,
+          });
+          const coveredTier =
+            entryPack.tier === "reserved-desk-workstation"
+              ? reservation.entryTier === "reserved-desk" &&
+                Boolean(reservation.monitorOption)
+              : entryPack.tier === reservation.entryTier;
+          if (!coveredTier) return yield* new EntryPackUnavailableError({});
+          return { entryPack, reservation };
+        });
         yield* Match.value(input.reservation).pipe(
           Match.discriminatorsExhaustive("kind")({
             cowork: (cowork) =>
@@ -739,13 +785,18 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
         // Pay state, so the first quote already prices the invitation; the
         // attribution is recorded only when that order is paid. A booking for
         // someone else gets a usable code as the code box prefill instead.
-        const referralForBooking = yield* rememberedReferral.forBooking(
-          accountCustomer
-            ? { for: "account", customerId: accountCustomer.dotyposCustomerId }
-            : { for: "someone-else" }
-        );
-        const { accountReferral, referralCodePrefill } =
-          splitReferralForBooking(referralForBooking);
+        const { accountReferral, referralCodePrefill } = entryPackBooking
+          ? { accountReferral: undefined, referralCodePrefill: undefined }
+          : splitReferralForBooking(
+              yield* rememberedReferral.forBooking(
+                accountCustomer
+                  ? {
+                      for: "account",
+                      customerId: accountCustomer.dotyposCustomerId,
+                    }
+                  : { for: "someone-else" }
+              )
+            );
         yield* Ref.set(carriesAccountReferral, accountReferral !== undefined);
         // The customer whose invitation a carried referral prices, if any.
         const referralCustomerFor = (pricedFor: DotyposCustomerId) =>
@@ -765,7 +816,12 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
         // Submission locks the price: calendar sales are evaluated at this
         // booking moment here and at every later checkout re-check.
         const bookedAt = yield* currentInstant;
-        const advertisement = yield* advertiseAt(bookedAt);
+        const checkoutPricing = entryPackBooking
+          ? { kind: "entry-pack" as const, ...entryPackBooking }
+          : {
+              kind: "card" as const,
+              advertisement: yield* advertiseAt(bookedAt),
+            };
 
         const checkoutSessionKeys = yield* deriveCheckoutSessionKeys(
           input.checkoutSessionId
@@ -775,6 +831,7 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
           checkoutAttemptId: input.checkoutAttemptId,
           reservation,
           people: officePeople,
+          ...(entryPackId && { entryPackId }),
         });
         yield* Effect.annotateLogsScoped({
           locale: input.locale,
@@ -809,14 +866,34 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
           dotyposCustomerId,
         });
 
-        const prepared = yield* quotePreparedReservation({
-          advertisement,
-          displayedOfficePrice: input.displayedOfficePrice,
-          dotyposCustomerId,
-          locale: input.locale,
-          referralCodePrefill,
-          referralCode: accountReferral?.referralCode,
+        const priceBooking = Effect.fnUntraced(function* (
+          customerId: DotyposCustomerId,
+          at: Temporal.Instant
+        ) {
+          if (checkoutPricing.kind === "entry-pack") {
+            const { entryPack } = checkoutPricing;
+            return yield* quoteCoworkEntryPackForContinue({
+              reservation: {
+                ...checkoutPricing.reservation,
+                ...accountCustomer?.contact,
+              },
+              entryPack,
+              advertisedPriceToken: input.advertisedPriceToken,
+              locale: input.locale,
+            });
+          }
+          return yield* quotePreparedReservation({
+            advertisement: at.equals(bookedAt)
+              ? checkoutPricing.advertisement
+              : yield* advertiseAt(at),
+            displayedOfficePrice: input.displayedOfficePrice,
+            dotyposCustomerId: customerId,
+            locale: input.locale,
+            referralCodePrefill,
+            referralCode: accountReferral?.referralCode,
+          });
         });
+        const prepared = yield* priceBooking(dotyposCustomerId, bookedAt);
         yield* Effect.annotateLogsScoped({
           quoteFingerprint: prepared.quote.fingerprint,
         });
@@ -825,20 +902,6 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
         // An agent's hold is anchored at its booking instant, and a repeated
         // request rebuilds its Pay state as of that instant, so the request
         // gets the same Pay link back for as long as the hold lasts.
-        const quoteAt = Effect.fn("preparePayState.quoteAt")(function* (
-          at: Temporal.Instant,
-          customerId: DotyposCustomerId
-        ) {
-          const anchoredAdvertisement = yield* advertiseAt(at);
-          return yield* quotePreparedReservation({
-            advertisement: anchoredAdvertisement,
-            displayedOfficePrice: input.displayedOfficePrice,
-            dotyposCustomerId: customerId,
-            locale: input.locale,
-            referralCodePrefill,
-            referralCode: accountReferral?.referralCode,
-          });
-        });
         const toHeldResult = Effect.fn("preparePayState.toHeldResult")(
           function* (held: {
             readonly reservation: WorkspaceReservation;
@@ -868,7 +931,7 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
                   held.reservation.dotyposCustomerId
                 ).pipe(
                   Effect.flatMap((pricedFor) =>
-                    quoteAt(holdBookedAt, pricedFor).pipe(
+                    priceBooking(pricedFor, holdBookedAt).pipe(
                       Effect.map((prepared) => ({ prepared, pricedFor }))
                     )
                   )
@@ -931,14 +994,7 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
         ) =>
           (reused.pricedFor === undefined
             ? Effect.succeed(prepared)
-            : quotePreparedReservation({
-                advertisement,
-                displayedOfficePrice: input.displayedOfficePrice,
-                dotyposCustomerId: reused.pricedFor,
-                locale: input.locale,
-                referralCodePrefill,
-                referralCode: accountReferral?.referralCode,
-              })
+            : priceBooking(reused.pricedFor, bookedAt)
           ).pipe(
             Effect.flatMap((reusedPrepared) =>
               toHeldResult({
@@ -962,6 +1018,7 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
             : undefined;
         const hold = yield* holds.holdForAttempt({
           ...(sealedOfficePeople && { officePeople: sealedOfficePeople }),
+          ...(entryPackBooking && { entryPack: entryPackBooking.entryPack }),
           checkout: {
             sessionId: input.checkoutSessionId,
             attemptId: input.checkoutAttemptId,

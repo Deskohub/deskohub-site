@@ -8,7 +8,10 @@ import {
   CustomerAccountSections,
 } from "@/features/account";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import { m } from "@/features/i18n";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import { EntryPackUnavailableError } from "@/features/passes/backend/entry-pack-redemption";
 import { ReferralService } from "@/features/referrals";
 import { ReferralReleaseGateRequest } from "@/features/referrals/referral-release-gate.server";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
@@ -35,7 +38,19 @@ const preparePayStateAction = defineWorkspaceAction(
   (input) =>
     verifyReservationFormHuman(input.locale).pipe(
       Effect.andThen(
-        prepareWorkspacePayState(input).pipe(
+        Effect.gen(function* () {
+          if (input.entryPackId && !(yield* CoworkPassesReleaseGate.isOpen)) {
+            return yield* new EntryPackUnavailableError({});
+          }
+          return yield* prepareWorkspacePayState(input);
+        }).pipe(
+          Effect.catchTag("EntryPackUnavailableError", () =>
+            Effect.succeed({
+              status: "error" as const,
+              reason: "entry_pack_unavailable" as const,
+              message: m.reservationErrorMessage({}, { locale: input.locale }),
+            })
+          ),
           Effect.mapError(toReservationFormError(input))
         )
       ),
@@ -53,6 +68,7 @@ const preparePayStateAction = defineWorkspaceAction(
           Layer.provideMerge(
             Layer.mergeAll(
               ReferralReleaseGateRequest,
+              CoworkPassesReleaseGate.Live,
               OfficeReleaseGate.Live,
               OvernightStayReleaseGate.Live
             )

@@ -20,6 +20,7 @@ type CheckoutSummaryProps = {
   readonly officeStartDateLabel?: string;
   readonly summary: CheckoutSummaryData;
   readonly changedKeys?: CheckoutSummaryChangedKeys;
+  readonly usesEntryPack?: boolean;
 };
 
 const getSummaryItemLabel = (
@@ -43,6 +44,7 @@ export function CheckoutSummary({
   locale,
   officeStartDateLabel,
   summary,
+  usesEntryPack = false,
 }: CheckoutSummaryProps) {
   return (
     <CheckoutSummarySections>
@@ -64,6 +66,11 @@ export function CheckoutSummary({
                     <CoworkCheckoutSummaryItem
                       key={productItem.key}
                       changed={itemChanged}
+                      detail={
+                        usesEntryPack
+                          ? m.coworkEntryPackBookingLine({}, { locale })
+                          : undefined
+                      }
                       item={productItem}
                       locale={locale}
                     />

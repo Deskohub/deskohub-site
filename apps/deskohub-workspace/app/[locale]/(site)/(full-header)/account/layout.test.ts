@@ -21,6 +21,7 @@ type TestSession = {
 type AccountLayoutShellProps = {
   readonly locale: "en-US";
   readonly passkeysEnabled: boolean;
+  readonly passesEnabled: boolean;
   readonly referralsEnabled: boolean;
   readonly signedIn: boolean;
   readonly children: ReactNode;
@@ -56,6 +57,7 @@ Object.assign(Authentication, { Default: AuthenticationLayer });
 
 const connection = mock(() => Promise.resolve());
 const arePasskeysEnabled = mock(() => Promise.resolve(true));
+const isCoworkPassesPageOpenAfterConnection = mock(() => Promise.resolve(true));
 let referralsEnabled = true;
 const areReferralsEnabled = mock(() => Promise.resolve(referralsEnabled));
 const runWithRequestLocale = mock(
@@ -66,6 +68,10 @@ mock.module("next/server", () => ({ connection }));
 mock.module("@/features/account/server/account-release-gates.server", () => ({
   arePasskeysEnabled,
 }));
+mock.module(
+  "@/features/passes/backend/cowork-passes-release-gate.server",
+  () => ({ isCoworkPassesPageOpenAfterConnection })
+);
 mock.module("@/features/referrals/referral-release-gate.server", () => ({
   areReferralsEnabled,
   ReferralReleaseGateRequest: Layer.unwrap(
@@ -100,6 +106,7 @@ describe("account route layout", () => {
     connection.mockClear();
     areReferralsEnabled.mockClear();
     arePasskeysEnabled.mockClear();
+    isCoworkPassesPageOpenAfterConnection.mockClear();
     runWithRequestLocale.mockClear();
     referralsEnabled = true;
     currentUserEffect = Effect.succeed(null);
@@ -155,6 +162,7 @@ describe("account route layout", () => {
       expect(connection).toHaveBeenCalled();
       expect(areReferralsEnabled).toHaveBeenCalledTimes(1);
       expect(arePasskeysEnabled).toHaveBeenCalledTimes(1);
+      expect(isCoworkPassesPageOpenAfterConnection).toHaveBeenCalledTimes(1);
       expect(rendered.map((element) => element.type)).toEqual([
         AccountLayoutShell,
         InstallLaunchRedirect,
@@ -163,6 +171,7 @@ describe("account route layout", () => {
       expect(rendered[0]?.props).toMatchObject({
         locale: "en-US",
         passkeysEnabled: true,
+        passesEnabled: true,
         referralsEnabled: true,
         signedIn: expectedSignedIn,
       });

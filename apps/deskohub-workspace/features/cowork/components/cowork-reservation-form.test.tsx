@@ -50,6 +50,7 @@ import {
 } from "@/features/checkout/product-catalog.i18n";
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { type Locale, m } from "@/features/i18n";
+import { orderIdSchema } from "@/features/order";
 import type { PreparePayStateInput } from "@/features/reservation/actions/prepare-pay-state.schema";
 import {
   continueAndSubmitReservation,
@@ -69,6 +70,7 @@ import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import {
   workspaceRouterPush as push,
+  workspaceRouterRefresh,
   workspaceUseAction,
   workspaceUseSearchParams,
 } from "@/shared/testing/workspace-component-module-mocks";
@@ -76,6 +78,7 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { formatCoworkOvernightStay } from "./cowork-stay-display";
 
 const testEmailAddressForAda = testEmailAddress("ada");
@@ -499,6 +502,192 @@ describe("CoworkReservationForm advertised pricing", () => {
       });
       expect(
         view.queryByRole("link", { name: /entry packs from/i })
+      ).toBeNull();
+    });
+  });
+
+  describe("Entry pack booking", () => {
+    const openSpacePack = {
+      id: orderIdSchema.make("a3bcb9c7-6e85-4874-bd3e-3788103596ba"),
+      tier: "open-space" as const,
+      entryCount: 5 as const,
+      entriesLeft: 3,
+      validFrom: plainDateStringSchema.make("2099-07-01"),
+      validUntil: plainDateStringSchema.make("2099-09-01"),
+    };
+    const bookingPasses = { packs: [openSpacePack], claimedDates: [] };
+    const initialValues = {
+      ...coworkReservationDefaultValues,
+      date: "2099-07-30",
+    };
+
+    test("applies the offered pack and keeps the ordinary tier enabled", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(jsonResponse(availabilityResponse))
+      ) as typeof fetch;
+      const view = renderForm({ bookingPasses, initialValues });
+      fireEvent.click(await view.findByRole("button", { name: "Use pass" }));
+
+      expect(view.getByText("Booking with your Entry pack")).toBeDefined();
+      expect(view.getByText("2 left after this")).toBeDefined();
+      expect(view.getByText("Entry pack · 1 entry")).toBeDefined();
+      expect(window.location.search).toContain(`pass=${openSpacePack.id}`);
+
+      const reservedDesk = view.getByRole("radio", {
+        name: /Reserved Desk/i,
+      }) as HTMLInputElement;
+      expect(reservedDesk.disabled).toBe(false);
+      fireEvent.click(reservedDesk);
+      const dialog = await view.findByRole("dialog");
+      const keepPack = within(dialog).getByRole("button", {
+        name: "Keep using Entry pack",
+      });
+      expect(document.activeElement).toBe(keepPack);
+      fireEvent.click(keepPack);
+      expect(reservedDesk.checked).toBe(false);
+
+      fireEvent.click(reservedDesk);
+      fireEvent.click(
+        within(await view.findByRole("dialog")).getByRole("button", {
+          name: "Pay by card",
+        })
+      );
+      expect(reservedDesk.checked).toBe(true);
+      expect(view.queryByText("Entry pack · 1 entry")).toBeNull();
+      expect(window.location.search).not.toContain("pass=");
+    });
+
+    test("does not offer a pack for an already redeemed holder date", () => {
+      const view = renderForm({
+        bookingPasses: {
+          ...bookingPasses,
+          claimedDates: [plainDateStringSchema.make(initialValues.date)],
+        },
+        initialValues,
+      });
+      expect(view.queryByRole("button", { name: "Use pass" })).toBeNull();
+    });
+
+    const rejectAppliedPack = async () => {
+      const { preparePayState } = await import(
+        "@/features/reservation/actions/prepare-pay-state"
+      );
+      const runCallback = workspaceUseAction.mock.calls.findLast(
+        ([action]) => action === preparePayState
+      )?.[1] as {
+        readonly onSuccess: (result: {
+          readonly data: {
+            readonly status: "error";
+            readonly reason: "entry_pack_unavailable";
+            readonly message: string;
+          };
+        }) => void;
+      };
+      act(() =>
+        runCallback.onSuccess({
+          data: {
+            status: "error",
+            reason: "entry_pack_unavailable",
+            message: "fixture",
+          },
+        })
+      );
+    };
+
+    test("keeps the pack after a conflicting date is rejected and another day is selected", async () => {
+      workspaceRouterRefresh.mockClear();
+      const view = renderForm({
+        bookingPasses,
+        initialEntryPack: { kind: "applied", packId: openSpacePack.id },
+        initialValues,
+      });
+      await rejectAppliedPack();
+      expect(
+        view.getByText("This pass can’t be used for booking")
+      ).toBeDefined();
+      expect(workspaceRouterRefresh).toHaveBeenCalled();
+      await selectCalendarDate(view, "2099-07-31");
+      expect(view.getByText("Booking with your Entry pack")).toBeDefined();
+    });
+
+    test("offers another eligible pack on the same date after a pack is rejected", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(jsonResponse(availabilityResponse))
+      ) as typeof fetch;
+      const laterPack = {
+        ...openSpacePack,
+        id: orderIdSchema.make("6fd5c251-6506-4697-8006-ca57bb324303"),
+        validUntil: plainDateStringSchema.make("2099-10-01"),
+        entriesLeft: 5,
+      };
+      const view = renderForm({
+        bookingPasses: { packs: [openSpacePack, laterPack], claimedDates: [] },
+        initialEntryPack: { kind: "applied", packId: openSpacePack.id },
+        initialValues,
+      });
+      await rejectAppliedPack();
+      fireEvent.click(
+        view.getByRole("button", { name: "Pay by card instead" })
+      );
+      expect(await view.findByText("5 of 5 left")).toBeDefined();
+      fireEvent.click(view.getByRole("button", { name: "Use pass" }));
+      expect(window.location.search).toContain(`pass=${laterPack.id}`);
+    });
+
+    test("keeps the selected workstation from a covered pack when changing dates", async () => {
+      const date = dateOffsetFromToday(1);
+      const nextDate = dateOffsetFromToday(2);
+      globalThis.fetch = mock((request: RequestInfo | URL) => {
+        const url = new URL(String(request), "http://localhost");
+        if (!url.pathname.startsWith("/api/workspace/availability")) {
+          return Promise.reject(new Error("Unexpected availability request"));
+        }
+        const monitor = url.searchParams.get("monitorOption") as
+          | "2x32-qhd"
+          | null;
+        const response =
+          url.searchParams.get("date") === date
+            ? requiredWorkstationAvailability(date, monitor)
+            : {
+                ...availabilityResponse,
+                reservedDeskWorkstationRequiredDates: [date],
+              };
+        return Promise.resolve(jsonResponse(response));
+      }) as typeof fetch;
+      const pack = {
+        ...openSpacePack,
+        tier: "reserved-desk-workstation" as const,
+        validFrom: plainDateStringSchema.make(date),
+        validUntil: plainDateStringSchema.make(dateOffsetFromToday(30)),
+      };
+      const view = renderForm({
+        bookingPasses: { packs: [pack], claimedDates: [] },
+        initialValues: reservedDeskFormValues(date),
+      });
+      fireEvent.click(await view.findByRole("button", { name: "Use pass" }));
+      await selectCalendarDate(view, nextDate);
+      await waitFor(() =>
+        expect(
+          (view.getByRole("radio", { name: /32.*QHD/i }) as HTMLInputElement)
+            .checked
+        ).toBe(true)
+      );
+      expect(view.getByText("Booking with your Entry pack")).toBeDefined();
+    });
+
+    test("shows the same dismissible notice for an unusable link and leaves cash booking available", () => {
+      const view = renderForm({
+        bookingPasses,
+        initialEntryPack: { kind: "invalid-link" },
+        initialValues,
+      });
+      expect(
+        view.getByText("This pass can’t be used for booking")
+      ).toBeDefined();
+      expect(view.queryByText("Entry pack · 1 entry")).toBeNull();
+      fireEvent.click(view.getByRole("button", { name: "Close" }));
+      expect(
+        view.queryByText("This pass can’t be used for booking")
       ).toBeNull();
     });
   });

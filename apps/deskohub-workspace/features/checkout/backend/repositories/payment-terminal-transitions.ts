@@ -7,6 +7,7 @@ import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers"
 import type { DiscountClaimError } from "@/features/discounts/errors";
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
 import type { OrderId } from "@/features/order";
+import { releaseReservedEntryPackClaim } from "@/features/passes/backend/entry-pack-redemption";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import { reservationIdForOrder } from "@/features/reservation/persistence-contracts";
 import { toPaymentAttempt } from "./payment-attempt.repository";
@@ -17,6 +18,7 @@ import {
   type NonTerminalPaymentAttemptState,
   type PaymentLifecycleStateError,
   type PaymentLifecycleTransition,
+  paymentAbandonedAfterProviderCutoffFailureCode,
 } from "./payment-lifecycle-state";
 
 export interface IPaymentTerminalTransitions {
@@ -123,6 +125,12 @@ export class PaymentTerminalTransitions extends Context.Service<
                 .returning({ updatedAt: workspaceReservations.updatedAt });
 
               if (reservation) {
+                if (
+                  input.failureCode !==
+                  paymentAbandonedAfterProviderCutoffFailureCode
+                ) {
+                  yield* releaseReservedEntryPackClaim(workspaceReservationId);
+                }
                 yield* PromotionClaims.release({
                   paymentAttemptId: input.id,
                   releasedAt: terminalAt,

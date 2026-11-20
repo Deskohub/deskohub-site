@@ -52,6 +52,9 @@ export const readPublicPayStatePayment = Effect.fn(
   )
     return undefined;
   if (reservation.paymentState === "paid") return { kind: "paid" } as const;
+  if ("entryPack" in state.quote && state.quote.entryPack) {
+    return { kind: "card_only" } as const;
+  }
   if (!defaultAccount || reservation.reservationState !== "held")
     return undefined;
 

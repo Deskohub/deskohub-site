@@ -10,6 +10,7 @@ import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { homeScreenAppMetadata } from "@/features/mobile-distribution/home-screen-app-metadata";
 import { InstallBar } from "@/features/mobile-distribution/install-bar";
 import { InstallLaunchRedirect } from "@/features/mobile-distribution/install-launch-redirect";
+import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { areReferralsEnabled } from "@/features/referrals/referral-release-gate.server";
 import { PageNavigationBoundary } from "@/shared/components/page-navigation-boundary";
 
@@ -37,17 +38,20 @@ async function AccountLayoutContent({
 }: AccountLayoutProps & { readonly locale: Locale }) {
   await connection();
 
-  const [passkeysEnabled, referralsEnabled, signedIn] = await Promise.all([
-    arePasskeysEnabled(),
-    areReferralsEnabled(),
-    isCustomerSignedIn(),
-  ]);
+  const [passkeysEnabled, referralsEnabled, passesEnabled, signedIn] =
+    await Promise.all([
+      arePasskeysEnabled(),
+      areReferralsEnabled(),
+      isCoworkPassesPageOpenAfterConnection(),
+      isCustomerSignedIn(),
+    ]);
 
   return (
     <>
       <AccountLayoutShell
         locale={locale}
         passkeysEnabled={passkeysEnabled}
+        passesEnabled={passesEnabled}
         referralsEnabled={referralsEnabled}
         signedIn={signedIn}
       >

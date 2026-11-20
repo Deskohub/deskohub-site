@@ -146,6 +146,28 @@ function DirtyProfileGuard() {
 }
 
 describe("ReservationHistory", () => {
+  test("labels Entry pack payments in featured, compact and past bookings", () => {
+    const packDay = (id: string) =>
+      reservation({
+        id,
+        paidWithEntryPack: true,
+        product: { kind: "cowork", tier: "open-space" },
+      });
+    const view = renderHistory("en-US", {
+      kind: "available",
+      groups: {
+        current: [
+          packDay("featured"),
+          packDay("compact"),
+          reservation({ id: "card-payment" }),
+        ],
+        past: [packDay("past")],
+        unavailable: [],
+      },
+    });
+
+    expect(view.getAllByText("Paid with Entry pack")).toHaveLength(3);
+  });
   beforeAll(() => {
     registerWorkspaceComponentTestEnv();
   });

@@ -32,6 +32,7 @@ import {
 } from "@/features/discounts";
 import type { Locale } from "@/features/i18n";
 import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
+import type { OrderId } from "@/features/order";
 import {
   publicPageMetadata,
   requirePublishedPublicPage,
@@ -46,6 +47,7 @@ import {
 import { loadReservationCheckoutAccount } from "@/features/reservation/backend/reservation-existing-customer.server";
 import { ReservationPagePreloads } from "@/features/reservation/backend/reservation-page-preloads.service";
 import { getOfficeReservationDayCount } from "@/features/reservation/office-reservation";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import {
   type CheckoutOfficeSelection,
   checkoutContactQueryParam,
@@ -92,7 +94,7 @@ type ReservationPageRequest<Kind extends ReservationKind, PageData> = {
   readonly checkoutContact?: ReservationCheckoutContact;
   readonly checkoutOfficeSelection?: CheckoutOfficeSelection;
   readonly locale: Locale;
-  /** Customer-independent data from the definition's `loadPageData`. */
+  /** Page data after the optional form-specific load. */
   readonly pageData: PageData;
   /** The signed reservation a Pay return or edit link reopens. */
   readonly restoredReservation?: RestoredReservation<Kind>;
@@ -101,6 +103,10 @@ type ReservationPageRequest<Kind extends ReservationKind, PageData> = {
 };
 
 type RestoredReservation<Kind extends ReservationKind> = {
+  readonly entryPack?: {
+    readonly passId: OrderId;
+    readonly reservationId: WorkspaceReservationId;
+  };
   readonly checkoutSessionId?: CheckoutSessionId;
   readonly heldOfficePrice?: HeldOfficePrice;
   readonly officeSelection?: CheckoutOfficeSelection;
@@ -199,7 +205,9 @@ type ReservationPageDefinition<
   readonly restore: (
     reservation: ReservationForKind<Kind>,
     searchParams: SearchParamsRecord,
-    scope: ReservationPageScope<PageData>
+    scope: ReservationPageScope<PageData> & {
+      readonly entryPack: RestoredReservation<Kind>["entryPack"];
+    }
   ) => ReservationPageRestoration<Values>;
   /** The prices and availability the form reads first for its values. */
   readonly preload: (
@@ -218,6 +226,16 @@ type ReservationPageDefinition<
   readonly renderForm: (
     form: ReservationPageForm<PageData, Values>
   ) => ReactNode;
+  /** Resolves visitor-specific data before selecting and preloading the form. */
+  readonly loadFormPageData?: (
+    pageData: PageData,
+    context: Pick<
+      ReservationPageRequest<Kind, PageData>,
+      "checkoutAccount" | "locale" | "restoredReservation" | "searchParams"
+    > & {
+      readonly verifiedContactReturn: boolean;
+    }
+  ) => Promise<PageData>;
 } & ([PageData] extends [undefined]
   ? { readonly loadPageData?: undefined }
   : {
@@ -270,6 +288,13 @@ export const loadRestoredReservation = Effect.fn(
 
   return {
     checkoutSessionId: payState.checkoutSessionId,
+    ...("entryPack" in payState.quote &&
+      payState.quote.entryPack && {
+        entryPack: {
+          passId: payState.quote.entryPack.passId,
+          reservationId: payState.orderId,
+        },
+      }),
     heldOfficePrice: Match.value(payState).pipe(
       Match.when(
         { reservation: { kind: "office" } },
@@ -475,13 +500,22 @@ async function ReservationPageRequestContent<
       );
     }
 
+    const formPageData = definition.loadFormPageData
+      ? await definition.loadFormPageData(pageData as PageData, {
+          checkoutAccount,
+          locale,
+          restoredReservation,
+          searchParams: resolvedSearchParams,
+          verifiedContactReturn: contactMatchesAccount,
+        })
+      : pageData;
     const content = await loadReservationPageContent(definition, {
       checkoutAccount,
       checkoutContact,
       checkoutOfficeSelection,
       locale,
       // A definition without a loader has `undefined` page data.
-      pageData: pageData as PageData,
+      pageData: formPageData as PageData,
       restoredReservation,
       searchParams: resolvedSearchParams,
       // A restored checkout keeps its own discount intent, even none.
@@ -528,7 +562,7 @@ const loadReservationPageSelection = Effect.fnUntraced(function* <
         restoredReservation.officeSelection?.kind === "seats"
           ? { ...request.searchParams, seats: undefined }
           : request.searchParams,
-        scope
+        { ...scope, entryPack: restoredReservation.entryPack }
       )
     : undefined;
   if (restoration?.kind === "replaced" || restoration?.kind === "restored") {

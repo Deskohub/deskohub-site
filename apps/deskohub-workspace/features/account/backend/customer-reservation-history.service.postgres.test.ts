@@ -16,14 +16,17 @@ import {
   DotyposUnavailable,
 } from "@deskohub/dotypos";
 import { Effect, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import { loadAccountPasses } from "@/features/account/account-passes.server";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import {
   type StoredWorkspaceReservationDetails,
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
+import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { ReviewAccounts, ReviewSandbox } from "@/features/review-accounts";
 import {
   fixtureReservationAuthorId,
@@ -35,6 +38,7 @@ import {
   type CustomerAccountId,
   customerAccountIdSchema,
 } from "../customer-account";
+import { CurrentCustomerAccount } from "./current-customer-account";
 import { CustomerAccountLinkRepository } from "./customer-account-link.repository";
 import {
   CustomerReservationHistoryService,
@@ -340,7 +344,7 @@ describe.skipIf(!testDatabase)(
       }
     });
 
-    test("exposes a workspace ID only for an owner-matched local reservation", async () => {
+    test("scopes Entry pack payment to an owner-matched reservation and booking to the pack's validity", async () => {
       const account = customerAccountIdSchema.make(uniqueId());
       const dotyposCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
       const foreignCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
@@ -380,10 +384,31 @@ describe.skipIf(!testDatabase)(
         authorAccountId: fixtureReservationAuthorId,
       });
 
+      const passId = uniqueId();
+      await testDatabase!.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
+         values ($1, 'pass-purchase', $2, 'paid', 'not_started', '2000-01-01T00:00:00Z')`,
+        [passId, dotyposCustomerId]
+      );
+      await testDatabase!.pool.query(
+        `insert into pass_purchases
+           (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $2, 'entry-pack', 'open-space', 5, 'active', '2000-01-01', '2000-03-01', '{}', 'en-US', now())`,
+        [passId, account]
+      );
+      await testDatabase!.pool.query(
+        `insert into pass_entry_claims (reservation_id, pass_id, date, status)
+         values ($1, $3, '2000-01-01', 'consumed'), ($2, $3, '2000-01-04', 'consumed')`,
+        [matchedWorkspaceReservationId, foreignWorkspaceReservationId, passId]
+      );
+
       const history = await Effect.runPromise(
         Effect.gen(function* () {
           const service = yield* CustomerReservationHistoryService;
-          return yield* service.load({ accountId: account, dotyposCustomerId });
+          return yield* service.load(
+            { accountId: account, dotyposCustomerId },
+            { includeEntryPackPayment: true }
+          );
         }).pipe(
           Effect.provide(
             makeHistoryLayer([
@@ -416,6 +441,13 @@ describe.skipIf(!testDatabase)(
       if (history.kind !== "available") throw new Error("History unavailable");
 
       const summaries = history.groups.past;
+      expect(summaries.map((summary) => summary.paidWithEntryPack)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ]);
+      expect(JSON.stringify(history)).not.toContain(passId);
       expect(summaries.map((summary) => summary.id)).toEqual([
         foreignDotyposReservationId,
         laterProviderOnlyDotyposReservationId,
@@ -429,6 +461,70 @@ describe.skipIf(!testDatabase)(
         expect("workspaceReservationId" in summary).toBe(false);
       }
       expect(summaries.some((summary) => "party" in summary)).toBe(false);
+
+      const reservedEntry = workspaceReservationIdSchema.make(uniqueId());
+      const releasedEntry = workspaceReservationIdSchema.make(uniqueId());
+      for (const id of [reservedEntry, releasedEntry]) {
+        await insertWorkspaceReservation({
+          id,
+          dotyposCustomerId,
+          dotyposReservationId: DotyposReservationIdSchema.make(
+            `dotypos-${uniqueId()}`
+          ),
+          authorAccountId: account,
+        });
+      }
+      await testDatabase!.pool.query(
+        `insert into pass_entry_claims (reservation_id, pass_id, date, status)
+         values ($1, $3, '2000-01-02', 'reserved'), ($2, $3, '2000-01-03', 'released')`,
+        [reservedEntry, releasedEntry, passId]
+      );
+
+      const paidAt = Temporal.Instant.from("2000-01-01T00:00:00Z");
+      const [lastDay, expiry] = await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(
+            Temporal.Instant.from("2000-02-29T22:59:59Z").epochMilliseconds
+          );
+          const lastDay = yield* loadAccountPasses("en-US");
+          yield* TestClock.adjust("1 second");
+          const expiry = yield* loadAccountPasses("en-US");
+          return [lastDay, expiry] as const;
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              testDatabaseLayer(),
+              TestClock.layer(),
+              Layer.mock(CurrentCustomerAccount, {
+                peek: Effect.succeed({
+                  kind: "unlinked",
+                  reviewMarker: "absent",
+                  session: {
+                    accountId: account,
+                    email: reservationCustomerEmailSchema.make(
+                      testEmailAddress(`h-${account}`)
+                    ),
+                    deletionRequested: false,
+                    displayName: null,
+                    accountCreatedAt: paidAt,
+                    accountUpdatedAt: paidAt,
+                  },
+                }),
+              })
+            )
+          )
+        )
+      );
+      expect(lastDay).toEqual([
+        expect.objectContaining({
+          status: "active",
+          entriesLeft: 2,
+          lastUsableDay: "Feb 29, 2000",
+          bookPath: `/en-US/reservation/cowork?pass=${passId}`,
+        }),
+      ]);
+      expect(expiry).toEqual([expect.objectContaining({ status: "expired" })]);
+      expect(JSON.stringify(expiry)).not.toContain(passId);
     });
 
     const seedParties = async () => {

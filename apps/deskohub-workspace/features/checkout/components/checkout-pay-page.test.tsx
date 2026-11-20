@@ -22,6 +22,7 @@ import { getOfficeCheckoutSummary } from "@/features/checkout/checkout-summary-o
 import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
 import { m } from "@/features/i18n";
 import { getOfficeAdvertisedPriceRequest } from "@/features/reservation/office-advertised-price";
+import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import {
   workspaceRouterPush,
@@ -332,6 +333,78 @@ describe("CheckoutPayPage payment navigation", () => {
     );
     expect(openPaymentWindow).not.toHaveBeenCalled();
   });
+
+  test.each([false, true])(
+    "shows the Entry pack Pay path with coffee selected: %s",
+    async (coffee) => {
+      const { CheckoutPayPage } = await import("./checkout-pay-page");
+      const execute = mock();
+      workspaceUseAction.mockReturnValue({
+        execute,
+        isExecuting: false,
+        result: {},
+      });
+      const original = buildCoworkCheckoutSummary({
+        entryTier: "open-space",
+        coffee,
+      });
+      const total = currencyCZK(coffee ? 5000 : 0);
+      const summary = {
+        ...original,
+        total,
+        sections: original.sections.map((section) => ({
+          ...section,
+          total,
+          items: section.items.map((item) => ({
+            ...item,
+            amount: "product" in item ? currencyCZK(0) : total,
+          })),
+        })),
+      };
+      const checkout = (earlyPerformanceRequestRequired: boolean) => (
+        <CheckoutPayPage
+          earlyPerformanceRequestRequired={earlyPerformanceRequestRequired}
+          key={
+            earlyPerformanceRequestRequired ? "early-performance" : "standard"
+          }
+          locale="en-US"
+          payStateToken="signed-entry-pack"
+          startPaymentAction={mock(async () => ({}))}
+          summary={summary}
+          usesEntryPack
+          variant="pay"
+        />
+      );
+      const view = render(checkout(true));
+
+      expect(view.queryByRole("button", { name: "Pay by QR" })).toBeNull();
+      expect(view.queryByRole("button", { name: "Pay by card" })).toBeNull();
+      expect(view.getByText("Entry pack · 1 entry")).toBeDefined();
+      expect(
+        view.queryAllByText(/Card payment opens in a new tab/)
+      ).toHaveLength(coffee ? 1 : 0);
+      const button = () =>
+        view.getByRole<HTMLButtonElement>("button", {
+          name: coffee ? /^Order and pay CZK\s50$/ : "Book with 1 entry",
+        });
+      expect(button().disabled).toBe(true);
+      fireEvent.click(button());
+      expect(execute).not.toHaveBeenCalled();
+      fireEvent.click(view.getByRole("checkbox"));
+      fireEvent.click(button());
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalledWith({
+        earlyPerformanceConsent: true,
+        legalConsent: true,
+        locale: "en-US",
+        payStateToken: "signed-entry-pack",
+      });
+
+      view.rerender(checkout(false));
+      expect(button().disabled).toBe(true);
+      expect(execute).toHaveBeenCalledTimes(1);
+    }
+  );
 
   test("shows the German order and pay heading with the signed total", async () => {
     const { CheckoutPayPage } = await import("./checkout-pay-page");

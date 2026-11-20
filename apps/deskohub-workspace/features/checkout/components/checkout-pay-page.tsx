@@ -14,6 +14,7 @@ import {
   type OfficeCheckoutPeople,
   OfficeCheckoutPeopleReview,
 } from "@/features/office/components/office-checkout-people";
+import { EntryPackBookingNotice } from "@/features/passes/components/entry-pack-booking-notice";
 import { getCoworkReservationPath } from "@/features/reservation/routes";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -41,6 +42,7 @@ type CheckoutPayPageProps = {
   readonly people?: OfficeCheckoutPeople;
   readonly startPaymentAction?: StartCheckoutPaymentAction;
   readonly summary: CheckoutSummaryData;
+  readonly usesEntryPack?: boolean;
   readonly variant: "pay" | "retry" | "pricingChanged";
   readonly retryOutcome?: "cancelled" | "failed";
 };
@@ -57,11 +59,13 @@ export function CheckoutPayPage({
   retryOutcome,
   startPaymentAction,
   summary,
+  usesEntryPack = false,
   variant,
 }: CheckoutPayPageProps) {
   const providerTotal = summary.total.value > 0 ? summary.total : undefined;
   const dualPaymentTotal =
     startPaymentAction &&
+    !usesEntryPack &&
     payStateToken &&
     variant === "pay" &&
     providerTotal?.currency === "CZK"
@@ -82,7 +86,10 @@ export function CheckoutPayPage({
   });
   const isPricingChanged = variant === "pricingChanged";
   const title = {
-    pay: m.checkoutPayTitle({}, { locale }),
+    pay:
+      usesEntryPack && providerTotal
+        ? m.coworkEntryPackPayAddon({}, { locale })
+        : m.checkoutPayTitle({}, { locale }),
     retry: m.checkoutPaymentRetryTitle({}, { locale }),
     pricingChanged: m.checkoutPayPricingChangedTitle({}, { locale }),
   }[variant];
@@ -126,10 +133,12 @@ export function CheckoutPayPage({
           locale={locale}
           officeStartDateLabel={officeStartDateLabel}
           summary={summary}
+          usesEntryPack={usesEntryPack}
         />
       )}
 
       {variant === "pay" && discountCodeForm}
+      {usesEntryPack && <EntryPackBookingNotice locale={locale} />}
 
       {isPricingChanged ? (
         <CheckoutPayUpdatedPriceLink
@@ -170,6 +179,11 @@ export function CheckoutPayPage({
             <>
               <CheckoutPaySubmitButton
                 disabled={!legalConsent || isSubmitPending}
+                freeOrderLabel={
+                  usesEntryPack
+                    ? m.coworkEntryPackBookWithEntry({}, { locale })
+                    : undefined
+                }
                 locale={locale}
                 pending={isSubmitPending}
                 total={providerTotal}

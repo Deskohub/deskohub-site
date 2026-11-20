@@ -355,6 +355,10 @@ const answerPreparationFailure =
           Effect.fail(
             new CustomerCheckoutDetailsInvalid({ field: "contact.email" })
           ),
+        EntryPackUnavailableError: () =>
+          Effect.fail(
+            new CustomerSelectionUnavailable({ reason: "availability_changed" })
+          ),
         // An unknown or unreadable discount is retried, never answered as a
         // changed price.
         PromotionCodeUnavailableError: retryable(operation),

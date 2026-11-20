@@ -217,8 +217,11 @@ async function CheckoutPayContent({
 
   const { state, reservation } = payableCheckout.checkout;
   const { total } = PayState.summary(state);
+  const usesEntryPack =
+    "entryPack" in state.quote && state.quote.entryPack !== undefined;
   const offersQrPayment =
     getPayPageVariant(state) === "pay" &&
+    !usesEntryPack &&
     !reservation.agentClientId &&
     total.currency === "CZK" &&
     total.value > 0 &&
@@ -245,6 +248,7 @@ async function CheckoutPayContent({
       payStateToken,
       searchParams: resolvedSearchParams,
       state: payableCheckout.checkout.state,
+      usesEntryPack,
     })
   );
 }
@@ -256,6 +260,7 @@ type CheckoutPayRenderInput = {
   readonly payStateToken: string;
   readonly searchParams: SearchParamsRecord;
   readonly state: SignedPayState;
+  readonly usesEntryPack: boolean;
 };
 
 /** The Pay step for a Pay state whose reservation is still held. */
@@ -301,7 +306,9 @@ function renderCheckoutPay(input: CheckoutPayRenderInput) {
       )}
       <CheckoutPayPage
         changedKeys={state.changedKeys}
-        discountCodeForm={renderDiscountCodeForm(input)}
+        discountCodeForm={
+          input.usesEntryPack ? undefined : renderDiscountCodeForm(input)
+        }
         freshPayUrl={payableCheckout.freshPayUrl}
         earlyPerformanceRequestRequired={earlyPerformanceRequestRequired}
         locale={locale}
@@ -331,6 +338,7 @@ function renderCheckoutPay(input: CheckoutPayRenderInput) {
           input.offersQrPayment ? submitReservation : undefined
         }
         summary={PayState.summary(state)}
+        usesEntryPack={input.usesEntryPack}
         variant={getPayPageVariant(state)}
       />
     </CheckoutFlowLayout>

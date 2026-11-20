@@ -182,6 +182,7 @@ const payLabelNamesAmount = (locale: Locale) =>
 
 export function CheckoutPaySubmitButton({
   disabled,
+  freeOrderLabel,
   locale,
   onClick,
   pending,
@@ -189,6 +190,7 @@ export function CheckoutPaySubmitButton({
   variant,
 }: {
   readonly disabled?: boolean;
+  readonly freeOrderLabel?: string;
   readonly locale: Locale;
   readonly onClick?: () => void;
   readonly pending?: boolean;
@@ -207,7 +209,7 @@ export function CheckoutPaySubmitButton({
         { amount: formatMoney(total, locale).replaceAll(" ", "\u00a0") },
         { locale }
       )
-    : m.checkoutPayOrderAndPayButton({}, { locale });
+    : (freeOrderLabel ?? m.checkoutPayOrderAndPayButton({}, { locale }));
   return (
     <div className="@container space-y-3">
       {!!separateTotal && (

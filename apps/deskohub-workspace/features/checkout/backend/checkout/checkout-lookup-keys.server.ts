@@ -9,6 +9,7 @@ import {
   checkoutSessionKeySchema,
 } from "@/features/checkout/checkout-identifiers";
 import type { ValidOfficePeople } from "@/features/office/office-people";
+import type { OrderId } from "@/features/order";
 import { getCoworkCheckoutAttemptDetails } from "@/features/reservation/cowork-reservation";
 import { getMeetingRoomReservationDetails } from "@/features/reservation/meeting-room-reservation";
 import { getOfficeReservationDetails } from "@/features/reservation/office-reservation";
@@ -63,6 +64,7 @@ export const deriveCheckoutAttemptKeys = Effect.fn(
   readonly checkoutSessionId: CheckoutSessionId;
   readonly checkoutAttemptId: CheckoutAttemptId;
   readonly reservation: ReservationOrderData;
+  readonly entryPackId?: OrderId;
   /**
    * Who is coming to an office booked with a people list, so a replay with
    * other people never reuses the hold. Absent from the payload otherwise,
@@ -82,6 +84,7 @@ export const deriveCheckoutAttemptKeys = Effect.fn(
     {
       checkoutSessionId: input.checkoutSessionId,
       checkoutAttemptId: input.checkoutAttemptId,
+      ...(input.entryPackId && { entryPackId: input.entryPackId }),
       reservation: {
         name: input.reservation.name,
         email: input.reservation.email,

@@ -11,18 +11,20 @@ import {
   Wifi,
 } from "lucide-react";
 import Image, { getImageProps } from "next/image";
-import { useSearchParams } from "next/navigation";
-import { useId } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useId, useState } from "react";
 import { preload } from "react-dom";
 import { type Control, useForm } from "react-hook-form";
 import type { PreloadedAdvertisedPrice } from "@/features/checkout/advertised-price";
 import type { CheckoutSessionId } from "@/features/checkout/checkout-identifiers";
 import {
+  getWorkspaceProductCoffeeLinePriceForTier,
   isWorkspaceCoworkCurrentProductTier,
   type WorkspaceCoworkCurrentTier,
   type WorkspaceProductMonitorOption,
   workspaceCoworkCurrentTiers,
   workspaceProductMonitorOptions,
+  workspaceProductWorkstationAddonPrice,
 } from "@/features/checkout/product-catalog";
 import {
   getWorkspaceProductMessage,
@@ -38,10 +40,13 @@ import reservedDeskArtwork from "@/features/cowork/assets/reserved-desk.png";
 import reservedDeskWorkstationArtwork from "@/features/cowork/assets/reserved-desk-workstation.png";
 import type { CanonicalPromotionCode } from "@/features/discounts";
 import { defaultPhoneRegion, type Locale, m } from "@/features/i18n";
+import type { OrderId } from "@/features/order";
+import { EntryPackBookingNotice } from "@/features/passes/components/entry-pack-booking-notice";
 import {
   getEntryPackPurchasePath,
   minimumEntryPackPricePerDay,
 } from "@/features/passes/entry-pack-discovery";
+import { getEntryPackLastUsableDate } from "@/features/passes/pass-offer";
 import { ReservationAdvertisedPrice } from "@/features/reservation/components/reservation-advertised-price";
 import { ReservationCheckoutForm } from "@/features/reservation/components/reservation-checkout-form";
 import { ReservationFormDateInput } from "@/features/reservation/components/reservation-date-input";
@@ -62,7 +67,10 @@ import {
   useReservationSelectionUrl,
   useWatchedSelection,
 } from "@/features/reservation/components/use-reservation-selection-url";
-import { getCoworkTierOptionPrice } from "@/features/reservation/cowork-advertised-price";
+import {
+  getCoworkAddOnAmount,
+  getCoworkTierOptionPrice,
+} from "@/features/reservation/cowork-advertised-price";
 import {
   type CoworkReservationData,
   type CoworkReservationInput,
@@ -90,8 +98,21 @@ import {
 import { Label } from "@/shared/components/ui/label";
 import { Switch } from "@/shared/components/ui/switch";
 import { textLink } from "@/shared/components/ui/text-link";
-import { formatMoney } from "@/shared/money/money";
+import { currencyCZK } from "@/shared/money/currencies";
+import { formatMoney, type Money } from "@/shared/money/money";
 import { cn } from "@/shared/utils";
+import {
+  type CoworkEntryPacks,
+  entryPackCoversDate,
+  getEntryPackCoworkTier,
+  getOfferedEntryPack,
+  type InitialCoworkEntryPack,
+} from "../cowork-entry-packs";
+import {
+  CoworkEntryPackBanner,
+  CoworkEntryPackCardDialog,
+  CoworkEntryPackUnavailable,
+} from "./cowork-entry-pack-banner";
 import { CoworkOptionalAddonToggle } from "./cowork-optional-addon-toggle";
 import { getCoworkReservationSelectionSummary } from "./cowork-reservation-selection-summary";
 import { formatCoworkOvernightStay } from "./cowork-stay-display";
@@ -100,7 +121,9 @@ import { useCoworkAdvertisedPrices } from "./use-cowork-advertised-prices";
 import { useCoworkSelectionAvailability } from "./use-cowork-selection-availability";
 
 type CoworkReservationFormProps = {
+  bookingPasses?: CoworkEntryPacks;
   entryPackOffered?: boolean;
+  initialEntryPack?: InitialCoworkEntryPack;
   initialReservation?: NormalizedCoworkReservationOrder;
   initialAdvertisedPrices?: ReadonlyArray<PreloadedAdvertisedPrice>;
   initialValues?: CoworkReservationInput;
@@ -159,7 +182,9 @@ const formatDisplayDate = (date: string, locale: Locale) =>
   );
 
 export function CoworkReservationForm({
+  bookingPasses,
   entryPackOffered = false,
+  initialEntryPack,
   initialReservation,
   initialAdvertisedPrices = [],
   initialValues,
@@ -173,6 +198,7 @@ export function CoworkReservationForm({
   today,
 }: CoworkReservationFormProps) {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const defaultValues =
     initialValues ??
     (initialReservation
@@ -187,6 +213,14 @@ export function CoworkReservationForm({
     reValidateMode: "onChange",
   });
   const selection = useWatchedSelection(coworkSelectionLink, form.control);
+  const [packSelection, setPackSelection] = useState<
+    InitialCoworkEntryPack | { readonly kind: "card" } | undefined
+  >(initialEntryPack);
+  const [cardChange, setCardChange] = useState<(() => void) | undefined>();
+  const [rejectedBooking, setRejectedBooking] = useState<{
+    readonly date: string;
+    readonly packId: OrderId;
+  }>();
   const {
     entryTier: selectedTier,
     monitorOption: selectedMonitorOption,
@@ -198,13 +232,17 @@ export function CoworkReservationForm({
   useReservationSelectionUrl(coworkSelectionLink, selection);
   const allowedMonitorOptions =
     getAllowedMonitorOptionsForCoworkTier(selectedTier);
-  const { advertisedPrices, coffeePriceLabel, workstationPriceLabel } =
-    useCoworkAdvertisedPrices({
-      initialAdvertisedPrices,
-      locale,
-      selection,
-      submittedCode,
-    });
+  const {
+    advertisedPrices,
+    coffeePriceLabel,
+    selectedPrice,
+    workstationPriceLabel,
+  } = useCoworkAdvertisedPrices({
+    initialAdvertisedPrices,
+    locale,
+    selection,
+    submittedCode,
+  });
   const selectionAvailability = useCoworkSelectionAvailability({
     initialAvailability,
     locale,
@@ -213,23 +251,114 @@ export function CoworkReservationForm({
     today,
   });
   const { workstation } = selectionAvailability;
+  const availability = selectionAvailability.checkoutAvailability;
   const isWorkstationRequired = workstation.requiredMonitorOption !== undefined;
+  const appliedPack =
+    packSelection?.kind === "applied"
+      ? bookingPasses?.packs.find((pack) => pack.id === packSelection.packId)
+      : undefined;
+  const workstationCovered = appliedPack?.tier === "reserved-desk-workstation";
+  const rejectedPackId =
+    rejectedBooking?.date === selection.date
+      ? rejectedBooking?.packId
+      : undefined;
+  const packUnavailable =
+    packSelection?.kind === "unavailable" ||
+    (packSelection?.kind === "applied" &&
+      (!appliedPack ||
+        appliedPack.id === rejectedPackId ||
+        (workstationCovered && !selectedMonitorOption) ||
+        getEntryPackCoworkTier(appliedPack.tier) !== selectedTier ||
+        !entryPackCoversDate(appliedPack, selection.date) ||
+        bookingPasses?.claimedDates.some((date) => date === selection.date)));
+  const offeredPack =
+    bookingPasses &&
+    (!packSelection || packSelection.kind === "card") &&
+    !availability.isPending &&
+    !availability.unavailableMessage &&
+    isWorkspaceCoworkCurrentProductTier(selectedTier)
+      ? getOfferedEntryPack(bookingPasses, {
+          date: selection.date,
+          excludedPackId: rejectedPackId,
+          tier: selectedTier,
+          workstation: Boolean(selectedMonitorOption),
+          workstationRequired: isWorkstationRequired,
+        })
+      : undefined;
+  const pack = appliedPack ?? offeredPack;
+  const coffeeCharge =
+    appliedPack && selection.coffee
+      ? (getCoworkAddOnAmount(selectedPrice, "coffee") ??
+        getWorkspaceProductCoffeeLinePriceForTier(selectedTier))
+      : currencyCZK(0);
+  const workstationCharge =
+    appliedPack?.tier === "reserved-desk" && selectedMonitorOption
+      ? (getCoworkAddOnAmount(selectedPrice, "workstation") ??
+        workspaceProductWorkstationAddonPrice)
+      : currencyCZK(0);
+  const packTotal = currencyCZK(coffeeCharge.value + workstationCharge.value);
+
+  const updatePassInUrl = (id?: OrderId) => {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("pass", id);
+    else url.searchParams.delete("pass");
+    if (url.href !== window.location.href) {
+      window.history.replaceState(null, "", url);
+    }
+  };
+  const payByCard = () => {
+    setPackSelection({ kind: "card" });
+    updatePassInUrl();
+  };
+  const changeUncoveredOption = (change: () => void) => {
+    setCardChange(() => change);
+  };
   const {
     isCoffeeOptional,
     isWorkstationOptional,
     onManualWorkstationSelection,
     onTierChange,
-  } = useCoworkAddonNormalization({ form, selection, workstation });
+  } = useCoworkAddonNormalization({
+    form,
+    selection,
+    workstation,
+    workstationIncluded: workstationCovered,
+    workstationOnlyWhenRequired: appliedPack?.tier === "reserved-desk",
+  });
 
   return (
     <ReservationCheckoutForm
       checkoutCustomer={checkoutCustomer}
-      advertisedPrice={advertisedPrices.checkout}
-      availability={selectionAvailability.checkoutAvailability}
+      advertisedPrice={
+        appliedPack
+          ? {
+              ...advertisedPrices.checkout,
+              sale: undefined,
+              total: { amount: packTotal },
+            }
+          : advertisedPrices.checkout
+      }
+      availability={
+        packUnavailable
+          ? {
+              ...availability,
+              unavailableMessage: m.coworkEntryPackUnavailableDescription(
+                {},
+                { locale }
+              ),
+            }
+          : availability
+      }
       checkoutSessionId={checkoutSessionId}
+      entryPackId={appliedPack?.id}
       form={form}
       getReservation={getCoworkCurrentReservationOrder}
       locale={locale}
+      onEntryPackUnavailable={() => {
+        if (appliedPack)
+          setRejectedBooking({ date: selection.date, packId: appliedPack.id });
+        router.refresh();
+      }}
       selectionSummary={getCoworkReservationSelectionSummary(selection, locale)}
       selection={{
         kind: coworkSelectionLink.kind,
@@ -237,6 +366,41 @@ export function CoworkReservationForm({
           coworkSelectionLink.readSelection(searchParams, { locale }),
       }}
     >
+      <div aria-live="polite" className="empty:absolute">
+        {packSelection?.kind === "invalid-link" || packUnavailable ? (
+          <CoworkEntryPackUnavailable
+            invalidLink={packSelection?.kind === "invalid-link"}
+            locale={locale}
+            onClear={payByCard}
+          />
+        ) : (
+          pack && (
+            <CoworkEntryPackBanner
+              applying={Boolean(appliedPack)}
+              locale={locale}
+              onAction={
+                appliedPack
+                  ? payByCard
+                  : () => {
+                      setPackSelection({ kind: "applied", packId: pack.id });
+                      updatePassInUrl(pack.id);
+                    }
+              }
+              pack={pack}
+            />
+          )
+        )}
+      </div>
+      <CoworkEntryPackCardDialog
+        locale={locale}
+        onCancel={() => setCardChange(undefined)}
+        onConfirm={() => {
+          payByCard();
+          cardChange?.();
+          setCardChange(undefined);
+        }}
+        open={Boolean(cardChange)}
+      />
       <FormField
         control={form.control}
         name="entryTier"
@@ -253,12 +417,22 @@ export function CoworkReservationForm({
                 name={field.name}
                 onBlur={field.onBlur}
                 onChange={(tier) => {
-                  field.onChange(tier);
-                  // Only a Reserved Desk offers an overnight stay.
-                  if (tier !== overnightCoworkStayTier) {
-                    form.setValue("stay", undefined);
+                  const change = () => {
+                    field.onChange(tier);
+                    // Only a Reserved Desk offers an overnight stay.
+                    if (tier !== overnightCoworkStayTier) {
+                      form.setValue("stay", undefined);
+                    }
+                    onTierChange(tier);
+                  };
+                  if (
+                    appliedPack &&
+                    tier !== getEntryPackCoworkTier(appliedPack.tier)
+                  ) {
+                    changeUncoveredOption(change);
+                  } else {
+                    change();
                   }
-                  onTierChange(tier);
                 }}
                 presentation="illustrated"
                 value={field.value}
@@ -282,6 +456,27 @@ export function CoworkReservationForm({
                     option.value
                   );
                   const originalAmount = tierPrice?.originalAmount;
+                  const usesEntry =
+                    appliedPack &&
+                    selectedTier === option.value &&
+                    !packUnavailable;
+                  const cardPrice = tierPrice ? (
+                    <ReservationAdvertisedPrice
+                      amount={tierPrice.amount}
+                      originalAmountClassName={
+                        originalAmount ? "text-[0.6em]" : undefined
+                      }
+                      locale={locale}
+                      originalAmount={originalAmount}
+                      suffix={
+                        <span className="ml-1 text-sm font-normal normal-case tracking-normal text-navy-blue/60">
+                          {m.coworkReservationPricePeriodSuffix({}, { locale })}
+                        </span>
+                      }
+                    />
+                  ) : (
+                    <ReservationSkeletonBlock className="h-4 w-24 bg-aquamarine-green/15" />
+                  );
                   return (
                     <ReservationTypeOption
                       key={option.value}
@@ -307,28 +502,15 @@ export function CoworkReservationForm({
                         />
                       }
                       price={
-                        tierPrice ? (
-                          <ReservationAdvertisedPrice
-                            amount={tierPrice.amount}
-                            originalAmountClassName={
-                              originalAmount ? "text-[0.6em]" : undefined
-                            }
-                            locale={locale}
-                            originalAmount={originalAmount}
-                            suffix={
-                              <span className="ml-1 text-sm font-normal normal-case tracking-normal text-navy-blue/60">
-                                {m.coworkReservationPricePeriodSuffix(
-                                  {},
-                                  { locale }
-                                )}
-                              </span>
-                            }
-                          />
+                        usesEntry ? (
+                          <span className="text-2xl font-semibold text-navy-blue">
+                            {m.coworkEntryPackOneEntry({}, { locale })}
+                          </span>
                         ) : (
-                          <ReservationSkeletonBlock className="h-4 w-24 bg-aquamarine-green/15" />
+                          cardPrice
                         )
                       }
-                      priceReady={Boolean(tierPrice)}
+                      priceReady={Boolean(usesEntry || tierPrice)}
                       title={optionTitle}
                       value={option.value}
                     >
@@ -344,6 +526,8 @@ export function CoworkReservationForm({
             </FormControl>
             <FormMessage />
             {entryPackOffered &&
+              !pack &&
+              packSelection?.kind !== "unavailable" &&
               !isOvernightStay &&
               isWorkspaceCoworkCurrentProductTier(selectedTier) && (
                 <p className="pt-1 text-sm leading-6 text-navy-blue/60">
@@ -385,9 +569,21 @@ export function CoworkReservationForm({
           <CoworkReservationDateField
             control={form.control}
             locale={locale}
+            maximumDate={
+              appliedPack &&
+              getEntryPackLastUsableDate(appliedPack.validUntil).toString()
+            }
+            minimumDate={appliedPack?.validFrom}
             offersStayChoice={offersStayChoice}
             overnight={isOvernightStay}
-            unavailableDates={selectionAvailability.unavailableDates}
+            unavailableDates={
+              appliedPack
+                ? new Set([
+                    ...selectionAvailability.unavailableDates,
+                    ...(bookingPasses?.claimedDates ?? []),
+                  ])
+                : selectionAvailability.unavailableDates
+            }
           />
 
           {selectionAvailability.selectedDateNotices.length > 0 && (
@@ -418,7 +614,15 @@ export function CoworkReservationForm({
           <CoworkCoffeeAddonField
             control={form.control}
             locale={locale}
-            priceLabel={coffeePriceLabel}
+            priceLabel={
+              coffeePriceLabel ??
+              (appliedPack
+                ? formatMoney(
+                    getWorkspaceProductCoffeeLinePriceForTier(selectedTier),
+                    locale
+                  )
+                : undefined)
+            }
           />
         )}
 
@@ -427,15 +631,82 @@ export function CoworkReservationForm({
             allowedMonitorOptions={allowedMonitorOptions}
             control={form.control}
             isWorkstationRequired={isWorkstationRequired}
+            workstationCovered={workstationCovered}
             monitorOptionsAvailabilitySettled={workstation.settled}
             locale={locale}
             onManualSelection={onManualWorkstationSelection}
-            priceLabel={workstationPriceLabel}
+            onUncoveredSelection={
+              appliedPack?.tier === "reserved-desk"
+                ? changeUncoveredOption
+                : undefined
+            }
+            priceLabel={
+              workstationCovered
+                ? formatMoney(currencyCZK(0), locale)
+                : (workstationPriceLabel ??
+                  (appliedPack
+                    ? formatMoney(workspaceProductWorkstationAddonPrice, locale)
+                    : undefined))
+            }
             unavailableMonitorOptions={workstation.unavailableMonitorOptions}
           />
         )}
       </div>
+      {appliedPack && !packUnavailable && (
+        <>
+          <CoworkEntryPackPrice
+            coffee={coffeeCharge}
+            locale={locale}
+            total={packTotal}
+            workstation={workstationCharge}
+          />
+          <EntryPackBookingNotice locale={locale} />
+        </>
+      )}
     </ReservationCheckoutForm>
+  );
+}
+
+function CoworkEntryPackPrice({
+  coffee,
+  locale,
+  total,
+  workstation,
+}: {
+  readonly coffee: Money;
+  readonly locale: Locale;
+  readonly total: Money;
+  readonly workstation: Money;
+}) {
+  return (
+    <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 rounded-3xl border border-navy-blue/10 bg-white/75 p-5 text-sm text-navy-blue sm:p-6">
+      <dt>{m.coworkEntryPackBookingLine({}, { locale })}</dt>
+      <dd className="text-end font-semibold">
+        {formatMoney(currencyCZK(0), locale)}
+      </dd>
+      {coffee.value > 0 && (
+        <>
+          <dt>{m.checkoutStatusSummaryCoffeeLabel({}, { locale })}</dt>
+          <dd className="text-end font-semibold">
+            {formatMoney(coffee, locale)}
+          </dd>
+        </>
+      )}
+      {workstation.value > 0 && (
+        <>
+          <dt>{m.reservationWorkstationLabel({}, { locale })}</dt>
+          <dd className="text-end font-semibold">
+            {formatMoney(workstation, locale)}
+          </dd>
+        </>
+      )}
+      <dt className="mt-2 border-t border-navy-blue/10 pt-3 font-semibold">
+        {m.coworkEntryPackToPay({}, { locale })}
+      </dt>
+      <dd className="mt-2 border-t border-navy-blue/10 pt-3 text-end text-lg font-semibold">
+        {formatMoney(total, locale)}
+      </dd>
+    </dl>
   );
 }
 
@@ -579,8 +850,10 @@ function CoworkWorkstationAddonField({
   monitorOptionsAvailabilitySettled,
   locale,
   onManualSelection,
+  onUncoveredSelection,
   priceLabel,
   unavailableMonitorOptions,
+  workstationCovered,
 }: {
   readonly allowedMonitorOptions: ReadonlyArray<WorkspaceProductMonitorOption>;
   readonly control: Control<
@@ -592,8 +865,10 @@ function CoworkWorkstationAddonField({
   readonly monitorOptionsAvailabilitySettled: boolean;
   readonly locale: Locale;
   readonly onManualSelection: () => void;
+  readonly onUncoveredSelection?: (change: () => void) => void;
   readonly priceLabel?: string;
   readonly unavailableMonitorOptions: ReadonlySet<WorkspaceProductMonitorOption>;
+  readonly workstationCovered: boolean;
 }) {
   const monitorSetupId = useId();
   const monitorSetupLabelId = `${monitorSetupId}-label`;
@@ -624,8 +899,12 @@ function CoworkWorkstationAddonField({
         <FormItem className="contents" data-cowork-addon-column>
           <CoworkOptionalAddonToggle
             addon="workstation"
-            checked={field.value !== undefined || isWorkstationRequired}
-            disabled={isWorkstationRequired}
+            checked={
+              field.value !== undefined ||
+              isWorkstationRequired ||
+              workstationCovered
+            }
+            disabled={isWorkstationRequired || workstationCovered}
             icon={Monitor}
             info={
               isWorkstationRequired
@@ -645,9 +924,13 @@ function CoworkWorkstationAddonField({
             label={m.reservationWorkstationLabel({}, { locale })}
             onBlur={field.onBlur}
             onCheckedChange={(checked) => {
-              if (isWorkstationRequired) return;
-              onManualSelection();
-              field.onChange(checked ? allowedMonitorOptions[0] : undefined);
+              if (isWorkstationRequired || workstationCovered) return;
+              const change = () => {
+                onManualSelection();
+                field.onChange(checked ? allowedMonitorOptions[0] : undefined);
+              };
+              if (checked && onUncoveredSelection) onUncoveredSelection(change);
+              else change();
             }}
             priceLabel={priceLabel}
           />
@@ -785,6 +1068,8 @@ function CoworkOvernightStaySwitch({
 function CoworkReservationDateField({
   control,
   locale,
+  maximumDate,
+  minimumDate,
   offersStayChoice,
   overnight,
   unavailableDates,
@@ -795,6 +1080,8 @@ function CoworkReservationDateField({
     CoworkReservationData
   >;
   readonly locale: Locale;
+  readonly maximumDate?: string;
+  readonly minimumDate?: string;
   /** Whether the date's heading row carries the overnight-stay switch. */
   readonly offersStayChoice: boolean;
   /** Whether the date is an overnight stay's arrival. */
@@ -833,7 +1120,11 @@ function CoworkReservationDateField({
             }
             label={m.reservationDateLabel({}, { locale })}
             locale={locale}
-            minimum={() => getCurrentWorkspaceDate().toString()}
+            maximum={maximumDate}
+            minimum={() => {
+              const today = getCurrentWorkspaceDate().toString();
+              return minimumDate && minimumDate > today ? minimumDate : today;
+            }}
             unavailableDates={unavailableDates}
           />
           <FormMessage />

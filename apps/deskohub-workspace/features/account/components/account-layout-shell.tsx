@@ -37,6 +37,7 @@ export type AccountLayoutShellProps = {
   readonly locale: Locale;
   /** Whether `login_passkeys` is on; off, Sign-in & security has no section. */
   readonly passkeysEnabled: boolean;
+  readonly passesEnabled?: boolean;
   /** Whether the referral program is released; withheld, it has no section. */
   readonly referralsEnabled: boolean;
   readonly signedIn: boolean;
@@ -58,6 +59,7 @@ const AccountLayoutContext = createContext<AccountLayoutContextValue | null>(
 
 const anonymousDisabledSections = [
   "reservations",
+  "passes",
   "referrals",
   "profile",
   "security",
@@ -129,6 +131,7 @@ export function AccountLayoutShell({
   children,
   locale,
   passkeysEnabled,
+  passesEnabled,
   referralsEnabled,
   signedIn,
 }: AccountLayoutShellProps) {
@@ -140,6 +143,7 @@ export function AccountLayoutShell({
   const pathnameSection = findAccountSectionOfPathname(locale, routeKey);
   const routeSection = opensAccountSection(pathnameSection, {
     passkeysEnabled,
+    passesEnabled,
     referralsEnabled,
   })
     ? pathnameSection
@@ -185,6 +189,7 @@ export function AccountLayoutShell({
       if (
         !isAccountSectionReleased(section, {
           passkeysEnabled,
+          passesEnabled,
           referralsEnabled,
         })
       ) {
@@ -214,6 +219,7 @@ export function AccountLayoutShell({
       isLegalPathname,
       locale,
       passkeysEnabled,
+      passesEnabled,
       referralsEnabled,
       routeKey,
       router,
@@ -249,11 +255,13 @@ export function AccountLayoutShell({
         (section) =>
           !isAccountSectionReleased(section, {
             passkeysEnabled,
+            passesEnabled,
             referralsEnabled,
           })
       )}
       locale={locale}
       onSectionChange={changeSection}
+      passesEnabled={passesEnabled}
       referralBadge={referralsEnabled ? referralBadge : undefined}
       reservationCount={reservationCount}
       signOut={signedIn ? <SignOutButton locale={locale} /> : null}

@@ -22,6 +22,7 @@ import {
   providerPaymentFinalizationLogFields,
 } from "../payment/provider-payment-finalization.service";
 import { PaymentLifecycleRepository } from "../repositories/payment-lifecycle.repository";
+import { paymentAbandonedAfterProviderCutoffFailureCode } from "../repositories/payment-lifecycle-state";
 import { QrPaymentRepository } from "../repositories/qr-payment.repository";
 import {
   HoldCancellationInProgress,
@@ -210,7 +211,7 @@ function makeReservationHoldCleanupServiceLayer(
               id: paymentAttemptId,
               orderId: reservationOrderId(orderId),
               state: "expired",
-              failureCode: "payment_abandoned_after_provider_cutoff",
+              failureCode: paymentAbandonedAfterProviderCutoffFailureCode,
             })
             .pipe(
               Effect.tapError((cause) =>

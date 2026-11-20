@@ -7,12 +7,16 @@ const notFound = mock(() => {
 });
 const arePasskeysEnabled = mock(() => Promise.resolve(true));
 const areReferralsEnabled = mock(() => Promise.resolve(true));
+const isCoworkPassesPageOpenAfterConnection = mock(() => Promise.resolve(true));
 const connection = mock(() => Promise.resolve());
 const getRequestPathname = mock(() =>
   Promise.resolve<string | undefined>("/en-US/account")
 );
-const loadCustomerAccountPage = mock(() =>
+const loadCustomerAccountPage = mock((_passesEnabled: boolean) =>
   Promise.resolve({ kind: "unavailable" as const })
+);
+const loadCustomerAccountPasses = mock((_locale: string) =>
+  Promise.resolve({ kind: "empty" as const })
 );
 const loadCustomerInvoiceHistory = mock((_locale: string) =>
   Promise.resolve({ kind: "empty" as const })
@@ -28,11 +32,20 @@ mock.module("@/features/account/server/account-release-gates.server", () => ({
 mock.module("@/features/referrals/referral-release-gate.server", () => ({
   areReferralsEnabled,
 }));
+mock.module(
+  "@/features/passes/backend/cowork-passes-release-gate.server",
+  () => ({
+    isCoworkPassesPageOpenAfterConnection,
+  })
+);
 mock.module("@/shared/backend/utils/request-pathname", () => ({
   getRequestPathname,
 }));
 mock.module("@/features/account/page-data.server", () => ({
   loadCustomerAccountPage,
+}));
+mock.module("@/features/account/account-passes.server", () => ({
+  loadCustomerAccountPasses,
 }));
 mock.module("@/features/account/invoice-history.server", () => ({
   loadCustomerInvoiceHistory,
@@ -99,6 +112,11 @@ describe("customer account route boundary", () => {
       events.push("referrals");
       return true;
     });
+    isCoworkPassesPageOpenAfterConnection.mockReset();
+    isCoworkPassesPageOpenAfterConnection.mockImplementation(async () => {
+      events.push("passes");
+      return true;
+    });
     connection.mockReset();
     connection.mockImplementation(async () => {
       events.push("connection");
@@ -113,6 +131,7 @@ describe("customer account route boundary", () => {
       events.push("load");
       return { kind: "unavailable" as const };
     });
+    loadCustomerAccountPasses.mockClear();
     AccountPage.mockClear();
   });
 
@@ -131,9 +150,10 @@ describe("customer account route boundary", () => {
       "pathname",
       "passkeys",
       "referrals",
+      "passes",
       "load",
     ]);
-    expect(loadCustomerAccountPage).toHaveBeenCalledWith();
+    expect(loadCustomerAccountPage).toHaveBeenCalledWith(true);
     expect(output).toMatchObject({
       type: AccountPage,
       props: { locale: "en-US", state: { kind: "unavailable" } },
@@ -149,6 +169,17 @@ describe("customer account route boundary", () => {
     await output.props.loadInvoiceHistory();
 
     expect(loadCustomerInvoiceHistory).toHaveBeenCalledWith("en-US");
+  });
+
+  test("lets the released Passes section load in its locale after rendering", async () => {
+    getRequestPathname.mockImplementation(async () => "/en-US/account/passes");
+    const output = (await renderSections().content()) as ReactElement<{
+      readonly loadPasses: () => Promise<unknown>;
+    }>;
+
+    expect(loadCustomerAccountPasses).not.toHaveBeenCalled();
+    await output.props.loadPasses();
+    expect(loadCustomerAccountPasses).toHaveBeenCalledWith("en-US");
   });
 
   test.each([
@@ -188,6 +219,7 @@ describe("customer account route boundary", () => {
   test.each([
     ["referrals", areReferralsEnabled],
     ["security", arePasskeysEnabled],
+    ["passes", isCoworkPassesPageOpenAfterConnection],
   ] as const)(
     "returns not found for the withheld %s section without loading the account",
     async (section, flag) => {
@@ -209,7 +241,7 @@ describe("customer account route boundary", () => {
     expect(route.type).toBe(Suspense);
     expect(route.props.fallback).toBeNull();
     expect(await content()).toBeNull();
-    expect(events).toEqual(["connection", "passkeys", "referrals"]);
+    expect(events).toEqual(["connection", "passkeys", "referrals", "passes"]);
     expect(loadCustomerAccountPage).not.toHaveBeenCalled();
   });
 
@@ -229,6 +261,7 @@ describe("customer account route boundary", () => {
   test.each([
     ["referrals", areReferralsEnabled, "referrals"],
     ["security", arePasskeysEnabled, "passkeys"],
+    ["passes", isCoworkPassesPageOpenAfterConnection, "passes"],
   ] as const)(
     "returns not found for the withheld %s section",
     async (section, flag, event) => {

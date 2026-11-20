@@ -83,6 +83,8 @@ export type CustomerReservationSummary = {
    * but never an access code.
    */
   readonly reviewSandbox?: true;
+  /** The account page marks a booking backed by a consumed Entry pack claim. */
+  readonly paidWithEntryPack?: true;
   /** Absent when the account's own customer booked it for itself. */
   readonly party?: CustomerReservationParty;
   readonly product: CustomerReservationProduct;

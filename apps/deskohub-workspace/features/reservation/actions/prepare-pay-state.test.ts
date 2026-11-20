@@ -1287,6 +1287,80 @@ describe("prepareWorkspacePayState", () => {
     expect(verifyHuman).toHaveBeenCalledTimes(1);
   });
 
+  test.skipIf(!testDatabase)(
+    "checks the existing overnight gate for a funded Reserved Desk submission",
+    async () => {
+      const prepareFromReservationForm = await loadReservationFormPreparation();
+      const { orderIdSchema } = await import("@/features/order");
+      const { recordCheckoutAnalytics } = await import(
+        "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
+      );
+      const { BotProtectionServiceMock } = await import(
+        "@/shared/backend/bot-protection/bot-protection.service.mock"
+      );
+      const accountId = customerAccountIdSchema.make(crypto.randomUUID());
+      const passId = orderIdSchema.make(crypto.randomUUID());
+      const { db, pool } = testDatabase!;
+      await pool.query("insert into customer_accounts (id) values ($1)", [
+        accountId,
+      ]);
+      await pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
+       values ($1, 'pass-purchase', 'fixture-buyer', 'paid', 'not_started', now())`,
+        [passId]
+      );
+      try {
+        await pool.query(
+          `insert into pass_purchases (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $2, 'entry-pack', 'reserved-desk', 5, 'active', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
+          [passId, accountId]
+        );
+        const { layer: accountAuthorityLayer } = await accountAuthorityFixture({
+          session: { accountId },
+          activityState: "active",
+        });
+        const effect = prepareFromReservationForm({
+          locale: "en-US",
+          checkoutSessionId: "session-id",
+          checkoutAttemptId: "attempt-id",
+          advertisedPriceToken: "fixture-advertisement",
+          customer: "account",
+          entryPackId: passId,
+          reservation: {
+            ...reservation,
+            date: "2099-06-30",
+            entryTier: "reserved-desk",
+            stay: "overnight",
+          },
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              accountAuthorityLayer,
+              BotProtectionServiceMock({
+                verifyHuman: mock(() => Effect.void),
+              }),
+              CheckoutPricingServiceMock({}),
+              inertRememberedReferral(),
+              recordCheckoutAnalytics().layer,
+              OvernightStayReleaseGate.fromDecision(false),
+              Layer.succeed(WorkspaceDatabase, WorkspaceDatabase.make(db))
+            )
+          )
+        ) as Effect.Effect<never, unknown, never>;
+        expect(await Effect.runPromise(Effect.flip(effect))).toMatchObject({
+          _tag: "PublicSafeActionError",
+          cause: { _tag: "OvernightStayUnavailableError" },
+        });
+      } finally {
+        await pool.query("delete from pass_purchases where id = $1", [passId]);
+        await pool.query("delete from orders where id = $1", [passId]);
+        await pool.query("delete from customer_accounts where id = $1", [
+          accountId,
+        ]);
+      }
+    }
+  );
+
   test("keeps meeting-room timing transient while creating its hold", async () => {
     const { PayState, payStateTokenQueryParam } = await import(
       "@/features/checkout/backend/checkout"

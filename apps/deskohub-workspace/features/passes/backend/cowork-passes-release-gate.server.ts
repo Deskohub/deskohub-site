@@ -3,7 +3,7 @@ import "server-only";
 import { ReleaseGate } from "@/features/feature-flags/backend/release-gate";
 import { releaseGateForRequest } from "@/features/feature-flags/backend/release-gate.server";
 
-class CoworkPassesReleaseGate extends ReleaseGate<CoworkPassesReleaseGate>()(
+export class CoworkPassesReleaseGate extends ReleaseGate<CoworkPassesReleaseGate>()(
   "@deskohub-workspace/passes/CoworkPassesReleaseGate",
   "cowork_passes"
 ) {}

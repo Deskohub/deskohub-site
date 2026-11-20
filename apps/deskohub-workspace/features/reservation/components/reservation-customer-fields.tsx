@@ -4,7 +4,13 @@ import Interpolate from "@doist/react-interpolate";
 import { AlertTriangle, Info, RotateCw } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { type ReactNode, useState, useTransition } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useEffectEvent,
+  useState,
+  useTransition,
+} from "react";
 import {
   type FieldPath,
   type FieldValues,
@@ -105,10 +111,12 @@ export type ReservationCustomer = ReturnType<typeof useReservationCustomer>;
 export function ReservationCustomerSection({
   checkoutCustomer,
   customer,
+  holderOnly = false,
   locale,
 }: {
   readonly checkoutCustomer: ReservationCheckoutCustomerForm;
   readonly customer: ReservationCustomer;
+  readonly holderOnly?: boolean;
   readonly locale: Locale;
 }) {
   if (checkoutCustomer.status === "signed-out") {
@@ -157,6 +165,7 @@ export function ReservationCustomerSection({
     <ReservationLinkedCustomerSection
       customer={customer}
       existingCustomer={checkoutCustomer.existingCustomer}
+      holderOnly={holderOnly}
       locale={locale}
       replacesTypedContact={checkoutCustomer.replacesTypedContact}
     />
@@ -166,11 +175,13 @@ export function ReservationCustomerSection({
 function ReservationLinkedCustomerSection({
   customer,
   existingCustomer,
+  holderOnly,
   locale,
   replacesTypedContact,
 }: {
   readonly customer: ReservationCustomer;
   readonly existingCustomer: ReservationExistingCustomerForm;
+  readonly holderOnly: boolean;
   readonly locale: Locale;
   readonly replacesTypedContact: boolean;
 }) {
@@ -193,6 +204,20 @@ function ReservationLinkedCustomerSection({
     customer.setMode(nextMode);
   };
 
+  const switchToAccount = () => {
+    const { name, email, phone } = form.getValues();
+    customer.setOtherContact({ name, email, phone });
+    switchTo(
+      "account",
+      getAccountContactValues(existingCustomer.contact, accountPhone)
+    );
+  };
+
+  const applyHolderContact = useEffectEvent(switchToAccount);
+  useEffect(() => {
+    if (holderOnly && mode === "contact") applyHolderContact();
+  }, [holderOnly, mode]);
+
   if (mode === "account") {
     return (
       <div className="space-y-3">
@@ -208,16 +233,21 @@ function ReservationLinkedCustomerSection({
             locale={locale}
           />
         </div>
-        <Button
-          variant="link"
-          onClick={() => {
-            customer.setAccountPhone(form.getValues("phone"));
-            switchTo("contact", otherContact ?? existingCustomer.otherContact);
-          }}
-          type="button"
-        >
-          {m.reservationBookForSomeoneElse({}, { locale })}
-        </Button>
+        {!holderOnly && (
+          <Button
+            variant="link"
+            onClick={() => {
+              customer.setAccountPhone(form.getValues("phone"));
+              switchTo(
+                "contact",
+                otherContact ?? existingCustomer.otherContact
+              );
+            }}
+            type="button"
+          >
+            {m.reservationBookForSomeoneElse({}, { locale })}
+          </Button>
+        )}
       </div>
     );
   }
@@ -225,18 +255,7 @@ function ReservationLinkedCustomerSection({
   return (
     <div className="space-y-5">
       <ReservationCustomerFields confirmsEmail locale={locale} />
-      <Button
-        variant="link"
-        onClick={() => {
-          const { name, email, phone } = form.getValues();
-          customer.setOtherContact({ name, email, phone });
-          switchTo(
-            "account",
-            getAccountContactValues(existingCustomer.contact, accountPhone)
-          );
-        }}
-        type="button"
-      >
+      <Button variant="link" onClick={switchToAccount} type="button">
         {m.reservationUseAccountDetails({}, { locale })}
       </Button>
     </div>

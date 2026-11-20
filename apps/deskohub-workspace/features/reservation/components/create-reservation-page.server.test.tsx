@@ -79,9 +79,34 @@ beforeEach(() => {
 const loadReservationCheckoutAccount = mock(
   (_kind: string): Promise<unknown> => Promise.resolve({ status: "signed-out" })
 );
+const existingCustomer = await import(
+  "@/features/reservation/backend/reservation-existing-customer.server"
+);
 mock.module(
   "@/features/reservation/backend/reservation-existing-customer.server",
-  () => ({ loadReservationCheckoutAccount })
+  () => ({ ...existingCustomer, loadReservationCheckoutAccount })
+);
+let coworkPassesOpen = false;
+const passesReleaseGate = await import(
+  "@/features/passes/backend/cowork-passes-release-gate.server"
+);
+const overnightReleaseGate = await import(
+  "@/features/reservation/backend/overnight-stay-release-gate.server"
+);
+mock.module(
+  "@/features/reservation/backend/overnight-stay-release-gate.server",
+  () => ({
+    ...overnightReleaseGate,
+    isOvernightStayOfferedAfterConnection: () => Promise.resolve(false),
+  })
+);
+mock.module(
+  "@/features/passes/backend/cowork-passes-release-gate.server",
+  () => ({
+    ...passesReleaseGate,
+    isCoworkPassesPageOpenAfterConnection: () =>
+      Promise.resolve(coworkPassesOpen),
+  })
 );
 
 const payStateBookedAt = instantStringSchema.make("2026-06-01T09:58:00.000Z");
@@ -234,6 +259,72 @@ const renderContent = async (page: ReactNode) => {
   ) => Promise<ReactNode>;
   return Content(content.props);
 };
+
+test("preserves a signed-out Entry pack link as the sign-in return path", async () => {
+  const { coworkReservationPage } = await import(
+    "@/features/cowork/components/cowork-reservation-page"
+  );
+  coworkPassesOpen = true;
+  try {
+    loadReservationCheckoutAccount.mockImplementationOnce(() =>
+      Promise.resolve({ status: "signed-out" })
+    );
+    const page = await coworkReservationPage.Page({
+      searchParams: Promise.resolve({
+        pass: "synthetic-pass",
+        date: "2099-07-30",
+      }),
+    });
+    const returnTo =
+      "/en-US/reservation/cowork?pass=synthetic-pass&date=2099-07-30";
+    await expect(renderContent(page)).rejects.toThrow(
+      `redirect to /en-US/auth/sign-in?${new URLSearchParams({ returnTo })}`
+    );
+  } finally {
+    coworkPassesOpen = false;
+  }
+});
+
+test("returns to the selection with verified contact before continuing a linked booking", async () => {
+  const { coworkReservationPage } = await import(
+    "@/features/cowork/components/cowork-reservation-page"
+  );
+  const checkoutContact = await Effect.runPromise(
+    checkoutContactReturnState
+      .seal(
+        {
+          name: "Ada Lovelace",
+          email: testEmailAddressForAda,
+          phone: "+420777777777",
+          billing: { purpose: "personal", invoice: "none" },
+          marketingConsent: false,
+        },
+        "en-US"
+      )
+      .pipe(Effect.provide(TestSealedStateKeys))
+  );
+  coworkPassesOpen = true;
+  try {
+    loadReservationCheckoutAccount.mockImplementationOnce(() =>
+      Promise.resolve({
+        status: "profile-missing",
+        email: testEmailAddressForAda,
+      })
+    );
+    const searchParams = {
+      pass: "synthetic-pass",
+      [checkoutContactQueryParam]: checkoutContact,
+    };
+    const page = await coworkReservationPage.Page({
+      searchParams: Promise.resolve({ ...searchParams, step: "contact" }),
+    });
+    await expect(renderContent(page)).rejects.toThrow(
+      `redirect to /en-US/reservation/cowork?${new URLSearchParams(searchParams)}`
+    );
+  } finally {
+    coworkPassesOpen = false;
+  }
+});
 
 /** Fails a deadlocked load quickly instead of at the test timeout. */
 const withinOneSecond = <Value,>(promise: Promise<Value>) =>

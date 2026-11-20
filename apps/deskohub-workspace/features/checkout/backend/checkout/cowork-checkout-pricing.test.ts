@@ -3,8 +3,12 @@ import { describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Schema } from "effect";
 import { buildCoworkReservationQuote } from "@/features/checkout/reservation-quote-cowork";
+import { getReservationQuoteFingerprint } from "@/features/checkout/reservation-quote-fingerprint";
 import { calendarSaleDiscountServiceLayer } from "@/features/discounts/calendar-sale.test-utils";
-import { makeDiscountCommitment } from "@/features/discounts/commitment";
+import {
+  getDiscountCommitmentPayload,
+  makeDiscountCommitment,
+} from "@/features/discounts/commitment";
 import {
   affirmedDiscountAdvertisementQuoteCodec,
   canonicalPromotionCodeSchema,
@@ -19,11 +23,21 @@ import {
   DiscountProviderError,
   PromotionCodeUnavailableError,
 } from "@/features/discounts/errors";
+import { orderIdSchema } from "@/features/order/order";
 import { getCoworkAdvertisedPriceReservation } from "@/features/reservation/cowork-reservation";
 import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import type { Money } from "@/shared/money/money";
-import { coworkCheckoutPricing } from "./cowork-checkout-pricing";
+import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
+import {
+  buildAdvertisedPriceState,
+  sealAdvertisedPriceState,
+} from "./advertised-price-state";
+import {
+  coworkCheckoutPricing,
+  quoteCoworkEntryPack,
+  quoteCoworkEntryPackForContinue,
+} from "./cowork-checkout-pricing";
 
 const testEmailAddressForAda = testEmailAddress("ada");
 
@@ -96,6 +110,240 @@ const runWithDiscounts = <A, E>(
 ) => effect.pipe(Effect.provide(discounts), Effect.runPromise);
 
 const bookedAt = Temporal.Instant.from("2099-06-01T10:00:00Z");
+
+describe("Entry pack checkout pricing", () => {
+  const passId = orderIdSchema.make("00000000-0000-4000-8000-000000000001");
+  const openSpace = {
+    ...reservation,
+    entryTier: "open-space" as const,
+    coffee: false,
+  };
+  const reservedDesk = { ...openSpace, entryTier: "reserved-desk" as const };
+  const workstation = { ...reservedDesk, monitorOption: "2x27-qhd" as const };
+  const cases = [
+    ["open-space", openSpace, 0, 29_000, undefined],
+    ["open-space", { ...openSpace, coffee: true }, 5_000, 29_000, "coffee"],
+    ["reserved-desk", reservedDesk, 0, 41_000, undefined],
+    ["reserved-desk", workstation, 12_000, 41_000, "workstation"],
+    ["reserved-desk-workstation", workstation, 0, 53_000, "workstation"],
+  ] as const;
+
+  test.each(cases)(
+    "quotes %s at Continue and reaffirms the same add-on amounts at Pay",
+    async (tier, order, total, covered, addon) => {
+      const entryPack = { passId, tier };
+      const { quote } = await Effect.runPromise(
+        quoteCoworkEntryPack({ reservation: order, entryPack })
+      );
+
+      expect(quote.items[0].amount).toEqual(money(0));
+      expect(quote.items[1]).toEqual(
+        addon ? { type: addon, amount: money(total) } : undefined
+      );
+      expect(quote.payment).toEqual({
+        expectedPrice: money(total),
+        undiscountedPrice: money(total),
+        discounts: [],
+      });
+      expect(quote.entryPack).toEqual({
+        ...entryPack,
+        coveredAmount: money(covered),
+      });
+
+      const affirmDisplayedDiscounts = mock(() =>
+        Effect.fail(
+          new DiscountAffirmationUnavailableError({ message: "offline" })
+        )
+      );
+      const pay = await runWithDiscounts(
+        Effect.gen(function* () {
+          const pricing = yield* coworkCheckoutPricing;
+          return yield* pricing.affirmForPayment({
+            reservation: order,
+            locale: "en-US",
+            bookedAt,
+            dotyposCustomerId,
+            submittedCode,
+            referralCode: submittedCode,
+            quote,
+            acceptedTotal: money(total),
+          });
+        }),
+        DiscountServiceMock({ affirmDisplayedDiscounts })
+      );
+
+      expect(pay.status).toBe("affirmed");
+      expect(pay.priced.quote).toEqual(quote);
+      expect(pay.priced.summary.total).toEqual(money(total));
+      expect(
+        getDiscountCommitmentPayload(pay.priced.commitment).applications
+      ).toEqual([]);
+      expect(affirmDisplayedDiscounts).not.toHaveBeenCalled();
+    }
+  );
+
+  const openSpaceWithCoffee = { ...openSpace, coffee: true };
+  test.each([
+    ["open-space", openSpaceWithCoffee, 4_000, 5_000, "addon:coffee"],
+    ["open-space", openSpaceWithCoffee, 5_000, 5_000, undefined],
+    ["reserved-desk", workstation, 11_000, 12_000, "addon:workstation"],
+    ["reserved-desk-workstation", workstation, 11_000, 0, undefined],
+  ] as const)(
+    "reviews a changed advertised add-on at Continue for %s only when the pack leaves it payable",
+    async (tier, order, oldAddonAmount, payable, changedAddon) => {
+      const prepared = await Effect.gen(function* () {
+        const cashQuote = yield* buildCoworkReservationQuote(order);
+        const [product, addon] = cashQuote.items;
+        const oldAmount = money(oldAddonAmount);
+        const oldTotal = money(product.amount.value + oldAddonAmount);
+        const previousQuote = {
+          items:
+            addon?.type === "workstation"
+              ? ([product, { type: "workstation", amount: oldAmount }] as const)
+              : ([product, { type: "coffee", amount: oldAmount }] as const),
+          payment: {
+            expectedPrice: oldTotal,
+            undiscountedPrice: oldTotal,
+            discounts: [],
+          },
+        };
+        const advertisement = yield* buildAdvertisedPriceState({
+          kind: order.kind,
+          locale: "en-US",
+          reservation: getCoworkAdvertisedPriceReservation(order),
+          requestedDiscountCode: submittedCode,
+          quote: {
+            ...previousQuote,
+            fingerprint: getReservationQuoteFingerprint(order, previousQuote),
+          },
+        });
+        const advertisedPriceToken =
+          yield* sealAdvertisedPriceState(advertisement);
+
+        return yield* quoteCoworkEntryPackForContinue({
+          reservation: order,
+          entryPack: { passId, tier },
+          advertisedPriceToken,
+          locale: "en-US",
+        });
+      }).pipe(Effect.provide(TestSealedStateKeys), Effect.runPromise);
+
+      expect(prepared.changedKeys).toEqual(
+        changedAddon
+          ? {
+              sectionKeys: ["order", "total"],
+              itemKeys: [changedAddon, "total:final"],
+            }
+          : undefined
+      );
+      expect(prepared.quote.payment.expectedPrice).toEqual(money(payable));
+      expect(prepared.quote.payment.discounts).toEqual([]);
+      expect(prepared).not.toHaveProperty("requestedDiscountCode");
+    }
+  );
+
+  test("keeps the historical cash quote fingerprint", async () => {
+    const quote = await Effect.runPromise(
+      buildCoworkReservationQuote({ ...openSpace, coffee: true })
+    );
+    expect(quote.entryPack).toBeUndefined();
+    expect(quote.fingerprint).toBe("3107b217");
+  });
+
+  test("binds the complete Entry pack coverage to the quote fingerprint", async () => {
+    const { quote } = await Effect.runPromise(
+      quoteCoworkEntryPack({
+        reservation: workstation,
+        entryPack: { passId, tier: "reserved-desk-workstation" },
+      })
+    );
+    const coverage = {
+      passId,
+      tier: "reserved-desk-workstation" as const,
+      coveredAmount: money(53_000),
+    };
+    const variants = [
+      {
+        ...coverage,
+        passId: orderIdSchema.make("00000000-0000-4000-8000-000000000002"),
+      },
+      { ...coverage, tier: "reserved-desk" as const },
+      { ...coverage, coveredAmount: money(52_000) },
+    ];
+    for (const entryPack of variants) {
+      expect(
+        getReservationQuoteFingerprint(workstation, { ...quote, entryPack })
+      ).not.toBe(quote.fingerprint);
+    }
+  });
+
+  test("refreshes a changed add-on price and refuses promotion code pricing", async () => {
+    const order = { ...openSpace, coffee: true };
+    const { quote } = await Effect.runPromise(
+      quoteCoworkEntryPack({
+        reservation: order,
+        entryPack: { passId, tier: "open-space" },
+      })
+    );
+    const previousAmount = money(4_000);
+    const previousQuote = {
+      ...quote,
+      items: [
+        quote.items[0],
+        { type: "coffee", amount: previousAmount },
+      ] as const,
+      payment: {
+        ...quote.payment,
+        expectedPrice: previousAmount,
+        undiscountedPrice: previousAmount,
+      },
+    };
+    const applyDiscountCode = mock(() => Effect.die("Unexpected code lookup"));
+    const { verdict, refreshed, rejectedApply, rejectedClear } =
+      await runWithDiscounts(
+        Effect.gen(function* () {
+          const pricing = yield* coworkCheckoutPricing;
+          const input = {
+            reservation: order,
+            locale: "en-US" as const,
+            bookedAt,
+            dotyposCustomerId,
+            quote: {
+              ...previousQuote,
+              fingerprint: getReservationQuoteFingerprint(order, previousQuote),
+            },
+            submittedCode,
+          };
+          const verdict = yield* pricing.affirmForPayment({
+            ...input,
+            acceptedTotal: previousAmount,
+          });
+          const refreshed = yield* pricing.repriceForPayment(input);
+          const rejectedApply = yield* Effect.flip(
+            pricing.applyDiscountCode(input)
+          );
+          const rejectedClear = yield* Effect.flip(
+            pricing.clearDiscountCode({
+              ...input,
+              submittedCodeDiscountId: advertisedDiscountId,
+            })
+          );
+          return { verdict, refreshed, rejectedApply, rejectedClear };
+        }),
+        DiscountServiceMock({ applyDiscountCode })
+      );
+
+    expect(verdict).toMatchObject({
+      status: "pricing_changed",
+      changedKeys: { itemKeys: ["addon:coffee", "total:final"] },
+    });
+    expect(verdict.priced.quote).toEqual(quote);
+    expect(refreshed.quote).toEqual(quote);
+    expect(rejectedApply).toBeInstanceOf(PromotionCodeUnavailableError);
+    expect(rejectedClear).toBeInstanceOf(PromotionCodeUnavailableError);
+    expect(applyDiscountCode).not.toHaveBeenCalled();
+  });
+});
 
 describe("cowork checkout pricing", () => {
   test("quotes the advertised catalog price with anonymous discounts", async () => {

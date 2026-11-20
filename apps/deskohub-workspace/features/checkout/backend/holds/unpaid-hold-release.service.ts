@@ -8,9 +8,11 @@ import {
 } from "@deskohub/dotypos";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer, Predicate } from "effect";
+import type { SqlError } from "effect/sql/SqlError";
 import type { WorkspaceReservationDetailsMalformedError } from "@/features/reservation/backend/stored-reservation-details.server";
 import {
   type ExpectedReservationHold,
+  entryPackAttachCancellationFailureCode,
   type WorkspaceReservation,
   WorkspaceReservationRepository,
   type WorkspaceReservationStateError,
@@ -119,6 +121,7 @@ type UnpaidHoldReleaseOutcome =
 type UnpaidHoldReleaseError =
   | DotyposWriteFailure
   | EffectDrizzleQueryError
+  | SqlError
   | WorkspaceReservationDetailsMalformedError
   | WorkspaceReservationStateError;
 
@@ -447,6 +450,10 @@ export class UnpaidHoldRelease extends Context.Service<
             liveStatus:
               policy.liveStatus === "require_new" ? "require_new" : "unchecked",
             failureCode: policy.failureCode,
+            ...(claimed.reservation.failureCode ===
+              entryPackAttachCancellationFailureCode && {
+              retryFailureCode: entryPackAttachCancellationFailureCode,
+            }),
           })
           .pipe(
             Effect.map((outcome) =>

@@ -94,15 +94,16 @@ export const useCoworkAdvertisedPrices = ({
         : [],
     [coffee, date, locale, submittedCode]
   );
+  const selected = findCoworkAdvertisedPriceRequest(requests, {
+    entryTier,
+    workstation: monitorOption !== undefined,
+  });
   const advertisedPrices = useAdvertisedOptionPrices({
     family: coworkTierOptions,
     initialAdvertisedPrices,
     productLabel: getWorkspaceProductTierTitle(entryTier, locale),
     requests,
-    selected: findCoworkAdvertisedPriceRequest(requests, {
-      entryTier,
-      workstation: monitorOption !== undefined,
-    }),
+    selected,
   });
   const coffeePriceLabel = useCoworkCoffeePriceLabel({
     initialAdvertisedPrices,
@@ -118,6 +119,7 @@ export const useCoworkAdvertisedPrices = ({
   return {
     advertisedPrices,
     coffeePriceLabel,
+    selectedPrice: selected && advertisedPrices.priceOf(selected),
     workstationPriceLabel: formatAddonPrice(
       getCoworkAddOnAmount(
         workstationRequest && advertisedPrices.priceOf(workstationRequest),
