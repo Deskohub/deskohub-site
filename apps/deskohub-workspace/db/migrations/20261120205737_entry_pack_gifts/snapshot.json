@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "97e563ff-d7c3-43f9-a716-3a7b5a012686",
+  "id": "68bfb0c0-85ea-4079-9d55-4c3e73b3af80",
   "prevIds": [
     "ec5a5feb-8b15-4d99-849b-36d4fb549c1e"
   ],
@@ -5979,6 +5979,19 @@
       "table": "entry_pack_gift_invitations"
     },
     {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "context_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "entry_pack_gift_invitations"
+    },
+    {
       "type": "integer",
       "typeSchema": null,
       "notNull": true,
@@ -6000,6 +6013,19 @@
       "generated": null,
       "identity": null,
       "name": "requested_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "entry_pack_gift_invitations"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "first_attempt_at",
       "entityType": "columns",
       "schema": "public",
       "table": "entry_pack_gift_invitations"
@@ -12812,6 +12838,19 @@
       "generated": null,
       "identity": null,
       "name": "user_agent",
+      "entityType": "columns",
+      "schema": "auth",
+      "table": "session"
+    },
+    {
+      "type": "boolean",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "signed_in_with_credential",
       "entityType": "columns",
       "schema": "auth",
       "table": "session"
@@ -20321,6 +20360,17 @@
       "name": "discount_codes_promotion_code_id_key",
       "schema": "public",
       "table": "discount_codes",
+      "entityType": "uniques"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "context_id"
+      ],
+      "nullsNotDistinct": false,
+      "name": "entry_pack_gift_invitations_context_id_key",
+      "schema": "public",
+      "table": "entry_pack_gift_invitations",
       "entityType": "uniques"
     },
     {

@@ -24,6 +24,7 @@ import {
 import type { SignInPurpose } from "@/features/account/routes";
 import type { Locale } from "@/features/i18n";
 import {
+  isEntryPackGiftSignInDocument,
   removeEntryPackGiftSignInFragment,
   takeEntryPackGiftSignInSecret,
 } from "@/features/passes/entry-pack-gift-sign-in.browser";
@@ -92,7 +93,10 @@ function useGiftSignIn(resolve: SignInCardProps["resolveGiftSignIn"]) {
     };
     const start = (secret: string | null | undefined) => {
       try {
-        lookup.current = secret ? resolve({ secret }) : null;
+        lookup.current =
+          secret && isEntryPackGiftSignInDocument()
+            ? resolve({ secret })
+            : null;
       } catch {
         lookup.current = null;
       }

@@ -18,6 +18,14 @@ import {
   parseBetterAuthSecrets,
 } from "./auth/auth-secrets";
 
+type AuthoritySession = {
+  readonly user: BetterAuthUser;
+  readonly session?: {
+    readonly createdAt: Date;
+    readonly signedInWithCredential?: boolean | null;
+  };
+} | null;
+
 /**
  * The closed account-domain view of an authoritative Better Auth session.
  * Better Auth user, provider, and session field types never cross this
@@ -33,6 +41,8 @@ export type CustomerAccountSession = {
   readonly accountCreatedAt: Temporal.Instant;
   /** When the account was last updated, as Better Auth recorded it. */
   readonly accountUpdatedAt: Temporal.Instant;
+  /** When the presented session authenticated a credential, if recorded. */
+  readonly verifiedSignInAt?: Temporal.Instant;
   /**
    * The saved locale preference on the account. Absent for an account that
    * has none yet; never defaulted.
@@ -58,7 +68,7 @@ const accountInstant = (value: Date) =>
   });
 
 export const decodeCustomerAccountSession = (
-  session: { readonly user: BetterAuthUser } | null
+  session: AuthoritySession
 ): Effect.Effect<CustomerAccountSession | null, CustomerAccountAccessError> =>
   Effect.gen(function* () {
     if (!session) return null;
@@ -84,6 +94,10 @@ export const decodeCustomerAccountSession = (
     );
     const accountCreatedAt = yield* accountInstant(session.user.createdAt);
     const accountUpdatedAt = yield* accountInstant(session.user.updatedAt);
+    const verifiedSignInAt =
+      session.session?.signedInWithCredential === true
+        ? yield* accountInstant(session.session.createdAt)
+        : undefined;
 
     return {
       accountId,
@@ -92,6 +106,7 @@ export const decodeCustomerAccountSession = (
       displayName: session.user.name.trim() === "" ? null : session.user.name,
       accountCreatedAt,
       accountUpdatedAt,
+      ...(verifiedSignInAt && { verifiedSignInAt }),
       ...(localePreference && { localePreference }),
     } satisfies CustomerAccountSession;
   });
@@ -107,9 +122,7 @@ export interface CustomerAuthenticationEnvironment {
    * The Better Auth session for the current request. Rejections are
    * bootstrap, provider, or database failures.
    */
-  readonly readCurrentSession: () => Promise<{
-    readonly user: BetterAuthUser;
-  } | null>;
+  readonly readCurrentSession: () => Promise<AuthoritySession>;
 }
 
 const authenticationUnconfiguredSecretsMessage: BetterAuthSecretsMessage =
@@ -228,8 +241,6 @@ class AuthorityStageFailure extends Data.TaggedError("AuthorityStageFailure")<{
         },
       });
 }
-
-type AuthoritySession = { readonly user: BetterAuthUser } | null;
 
 /**
  * The production authority read, split into the boundaries a failure can

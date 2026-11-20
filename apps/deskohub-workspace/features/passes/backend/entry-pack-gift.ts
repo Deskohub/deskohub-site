@@ -3,6 +3,7 @@ import "server-only";
 import {
   and,
   eq,
+  gt,
   inArray,
   isNotNull,
   isNull,
@@ -25,7 +26,7 @@ import {
   hasVerifiedActiveLogin,
 } from "@/features/account/backend/customer-account-by-email";
 import type { CustomerAccountId } from "@/features/account/customer-account";
-import { type OrderId, orderIdSchema } from "@/features/order";
+import type { OrderId } from "@/features/order";
 import {
   deriveSealedStateSubkey,
   type SealedStateKey,
@@ -33,7 +34,12 @@ import {
 } from "@/shared/backend/sealed-state-keys.service";
 import { makeSignedClaims } from "@/shared/backend/signed-claims";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import { currentInstant } from "@/shared/utils/temporal";
+import {
+  currentInstant,
+  plainDateStringSchema,
+  temporalInstantToPlainDate,
+} from "@/shared/utils/temporal";
+import { hasUnrefundedEntryPackPayment } from "./entry-pack-payment-eligibility";
 
 type Purchase = typeof passPurchases.$inferSelect;
 type Invitation = typeof entryPackGiftInvitations.$inferSelect;
@@ -44,11 +50,7 @@ const invitationLifetime = { hours: 7 * 24 };
 
 const giftClaims = makeSignedClaims({
   purpose: "entry-pack-gift-invitation",
-  schema: Schema.Struct({
-    orderId: orderIdSchema,
-    generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    requestedAt: Schema.Int,
-  }),
+  schema: Schema.Struct({ contextId: Schema.String.check(Schema.isUUID()) }),
 });
 
 const invitationSigningKey = (key: SealedStateKey) =>
@@ -58,14 +60,9 @@ export const makeEntryPackInvitationContext = (
   invitation: Invitation,
   key: SealedStateKey
 ) =>
-  giftClaims.sign(
-    {
-      orderId: invitation.orderId,
-      generation: invitation.generation,
-      requestedAt: invitation.requestedAt.epochMilliseconds,
-    },
-    [invitationSigningKey(key)]
-  );
+  giftClaims.sign({ contextId: invitation.contextId }, [
+    invitationSigningKey(key),
+  ]);
 
 const readPaidGiftRows = Effect.fnUntraced(function* (
   orderIds: readonly OrderId[]
@@ -77,6 +74,7 @@ const readPaidGiftRows = Effect.fnUntraced(function* (
       invitation: entryPackGiftInvitations,
       holderDeletedAt: customerAccounts.deletedAt,
       refundState: paymentAttempts.refundState,
+      paymentAttemptState: paymentAttempts.state,
     })
     .from(passPurchases)
     .innerJoin(orders, eq(orders.id, passPurchases.id))
@@ -118,7 +116,9 @@ const canInvite = (row: PaidGift, now: Temporal.Instant) =>
   row.holderDeletedAt === null &&
   row.purchase.giftClaimedAt === null &&
   row.purchase.status === "active" &&
-  (row.refundState === null || row.refundState === "not_required") &&
+  ((row.purchase.giftIssuedAt === null && row.refundState === null) ||
+    (row.paymentAttemptState === "paid" &&
+      row.refundState === "not_required")) &&
   Temporal.PlainDate.compare(
     now
       .toZonedDateTimeISO(workspaceSiteConstants.location.timeZone)
@@ -133,7 +133,11 @@ const canResend = (row: PaidGift, now: Temporal.Instant) =>
       row.invitation.generation < maxResends &&
       Temporal.Instant.compare(
         now,
-        row.invitation.requestedAt.add(resendCooldown)
+        (
+          row.invitation.sentAt ??
+          row.invitation.firstAttemptAt ??
+          row.invitation.requestedAt
+        ).add(resendCooldown)
       ) >= 0));
 
 export type EntryPackGiftState = {
@@ -224,12 +228,14 @@ export const queueEntryPackGiftResend = Effect.fnUntraced(function* (
   if (!email) return false;
 
   const { db } = yield* WorkspaceDatabase;
+  const contextId = crypto.randomUUID();
   yield* db
     .insert(entryPackGiftInvitations)
     .values({
       orderId,
       holderAccountId: purchase.holderAccountId,
       generation: invitation === null ? 0 : invitation.generation + 1,
+      contextId,
       attempts: 0,
       locale: purchase.locale,
       requestedAt: now,
@@ -241,9 +247,11 @@ export const queueEntryPackGiftResend = Effect.fnUntraced(function* (
       set: {
         holderAccountId: purchase.holderAccountId,
         generation: invitation === null ? 0 : invitation.generation + 1,
+        contextId,
         attempts: 0,
         locale: purchase.locale,
         requestedAt: now,
+        firstAttemptAt: null,
         nextAttemptAt: now,
         sentAt: null,
         keyId: null,
@@ -260,6 +268,12 @@ export const claimEntryPackGifts = Effect.fn("claimEntryPackGifts")(function* (
   signedInAt: Temporal.Instant
 ) {
   const { db } = yield* WorkspaceDatabase;
+  const signedInOn = plainDateStringSchema.make(
+    temporalInstantToPlainDate({
+      instant: signedInAt,
+      timeZone: workspaceSiteConstants.location.timeZone,
+    }).toString()
+  );
   yield* db
     .update(passPurchases)
     .set({ giftClaimedAt: signedInAt })
@@ -268,6 +282,12 @@ export const claimEntryPackGifts = Effect.fn("claimEntryPackGifts")(function* (
         eq(passPurchases.holderAccountId, accountId),
         ne(passPurchases.buyerAccountId, accountId),
         isNull(passPurchases.giftClaimedAt),
+        eq(passPurchases.status, "active"),
+        or(
+          isNull(passPurchases.giftIssuedAt),
+          hasUnrefundedEntryPackPayment(db)
+        ),
+        gt(passPurchases.validUntil, signedInOn),
         hasVerifiedActiveLogin(db, accountId),
         inArray(
           passPurchases.id,
@@ -292,6 +312,19 @@ export const claimEntryPackGifts = Effect.fn("claimEntryPackGifts")(function* (
     );
 });
 
+/** Retries a claim write that the verified sign-in could not complete. */
+export const recoverEntryPackGiftClaims = (
+  accountId: CustomerAccountId,
+  verifiedSignInAt: Temporal.Instant | undefined
+) =>
+  verifiedSignInAt === undefined
+    ? Effect.void
+    : claimEntryPackGifts(accountId, verifiedSignInAt).pipe(
+        Effect.catch(() =>
+          Effect.logWarning("Entry pack gift claim recovery failed")
+        )
+      );
+
 /** The link only prefills sign-in and never substitutes for authentication. */
 export const resolveEntryPackGiftInvitation = Effect.fnUntraced(function* (
   contextSecret: string
@@ -312,18 +345,25 @@ export const resolveEntryPackGiftInvitation = Effect.fnUntraced(function* (
     .pipe(Effect.catch(() => Effect.succeed(undefined)));
   if (!claims) return undefined;
 
-  const [row] = yield* readPaidGiftRows([claims.orderId]);
+  const { db } = yield* WorkspaceDatabase;
+  const [target] = yield* db
+    .select({ orderId: entryPackGiftInvitations.orderId })
+    .from(entryPackGiftInvitations)
+    .where(eq(entryPackGiftInvitations.contextId, claims.contextId));
+  if (!target) return undefined;
+
+  const [row] = yield* readPaidGiftRows([target.orderId]);
   const now = yield* currentInstant;
   const invitation = row?.invitation;
   if (
     !row ||
     !invitation?.keyId ||
-    claims.generation !== invitation.generation ||
-    claims.requestedAt !== invitation.requestedAt.epochMilliseconds ||
+    !invitation.firstAttemptAt ||
+    claims.contextId !== invitation.contextId ||
     !canInvite(row, now) ||
     Temporal.Instant.compare(
       now,
-      invitation.requestedAt.add(invitationLifetime)
+      invitation.firstAttemptAt.add(invitationLifetime)
     ) >= 0
   ) {
     return undefined;
@@ -332,7 +372,7 @@ export const resolveEntryPackGiftInvitation = Effect.fnUntraced(function* (
   const email = yield* findPurchaseLoginEmail(row.purchase.holderAccountId);
   return email
     ? {
-        orderId: claims.orderId,
+        orderId: target.orderId,
         email,
         holderAccountId: row.purchase.holderAccountId,
       }

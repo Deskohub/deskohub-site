@@ -24,10 +24,12 @@ import {
   requireVerifiedIdentity,
 } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
+import { CustomerAccountLinkRepository } from "@/features/account/backend/customer-account-link.repository";
 import {
   CustomerAccountSections,
   HeldCustomerAccount,
 } from "@/features/account/backend/customer-account-sections";
+import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { accountingSnapshotKeyIdSchema } from "@/features/accounting/accounting-document-snapshot";
@@ -275,6 +277,17 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         })
       );
       const deliveryAttempts: string[] = [];
+      const backgroundAccountSections = CustomerAccountSections.Default.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            CustomerAccountLinkRepository.Default.pipe(Layer.provide(db.layer)),
+            WorkspaceDatabaseAdvisoryLock.makeLayer(db.databasePool),
+            Layer.mock(CustomerAuthentication, {
+              currentUser: Effect.succeed(null),
+            })
+          )
+        )
+      );
       const emailLayer = Layer.merge(
         Layer.succeed(EmailConfigTag, {
           defaultFrom: { email: testEmailAddress("pass-sender") },
@@ -369,6 +382,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               invoiceDeliveryLedger,
               invoiceDelivery,
               emailLayer,
+              backgroundAccountSections,
               WorkspaceDatabaseAdvisoryLock.makeLayer(db.databasePool)
             )
           )
@@ -1676,6 +1690,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         await markClaimed(holderAccountId, beforePayment);
         await markClaimed(accountId, later);
         expect((await readGift()).claimed).toBe(false);
+        if (!internal) {
+          await db.pool.query(
+            "update payment_attempts set refund_state = 'required' where order_id = $1",
+            [orderId]
+          );
+          expect(await resolve(currentSecret, later)).toBeUndefined();
+          await markClaimed(holderAccountId, later);
+          expect((await readGift()).claimed).toBe(false);
+          await db.pool.query(
+            "update payment_attempts set refund_state = 'not_required' where order_id = $1",
+            [orderId]
+          );
+        }
         await markClaimed(holderAccountId, later.add({ minutes: 2 }));
         await markClaimed(holderAccountId, later.add({ minutes: 3 }));
         expect(await readGift()).toMatchObject({
@@ -1691,6 +1718,13 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           passId: orderId,
           holderAccountId,
         });
+        if (!internal) {
+          await db.pool.query(
+            "update payment_attempts set refund_state = 'required' where order_id = $1",
+            [orderId]
+          );
+          await expect(quote(holderAccountId)).rejects.toBeDefined();
+        }
       }
     );
 

@@ -60,7 +60,11 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
   if (
     !deliverable ||
     retryIn === undefined ||
-    Temporal.Instant.compare(now, invitation.requestedAt.add(retryWindow)) >= 0
+    (invitation.firstAttemptAt !== null &&
+      Temporal.Instant.compare(
+        now,
+        invitation.firstAttemptAt.add(retryWindow)
+      ) >= 0)
   ) {
     yield* stop;
     return;
@@ -150,7 +154,11 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
     if (!invitation.deliveryFingerprint) {
       yield* db
         .update(entryPackGiftInvitations)
-        .set({ callbackOrigin: origin, deliveryFingerprint: fingerprint })
+        .set({
+          callbackOrigin: origin,
+          deliveryFingerprint: fingerprint,
+          firstAttemptAt: yield* currentInstant,
+        })
         .where(currentGeneration);
     }
 

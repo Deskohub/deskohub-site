@@ -657,6 +657,10 @@ describe("account components", () => {
           : Promise.resolve(gift(newerAddress));
       }
     );
+    window.happyDOM.setURL(
+      "https://deskohub.test/en-US/auth/sign-in?gift-sign-in=1"
+    );
+    prepareEntryPackGiftSignInDocument();
     const view = render(
       <SignInCard locale={locale} resolveGiftSignIn={resolveGiftSignIn} />
     );
@@ -678,6 +682,26 @@ describe("account components", () => {
     expect(view.getByDisplayValue(newerAddress)).toBeTruthy();
   });
 
+  test("leaves a gift fragment unexchanged on an ordinary sign-in document", async () => {
+    const { SignInCard } = await import("./sign-in-card");
+    window.happyDOM.setURL("https://deskohub.test/en-US/auth/sign-in");
+    prepareEntryPackGiftSignInDocument();
+    const resolveGiftSignIn = mock(async () => ({}));
+    render(
+      <SignInCard locale={locale} resolveGiftSignIn={resolveGiftSignIn} />
+    );
+    await act(async () => {
+      window.history.replaceState(
+        null,
+        "",
+        `#gift=synthetic.${"a".repeat(43)}`
+      );
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    expect(window.location.hash).toBe("");
+    expect(resolveGiftSignIn).not.toHaveBeenCalled();
+  });
+
   test("keeps a gift review login's username out of the password step's HTML", async () => {
     const { SignInCard } = await import("./sign-in-card");
     const resolveGiftSignIn = async () => ({
@@ -688,7 +712,10 @@ describe("account components", () => {
       },
     });
     signInMagicLink.mockImplementationOnce(passwordStep);
-    window.history.replaceState(null, "", `#gift=synthetic.${"a".repeat(43)}`);
+    window.happyDOM.setURL(
+      `https://deskohub.test/en-US/auth/sign-in?gift-sign-in=1#gift=synthetic.${"a".repeat(43)}`
+    );
+    prepareEntryPackGiftSignInDocument();
     const view = render(
       <SignInCard locale={locale} resolveGiftSignIn={resolveGiftSignIn} />
     );

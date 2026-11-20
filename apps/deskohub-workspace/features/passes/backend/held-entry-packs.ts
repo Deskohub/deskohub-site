@@ -16,6 +16,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import type { PlainDate } from "@/shared/utils/temporal";
 import type { PassStatus } from "../pass";
 import type { EntryPackSize, PassTier } from "../pass-offer";
+import { hasUnrefundedEntryPackPayment } from "./entry-pack-payment-eligibility";
 
 export type HeldEntryPack = {
   readonly id: OrderId;
@@ -28,6 +29,7 @@ export type HeldEntryPack = {
   readonly status: PassStatus;
   readonly giftIssuedAt: Temporal.Instant | null;
   readonly giftClaimedAt: Temporal.Instant | null;
+  readonly giftPaymentIsUsable: boolean;
   readonly claimedDates: readonly PlainDate[];
   /** Server-only lookup for editing a signed draft that already holds an entry. */
   readonly reservedEntryDates: Readonly<
@@ -62,6 +64,7 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
       status: passPurchases.status,
       giftIssuedAt: passPurchases.giftIssuedAt,
       giftClaimedAt: passPurchases.giftClaimedAt,
+      giftPaymentIsUsable: sql<boolean>`${passPurchases.giftIssuedAt} is null or ${hasUnrefundedEntryPackPayment(db)}`,
       claimedDates: sql<PlainDate[]>`coalesce(
         array_agg(${passEntryClaims.date}::text order by ${passEntryClaims.date})
           filter (where ${passEntryClaims.date} is not null),

@@ -13,6 +13,7 @@ import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { PlainDate } from "@/shared/utils/temporal";
 import type { PassTier } from "../pass-offer";
+import { hasUnrefundedEntryPackPayment } from "./entry-pack-payment-eligibility";
 
 export class EntryPackUnavailableError extends Data.TaggedError(
   "EntryPackUnavailableError"
@@ -29,14 +30,20 @@ export type EntryPackRedemption = {
 
 type EntryPackRequest = Omit<EntryPackRedemption, "tier">;
 
-const passForBooking = (request: EntryPackRequest) =>
+const passForBooking = (
+  db: WorkspaceDatabaseClient,
+  request: EntryPackRequest
+) =>
   and(
     eq(passPurchases.id, request.passId),
     eq(passPurchases.holderAccountId, request.holderAccountId),
     eq(passPurchases.status, "active"),
     or(
       isNull(passPurchases.giftIssuedAt),
-      isNotNull(passPurchases.giftClaimedAt)
+      and(
+        isNotNull(passPurchases.giftClaimedAt),
+        hasUnrefundedEntryPackPayment(db)
+      )
     ),
     sql`${passPurchases.validFrom} <= ${request.date} and ${request.date} < ${passPurchases.validUntil}`
   );
@@ -47,7 +54,7 @@ export const loadEntryPackRedemption = Effect.fn("loadEntryPackRedemption")(
     const [pass] = yield* db
       .select({ tier: passPurchases.tier })
       .from(passPurchases)
-      .where(passForBooking(request));
+      .where(passForBooking(db, request));
     if (!pass) return yield* new EntryPackUnavailableError({});
     return { ...request, tier: pass.tier };
   }
@@ -83,7 +90,7 @@ export const checkEntryPackClaim = Effect.fn("checkEntryPackClaim")(function* (
       entryCount: passPurchases.entryCount,
     })
     .from(passPurchases)
-    .where(passForBooking(request))
+    .where(passForBooking(db, request))
     .for("no key update");
   if (!pass || (request.tier && pass.tier !== request.tier)) {
     return yield* new EntryPackUnavailableError({});

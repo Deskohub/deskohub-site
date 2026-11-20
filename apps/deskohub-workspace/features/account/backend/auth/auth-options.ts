@@ -16,6 +16,9 @@ const betterAuthSessionOptions = {
     enabled: false,
   },
   storeSessionInDatabase: true,
+  additionalFields: {
+    signedInWithCredential: { type: "boolean", required: false, input: false },
+  },
 } as const;
 
 /**

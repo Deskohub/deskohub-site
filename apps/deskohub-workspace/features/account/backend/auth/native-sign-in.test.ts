@@ -783,6 +783,12 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     const app = await handOff(cookie, false);
     expect(app.status).toBe(200);
     expect(signIns).toHaveLength(1);
+    const session = await callHandler(auth, "/get-session", {
+      headers: { cookie: app.cookie! },
+    });
+    expect(await session.json()).toMatchObject({
+      session: { signedInWithCredential: false },
+    });
 
     // Ten minutes after the browser sign-in, the app's session is as stale
     // as the browser's, and minting from it can't make a fresh one.

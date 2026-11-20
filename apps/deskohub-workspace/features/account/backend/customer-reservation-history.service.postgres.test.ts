@@ -575,7 +575,10 @@ describe.skipIf(!testDatabase)(
             billing: null,
           }),
       });
-      const loadFor = (accountId: CustomerAccountId) =>
+      const loadFor = (
+        accountId: CustomerAccountId,
+        verifiedSignInAt?: Temporal.Instant
+      ) =>
         Effect.runPromise(
           loadAccountPasses("en-US", profileLayer).pipe(
             Effect.provide(
@@ -594,6 +597,7 @@ describe.skipIf(!testDatabase)(
                       displayName: null,
                       accountCreatedAt: createdAt,
                       accountUpdatedAt: createdAt,
+                      verifiedSignInAt,
                     },
                   }),
                 })
@@ -666,6 +670,21 @@ describe.skipIf(!testDatabase)(
         `update pass_purchases set gift_issued_at = now() where id = $1`,
         [giftId]
       );
+      await testDatabase!.pool.query(
+        `with attempt as (
+           insert into payment_attempts
+             (order_id, provider, state, amount_value, amount_exponent, currency)
+           values ($1, 'internal', 'paid', 0, 2, 'CZK')
+           returning id
+         )
+         update orders set active_payment_attempt_id = attempt.id from attempt
+         where orders.id = $1`,
+        [giftId]
+      );
+      await testDatabase!.pool.query(
+        `update auth."user" set email_verified = true where id = $1`,
+        [holder]
+      );
       const beforeClaim = await loadFor(holder);
       expect(beforeClaim).toEqual({
         boughtForOthers: [],
@@ -678,11 +697,16 @@ describe.skipIf(!testDatabase)(
       expect(JSON.stringify(beforeClaim)).not.toContain(buyerEmail);
       expect(JSON.stringify(beforeClaim)).not.toContain("bookPath");
 
-      await testDatabase!.pool.query(
-        `update pass_purchases set gift_claimed_at = now() where id = $1`,
-        [giftId]
-      );
-      expect(await loadFor(holder)).toEqual({
+      expect(await loadFor(holder, createdAt)).toEqual(beforeClaim);
+      const verifiedSignInAt = Temporal.Now.instant().add({ seconds: 1 });
+      expect(await loadFor(other, verifiedSignInAt)).toEqual({
+        boughtForOthers: [],
+        held: [],
+      });
+      expect(await loadFor(buyer)).toMatchObject({
+        boughtForOthers: [{ orderId: giftId, claimed: false }],
+      });
+      expect(await loadFor(holder, verifiedSignInAt)).toEqual({
         boughtForOthers: [],
         held: [
           expect.objectContaining({
@@ -690,6 +714,9 @@ describe.skipIf(!testDatabase)(
             bookPath: `/en-US/reservation/cowork?pass=${giftId}`,
           }),
         ],
+      });
+      expect(await loadFor(buyer)).toMatchObject({
+        boughtForOthers: [{ orderId: giftId, claimed: true, canResend: false }],
       });
 
       profileLastName = "Example";

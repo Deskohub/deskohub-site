@@ -978,8 +978,15 @@ const prepareSession = <Session extends { readonly userId: string }>(request: {
   Effect.succeed(request).pipe(
     Effect.tap(claimSignInCodeSession),
     Effect.tap(captureSessionLocale),
-    Effect.map(({ session }) => ({
-      data: { ...session, ipAddress: null, userAgent: null },
+    Effect.map(({ session, ctx }) => ({
+      data: {
+        ...session,
+        ipAddress: null,
+        userAgent: null,
+        // Only session creation after a credential ceremony proves sign-in.
+        // A token exchange, registration or ordinary refresh cannot mint it.
+        signedInWithCredential: verifiedSignInPaths.has(ctx?.path ?? ""),
+      },
     }))
   );
 

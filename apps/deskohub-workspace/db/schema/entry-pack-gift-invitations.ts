@@ -6,6 +6,7 @@ import {
   integer,
   pgTable,
   text,
+  uuid,
 } from "drizzle-orm/pg-core";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { Locale } from "@/features/i18n";
@@ -28,8 +29,10 @@ export const entryPackGiftInvitations = pgTable(
       .references(() => customerAccounts.id),
     locale: text("locale").notNull().$type<Locale>(),
     generation: integer("generation").notNull(),
+    contextId: uuid("context_id").notNull().defaultRandom().unique(),
     attempts: integer("attempts").notNull(),
     requestedAt: instant("requested_at").notNull(),
+    firstAttemptAt: instant("first_attempt_at"),
     nextAttemptAt: instant("next_attempt_at"),
     sentAt: instant("sent_at"),
     keyId: text("key_id").$type<SealedStateKeyId>(),

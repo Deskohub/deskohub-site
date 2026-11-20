@@ -134,7 +134,13 @@ describe("verified sign-in gift recording", () => {
     ).toBe(200);
     const verified = await verifyMagicLink(auth, sentLinks[0]!);
     expect(verified.status).toBe(302);
-    expect(getSessionCookie(verified)).toBeDefined();
+    const cookie = cookieJar(getSessionCookie(verified)!);
+    const session = await callHandler(auth, "/get-session", {
+      headers: { cookie },
+    });
+    expect(await session.json()).toMatchObject({
+      session: { signedInWithCredential: true },
+    });
   });
 });
 

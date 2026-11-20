@@ -10,6 +10,7 @@ import {
 import { type Locale, m } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import { recoverEntryPackGiftClaims } from "@/features/passes/backend/entry-pack-gift";
 import {
   type HeldEntryPack,
   listHeldEntryPacks,
@@ -70,9 +71,12 @@ type CoworkPageSelection = CoworkReservationInput & {
 const loadHeldEntryPacks = Effect.fn("cowork.loadHeldEntryPacks")(function* () {
   const account = yield* CurrentCustomerAccount;
   const active = yield* Effect.option(account.requireActive);
-  return Option.isSome(active)
-    ? yield* listHeldEntryPacks(active.value.accountId)
-    : [];
+  if (Option.isNone(active)) return [];
+  yield* recoverEntryPackGiftClaims(
+    active.value.accountId,
+    active.value.verifiedSignInAt
+  );
+  return yield* listHeldEntryPacks(active.value.accountId);
 });
 
 const getBookingPasses = (
@@ -95,6 +99,7 @@ const getBookingPasses = (
     const entriesLeft = pack.entriesLeft + Number(editedDate !== undefined);
     return pack.status === "active" &&
       (pack.giftIssuedAt === null || pack.giftClaimedAt !== null) &&
+      pack.giftPaymentIsUsable &&
       entriesLeft > 0 &&
       today < pack.validUntil
       ? [

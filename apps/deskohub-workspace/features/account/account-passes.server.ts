@@ -15,6 +15,7 @@ import type { OrderId } from "@/features/order";
 import {
   type EntryPackGiftState,
   readEntryPackGiftStates,
+  recoverEntryPackGiftClaims,
 } from "@/features/passes/backend/entry-pack-gift";
 import {
   type HeldEntryPack,
@@ -88,7 +89,8 @@ export const loadAccountPasses = Effect.fn("loadAccountPasses")(function* (
     return "unavailable" as const;
   }
 
-  const { accountId } = standing.session;
+  const { accountId, verifiedSignInAt } = standing.session;
+  yield* recoverEntryPackGiftClaims(accountId, verifiedSignInAt);
   const [packs, today, boughtForOthers] = yield* Effect.all(
     [
       listHeldEntryPacks(accountId),
@@ -281,7 +283,8 @@ function toAccountEntryPack(
     status,
     ...(status === "active" &&
       pack.entriesLeft > 0 &&
-      (pack.giftIssuedAt === null || pack.giftClaimedAt !== null) && {
+      (pack.giftIssuedAt === null || pack.giftClaimedAt !== null) &&
+      pack.giftPaymentIsUsable && {
         bookPath: `${getCoworkReservationPath(locale)}?${new URLSearchParams({ pass: pack.id })}`,
       }),
   };
