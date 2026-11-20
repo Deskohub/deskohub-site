@@ -30,16 +30,20 @@ const retryRefused: PaymentRecovery = { ...noRecovery, retryRefused: true };
 const awaiting = bookingTicketOf("pending", "checking");
 
 describe("bookingTicketOf", () => {
-  test("dims a failed, expired, cancelled or refunded booking", () => {
+  test("dims and labels a failed, expired, cancelled or refunded booking as Not booked", () => {
+    const notBooked: ReadonlyArray<CustomerOrderStatus> = [
+      "payment_failed",
+      "cancelled",
+      "expired",
+      "late_payment_refund",
+    ];
     for (const checking of checkings) {
-      expect(
-        statuses.filter((status) => bookingTicketOf(status, checking).dim)
-      ).toEqual([
-        "payment_failed",
-        "cancelled",
-        "expired",
-        "late_payment_refund",
-      ]);
+      for (const status of statuses) {
+        const ticket = bookingTicketOf(status, checking);
+        const expected = notBooked.includes(status);
+        expect(ticket.dim).toBe(expected);
+        expect(ticket.badge === "not-booked").toBe(expected);
+      }
     }
   });
 

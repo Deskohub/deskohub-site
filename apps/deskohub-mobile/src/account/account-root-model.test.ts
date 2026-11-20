@@ -29,10 +29,7 @@ const subtitleOf = (model: AccountRootModel, section: string) =>
 
 describe("accountRootModel", () => {
   test("a linked account: its sections on the masthead, then Rewards, Privacy and the Danger zone", () => {
-    const model = accountRootModel(linked());
-
-    expect(model.completionCard).toBe(false);
-    expect(layout(model)).toEqual([
+    const sections: ReturnType<typeof layout> = [
       [
         "first",
         [
@@ -47,14 +44,18 @@ describe("accountRootModel", () => {
       ["rewards", ["referrals"]],
       ["privacy", ["legal"]],
       ["danger", ["danger"]],
-    ]);
+    ];
+    for (const release of [undefined, { paymentMethods: false }]) {
+      const model = accountRootModel(linked(), release);
+      expect(model.completionCard).toBe(false);
+      expect(layout(model)).toEqual(sections);
+    }
   });
 
   test("payment methods sits between billing and invoices only while released", () => {
-    const firstRows = (paymentMethods: boolean) =>
-      layout(accountRootModel(linked(), { paymentMethods }))[0]?.[1];
+    const model = accountRootModel(linked(), { paymentMethods: true });
 
-    expect(firstRows(true)).toEqual([
+    expect(layout(model)[0]?.[1]).toEqual([
       "profile",
       "security",
       "assistants",
@@ -63,9 +64,7 @@ describe("accountRootModel", () => {
       "invoices",
       "language",
     ]);
-    expect(firstRows(false)).not.toContain("payment-methods");
     // Neither row says anything about its section yet.
-    const model = accountRootModel(linked(), { paymentMethods: true });
     expect(subtitleOf(model, "payment-methods")).toBeUndefined();
     expect(subtitleOf(model, "invoices")).toBeUndefined();
   });
@@ -94,7 +93,7 @@ describe("accountRootModel", () => {
     ["review-account", ["security", "assistants", "language", "legal"]],
     ["deletion-pending", ["security", "legal", "danger"]],
   ] as const)(
-    "a %s account shows its reachable rows without a completion card",
+    "%s shows its reachable rows without a completion card",
     (kind, sections) => {
       const model = accountRootModel(accountOf(kind));
 
