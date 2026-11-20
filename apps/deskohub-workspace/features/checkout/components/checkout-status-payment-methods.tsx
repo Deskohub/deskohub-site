@@ -3,7 +3,7 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { useRouter } from "next/navigation";
 import type { SafeActionResult } from "next-safe-action";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { type Locale, m } from "@/features/i18n";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { Button } from "@/shared/components/ui/button";
@@ -51,6 +51,14 @@ export function CheckoutStatusPaymentMethods({
   const router = useRouter();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshing, startRefresh] = useTransition();
+  const qrDetails = useRef<HTMLElement>(null);
+  const focusQrDetails = useRef(false);
+  useEffect(() => {
+    if (qrPayment && focusQrDetails.current) {
+      focusQrDetails.current = false;
+      qrDetails.current?.focus();
+    }
+  }, [qrPayment]);
   const showError = (message?: string) =>
     setErrorMessage(message ?? m.checkoutPaySubmitError({}, { locale }));
   const { execute, isExecuting } = useWorkspaceAction<
@@ -70,6 +78,7 @@ export function CheckoutStatusPaymentMethods({
           router.push(data.redirectUrl);
         return;
       }
+      focusQrDetails.current = data.status === "qr_pending";
       startRefresh(() => router.refresh());
     },
     onError: ({ error }) => showError(error.serverError),
@@ -85,7 +94,13 @@ export function CheckoutStatusPaymentMethods({
   return (
     <div className="mt-6 space-y-4">
       {qrPayment && (
-        <CheckoutQrPaymentDetails locale={locale} payment={qrPayment} />
+        <section
+          aria-label={m.checkoutPayMethodQr({}, { locale })}
+          ref={qrDetails}
+          tabIndex={-1}
+        >
+          <CheckoutQrPaymentDetails locale={locale} payment={qrPayment} />
+        </section>
       )}
       <div className="flex flex-col gap-3 sm:flex-row">
         {!qrPayment && (

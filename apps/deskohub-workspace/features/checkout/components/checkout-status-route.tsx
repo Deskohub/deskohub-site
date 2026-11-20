@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import { continueReservationPayment } from "@/features/checkout/actions/continue-reservation-payment";
 import {
   CheckoutStatusService,
   loadCheckoutStatusPage,
@@ -12,6 +13,12 @@ import {
   getReservationStatusSignInPath,
   isStatusViewerSignedOut,
 } from "@/features/checkout/backend/checkout/checkout-status-sign-in";
+import { getPublicReservationPaymentAccount } from "@/features/checkout/backend/checkout/public-reservation-payment-account";
+import {
+  publicReservationPaymentStatusServices,
+  readAuthorPaymentStatus,
+} from "@/features/checkout/backend/checkout/public-reservation-payment-status.server";
+import { FioAccounts } from "@/features/checkout/backend/fio/fio-accounts.service";
 import { checkoutStatusTraits } from "@/features/checkout/checkout-status-kind";
 import { CheckoutFlowLayout } from "@/features/checkout/components/checkout-flow-layout";
 import { CheckoutPaymentWindowCoordinator } from "@/features/checkout/components/checkout-payment-window";
@@ -29,7 +36,10 @@ import {
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
 import { readReservationWithdrawalEntry } from "@/features/withdrawal/backend/withdrawal-entry.server";
-import { runWorkspaceEffect } from "@/shared/backend/workspace-effect";
+import {
+  runWorkspaceEffect,
+  runWorkspaceEffectOrElse,
+} from "@/shared/backend/workspace-effect";
 import { RouteAutoRefresh } from "@/shared/components/route-auto-refresh";
 import {
   getSearchParamsDecoder,
@@ -173,10 +183,35 @@ async function renderReservationStatus({
       )
     );
   }
+  const paymentMethods =
+    presentation === "page" &&
+    (status.status === "pending" ||
+      status.status === "payment_pending_delayed") &&
+    status.paymentStatus === "pending" &&
+    !status.reviewSandbox
+      ? await getPublicReservationPaymentAccount().pipe(
+          Effect.flatMap((account) =>
+            account
+              ? readAuthorPaymentStatus(orderId, locale).pipe(
+                  Effect.provide(publicReservationPaymentStatusServices)
+                )
+              : Effect.succeed(undefined)
+          ),
+          Effect.provide(FioAccounts.Default),
+          runWorkspaceEffectOrElse("checkout.status.payment-methods", {
+            failureCode: "reservation_payment_methods_unavailable",
+            orElse: () => undefined,
+          })
+        )
+      : undefined;
   return (
     <>
       <RouteAutoRefresh
-        enabled={checkoutStatusTraits[status.status].autoRefresh}
+        enabled={
+          Boolean(paymentMethods) ||
+          checkoutStatusTraits[status.status].autoRefresh
+        }
+        refreshAt={paymentMethods?.expiresAt}
       />
       <CheckoutStatusReferralCodeSettlement
         status={status.status}
@@ -186,6 +221,12 @@ async function renderReservationStatus({
       />
       <CheckoutStatusPage
         locale={locale}
+        paymentMethods={
+          paymentMethods && {
+            continuePaymentAction: continueReservationPayment,
+            qrPayment: paymentMethods.qrPayment,
+          }
+        }
         presentation={presentation}
         resendInvitation={resendReservationInvitation}
         status={status}

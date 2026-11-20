@@ -67,6 +67,9 @@ test("switches from card to QR and reopens card on the same reservation", () => 
     />
   );
   expect(view.getByRole("img", { name: "Bank transfer QR code" })).toBeTruthy();
+  expect(document.activeElement).toBe(
+    view.getByRole("region", { name: "QR bank transfer" })
+  );
   expect(view.queryByRole("button", { name: "Show QR payment" })).toBeNull();
   fireEvent.click(
     view.getByRole("button", { name: "Continue to card payment" })

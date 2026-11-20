@@ -15,6 +15,8 @@ import {
   findCheckoutOfficeSelectionForVisitor,
 } from "@/features/checkout/backend/checkout/pay-state-checkout-view";
 import { isOrderBoundPayState } from "@/features/checkout/backend/checkout/pay-state-contract";
+import { getPublicReservationPaymentAccount } from "@/features/checkout/backend/checkout/public-reservation-payment-account";
+import { FioAccounts } from "@/features/checkout/backend/fio/fio-accounts.service";
 import {
   checkoutReferralAppliedQueryParam,
   hasCheckoutReferralAppliedNotice,
@@ -32,6 +34,7 @@ import {
   isEarlyPerformanceRequestRequired,
 } from "@/features/legal/early-performance";
 import { createNoindexedPageMetadata } from "@/features/public-pages/page-metadata";
+import { submitReservation } from "@/features/reservation/actions/submit-reservation";
 import { reservationCheckoutStepQueryParam } from "@/features/reservation/reservation-checkout-step";
 import {
   getCoworkReservationPath,
@@ -208,9 +211,24 @@ async function CheckoutPayContent({
     ));
   }
 
+  const { state, reservation } = payableCheckout.checkout;
+  const { total } = PayState.summary(state);
+  const offersQrPayment =
+    getPayPageVariant(state) === "pay" &&
+    !reservation.agentClientId &&
+    total.currency === "CZK" &&
+    total.value > 0 &&
+    Boolean(
+      await getPublicReservationPaymentAccount().pipe(
+        Effect.provide(FioAccounts.Default),
+        runWorkspaceEffect("checkout.pay.payment-methods")
+      )
+    );
+
   return runWithRequestLocale(() =>
     renderCheckoutPay({
       locale,
+      offersQrPayment,
       payableCheckout,
       payStateToken,
       searchParams: resolvedSearchParams,
@@ -221,6 +239,7 @@ async function CheckoutPayContent({
 
 type CheckoutPayRenderInput = {
   readonly locale: Locale;
+  readonly offersQrPayment: boolean;
   readonly payableCheckout: PayableCheckoutPage;
   readonly payStateToken: string;
   readonly searchParams: SearchParamsRecord;
@@ -295,6 +314,9 @@ function renderCheckoutPay(input: CheckoutPayRenderInput) {
               email: state.reservation.email,
             },
           }
+        }
+        startPaymentAction={
+          input.offersQrPayment ? submitReservation : undefined
         }
         summary={PayState.summary(state)}
         variant={getPayPageVariant(state)}
