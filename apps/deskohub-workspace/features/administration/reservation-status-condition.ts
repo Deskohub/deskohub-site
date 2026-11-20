@@ -114,6 +114,7 @@ export const bookedReservationConditionAt = (asOf?: Temporal.Instant): SQL =>
 const needsRefundCondition = sql`(exists (
   select 1 from ${paymentAttempts}
   where ${paymentAttempts.workspaceReservationId} = ${workspaceReservations.id}
+    and ${paymentAttempts.provider} = 'nexi'
     and ${paymentAttempts.refundState} = 'required'
 ) or exists (
   select 1 from ${contractWithdrawals}
@@ -236,6 +237,7 @@ export const undatedStatusChangeAt = (
       sql`(
         select max(${paymentAttempts.updatedAt}) from ${paymentAttempts}
         where ${paymentAttempts.workspaceReservationId} = ${workspaceReservations.id}
+          and ${paymentAttempts.provider} = 'nexi'
           and ${paymentAttempts.refundState} <> 'not_required'
       )`,
   ].filter((change): change is SQL => change !== false);

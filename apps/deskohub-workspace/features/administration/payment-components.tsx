@@ -113,7 +113,10 @@ export const getPaymentAttemptStatusLabel = (
   link: NonNullable<AdministrationOrder["link"]>,
   locale: Locale
 ) => {
-  const status = getAdministrationPaymentStatus(link, locale);
+  const status = getAdministrationPaymentStatus(
+    { ...link, provider: "nexi" },
+    locale
+  );
   return status.refunded
     ? status.label
     : getAdministrationPaymentAttemptStateLabel(link.state, locale);
@@ -126,7 +129,10 @@ export function PaymentAttemptStatusBadge({
   readonly link: NonNullable<AdministrationOrder["link"]>;
   readonly locale: Locale;
 }) {
-  const refunded = getAdministrationPaymentStatus(link, locale).refunded;
+  const refunded = getAdministrationPaymentStatus(
+    { ...link, provider: "nexi" },
+    locale
+  ).refunded;
   return (
     <StatusBadge
       tone={refunded ? "attention" : getProviderStatusTone(link.state)}
@@ -166,6 +172,7 @@ function ReservationOrderHeader({
   readonly locale: Locale;
   readonly order: AdministrationOrder;
 }) {
+  const payment = order.link && { ...order.link, provider: "nexi" as const };
   return (
     <div className="flex flex-col gap-4 border-b border-navy-blue/10 px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-5">
       <div className="min-w-0">
@@ -180,15 +187,15 @@ function ReservationOrderHeader({
       </div>
       <div className="sm:text-right">
         <p className="font-semibold">
-          {order.link ? (
-            <PaymentAmount locale={locale} payment={order.link} />
+          {payment ? (
+            <PaymentAmount locale={locale} payment={payment} />
           ) : (
             formatOrderMoney(order, locale)
           )}
         </p>
         <p className="mt-1 text-xs text-navy-blue/60">
-          {order.link ? (
-            <PaymentStatusLabel locale={locale} payment={order.link} />
+          {payment ? (
+            <PaymentStatusLabel locale={locale} payment={payment} />
           ) : (
             m.administrationPaymentNoLocalAttempt({}, { locale })
           )}

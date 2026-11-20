@@ -11,6 +11,7 @@ import {
 
 const paidAttempt = {
   amount: { value: 21_750, exponent: 2, currency: "CZK" },
+  provider: "nexi",
   refundState: "not_required",
   refundedAmount: null,
   refundedAt: null,
@@ -21,6 +22,7 @@ const paidAttempt = {
   AdministrationPaymentAttempt,
   | "amount"
   | "failureCode"
+  | "provider"
   | "refundState"
   | "refundedAmount"
   | "refundedAt"
