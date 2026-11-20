@@ -23,14 +23,6 @@ import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date
 import { Button } from "@/shared/components/ui/button";
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/shared/components/ui/command";
-import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -39,10 +31,9 @@ import {
 import { fieldTriggerVariants } from "@/shared/components/ui/field-trigger";
 import { Input } from "@/shared/components/ui/input";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/shared/components/ui/popover";
+  SearchablePicker,
+  SearchablePickerItem,
+} from "@/shared/components/ui/searchable-picker";
 import { SegmentedControl } from "@/shared/components/ui/segmented-control";
 import {
   Select,
@@ -432,25 +423,8 @@ function ChoiceParamControl({
 /** The select value standing for an unset optional choice. */
 const absentValue = "absent";
 
-/** The command value standing for the automation's own campaign. */
+/** The picker value standing for the automation's own campaign. */
 const thisCampaignValue = "this";
-
-/**
- * The campaign a source names among the listed ones, and whether the list
- * lost it, as it does a deleted campaign.
- */
-const campaignSourceChoice = (
-  value: CampaignEmailSourceType | undefined,
-  campaigns: readonly AudienceCampaignOption[]
-) => {
-  const chosen = value?._tag === "Specific" ? value.campaignId : undefined;
-  const chosenCampaign = campaigns.find(({ id }) => id === chosen);
-  return {
-    chosen,
-    chosenCampaign,
-    lost: chosen !== undefined && chosenCampaign === undefined,
-  };
-};
 
 /**
  * Whose emails count: any campaign, this campaign where `holder` can hold
@@ -472,19 +446,31 @@ function CampaignSourceControl({
   readonly holder: AudienceFilterHolder;
 }) {
   const locale = useRouteLocale();
-  const [open, setOpen] = useState(false);
-  const { chosen, chosenCampaign, lost } = campaignSourceChoice(
-    value,
-    campaigns
-  );
+  const chosen = value?._tag === "Specific" ? value.campaignId : undefined;
+  const chosenCampaign = campaigns.find(({ id }) => id === chosen);
+  const lost = chosen !== undefined && chosenCampaign === undefined;
   const thisCampaign = m.emailAutomationFlowCampaignSourceThis({}, { locale });
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <SearchablePicker
+      empty={wording.empty}
+      onPick={(picked) => {
+        if (picked === absentValue) onChange(undefined);
+        else if (picked === thisCampaignValue) onChange({ _tag: "This" });
+        else if (!lost || picked !== chosen) {
+          onChange({
+            _tag: "Specific",
+            campaignId: AdministrationCampaignId.make(picked),
+          });
+        }
+      }}
+      search={wording.search}
+      value={
+        value?._tag === "This" ? thisCampaignValue : (chosen ?? absentValue)
+      }
+      triggerRole="combobox"
+      trigger={
         <button
           type="button"
-          role="combobox"
-          aria-expanded={open}
           aria-label={wording.label}
           className={cn(
             fieldTriggerVariants(),
@@ -499,116 +485,36 @@ function CampaignSourceControl({
                 (lost ? wording.unknown : wording.absent))}
           </span>
           <ChevronDown
-            className="h-4 w-4 shrink-0 text-navy-blue/60"
+            className="size-4 shrink-0 text-navy-blue/60"
             aria-hidden
           />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="w-[min(22rem,calc(100vw-2rem))] overflow-hidden p-0"
-      >
-        <Command label={wording.search}>
-          <CommandInput placeholder={wording.search} />
-          <CommandList>
-            <CampaignSourceOptions
-              wording={wording}
-              campaigns={campaigns}
-              value={value}
-              chosen={chosen}
-              lost={lost}
-              thisCampaign={thisCampaign}
-              holder={holder}
-              onPick={(next) => {
-                onChange(next);
-                setOpen(false);
-              }}
-              onKeep={() => setOpen(false)}
-            />
-          </CommandList>
-          <CommandEmpty>{wording.empty}</CommandEmpty>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/**
- * The campaign picker's options: any campaign, this campaign where `holder`
- * can hold it, the lost chosen campaign, then each listed campaign.
- */
-function CampaignSourceOptions({
-  wording,
-  campaigns,
-  value,
-  chosen,
-  lost,
-  thisCampaign,
-  holder,
-  onPick,
-  onKeep,
-}: {
-  readonly wording: AudienceCampaignSourceWording;
-  readonly campaigns: readonly AudienceCampaignOption[];
-  readonly value: CampaignEmailSourceType | undefined;
-  readonly chosen: string | undefined;
-  readonly lost: boolean;
-  /** The automation's own campaign, as its option reads. */
-  readonly thisCampaign: string;
-  readonly holder: AudienceFilterHolder;
-  readonly onPick: (value: CampaignEmailSourceType | undefined) => void;
-  /** Closes the picker on the lost campaign, which stays chosen. */
-  readonly onKeep: () => void;
-}) {
-  const locale = useRouteLocale();
-  return (
-    <CommandGroup>
-      <CommandItem
-        value={absentValue}
-        keywords={[wording.absent]}
-        selected={value === undefined}
-        onSelect={() => onPick(undefined)}
-      >
+      }
+    >
+      <SearchablePickerItem label={wording.absent} value={absentValue}>
         {wording.absent}
-      </CommandItem>
+      </SearchablePickerItem>
       {canHoldCampaignSource(holder, "This") && (
-        <CommandItem
-          value={thisCampaignValue}
-          keywords={[thisCampaign]}
-          selected={value?._tag === "This"}
-          onSelect={() => onPick({ _tag: "This" })}
-        >
+        <SearchablePickerItem label={thisCampaign} value={thisCampaignValue}>
           {thisCampaign}
-        </CommandItem>
+        </SearchablePickerItem>
       )}
       {lost && (
-        <CommandItem
-          value={chosen}
-          keywords={[wording.unknown]}
-          selected
-          onSelect={onKeep}
-        >
+        <SearchablePickerItem label={wording.unknown} value={chosen}>
           {wording.unknown}
-        </CommandItem>
+        </SearchablePickerItem>
       )}
       {campaigns.map((campaign) => (
-        <CommandItem
+        <SearchablePickerItem
           key={campaign.id}
+          label={campaign.name}
           value={campaign.id}
-          keywords={[campaign.name]}
-          selected={campaign.id === chosen}
-          onSelect={() =>
-            onPick({
-              _tag: "Specific",
-              campaignId: AdministrationCampaignId.make(campaign.id),
-            })
-          }
         >
           <span className="min-w-0 flex-1 truncate">{campaign.name}</span>
           <CampaignStateBadge locale={locale} campaign={campaign} />
-        </CommandItem>
+        </SearchablePickerItem>
       ))}
-    </CommandGroup>
+    </SearchablePicker>
   );
 }
 

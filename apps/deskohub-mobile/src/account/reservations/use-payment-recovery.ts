@@ -4,8 +4,8 @@ import type {
 } from "@deskohub/workspace-customer-api";
 import { useAtom, useAtomSet } from "@effect/atom-react";
 import { Cause, Exit, Option } from "effect";
-import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useFocusEffect, useNavigation, useRouter } from "expo-router";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { bookCheckoutHref } from "../../booking/booking-routes";
 import { checkoutRequestAtom } from "../../booking/checkout/checkout-flow";
 import { retryMessage } from "../../booking/checkout-screen/checkout-copy";
@@ -42,6 +42,36 @@ export const usePaymentRecovery = (
 ) => {
   const locale = useAppLocale();
   const router = useRouter();
+  const navigation = useNavigation();
+  const routeOwner = useRef<symbol | undefined>(undefined);
+  const latestAttempt = useRef<symbol | undefined>(undefined);
+  useLayoutEffect(
+    () => () => {
+      routeOwner.current = undefined;
+    },
+    []
+  );
+  useFocusEffect(
+    useCallback(() => {
+      routeOwner.current = Symbol();
+      return () => {
+        routeOwner.current = undefined;
+      };
+    }, [])
+  );
+
+  // Width changes can hide this ticket while its payment action is running.
+  // An attempt may still finish until the initiating route or ticket leaves.
+  const startAttempt = () => {
+    const owner = routeOwner.current;
+    if (owner === undefined || !navigation.isFocused()) return undefined;
+    const attempt = Symbol();
+    latestAttempt.current = attempt;
+    return () =>
+      routeOwner.current === owner &&
+      latestAttempt.current === attempt &&
+      navigation.isFocused();
+  };
   const setCheckoutRequest = useAtomSet(checkoutRequestAtom);
   const [reopened, runReopen] = useAtom(reopenPaymentPageAtom, {
     mode: "promiseExit",
@@ -63,13 +93,17 @@ export const usePaymentRecovery = (
     );
 
   const reopen = async () => {
+    const ownsAttempt = startAttempt();
+    if (!ownsAttempt) return;
     setNotice(undefined);
-    const exit = await runReopen(order.orderId);
+    const exit = await runReopen({ orderId: order.orderId, ownsAttempt });
+    if (!ownsAttempt()) return;
     Exit.match(exit, {
       onFailure: failed,
       onSuccess: (outcome) =>
         PaymentPageOutcome.$match(outcome, {
           Opened: onPaymentPageLeft,
+          Abandoned: () => undefined,
           Closed: () => {
             setPageClosedOn(order);
             onCheckAgain();
@@ -80,9 +114,12 @@ export const usePaymentRecovery = (
   };
 
   const retry = async () => {
-    setNotice(undefined);
     if (booked === undefined) return;
+    const ownsAttempt = startAttempt();
+    if (!ownsAttempt) return;
+    setNotice(undefined);
     const exit = await runRetry({ orderId: order.orderId, locale });
+    if (!ownsAttempt()) return;
     Exit.match(exit, {
       onFailure: failed,
       onSuccess: (outcome) =>

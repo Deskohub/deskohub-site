@@ -25,12 +25,7 @@ import {
 } from "@/shared/components/ui/form";
 import { Input, inputVariants } from "@/shared/components/ui/input";
 import { Switch } from "@/shared/components/ui/switch";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import { ReservationFormLabel } from "./reservation-form-label";
 
 type ReservationBillingFormValues = {
@@ -105,31 +100,27 @@ export function ReservationBillingFields({
                   >
                     {m.reservationPurposeBusinessLabel({}, { locale })}
                   </label>
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          aria-label={m.reservationBusinessUseTooltip(
-                            {},
-                            { locale }
-                          )}
-                          className="shrink-0"
-                          size="icon-sm"
-                          tone="muted"
-                          type="button"
-                          variant="ghost"
-                        >
-                          <Info aria-hidden="true" className="size-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent
-                        collisionPadding={16}
-                        className="w-[min(20rem,calc(100vw-2rem))]"
+                  <Tooltip
+                    collisionPadding={16}
+                    contentClassName="w-[min(20rem,calc(100vw-2rem))]"
+                    trigger={
+                      <Button
+                        aria-label={m.reservationBusinessUseTooltip(
+                          {},
+                          { locale }
+                        )}
+                        className="shrink-0"
+                        size="icon-sm"
+                        tone="muted"
+                        type="button"
+                        variant="ghost"
                       >
-                        {m.reservationBusinessUseTooltip({}, { locale })}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                        <Info aria-hidden="true" className="size-4" />
+                      </Button>
+                    }
+                  >
+                    {m.reservationBusinessUseTooltip({}, { locale })}
+                  </Tooltip>
                 </div>
 
                 <label

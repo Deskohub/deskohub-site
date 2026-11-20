@@ -6,6 +6,7 @@ import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import {
   type Browser,
   chromium,
+  expect as expectBrowser,
   type Locator,
   type Page,
 } from "@playwright/test";
@@ -418,17 +419,34 @@ test.skipIf(!chromiumAvailable)(
       await preheader.click();
       await page.keyboard.press("End");
       await page.keyboard.type(", code ");
-      await preheader
+      const valueTrigger = preheader
         .locator("xpath=ancestor::*[.//*[@role='toolbar']][1]")
         .getByRole("button", {
           name: m.emailsEditorInlineValueInsert({}, { locale }),
-        })
-        .click();
-      await page
-        .getByPlaceholder(m.emailsEditorInlineValueSearch({}, { locale }))
-        .fill("welcome_offer.code");
-      await page.keyboard.press("Enter");
+        });
+      const valueSearch = page.getByRole("combobox", {
+        name: m.emailsEditorInlineValueSearch({}, { locale }),
+      });
+
+      await valueTrigger.click();
+      await valueSearch.fill("no matching value");
+      const popup = page.getByRole("listbox", {
+        name: m.emailsEditorInlineValueSearch({}, { locale }),
+      });
+      expect(await valueSearch.getAttribute("aria-controls")).toBe(
+        await popup.getAttribute("id")
+      );
+      await valueSearch.press("Escape");
+      await valueSearch.waitFor({ state: "hidden" });
+      await expectBrowser(valueTrigger).toBeFocused();
+
+      await valueTrigger.press("Enter");
+      await expectBrowser(valueSearch).toBeFocused();
+      await expectBrowser(valueSearch).toHaveValue("");
+      await valueSearch.fill("welcome_offer.code");
+      await valueSearch.press("Enter");
       await preheader.locator('[data-name="welcome_offer"]').waitFor();
+      await expectBrowser(preheader).toBeFocused();
 
       const saved = await saveDraft(page);
       const english = saved.translations?.["en-US"];

@@ -120,7 +120,7 @@ export function EmailValuesSection({
         <EmailValueCustomerPicker
           restoresFocusOnSelect={false}
           onSelect={addCustomer}
-          trigger={() => (
+          trigger={
             <Button
               ref={addCustomerRef}
               type="button"
@@ -130,7 +130,7 @@ export function EmailValuesSection({
               <Plus className="size-4" aria-hidden />
               {m.emailsEditorValuesAddCustomer({}, { locale })}
             </Button>
-          )}
+          }
         />
         <Button
           type="button"

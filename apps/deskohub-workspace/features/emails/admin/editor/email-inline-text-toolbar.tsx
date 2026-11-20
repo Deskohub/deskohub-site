@@ -2,18 +2,11 @@
 
 import { type Editor, useEditorState } from "@tiptap/react";
 import { Bold, Braces, Italic, Link2 } from "lucide-react";
-import { type ReactNode, useId, useRef, useState } from "react";
+import { type ReactElement, useRef, useState } from "react";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { Button } from "@/shared/components/ui/button";
-import {
-  Command,
-  CommandEmpty,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/shared/components/ui/command";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -23,17 +16,11 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/components/ui/dropdown-menu";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/shared/components/ui/popover";
+  SearchablePicker,
+  SearchablePickerItem,
+} from "@/shared/components/ui/searchable-picker";
 import { Toggle } from "@/shared/components/ui/toggle";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 import type { EmailDraftValueDefinition } from "./email-draft-form";
 import {
   emailInlineLinkKey,
@@ -72,26 +59,20 @@ export function EmailInlineTextToolbar({
 }) {
   const locale = useRouteLocale();
   return (
-    <TooltipProvider>
-      <div
-        aria-label={m.emailsEditorInlineToolbarLabel({}, { locale })}
-        className="flex shrink-0 items-center gap-0.5 py-0.5"
-        role="toolbar"
-      >
-        {mode === "rich" && (
-          <EmailInlineFormatting
-            editor={editor}
-            links={links}
-            locale={locale}
-          />
-        )}
-        <EmailInlineValuePicker
-          definitions={definitions}
-          editor={editor}
-          locale={locale}
-        />
-      </div>
-    </TooltipProvider>
+    <div
+      aria-label={m.emailsEditorInlineToolbarLabel({}, { locale })}
+      className="flex shrink-0 items-center gap-0.5 py-0.5"
+      role="toolbar"
+    >
+      {mode === "rich" && (
+        <EmailInlineFormatting editor={editor} links={links} locale={locale} />
+      )}
+      <EmailInlineValuePicker
+        definitions={definitions}
+        editor={editor}
+        locale={locale}
+      />
+    </div>
   );
 }
 
@@ -99,15 +80,10 @@ function ToolbarHint({
   children,
   label,
 }: {
-  readonly children: ReactNode;
+  readonly children: ReactElement;
   readonly label: string;
 }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
+  return <Tooltip trigger={children}>{label}</Tooltip>;
 }
 
 function EmailInlineFormatting({
@@ -172,7 +148,6 @@ function EmailInlineLinkPicker({
   const [open, setOpen] = useState(false);
   // Whether the menu closes on a choice, which hands focus back to the text.
   const chose = useRef(false);
-  const hintId = useId();
   const destinations = Object.entries(links);
   const hasDestinations = destinations.length > 0;
   // A link to a removed destination can still be removed.
@@ -202,7 +177,6 @@ function EmailInlineLinkPicker({
           {/* Pressed while the caret is in a link. It stays focusable when the
           block has no destinations, so its hint can explain why. */}
           <Toggle
-            aria-describedby={hasDestinations ? undefined : hintId}
             aria-disabled={!available || undefined}
             aria-label={label}
             className="aria-disabled:opacity-50"
@@ -212,9 +186,6 @@ function EmailInlineLinkPicker({
           </Toggle>
         </DropdownMenuTrigger>
       </ToolbarHint>
-      <span className="sr-only" id={hintId}>
-        {!hasDestinations && unavailableHint}
-      </span>
       <DropdownMenuContent
         align="end"
         className="max-w-80"
@@ -258,9 +229,6 @@ function EmailInlineValuePicker({
   readonly editor: Editor | null;
   readonly locale: Locale;
 }) {
-  const [open, setOpen] = useState(false);
-  // Whether the list closes on a choice, which hands focus back to the text.
-  const chose = useRef(false);
   const options = emailScalarValueOptions(definitions);
   const label = m.emailsEditorInlineValueInsert({}, { locale });
   const searchLabel = m.emailsEditorInlineValueSearch({}, { locale });
@@ -278,9 +246,9 @@ function EmailInlineValuePicker({
       : undefined;
   };
 
-  const insert = (option: EmailScalarValueOption) => {
-    if (!editor) return;
-    chose.current = true;
+  const insert = (value: string) => {
+    const option = options.find((option) => optionValue(option) === value);
+    if (!editor || !option) return;
     editor
       .chain()
       .insertContent({
@@ -291,67 +259,55 @@ function EmailInlineValuePicker({
         },
       })
       .run();
-    setOpen(false);
   };
 
   return (
-    <Popover onOpenChange={setOpen} open={open}>
-      <ToolbarHint label={label}>
-        <PopoverTrigger asChild>
-          <Button
-            aria-label={label}
-            disabled={!editor}
-            size="icon-sm"
-            tone="muted"
-            type="button"
-            variant="ghost"
+    <SearchablePicker
+      align="end"
+      className="w-72"
+      empty={
+        options.length > 0
+          ? m.emailsEditorInlineValueNoMatch({}, { locale })
+          : m.emailsEditorInlineValueNone({}, { locale })
+      }
+      focusOnSelect={() => editor?.commands.focus()}
+      onPick={insert}
+      search={searchLabel}
+      trigger={
+        <Button
+          aria-label={label}
+          disabled={!editor}
+          size="icon-sm"
+          tone="muted"
+          type="button"
+          variant="ghost"
+        >
+          <Braces aria-hidden className="size-4" />
+        </Button>
+      }
+      wrapTrigger={(trigger) => (
+        <ToolbarHint label={label}>{trigger}</ToolbarHint>
+      )}
+    >
+      {options.map((option) => {
+        const reference = emailValueReferenceLabel(option);
+        const hint = description(option);
+        return (
+          <SearchablePickerItem
+            key={optionValue(option)}
+            keywords={hint ? [hint] : undefined}
+            label={reference}
+            value={optionValue(option)}
           >
-            <Braces aria-hidden className="size-4" />
-          </Button>
-        </PopoverTrigger>
-      </ToolbarHint>
-      <PopoverContent
-        align="end"
-        className="w-72 p-0"
-        onCloseAutoFocus={(event) => {
-          if (!chose.current) return;
-          chose.current = false;
-          event.preventDefault();
-          editor?.commands.focus();
-        }}
-      >
-        <Command label={searchLabel}>
-          <CommandInput placeholder={searchLabel} />
-          <CommandList>
-            {options.map((option) => {
-              const reference = emailValueReferenceLabel(option);
-              const hint = description(option);
-              return (
-                <CommandItem
-                  key={optionValue(option)}
-                  keywords={hint ? [reference, hint] : [reference]}
-                  onSelect={() => insert(option)}
-                  value={optionValue(option)}
-                >
-                  <span className="min-w-0 truncate font-mono">
-                    {reference}
-                  </span>
-                  {hint && (
-                    <span className="ml-auto shrink-0 text-navy-blue/60 text-xs">
-                      {hint}
-                    </span>
-                  )}
-                </CommandItem>
-              );
-            })}
-          </CommandList>
-          <CommandEmpty>
-            {options.length > 0
-              ? m.emailsEditorInlineValueNoMatch({}, { locale })
-              : m.emailsEditorInlineValueNone({}, { locale })}
-          </CommandEmpty>
-        </Command>
-      </PopoverContent>
-    </Popover>
+            <span className="min-w-0 truncate font-mono">{reference}</span>
+            {hint && (
+              <span className="ml-auto shrink-0 text-navy-blue/60 text-xs">
+                {hint}
+              </span>
+            )}
+          </SearchablePickerItem>
+        );
+      })}
+    </SearchablePicker>
   );
 }

@@ -838,15 +838,14 @@ export const isAppliedZeroTotalPaySummary = ({
 }: ReturnType<typeof toAppliedZeroTotalPaySummary>) => {
   const normalize = (value: string | null | undefined) =>
     (value ?? "").replace(/\s+/g, " ").trim();
-  // The total line renders a label span and an amount span as its only two
-  // direct children, so a zero amount on any other summary line never matches.
+  // Match the label with the amount in the same summary line.
   const totalRows = [...document.querySelectorAll("div")].filter((div) => {
-    const spans = [...div.children];
+    const [label, amount] = div.children;
     return (
-      spans.length === 2 &&
-      spans.every((span) => span.tagName === "SPAN") &&
-      normalize(spans[0]?.textContent) === normalize(totalLabel) &&
-      normalize(spans[1]?.textContent) === normalize(zeroTotal)
+      div.children.length === 2 &&
+      label?.tagName === "SPAN" &&
+      normalize(label.textContent) === normalize(totalLabel) &&
+      normalize(amount?.textContent) === normalize(zeroTotal)
     );
   });
   if (totalRows.length !== 1) return false;

@@ -35,6 +35,10 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      - name: Install Chromium for browser tests
+        working-directory: apps/deskohub-boardgame-bar
+        run: bunx playwright install --with-deps --no-shell chromium
+
       - name: Run Boardgame Bar tests
         env:
           TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
