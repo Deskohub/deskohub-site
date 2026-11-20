@@ -93,6 +93,22 @@ test("a short, slow swipe springs the sheet back without dismissing it", async (
   expect(dismissals).toEqual([]);
 });
 
+test("a canceled drag past the threshold springs back and the next swipe can dismiss", async () => {
+  const dismissals: string[] = [];
+  const handle = renderSwipeableSheet(() => dismissals.push("dismissed"));
+  const down = { button: 0, clientY: 100, pointerId: 1 };
+  fireEvent.pointerDown(handle, down);
+  fireEvent.pointerMove(handle, { ...down, clientY: 280 });
+  fireEvent.pointerCancel(handle, { ...down, clientY: 280 });
+  expect(handle.closest<HTMLElement>('[role="dialog"]')?.style.transform).toBe(
+    "translateY(0px)"
+  );
+
+  swipe(handle, 160);
+  await new Promise((resolve) => setTimeout(resolve, 260));
+  expect(dismissals).toEqual(["dismissed"]);
+});
+
 test("a sheet without a swipe handler has no grab handle", () => {
   const view = render(
     <Sheet open>
