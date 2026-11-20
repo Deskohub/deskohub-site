@@ -175,6 +175,8 @@ test("spreads sparse availability across deterministic allocation shards", async
             }
           );
 
+          expect(initialDates).toHaveLength(5);
+          expect(discountDates).toHaveLength(16);
           return [...initialDates, ...discountDates];
         }).pipe(Effect.provide(httpClientLayer))
       )

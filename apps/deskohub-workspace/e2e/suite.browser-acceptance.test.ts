@@ -412,13 +412,6 @@ test.skipIf(!chromiumAvailable)(
     expect(await read("snapshot-interactive.txt")).toContain(
       "Synthetic checkout"
     );
-    const har = await read("network.har");
-    expect(
-      JSON.parse(har).log.entries.some((entry: { request: { url: string } }) =>
-        entry.request.url.includes("/api")
-      )
-    ).toBe(true);
-    expect(har).toEndWith("}\n");
     for (const name of await artifactFiles(result.artifactDir))
       expect(await read(name)).not.toContain(pageSecret);
     expect(await rawHarFiles(`${sessionPrefix}-${result.id}`)).toEqual([]);

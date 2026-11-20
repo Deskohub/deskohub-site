@@ -16,6 +16,7 @@ import {
 import { workspaceE2ETimeouts } from "../timeouts";
 import {
   accountSectionLandmarks,
+  selectAccountSection,
   selectAccountSectionInSession,
 } from "./account-sections";
 import { buildAccountSectionsHarness } from "./account-sections.browser-harness.test-utils";
@@ -180,6 +181,36 @@ test.skipIf(!chromiumAvailable)(
         mobile: true,
       });
     }
+  }
+);
+
+test.skipIf(!chromiumAvailable)(
+  "does not click a visible section link that never hydrates",
+  async () => {
+    const { failure, after } = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* openAccountSections();
+          yield* session.use("hold the billing link's hydration", (page) =>
+            page
+              .locator('a[data-account-sidebar-section="billing"]')
+              .evaluate((link) => link.replaceWith(link.cloneNode(true)))
+          );
+          const failure = yield* session
+            .use("select billing", (page) =>
+              selectAccountSection(page, "billing")
+            )
+            .pipe(Effect.flip);
+          return { failure, after: yield* readSelection(session, "billing") };
+        })
+      )
+    );
+
+    expect(isWorkspaceE2ETimeout(failure)).toBe(true);
+    expect(after.clicks).toEqual([]);
+    expect(after.currentHrefs).toEqual([
+      getAccountSectionPath("en-US", "reservations"),
+    ]);
   }
 );
 

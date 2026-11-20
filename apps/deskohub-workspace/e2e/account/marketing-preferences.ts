@@ -656,7 +656,7 @@ export const waitForWorkspaceE2EMarketingConsentPersistence = <
   }).pipe(Effect.asVoid);
 };
 
-export const managedPreferenceSelector = (
+const managedPreferenceSelector = (
   status: MarketingPreferenceStatus,
   source: MarketingPreferenceSource
 ) =>
@@ -667,9 +667,8 @@ export const managedPreferenceSelector = (
  * flip `data-marketing-preferences`, so a transition must target the section
  * by source alone or the locator loses its target mid-save.
  */
-export const managedPreferenceSourceSelector = (
-  source: MarketingPreferenceSource
-) => `[data-marketing-preferences-source=${JSON.stringify(source)}]`;
+const managedPreferenceSourceSelector = (source: MarketingPreferenceSource) =>
+  `[data-marketing-preferences-source=${JSON.stringify(source)}]`;
 
 const pendingPreferenceSelector = '[data-marketing-preferences="pending-link"]';
 const invalidPreferenceSelector = '[data-marketing-preferences="invalid-link"]';

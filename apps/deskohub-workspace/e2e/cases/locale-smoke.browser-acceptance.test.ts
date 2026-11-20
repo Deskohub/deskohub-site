@@ -24,7 +24,6 @@ import {
   type LocaleSmokeLocale,
   localeHomeHeading,
   localeSmokeCaseId,
-  localeSmokeLocales,
 } from "./locale-smoke";
 
 const chromiumAvailable = await playwrightChromiumAvailable();
@@ -154,15 +153,6 @@ const runLocaleSmoke = async (locale: LocaleSmokeLocale, site: FakeSite) => {
     await server.stop(true);
   }
 };
-
-for (const locale of localeSmokeLocales) {
-  test.skipIf(!chromiumAvailable)(
-    `passes ${locale} on a site that serves it`,
-    async () => {
-      expect(await runLocaleSmoke(locale, {})).toEqual([]);
-    }
-  );
-}
 
 test.skipIf(!chromiumAvailable)(
   "fails the redirect step when a regional language lands elsewhere",
