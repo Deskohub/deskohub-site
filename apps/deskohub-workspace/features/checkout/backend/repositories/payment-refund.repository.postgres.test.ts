@@ -12,39 +12,21 @@ import {
   type PaymentAttemptId,
   paymentAttemptIdSchema,
 } from "@/features/checkout/checkout-identifiers";
-import type { OrderId } from "@/features/order";
-import {
-  reservationOrderId,
-  type WorkspaceReservationId,
-} from "@/features/reservation/persistence-contracts";
+import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
-import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { PaymentRefundRepository } from "./payment-refund.repository";
 
-const testDatabase = await connectWorkspacePostgresTestDatabase();
+// Refund claims scan the whole table, so other suites' payments change the batch.
+const testDatabase =
+  await createWorkspacePostgresSuiteDatabase("payment_refunds");
+afterAll(() => testDatabase?.close());
 
 describe.skipIf(!testDatabase)(
   "PaymentRefundRepository on disposable Postgres",
   () => {
     if (!testDatabase) return;
-    const reservationIds: WorkspaceReservationId[] = [];
-    const purchaseOrderIds: OrderId[] = [];
-
-    afterAll(async () => {
-      await testDatabase.pool.query("delete from orders where id = any($1)", [
-        purchaseOrderIds,
-      ]);
-      await testDatabase.pool.query(
-        "delete from payment_attempts where workspace_reservation_id = any($1)",
-        [reservationIds]
-      );
-      await testDatabase.pool.query(
-        "delete from workspace_reservations where id = any($1)",
-        [reservationIds]
-      );
-    });
-
     const run = <A, E>(
       operation: (
         repository: typeof PaymentRefundRepository.Service
@@ -75,7 +57,6 @@ describe.skipIf(!testDatabase)(
           stage: { reservation: "cancelled", payment: input.attemptState },
         })
       );
-      reservationIds.push(reservationId);
       await Effect.runPromise(
         testDatabase.db.insert(paymentAttempts).values({
           id: paymentAttemptId,
@@ -171,7 +152,6 @@ describe.skipIf(!testDatabase)(
           })
           .returning({ id: orders.id })
       );
-      purchaseOrderIds.push(order!.id);
       const [attempt] = await Effect.runPromise(
         testDatabase.db
           .insert(paymentAttempts)
@@ -375,7 +355,7 @@ describe.skipIf(!testDatabase)(
       // nested-loop semi-join that re-runs the claim subquery for every row it
       // updates. These settings force that plan on a dedicated connection.
       const rescanningPool = await openDatabasePool({
-        connectionString: process.env.WORKSPACE_TEST_DATABASE_URL ?? "",
+        connectionString: testDatabase.pool.options.connectionString ?? "",
         maxConnections: 1,
         startupParameters: {
           enable_hashjoin: "off",
