@@ -301,6 +301,10 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     expect(recorded[0]?.observedAt).toEqual(recorded[1]?.observedAt);
 
     await expect(h.consume(job)).rejects.toMatchObject({
+      _tag: "FioPollNotDue",
+    });
+    await h.due();
+    await expect(h.consume(job)).rejects.toMatchObject({
       _tag: "PaidFulfillmentQueueError",
     });
     expect((await h.state())?.delivery_id).toBe(job.deliveryId);
@@ -313,6 +317,71 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     expect(h.dispatchQueue.pending()).toHaveLength(2);
     expect(await h.evidence()).toEqual(recorded);
     expect((await h.state())?.delivery_id).toBeNull();
+  });
+
+  test("replays a failed dispatch before a due retry reads for newly payable demand", async () => {
+    const h = createHarness();
+    const old = await h.start();
+    const job = h.take();
+    h.setRead(({ to }) =>
+      Effect.succeed([credit("winner", to, old.variableSymbol)])
+    );
+    h.failDispatch(true);
+    await expect(h.consume(job)).rejects.toMatchObject({
+      _tag: "PaidFulfillmentQueueError",
+    });
+
+    await h.start();
+    await h.due();
+    await expect(h.consume(job)).rejects.toMatchObject({
+      _tag: "PaidFulfillmentQueueError",
+    });
+    expect(h.reads).toHaveLength(1);
+    expect((await h.state())?.delivery_id).toBe(job.deliveryId);
+
+    h.failDispatch(false);
+    h.setRead(() => {
+      expect(h.dispatchQueue.pending()).toHaveLength(1);
+      return Effect.fail({
+        _tag: "FioRejected",
+        reason: "period-too-large",
+      } as FioReadFailure);
+    });
+    await h.consume(job);
+    expect(h.reads).toHaveLength(2);
+    expect((await h.state())?.covered_through).toBeNull();
+    expect((await h.state())?.delivery_id).toBeNull();
+    expect(h.queue.pending()).toEqual([]);
+  });
+
+  test("an idle duplicate cannot retire a delivery while its bank read is in flight", async () => {
+    const h = createHarness();
+    const order = await h.start();
+    const job = h.take();
+    const reading = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    h.setRead(() =>
+      Effect.gen(function* () {
+        reading.resolve();
+        yield* Effect.promise(() => release.promise);
+        return [];
+      })
+    );
+    const original = h.consume(job);
+    await reading.promise;
+    try {
+      await h.expire(order.orderId);
+      await expect(h.consume(job)).rejects.toMatchObject({
+        _tag: "FioPollNotDue",
+      });
+      expect((await h.state())?.delivery_id).toBe(job.deliveryId);
+      expect(h.reads).toHaveLength(1);
+    } finally {
+      release.resolve();
+      await original;
+    }
+    expect((await h.state())?.delivery_id).toBeNull();
+    expect(h.queue.pending()).toEqual([]);
   });
 
   test("one payable account sequence stays awake after selecting card and fences deliveries", async () => {

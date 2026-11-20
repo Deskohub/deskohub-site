@@ -52,11 +52,17 @@ interface IFioAccountPoller {
 }
 
 interface PollRead {
+  readonly _tag: "Read";
   readonly readId: string;
   readonly receivingAccount: FioReceivingAccount;
   readonly from: string;
   readonly to: string;
   readonly today: string;
+}
+
+interface ReplayDispatch {
+  readonly _tag: "ReplayDispatch";
+  readonly readId: string | null;
 }
 
 export class FioAccountPoller extends Context.Service<
@@ -76,7 +82,7 @@ export class FioAccountPoller extends Context.Service<
 
       const claim = Effect.fn("FioAccountPoller.claim")(function* (
         job: FioPollJob,
-        dispatchReplayed = false
+        replayed?: ReplayDispatch
       ) {
         return yield* transaction(
           Effect.gen(function* () {
@@ -84,14 +90,10 @@ export class FioAccountPoller extends Context.Service<
             const poll = yield* polls.lockDelivery(accountKey);
             if (poll?.deliveryId !== deliveryId) return;
 
-            if (!(yield* attempts.hasPayableAttempts(accountKey))) {
-              if (!dispatchReplayed) return "replayDispatch" as const;
-              yield* polls.update(accountKey, idleDelivery);
-              return;
-            }
-
+            const payable = yield* attempts.hasPayableAttempts(accountKey);
             const now = yield* polls.currentTime(accountKey);
             if (
+              (payable || poll.readId) &&
               poll.readNotBefore &&
               poll.readNotBefore.getTime() > now.epochMilliseconds
             ) {
@@ -100,6 +102,25 @@ export class FioAccountPoller extends Context.Service<
                   poll.readNotBefore.getTime()
                 ),
               });
+            }
+
+            // A prior read may still commit local dispatch work. The gate
+            // above covers that read even if it already lost its last payable
+            // attempt. Replay durable work before another read or retirement.
+            if (!replayed && (!payable || poll.readId)) {
+              return {
+                _tag: "ReplayDispatch",
+                readId: poll.readId,
+              } satisfies ReplayDispatch;
+            }
+            if (replayed && replayed.readId !== poll.readId) {
+              return yield* new FioPollNotDue({
+                instant: now.add({ seconds: 1 }),
+              });
+            }
+            if (!payable) {
+              yield* polls.update(accountKey, idleDelivery);
+              return;
             }
 
             const receivingAccount = accounts.getReceivingAccount(accountKey);
@@ -140,6 +161,7 @@ export class FioAccountPoller extends Context.Service<
               deliveryExpiresAt: fioPollDeliveryExpiry(now),
             });
             return {
+              _tag: "Read",
               readId,
               receivingAccount,
               from,
@@ -206,17 +228,16 @@ export class FioAccountPoller extends Context.Service<
         consume: Effect.fn("FioAccountPoller.consume")(
           function* (job) {
             const candidate = yield* claim(job);
-            if (candidate === "replayDispatch") {
-              // A previous delivery can settle the last attempt before its
-              // fulfillment/recovery publish fails. Replay that durable work
-              // without reading Fio and keep this delivery if replay fails.
+            if (candidate?._tag === "ReplayDispatch") {
+              // Run replay outside the gate transaction. A failed replay
+              // leaves the same delivery eligible for another attempt.
               yield* settlements.retryPendingDispatch(job.accountKey);
             }
             const read =
-              candidate === "replayDispatch"
-                ? yield* claim(job, true)
+              candidate?._tag === "ReplayDispatch"
+                ? yield* claim(job, candidate)
                 : candidate;
-            if (!read || read === "replayDispatch") return;
+            if (read?._tag !== "Read") return;
 
             const { account, readToken } = read.receivingAccount;
             const response = yield* provider
