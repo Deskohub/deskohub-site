@@ -42,42 +42,14 @@ describe("selectAvailableUpdate", () => {
     const update = selectAvailableUpdate(
       [
         release("0.2.0", "darwin-arm64"),
-        release("0.3.0", "linux-x64-baseline"),
         release("0.1.0", "linux-x64-baseline"),
+        release("0.3.0", "linux-x64-baseline"),
       ],
       "linux-x64-baseline"
     );
 
     expect(update?.version).toBe("0.3.0");
     expect(update?.target).toBe("linux-x64-baseline");
-  });
-
-  test("rejects mutable, partial, and wrong-target releases", () => {
-    const mutable = release("0.4.0", "linux-x64-baseline", {
-      immutable: false,
-    });
-    const missingDigest = release("0.3.0", "linux-x64-baseline", {
-      assets: [
-        {
-          name: "dhw-linux-x64-baseline",
-          browser_download_url: new URL("https://example.test/dhw"),
-          size: 42,
-          digest: null,
-        },
-      ],
-    });
-
-    expect(
-      selectAvailableUpdate(
-        [
-          mutable,
-          missingDigest,
-          release("0.5.0-beta.1", "linux-x64-baseline"),
-          release("0.2.0", "darwin-x64"),
-        ],
-        "linux-x64-baseline"
-      )
-    ).toBeUndefined();
   });
 
   test("rejects assets outside the repository release path", () => {
@@ -121,8 +93,10 @@ describe("selectAvailableUpdate release filtering", () => {
   test.each([
     ["draft", { draft: true }],
     ["prerelease", { prerelease: true }],
-    ["non-CLI tag", { tag_name: "workspace-v1.0.0" }],
+    ["mutable release", { immutable: false }],
+    ["non-CLI tag", { tag_name: "web-v1.0.0" }],
     ["invalid version", { tag_name: "dhw-vnext" }],
+    ["prerelease version", { tag_name: "dhw-v1.0.0-beta.1" }],
     [
       "release page outside the repository",
       { html_url: new URL("https://github.com/another/repo/releases/x") },
@@ -145,10 +119,12 @@ describe("selectAvailableUpdate release filtering", () => {
     ],
     ["zero-byte asset", { assets: [{ ...asset, size: 0 }] }],
     ["fractional asset size", { assets: [{ ...asset, size: 1.5 }] }],
+    ["missing digest", { assets: [{ ...asset, digest: null }] }],
     [
       "non-SHA-256 digest",
       { assets: [{ ...asset, digest: `sha512:${"a".repeat(64)}` }] },
     ],
+    ["wrong target", { assets: release("1.0.0", "darwin-x64").assets }],
   ] satisfies ReadonlyArray<readonly [string, Partial<GithubRelease>]>)(
     "rejects a %s",
     (_label, options) => {
