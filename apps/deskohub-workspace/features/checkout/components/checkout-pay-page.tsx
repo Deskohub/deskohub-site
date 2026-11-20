@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useId } from "react";
 import type {
   CheckoutSummaryChangedKeys,
   CheckoutSummary as CheckoutSummaryData,
@@ -19,11 +19,11 @@ import { Button } from "@/shared/components/ui/button";
 import {
   CheckoutPayCard,
   CheckoutPayConsent,
+  CheckoutPayMethodButtons,
   CheckoutPayProviderHandoff,
   CheckoutPaySubmitButton,
 } from "./checkout-pay-page-card";
 import {
-  type CheckoutPaymentMethod,
   type StartCheckoutPaymentAction,
   useCheckoutPaySubmission,
 } from "./use-checkout-pay-submission";
@@ -59,28 +59,27 @@ export function CheckoutPayPage({
   summary,
   variant,
 }: CheckoutPayPageProps) {
-  const [method, setMethod] = useState<CheckoutPaymentMethod>("card");
-  const paymentMethodName = useId();
+  const cardHandoffId = useId();
   const providerTotal = summary.total.value > 0 ? summary.total : undefined;
-  const offersQr = Boolean(
+  const dualPaymentTotal =
     startPaymentAction &&
-      payStateToken &&
-      variant === "pay" &&
-      providerTotal?.currency === "CZK"
-  );
-  const paymentMethod = offersQr ? method : "card";
+    payStateToken &&
+    variant === "pay" &&
+    providerTotal?.currency === "CZK"
+      ? providerTotal
+      : undefined;
   const {
     errorMessage,
     isSubmitPending,
     legalConsent,
+    pendingMethod,
     setLegalConsent,
     submit,
   } = useCheckoutPaySubmission({
     earlyPerformanceRequestRequired,
     locale,
-    method: paymentMethod,
     payStateToken,
-    startPaymentAction: offersQr ? startPaymentAction : undefined,
+    startPaymentAction: dualPaymentTotal ? startPaymentAction : undefined,
   });
   const isPricingChanged = variant === "pricingChanged";
   const title = {
@@ -139,37 +138,19 @@ export function CheckoutPayPage({
           locale={locale}
         />
       ) : (
-        <>
-          {offersQr && (
-            <fieldset disabled={isSubmitPending}>
-              <legend className="mb-2 text-sm font-semibold">
-                {m.checkoutPayMethod({}, { locale })}
-              </legend>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {(
-                  [
-                    ["card", m.checkoutPayMethodCard({}, { locale })],
-                    ["qr", m.checkoutPayMethodQr({}, { locale })],
-                  ] as const
-                ).map(([option, label]) => (
-                  <label
-                    className="flex cursor-pointer items-center gap-2 rounded-xl border border-navy-blue/15 px-3 py-3 text-sm font-semibold has-checked:border-navy-blue/55 has-checked:bg-navy-blue/5 has-disabled:cursor-default"
-                    key={option}
-                  >
-                    <input
-                      checked={paymentMethod === option}
-                      className="size-4 accent-navy-blue"
-                      name={paymentMethodName}
-                      onChange={() => setMethod(option)}
-                      type="radio"
-                      value={option}
-                    />
-                    {label}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          )}
+        <form
+          className="space-y-6"
+          method="post"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const method =
+              dualPaymentTotal &&
+              event.nativeEvent.submitter?.getAttribute("value") === "qr"
+                ? "qr"
+                : "card";
+            submit(method);
+          }}
+        >
           <CheckoutPayConsent
             checked={legalConsent}
             id="checkout-pay-legal-consent"
@@ -179,20 +160,28 @@ export function CheckoutPayPage({
             variant={actionVariant}
           />
 
-          <CheckoutPaySubmitButton
-            disabled={!legalConsent || isSubmitPending}
-            locale={locale}
-            method={paymentMethod}
-            onClick={submit}
-            pending={isSubmitPending}
-            total={providerTotal}
-            variant={actionVariant}
-          />
-
-          {!!providerTotal && paymentMethod === "card" && (
-            <CheckoutPayProviderHandoff locale={locale} />
+          {dualPaymentTotal ? (
+            <CheckoutPayMethodButtons
+              cardHandoffId={cardHandoffId}
+              disabled={!legalConsent || isSubmitPending}
+              locale={locale}
+              pendingMethod={pendingMethod}
+              total={dualPaymentTotal}
+            />
+          ) : (
+            <CheckoutPaySubmitButton
+              disabled={!legalConsent || isSubmitPending}
+              locale={locale}
+              pending={isSubmitPending}
+              total={providerTotal}
+              variant={actionVariant}
+            />
           )}
-        </>
+
+          {!!providerTotal && (
+            <CheckoutPayProviderHandoff id={cardHandoffId} locale={locale} />
+          )}
+        </form>
       )}
 
       {!!errorMessage && (

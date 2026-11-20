@@ -9,6 +9,7 @@ import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser
 import { compileWorkspaceAppStyles } from "@/shared/testing/workspace-app-styles.test-utils";
 import {
   CheckoutPayCard,
+  CheckoutPayMethodButtons,
   CheckoutPaySubmitButton,
 } from "./checkout-pay-page-card";
 
@@ -68,6 +69,11 @@ const payCardMarkup = (locale: Locale) =>
           total={largeTotal}
           variant="pay"
         />
+        <CheckoutPayMethodButtons
+          cardHandoffId="card-handoff"
+          locale={locale}
+          total={largeTotal}
+        />
       </CheckoutPayCard>
     </main>
   );
@@ -83,7 +89,9 @@ test.skipIf(!chromiumAvailable)(
         await page.setContent(
           `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${payCardMarkup(locale)}</body></html>`
         );
-        await page.addStyleTag({ content: appStyles });
+        await page.addStyleTag({
+          content: `${appStyles}\n* { transition: none !important; }`,
+        });
         await page.evaluate(() => document.fonts.ready);
         for (const width of viewportWidths) {
           await page.setViewportSize({ height: 900, width });
@@ -103,8 +111,14 @@ test.skipIf(!chromiumAvailable)(
               if (!labelElement) throw new Error("Missing pay button label");
               label.selectNodeContents(labelElement);
               const labelBox = labelElement.getBoundingClientRect();
-              const icon = button.querySelector("svg")?.getBoundingClientRect();
+              const icon = button
+                .querySelector("svg, img")
+                ?.getBoundingClientRect();
               return {
+                background: style.backgroundColor,
+                height: box.height,
+                top: box.top,
+                payment: button.getAttribute("value"),
                 iconWidth: icon?.width,
                 iconCentered:
                   !!icon &&
@@ -119,26 +133,34 @@ test.skipIf(!chromiumAvailable)(
             })
           );
 
-          expect(buttons).toHaveLength(4);
+          expect(buttons).toHaveLength(6);
           // The pending button shows no icon.
-          const [pay, retry, , largePay] = buttons;
-          for (const { iconCentered, iconWidth, wrapped } of [
-            pay,
-            retry,
-            largePay,
-          ]) {
+          const [pay, retry, , largePay, card, qr] = buttons;
+          for (const [button, imageWidth] of [
+            [pay, 48],
+            [retry, 16],
+            [largePay, 48],
+            [card, 48],
+            [qr, 16],
+          ] as const) {
+            const { iconCentered, iconWidth, wrapped } = button;
             sawWrappedLabel ||= wrapped;
             expect({ locale, width, iconCentered, iconWidth }).toEqual({
               locale,
               width,
               iconCentered: true,
-              iconWidth: 16,
+              iconWidth: imageWidth,
             });
           }
-          for (const { content, label } of buttons) {
-            expect({ locale, width, overflow: false }).toEqual({
+          expect(card.background).toBe("rgb(45, 50, 170)");
+          expect(qr.background).toBe(retry.background);
+          expect(qr.top).toBeGreaterThanOrEqual(card.top + card.height);
+          for (const { content, height, label, payment } of buttons) {
+            expect(height).toBeGreaterThanOrEqual(48);
+            expect({ locale, width, payment, overflow: false }).toEqual({
               locale,
               width,
+              payment,
               overflow:
                 label.left < content.left - 0.5 ||
                 label.right > content.right + 0.5,

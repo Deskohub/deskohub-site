@@ -17,6 +17,7 @@ import {
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import { ChoiceCard } from "@/shared/components/ui/choice-card";
 import { formatMoney, type Money } from "@/shared/money/money";
+import { cn } from "@/shared/utils";
 import { CheckoutSummaryLine } from "./checkout-summary-line";
 import type { CheckoutPaymentMethod } from "./use-checkout-pay-submission";
 
@@ -110,15 +111,16 @@ export function CheckoutPayConsent({
   );
 }
 
-/** Tells the customer, and any agent acting for them, who takes the payment. */
 /**
  * What happens after the pay button: payment opens in a new tab, and the
  * payment provider's own "back to the shop" button, shown as a small replica
  * so the customer recognizes it there, returns them here.
  */
 export function CheckoutPayProviderHandoff({
+  id,
   locale,
 }: {
+  readonly id?: string;
   readonly locale: Locale;
 }) {
   const returnToShop = m.checkoutPayNoteBackToShop({}, { locale });
@@ -126,7 +128,10 @@ export function CheckoutPayProviderHandoff({
   // result button labels for those languages have not been verified.
   const showsProviderLabel = locale !== "de-DE" && locale !== "sk-SK";
   return (
-    <p className="flex items-start gap-2 text-sm leading-6 text-navy-blue/66">
+    <p
+      className="flex items-start gap-2 text-sm leading-6 text-navy-blue/66"
+      id={id}
+    >
       <ShieldCheck
         aria-hidden="true"
         className="mt-1 size-4 shrink-0 text-aquamarine-ink"
@@ -168,16 +173,12 @@ const payLabelNamesAmount = (locale: Locale) =>
 export function CheckoutPaySubmitButton({
   disabled,
   locale,
-  method = "card",
-  onClick,
   pending,
   total,
   variant,
 }: {
   readonly disabled?: boolean;
   readonly locale: Locale;
-  readonly method?: CheckoutPaymentMethod;
-  readonly onClick?: () => void;
   readonly pending?: boolean;
   /** The amount the provider charges; a free order omits it. */
   readonly total?: Money;
@@ -186,9 +187,8 @@ export function CheckoutPaySubmitButton({
   const separateTotalId = useId();
   const separateTotal =
     total && !payLabelNamesAmount(locale) ? total : undefined;
+  const payMethod = total ? "card" : "free";
 
-  // The icon sits outside the label, centred on however many lines it takes.
-  const payIconClassName = "size-4 shrink-0";
   const orderLabel = total
     ? m.checkoutPayOrderAndPayAmountButton(
         // No-break spaces keep the amount on one line when the label wraps.
@@ -196,14 +196,6 @@ export function CheckoutPaySubmitButton({
         { locale }
       )
     : m.checkoutPayOrderAndPayButton({}, { locale });
-  const label = pending
-    ? m.checkoutPaymentRetryPending({}, { locale })
-    : orderLabel;
-  const Icon = {
-    pay: { card: CreditCard, qr: QrCode }[method],
-    retry: RotateCcw,
-  }[variant];
-
   return (
     <div className="@container space-y-3">
       {!!separateTotal && (
@@ -215,35 +207,127 @@ export function CheckoutPaySubmitButton({
           />
         </div>
       )}
-      <Button
-        type="button"
-        size="xl"
-        caps
-        fullWidth
-        wrap
-        aria-describedby={separateTotal ? separateTotalId : undefined}
+      <CheckoutPayButton
+        describedBy={separateTotal ? separateTotalId : undefined}
         disabled={disabled}
+        label={orderLabel}
+        locale={locale}
         pending={pending}
-        onClick={onClick}
-      >
-        {/* Long labels, such as the German legal order wording or a narrow
-            screen's "Order and pay" with its amount, wrap onto balanced
-            lines beside the icon, which stays vertically centred. Below
-            18rem the label takes the small button's type size and caps
-            tracking: at the full size, the longest word
-            ("Zahlungspflichtig", about 206px) beside the icon needs a
-            278px button. */}
-        <span className="flex min-w-0 items-center justify-center gap-3">
-          {!pending && <Icon aria-hidden="true" className={payIconClassName} />}
-          <span
-            className="min-w-0 text-balance @max-[18rem]:text-xs @max-[18rem]:tracking-[0.08em]"
-            data-checkout-pay-label=""
-          >
-            {label}
-          </span>
-        </span>
-      </Button>
+        payment={variant === "retry" ? "retry" : payMethod}
+      />
     </div>
+  );
+}
+
+export function CheckoutPayMethodButtons({
+  cardHandoffId,
+  disabled,
+  locale,
+  pendingMethod,
+  total,
+}: {
+  readonly cardHandoffId: string;
+  readonly disabled?: boolean;
+  readonly locale: Locale;
+  readonly pendingMethod?: CheckoutPaymentMethod;
+  readonly total: Money;
+}) {
+  const totalId = useId();
+  return (
+    <section aria-labelledby={totalId} className="@container space-y-2">
+      <h2
+        className="mb-3 text-center text-lg font-semibold text-balance"
+        id={totalId}
+      >
+        {m.checkoutPayMethodsTotal(
+          { amount: formatMoney(total, locale).replaceAll(" ", "\u00a0") },
+          { locale }
+        )}
+      </h2>
+      <CheckoutPayButton
+        describedBy={`${totalId} ${cardHandoffId}`}
+        disabled={disabled}
+        label={m.checkoutPayByCard({}, { locale })}
+        locale={locale}
+        pending={pendingMethod === "card"}
+        payment="card"
+      />
+      <CheckoutPayButton
+        describedBy={totalId}
+        disabled={disabled}
+        label={m.checkoutPayByQr({}, { locale })}
+        locale={locale}
+        pending={pendingMethod === "qr"}
+        payment="qr"
+      />
+    </section>
+  );
+}
+
+function CheckoutPayButton({
+  describedBy,
+  disabled,
+  label,
+  locale,
+  payment,
+  pending,
+}: {
+  readonly describedBy?: string;
+  readonly disabled?: boolean;
+  readonly label: string;
+  readonly locale: Locale;
+  readonly payment: CheckoutPaymentMethod | "free" | "retry";
+  readonly pending?: boolean;
+}) {
+  const iconClassName = "size-4 shrink-0";
+  return (
+    <Button
+      aria-describedby={describedBy}
+      caps
+      disabled={disabled}
+      fullWidth
+      name="method"
+      pending={pending}
+      size="xl"
+      tone={payment === "card" ? "nexi" : undefined}
+      type="submit"
+      value={payment}
+      wrap
+    >
+      <span
+        className={cn(
+          "flex min-w-0 items-center justify-center gap-3",
+          payment === "card" && "@max-[18rem]:gap-1"
+        )}
+      >
+        {!pending &&
+          {
+            card: (
+              // biome-ignore lint/performance/noImgElement: The fixed-size provider wordmark is served at its authored resolution.
+              <img
+                alt=""
+                className="shrink-0"
+                height={15}
+                src="/payment/nexi-wordmark-white.png"
+                width={48}
+              />
+            ),
+            free: <CreditCard aria-hidden="true" className={iconClassName} />,
+            qr: <QrCode aria-hidden="true" className={iconClassName} />,
+            retry: <RotateCcw aria-hidden="true" className={iconClassName} />,
+          }[payment]}
+        <span
+          className={
+            payment === "card"
+              ? "min-w-0 text-balance @max-[21rem]:text-xs @max-[21rem]:tracking-[0.08em]"
+              : "min-w-0 text-balance @max-[18rem]:text-xs @max-[18rem]:tracking-[0.08em]"
+          }
+          data-checkout-pay-label=""
+        >
+          {pending ? m.checkoutPaymentRetryPending({}, { locale }) : label}
+        </span>
+      </span>
+    </Button>
   );
 }
 
