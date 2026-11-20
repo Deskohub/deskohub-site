@@ -426,8 +426,7 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
         return release.promise;
       },
     });
-    const expectedRollback =
-      expect(admission).rejects.toBe("synthetic rollback");
+    const rolledBack = admission.catch((error: unknown) => error);
     await published.promise;
     const stale = h.take();
     const delivery = h.consume(stale);
@@ -439,7 +438,7 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
       expect(h.reads).toEqual([]);
     } finally {
       release.resolve();
-      await expectedRollback;
+      expect(await rolledBack).toBe("synthetic rollback");
       await delivery;
     }
     expect(await h.state()).toBeUndefined();
