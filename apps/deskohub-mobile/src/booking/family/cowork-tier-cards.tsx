@@ -22,26 +22,24 @@ const artwork = {
   openSpace: {
     source: require("../../../assets/images/booking/open-space.webp"),
     aspectRatio: 630 / 482,
-    clearsTitle: false,
+    size: "standard",
   },
   reservedDesk: {
     source: require("../../../assets/images/booking/reserved-desk.webp"),
     aspectRatio: 630 / 477,
-    clearsTitle: false,
+    size: "large",
   },
-  // The monitors stand tall: kept below the name and the radio.
   reservedDeskWorkstation: {
     source: require("../../../assets/images/booking/reserved-desk-workstation.webp"),
     aspectRatio: 630 / 459,
-    clearsTitle: true,
+    size: "large",
   },
 } satisfies Record<
   string,
   {
     readonly source: ImageSourcePropType;
     readonly aspectRatio: number;
-    /** Whether the art starts below the card's name and radio. */
-    readonly clearsTitle: boolean;
+    readonly size: "standard" | "large";
   }
 >;
 
@@ -116,6 +114,7 @@ export function CoworkTierCards({
             onPress={() => onSelect(card.tier)}
             style={({ pressed }) => [
               styles.card,
+              card.artwork.size === "large" && styles.cardWithLargeArtwork,
               paired && styles.pairedCard,
               stretch && styles.stretch,
               checked ? styles.checked : styles.unchecked,
@@ -152,10 +151,8 @@ export function CoworkTierCards({
 }
 
 /**
- * A tier card's artwork behind its head row (the name and the radio): the
- * art sits on the right, as tall as the card allows, centred top to bottom
- * and never cut off. Art that would cover the head starts below it, at
- * every font size.
+ * Large artwork starts below the measured name and radio so the header can
+ * wrap at larger font sizes.
  */
 function TierCardTop({
   artwork: art,
@@ -168,13 +165,14 @@ function TierCardTop({
   readonly children: ReactNode;
 }) {
   const [headBottom, setHeadBottom] = useState<number | undefined>(undefined);
+  const largeArtwork = art.size === "large";
   return (
     <>
-      {(!art.clearsTitle || headBottom !== undefined) && (
+      {(!largeArtwork || headBottom !== undefined) && (
         <TierCardArtwork
           artwork={art}
           disabled={disabled}
-          top={art.clearsTitle ? (headBottom ?? 0) + space.xs : 0}
+          top={largeArtwork ? (headBottom ?? 0) + space.xs : 0}
         />
       )}
       <View
@@ -204,7 +202,11 @@ function TierCardArtwork({
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       pointerEvents="none"
-      style={[styles.artFrame, { top }]}
+      style={[
+        styles.artFrame,
+        art.size === "large" && styles.largeArtFrame,
+        { top },
+      ]}
     >
       <Image
         aria-hidden
@@ -269,11 +271,11 @@ const styles = StyleSheet.create({
     minHeight: 148,
     overflow: "hidden",
   },
+  cardWithLargeArtwork: { minHeight: 232 },
   unchecked: outlined(color.line, 1),
   checked: { ...outlined(color.action, 2), backgroundColor: color.actionTint },
   disabled: { backgroundColor: color.disabledField },
   pressed: { backgroundColor: color.pressed },
-  // The art fits inside the card's right 64% and is centred vertically.
   artFrame: {
     alignItems: "flex-end",
     bottom: 0,
@@ -282,6 +284,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 0,
   },
+  largeArtFrame: { left: "28%" },
   art: { height: "100%", maxWidth: "100%", width: undefined },
   artDisabled: { opacity: 0.5 },
   head: {
