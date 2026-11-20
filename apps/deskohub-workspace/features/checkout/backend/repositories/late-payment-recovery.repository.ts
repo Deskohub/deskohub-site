@@ -56,6 +56,12 @@ export class LatePaymentRecoveryStateError extends Data.TaggedError(
   readonly message: string;
 }> {}
 
+export class LatePaymentRecoverySessionTakenError extends Data.TaggedError(
+  "LatePaymentRecoverySessionTakenError"
+)<{
+  readonly paymentAttemptId: PaymentAttemptId;
+}> {}
+
 /**
  * The original hold stopped being reusable (its deadline reached the safety
  * margin or its local state changed) before the settlement acquired its lock.
@@ -93,6 +99,7 @@ type LatePaymentRecoveryRepositoryError =
   | DiscountClaimError
   | EntryPackUnavailableError
   | EffectDrizzleQueryError
+  | LatePaymentRecoverySessionTakenError
   | LatePaymentRecoveryStateError
   | OriginalHoldNotReusableError
   | SqlError;
@@ -769,11 +776,9 @@ const settleActiveReservation = Effect.fnUntraced(function* (
             (constraint) => constraint === activeCheckoutSessionIndex
           ),
         () =>
-          recoveryStateError(
-            "settle",
-            input.paymentAttemptId,
-            "The checkout session already has an active reservation."
-          )
+          new LatePaymentRecoverySessionTakenError({
+            paymentAttemptId: input.paymentAttemptId,
+          })
       )
     );
   if (!updatedReservation) {

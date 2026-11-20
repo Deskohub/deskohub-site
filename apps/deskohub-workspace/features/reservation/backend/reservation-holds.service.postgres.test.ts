@@ -12,13 +12,21 @@ import {
 import { testEmailAddress } from "@deskohub/test-email";
 import { asc, eq, inArray } from "drizzle-orm";
 import { Effect, Latch, Layer, Ref, Result, Schema } from "effect";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { workspaceReservations } from "@/db/schema";
 import { customerAgentClientIdSchema } from "@/features/account/backend/auth/customer-agent-authorization.service";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { recordCheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service.mock";
 import { payStateDefaultTtlMilliseconds } from "@/features/checkout/backend/checkout";
 import { deriveCheckoutAttemptKeys } from "@/features/checkout/backend/checkout/checkout-lookup-keys.server";
-import { ReservationHoldCleanupScheduleService } from "@/features/checkout/backend/holds";
+import {
+  processReservationHoldCleanupScheduleMessage,
+  ReservationHoldCleanupScheduleService,
+  ReservationHoldCleanupService,
+  UnpaidHoldRelease,
+} from "@/features/checkout/backend/holds";
+import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
+import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { WorkspaceTableAssignmentServiceMock } from "@/features/checkout/backend/reservation/workspace-table-assignment.service.mock";
 import {
   type CheckoutAttemptId,
@@ -843,11 +851,23 @@ describe.skipIf(!postgresDatabase)(
         expect(dotypos.cancelReservation.mock.calls).toEqual([[dotyposId]]);
       });
 
-      test("schedules and sweeps the failed cancellation of a refused Entry pack attachment", async () => {
+      const failedEntryPackAttachment = async (options: {
+        readonly resumeDraft?: true;
+        readonly queueDown?: true;
+      }) => {
         const author = await newAuthor();
-        const request = holdRequest({ author });
-        if (request.reservation.kind !== "cowork")
+        const base = holdRequest({ author });
+        if (base.reservation.kind !== "cowork")
           throw new Error("Expected cowork");
+        const request = {
+          ...base,
+          entryPack: {
+            passId: orderIdSchema.make(crypto.randomUUID()),
+            holderAccountId: author,
+            tier: "open-space" as const,
+            date: base.reservation.date,
+          },
+        };
         const dotypos = makeDotypos();
         const cancelFailed = dotyposUnavailable("cancelReservation");
         dotypos.cancelReservation.mockImplementationOnce(
@@ -861,44 +881,120 @@ describe.skipIf(!postgresDatabase)(
             attachHold: () => Effect.fail(new EntryPackUnavailableError({})),
           }),
         });
-        expect(
-          await holds.holdFailure({
-            ...request,
-            entryPack: {
-              passId: orderIdSchema.make(crypto.randomUUID()),
-              holderAccountId: author,
-              tier: "open-space",
-              date: request.reservation.date,
-            },
-          })
-        ).toBe(cancelFailed);
+        if (options.resumeDraft) {
+          const createFailed = dotyposUnavailable("createReservation");
+          dotypos.createReservation.mockImplementationOnce(
+            () => Effect.fail(createFailed) as never
+          );
+          expect(await holds.holdFailure(request)).toBe(createFailed);
+          const [draft] = await rowsOf(author);
+          const earlierDeadline = draft!.reservationHoldExpiresAt!.subtract({
+            minutes: 3,
+          });
+          await postgres.db
+            .update(workspaceReservations)
+            .set({ reservationHoldExpiresAt: earlierDeadline })
+            .where(eq(workspaceReservations.id, draft!.id))
+            .pipe(Effect.runPromise);
+        }
+        if (options.queueDown) {
+          holds.enqueueCleanup.mockImplementationOnce(
+            () => Effect.fail(new Error("Synthetic queue failure")) as never
+          );
+        }
+        expect(await holds.holdFailure(request)).toBe(cancelFailed);
         const [failed] = await rowsOf(author);
         expect(failed).toMatchObject({
           reservationState: "cancellation_failed",
           failureCode: entryPackAttachCancellationFailureCode,
           dotyposReservationId: dotypos.createdHolds[0],
         });
-        expect(holds.enqueueCleanup).toHaveBeenCalledTimes(1);
-        const [cleanup] = holds.enqueueCleanup.mock.calls[0]!;
-        expect(cleanup.orderId).toBe(failed!.id);
-        expect(cleanup.reservationHoldExpiresAt.epochMilliseconds).toBe(
-          failed!.reservationHoldExpiresAt!.epochMilliseconds
+        const cleanup = ReservationHoldCleanupService.Default.pipe(
+          Layer.provide(UnpaidHoldRelease.Default),
+          Layer.provide(
+            Layer.mergeAll(
+              WorkspaceReservationRepository.Default.pipe(
+                Layer.provide(postgres.layer)
+              ),
+              WorkspaceDatabaseAdvisoryLock.makeLayer(postgres.databasePool),
+              Layer.mock(PaymentLifecycleRepository, {}),
+              Layer.mock(ProviderPaymentFinalizationService, {}),
+              recordCheckoutAnalytics().layer,
+              Layer.mock(DotyposService, dotypos as never)
+            )
+          )
         );
+        return {
+          cleanup,
+          dotypos,
+          failed: failed!,
+          enqueueCleanup: holds.enqueueCleanup,
+        };
+      };
+
+      test("cancels a resumed draft through the queue using its stored deadline", async () => {
+        const { cleanup, failed, enqueueCleanup, dotypos } =
+          await failedEntryPackAttachment({ resumeDraft: true });
+        expect(enqueueCleanup).toHaveBeenCalledTimes(1);
+        const [queued] = enqueueCleanup.mock.calls[0]!;
+        expect(queued.orderId).toBe(failed.id);
         expect(
-          await WorkspaceReservationRepository.pipe(
-            Effect.flatMap((repository) =>
-              repository.selectExpiredHolds({
-                now: failed!.reservationHoldExpiresAt!.add({ seconds: 1 }),
+          await processReservationHoldCleanupScheduleMessage(
+            {
+              orderId: queued.orderId,
+              reservationHoldExpiresAtIso:
+                queued.reservationHoldExpiresAt.toString(),
+            },
+            failed.reservationHoldExpiresAt!.add({ seconds: 1 })
+          ).pipe(Effect.provide(cleanup), Effect.runPromise)
+        ).toBe("cancelled");
+        expect(await rowOf(failed.id)).toMatchObject({
+          reservationState: "cancelled",
+        });
+        expect(dotypos.cancelReservation).toHaveBeenCalledTimes(2);
+      });
+
+      test("a failed pack attachment remains sweepable after a transient Dotypos failure", async () => {
+        const { cleanup, failed, dotypos } = await failedEntryPackAttachment({
+          queueDown: true,
+        });
+        const sweep = () =>
+          ReservationHoldCleanupService.pipe(
+            Effect.flatMap((service) =>
+              service.sweepExpiredHolds({
+                now: failed.reservationHoldExpiresAt!.add({ seconds: 1 }),
                 limit: 100,
               })
             ),
-            Effect.provide(WorkspaceReservationRepository.Default),
-            Effect.provide(postgres.layer),
+            Effect.provide(cleanup),
             Effect.runPromise
+          );
+        let firstRead = true;
+        const readHoldStatus =
+          dotypos.getReservationStatus.getMockImplementation()!;
+        dotypos.getReservationStatus.mockImplementation((id) => {
+          if (id === failed.dotyposReservationId && firstRead) {
+            firstRead = false;
+            return Effect.fail(
+              dotyposUnavailable("getReservationStatus")
+            ) as never;
+          }
+          return readHoldStatus(id);
+        });
+        expect((await sweep()).failed).toBeGreaterThanOrEqual(1);
+        expect(await rowOf(failed.id)).toMatchObject({
+          reservationState: "cancellation_failed",
+          failureCode: entryPackAttachCancellationFailureCode,
+        });
+        expect((await sweep()).cancelled).toBeGreaterThanOrEqual(1);
+        expect(await rowOf(failed.id)).toMatchObject({
+          reservationState: "cancelled",
+        });
+        expect(
+          dotypos.cancelReservation.mock.calls.filter(
+            ([id]) => id === failed.dotyposReservationId
           )
-        ).toEqual(
-          expect.arrayContaining([expect.objectContaining({ id: failed!.id })])
-        );
+        ).toHaveLength(2);
       });
 
       test("refuses an attempt whose hold creation stays in flight", async () => {

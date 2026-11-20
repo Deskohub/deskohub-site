@@ -570,6 +570,24 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       });
       expect(await status(older.reservation)).toBe("consumed");
       expect(await status(newer.reservation)).toBe("released");
+
+      const losingRecovery = await startVerifiedRecovery(
+        newer.reservation,
+        newer.result
+      );
+      await expect(
+        runRecovery((repository) =>
+          repository.completeWithReplacement({
+            ...losingRecovery,
+            recoveredDotyposReservationId: DotyposReservationIdSchema.make(
+              crypto.randomUUID()
+            ),
+            reservationState: "confirmed",
+            completedAt: now(),
+          })
+        )
+      ).rejects.toMatchObject({ _tag: "LatePaymentRecoverySessionTakenError" });
+      expect(await status(newer.reservation)).toBe("released");
     });
   }
 );

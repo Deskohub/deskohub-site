@@ -30,6 +30,7 @@ import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.s
 import { UnpaidHoldRelease } from "../holds/unpaid-hold-release.service";
 import {
   LatePaymentRecoveryRepository,
+  LatePaymentRecoverySessionTakenError,
   LatePaymentRecoveryStateError,
   OriginalHoldNotReusableError,
 } from "../repositories/late-payment-recovery.repository";
@@ -1779,6 +1780,29 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
         "call recoveries.findByPaymentAttemptId(attempt-id)",
       ]
     `);
+  });
+
+  test("cancels the replacement and refunds when an older reservation owns the checkout session", async () => {
+    const { outcome, trace } = await recover({
+      newerReservation: [false, false],
+      completeWithReplacement: fail(
+        new LatePaymentRecoverySessionTakenError({
+          paymentAttemptId: recoveryStateError.paymentAttemptId,
+        })
+      ),
+    });
+
+    expect(outcome).toBe("refund_required");
+    expect(
+      trace.filter(
+        (event) =>
+          event.includes("cancelReservation(replacement-id)") ||
+          event.includes("recoveries.requireRefund")
+      )
+    ).toEqual([
+      "call dotypos.cancelReservation(replacement-id)",
+      "call recoveries.requireRefund(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, failureCode=late_payment_checkout_session_taken, completedAt=<Instant>)",
+    ]);
   });
 
   test("keeps a settlement conflict without a newer reservation retryable", async () => {

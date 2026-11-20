@@ -370,7 +370,7 @@ export interface IWorkspaceReservationRepository {
     readonly reservationCreatedAt: Temporal.Instant;
     readonly failureCode: string;
   }) => Effect.Effect<
-    void,
+    Temporal.Instant | null,
     EffectDrizzleQueryError | WorkspaceReservationStateError
   >;
   /**
@@ -1633,13 +1633,17 @@ export class WorkspaceReservationRepository extends Context.Service<
                 eq(workspaceReservations.reservationState, "creating_hold")
               )
             )
-            .returning({ id: workspaceReservations.id });
+            .returning({
+              id: workspaceReservations.id,
+              holdExpiresAt: workspaceReservations.reservationHoldExpiresAt,
+            });
           yield* ensureUpdated(
             updated,
             "workspaceReservations.markAttachFailedCancellationRequired",
             input.id,
             "Only creating_hold reservations can record attach-cancel recovery."
           );
+          return updated[0]!.holdExpiresAt;
         }),
         claimCancellation: Effect.fn("workspaceReservations.claimCancellation")(
           function* (input) {
@@ -2207,10 +2211,10 @@ export class WorkspaceReservationRepository extends Context.Service<
                   or(
                     eq(workspaceReservations.reservationState, "held"),
                     and(
-                      eq(
-                        workspaceReservations.reservationState,
-                        "cancellation_failed"
-                      ),
+                      inArray(workspaceReservations.reservationState, [
+                        "cancellation_failed",
+                        "cancelling",
+                      ]),
                       eq(
                         workspaceReservations.failureCode,
                         entryPackAttachCancellationFailureCode

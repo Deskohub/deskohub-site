@@ -494,7 +494,7 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
                     }
                   );
 
-                  yield* reservations
+                  const cleanupDeadline = yield* reservations
                     .markAttachFailedCancellationRequired({
                       id: reservationDraft.id,
                       dotyposReservationId,
@@ -519,7 +519,7 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
                   if (entryPack) {
                     yield* enqueueReservationHoldCleanup({
                       orderId: reservationDraft.id,
-                      reservationHoldExpiresAt: holdExpiresAt,
+                      reservationHoldExpiresAt: cleanupDeadline,
                     });
                   }
 
