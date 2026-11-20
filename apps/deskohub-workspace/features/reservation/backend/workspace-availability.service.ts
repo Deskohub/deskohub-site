@@ -1,4 +1,5 @@
 import type {
+  DotyposReservation,
   DotyposReservationId,
   DotyposReservationInterval,
 } from "@deskohub/dotypos";
@@ -90,6 +91,7 @@ import {
   GoogleCalendarWorkspaceLimitationsService,
   type WorkspaceCalendarLimitation as WorkspaceCalendarLimitationType,
 } from "./google-calendar-workspace-limitations.service";
+import type { ReservationRecord } from "./reservation-record";
 import { WorkspaceReservationRepository } from "./workspace-reservation.repository";
 
 /**
@@ -267,7 +269,9 @@ const implementation = Effect.gen(function* () {
           reservation.id === replacementReservationId &&
           reservation.status === "NEW"
       );
-      const activeReservations = excludeDotyposReservationsById(reservations, [
+      const activeReservations = excludeDotyposReservationsById<
+        DotyposReservation | ReservationRecord
+      >(reservations, [
         ...expiredDotyposReservationIds,
         ...(replacementIsPending && replacementReservationId
           ? [replacementReservationId]
