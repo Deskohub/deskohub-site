@@ -10,7 +10,11 @@ import { useLocale } from "@/features/i18n/utils/use-locale";
 import { Button } from "@/shared/components/ui/button";
 import { cn } from "@/shared/utils";
 
-export function LanguageSwitcher() {
+export function LanguageSwitcher({
+  onOpenChange,
+}: {
+  onOpenChange?: (open: boolean) => void;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const currentLocale = useLocale();
@@ -28,7 +32,7 @@ export function LanguageSwitcher() {
   };
 
   return (
-    <Menu modal loop={false}>
+    <Menu modal loop={false} onOpenChange={onOpenChange}>
       <MenuTrigger
         render={
           <Button
@@ -44,6 +48,7 @@ export function LanguageSwitcher() {
       <MenuContent
         align="end"
         sideOffset={4}
+        collisionPadding={0}
         className="z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md origin-[--transform-origin] transition-[opacity,transform] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:scale-95"
       >
         {locales.map((locale) => (

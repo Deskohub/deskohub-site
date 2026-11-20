@@ -2,6 +2,7 @@
 
 import {
   Dialog,
+  DialogBackdrop,
   DialogClose,
   DialogContent,
   DialogTitle,
@@ -35,13 +36,18 @@ const navigationItems = [
 
 export function MobileMenu() {
   const [isOpen, setIsOpen] = useState(false);
+  const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
   const locale = useLocale();
   const ttrpgRoomHref = `https://workspace.deskohub.cz/${locale}/ttrpg-room`;
   setLocale(locale, { reload: false });
 
   return (
     <div className="xl:hidden">
-      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+      <Dialog
+        open={isOpen}
+        onOpenChange={setIsOpen}
+        closeOnOutsidePress={!isLanguageMenuOpen}
+      >
         <DialogTrigger
           render={
             <Button
@@ -54,7 +60,8 @@ export function MobileMenu() {
           <Menu className="h-6 w-6" />
           <span className="sr-only">{m["nav.openMenu"]()}</span>
         </DialogTrigger>
-        <DialogContent className="fixed inset-y-0 right-0 left-auto m-0 h-full max-h-none w-80 max-w-full gap-4 border-l border-gray-800 bg-gray-900 p-6 text-foreground shadow-lg safe-padding-vertical transition-transform duration-500 ease-in-out data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full data-[ending-style]:duration-300 backdrop:bg-black/80 backdrop:transition-opacity data-[starting-style]:backdrop:opacity-0 data-[ending-style]:backdrop:opacity-0">
+        <DialogBackdrop className="fixed inset-0 bg-black/80 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+        <DialogContent className="fixed inset-y-0 right-0 left-auto m-0 h-full max-h-none w-80 max-w-full gap-4 border-l border-gray-800 bg-gray-900 p-6 text-foreground shadow-lg safe-padding-vertical transition-transform duration-500 ease-in-out data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full data-[ending-style]:duration-300">
           <div className="flex flex-col space-y-2 border-b border-gray-800 pb-4 text-center sm:text-left">
             <div className="flex items-center gap-3">
               <Image
@@ -117,7 +124,7 @@ export function MobileMenu() {
             </div>
 
             <div className="px-4">
-              <LanguageSwitcher />
+              <LanguageSwitcher onOpenChange={setIsLanguageMenuOpen} />
             </div>
 
             <div className="px-4">

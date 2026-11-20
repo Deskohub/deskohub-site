@@ -316,6 +316,7 @@ export function ReservationForm() {
                         <PopoverContent
                           align="start"
                           sideOffset={4}
+                          collisionPadding={0}
                           initialFocus="none"
                           className="z-50 w-auto rounded-md border bg-popover p-0 text-popover-foreground shadow-md outline-none origin-[--transform-origin] transition-[opacity,transform] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:scale-95"
                         >
