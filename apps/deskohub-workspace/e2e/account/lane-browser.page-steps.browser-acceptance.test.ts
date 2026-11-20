@@ -83,7 +83,7 @@ const server = Bun.serve({
               event.preventDefault();
               const email = document.getElementById("account-sign-in-email").value;
               document.body.innerHTML = '<p>Accepted ' + email + '</p><input id="account-sign-in-code">';
-              ${hydrate ? reactProps("#account-sign-in-code", ["onChange"]) : ""}
+              ${hydrate ? reactProps("#account-sign-in-code", []) : ""}
             });
             ${hydrate ? `${reactProps("#account-sign-in-form", ["onSubmit"])}${reactProps("#account-sign-in-email", ["onChange"])}` : ""}
           </script>`);
