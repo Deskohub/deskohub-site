@@ -143,6 +143,25 @@ test("renders a held Unlimited pass with its assigned desk and purchase date", a
   expect(markup).toContain(`href="${pass.accessPath}"`);
 });
 
+test("shows a lookup failure when Entry Packs loaded empty and Unlimited did not load", async () => {
+  const markup = await new Response(
+    await renderToReadableStream(
+      <UnsavedChangesProvider>
+        <AccountPassesPanel
+          locale="en-US"
+          packs={Promise.resolve({ held: [], boughtForOthers: [] })}
+          unlimitedPasses="unavailable"
+        />
+      </UnsavedChangesProvider>
+    )
+  ).text();
+
+  expect(markup).toContain(
+    "Your Unlimited passes are temporarily unavailable."
+  );
+  expect(markup).not.toContain("You don’t have any passes yet.");
+});
+
 test("shows generic gift attribution when there is no buyer name", async () => {
   const markup = await new Response(
     await renderToReadableStream(

@@ -993,6 +993,9 @@ describe("AccountPage states", () => {
     expect(view.getByText(m.accountUnavailableTitle({}, en))).toBeTruthy();
     expect(view.getByText("Day 8 of 30")).toBeTruthy();
     expect(
+      view.queryByText(m.accountReservationsProviderUnavailable({}, en))
+    ).toBeNull();
+    expect(
       view
         .getByRole("link", { name: m.unlimitedAccessTodayTitle({}, en) })
         .getAttribute("href")

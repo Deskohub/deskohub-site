@@ -193,16 +193,16 @@ export function ReservationHistory({
   locale,
   unlimitedPasses = [],
 }: {
-  readonly history: CustomerReservationHistory;
+  readonly history?: CustomerReservationHistory;
   readonly locale: Locale;
   readonly unlimitedPasses?: AccountUnlimitedPasses;
 }) {
   const periods = unlimitedPasses === "unavailable" ? [] : unlimitedPasses;
-  if (history.kind === "unavailable" && periods.length === 0) {
+  if (history?.kind === "unavailable" && periods.length === 0) {
     return <ProviderUnavailableNotice locale={locale} />;
   }
 
-  const groups = history.kind === "available" ? history.groups : undefined;
+  const groups = history?.kind === "available" ? history.groups : undefined;
   const currentPasses = periods.filter(
     (pass) => pass.status === "active" || pass.status === "upcoming"
   );
@@ -232,7 +232,7 @@ export function ReservationHistory({
           reservations={groups.unavailable}
         />
       )}
-      {history.kind === "unavailable" && (
+      {history?.kind === "unavailable" && (
         <ProviderUnavailableNotice locale={locale} />
       )}
       {unlimitedPasses === "unavailable" && (

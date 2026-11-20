@@ -88,9 +88,9 @@ function withRenderedReservations(
       : unlimitedPasses.filter(
           (pass) => pass.status === "active" || pass.status === "upcoming"
         ).length;
-  const render = (history: CustomerReservationHistory) => ({
+  const render = (history?: CustomerReservationHistory) => ({
     count:
-      history.kind === "available" && currentPassCount !== undefined
+      history?.kind === "available" && currentPassCount !== undefined
         ? history.groups.current.length + currentPassCount
         : undefined,
     history: (
@@ -127,10 +127,7 @@ function withRenderedReservations(
         return state;
       return {
         ...state,
-        reservations: render({
-          kind: "unavailable",
-          reason: "provider-unavailable",
-        }),
+        reservations: render(),
       };
     }
     case "deletion-pending":
