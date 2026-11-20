@@ -33,6 +33,8 @@ export const entryPackGiftInvitations = pgTable(
     nextAttemptAt: instant("next_attempt_at"),
     sentAt: instant("sent_at"),
     keyId: text("key_id").$type<SealedStateKeyId>(),
+    callbackOrigin: text("callback_origin"),
+    deliveryFingerprint: text("delivery_fingerprint"),
     confirmationInvited: boolean("confirmation_invited"),
   },
   (t) => [

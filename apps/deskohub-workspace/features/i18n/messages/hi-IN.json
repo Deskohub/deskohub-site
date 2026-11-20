@@ -1915,7 +1915,7 @@
   "entryPackStatusGiftInvitationNotSent": "निमंत्रण नहीं भेजा गया",
   "entryPackStatusGiftInvitationPending": "निमंत्रण भेजा जाना बाकी है",
   "entryPackStatusGiftInvitationSent": "निमंत्रण भेज दिया गया",
-  "entryPackStatusGiftInvitationFailed": "निमंत्रण नहीं भेजा जा सका",
+  "entryPackStatusGiftInvitationFailed": "निमंत्रण भेजे जाने की पुष्टि नहीं हो सकी",
   "entryPackStatusPendingLead": "हम Nexi से आपके भुगतान की पुष्टि का इंतज़ार कर रहे हैं। यह पेज अपने आप अपडेट होता है। अगर भुगतान पेज अभी खुला है, तो वहीं भुगतान पूरा करें।",
   "entryPackStatusNotStartedTitle": "भुगतान अभी शुरू नहीं हुआ है।",
   "entryPackStatusCheckingLead": "हम Nexi से भुगतान की पुष्टि कर रहे हैं। यह पेज अपने आप अपडेट होता है।",

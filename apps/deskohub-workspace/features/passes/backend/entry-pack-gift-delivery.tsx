@@ -1,6 +1,11 @@
 import "server-only";
 
-import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
+import { createHash } from "node:crypto";
+import {
+  EmailConfigTag,
+  type EmailMessage,
+  EmailServiceTag,
+} from "@deskohub/email";
 import { and, eq } from "drizzle-orm";
 import { Effect, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
@@ -92,12 +97,16 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
     const snapshot = yield* snapshots.findEntryPack(paymentAttemptId);
     // Only the buyer's supplied personal name belongs in the invitation.
     // The frozen accounting identity keeps the body stable across attempts.
-    const buyerName =
+    const personalName =
       contacts.has(purchase.buyerAccountId) && snapshot?.buyer.kind === "person"
-        ? snapshot.buyer.legalName
+        ? snapshot.buyer.legalName.trim()
         : null;
+    const buyerName =
+      personalName && !personalName.includes("@") ? personalName : null;
     const context = yield* makeEntryPackInvitationContext(invitation, key);
-    const origin = yield* getWorkspaceRuntimeCallbackOrigin;
+    const origin =
+      invitation.callbackOrigin ??
+      (yield* getWorkspaceRuntimeCallbackOrigin).origin;
     const claimUrl = new URL(getAccountSignInPath(locale), origin);
     claimUrl.searchParams.set("gift-sign-in", "1");
     claimUrl.hash = new URLSearchParams({ gift: context }).toString();
@@ -112,9 +121,8 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
         validUntil={purchase.validUntil}
       />
     );
-    const mailer = yield* EmailServiceTag;
     const { defaultFrom } = yield* EmailConfigTag;
-    yield* mailer.send({
+    const message: EmailMessage = {
       ...rendered,
       from: defaultFrom,
       to: { email: holder.email },
@@ -122,12 +130,35 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
       idempotencyKey: `entry-pack-gift-invitation:${orderId}:${generation}`,
       tags: ["entry_pack_gift_invitation"],
       sensitiveContent: true,
-    });
+    };
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(message))
+      .digest("base64url");
+    if (
+      invitation.deliveryFingerprint &&
+      invitation.deliveryFingerprint !== fingerprint
+    ) {
+      // The provider may already have sent the original message. Reusing its
+      // key with a different payload would leave that send unresolved.
+      yield* stop;
+      return false;
+    }
+    if (!invitation.deliveryFingerprint) {
+      yield* db
+        .update(entryPackGiftInvitations)
+        .set({ callbackOrigin: origin, deliveryFingerprint: fingerprint })
+        .where(currentGeneration);
+    }
+
+    const mailer = yield* EmailServiceTag;
+    yield* mailer.send(message);
+    return true;
   }).pipe(Effect.result);
   if (Result.isFailure(sent)) {
     yield* Effect.logWarning("Entry pack gift invitation send failed");
     return;
   }
+  if (!sent.success) return;
   yield* db
     .update(entryPackGiftInvitations)
     .set({ nextAttemptAt: null, sentAt: yield* currentInstant })

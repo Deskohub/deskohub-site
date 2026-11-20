@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "99c5331f-7846-43fc-a4a1-f37da9bb550a",
+  "id": "97e563ff-d7c3-43f9-a716-3a7b5a012686",
   "prevIds": [
     "ec5a5feb-8b15-4d99-849b-36d4fb549c1e"
   ],
@@ -6039,6 +6039,32 @@
       "generated": null,
       "identity": null,
       "name": "key_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "entry_pack_gift_invitations"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "callback_origin",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "entry_pack_gift_invitations"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "delivery_fingerprint",
       "entityType": "columns",
       "schema": "public",
       "table": "entry_pack_gift_invitations"

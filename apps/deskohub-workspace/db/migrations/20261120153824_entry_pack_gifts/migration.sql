@@ -8,6 +8,8 @@ CREATE TABLE "entry_pack_gift_invitations" (
 	"next_attempt_at" timestamp with time zone,
 	"sent_at" timestamp with time zone,
 	"key_id" text,
+	"callback_origin" text,
+	"delivery_fingerprint" text,
 	"confirmation_invited" boolean,
 	CONSTRAINT "entry_pack_gift_generation_check" CHECK ("generation" >= 0),
 	CONSTRAINT "entry_pack_gift_attempts_check" CHECK ("attempts" >= 0),

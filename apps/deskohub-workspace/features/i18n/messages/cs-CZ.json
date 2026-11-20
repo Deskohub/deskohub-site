@@ -1933,7 +1933,7 @@
   "entryPackStatusGiftInvitationNotSent": "Pozvánka neodeslána",
   "entryPackStatusGiftInvitationPending": "Pozvánka čeká na odeslání",
   "entryPackStatusGiftInvitationSent": "Pozvánka odeslána",
-  "entryPackStatusGiftInvitationFailed": "Pozvánku se nepodařilo odeslat",
+  "entryPackStatusGiftInvitationFailed": "Odeslání pozvánky se nepodařilo potvrdit",
   "entryPackStatusPendingLead": "Čekáme na potvrzení od Nexi. Stránka se aktualizuje automaticky. Pokud máš platební stránku ještě otevřenou, dokonči platbu tam.",
   "entryPackStatusNotStartedTitle": "Platba ještě nezačala.",
   "entryPackStatusCheckingLead": "Ověřujeme platbu u Nexi. Stránka se aktualizuje automaticky.",

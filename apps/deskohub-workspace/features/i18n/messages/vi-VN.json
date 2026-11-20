@@ -1897,7 +1897,7 @@
   "entryPackStatusGiftInvitationNotSent": "Chưa gửi lời mời",
   "entryPackStatusGiftInvitationPending": "Lời mời đang chờ gửi",
   "entryPackStatusGiftInvitationSent": "Đã gửi lời mời",
-  "entryPackStatusGiftInvitationFailed": "Không gửi được lời mời",
+  "entryPackStatusGiftInvitationFailed": "Chưa xác nhận được lời mời đã gửi",
   "entryPackStatusPendingLead": "Chúng tôi đang chờ Nexi xác nhận khoản thanh toán của bạn. Trang này tự cập nhật. Nếu trang thanh toán vẫn mở, hãy hoàn tất thanh toán ở đó.",
   "entryPackStatusNotStartedTitle": "Thanh toán chưa bắt đầu.",
   "entryPackStatusCheckingLead": "Chúng tôi đang xác minh thanh toán với Nexi. Trang này tự động cập nhật.",

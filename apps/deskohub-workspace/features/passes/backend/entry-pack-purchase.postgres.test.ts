@@ -1694,6 +1694,77 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       }
     );
 
+    test("preserves bookability of a paid gift from before gift activation tracking", async () => {
+      const db = database!;
+      const payment = await integration(
+        db,
+        115_000,
+        undefined,
+        undefined,
+        undefined,
+        testEmailAddress("legacy-gift-recipient")
+      );
+      await payment.pay();
+      const {
+        orderId,
+        initialPurchase: { holderAccountId, validFrom },
+      } = payment;
+      await db.pool.query(
+        "delete from entry_pack_gift_invitations where order_id = $1",
+        [orderId]
+      );
+      await db.pool.query(
+        "update pass_purchases set gift_issued_at = null where id = $1",
+        [orderId]
+      );
+
+      expect(
+        await Effect.runPromise(
+          readEntryPackGiftState(orderId).pipe(Effect.provide(db.layer))
+        )
+      ).toEqual({ invitation: "not_sent", claimed: false, canResend: true });
+      expect(
+        await Effect.runPromise(
+          loadEntryPackRedemption(db.db, {
+            passId: orderId,
+            holderAccountId,
+            date: validFrom,
+          })
+        )
+      ).toMatchObject({ passId: orderId, holderAccountId });
+    });
+
+    test("does not replay an uncertain invitation with changed content", async () => {
+      const db = database!;
+      const payment = await integration(
+        db,
+        115_000,
+        undefined,
+        undefined,
+        undefined,
+        testEmailAddress("fingerprint-gift-recipient")
+      );
+      payment.rejectNextInvitation();
+      await payment.pay();
+      const { orderId } = payment;
+      await db.pool.query(
+        "update entry_pack_gift_invitations set delivery_fingerprint = $2 where order_id = $1",
+        [orderId, "previous-template-fingerprint"]
+      );
+      const later = Temporal.Now.instant().add({ minutes: 20 });
+      await payment.reconcile(later);
+      expect(payment.invitations).toHaveLength(1);
+      expect(payment.mail).toHaveLength(1);
+      expect(
+        await Effect.runPromise(
+          readEntryPackGiftState(orderId).pipe(
+            Effect.provide(db.layer),
+            atInstant(later)
+          )
+        )
+      ).toEqual({ invitation: "failed", claimed: false, canResend: true });
+    });
+
     test("creates one pending order with an empty entry and evidence ledger", async () => {
       const db = database!;
       const orderId = orderIdSchema.make(crypto.randomUUID());

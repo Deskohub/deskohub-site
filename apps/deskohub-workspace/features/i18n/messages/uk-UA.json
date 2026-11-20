@@ -1951,7 +1951,7 @@
   "entryPackStatusGiftInvitationNotSent": "Запрошення не надіслано",
   "entryPackStatusGiftInvitationPending": "Запрошення очікує на надсилання",
   "entryPackStatusGiftInvitationSent": "Запрошення надіслано",
-  "entryPackStatusGiftInvitationFailed": "Не вдалося надіслати запрошення",
+  "entryPackStatusGiftInvitationFailed": "Не вдалося підтвердити надсилання запрошення",
   "entryPackStatusPendingLead": "Чекаємо, поки Nexi підтвердить ваш платіж. Сторінка оновлюється автоматично. Якщо сторінка оплати ще відкрита, завершіть оплату там.",
   "entryPackStatusNotStartedTitle": "Оплату ще не розпочато.",
   "entryPackStatusCheckingLead": "Ми перевіряємо оплату в Nexi. Ця сторінка оновлюється автоматично.",

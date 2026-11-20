@@ -1915,7 +1915,7 @@
   "entryPackStatusGiftInvitationNotSent": "Invitation not sent",
   "entryPackStatusGiftInvitationPending": "Invitation queued",
   "entryPackStatusGiftInvitationSent": "Invitation sent",
-  "entryPackStatusGiftInvitationFailed": "Invitation couldn’t be sent",
+  "entryPackStatusGiftInvitationFailed": "Invitation sending couldn’t be confirmed",
   "entryPackStatusPendingLead": "We're waiting for Nexi to confirm your payment. This page updates automatically. If your payment page is still open, finish the payment there.",
   "entryPackStatusNotStartedTitle": "Payment hasn’t started.",
   "entryPackStatusCheckingLead": "We’re checking with Nexi. This page updates automatically.",

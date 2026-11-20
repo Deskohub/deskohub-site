@@ -155,7 +155,8 @@ export const readEntryPackGiftStates = Effect.fn("readEntryPackGiftStates")(
         if (invitation?.sentAt) state = "sent";
         else if (invitation?.nextAttemptAt && canInvite(row, now))
           state = "pending";
-        else if (invitation && !invitation.nextAttemptAt) state = "failed";
+        else if (invitation?.attempts && !invitation.nextAttemptAt)
+          state = "failed";
         return [
           purchase.id,
           {
@@ -246,6 +247,8 @@ export const queueEntryPackGiftResend = Effect.fnUntraced(function* (
         nextAttemptAt: now,
         sentAt: null,
         keyId: null,
+        callbackOrigin: null,
+        deliveryFingerprint: null,
       },
     });
   return true;
