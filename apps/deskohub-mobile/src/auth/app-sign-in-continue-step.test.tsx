@@ -1,14 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import type { ReactElement } from "react";
-import { Button } from "../ui/controls";
-import { elementTree, findAll, textOf } from "../ui/testing/element-tree";
+import { findAll, textOf } from "../ui/testing/element-tree";
+import { AppSignInContinueStep } from "./app-sign-in-continue-step";
 import {
-  AppSignInContinueStep,
-  emailInitials,
-} from "./app-sign-in-continue-step";
-import { AppSignInLayout } from "./app-sign-in-layout";
-import { inEnglish, shownTree } from "./testing/sign-in-step-tree";
+  bottomSpacerIndex,
+  inOrder,
+  shownTree,
+} from "./testing/sign-in-step-tree";
 
 type Props = Parameters<typeof AppSignInContinueStep>[0];
 
@@ -21,51 +19,51 @@ const defaults: Props = {
 };
 
 describe("AppSignInContinueStep", () => {
-  test("shows the account it continues as, with one action back to the app", () => {
+  test("shows the account it continues as, with one bottom action back to the app", () => {
     const onContinue = mock(() => undefined);
-    const layout = elementTree(
-      AppSignInContinueStep,
-      { ...defaults, onContinue },
-      inEnglish
-    ) as ReactElement<Parameters<typeof AppSignInLayout>[0]>;
-    expect(layout.type).toBe(AppSignInLayout);
-    expect(layout.props.onUseDifferentEmail).toBeDefined();
-    const action = layout.props.action as ReactElement<
-      Parameters<typeof Button>[0]
-    >;
-    expect(action.type).toBe(Button);
-    expect(action.props.busy).toBe(false);
-    action.props.onPress();
+    const tree = shownTree(AppSignInContinueStep, { ...defaults, onContinue });
+    const elements = inOrder(tree);
+    const actions = elements.filter(({ props }) => props.role === "button");
+    expect(actions).toHaveLength(1);
+    const spacer = bottomSpacerIndex(elements);
+    expect(spacer).toBeGreaterThanOrEqual(0);
+    expect(
+      elements.findIndex(({ props }) => props.role === "button")
+    ).toBeGreaterThan(spacer);
+    const press = actions[0]?.props.onPress;
+    if (typeof press === "function") press();
     expect(onContinue).toHaveBeenCalledTimes(1);
+    expect(elements.some(({ props }) => props.role === "link")).toBe(true);
 
-    const texts = findAll(
-      shownTree(AppSignInContinueStep, defaults),
-      "Text"
-    ).map(textOf);
+    const texts = findAll(tree, "Text").map(textOf);
     // The address may carry a break opportunity before the @.
     expect(texts.map((text) => text.replaceAll("\u200B", ""))).toContain(
       defaults.email
     );
-    expect(texts).toContain(emailInitials(defaults.email));
   });
 
   test("while it hands off, the action is busy", () => {
-    const layout = elementTree(
-      AppSignInContinueStep,
-      { ...defaults, continuing: true },
-      inEnglish
-    ) as ReactElement<Parameters<typeof AppSignInLayout>[0]>;
-    expect(
-      (layout.props.action as ReactElement<{ busy: boolean }>).props.busy
-    ).toBe(true);
-    expect(layout.props.useDifferentEmailDisabled).toBe(true);
+    const elements = inOrder(
+      shownTree(AppSignInContinueStep, { ...defaults, continuing: true })
+    );
+    const action = elements.find(({ props }) => props.role === "button");
+    const link = elements.find(({ props }) => props.role === "link");
+    expect(action?.props["aria-busy"]).toBe(true);
+    expect(action?.props.onPress).toBeUndefined();
+    expect(link?.props["aria-disabled"]).toBe(true);
   });
-});
 
-describe("emailInitials", () => {
-  test("takes the first letters of the first two parts before the @", () => {
-    expect(emailInitials(testEmailAddress("jana.novakova"))).toBe("JN");
-    expect(emailInitials(testEmailAddress("jana_novakova-x"))).toBe("JN");
-    expect(emailInitials(testEmailAddress("jana"))).toBe("J");
+  test("shows initials from the first two parts of the address", () => {
+    for (const [address, initials] of [
+      ["jana.novakova", "JN"],
+      ["jana_novakova-x", "JN"],
+      ["jana", "J"],
+    ] as const) {
+      const tree = shownTree(AppSignInContinueStep, {
+        ...defaults,
+        email: testEmailAddress(address),
+      });
+      expect(findAll(tree, "Text").map(textOf)).toContain(initials);
+    }
   });
 });

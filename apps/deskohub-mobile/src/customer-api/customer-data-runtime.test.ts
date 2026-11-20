@@ -80,7 +80,7 @@ describe("accountAtom", () => {
     expect(device.sessionChecks).toBe(1);
   });
 
-  test("retries a read once after the connection breaks", async () => {
+  test("retries a read once after the connection breaks and counts both sends", async () => {
     const { registry, workspace } = makeFakeCustomerData("linked");
     workspace.fail("getAccount", "transport-failure");
 
@@ -88,6 +88,9 @@ describe("accountAtom", () => {
 
     expect(result._tag).toBe("Success");
     expect(workspace.calls).toEqual(["getAccount", "getAccount"]);
+    expect(await settle(registry, remainingReadsAtom)).toMatchObject({
+      success: accountReadAllowance.reads - 2,
+    });
   });
 
   test("surfaces a 429 without retrying", async () => {
@@ -101,17 +104,6 @@ describe("accountAtom", () => {
       failure: { _tag: "CustomerRateLimited" },
     });
     expect(workspace.calls).toEqual(["getAccount"]);
-  });
-
-  test("spends the budget for each attempt the server saw", async () => {
-    const { registry, workspace } = makeFakeCustomerData("linked");
-    workspace.fail("getAccount", "transport-failure");
-
-    await settle(registry, accountAtom);
-
-    expect(await settle(registry, remainingReadsAtom)).toMatchObject({
-      success: accountReadAllowance.reads - 2,
-    });
   });
 });
 

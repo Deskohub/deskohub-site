@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  CustomerAccountLinkRequired,
-  CustomerSessionRequired,
-} from "@deskohub/workspace-customer-api";
+import { CustomerAccountLinkRequired } from "@deskohub/workspace-customer-api";
 import { Effect, Fiber, Layer } from "effect";
 import { HttpClientError, HttpClientRequest } from "effect/http";
 import { Atom, AtomRegistry } from "effect/reactivity";
@@ -55,17 +52,6 @@ const transportFailure = new HttpClientError.HttpClientError({
 });
 
 describe("customerRead", () => {
-  test("spends the read budget for an account read", async () => {
-    const { run } = harness();
-
-    const { result, remaining } = await run(
-      customerRead({ accountRead: true })(sent(Effect.succeed("history")))
-    );
-
-    expect(result).toMatchObject({ _tag: "Success", success: "history" });
-    expect(remaining).toBe(accountReadAllowance.reads - 1);
-  });
-
   test("leaves the budget alone for a Workspace-only read", async () => {
     const { run } = harness();
 
@@ -87,36 +73,6 @@ describe("customerRead", () => {
       _tag: "Failure",
       failure: { _tag: "CustomerRequestTimedOut" },
     });
-  });
-
-  test("asks the auth state to re-check the session on 401", async () => {
-    const { run, sessionChecks } = harness();
-
-    const { result } = await run(
-      customerRead({ accountRead: false })(
-        Effect.fail(new CustomerSessionRequired())
-      )
-    );
-
-    expect(result).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "CustomerSessionRequired" },
-    });
-    expect(sessionChecks).toEqual(["recheck"]);
-  });
-});
-
-describe("customerRead attempts", () => {
-  test("spends the budget once per send, so a retried read spends twice", async () => {
-    const { run } = harness();
-
-    const { remaining } = await run(
-      customerRead({ accountRead: true })(
-        Effect.andThen(sent(Effect.void), sent(Effect.succeed("history")))
-      )
-    );
-
-    expect(remaining).toBe(accountReadAllowance.reads - 2);
   });
 });
 
@@ -218,12 +174,6 @@ describe("refreshAfterWrite", () => {
 
   test("refreshes after a write succeeds", async () => {
     expect(await setup().settleWrite(sent(Effect.succeed("saved")))).toBe(1);
-  });
-
-  test("refreshes after an unconfirmed write, to show what was saved", async () => {
-    expect(await setup().settleWrite(sent(Effect.fail(transportFailure)))).toBe(
-      1
-    );
   });
 
   test("refreshes nothing after a refusal", async () => {

@@ -16,7 +16,7 @@ export const accountReadAllowance = {
 export const automaticRefreshReserve = 8;
 
 /** When each read in the current window was spent, oldest first. */
-export type ReadBudgetWindow = ReadonlyArray<number>;
+type ReadBudgetWindow = ReadonlyArray<number>;
 
 const windowMillis = Duration.toMillis(accountReadAllowance.window);
 
@@ -28,7 +28,7 @@ export const spendRead = (
   now: number
 ): ReadBudgetWindow => [...liveReads(window, now), now];
 
-export const remainingReads = (window: ReadBudgetWindow, now: number) =>
+const remainingReads = (window: ReadBudgetWindow, now: number) =>
   Math.max(0, accountReadAllowance.reads - liveReads(window, now).length);
 
 export const allowsAutomaticRefresh = (remaining: number) =>

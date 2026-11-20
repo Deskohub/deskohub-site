@@ -806,8 +806,6 @@ describe("sendSignInEmail", () => {
         failure?.nextSignInEmailAt === undefined
           ? undefined
           : DateTime.toEpochMillis(failure.nextSignInEmailAt),
-      carriesInstant:
-        failure !== undefined && Object.hasOwn(failure, "nextSignInEmailAt"),
     };
   };
 
@@ -850,8 +848,7 @@ describe("sendSignInEmail", () => {
 
   test("ignores an invalid next send", async () => {
     // An out-of-range ISO string is no case here: Better Auth's client rolls
-    // it over into a valid Date before the page sees it (the decoder's own
-    // test covers it as a string).
+    // it over into a valid Date before the page sees it.
     for (const nextSignInEmailAt of ["soon", 60, null]) {
       emailSent = { status: true, signInCode: true, nextSignInEmailAt };
       expect((await sent()).nextSignInEmailAt).toEqual(Option.none());
@@ -907,7 +904,6 @@ describe("sendSignInEmail", () => {
     expect(await refusal()).toEqual({
       reason: "address-limit",
       nextSignInEmailAt: Date.parse(nextAt),
-      carriesInstant: true,
     });
   });
 
@@ -924,7 +920,6 @@ describe("sendSignInEmail", () => {
       expect(await refusal()).toEqual({
         reason: "address-limit",
         nextSignInEmailAt: undefined,
-        carriesInstant: false,
       });
     }
   });
@@ -942,7 +937,6 @@ describe("sendSignInEmail", () => {
       expect(await refusal()).toEqual({
         reason,
         nextSignInEmailAt: undefined,
-        carriesInstant: false,
       });
     }
   });
