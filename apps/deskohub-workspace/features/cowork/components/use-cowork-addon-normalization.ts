@@ -47,6 +47,7 @@ export const useCoworkAddonNormalization = ({
     normalizable,
     requiredMonitorOption,
   },
+  workstationOnlyWhenRequired = false,
 }: {
   readonly form: UseFormReturn<
     CoworkReservationInput,
@@ -55,6 +56,7 @@ export const useCoworkAddonNormalization = ({
   >;
   readonly selection: CoworkAddonSelection;
   readonly workstation: Parameters<typeof getCoworkWorkstationNormalization>[0];
+  readonly workstationOnlyWhenRequired?: boolean;
 }) => {
   const { date, entryTier, monitorOption, stay } = selection;
   const isCoffeeOptional = getCoworkTierCoffeeAddon(entryTier) === "optional";
@@ -78,7 +80,8 @@ export const useCoworkAddonNormalization = ({
         {
           monitorOption,
           origin: getCoworkWorkstationOrigin({
-            autoAdded: autoAddedWorkstation.current,
+            autoAdded:
+              workstationOnlyWhenRequired || autoAddedWorkstation.current,
             monitorOption,
           }),
         }
@@ -108,6 +111,7 @@ export const useCoworkAddonNormalization = ({
     normalizable,
     requiredMonitorOption,
     stay,
+    workstationOnlyWhenRequired,
   ]);
 
   return {

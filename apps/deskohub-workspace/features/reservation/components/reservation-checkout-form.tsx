@@ -16,6 +16,7 @@ import type {
 } from "@/features/checkout/checkout-summary";
 import { CheckoutPayPageSkeleton } from "@/features/checkout/components/checkout-pay-page-skeleton";
 import { type Locale, m } from "@/features/i18n";
+import type { OrderId } from "@/features/order";
 import type { OfficeReservationDetails } from "@/features/reservation/office-reservation";
 import type { CheckoutOfficeSelection } from "@/features/reservation/reservation-checkout-contact";
 import type { ReservationCheckoutCustomerForm } from "@/features/reservation/reservation-existing-customer";
@@ -91,11 +92,13 @@ type ReservationCheckoutFormProps<
   };
   readonly checkoutCustomer: ReservationCheckoutCustomerForm;
   readonly checkoutSessionId?: CheckoutSessionId;
+  readonly entryPackId?: OrderId;
   readonly children: ReactNode;
   readonly form: UseFormReturn<Input, unknown, Data>;
   readonly getOfficeSelection?: (data: Data) => CheckoutOfficeSelection;
   readonly getReservation: (data: Data) => ReservationOrderIssuanceData;
   readonly locale: Locale;
+  readonly onEntryPackUnavailable?: () => void;
   /** The space picked at the first step, summarized at the contact step. */
   readonly selectionSummary: CheckoutStatusSummaryPresentation;
   /** The family the form books, and its selection values from link parameters. */
@@ -253,6 +256,7 @@ function ReservationContactStep({
   asksMarketingConsent,
   checkoutCustomer,
   customer,
+  holderOnly,
   isContactStep,
   locale,
   onChangeSelection,
@@ -262,6 +266,7 @@ function ReservationContactStep({
   readonly asksMarketingConsent: boolean;
   readonly checkoutCustomer: ReservationCheckoutCustomerForm;
   readonly customer: ReservationCustomer;
+  readonly holderOnly: boolean;
   readonly isContactStep: boolean;
   readonly locale: Locale;
   readonly onChangeSelection: () => void;
@@ -284,6 +289,7 @@ function ReservationContactStep({
       <ReservationCustomerSection
         checkoutCustomer={checkoutCustomer}
         customer={customer}
+        holderOnly={holderOnly}
         locale={locale}
       />
       {checkoutCustomer.status !== "support-required" && (
@@ -313,11 +319,13 @@ export function ReservationCheckoutForm<
   checkoutCustomer,
   checkoutSessionId,
   children,
+  entryPackId,
   form,
   getOfficeSelection,
   getReservation,
   heldOfficePrice,
   locale,
+  onEntryPackUnavailable,
   selectionSummary,
   selection,
 }: ReservationCheckoutFormProps<Input, Data>) {
@@ -328,6 +336,12 @@ export function ReservationCheckoutForm<
   const checkout = useReservationCheckout({
     initialCheckoutSessionId: checkoutSessionId,
     locale,
+    onEntryPackUnavailable:
+      onEntryPackUnavailable &&
+      (() => {
+        onEntryPackUnavailable();
+        checkoutStep.goTo("selection");
+      }),
   });
   const submission = {
     advertisedPrice,
@@ -338,6 +352,7 @@ export function ReservationCheckoutForm<
     checkoutCustomer,
     checkoutStep,
     emailVerification,
+    entryPackId,
     form,
     getOfficeSelection,
     getReservation,
@@ -405,6 +420,7 @@ export function ReservationCheckoutForm<
             asksMarketingConsent={asksMarketingConsent}
             checkoutCustomer={checkoutCustomer}
             customer={customer}
+            holderOnly={entryPackId !== undefined}
             isContactStep={isContactStep}
             locale={locale}
             onChangeSelection={() => checkoutStep.goTo("selection")}

@@ -7,6 +7,7 @@ import type {
 } from "react-hook-form";
 import type { CheckoutSummary } from "@/features/checkout/checkout-summary";
 import { type Locale, m } from "@/features/i18n";
+import type { OrderId } from "@/features/order";
 import type { ReservationBillingSelectionInput } from "@/features/reservation/reservation-billing";
 import type { CheckoutOfficeSelection } from "@/features/reservation/reservation-checkout-contact";
 import type {
@@ -78,6 +79,7 @@ type ReservationFormSubmissionContext<
   readonly checkoutStep: ReturnType<typeof useReservationCheckoutStep>;
   readonly displayedOfficePrice?: CheckoutSummary;
   readonly emailVerification: ReturnType<typeof useCheckoutEmailVerification>;
+  readonly entryPackId?: OrderId;
   readonly form: UseFormReturn<Input, unknown, Data>;
   readonly getOfficeSelection?: (data: Data) => CheckoutOfficeSelection;
   readonly getReservation: (data: Data) => ReservationOrderIssuanceData;
@@ -140,6 +142,7 @@ const getCheckoutDetails = <
     asksMarketingConsent,
     booksForSomeoneElse,
     displayedOfficePrice,
+    entryPackId,
     getReservation,
   }: ReservationFormSubmissionContext<Input, Data>,
   {
@@ -156,6 +159,7 @@ const getCheckoutDetails = <
 ): Parameters<ReservationCheckout["startCheckout"]>[0] => ({
   advertisedPriceToken,
   ...(displayedOfficePrice && { displayedOfficePrice }),
+  ...(entryPackId && { entryPackId }),
   ...(!booksForSomeoneElse && { customer: "account" }),
   // Without the checkbox the account already consented: send no consent.
   ...(asksMarketingConsent && {

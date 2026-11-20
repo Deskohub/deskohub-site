@@ -177,6 +177,7 @@ const payLabelNamesAmount = (locale: Locale) =>
 
 export function CheckoutPaySubmitButton({
   disabled,
+  freeOrderLabel,
   locale,
   method = "card",
   onClick,
@@ -185,6 +186,7 @@ export function CheckoutPaySubmitButton({
   variant,
 }: {
   readonly disabled?: boolean;
+  readonly freeOrderLabel?: string;
   readonly locale: Locale;
   readonly method?: CheckoutPaymentMethod;
   readonly onClick?: () => void;
@@ -205,7 +207,7 @@ export function CheckoutPaySubmitButton({
         { amount: formatMoney(total, locale).replaceAll(" ", "\u00a0") },
         { locale }
       )
-    : m.checkoutPayOrderAndPayButton({}, { locale });
+    : (freeOrderLabel ?? m.checkoutPayOrderAndPayButton({}, { locale }));
   const label = pending
     ? m.checkoutPaymentRetryPending({}, { locale })
     : orderLabel;

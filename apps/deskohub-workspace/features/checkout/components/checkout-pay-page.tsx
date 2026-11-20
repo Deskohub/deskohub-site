@@ -41,6 +41,7 @@ type CheckoutPayPageProps = {
   readonly people?: OfficeCheckoutPeople;
   readonly startPaymentAction?: StartCheckoutPaymentAction;
   readonly summary: CheckoutSummaryData;
+  readonly usesEntryPack?: boolean;
   readonly variant: "pay" | "retry" | "pricingChanged";
   readonly retryOutcome?: "cancelled" | "failed";
 };
@@ -57,6 +58,7 @@ export function CheckoutPayPage({
   retryOutcome,
   startPaymentAction,
   summary,
+  usesEntryPack = false,
   variant,
 }: CheckoutPayPageProps) {
   const [method, setMethod] = useState<CheckoutPaymentMethod>("card");
@@ -64,6 +66,7 @@ export function CheckoutPayPage({
   const providerTotal = summary.total.value > 0 ? summary.total : undefined;
   const offersQr = Boolean(
     startPaymentAction &&
+      !usesEntryPack &&
       payStateToken &&
       variant === "pay" &&
       providerTotal?.currency === "CZK"
@@ -84,7 +87,10 @@ export function CheckoutPayPage({
   });
   const isPricingChanged = variant === "pricingChanged";
   const title = {
-    pay: m.checkoutPayTitle({}, { locale }),
+    pay:
+      usesEntryPack && providerTotal
+        ? m.coworkEntryPackPayAddon({}, { locale })
+        : m.checkoutPayTitle({}, { locale }),
     retry: m.checkoutPaymentRetryTitle({}, { locale }),
     pricingChanged: m.checkoutPayPricingChangedTitle({}, { locale }),
   }[variant];
@@ -128,6 +134,7 @@ export function CheckoutPayPage({
           locale={locale}
           officeStartDateLabel={officeStartDateLabel}
           summary={summary}
+          usesEntryPack={usesEntryPack}
         />
       )}
 
@@ -181,6 +188,11 @@ export function CheckoutPayPage({
 
           <CheckoutPaySubmitButton
             disabled={!legalConsent || isSubmitPending}
+            freeOrderLabel={
+              usesEntryPack
+                ? m.coworkEntryPackBookWithEntry({}, { locale })
+                : undefined
+            }
             locale={locale}
             method={paymentMethod}
             onClick={submit}

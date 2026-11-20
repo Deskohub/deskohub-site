@@ -14,6 +14,7 @@ import { visitorConsent } from "@/features/cookie-consent";
 import { captureAnalyticsEvent } from "@/features/cookie-consent/analytics-events";
 import { type Locale, m } from "@/features/i18n";
 import type { OfficePeople } from "@/features/office/office-people";
+import type { OrderId } from "@/features/order";
 import { preparePayState } from "@/features/reservation/actions/prepare-pay-state";
 import {
   getReservationAnalyticsProperties,
@@ -25,6 +26,7 @@ import { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 type ReservationCheckoutDetails = {
   readonly advertisedPriceToken: string;
   readonly displayedOfficePrice?: CheckoutSummary;
+  readonly entryPackId?: OrderId;
   readonly customer?: "account";
   readonly marketingConsent?: boolean;
   /** Labels a `marketingConsent: true` given through a site tool. */
@@ -49,11 +51,13 @@ export type CheckoutSubmission =
 type UseReservationCheckoutOptions = {
   readonly initialCheckoutSessionId?: CheckoutSessionId;
   readonly locale: Locale;
+  readonly onEntryPackUnavailable?: () => void;
 };
 
 export function useReservationCheckout({
   initialCheckoutSessionId,
   locale,
+  onEntryPackUnavailable,
 }: UseReservationCheckoutOptions) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -86,6 +90,14 @@ export function useReservationCheckout({
   } = useWorkspaceAction(preparePayState, {
     onSuccess: ({ data, input }) => {
       if (data?.status === "error") {
+        if (
+          onEntryPackUnavailable &&
+          "reason" in data &&
+          data.reason === "entry_pack_unavailable"
+        ) {
+          onEntryPackUnavailable();
+          return;
+        }
         setSubmissionError(data.message);
         return;
       }
@@ -138,6 +150,7 @@ export function useReservationCheckout({
     const reservationFingerprint = JSON.stringify([
       details.reservation,
       details.people,
+      details.entryPackId,
     ]);
     const effectiveCheckoutAttemptId =
       lastSubmittedReservationRef.current &&

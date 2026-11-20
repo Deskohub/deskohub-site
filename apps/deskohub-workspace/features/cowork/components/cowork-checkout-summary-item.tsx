@@ -10,16 +10,19 @@ type CoworkCheckoutSummaryItem = Extract<
 
 export function CoworkCheckoutSummaryItem({
   changed,
+  detail,
   item,
   locale,
 }: {
   readonly changed?: boolean;
+  readonly detail?: string;
   readonly item: CoworkCheckoutSummaryItem;
   readonly locale: Locale;
 }) {
   return (
     <CheckoutSummaryProductLine
       changed={changed}
+      detail={detail}
       item={item}
       label={getWorkspaceProductTierTitle(item.product.tier, locale)}
       locale={locale}

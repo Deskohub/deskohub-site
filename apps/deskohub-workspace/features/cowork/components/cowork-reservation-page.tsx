@@ -1,7 +1,17 @@
-import { Effect } from "effect";
-import { isWorkspaceCoworkCurrentProductTier } from "@/features/checkout/product-catalog";
+import { Effect, Layer, Option } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
+import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import {
+  isWorkspaceCoworkCurrentProductTier,
+  workspaceProductMonitorOptions,
+} from "@/features/checkout/product-catalog";
 import { type Locale, m } from "@/features/i18n";
+import type { OrderId } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import {
+  type HeldEntryPack,
+  listHeldEntryPacks,
+} from "@/features/passes/backend/held-entry-packs";
 import { isOvernightStayOfferedAfterConnection } from "@/features/reservation/backend/overnight-stay-release-gate.server";
 import { isRememberedCoworkOfferAvailable } from "@/features/reservation/backend/reservation-existing-customer.server";
 import { createReservationPage } from "@/features/reservation/components/create-reservation-page.server";
@@ -11,12 +21,14 @@ import {
   getCoworkReservationDefaultValues,
 } from "@/features/reservation/cowork-reservation";
 import { coworkSelectionLink } from "@/features/reservation/cowork-selection-link";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { getCoworkPageOfferings } from "@/features/reservation/reservation-page-offerings";
 import {
   coworkReservationPath,
   getCoworkReservationPath,
 } from "@/features/reservation/routes";
 import { getCoworkAvailabilityQueries } from "@/features/reservation/workspace-availability";
+import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import { Button } from "@/shared/components/ui/button";
 import {
   Card,
@@ -24,6 +36,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/shared/components/ui/card";
+import { getSearchParam } from "@/shared/utils";
+import {
+  type CoworkEntryPacks,
+  firstEntryPackDate,
+  getEntryPackCoworkTier,
+  type InitialCoworkEntryPack,
+} from "../cowork-entry-packs";
 import {
   CoworkReservationForm,
   CoworkReservationFormFallback,
@@ -34,8 +53,96 @@ const withWorkspaceDate = (values: CoworkReservationInput, today: string) =>
 
 type CoworkReservationPageData = {
   readonly entryPackOffered: boolean;
+  readonly heldEntryPacks: readonly HeldEntryPack[];
   /** Whether a Reserved Desk can be booked as an overnight stay. */
   readonly overnightStayOffered: boolean;
+};
+
+type CoworkPageSelection = CoworkReservationInput & {
+  readonly bookingPasses: CoworkEntryPacks;
+  readonly initialEntryPack?: InitialCoworkEntryPack;
+};
+
+const loadHeldEntryPacks = Effect.fn("cowork.loadHeldEntryPacks")(function* () {
+  const account = yield* CurrentCustomerAccount;
+  const active = yield* Effect.option(account.requireActive);
+  return Option.isSome(active)
+    ? yield* listHeldEntryPacks(active.value.accountId)
+    : [];
+});
+
+const getBookingPasses = (
+  heldEntryPacks: readonly HeldEntryPack[],
+  today: string,
+  restored?: {
+    readonly passId: OrderId;
+    readonly reservationId: WorkspaceReservationId;
+  }
+): CoworkEntryPacks => {
+  const claimedDates = new Set<CoworkEntryPacks["claimedDates"][number]>();
+  const packs = heldEntryPacks.flatMap((pack) => {
+    const editedDate =
+      restored?.passId === pack.id
+        ? pack.reservedEntryDates[restored.reservationId]
+        : undefined;
+    for (const date of pack.claimedDates) {
+      if (date >= today && date !== editedDate) claimedDates.add(date);
+    }
+    const entriesLeft = pack.entriesLeft + Number(editedDate !== undefined);
+    return pack.status === "active" &&
+      entriesLeft > 0 &&
+      today < pack.validUntil
+      ? [
+          {
+            id: pack.id,
+            tier: pack.tier,
+            entryCount: pack.entryCount,
+            entriesLeft,
+            validFrom: pack.validFrom,
+            validUntil: pack.validUntil,
+          },
+        ]
+      : [];
+  });
+  return { packs, claimedDates: [...claimedDates] };
+};
+
+const applyEntryPack = (
+  values: CoworkReservationInput,
+  bookingPasses: CoworkEntryPacks,
+  passId: string | undefined,
+  today: string,
+  dateWasRequested: boolean
+): CoworkPageSelection => {
+  if (passId === undefined) return { ...values, bookingPasses };
+
+  const pack = bookingPasses.packs.find(({ id }) => id === passId);
+  const date = dateWasRequested
+    ? values.date
+    : pack && firstEntryPackDate(pack, today, bookingPasses.claimedDates);
+
+  if (!pack || !date) {
+    return {
+      ...values,
+      bookingPasses,
+      initialEntryPack: { kind: "invalid-link" },
+    };
+  }
+
+  const entryTier = getEntryPackCoworkTier(pack.tier);
+  return {
+    ...values,
+    bookingPasses,
+    initialEntryPack: { kind: "applied", packId: pack.id },
+    date,
+    entryTier,
+    coffee: entryTier !== "open-space" || values.coffee,
+    monitorOption:
+      pack.tier === "reserved-desk-workstation"
+        ? (values.monitorOption ?? workspaceProductMonitorOptions[0])
+        : undefined,
+    stay: entryTier === "reserved-desk" ? values.stay : undefined,
+  };
 };
 
 /** Drops a linked or restored overnight stay the page doesn't offer. */
@@ -60,28 +167,68 @@ export const coworkReservationPage = createReservationPage({
       isCoworkPassesPageOpenAfterConnection(),
       isOvernightStayOfferedAfterConnection(),
     ]);
-    return { entryPackOffered, overnightStayOffered };
+    return { entryPackOffered, heldEntryPacks: [], overnightStayOffered };
+  },
+  loadFormPageData: async (pageData) => {
+    if (!pageData.entryPackOffered) return pageData;
+    const heldEntryPacks = await loadHeldEntryPacks().pipe(
+      Effect.provide(
+        Layer.mergeAll(WorkspaceDatabase.Default, CurrentCustomerAccount.Live)
+      ),
+      runWorkspaceEffectOrElse("cowork.load-held-entry-packs", {
+        boundary: "page",
+        failureCode: "cowork.held-entry-packs-unavailable",
+        orElse: (): readonly HeldEntryPack[] => [],
+      })
+    );
+    return { ...pageData, heldEntryPacks };
   },
   pathname: coworkReservationPath,
   prefillsContact: true,
   // A historical tier can't be booked again, so its customer starts over.
-  restore: (reservation, searchParams, { locale, pageData, today }) =>
-    isWorkspaceCoworkCurrentProductTier(reservation.entryTier)
-      ? {
-          kind: "restored",
-          values: withOfferedStay(
-            withWorkspaceDate(
-              coworkSelectionLink.restore(
-                getCoworkReservationDefaultValues(reservation),
-                searchParams,
-                { locale }
-              ),
-              today
-            ),
-            pageData
-          ),
-        }
-      : { kind: "replaced", content: <CoworkOfferReplaced locale={locale} /> },
+  restore: (
+    reservation,
+    searchParams,
+    { entryPack, locale, pageData, today }
+  ) => {
+    if (!isWorkspaceCoworkCurrentProductTier(reservation.entryTier)) {
+      return {
+        kind: "replaced",
+        content: <CoworkOfferReplaced locale={locale} />,
+      };
+    }
+
+    const bookingPasses = getBookingPasses(
+      pageData.heldEntryPacks,
+      today,
+      entryPack
+    );
+    const values = withOfferedStay(
+      withWorkspaceDate(
+        coworkSelectionLink.restore(
+          getCoworkReservationDefaultValues(reservation),
+          searchParams,
+          { locale }
+        ),
+        today
+      ),
+      pageData
+    );
+    const restoredPack =
+      entryPack &&
+      bookingPasses.packs.find(({ id }) => id === entryPack.passId);
+    const initialValues: CoworkPageSelection = {
+      ...values,
+      bookingPasses,
+      initialEntryPack: restoredPack
+        ? { kind: "applied", packId: restoredPack.id }
+        : entryPack && { kind: "unavailable" },
+    };
+    return {
+      kind: "restored",
+      values: initialValues,
+    };
+  },
   /**
    * Cowork form values from a link, filled from the customer's last cowork
    * offer only while that offer is still bookable on the form's date.
@@ -97,7 +244,19 @@ export const coworkReservationPage = createReservationPage({
       ),
       pageData
     );
-    if (!lastReservation) return queryValues;
+    const bookingPasses = getBookingPasses(pageData.heldEntryPacks, today);
+    const requestedPack = pageData.entryPackOffered
+      ? getSearchParam(searchParams, "pass")
+      : undefined;
+    if (requestedPack !== undefined || !lastReservation) {
+      return applyEntryPack(
+        queryValues,
+        bookingPasses,
+        requestedPack,
+        today,
+        getSearchParam(searchParams, "date") === queryValues.date
+      );
+    }
 
     const rememberedValues = withOfferedStay(
       withWorkspaceDate(
@@ -111,12 +270,13 @@ export const coworkReservationPage = createReservationPage({
       rememberedValues.coffee === queryValues.coffee &&
       rememberedValues.monitorOption === queryValues.monitorOption
     ) {
-      return queryValues;
+      return { ...queryValues, bookingPasses };
     }
 
-    return (yield* isRememberedCoworkOfferAvailable(rememberedValues))
+    const values = (yield* isRememberedCoworkOfferAvailable(rememberedValues))
       ? rememberedValues
       : queryValues;
+    return { ...values, bookingPasses };
   }),
   // Every price and the initial availability render with the content, so no
   // option streams in later and resizes the form.
@@ -138,14 +298,19 @@ export const coworkReservationPage = createReservationPage({
       locale,
       submittedCode,
     }),
-  renderForm: (form) => (
+  renderForm: ({
+    initialValues: { bookingPasses, initialEntryPack, ...initialValues },
+    ...form
+  }) => (
     <CoworkReservationForm
+      bookingPasses={bookingPasses}
       checkoutCustomer={form.checkoutCustomer}
       checkoutSessionId={form.checkoutSessionId}
       entryPackOffered={form.pageData.entryPackOffered}
       initialAdvertisedPrices={form.initialAdvertisedPrices}
       initialAvailability={form.initialAvailability}
-      initialValues={form.initialValues}
+      initialEntryPack={initialEntryPack}
+      initialValues={initialValues}
       locale={form.locale}
       overnightStayOffered={form.pageData.overnightStayOffered}
       replacementToken={form.replacementToken}

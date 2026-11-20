@@ -1,11 +1,18 @@
 import "server-only";
 
-import { and, asc, eq, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { orders, passEntryClaims, passPurchases } from "@/db/schema";
+import {
+  orders,
+  passEntryClaims,
+  passPurchases,
+  workspaceReservations,
+} from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { OrderId } from "@/features/order";
+import { supersedableReservationPaymentStates } from "@/features/reservation/backend/reservation-supersession";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { PlainDate } from "@/shared/utils/temporal";
 import type { PassStatus } from "../pass";
 import type { EntryPackSize, PassTier } from "../pass-offer";
@@ -20,6 +27,10 @@ export type HeldEntryPack = {
   readonly validUntil: PlainDate;
   readonly status: PassStatus;
   readonly claimedDates: readonly PlainDate[];
+  /** Server-only lookup for editing a signed draft that already holds an entry. */
+  readonly reservedEntryDates: Readonly<
+    Partial<Record<WorkspaceReservationId, PlainDate>>
+  >;
 };
 
 /** Payment and claim state from one snapshot, scoped to the verified holder. */
@@ -27,6 +38,17 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
   accountId: CustomerAccountId
 ) {
   const { db } = yield* WorkspaceDatabase;
+  const liveEditableClaim = and(
+    eq(passEntryClaims.status, "reserved"),
+    eq(workspaceReservations.authorAccountId, accountId),
+    eq(workspaceReservations.reservationState, "held"),
+    inArray(
+      workspaceReservations.paymentState,
+      supersedableReservationPaymentStates
+    ),
+    isNotNull(workspaceReservations.dotyposReservationId),
+    sql`${workspaceReservations.reservationHoldExpiresAt} > now()`
+  );
   const rows = yield* db
     .select({
       id: passPurchases.id,
@@ -41,6 +63,11 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
           filter (where ${passEntryClaims.date} is not null),
         array[]::text[]
       )`,
+      reservedEntryDates: sql<HeldEntryPack["reservedEntryDates"]>`coalesce(
+        jsonb_object_agg(${passEntryClaims.reservationId}, ${passEntryClaims.date})
+          filter (where ${liveEditableClaim}),
+        '{}'::jsonb
+      )`,
     })
     .from(passPurchases)
     .innerJoin(orders, eq(orders.id, passPurchases.id))
@@ -50,6 +77,10 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
         eq(passEntryClaims.passId, passPurchases.id),
         ne(passEntryClaims.status, "released")
       )
+    )
+    .leftJoin(
+      workspaceReservations,
+      eq(workspaceReservations.id, passEntryClaims.reservationId)
     )
     .where(
       and(
@@ -67,7 +98,10 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
           {
             ...pack,
             paidAt,
-            entriesLeft: Math.max(0, pack.entryCount - pack.claimedDates.length),
+            entriesLeft: Math.max(
+              0,
+              pack.entryCount - pack.claimedDates.length
+            ),
           },
         ]
       : []

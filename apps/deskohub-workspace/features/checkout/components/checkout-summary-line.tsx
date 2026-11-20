@@ -13,11 +13,13 @@ type CheckoutSummaryPriceItem = {
 
 export function CheckoutSummaryProductLine({
   changed,
+  detail,
   item,
   label,
   locale,
 }: {
   readonly changed?: boolean;
+  readonly detail?: string;
   readonly item: CheckoutSummaryPriceItem;
   readonly label: string;
   readonly locale: Locale;
@@ -31,7 +33,12 @@ export function CheckoutSummaryProductLine({
       : undefined;
 
   return (
-    <CheckoutSummaryLine changed={changed} label={label} locale={locale}>
+    <CheckoutSummaryLine
+      changed={changed}
+      detail={detail}
+      label={label}
+      locale={locale}
+    >
       {discounted ? (
         <>
           <span className="sr-only">
