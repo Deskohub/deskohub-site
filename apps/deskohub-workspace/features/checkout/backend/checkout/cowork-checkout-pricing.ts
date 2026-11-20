@@ -3,6 +3,7 @@ import { getCoworkCheckoutSummary } from "@/features/checkout/checkout-summary-c
 import { getWorkspaceProductByTier } from "@/features/checkout/product-catalog";
 import {
   buildCoworkReservationQuote,
+  type CoworkEntryPackFunding,
   type CoworkReservationQuote,
 } from "@/features/checkout/reservation-quote-cowork";
 import type {
@@ -10,6 +11,8 @@ import type {
   DiscountQuote,
   DiscountResolutionError,
 } from "@/features/discounts";
+import { makeDiscountCommitment } from "@/features/discounts/commitment";
+import { PromotionCodeUnavailableError } from "@/features/discounts/errors";
 import {
   type CoworkAdvertisedPriceDetails,
   type CoworkAdvertisedPriceReservation,
@@ -20,6 +23,7 @@ import {
 } from "@/features/reservation/cowork-reservation";
 import type { MoneyUnitMismatch } from "@/shared/money/money";
 import {
+  getPaymentPriceVerdict,
   type ReservationAdvertisementAffirmation,
   type ReservationAdvertisementAffirmationInput,
   type ReservationAdvertisementQuote,
@@ -147,7 +151,7 @@ const buildCoworkQuote = Effect.fn("CoworkCheckoutPricing.buildQuote")(
       discountQuote: input.discountQuote,
     })
 );
-export const coworkCheckoutPricing = reservationCheckoutPricing<
+const coworkPricingWithDiscounts = reservationCheckoutPricing<
   CoworkPricingSelection,
   CoworkAdvertisedPriceReservation,
   NormalizedCoworkReservationOrder,
@@ -165,3 +169,80 @@ export const coworkCheckoutPricing = reservationCheckoutPricing<
   getCheckoutSummary: ({ quote, reservation }) =>
     getCoworkCheckoutSummary(reservation, quote),
 });
+
+/** Quotes a cowork reservation whose Entry pack funding was validated by booking. */
+export const quoteCoworkEntryPack = Effect.fn("quoteCoworkEntryPack")(
+  function* (input: {
+    readonly reservation: NormalizedCoworkReservationOrder;
+    readonly entryPack: CoworkEntryPackFunding;
+  }): Effect.fn.Return<CoworkCustomerQuote, MoneyUnitMismatch> {
+    const { reservation, entryPack } = input;
+    const quote = yield* buildCoworkReservationQuote(reservation, {
+      entryPack,
+    });
+    return { kind: reservation.kind, reservation, quote };
+  }
+);
+
+const repriceCoworkEntryPack = Effect.fn("repriceCoworkEntryPack")(
+  function* (input: {
+    readonly reservation: NormalizedCoworkReservationOrder;
+    readonly entryPack: CoworkEntryPackFunding;
+  }): Effect.fn.Return<CoworkPaymentPriceAffirmation, MoneyUnitMismatch> {
+    const priced = yield* quoteCoworkEntryPack(input);
+    const { reservation, quote } = priced;
+    return {
+      ...priced,
+      commitment: makeDiscountCommitment({
+        product: { kind: reservation.kind, tier: reservation.entryTier },
+        firstServiceDate: reservation.date,
+        applications: [],
+      }),
+      summary: getCoworkCheckoutSummary(reservation, quote),
+    };
+  }
+);
+
+const entryPackCodeUnavailable = () =>
+  new PromotionCodeUnavailableError({
+    reason: "product_ineligible",
+    message: "An Entry pack booking cannot use a promotion code.",
+  });
+
+export const coworkCheckoutPricing = coworkPricingWithDiscounts.pipe(
+  Effect.map((pricing) => ({
+    ...pricing,
+    repriceForPayment: (input: CoworkPaymentRepricingInput) => {
+      const { entryPack } = input.quote;
+      return entryPack
+        ? repriceCoworkEntryPack({ reservation: input.reservation, entryPack })
+        : pricing.repriceForPayment(input);
+    },
+    affirmForPayment: (input: CoworkPaymentPriceAffirmationInput) => {
+      const { reservation, quote, acceptedTotal } = input;
+      const { entryPack } = quote;
+      if (!entryPack) return pricing.affirmForPayment(input);
+
+      return repriceCoworkEntryPack({ reservation, entryPack }).pipe(
+        Effect.map((priced) =>
+          getPaymentPriceVerdict({
+            signed: {
+              quote,
+              summary: getCoworkCheckoutSummary(reservation, quote),
+              acceptedTotal,
+            },
+            priced,
+          })
+        )
+      );
+    },
+    applyDiscountCode: (input: CoworkDiscountCodePriceInput) =>
+      input.quote.entryPack
+        ? Effect.fail(entryPackCodeUnavailable())
+        : pricing.applyDiscountCode(input),
+    clearDiscountCode: (input: CoworkDiscountCodeClearInput) =>
+      input.quote.entryPack
+        ? Effect.fail(entryPackCodeUnavailable())
+        : pricing.clearDiscountCode(input),
+  }))
+);
