@@ -15,6 +15,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
+import { isReusableAttemptState } from "../checkout/reusable-payment-attempt";
 import {
   ProviderPaymentDeferral,
   ProviderPaymentFinalizationService,
@@ -255,6 +256,8 @@ function makeReservationHoldCleanupServiceLayer(
         readonly orderId: WorkspaceReservationId;
         readonly checkedAt?: Temporal.Instant;
         readonly paymentAttemptId: PaymentAttemptId;
+        readonly sharedWindowCutoff?: Temporal.Instant;
+        readonly requeueRecovery?: boolean;
       }) {
         yield* Effect.logInfo(
           "Reservation hold cancellation provider finalization started"
@@ -265,6 +268,9 @@ function makeReservationHoldCleanupServiceLayer(
             paymentAttemptId: input.paymentAttemptId,
             ...(input.checkedAt && {
               abandonmentCheckedAt: input.checkedAt,
+            }),
+            ...(input.sharedWindowCutoff && {
+              sharedWindowCutoff: input.sharedWindowCutoff,
             }),
           })
           .pipe(
@@ -281,6 +287,9 @@ function makeReservationHoldCleanupServiceLayer(
           "Reservation hold cancellation provider finalization completed"
         );
 
+        if (result === "recovery_pending") return "skipped" as const;
+        if (input.requeueRecovery && result === "not_pending") return undefined;
+
         if (result === "paid") {
           yield* Effect.logWarning(
             "Reservation hold cancellation skipped: provider finalized paid"
@@ -295,7 +304,9 @@ function makeReservationHoldCleanupServiceLayer(
           return result;
         }
         if (result === "abandoned") {
-          return yield* expireAbandonedPaymentAttempt(input);
+          if (!input.sharedWindowCutoff)
+            return yield* expireAbandonedPaymentAttempt(input);
+          return undefined;
         }
         if (result !== "terminal") {
           yield* Effect.logWarning(
@@ -437,6 +448,37 @@ function makeReservationHoldCleanupServiceLayer(
           }
 
           if (sharedHold) {
+            const card =
+              qrPayments &&
+              (yield* qrPayments
+                .findCardAttempt(orderId)
+                .pipe(
+                  Effect.mapError(
+                    ReservationHoldCleanupError.fromError(
+                      "Card attempt could not be loaded."
+                    )
+                  )
+                ));
+            if (card) {
+              const requeueRecovery =
+                active.paymentState === "expired" &&
+                card.id === active.activePaymentAttemptId;
+              if (
+                requeueRecovery ||
+                (active.paymentState === "pending" &&
+                  isReusableAttemptState(card.state))
+              ) {
+                const outcome = yield* settlePendingProviderPayment({
+                  orderId: input.orderId,
+                  paymentAttemptId: card.id,
+                  checkedAt,
+                  sharedWindowCutoff: window.expiresAt,
+                  requeueRecovery,
+                });
+                if (outcome) return outcome;
+              }
+            }
+
             const expired = yield* paymentLifecycle
               .expirePublicPaymentWindow({ orderId, checkedAt })
               .pipe(

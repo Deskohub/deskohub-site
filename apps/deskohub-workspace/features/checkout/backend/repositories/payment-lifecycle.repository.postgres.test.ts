@@ -771,6 +771,137 @@ describe.skipIf(!testDatabase)(
       }
     });
 
+    test("records required Nexi refund for a verified card after forced cancellation", async () => {
+      const repository = await makeRepository();
+      const customer = customerId();
+      const reservation = await createHeldReservation(customer);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        customer
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const accountKey = "synthetic-fio-account";
+      const qr = await Effect.runPromise(
+        repository
+          .createPendingQrAttempt({
+            ...admission,
+            orderId,
+            locale,
+            accountingSnapshot: snapshot,
+            publicPayment: { accountKey },
+          })
+          .pipe(Effect.provideService(FioPollWake, { wake: () => Effect.void }))
+      );
+      const card = await Effect.runPromise(
+        repository.createPendingProviderAttempt({
+          orderId,
+          amount: admission.amount,
+          locale,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+          publicPayment: { accountKey, useAcceptedCommitment: true },
+        })
+      );
+
+      const claim = await Effect.runPromise(
+        Effect.gen(function* () {
+          const reservations = yield* WorkspaceReservationRepository;
+          return yield* reservations.claimAdministrationCancellation({
+            id: reservation.id,
+            staleCancellingBefore: Temporal.Now.instant(),
+            pendingPaymentCancellation: {
+              paymentAttemptId: qr.id,
+              failureCode: "admin_forced_payment_cancellation",
+            },
+          });
+        }).pipe(
+          Effect.provide(
+            WorkspaceReservationRepository.Default.pipe(
+              Layer.provide(testDatabase!.layer)
+            )
+          )
+        )
+      );
+      expect(claim).not.toBeNull();
+      const settled = await Effect.runPromise(
+        repository.markPaid({
+          orderId,
+          id: card.id,
+          paidAt: Temporal.Now.instant(),
+          providerOperationId: "fixture-card",
+        })
+      );
+      expect(settled).toMatchObject({
+        changed: false,
+        settlement: "refund_required",
+        attempt: { refundState: "required" },
+      });
+    });
+
+    test("settles an admitted card retry outside its order’s earlier shared window", async () => {
+      const repository = await makeRepository();
+      const customer = customerId();
+      const reservation = await createHeldReservation(customer);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        customer
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const old = await Effect.runPromise(
+        repository.createPendingProviderAttempt({
+          ...admission,
+          orderId,
+          locale,
+          accountingSnapshot: snapshot,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+          publicPayment: { accountKey: "synthetic-nexi-account" },
+        })
+      );
+      const expiredAt = Temporal.Now.instant().add({ minutes: 31 });
+      expect(
+        await Effect.runPromise(
+          repository.expirePublicPaymentWindow({
+            orderId,
+            checkedAt: expiredAt,
+          })
+        )
+      ).toBe(true);
+      await Effect.runPromise(
+        testDatabase!.db
+          .update(workspaceReservations)
+          .set({
+            activePaymentAttemptId: null,
+            reservationState: "held",
+            reservationHoldExpiresAt: Temporal.Now.instant().add({
+              minutes: 20,
+            }),
+          })
+          .where(eq(workspaceReservations.id, reservation.id))
+      );
+      const retried = await Effect.runPromise(
+        repository.createPendingProviderAttempt({
+          orderId,
+          amount: admission.amount,
+          commitment: admission.commitment,
+          locale,
+          accountingSnapshot: snapshot,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+          retriedAttempt: { ...old, state: "expired" },
+        })
+      );
+      const paid = await Effect.runPromise(
+        repository.markPaid({
+          orderId,
+          id: retried.id,
+          providerOperationId: "synthetic-retry-paid",
+          paidAt: Temporal.Now.instant(),
+        })
+      );
+      expect(paid.changed).toBe(true);
+    });
+
     test("expires a QR-first window and admits only one durable late receipt for recovery", async () => {
       const repository = await makeRepository();
       const customer = customerId();
@@ -832,6 +963,159 @@ describe.skipIf(!testDatabase)(
           repository.expirePublicPaymentWindow({ orderId, checkedAt })
         )
       ).toBe(false);
+    });
+
+    test("keeps a card settlement verified at cutoff in durable recovery", async () => {
+      const repository = await makeRepository();
+      const customer = customerId();
+      const reservation = await createHeldReservation(customer);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        customer
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const card = await Effect.runPromise(
+        repository.createPendingProviderAttempt({
+          ...admission,
+          orderId,
+          locale,
+          accountingSnapshot: snapshot,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+          publicPayment: { accountKey: "synthetic-fio-account" },
+        })
+      );
+      const observedAt = Temporal.Now.instant().add({ minutes: 31 });
+      expect(
+        await Effect.runPromise(
+          repository.markPaid({
+            orderId,
+            id: card.id,
+            paidAt: observedAt,
+            providerOperationId: "synthetic-captured-card",
+          })
+        )
+      ).toMatchObject({
+        changed: false,
+        settlement: "recovery_pending",
+        attempt: { id: card.id },
+      });
+
+      expect(
+        await Effect.runPromise(
+          repository.expirePublicPaymentWindow({
+            orderId,
+            checkedAt: observedAt,
+          })
+        )
+      ).toBe(false);
+    });
+
+    test("returns refund work for a late QR credit to a reservation superseded by another checkout", async () => {
+      const repository = await makeRepository();
+      const customer = customerId();
+      const reservation = await createHeldReservation(customer);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        customer
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const qr = await Effect.runPromise(
+        repository
+          .createPendingQrAttempt({
+            ...admission,
+            orderId,
+            locale,
+            accountingSnapshot: snapshot,
+            publicPayment: { accountKey: "synthetic-fio-account" },
+          })
+          .pipe(Effect.provideService(FioPollWake, { wake: () => Effect.void }))
+      );
+      const expiredAt = Temporal.Now.instant().add({ minutes: 31 });
+      await Effect.runPromise(
+        repository.expirePublicPaymentWindow({ orderId, checkedAt: expiredAt })
+      );
+      await Effect.runPromise(
+        testDatabase!.db
+          .update(workspaceReservations)
+          .set({
+            reservationState: "cancelled",
+            cancellationCause: "checkout_superseded",
+            reservationCancelledAt: expiredAt,
+          })
+          .where(eq(workspaceReservations.id, reservation.id))
+      );
+
+      expect(
+        await Effect.runPromise(
+          repository.recordVerifiedQrPayment({
+            orderId,
+            id: qr.id,
+            providerOperationId: "synthetic-superseded-transfer",
+            paidAt: expiredAt,
+          })
+        )
+      ).toEqual({ status: "refund" });
+    });
+
+    test("releases voucher credit when an exact late QR receipt reaches recovery before hold cleanup", async () => {
+      const repository = await makeRepository();
+      const customer = customerId();
+      const voucher = await createVoucher(customer);
+      try {
+        const reservation = await createHeldReservation(customer);
+        const { admission, locale, snapshot } = makeCodeAdmission({
+          reservation,
+          dotyposCustomerId: customer,
+          candidate: voucher.candidate,
+          firstServiceDate: "2099-01-01",
+        });
+        const orderId = reservationOrderId(reservation.id);
+        const qr = await Effect.runPromise(
+          repository
+            .createPendingQrAttempt({
+              ...admission,
+              orderId,
+              locale,
+              accountingSnapshot: snapshot,
+              publicPayment: { accountKey: "synthetic-fio-account" },
+            })
+            .pipe(
+              Effect.provideService(FioPollWake, { wake: () => Effect.void })
+            )
+        );
+
+        expect(
+          await Effect.runPromise(
+            repository.recordVerifiedQrPayment({
+              orderId,
+              id: qr.id,
+              providerOperationId: "synthetic-voucher-transfer",
+              paidAt: Temporal.Now.instant().add({ minutes: 31 }),
+            })
+          )
+        ).toEqual({ status: "recover" });
+
+        const another = await createHeldReservation(customer);
+        const replay = makeCodeAdmission({
+          reservation: another,
+          dotyposCustomerId: customer,
+          candidate: voucher.candidate,
+          firstServiceDate: "2099-01-01",
+        });
+        expect(
+          await Effect.runPromise(admit(repository, another, replay))
+        ).toMatchObject({
+          amount: admission.amount,
+          state: "created",
+        });
+      } finally {
+        await testDatabase!.pool.query(
+          "delete from voucher_redemptions where voucher_id = $1",
+          [voucher.candidate.provenance.providerReference]
+        );
+        await voucher.cleanup();
+      }
     });
 
     test("admits only one successor of the exact marked Nexi attempt", async () => {

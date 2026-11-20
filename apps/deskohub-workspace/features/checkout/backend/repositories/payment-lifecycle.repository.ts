@@ -1,5 +1,5 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { and, eq, inArray, notExists, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, notExists, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
@@ -205,6 +205,119 @@ const noLatePaymentRecovery = notExists(
   sql`(select 1 from ${latePaymentRecoveries} where ${latePaymentRecoveries.workspaceReservationId} = ${workspaceReservations.id})`
 );
 
+type ReservationPaymentWindow = typeof reservationPaymentWindows.$inferSelect;
+
+const windowIncludesAttempt = (
+  window: ReservationPaymentWindow,
+  attemptId: PaymentAttemptId | null
+) =>
+  attemptId !== null &&
+  (window.cardAttemptId === attemptId || window.qrAttemptId === attemptId);
+
+const releaseWindowClaims = Effect.fnUntraced(function* (
+  paymentAttemptId: PaymentAttemptId,
+  releasedAt: Temporal.Instant
+) {
+  const claim = {
+    paymentAttemptId,
+    releasedAt,
+    releaseReason: "public_payment_window_expired",
+  };
+  yield* PromotionClaims.release(claim);
+  yield* ReferralInvitationLedger.release(claim);
+});
+
+const canRecoverPublicReservation = (
+  reservation: WorkspaceReservationRow,
+  window: ReservationPaymentWindow
+) =>
+  reservation.dotyposReservationId !== null &&
+  reservation.activePaymentAttemptId !== null &&
+  windowIncludesAttempt(window, reservation.activePaymentAttemptId) &&
+  reservation.paymentState !== "paid" &&
+  reservation.reservationState !== "confirmed" &&
+  reservation.failureCode !==
+    administrationForcedPaymentCancellationFailureCode &&
+  reservation.cancellationCause !== "checkout_superseded" &&
+  reservation.cancellationCause !== "operator" &&
+  reservation.cancellationCause !== "customer_withdrawal";
+
+const admitLatePublicSettlement = Effect.fnUntraced(function* (
+  input: Parameters<IPaymentLifecycleRepository["markPaid"]>[0],
+  reservation: WorkspaceReservationRow | undefined,
+  window: ReservationPaymentWindow
+) {
+  if (
+    !reservation?.dotyposReservationId ||
+    !reservation.activePaymentAttemptId ||
+    !canRecoverPublicReservation(reservation, window)
+  )
+    return undefined;
+
+  const { db } = yield* WorkspaceTransaction;
+  const workspaceReservationId = reservation.id;
+  const [recovery] = yield* db
+    .select()
+    .from(latePaymentRecoveries)
+    .where(
+      eq(latePaymentRecoveries.workspaceReservationId, workspaceReservationId)
+    )
+    .limit(1);
+  if (recovery) {
+    if (
+      recovery.paymentAttemptId !== input.id ||
+      recovery.providerOperationId !== (input.providerOperationId ?? null)
+    )
+      return undefined;
+    const [attempt] = yield* db
+      .select()
+      .from(paymentAttempts)
+      .where(eq(paymentAttempts.id, input.id))
+      .limit(1);
+    return attempt ? toPaymentAttempt(attempt) : undefined;
+  }
+
+  const [attempt] = yield* db
+    .update(paymentAttempts)
+    .set({
+      state: "expired",
+      failureCode: "public_payment_window_expired",
+      updatedAt: input.paidAt,
+    })
+    .where(
+      and(eq(paymentAttempts.id, input.id), ne(paymentAttempts.state, "paid"))
+    )
+    .returning();
+  if (!attempt) return undefined;
+  if (reservation.activePaymentAttemptId !== input.id) {
+    yield* bindAcceptedClaimsToWinner(
+      reservation.activePaymentAttemptId,
+      input.id
+    );
+  }
+  yield* releaseWindowClaims(input.id, input.paidAt);
+  yield* db
+    .update(workspaceReservations)
+    .set({
+      activePaymentAttemptId: input.id,
+      paymentState: "expired",
+      updatedAt: input.paidAt,
+    })
+    .where(eq(workspaceReservations.id, workspaceReservationId));
+
+  yield* db.insert(latePaymentRecoveries).values({
+    paymentAttemptId: input.id,
+    workspaceReservationId,
+    originalDotyposReservationId: reservation.dotyposReservationId,
+    webhookEventId: input.webhookEventId,
+    providerOperationId: input.providerOperationId,
+    providerStatus: input.providerStatus,
+    verifiedPaidAt: input.paidAt,
+    state: "pending",
+  });
+  return toPaymentAttempt(attempt);
+});
+
 const bindAcceptedClaimsToWinner = Effect.fnUntraced(function* (
   original: PaymentAttemptId,
   winner: PaymentAttemptId
@@ -228,7 +341,7 @@ const bindAcceptedClaimsToWinner = Effect.fnUntraced(function* (
     .where(eq(referralInvitationClaims.paymentAttemptId, original));
 });
 
-const refundDuplicateCardAttempt = Effect.fnUntraced(function* (
+const requireCardSettlementRefund = Effect.fnUntraced(function* (
   input: Parameters<IPaymentLifecycleRepository["markPaid"]>[0]
 ) {
   const { db } = yield* WorkspaceTransaction;
@@ -922,11 +1035,15 @@ export class PaymentLifecycleRepository extends Context.Service<
           const workspaceReservationId = reservationIdForOrder(input.orderId);
           return yield* transaction(
             Effect.gen(function* () {
-              const [window] = yield* db
+              const [storedWindow] = yield* db
                 .select()
                 .from(reservationPaymentWindows)
                 .where(eq(reservationPaymentWindows.orderId, input.orderId))
                 .limit(1);
+              const window =
+                storedWindow && windowIncludesAttempt(storedWindow, input.id)
+                  ? storedWindow
+                  : undefined;
               const [orderBeforeLock] = window
                 ? yield* db
                     .select({
@@ -955,17 +1072,6 @@ export class PaymentLifecycleRepository extends Context.Service<
                   .limit(1)
                   .for("update");
                 if (
-                  window.cardAttemptId !== input.id &&
-                  window.qrAttemptId !== input.id
-                ) {
-                  return yield* lifecycleStateError(
-                    "markPaid",
-                    { type: "paymentAttemptId", id: input.id },
-                    "The attempt is outside the public reservation payment window."
-                  );
-                }
-
-                if (
                   reservation?.paymentState === "paid" &&
                   window.qrAttemptId === input.id &&
                   reservation.activePaymentAttemptId === input.id
@@ -987,7 +1093,7 @@ export class PaymentLifecycleRepository extends Context.Service<
                   reservation?.paymentState === "paid" &&
                   reservation.activePaymentAttemptId !== input.id
                 ) {
-                  return yield* refundDuplicateCardAttempt(input);
+                  return yield* requireCardSettlementRefund(input);
                 }
 
                 if (reservation?.paymentState !== "paid") {
@@ -995,9 +1101,28 @@ export class PaymentLifecycleRepository extends Context.Service<
                     reservation?.reservationState !== "held" ||
                     reservation.paymentState !== "pending" ||
                     !reservation.activePaymentAttemptId ||
+                    !windowIncludesAttempt(
+                      window,
+                      reservation.activePaymentAttemptId
+                    ) ||
                     Temporal.Instant.compare(window.expiresAt, input.paidAt) <=
                       0
                   ) {
+                    if (window.cardAttemptId === input.id) {
+                      const attempt = yield* admitLatePublicSettlement(
+                        input,
+                        reservation,
+                        window
+                      );
+                      if (attempt)
+                        return {
+                          attempt,
+                          changed: false,
+                          timestamp: input.paidAt,
+                          settlement: "recovery_pending" as const,
+                        };
+                      return yield* requireCardSettlementRefund(input);
+                    }
                     return yield* lifecycleStateError(
                       "markPaid",
                       { type: "paymentAttemptId", id: input.id },
@@ -1154,69 +1279,12 @@ export class PaymentLifecycleRepository extends Context.Service<
               .from(workspaceReservations)
               .where(eq(workspaceReservations.id, workspaceReservationId))
               .for("update");
-            if (
-              !reservation?.dotyposReservationId ||
-              reservation.paymentState === "paid" ||
-              reservation.reservationState === "confirmed" ||
-              reservation.failureCode ===
-                administrationForcedPaymentCancellationFailureCode ||
-              reservation.failureCode === "checkout_superseded" ||
-              !reservation.activePaymentAttemptId
-            ) {
-              return { status: "refund" } as const;
-            }
-            const [recovery] = yield* db
-              .select()
-              .from(latePaymentRecoveries)
-              .where(
-                eq(
-                  latePaymentRecoveries.workspaceReservationId,
-                  workspaceReservationId
-                )
-              )
-              .limit(1);
-            if (recovery) {
-              return {
-                status:
-                  recovery.paymentAttemptId === input.id &&
-                  recovery.providerOperationId === input.providerOperationId
-                    ? "recover"
-                    : "refund",
-              } as const;
-            }
-
-            if (reservation.activePaymentAttemptId !== input.id) {
-              yield* bindAcceptedClaimsToWinner(
-                reservation.activePaymentAttemptId,
-                input.id
-              );
-            }
-            yield* db
-              .update(paymentAttempts)
-              .set({
-                state: "expired",
-                failureCode: "public_payment_window_expired",
-                updatedAt: input.paidAt,
-              })
-              .where(eq(paymentAttempts.id, input.id));
-            yield* db
-              .update(workspaceReservations)
-              .set({
-                activePaymentAttemptId: input.id,
-                paymentState: "expired",
-                updatedAt: input.paidAt,
-              })
-              .where(eq(workspaceReservations.id, workspaceReservationId));
-            yield* db.insert(latePaymentRecoveries).values({
-              paymentAttemptId: input.id,
-              workspaceReservationId,
-              originalDotyposReservationId: reservation.dotyposReservationId,
-              providerOperationId: input.providerOperationId,
-              verifiedPaidAt: input.paidAt,
-              state: "pending",
-            });
-
-            return { status: "recover" } as const;
+            const attempt = yield* admitLatePublicSettlement(
+              input,
+              reservation,
+              window
+            );
+            return { status: attempt ? "recover" : "refund" } as const;
           })
         );
       });
@@ -1298,13 +1366,10 @@ export class PaymentLifecycleRepository extends Context.Service<
               })
               .where(eq(workspaceReservations.id, workspaceReservationId));
             if (reservation.activePaymentAttemptId) {
-              const claim = {
-                paymentAttemptId: reservation.activePaymentAttemptId,
-                releasedAt: checkedAt,
-                releaseReason: failureCode,
-              };
-              yield* PromotionClaims.release(claim);
-              yield* ReferralInvitationLedger.release(claim);
+              yield* releaseWindowClaims(
+                reservation.activePaymentAttemptId,
+                checkedAt
+              );
             }
             return true;
           })

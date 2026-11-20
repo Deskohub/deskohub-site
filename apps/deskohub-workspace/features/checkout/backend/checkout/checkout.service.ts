@@ -688,6 +688,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
         readonly reservation: WorkspaceReservation;
         readonly state: SignedPayState;
         readonly locale: Locale;
+        readonly method?: PublicPaymentChoice["method"];
         readonly returnTarget: PaymentReturnTarget | undefined;
       };
 
@@ -700,6 +701,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
       ) {
         const paidResult = yield* findPaidOrderResult(input);
         if (paidResult) return paidResult;
+        if (input.method === "qr" && input.reservation.activePaymentAttemptId) {
+          return paymentInProgress;
+        }
         // Shared-window attempts are only reopened through the method-aware
         // path, including when a stale Pay form omits the payment method.
         if (
@@ -1054,7 +1058,17 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           }
 
           const checkout = yield* payableCheckout
-            .open({ payStateToken: input.payStateToken, page: { locale } })
+            .open({
+              payStateToken: input.payStateToken,
+              page: { locale },
+              blockPaymentRetry:
+                !input.method && qrPayments
+                  ? (reservationId) =>
+                      qrPayments
+                        .findPaymentWindow(reservationOrderId(reservationId))
+                        .pipe(Effect.map((window) => window !== null))
+                  : undefined,
+            })
             .pipe(
               Effect.catchTags({
                 PayStateTokenError: (cause) =>
@@ -1093,6 +1107,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           }
 
           const progressResult = yield* findReservationProgressResult({
+            method: input.method,
             reservation,
             state,
             locale,
@@ -1181,6 +1196,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 }
                 const lockedProgressResult =
                   yield* findReservationProgressResult({
+                    method: input.method,
                     reservation: lockedReservation,
                     state,
                     locale,

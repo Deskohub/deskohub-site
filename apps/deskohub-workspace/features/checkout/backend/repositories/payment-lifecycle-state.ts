@@ -34,7 +34,7 @@ export interface PaymentLifecycleTransition {
   readonly attempt: PaymentAttempt;
   readonly changed: boolean;
   readonly timestamp: Temporal.Instant;
-  readonly settlement?: "refund_required";
+  readonly settlement?: "refund_required" | "recovery_pending";
 }
 
 export type NonTerminalPaymentAttemptState = Extract<

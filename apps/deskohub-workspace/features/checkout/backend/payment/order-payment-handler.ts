@@ -72,6 +72,7 @@ export interface OrderPaymentHandler {
   readonly resumeRecovery: (input: {
     readonly orderId: OrderId;
     readonly paymentAttemptId: PaymentAttemptId;
+    readonly requeue?: boolean;
   }) => Effect.Effect<boolean, Error>;
   readonly startRecovery: (
     input: Omit<PaymentOutcome, "id"> & {

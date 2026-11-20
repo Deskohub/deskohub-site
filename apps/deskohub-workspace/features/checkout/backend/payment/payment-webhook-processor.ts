@@ -1,5 +1,6 @@
 import { Effect, type Schema } from "effect";
 import type { PaymentAttemptState, WebhookEvent } from "@/db/schema";
+import { currentPreciseInstant } from "@/shared/utils/temporal";
 import {
   CheckoutAnalytics,
   type ICheckoutAnalytics,
@@ -682,9 +683,13 @@ export const makePaymentWebhookProcessor = <
         webhookEventId: eventId,
         providerOperationId,
         providerStatus,
-        paidAt: Temporal.Now.instant(),
+        paidAt: yield* currentPreciseInstant,
       });
       if (transition.settlement === "refund_required") return;
+      if (transition.settlement === "recovery_pending") {
+        yield* startLatePaymentRecovery(payment);
+        return;
+      }
       if (transition.changed) {
         yield* checkoutAnalytics.paymentCompleted({
           attempt: transition.attempt,
