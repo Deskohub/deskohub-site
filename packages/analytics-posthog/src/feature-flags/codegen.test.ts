@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
@@ -42,12 +41,14 @@ describe("generatePostHogFeatureFlagContract", () => {
       );
 
       expect(result).toEqual({ flagCount: 2, status: "updated" });
-      expect(await Bun.file(contract).text()).toContain(
-        '  "feature_a",\n  "feature_b",'
+      expect(await import(contract)).toHaveProperty(
+        "postHogFeatureFlags.keys",
+        ["feature_a", "feature_b"]
       );
-      const snapshotSource = await Bun.file(snapshot).text();
-      expect(snapshotSource).toContain('"feature_a": true');
-      expect(snapshotSource).toContain('"feature_b": null');
+      expect(await import(snapshot)).toHaveProperty(
+        "postHogFeatureFlagSnapshot.constantValues",
+        { feature_a: true, feature_b: null }
+      );
     });
   });
 });
@@ -87,10 +88,10 @@ describe("generatePostHogFeatureFlagSnapshot", () => {
       );
 
       expect(result).toEqual({ flagCount: 2 });
-      const source = await Bun.file(snapshot).text();
-      expect(source).toContain('"feature_a": true');
-      expect(source).toContain('"feature_c": null');
-      expect(source).not.toContain("feature_b");
+      expect(await import(snapshot)).toHaveProperty(
+        "postHogFeatureFlagSnapshot.constantValues",
+        { feature_a: true, feature_c: null }
+      );
     });
   });
 });
@@ -126,7 +127,7 @@ interface OutputFiles {
 const withOutputFiles = async (
   callback: (files: OutputFiles) => Promise<void>
 ) => {
-  const directory = mkdtempSync(join(tmpdir(), "posthog-feature-flags-"));
+  const directory = mkdtempSync(join(import.meta.dir, ".tmp-codegen-test-"));
 
   try {
     await callback({
