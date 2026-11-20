@@ -6,35 +6,28 @@ import {
   isUpdateCheckDue,
   planUpdateCheck,
   runUpdateCheck,
-  updateCheckIntervalMs,
 } from "./update-check";
 
 describe("isUpdateCheckDue", () => {
   const startedAt = 1_000_000;
+  const fifteenMinutesMs = 15 * 60 * 1000;
 
   test("checks when no check has started yet", () => {
     expect(isUpdateCheckDue(undefined, startedAt)).toBeTrue();
   });
 
-  test("waits out the interval after a check started", () => {
+  test("waits fifteen minutes between checks", () => {
     expect(isUpdateCheckDue(startedAt, startedAt)).toBeFalse();
     expect(
-      isUpdateCheckDue(startedAt, startedAt + updateCheckIntervalMs - 1)
+      isUpdateCheckDue(startedAt, startedAt + fifteenMinutesMs - 1)
     ).toBeFalse();
-  });
-
-  test("checks again once the interval has passed", () => {
     expect(
-      isUpdateCheckDue(startedAt, startedAt + updateCheckIntervalMs)
+      isUpdateCheckDue(startedAt, startedAt + fifteenMinutesMs)
     ).toBeTrue();
   });
 
   test("checks again when the clock moved back behind the last check", () => {
     expect(isUpdateCheckDue(startedAt, startedAt - 1)).toBeTrue();
-  });
-
-  test("waits about fifteen minutes", () => {
-    expect(updateCheckIntervalMs).toBe(15 * 60 * 1000);
   });
 });
 

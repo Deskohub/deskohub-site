@@ -7,11 +7,11 @@ import TriangleAlert from "lucide-react-native/icons/triangle-alert";
 import { isValidElement, type ReactElement } from "react";
 import { Icon } from "./icon";
 import { Notice } from "./notice";
-import { idleLiveRegionLayout } from "./notice-presentation";
 import {
   elementTree,
   find,
   findAll,
+  flatStyle,
   type HostProps,
 } from "./testing/element-tree";
 import { Text } from "./text";
@@ -26,13 +26,33 @@ const region = (props: Parameters<typeof Notice>[0]) =>
 
 describe("Notice", () => {
   test("idle, it keeps its live region mounted out of the flow", () => {
-    const tree = notice({ tone: "error", message: undefined, title: "t" });
-    expect(tree.props.style).toBe(idleLiveRegionLayout);
-    expect(find(tree, Icon)).toBeUndefined();
-    expect(find(tree, "Pressable")).toBeUndefined();
-    const live = region({ tone: "error", message: undefined });
-    expect(live?.role).toBe("alert");
-    expect(live?.accessibilityLiveRegion).toBe("assertive");
+    for (const message of [undefined, ""]) {
+      const tree = notice({
+        tone: "error",
+        message,
+        title: "t",
+        action: { label: "a", onPress: () => undefined },
+      });
+      expect(flatStyle(tree.props.style)).toMatchObject({
+        position: "absolute",
+        overflow: "hidden",
+        width: 1,
+        height: 1,
+      });
+      expect(find(tree, Icon)).toBeUndefined();
+      expect(find(tree, "Pressable")).toBeUndefined();
+      const live = region({ tone: "error", message });
+      expect(live).toMatchObject({
+        role: "alert",
+        "aria-live": "assertive",
+        accessibilityLiveRegion: "assertive",
+      });
+      expect(region({ tone: "info", message })).toMatchObject({
+        role: "status",
+        "aria-live": "polite",
+        accessibilityLiveRegion: "polite",
+      });
+    }
   });
 
   test("each tone shows its own icon; an icon of the caller's replaces it", () => {
@@ -52,7 +72,10 @@ describe("Notice", () => {
       expect(live?.["aria-live"]).toBe("polite");
       expect(live?.accessibilityLiveRegion).toBe("polite");
     }
-    expect(region({ tone: "error", message: "m" })?.role).toBe("alert");
+    const error = region({ tone: "error", message: "m" });
+    expect(error?.role).toBe("alert");
+    expect(error?.["aria-live"]).toBe("assertive");
+    expect(error?.accessibilityLiveRegion).toBe("assertive");
   });
 
   test("a title is part of the live region, before the message", () => {

@@ -268,7 +268,7 @@ describe("officeEnablement", () => {
 
     expect(enablement.maximumSeats).toEqual(Option.none());
     expect(enablement.blockers).toEqual([]);
-    expect(clampOfficeDraft(group, enablement)).toBe(group);
+    expect(clampOfficeDraft(group, enablement)).toEqual(group);
   });
 
   test("blocks a day count that isn't a whole number", () => {
@@ -371,7 +371,7 @@ describe("clampOfficeDraft", () => {
       clampOfficeDraft(draft, {
         maximumDayCount: 4,
       })
-    ).toBe(draft);
+    ).toEqual(draft);
   });
 
   test("keeps the day count when the first day allows none", () => {

@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
-import {
-  checkNativeRelease,
-  nativeUpdateOffer,
-  nextNativeUpdate,
-} from "./native-release";
+import { checkNativeRelease, nextNativeUpdate } from "./native-release";
 
 const latestReleaseUrl = "https://workspace.test/api/mobile/releases/latest";
 
@@ -21,27 +17,6 @@ const release = {
   releaseUrl:
     "https://github.com/totalolage/deskohub-site/releases/tag/mobile-v1.3.0",
 };
-
-describe("nativeUpdateOffer", () => {
-  test("offers a release with a larger version code", () => {
-    expect(nativeUpdateOffer("1002000", release)).toEqual({
-      versionName: "1.3.0",
-      versionCode: 1_003_000,
-    });
-  });
-
-  test("offers nothing for the installed version or an older one", () => {
-    expect(nativeUpdateOffer("1003000", release)).toBeUndefined();
-    expect(nativeUpdateOffer("1004000", release)).toBeUndefined();
-  });
-
-  test.each([null, "", "abc", "1.2", "-1"])(
-    "offers nothing when the installed version code %p is unreadable",
-    (installed) => {
-      expect(nativeUpdateOffer(installed, release)).toBeUndefined();
-    }
-  );
-});
 
 const respondWith = (handler: (url: string) => Promise<Response>) => {
   const requested: Array<string> = [];
@@ -82,11 +57,13 @@ describe("checkNativeRelease", () => {
     expect(requested).toEqual([latestReleaseUrl]);
   });
 
-  test("reports the installed build current when it is the latest", async () => {
-    const { check } = await lookup("1003000", async () =>
-      Response.json(release)
-    );
-    expect(check).toEqual({ kind: "current" });
+  test("reports no update when the latest release is the same version or older", async () => {
+    for (const installed of ["1003000", "1004000"]) {
+      const { check } = await lookup(installed, async () =>
+        Response.json(release)
+      );
+      expect(check).toEqual({ kind: "current" });
+    }
   });
 
   test("reports the installed build current when nothing is released yet", async () => {
@@ -102,11 +79,13 @@ describe("checkNativeRelease", () => {
   });
 
   test("skips the request when the installed version code is unreadable", async () => {
-    const { check, requested } = await lookup(null, async () =>
-      Response.json(release)
-    );
-    expect(check).toEqual({ kind: "unknown" });
-    expect(requested).toEqual([]);
+    for (const installed of [null, "", "abc", "1.2", "-1"]) {
+      const { check, requested } = await lookup(installed, async () =>
+        Response.json(release)
+      );
+      expect(check).toEqual({ kind: "unknown" });
+      expect(requested).toEqual([]);
+    }
   });
 
   test.each([

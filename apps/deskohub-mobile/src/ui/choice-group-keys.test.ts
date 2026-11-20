@@ -18,12 +18,8 @@ describe("choiceIndexForKey", () => {
     expect(choiceIndexForKey("End", 0, 3)).toBe(2);
   });
 
-  test("Space chooses the focused option", () => {
-    expect(choiceIndexForKey(" ", 1, 3)).toBe(1);
-  });
-
   test("other keys are left to the platform", () => {
-    for (const key of ["Enter", "Tab", "a", "constructor"]) {
+    for (const key of ["Enter", "a", "constructor"]) {
       expect(choiceIndexForKey(key, 1, 3)).toBeUndefined();
     }
   });

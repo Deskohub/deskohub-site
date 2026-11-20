@@ -9,58 +9,18 @@ import {
   accountReadAllowance,
   allowsAutomaticRefresh,
   automaticRefreshReserve,
-  type ReadBudgetWindow,
-  remainingReads,
   spendRead,
 } from "./account-read-budget";
-import { accountAtom } from "./customer-data-runtime";
 import {
   makeFakeCustomerData,
   remainingAccountReads,
   settle,
 } from "./testing/customer-data-test-registry";
 
-const minute = 60_000;
-
-const spendTimes = (times: ReadonlyArray<number>) =>
-  times.reduce<ReadBudgetWindow>((window, at) => spendRead(window, at), []);
-
-describe("remainingReads", () => {
-  test("starts with the whole allowance", () => {
-    expect(remainingReads([], 0)).toBe(accountReadAllowance.reads);
-  });
-
-  test("counts every read spent within the window", () => {
-    const window = spendTimes([0, 1 * minute, 2 * minute]);
-
-    expect(remainingReads(window, 3 * minute)).toBe(
-      accountReadAllowance.reads - 3
-    );
-  });
-
-  test("frees a read once it is 30 minutes old", () => {
-    const window = spendTimes([0, 10 * minute]);
-
-    expect(remainingReads(window, 30 * minute - 1)).toBe(
-      accountReadAllowance.reads - 2
-    );
-    expect(remainingReads(window, 30 * minute)).toBe(
-      accountReadAllowance.reads - 1
-    );
-  });
-
-  test("never goes below zero", () => {
-    const window = spendTimes(
-      Array.from({ length: accountReadAllowance.reads + 5 }, (_, i) => i)
-    );
-
-    expect(remainingReads(window, 100)).toBe(0);
-  });
-
+describe("the read budget window", () => {
   test("drops expired reads when spending, so the window stays bounded", () => {
-    const window = spendTimes([0, 1, 2, 31 * minute]);
-
-    expect(window).toEqual([31 * minute]);
+    const now = 31 * 60_000;
+    expect(spendRead([0, 1, 2], now)).toEqual([now]);
   });
 });
 
@@ -72,16 +32,29 @@ describe("allowsAutomaticRefresh", () => {
 });
 
 describe("AccountReadBudget", () => {
-  test("counts spent reads on the clock and frees them as they age", async () => {
+  test("never goes below zero", async () => {
+    const remaining = await Effect.gen(function* () {
+      const budget = yield* AccountReadBudget;
+      for (let read = 0; read <= accountReadAllowance.reads; read += 1) {
+        yield* budget.spend;
+      }
+      return yield* budget.remaining;
+    }).pipe(Effect.provide(AccountReadBudget.Default), Effect.runPromise);
+
+    expect(remaining).toBe(0);
+  });
+
+  test("frees each spent read exactly when its window ends", async () => {
     const remaining = await Effect.gen(function* () {
       const budget = yield* AccountReadBudget;
       yield* budget.spend;
       yield* TestClock.adjust("10 minutes");
       yield* budget.spend;
-      const afterTwo = yield* budget.remaining;
-      yield* TestClock.adjust("25 minutes");
-      const afterAging = yield* budget.remaining;
-      return [afterTwo, afterAging];
+      yield* TestClock.adjust(Duration.millis(20 * 60_000 - 1));
+      const beforeExpiry = yield* budget.remaining;
+      yield* TestClock.adjust(Duration.millis(1));
+      const atExpiry = yield* budget.remaining;
+      return [beforeExpiry, atExpiry];
     }).pipe(
       Effect.provide(
         Layer.mergeAll(AccountReadBudget.Default, TestClock.layer())
@@ -106,7 +79,6 @@ describe("the account read allowance", () => {
 
   type Registry = ReturnType<typeof makeFakeCustomerData>["registry"];
   test.each([
-    ["the account", (r: Registry) => settle(r, accountAtom), 1],
     [
       "the reservation history",
       (r: Registry) => settle(r, reservationHistoryAtom),

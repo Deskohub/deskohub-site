@@ -72,7 +72,8 @@ describe("AppSignInCodeStep", () => {
     action.onPress();
     expect(onSubmit).toHaveBeenCalledWith("731044");
     // The sixth digit submits on its own, as on the site.
-    expect(input?.onComplete).toBe(onSubmit);
+    input?.onComplete?.("731045");
+    expect(onSubmit.mock.calls).toEqual([["731044"], ["731045"]]);
   });
 
   test("while the code is checked the action is busy and the boxes lock", () => {

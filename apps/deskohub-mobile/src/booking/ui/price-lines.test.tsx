@@ -6,7 +6,6 @@ import { m } from "../../i18n/messages";
 import { formatMoney, formatMoneyReduction } from "../../i18n/money-format";
 import {
   elementTree,
-  find,
   findAll,
   flatStyle,
   type HostProps,
@@ -170,27 +169,16 @@ describe("PriceLines", () => {
     expect(withNote[withNote.indexOf("Total") + 1]).toBe("note");
   });
 
-  test("a total from a seller who is not a VAT payer has no tax note and today's layout", () => {
-    const today = render({
-      breakdown: breakdownFor("not-vat-payer"),
-      variant: "card",
-      total: { label: "Total" },
-    });
-    const given = render({
+  test("a seller who is not a VAT payer shows the total without a tax note", () => {
+    const tree = render({
       breakdown: breakdownFor("not-vat-payer"),
       variant: "card",
       total: { label: "Total", taxNote: "note" },
     });
-    expect(openSpaceWithCoffee.summary.vatStatus).toBe("not-vat-payer");
-    expect(texts(given as ReactElement<HostProps>)).not.toContain("note");
-    expect(texts(given as ReactElement<HostProps>)).toEqual(
-      texts(today as ReactElement<HostProps>)
-    );
-    expect(
-      findAll(given, "View").map((view) => flatStyle(view.props.style))
-    ).toEqual(
-      findAll(today, "View").map((view) => flatStyle(view.props.style))
-    );
+    const shown = texts(tree as ReactElement<HostProps>);
+    expect(shown).toContain("Total");
+    expect(shown).toContain(formatMoney(czk(282), locale));
+    expect(shown).not.toContain("note");
   });
 
   test("the card's rows sit on a shared baseline, the bar's at the top", () => {
@@ -198,6 +186,5 @@ describe("PriceLines", () => {
     const [barRow] = rows(render());
     expect(flatStyle(cardRow?.props.style).alignItems).toBe("baseline");
     expect(flatStyle(barRow?.props.style).alignItems).toBe("flex-start");
-    expect(find(render(), "View")).toBeDefined();
   });
 });

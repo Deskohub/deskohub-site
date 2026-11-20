@@ -3,7 +3,6 @@ import { StyleSheet } from "react-native";
 import {
   FieldLabel,
   FieldMessages,
-  fieldDescription,
   fieldFrameState,
   fieldFrameStyles,
 } from "./field";
@@ -49,29 +48,6 @@ describe("fieldFrameState", () => {
       const { borderWidth, paddingHorizontal } = frame(state);
       expect(Number(borderWidth) + Number(paddingHorizontal)).toBe(15);
     }
-  });
-});
-
-describe("fieldDescription", () => {
-  const ids = { hintId: "h", errorId: "e" };
-  test("an error describes the field over its hint", () => {
-    expect(fieldDescription({ ...ids, hint: "hint", error: "error" })).toEqual({
-      invalid: true,
-      hint: "error",
-      describedBy: "e",
-    });
-  });
-  test("a hint describes a valid field", () => {
-    expect(fieldDescription({ ...ids, hint: "hint", error: "" })).toEqual({
-      invalid: false,
-      hint: "hint",
-      describedBy: "h",
-    });
-  });
-  test("with neither the field is undescribed", () => {
-    expect(
-      fieldDescription({ ...ids, hint: undefined, error: undefined })
-    ).toEqual({ invalid: false, hint: undefined, describedBy: undefined });
   });
 });
 

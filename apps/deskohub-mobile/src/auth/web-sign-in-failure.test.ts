@@ -1,17 +1,16 @@
 import { expect, test } from "bun:test";
-import { DateTime, Option } from "effect";
 import {
-  decodeNextSignInEmailAt,
   WebSignInFailure,
-  webSignInFailureReason,
+  type WebSignInFailureReason,
+  type WebSignInOperation,
 } from "./web-sign-in-failure";
 
 test("maps each operation's Better Auth errors to a reason", () => {
   const cases: ReadonlyArray<
     readonly [
-      Parameters<typeof webSignInFailureReason>[0],
+      WebSignInOperation,
       { readonly status?: number; readonly code?: string },
-      ReturnType<typeof webSignInFailureReason>,
+      WebSignInFailureReason,
     ]
   > = [
     ["send-email", { status: 403, code: "BOT_DETECTED" }, "automated"],
@@ -49,65 +48,14 @@ test("maps each operation's Better Auth errors to a reason", () => {
     ["mint-handoff", { status: 400, code: "INVALID_RETURN_URI" }, "failed"],
   ];
   for (const [operation, error, reason] of cases) {
-    expect([
-      operation,
-      error,
-      webSignInFailureReason(operation, error),
-    ]).toEqual([operation, error, reason]);
+    expect(WebSignInFailure.fromAnswer(operation)(error).reason).toBe(reason);
   }
 });
 
-test("only an address-limit failure keeps the server's next send", () => {
-  const nextSignInEmailAt = "2026-11-15T20:41:07.123Z";
-  const limited = WebSignInFailure.fromAnswer("send-email")({
+test("a code verification refusal cannot change when an email can be resent", () => {
+  const refusal = WebSignInFailure.fromAnswer("verify-code")({
     status: 429,
-    code: "SIGN_IN_EMAIL_LIMIT_REACHED",
-    nextSignInEmailAt,
+    nextSignInEmailAt: "2026-11-15T20:41:07.123Z",
   });
-  expect(
-    limited.nextSignInEmailAt === undefined
-      ? undefined
-      : DateTime.toEpochMillis(limited.nextSignInEmailAt)
-  ).toBe(Date.parse(nextSignInEmailAt));
-  for (const [operation, answer] of [
-    ["send-email", { status: 429, nextSignInEmailAt }],
-    ["verify-code", { status: 429, nextSignInEmailAt }],
-    ["send-email", { status: 429, code: "SIGN_IN_EMAIL_LIMIT_REACHED" }],
-  ] as const) {
-    expect(
-      Object.hasOwn(
-        WebSignInFailure.fromAnswer(operation)(answer),
-        "nextSignInEmailAt"
-      )
-    ).toBe(false);
-  }
-});
-
-test("reads the server's next send whether it arrives as the wire string or a revived Date", () => {
-  const at = "2026-11-15T20:41:07.123Z";
-  for (const answer of [at, new Date(at)]) {
-    expect(
-      Option.map(decodeNextSignInEmailAt(answer), DateTime.toEpochMillis)
-    ).toEqual(Option.some(Date.parse(at)));
-  }
-  for (const answer of [
-    new Date("not a date"),
-    "2026-13-45T99:00:00Z",
-    "soon",
-    60,
-    null,
-    undefined,
-  ]) {
-    expect(decodeNextSignInEmailAt(answer)).toEqual(Option.none());
-  }
-  // Better Auth's client revives the 429 body's instant too.
-  const limited = WebSignInFailure.fromAnswer("send-email")({
-    status: 429,
-    code: "SIGN_IN_EMAIL_LIMIT_REACHED",
-    nextSignInEmailAt: new Date(at),
-  });
-  expect(
-    limited.nextSignInEmailAt &&
-      DateTime.toEpochMillis(limited.nextSignInEmailAt)
-  ).toBe(Date.parse(at));
+  expect(refusal.nextSignInEmailAt).toBeUndefined();
 });

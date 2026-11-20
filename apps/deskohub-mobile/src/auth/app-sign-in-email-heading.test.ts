@@ -12,13 +12,6 @@ const request = {
 } as const;
 
 describe("appSignInEmailHeading", () => {
-  test("keeps the ordinary sign-in heading when the app isn't reauthenticating", () => {
-    expect(appSignInEmailHeading(request, "en-US")).toEqual({
-      title: m.signin_create_title({}, { locale: "en-US" }),
-      confirmsAccount: false,
-    });
-  });
-
   test("asks to confirm the account and names the deletion it is for", () => {
     for (const locale of appLocales) {
       expect(

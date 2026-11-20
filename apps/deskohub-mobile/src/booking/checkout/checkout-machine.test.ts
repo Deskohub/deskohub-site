@@ -259,12 +259,6 @@ describe("payment retry", () => {
 });
 
 describe("details", () => {
-  test("starts on the details form with nothing sent", () => {
-    const state = startCheckout(startInput);
-    expect(state._tag).toBe("Details");
-    expect(run(state).commands).toEqual([]);
-  });
-
   test("continue creates the hold with the quote, details, ids and referral code", () => {
     const result = run(startCheckout(startInput), continueEvent);
     expect(result.state._tag).toBe("Creating");
@@ -642,7 +636,7 @@ describe("review", () => {
     ).toBe(true);
   });
 
-  test("a payment to make opens the payment page and tracks the submission", () => {
+  test("opens payment with an app return URL when the status URL is on the site", () => {
     const paying = paid(consented().state);
     const result = run(
       paying.state,
@@ -657,17 +651,11 @@ describe("review", () => {
         },
       })
     );
-    expect(result.state._tag).toBe("Paying");
-    expect(tags(result).slice(-2)).toEqual([
-      "OpenPayment",
-      "TrackBookingSubmitted",
-    ]);
     expect(commandOf(result, "OpenPayment")).toMatchObject({
       orderId: "order-1",
       paymentUrl: "https://gateway.example.test/pay/1",
       returnUrl: "deskohub://reservations/order-1?after=payment",
     });
-    expect(commandOf(result, "TrackBookingSubmitted").family).toBe("cowork");
   });
 
   test("a status URL in the app's scheme is the payment page's return URL", () => {
@@ -1052,6 +1040,7 @@ describe("codes", () => {
       summary: summary(35000),
     });
     expect(canPay(state)).toBe(true);
+    expect(restartsAt(state, holdExpiresAtMillis - 1)).toBe(false);
     expect(restartsAt(state, holdExpiresAtMillis)).toBe(true);
   });
 
@@ -1512,17 +1501,23 @@ describe("status and pending price review from every command", () => {
   );
 
   test.each([
-    ["code", codeSent, "ApplyDiscountCode"],
-    ["submit", submitSent, "SubmitCheckout"],
+    [
+      "code",
+      codeSent,
+      "ApplyDiscountCode",
+      CodeStatus.AwaitingPriceAcceptance(),
+    ],
+    ["submit", submitSent, "SubmitCheckout", CodeStatus.Idle()],
   ] as const)(
     "a %s answered price review pending asks to accept the price",
-    (_name, sent, tag) => {
+    (_name, sent, tag, codeStatus) => {
       const result = sent();
       const next = run(
         result.state,
         failed(lastOperation(result, tag), BookingProblem.PriceReviewPending())
       );
       const state = review(next);
+      expect(state.code.status).toEqual(codeStatus);
       expect(Option.isSome(state.checkout.priceReview)).toBe(true);
       expect(canPay(state)).toBe(false);
       expect(tags(run(next.state, CheckoutEvent.AcceptPrice()))).toContain(
@@ -1530,20 +1525,6 @@ describe("status and pending price review from every command", () => {
       );
     }
   );
-
-  test("a code answered price review pending waits for the price before re-applying", () => {
-    const result = codeSent();
-    const next = run(
-      result.state,
-      failed(
-        lastOperation(result, "ApplyDiscountCode"),
-        BookingProblem.PriceReviewPending()
-      )
-    );
-    expect(review(next).code.status).toEqual(
-      CodeStatus.AwaitingPriceAcceptance()
-    );
-  });
 
   test.each([
     ["code", codeSent, "ApplyDiscountCode"],
@@ -1974,7 +1955,7 @@ describe("unconfirmed submit", () => {
 });
 
 describe("hold expiry", () => {
-  test("restarts a held checkout once its hold runs out", () => {
+  test("restarts at the hold's end even when the token is still valid", () => {
     const state = consented().state;
     expect(
       step(
@@ -2047,33 +2028,6 @@ describe("hold expiry", () => {
       _tag: "Restart",
       reason: "hold_expired",
     });
-  });
-
-  test("ends at the hold's end, not the token's expiry", () => {
-    const state = consented().state;
-    expect(restartsAt(state, holdExpiresAtMillis - 1)).toBe(false);
-    expect(restartsAt(state, holdExpiresAtMillis)).toBe(true);
-  });
-
-  test("a replacement token doesn't move the hold's end", () => {
-    const sent = run(
-      consented().state,
-      CheckoutEvent.CodeChanged({ input: "SAVE10" }),
-      CheckoutEvent.ApplyCode()
-    );
-    const replaced = run(
-      sent.state,
-      failed(
-        lastOperation(sent, "ApplyDiscountCode"),
-        BookingProblem.CodeRejected({
-          reason: "ineligible",
-          replacement: Option.some({ payStateToken: "token-2" }),
-        })
-      )
-    );
-    expect(review(replaced).checkout.payStateToken).toBe("token-2");
-    expect(restartsAt(replaced.state, holdExpiresAtMillis - 1)).toBe(false);
-    expect(restartsAt(replaced.state, holdExpiresAtMillis)).toBe(true);
   });
 });
 

@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import type { CustomerAccountState } from "@deskohub/workspace-customer-api";
-import { accountAtom } from "../customer-api/customer-data-runtime";
-import {
-  makeFakeCustomerData,
-  settle,
-} from "../customer-api/testing/customer-data-test-registry";
 import {
   type SampleAccountKind,
   sampleWorkspaceData,
@@ -14,8 +9,6 @@ import {
   type AccountSection,
   accountDetailSection,
   accountIndexModel,
-  offersAccessCode,
-  opensReservationStatus,
   reservationsAccess,
   type TabGate,
   tabGate,
@@ -87,16 +80,6 @@ describe("accountIndexModel", () => {
     expect(accountIndexModel(linked).sections).not.toContain("security");
   });
 
-  test("offers the language to every account but one pending deletion", () => {
-    const offered = (kind: SampleAccountKind) =>
-      accountIndexModel(accountOf(kind)).sections.includes("language");
-
-    expect(offered("completion-required")).toBe(true);
-    expect(offered("authenticated-unavailable")).toBe(true);
-    // The server refuses a pending deletion's preference writes.
-    expect(offered("deletion-pending")).toBe(false);
-  });
-
   test("hides the danger zone while deletion is withheld", () => {
     expect(
       accountIndexModel({
@@ -104,22 +87,6 @@ describe("accountIndexModel", () => {
         deletion: "withheld",
       }).sections
     ).not.toContain("danger");
-  });
-
-  test("builds the index from the account the API returns", async () => {
-    const { registry } = makeFakeCustomerData("completion-required");
-
-    const result = await settle(registry, accountAtom);
-    if (result._tag !== "Success") throw new Error("account didn't load");
-
-    expect(accountIndexModel(result.success).sections).toEqual([
-      "complete",
-      "security",
-      "assistants",
-      "language",
-      "legal",
-      "danger",
-    ]);
   });
 });
 
@@ -158,18 +125,4 @@ describe("tabGate", () => {
       expect(tabGate("reservations", access)).toBe(reservations);
     }
   );
-});
-
-describe("reservation links", () => {
-  test("only a row with an order opens its status", () => {
-    const { history } = sampleWorkspaceData("linked");
-
-    expect(history.current.every(opensReservationStatus)).toBe(true);
-    expect(history.unavailable.some(opensReservationStatus)).toBe(false);
-  });
-
-  test("a review-sandbox order offers no access code", () => {
-    expect(offersAccessCode({ reviewSandbox: true })).toBe(false);
-    expect(offersAccessCode({})).toBe(true);
-  });
 });

@@ -7,6 +7,7 @@ import {
 import { AppLocaleProvider } from "../../i18n/locale-context";
 import {
   elementTree,
+  flatStyle,
   type HostProps,
   hostTree,
 } from "../../ui/testing/element-tree";
@@ -29,3 +30,10 @@ export const inOrder = (
   isValidElement<HostProps>(node)
     ? [node, ...Children.toArray(node.props.children).flatMap(inOrder)]
     : [];
+
+/** The flexible gap between the step's content and its bottom action. */
+export const bottomSpacerIndex = (elements: ReturnType<typeof inOrder>) =>
+  elements.findLastIndex(
+    ({ type, props }) =>
+      type === "View" && flatStyle(props.style).flexGrow === 1
+  );

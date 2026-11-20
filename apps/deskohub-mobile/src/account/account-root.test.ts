@@ -2,11 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { Href, ImperativeRouter } from "expo-router";
 import { createElement, useEffect } from "react";
 import { clientRoot } from "../testing/client-root";
-import {
-  accountRootHref,
-  returnToAccountRoot,
-  useDefaultAccountProfile,
-} from "./account-root";
+import { returnToAccountRoot, useDefaultAccountProfile } from "./account-root";
 
 describe("returnToAccountRoot", () => {
   const recordingRouter = () => {
@@ -33,10 +29,6 @@ describe("returnToAccountRoot", () => {
     // A replace would swap the section for a second Account root above the
     // anchored one, which then shows a back arrow to itself (#1125).
     expect(calls).toEqual([["dismissTo", "/account", undefined]]);
-  });
-
-  test("the Account root is the Account tab's index", () => {
-    expect(accountRootHref).toBe("/account");
   });
 });
 

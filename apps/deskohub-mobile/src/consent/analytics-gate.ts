@@ -36,7 +36,7 @@ export const consentAnalyticsGate = (
  * may change (`decisionToTake`): a withdrawal over a grant, never a grant
  * over a refusal.
  */
-export const carriedAnalyticsDecision = (
+const carriedAnalyticsDecision = (
   stored: StoredConsent,
   { granted, decidedAt }: NativeHandoffAnalyticsAnswer
 ): AnalyticsDecision | undefined => {
