@@ -692,6 +692,10 @@ describe.skipIf(!testDatabase)(
         ],
       });
 
+      profileLastName = "Example";
+      expect(await loadFor(holder)).toMatchObject({
+        held: [{ gift: { buyerName: "Pat Example" } }],
+      });
       await testDatabase!.pool.query(
         `update auth."user" set deletion_requested_at = now() where id = $1`,
         [buyer]
