@@ -385,6 +385,44 @@ describe.skipIf(!testDatabase)(
       expect(await sessionCountOf(customer.userId)).toBe(sessions);
     });
 
+    test("records an actual passkey sign-in but no refresh during a rejected assertion", async () => {
+      const signIns: string[] = [];
+      const auth = makeTestAuth({
+        recordEntryPackGiftSignIn: (accountId) =>
+          Effect.sync(() => {
+            signIns.push(accountId);
+          }),
+      });
+      const customer = await signInByEmail(auth, "passkey-gift-claim");
+      const authenticator = newPasskey();
+      expect(
+        (await registerPasskey(auth, customer.cookie, authenticator)).status
+      ).toBe(200);
+      const rejected = await assertPasskey(auth, authenticator, {
+        cookie: customer.cookie,
+        userVerified: false,
+        client: async (auth, path, init) => {
+          if (path === "/passkey/verify-authentication") {
+            await testDatabase!.pool.query(
+              "update auth.session set expires_at = now() + interval '28 days' where user_id = $1",
+              [customer.userId]
+            );
+          }
+          return callHandler(auth, path, init);
+        },
+      });
+      expect(rejected.status).toBe(403);
+      const refreshed = await testDatabase!.pool.query<{ refresh: boolean }>(
+        "select expires_at > now() + interval '29 days' as refresh from auth.session where user_id = $1",
+        [customer.userId]
+      );
+      expect(refreshed.rows).toEqual([{ refresh: true }]);
+      expect(signIns).toEqual([customer.userId]);
+
+      expect((await assertPasskey(auth, authenticator)).status).toBe(200);
+      expect(signIns).toEqual([customer.userId, customer.userId]);
+    });
+
     test("signs in without a session from a passkey that skipped user verification", async () => {
       const auth = makeTestAuth();
       const customer = await signInByEmail(auth, "passkey-anonymous");
