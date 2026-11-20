@@ -2,9 +2,10 @@ import { expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { renderToReadableStream } from "react-dom/server";
 import type {
-  AccountBoughtEntryPack,
+  AccountBoughtPass,
   AccountEntryPack,
 } from "@/features/account/account-passes.server";
+import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
 import { orderIdSchema } from "@/features/order";
 import "@/shared/testing/workspace-component-module-mocks";
 import { UnsavedChangesProvider } from "@/shared/components/unsaved-changes-guard";
@@ -60,10 +61,11 @@ test("presents the buyer's order separately from passes they can use", async () 
   const unavailableOrderId = orderIdSchema.make(crypto.randomUUID());
   const statusPath = `/en-US/reservation/status/${orderId}`;
   const maskedHolderEmail = maskEmailAddress(testEmailAddress("alice"));
-  const gift: AccountBoughtEntryPack = {
+  const gift: AccountBoughtPass = {
     orderId,
     statusPath,
     tier: "Open Space",
+    product: "entry-pack",
     entryCount: 5,
     maskedHolderEmail,
     invitation: "sent",
@@ -80,10 +82,12 @@ test("presents the buyer's order separately from passes they can use", async () 
             boughtForOthers: [
               gift,
               {
-                ...gift,
                 orderId: unavailableOrderId,
                 statusPath: `/en-US/reservation/status/${unavailableOrderId}`,
-                maskedHolderEmail: undefined,
+                tier: "Reserved Desk",
+                product: "unlimited",
+                invitation: "sent",
+                claimed: false,
                 canResend: false,
               },
             ],
@@ -98,10 +102,46 @@ test("presents the buyer's order separately from passes they can use", async () 
   expect(markup).toContain(`href="${statusPath}"`);
   expect(markup).toContain("Invitation sent");
   expect(markup).toContain("Not claimed yet");
+  expect(markup).toContain("Unlimited pass");
   expect(markup.match(/Resend invitation/g)).toHaveLength(1);
   expect(markup).not.toContain("entries left");
   expect(markup).not.toContain("Book a date");
-  expect(markup).not.toContain("You don’t have any Entry packs yet.");
+  expect(markup).not.toContain("/reservation/access/");
+  expect(markup).not.toContain("Day 1 of 30");
+  expect(markup).not.toContain("You don’t have any passes yet.");
+});
+
+test("renders a held Unlimited pass with its assigned desk and purchase date", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const pass: AccountUnlimitedPass = {
+    orderId,
+    tier: "Reserved Desk",
+    boughtOn: "Oct 31, 2026",
+    boughtForYou: true,
+    period: "Nov 10 – Dec 9, 2026",
+    seating: { kind: "assigned", name: "Desk 14" },
+    status: "active",
+    day: 8,
+    daysLeft: 23,
+    accessPath: `/en-US/reservation/access/${orderId}`,
+  };
+  const markup = await new Response(
+    await renderToReadableStream(
+      <UnsavedChangesProvider>
+        <AccountPassesPanel
+          locale="en-US"
+          packs={Promise.resolve({ held: [], boughtForOthers: [] })}
+          unlimitedPasses={[pass]}
+        />
+      </UnsavedChangesProvider>
+    )
+  ).text();
+
+  expect(markup).toContain("Day 8 of 30");
+  expect(markup).toContain("23 days left, including today");
+  expect(markup).toContain("Desk 14");
+  expect(markup).toContain("Bought Oct 31, 2026");
+  expect(markup).toContain(`href="${pass.accessPath}"`);
 });
 
 test("shows generic gift attribution when there is no buyer name", async () => {

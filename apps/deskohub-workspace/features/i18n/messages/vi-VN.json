@@ -1848,13 +1848,25 @@
   "accountPassBoughtForYouBy": "Quà tặng từ {name}",
   "accountPassBoughtForYou": "Quà tặng dành cho bạn",
   "accountPassesPast": "Gói trước đây",
-  "accountPassesEmpty": "Bạn chưa có gói lượt vào nào.",
+  "accountPassesEmpty": "Bạn chưa có gói hay thẻ coworking nào.",
   "accountPassesUnavailable": "Hiện không thể tải các gói lượt vào của bạn.",
   "accountPassBoughtOn": "Mua ngày {date}",
   "accountPassBookDate": "Đặt chỗ theo ngày",
   "accountPassExpired": "Đã hết hạn",
   "accountPassDepleted": "Đã dùng hết",
   "accountPassEnded": "Đã kết thúc",
+  "accountUnlimitedPassPeriod": "Thời hạn",
+  "accountUnlimitedPassWhere": "Chỗ ngồi",
+  "accountUnlimitedPassAnyDesk": "Bất kỳ bàn trống nào",
+  "accountUnlimitedPassDaysLeft": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Còn {count} ngày, tính cả hôm nay"
+      }
+    }
+  ],
   "entryPackDiscoveryTitle": "Gói lượt vào",
   "entryPackDiscoveryIntro": "5 hoặc 10 ngày làm việc tại không gian làm việc chung. Bạn có thể dùng bất kỳ lúc nào trước khi gói hết hạn. Đặt chỗ cho từng ngày như thường lệ. Bạn có thể mua gói cho người khác.",
   "entryPackDiscoveryOpenSpaceDescription": "Chỗ ngồi bất kỳ còn trống trong không gian mở.",

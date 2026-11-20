@@ -21,7 +21,10 @@ import {
   type HeldEntryPack,
   listHeldEntryPacks,
 } from "@/features/passes/backend/held-entry-packs";
-import { getEntryPackLastUsableDate } from "@/features/passes/pass-offer";
+import {
+  type EntryPackSize,
+  getEntryPackLastUsableDate,
+} from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import {
   getCoworkReservationPath,
@@ -54,18 +57,20 @@ export type AccountEntryPack = {
   };
 };
 
-export type AccountBoughtEntryPack = EntryPackGiftState & {
+export type AccountBoughtPass = EntryPackGiftState & {
   readonly orderId: OrderId;
   readonly statusPath: string;
   readonly tier: string;
-  readonly entryCount: number;
   readonly maskedHolderEmail?: string;
-};
+} & (
+    | { readonly product: "entry-pack"; readonly entryCount: EntryPackSize }
+    | { readonly product: "unlimited" }
+  );
 
 export type AccountPasses =
   | {
       readonly held: readonly AccountEntryPack[];
-      readonly boughtForOthers: readonly AccountBoughtEntryPack[];
+      readonly boughtForOthers: readonly AccountBoughtPass[];
     }
   | "unavailable";
 
@@ -115,7 +120,7 @@ export const loadAccountPasses = Effect.fn("loadAccountPasses")(function* (
   };
 });
 
-const listBoughtGifts = Effect.fn("listBoughtEntryPackGifts")(function* (
+const listBoughtGifts = Effect.fn("listBoughtPassGifts")(function* (
   accountId: CustomerAccountId,
   locale: Locale
 ) {
@@ -125,6 +130,7 @@ const listBoughtGifts = Effect.fn("listBoughtEntryPackGifts")(function* (
       orderId: passPurchases.id,
       holderAccountId: passPurchases.holderAccountId,
       tier: passPurchases.tier,
+      product: passPurchases.product,
       entryCount: passPurchases.entryCount,
     })
     .from(passPurchases)
@@ -149,23 +155,25 @@ const listBoughtGifts = Effect.fn("listBoughtEntryPackGifts")(function* (
     ],
     { concurrency: "unbounded" }
   );
-  const result: AccountBoughtEntryPack[] = [];
-  for (const { orderId, tier, entryCount, holderAccountId } of gifts) {
+  const result: AccountBoughtPass[] = [];
+  for (const { orderId, tier, product, entryCount, holderAccountId } of gifts) {
     const state = states.get(orderId);
     // A refund can end payment eligibility between the two reads.
     if (!state) continue;
     const email = recipients.get(holderAccountId)?.email;
     const masked = email ? maskEmailAddress(email) : undefined;
     const maskedHolderEmail = masked === email ? undefined : masked;
-    result.push({
+    const summary = {
       ...state,
       canResend: state.canResend && maskedHolderEmail !== undefined,
       orderId,
       statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
       tier: getPassTierName(tier, locale),
-      entryCount,
       maskedHolderEmail,
-    });
+    };
+    if (product === "unlimited") result.push({ ...summary, product });
+    else if (entryCount !== null)
+      result.push({ ...summary, product, entryCount });
   }
   return result;
 });

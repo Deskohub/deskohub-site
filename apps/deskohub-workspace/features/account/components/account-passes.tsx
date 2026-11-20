@@ -1,10 +1,12 @@
 import { CalendarPlus, Gift, Ticket } from "lucide-react";
 import { Suspense, use } from "react";
 import type {
-  AccountBoughtEntryPack,
+  AccountBoughtPass,
   AccountEntryPack,
   AccountPasses,
 } from "@/features/account/account-passes.server";
+import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
+import { AccountUnlimitedPassCard } from "@/features/account/components/account-unlimited-pass";
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import { type Locale, m } from "@/features/i18n";
 import { EntryPackMeter } from "@/features/passes/components/entry-pack-meter";
@@ -19,9 +21,14 @@ import { FocusedGiftPassCard, GiftInvitationResend } from "./account-pass-gift";
 type PassesPanelProps = {
   readonly packs: Promise<AccountPasses>;
   readonly locale: Locale;
+  readonly unlimitedPasses?: readonly AccountUnlimitedPass[];
 };
 
-export function AccountPassesPanel({ packs, locale }: PassesPanelProps) {
+export function AccountPassesPanel({
+  packs,
+  locale,
+  unlimitedPasses,
+}: PassesPanelProps) {
   return (
     <AccountSectionPanel
       actions={
@@ -45,17 +52,29 @@ export function AccountPassesPanel({ packs, locale }: PassesPanelProps) {
           </div>
         }
       >
-        <AccountPassesBody locale={locale} packs={packs} />
+        <AccountPassesBody
+          locale={locale}
+          packs={packs}
+          unlimitedPasses={unlimitedPasses}
+        />
       </Suspense>
     </AccountSectionPanel>
   );
 }
 
-function AccountPassesBody({ packs, locale }: PassesPanelProps) {
+function AccountPassesBody({
+  packs,
+  locale,
+  unlimitedPasses = [],
+}: PassesPanelProps) {
   const loaded = use(packs);
+  const held = loaded === "unavailable" ? [] : loaded.held;
+  const boughtForOthers =
+    loaded === "unavailable" ? [] : loaded.boughtForOthers;
   if (
-    loaded === "unavailable" ||
-    (loaded.held.length === 0 && loaded.boughtForOthers.length === 0)
+    held.length === 0 &&
+    boughtForOthers.length === 0 &&
+    unlimitedPasses.length === 0
   ) {
     return (
       <p className="text-sm text-slate-600">
@@ -66,36 +85,49 @@ function AccountPassesBody({ packs, locale }: PassesPanelProps) {
     );
   }
 
-  const active = loaded.held.filter((pack) => pack.status === "active");
-  const past = loaded.held.filter((pack) => pack.status !== "active");
+  const active = held.filter((pack) => pack.status === "active");
+  const past = held.filter((pack) => pack.status !== "active");
+  const currentUnlimited = unlimitedPasses.filter(
+    (pass) => pass.status === "active" || pass.status === "upcoming"
+  );
+  const pastUnlimited = unlimitedPasses.filter(
+    (pass) => pass.status === "expired" || pass.status === "ended"
+  );
   return (
     <div className="@container space-y-8">
-      {active.length > 0 && (
-        <EntryPackGroup
+      {(active.length > 0 || currentUnlimited.length > 0) && (
+        <PassGroup
           locale={locale}
           packs={active}
           title={m.accountPassesActive({}, { locale })}
+          unlimitedPasses={currentUnlimited}
         />
       )}
-      {loaded.boughtForOthers.length > 0 && (
-        <BoughtEntryPackGifts gifts={loaded.boughtForOthers} locale={locale} />
+      {boughtForOthers.length > 0 && (
+        <BoughtPassGifts gifts={boughtForOthers} locale={locale} />
       )}
-      {past.length > 0 && (
-        <EntryPackGroup
+      {(past.length > 0 || pastUnlimited.length > 0) && (
+        <PassGroup
           locale={locale}
           packs={past}
           title={m.accountPassesPast({}, { locale })}
+          unlimitedPasses={pastUnlimited}
         />
+      )}
+      {loaded === "unavailable" && (
+        <p className="text-sm text-slate-600">
+          {m.accountPassesUnavailable({}, { locale })}
+        </p>
       )}
     </div>
   );
 }
 
-function BoughtEntryPackGifts({
+function BoughtPassGifts({
   gifts,
   locale,
 }: {
-  readonly gifts: readonly AccountBoughtEntryPack[];
+  readonly gifts: readonly AccountBoughtPass[];
   readonly locale: Locale;
 }) {
   return (
@@ -120,10 +152,12 @@ function BoughtEntryPackGifts({
             <div className="min-w-0 space-y-1">
               <h4 className="break-words font-semibold">
                 {gift.tier} ·{" "}
-                {m.entryPackCheckoutPackLabel(
-                  { count: gift.entryCount },
-                  { locale }
-                )}
+                {gift.product === "unlimited"
+                  ? m.passUnlimited({}, { locale })
+                  : m.entryPackCheckoutPackLabel(
+                      { count: gift.entryCount },
+                      { locale }
+                    )}
               </h4>
               {gift.maskedHolderEmail && (
                 <p className="break-words text-sm text-slate-600">
@@ -178,14 +212,16 @@ function BoughtEntryPackGifts({
   );
 }
 
-function EntryPackGroup({
+function PassGroup({
   locale,
   packs,
   title,
+  unlimitedPasses,
 }: {
   readonly locale: Locale;
   readonly packs: readonly AccountEntryPack[];
   readonly title: string;
+  readonly unlimitedPasses: readonly AccountUnlimitedPass[];
 }) {
   return (
     <div>
@@ -196,6 +232,11 @@ function EntryPackGroup({
         {packs.map((pack) => (
           <li key={pack.position}>
             <AccountEntryPackCard locale={locale} pack={pack} />
+          </li>
+        ))}
+        {unlimitedPasses.map((pass) => (
+          <li key={pass.orderId}>
+            <AccountUnlimitedPassCard locale={locale} pass={pass} />
           </li>
         ))}
       </ul>

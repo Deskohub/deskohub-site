@@ -10,7 +10,9 @@ import {
 } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
 import type { ComponentPropsWithoutRef } from "react";
+import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
 import { type Locale, m } from "@/features/i18n";
+import { orderIdSchema } from "@/features/order";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import {
   UnsavedChangesProvider,
@@ -32,12 +34,14 @@ type NavigateEvent = {
 type MockNextLinkProps = ComponentPropsWithoutRef<"a"> & {
   readonly href: string;
   readonly onNavigate?: (event: NavigateEvent) => void;
+  readonly prefetch?: boolean;
 };
 
 function MockNextLink({
   children,
   href,
   onNavigate,
+  prefetch: _prefetch,
   ...props
 }: MockNextLinkProps) {
   return (
@@ -146,6 +150,58 @@ function DirtyProfileGuard() {
 }
 
 describe("ReservationHistory", () => {
+  test("shows one Unlimited period and keeps ordinary reservations in their groups", () => {
+    const orderId = orderIdSchema.make(crypto.randomUUID());
+    const sharedPassDetails = {
+      tier: "Open Space",
+      boughtOn: "Nov 10, 2026",
+      boughtForYou: false,
+      seating: { kind: "shared" } as const,
+    };
+    const pass: AccountUnlimitedPass = {
+      ...sharedPassDetails,
+      orderId,
+      period: "Nov 10 – Dec 9, 2026",
+      status: "active",
+      day: 8,
+      daysLeft: 23,
+      accessPath: `/en-US/reservation/access/${orderId}`,
+    };
+    const futurePass: AccountUnlimitedPass = {
+      ...sharedPassDetails,
+      orderId: orderIdSchema.make(crypto.randomUUID()),
+      status: "upcoming",
+      startsOn: "Dec 10, 2026",
+      period: "Dec 10, 2026 – Jan 8, 2027",
+    };
+    const view = render(
+      <UnsavedChangesProvider>
+        <ReservationHistory
+          history={availableHistory}
+          locale="en-US"
+          unlimitedPasses={[pass, futurePass]}
+        />
+      </UnsavedChangesProvider>
+    );
+
+    const row = view.getByText("Day 8 of 30").closest("li");
+    expect(row?.textContent).toContain("Unlimited pass");
+    expect(row?.textContent).toContain(pass.period);
+    expect(row?.querySelectorAll("[aria-hidden=true] > span")).toHaveLength(30);
+    expect(
+      view.getAllByRole("link", { name: /today’s door code/i })
+    ).toHaveLength(1);
+    expect(
+      view
+        .getByRole("link", { name: /today’s door code/i })
+        .getAttribute("href")
+    ).toBe(pass.accessPath);
+    expect(view.getByText("Starts Dec 10, 2026")).toBeDefined();
+    expect(
+      view.getByText(m.accountReservationsPastTitle({}, { locale: "en-US" }))
+    ).toBeDefined();
+  });
+
   test("labels Entry pack payments in featured, compact and past bookings", () => {
     const packDay = (id: string) =>
       reservation({

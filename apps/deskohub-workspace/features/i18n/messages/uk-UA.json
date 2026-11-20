@@ -1902,13 +1902,28 @@
   "accountPassBoughtForYouBy": "Подарунок від {name}",
   "accountPassBoughtForYou": "Придбано для вас",
   "accountPassesPast": "Попередні пакети",
-  "accountPassesEmpty": "У вас ще немає пакетів відвідувань.",
+  "accountPassesEmpty": "У вас ще немає абонементів чи пакетів відвідувань.",
   "accountPassesUnavailable": "Не вдалося завантажити пакети відвідувань.",
   "accountPassBoughtOn": "Придбано {date}",
   "accountPassBookDate": "Забронювати день",
   "accountPassExpired": "Термін дії минув",
   "accountPassDepleted": "Вичерпано",
   "accountPassEnded": "Завершено",
+  "accountUnlimitedPassPeriod": "Період дії",
+  "accountUnlimitedPassWhere": "Де сісти",
+  "accountUnlimitedPassAnyDesk": "Будь-який вільний стіл",
+  "accountUnlimitedPassDaysLeft": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Залишився {count} день разом із сьогоднішнім",
+        "countPlural=few": "Залишилося {count} дні разом із сьогоднішнім",
+        "countPlural=many": "Залишилося {count} днів разом із сьогоднішнім",
+        "countPlural=other": "Залишилося {count} дня разом із сьогоднішнім"
+      }
+    }
+  ],
   "entryPackDiscoveryTitle": "Пакети відвідувань",
   "entryPackDiscoveryIntro": "5 або 10 днів коворкінгу, якими можна скористатися в будь-який час, поки діє пакет. Бронюйте кожен день як зазвичай. Пакет можна купити для іншої людини.",
   "entryPackDiscoveryOpenSpaceDescription": "Будь-яке вільне місце у відкритому просторі.",
