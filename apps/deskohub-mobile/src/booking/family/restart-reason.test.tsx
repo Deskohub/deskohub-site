@@ -77,35 +77,6 @@ describe("useRestartReasonInView", () => {
     screen.focused = true;
   });
 
-  test("an expired hold's return shows its reason and scrolls it into view", async () => {
-    const { seen, show } = familyScreen();
-    await show();
-    // Checkout opens on top; the customer had scrolled down to the calendar.
-    await show({ focused: false });
-    // The hold expires and checkout dismisses back here with the reason.
-    await show({ focused: true, params: expired });
-
-    expect(seen.reason).toEqual(Option.some("hold_expired"));
-    expect(seen.rereads).toBe(1);
-    expect(seen.scrollsToTop).toBe(1);
-  });
-
-  test("every return with the same reason shows it afresh and scrolls up", async () => {
-    const { seen, show } = familyScreen();
-    await show({ params: expired });
-    expect(seen.reason).toEqual(Option.some("hold_expired"));
-
-    for (const returns of [1, 2]) {
-      // Under the checkout the notice empties, so its return is announced.
-      await show({ focused: false });
-      expect(seen.reason).toEqual(Option.none());
-      await show({ focused: true });
-      expect(seen.reason).toEqual(Option.some("hold_expired"));
-      expect(seen.scrollsToTop).toBe(returns);
-      expect(seen.rereads).toBe(returns);
-    }
-  });
-
   test("a reason that arrives while in view scrolls it into view", async () => {
     const { seen, show } = familyScreen();
     await show();
@@ -163,7 +134,7 @@ describe("an expired hold's return notice", () => {
     delete accessibility.announceForAccessibilityWithOptions;
   });
 
-  test("is shown and announced on each return, the same expiry twice included", async () => {
+  test("each return refreshes availability and scrolls to the announced expiry", async () => {
     const expiredMessage = restartMessage("hold_expired", "en-US");
     const { seen, show } = familyScreen();
     await show();
@@ -177,6 +148,7 @@ describe("an expired hold's return notice", () => {
       await show({ focused: true, params: expired });
       expect(seen.message).toBe(expiredMessage);
       expect(seen.scrollsToTop).toBe(returns);
+      expect(seen.rereads).toBe(returns);
       // The notice announces its title with the message.
       expect(announced).toEqual(
         Array(returns).fill(expect.stringContaining(expiredMessage))

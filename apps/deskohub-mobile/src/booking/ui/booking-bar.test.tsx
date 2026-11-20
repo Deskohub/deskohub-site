@@ -18,7 +18,6 @@ mock.module("expo-router", () =>
 const { clientRoot } = await import("../../testing/client-root");
 const { m } = await import("../../i18n/messages");
 const { formatMoney } = await import("../../i18n/money-format");
-const { Button } = await import("../../ui/controls");
 const { idleLiveRegionLayout } = await import("../../ui/notice-presentation");
 const { elementTree, find, findAll, flatStyle, hostTree, textOf } =
   await import("../../ui/testing/element-tree");
@@ -31,7 +30,7 @@ const { default: CircleAlert } = await import(
   "lucide-react-native/icons/circle-alert"
 );
 const { czk } = await import("../testing/sample-booking-catalog");
-const { BookingBar, claimsSwipe, swipeIntent } = await import("./booking-bar");
+const { BookingBar } = await import("./booking-bar");
 const { priceBreakdown } = await import("./price-breakdown");
 const { describeOfficePriceLine, describePriceLine } = await import(
   "./price-line-description"
@@ -100,21 +99,6 @@ const reasonOf = (tree: ReactNode) =>
     .filter((view) => view.props.role === "status")
     .at(-1);
 
-describe("swipes", () => {
-  test("a vertical move past a tap's jitter is the bar's, a sideways one is not", () => {
-    expect(claimsSwipe({ dx: 0, dy: -4 })).toBe(false);
-    expect(claimsSwipe({ dx: 2, dy: -16 })).toBe(true);
-    expect(claimsSwipe({ dx: 30, dy: 16 })).toBe(false);
-  });
-
-  test("up opens, down closes, a short or sideways swipe does nothing", () => {
-    expect(swipeIntent({ dx: 0, dy: -40 })).toBe("open");
-    expect(swipeIntent({ dx: 0, dy: 40 })).toBe("close");
-    expect(swipeIntent({ dx: 0, dy: -12 })).toBeUndefined();
-    expect(swipeIntent({ dx: -60, dy: -40 })).toBeUndefined();
-  });
-});
-
 describe("BookingBar", () => {
   test("discloses the price beside the action when the available width fits", () => {
     const collapsed = wideBar({});
@@ -176,13 +160,15 @@ describe("BookingBar", () => {
   });
 
   test("opened, it lists the lines above the summary and offers to hide them", () => {
-    const tree = elementTree(
-      BookingBar,
-      props({ initiallyOpen: true }),
-      withToasts
+    const host = bar({ initiallyOpen: true });
+    const amount = formatMoney(czk(290), locale);
+    const texts = findAll(host, "Text").map(textOf);
+    expect(texts).toContain(amount);
+    expect(texts).toContain("Thu 26 Nov");
+    expect(texts.indexOf(amount)).toBeLessThan(texts.indexOf("Thu 26 Nov"));
+    expect(findAll(find(host, "ScrollView"), "Text").map(textOf)).not.toContain(
+      formatMoney(czk(282), locale)
     );
-    expect(find(tree, PriceLines)?.props.variant).toBe("bar");
-    const host = hostTree(tree);
     const chevron = chevronOf(host);
     expect(chevron?.props["aria-expanded"]).toBe(true);
     expect(chevron?.props["aria-label"]).toBe(
@@ -341,20 +327,9 @@ describe("BookingBar", () => {
     expect(reason?.props["aria-live"]).toBe("polite");
     expect(reason?.props.accessibilityLiveRegion).toBe("polite");
     expect(findAll(reason, "Text").map(textOf)).toEqual(["why"]);
-    const parts = Children.toArray(
-      (
-        elementTree(
-          BookingBar,
-          props({ reason: "why" }),
-          withToasts
-        ) as ReactElement<{
-          children: ReactNode;
-        }>
-      ).props.children
-    ) as ReadonlyArray<ReactElement>;
-    expect(parts.findIndex((part) => part.type === Button)).toBe(
-      parts.length - 2
-    );
+    const texts = findAll(tree, "Text").map(textOf);
+    expect(texts).toContain("Continue");
+    expect(texts.indexOf("Continue")).toBeLessThan(texts.indexOf("why"));
   });
 
   test("the reason's tone picks its icon and ink", () => {
@@ -398,19 +373,15 @@ describe("BookingBar", () => {
   });
 
   test("without a summary the bar is the action and its reason alone", () => {
-    const tree = elementTree(
-      BookingBar,
-      props({ summary: undefined, reason: "why" }),
-      withToasts
-    );
-    expect(find(tree, Button)).toBeDefined();
-    const host = hostTree(tree);
+    const host = bar({ summary: undefined, reason: "why" });
+    expect(findAll(host, "Text").map(textOf).filter(Boolean)).toEqual([
+      "Continue",
+      "why",
+    ]);
     expect(chevronOf(host)).toBeUndefined();
-    expect(
-      findAll(host, "Pressable").filter(
-        (press) => press.props.accessible === false
-      )
-    ).toEqual([]);
+    expect(findAll(host, "Pressable").map((press) => press.props.role)).toEqual(
+      ["button"]
+    );
     expect(flatStyle(find(host, "View")?.props.style).paddingTop).toBe(12);
   });
 });
@@ -448,28 +419,49 @@ describe("BookingBar opening and closing", () => {
     expect(isOpen(bar.tree())).toBe(false);
   });
 
-  test("a swipe up opens it and a swipe down closes it", async () => {
-    const bar = await live(props());
-    const area = () =>
-      findAll(bar.tree(), "View").find(
-        (view) => view.props.onResponderRelease !== undefined
-      )?.props as Record<string, (event: unknown) => unknown>;
-    const at = (pageY: number, pageX = 0) => ({
+  const startSwipe = (tree: ReactNode) => {
+    const handlers = findAll(tree, "View").find(
+      (view) => view.props.onResponderRelease !== undefined
+    )?.props as Record<string, (event: unknown) => unknown>;
+    const at = (pageY: number, pageX: number) => ({
       nativeEvent: { pageX, pageY },
     });
-    const swipe = async (from: number, to: number) => {
-      const handlers = area();
-      expect(handlers.onStartShouldSetResponderCapture?.(at(from))).toBe(false);
-      expect(
-        handlers.onMoveShouldSetResponderCapture?.(at((from + to) / 2))
-      ).toBe(true);
-      await act(async () => {
-        handlers.onResponderRelease?.(at(to));
-      });
+    expect(handlers.onStartShouldSetResponderCapture?.(at(300, 0))).toBe(false);
+    return {
+      move: (dy: number, dx = 0) =>
+        handlers.onMoveShouldSetResponderCapture?.(at(300 + dy, dx)),
+      release: (dy: number, dx = 0) =>
+        act(async () => {
+          handlers.onResponderRelease?.(at(300 + dy, dx));
+        }),
     };
-    await swipe(300, 240);
+  };
+
+  test("a swipe up opens it and a swipe down closes it", async () => {
+    const bar = await live(props());
+    const swipe = async (dy: number) => {
+      const gesture = startSwipe(bar.tree());
+      expect(gesture.move(dy / 2)).toBe(true);
+      await gesture.release(dy);
+    };
+    await swipe(-40);
     expect(isOpen(bar.tree())).toBe(true);
-    await swipe(240, 300);
+    await swipe(40);
+    expect(isOpen(bar.tree())).toBe(false);
+  });
+
+  test("taps, sideways movement and short swipes leave details closed", async () => {
+    const bar = await live(props());
+    const short = startSwipe(bar.tree());
+    expect(short.move(-4)).toBe(false);
+    expect(short.move(16, 30)).toBe(false);
+    expect(short.move(-12)).toBe(true);
+    await short.release(-12);
+    expect(isOpen(bar.tree())).toBe(false);
+
+    const sideways = startSwipe(bar.tree());
+    expect(sideways.move(-16, 2)).toBe(true);
+    await sideways.release(-40, -60);
     expect(isOpen(bar.tree())).toBe(false);
   });
 

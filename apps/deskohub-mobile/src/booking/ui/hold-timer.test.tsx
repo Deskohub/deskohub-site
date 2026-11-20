@@ -12,7 +12,13 @@ import { clientRoot } from "../../testing/client-root";
 import { Button } from "../../ui/controls";
 import { Dialog } from "../../ui/dialog";
 import { Icon } from "../../ui/icon";
-import { elementTree, find, flatStyle } from "../../ui/testing/element-tree";
+import {
+  elementTree,
+  find,
+  flatStyle,
+  hostTree,
+  textOf,
+} from "../../ui/testing/element-tree";
 import { Text } from "../../ui/text";
 import { color } from "../../ui/tokens";
 import {
@@ -20,7 +26,6 @@ import {
   HoldEndedDialog,
   type HoldStatus,
   HoldStatusChip,
-  holdClockText,
   holdCountdown,
   useHoldCountdown,
 } from "./hold-timer";
@@ -59,19 +64,6 @@ describe("holdCountdown", () => {
   });
 });
 
-describe("holdClockText", () => {
-  test.each([
-    [597, "9:57"],
-    [60, "1:00"],
-    [58, "0:58"],
-    [5, "0:05"],
-    [0, "0:00"],
-    [600, "10:00"],
-  ] as const)("shows %i seconds as %s", (seconds, text) => {
-    expect(holdClockText(seconds)).toBe(text);
-  });
-});
-
 const chip = (status: HoldStatus) =>
   elementTree(HoldStatusChip, { status, locale: "en-US" }) as ReactElement<{
     role?: string;
@@ -84,19 +76,27 @@ const chipIcon = (status: HoldStatus) =>
   find<Parameters<typeof Icon>[0]>(chip(status), Icon)?.props;
 
 describe("HoldStatusChip", () => {
-  test("is a timer named by the time left", () => {
-    const props = chip({ secondsLeft: 597, phase: "held" }).props;
-    expect(props.role).toBe("timer");
-    expect(props["aria-label"]).toBe(
-      m.booking_hold_chip_label({ time: "9:57" }, { locale: "en-US" })
-    );
-    expect(
-      find<{ children?: ReactNode; numeric?: boolean }>(
-        chip({ secondsLeft: 597, phase: "held" }),
-        Text
-      )?.props
-    ).toMatchObject({ children: "9:57", numeric: true });
-  });
+  test.each([
+    [597, "held", "9:57"],
+    [60, "ending", "1:00"],
+    [58, "ending", "0:58"],
+    [5, "ending", "0:05"],
+    [0, "ended", "0:00"],
+    [600, "held", "10:00"],
+  ] as const)(
+    "shows and announces %i seconds as a %s timer at %s",
+    (secondsLeft, phase, time) => {
+      const tree = chip({ secondsLeft, phase });
+      const { props } = tree;
+      expect(props.role).toBe("timer");
+      expect(props["aria-label"]).toBe(
+        m.booking_hold_chip_label({ time }, { locale: "en-US" })
+      );
+      expect(
+        find<{ children?: ReactNode; numeric?: boolean }>(tree, Text)?.props
+      ).toMatchObject({ children: time, numeric: true });
+    }
+  );
 
   test("a held chip is sunken navy with a timer icon", () => {
     const status = { secondsLeft: 597, phase: "held" } as const;
@@ -247,19 +247,23 @@ describe("useHoldCountdown", () => {
     await render(null);
   });
 
-  test("HoldChip draws the live countdown of its expiry", async () => {
-    let drawn: ReactElement<Parameters<typeof HoldStatusChip>[0]> | undefined;
+  test("HoldChip shows the time left for the given expiry", async () => {
+    let drawn: ReactNode = null;
     const expiresAt = new Date(Date.now() + 30_000).toISOString();
     function Probe() {
-      // The chip runs here, with its clock hook; the chip it draws is read.
-      drawn = HoldChip({ expiresAt, locale: "en-US" }) as typeof drawn;
+      drawn = HoldChip({ expiresAt, locale: "en-US" });
       return null;
     }
     await render(<Probe />);
-    expect(drawn?.type).toBe(HoldStatusChip);
-    expect(drawn?.props.status.phase).toBe("ending");
-    expect(drawn?.props.status.secondsLeft).toBeOneOf([30, 29]);
-    expect(drawn?.props.locale).toBe("en-US");
+    const timer = find(hostTree(drawn), "View");
+    const time = find(timer, "Text");
+    if (time === undefined)
+      throw new Error("The hold timer has no visible time");
+    expect(timer?.props.role).toBe("timer");
+    expect(textOf(time)).toBeOneOf(["0:30", "0:29"]);
+    expect(timer?.props["aria-label"]).toBe(
+      m.booking_hold_chip_label({ time: textOf(time) }, { locale: "en-US" })
+    );
     await render(null);
   });
 });
