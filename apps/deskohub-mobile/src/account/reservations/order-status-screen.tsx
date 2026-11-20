@@ -3,10 +3,15 @@ import type {
   CustomerOrderState,
   CustomerReservationOrderId,
 } from "@deskohub/workspace-customer-api";
-import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { DateTime, Match, Option } from "effect";
 import { AsyncResult } from "effect/reactivity";
-import { useFocusEffect, useRouter } from "expo-router";
+import {
+  useFocusEffect,
+  useIsFocused,
+  useNavigation,
+  useRouter,
+} from "expo-router";
 import CalendarPlus from "lucide-react-native/icons/calendar-plus";
 import ChevronRight from "lucide-react-native/icons/chevron-right";
 import Download from "lucide-react-native/icons/download";
@@ -15,8 +20,16 @@ import Mail from "lucide-react-native/icons/mail";
 import RotateCcw from "lucide-react-native/icons/rotate-ccw";
 import Search from "lucide-react-native/icons/search";
 import Undo2 from "lucide-react-native/icons/undo-2";
-import { type ReactNode, useCallback } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { bookAgainHref, reservationsHref } from "../../booking/booking-routes";
 import { AsyncView, viewErrorOf } from "../../customer-api/async-view";
 import { accountAtom } from "../../customer-api/customer-data-runtime";
@@ -34,9 +47,11 @@ import { useAppLocale } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
 import { formatMoney } from "../../i18n/money-format";
 import { openContactPage } from "../../routing/open-contact-page";
+import { AppBar } from "../../ui/app-bar";
 import { Card } from "../../ui/card";
 import { Button, LiveMessage } from "../../ui/controls";
 import { EmptyState } from "../../ui/empty-state";
+import { FocusedStatusBar } from "../../ui/focused-status-bar";
 import { Icon } from "../../ui/icon";
 import { ListGroup, ListRow } from "../../ui/list";
 import { useLiveRegionAnnouncement } from "../../ui/live-announcement";
@@ -44,6 +59,7 @@ import { Notice } from "../../ui/notice";
 import { ScrollScreen } from "../../ui/scroll-screen";
 import { Text } from "../../ui/text";
 import { color, space } from "../../ui/tokens";
+import { useContentColumn } from "../../ui/viewport";
 import { AccessPinButton } from "./access-pin-button";
 import {
   BookingSteps,
@@ -61,7 +77,13 @@ import { establishmentAtom } from "./establishment";
 import { invoiceShareAtom } from "./invoice-share";
 import { OrderPeopleSection } from "./order-people-section";
 import { offersAccessLink, offersInvoice } from "./order-status-kind";
-import { focusGained, focusLost, orderStatusAtoms } from "./order-status-state";
+import {
+  focusGained,
+  focusLost,
+  focusVisibility,
+  orderStatusAtoms,
+  restartStatusVisit,
+} from "./order-status-state";
 import { orderTicketView, reservationOfOrderAtom } from "./order-ticket-view";
 import { bookedSelectionOf } from "./payment-recovery";
 import { canRefreshManually, type StatusRefreshState } from "./status-refresh";
@@ -96,12 +118,14 @@ function MoreActions({
   order,
   event,
   withdrawn = false,
+  announce,
 }: {
   readonly order: CustomerOrderState;
   /** Withdrawn from already: no second withdrawal. */
   readonly withdrawn?: boolean;
   /** The booking as a calendar event; none while its times are unknown. */
   readonly event: BookingEvent | undefined;
+  readonly announce: boolean;
 }) {
   const locale = useAppLocale();
   const router = useRouter();
@@ -165,7 +189,7 @@ function MoreActions({
       <LiveMessage
         role="status"
         message={
-          invoice.waiting
+          announce && invoice.waiting
             ? m.reservations_invoice_preparing({}, { locale })
             : undefined
         }
@@ -173,7 +197,7 @@ function MoreActions({
       <LiveMessage
         role="alert"
         message={
-          failure === undefined
+          !announce || failure === undefined
             ? undefined
             : invoiceFailureMessage(failure, locale)
         }
@@ -181,7 +205,7 @@ function MoreActions({
       <LiveMessage
         role="alert"
         message={
-          AsyncResult.isFailure(calendar)
+          announce && AsyncResult.isFailure(calendar)
             ? m.reservations_calendar_share_failed({}, { locale })
             : undefined
         }
@@ -302,19 +326,23 @@ function TicketStub({
 function OrderTicket({
   state,
   onCheckAgain,
+  onPaymentCheckAgain,
   onPaymentPageLeft,
+  announce,
 }: {
   readonly state: StatusRefreshState;
   readonly onCheckAgain: () => void;
+  readonly onPaymentCheckAgain: () => void;
   /** The customer came back from the payment page: follow the payment. */
   readonly onPaymentPageLeft: () => void;
+  readonly announce: boolean;
 }) {
   const locale = useAppLocale();
   const { order } = state;
   const reservation = useAtomValue(reservationOfOrderAtom(order.orderId));
   const booked = bookedSelectionOf(order, reservation);
   const recovery = usePaymentRecovery(order, booked, {
-    onCheckAgain,
+    onCheckAgain: onPaymentCheckAgain,
     onPaymentPageLeft,
   });
   const model = orderTicketModel(
@@ -334,10 +362,12 @@ function OrderTicket({
   const withdrawn = model.stub._tag === "Withdrawn";
   const badge = ticketBadge(model.badge, locale);
   // The status changes while the screen is open: announce the new one.
-  useLiveRegionAnnouncement(
+  const statusAnnouncement =
     view.lead?.kind === "reason"
       ? `${badge.label}. ${view.lead.text}`
-      : badge.label,
+      : badge.label;
+  useLiveRegionAnnouncement(
+    announce ? statusAnnouncement : undefined,
     "polite"
   );
   // A payment action's answer, else the last read's own failure; a 429
@@ -355,7 +385,7 @@ function OrderTicket({
   return (
     <View style={styles.stack}>
       {/* Kept mounted so assistive tech announces each change. */}
-      <Notice tone="warning" message={failureMessage} />
+      <Notice tone="warning" message={announce ? failureMessage : undefined} />
       <BookingTicket
         lead={view.lead}
         badge={badge}
@@ -396,7 +426,12 @@ function OrderTicket({
         <OrderPeopleSection order={order} people={order.people} />
       )}
       {model.followUp === "more-actions" && (
-        <MoreActions order={order} event={view.event} withdrawn={withdrawn} />
+        <MoreActions
+          order={order}
+          event={view.event}
+          withdrawn={withdrawn}
+          announce={announce}
+        />
       )}
       {model.followUp === "contact" && <ContactLink />}
     </View>
@@ -404,7 +439,7 @@ function OrderTicket({
 }
 
 /** The order isn't the signed-in account's: say whose account this is. */
-function OrderNotFound() {
+function OrderNotFound({ onReturn }: { readonly onReturn?: () => void }) {
   const locale = useAppLocale();
   const router = useRouter();
   const account = AsyncResult.value(useAtomValue(accountAtom));
@@ -422,7 +457,7 @@ function OrderNotFound() {
       >
         <Button
           label={m.reservations_go_to_list({}, { locale })}
-          onPress={() => router.dismissTo(reservationsHref)}
+          onPress={onReturn ?? (() => router.dismissTo(reservationsHref))}
         />
         <Button
           variant="quiet"
@@ -442,36 +477,103 @@ const isNotFound = <E extends CustomerRequestFailure>(
   Option.isNone(AsyncResult.value(result)) &&
   CustomerViewError.$is("NotFound")(viewErrorOf(result.cause));
 
+export function ReservationPaneHeading({
+  onBack,
+  closes = false,
+}: {
+  readonly onBack?: () => void;
+  readonly closes?: boolean;
+}) {
+  const locale = useAppLocale();
+  const insets = useSafeAreaInsets();
+  const column = useContentColumn("form");
+  const title = closes
+    ? m.reservations_your_booking({}, { locale })
+    : m.reservations_status_title({}, { locale });
+  return (
+    <View style={[column, { paddingTop: insets.top + space.md }]}>
+      <FocusedStatusBar style="dark" />
+      {onBack === undefined ? (
+        <Text variant="display" role="heading">
+          {title}
+        </Text>
+      ) : (
+        <AppBar
+          title={title}
+          onBack={onBack}
+          back={closes ? "close" : "back"}
+          alignToContent
+        />
+      )}
+    </View>
+  );
+}
+
 /**
  * An order as its booking ticket (GET status, which refreshes the order and
  * spends the read budget): where it stands, and the one thing to do next.
- * It keeps itself up to date while focused and in the foreground; pulling
- * down checks again once it has stopped checking on its own.
+ * It keeps itself up to date while visible, focused, and in the foreground;
+ * pulling down checks again once it has stopped checking on its own.
  */
 export function OrderStatusScreen({
   orderId,
   visit,
+  active = true,
+  heading,
+  onMissingReturn,
 }: {
   readonly orderId: CustomerReservationOrderId;
   readonly visit: StatusVisit;
+  readonly active?: boolean;
+  readonly heading?: ReactNode;
+  readonly onMissingReturn?: () => void;
 }) {
   const locale = useAppLocale();
+  const navigation = useNavigation();
+  const focused = useIsFocused();
+  const registry = useContext(RegistryContext);
+  const [owner] = useState(() => Symbol());
+  const visible = useRef(active);
+  const focusAtom = orderStatusAtoms.focus(orderId);
+  const currentFocus = useAtomValue(focusAtom);
   const result = useAtomValue(orderStatusAtoms.status(orderId));
-  const retry = useAtomRefresh(orderStatusAtoms.progress(orderId));
-  const setFocus = useAtomSet(orderStatusAtoms.focus(orderId));
+  const setFocus = useAtomSet(focusAtom);
   const tap = useAtomSet(orderStatusAtoms.refreshRequests(orderId));
+
+  useLayoutEffect(() => {
+    visible.current = active;
+    setFocus(focusVisibility(owner, active));
+  }, [active, owner, setFocus]);
 
   useFocusEffect(
     useCallback(() => {
-      setFocus(focusGained(visit));
-      return () => setFocus(focusLost);
-    }, [setFocus, visit])
+      setFocus(focusGained(visit, owner, visible.current));
+      return () => setFocus(focusLost(owner));
+    }, [owner, setFocus, visit])
   );
 
+  const ownsRefresh = () => {
+    const focus = registry.get(focusAtom);
+    return focus.owner === owner && focus.visible && navigation.isFocused();
+  };
+  const retryRead = () => {
+    if (ownsRefresh()) setFocus(restartStatusVisit(owner));
+  };
   // After a failed first read the refreshes have ended: start them again.
-  const refresh = AsyncResult.isFailure(result)
-    ? retry
-    : () => tap((taps) => taps + 1);
+  const refresh = () => {
+    if (ownsRefresh()) {
+      if (AsyncResult.isFailure(result)) setFocus(restartStatusVisit(owner));
+      else tap((taps) => taps + 1);
+    }
+  };
+  const checkAfterPayment = () => {
+    const focus = registry.get(focusAtom);
+    if (focus.owner !== owner || !navigation.isFocused()) return;
+    if (focus.visible) refresh();
+    // A payment outcome can invalidate the order while its preview is hidden.
+    // Start the fresh read once the same preview is visible.
+    else setFocus(restartStatusVisit(owner));
+  };
   const refreshable = Option.match(AsyncResult.value(result), {
     onNone: () => AsyncResult.isFailure(result),
     onSome: canRefreshManually,
@@ -489,33 +591,41 @@ export function OrderStatusScreen({
     : result;
 
   return (
-    <ScrollScreen
-      refreshing={pulled && !AsyncResult.isInitial(result)}
-      onRefresh={refreshable ? refresh : undefined}
-    >
-      {isNotFound(result) ? (
-        <OrderNotFound />
-      ) : (
-        <AsyncView
-          result={shown}
-          onRetry={retry}
-          loading={
-            <BookingTicketSkeleton
-              label={m.account_loading({}, { locale })}
-              stub="button"
-            />
-          }
-        >
-          {(state) => (
-            <OrderTicket
-              state={state}
-              onCheckAgain={refresh}
-              onPaymentPageLeft={() => setFocus(focusGained("after-payment"))}
-            />
-          )}
-        </AsyncView>
-      )}
-    </ScrollScreen>
+    <>
+      {heading}
+      <ScrollScreen
+        refreshing={pulled && !AsyncResult.isInitial(result)}
+        onRefresh={refreshable ? refresh : undefined}
+      >
+        {isNotFound(result) ? (
+          <OrderNotFound onReturn={onMissingReturn} />
+        ) : (
+          <AsyncView
+            result={shown}
+            onRetry={retryRead}
+            loading={
+              <BookingTicketSkeleton
+                label={m.account_loading({}, { locale })}
+                stub="button"
+              />
+            }
+          >
+            {(state) => (
+              <OrderTicket
+                state={state}
+                onCheckAgain={refresh}
+                onPaymentCheckAgain={checkAfterPayment}
+                onPaymentPageLeft={() => {
+                  if (!navigation.isFocused()) return;
+                  setFocus(restartStatusVisit(owner, "after-payment"));
+                }}
+                announce={active && focused && currentFocus.owner === owner}
+              />
+            )}
+          </AsyncView>
+        )}
+      </ScrollScreen>
+    </>
   );
 }
 

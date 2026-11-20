@@ -32,6 +32,8 @@ import {
 } from "./payment-recovery";
 
 const orderId = sampleDeskOrderId("payment_failed");
+const reopenOwnedPaymentPage = (id = orderId) =>
+  reopenPaymentPage(id, () => true);
 
 const retriedDetails: CustomerPaymentRetryDetails = {
   bookingFor: "someone-else",
@@ -86,7 +88,7 @@ describe("reopenPaymentPage", () => {
     async (result) => {
       const { workspace, opened, run } = harness(result);
       workspace.paymentPage = { url: "https://gateway.example.test/pay/1" };
-      const exit = await run(reopenPaymentPage(orderId));
+      const exit = await run(reopenOwnedPaymentPage());
       expect(exit).toEqual(Exit.succeed(PaymentPageOutcome.Opened({ result })));
       expect(opened).toEqual([
         [
@@ -97,12 +99,24 @@ describe("reopenPaymentPage", () => {
     }
   );
 
+  test("does not open a URL that arrives after the booking loses ownership", async () => {
+    const { workspace, opened, run } = harness();
+    workspace.paymentPage = { url: "https://gateway.example.test/pay/1" };
+    const ownsAttempt = () => !workspace.calls.includes("reopenPaymentPage");
+
+    expect(ownsAttempt()).toBe(true);
+    const exit = await run(reopenPaymentPage(orderId, ownsAttempt));
+    expect(ownsAttempt()).toBe(false);
+    expect(exit).toEqual(Exit.succeed(PaymentPageOutcome.Abandoned()));
+    expect(opened).toEqual([]);
+  });
+
   test.each([...CustomerPaymentPageClosedReason.literals])(
     "a page the server won't reopen (%s) opens nothing and says why",
     async (reason) => {
       const { workspace, opened, run } = harness();
       workspace.paymentPage = reason;
-      const exit = await run(reopenPaymentPage(orderId));
+      const exit = await run(reopenOwnedPaymentPage());
       expect(exit).toEqual(Exit.succeed(PaymentPageOutcome.Closed({ reason })));
       expect(opened).toEqual([]);
     }
@@ -111,7 +125,9 @@ describe("reopenPaymentPage", () => {
   test("an order that isn't the account's is not found", async () => {
     const { run } = harness();
     const exit = await run(
-      reopenPaymentPage(CustomerReservationOrderId.make("sample-order-unknown"))
+      reopenOwnedPaymentPage(
+        CustomerReservationOrderId.make("sample-order-unknown")
+      )
     );
     expect(exit).toEqual(Exit.succeed(PaymentPageOutcome.NotFound()));
   });
@@ -120,7 +136,7 @@ describe("reopenPaymentPage", () => {
     const { workspace, opened, run } = harness();
     workspace.paymentPage = { url: "https://gateway.example.test/pay/1" };
     workspace.fail("reopenPaymentPage", "service-unavailable");
-    const exit = await run(reopenPaymentPage(orderId));
+    const exit = await run(reopenOwnedPaymentPage());
     expect(exit).toEqual(
       Exit.fail(new PaymentRecoveryFailed({ kind: "service_unavailable" }))
     );

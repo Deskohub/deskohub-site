@@ -85,55 +85,56 @@ describe("CoworkTierCards", () => {
     expect(onSelect).toHaveBeenCalledWith("open-space");
   });
 
-  test("the artwork is a decorative background, hidden from assistive tech", () => {
-    const { images } = render();
+  test("the Open Space artwork is decorative and ends inside the card", () => {
+    const { images, artFrames } = render();
 
-    expect(images).toHaveLength(2);
-    for (const image of images) {
-      expect(image["aria-hidden"]).toBe(true);
-    }
-  });
-
-  test("the Open Space and Reserved Desk artwork ends inside each card", () => {
-    const { artFrames } = render();
-
-    expect(artFrames.map((frame) => frame.right)).toEqual([0, 0]);
+    expect(images).toHaveLength(1);
+    expect(images[0]?.["aria-hidden"]).toBe(true);
+    expect(artFrames.map((frame) => frame.right)).toEqual([0]);
   });
 
   const root = clientRoot();
 
-  test("the workstation artwork stays inside the card below the measured header", async () => {
-    const card = {
-      ...(cards[1] as CoworkTierCard),
-      artwork: tierArtwork("reserved-desk", true),
-    };
-    const radio = findAll(renderCards(undefined, [card]), "Pressable")[0];
-    const top = Children.toArray(radio?.props.children)[0];
-    if (!isValidElement<HostProps>(top) || typeof top.type !== "function") {
-      throw new Error("No card header");
+  test.each([false, true])(
+    "the Reserved Desk artwork clears the measured header (workstation: %s)",
+    async (withWorkstation) => {
+      const card = {
+        ...(cards[1] as CoworkTierCard),
+        artwork: tierArtwork("reserved-desk", withWorkstation),
+      };
+      const radio = findAll(renderCards(undefined, [card]), "Pressable")[0];
+      const top = Children.toArray(radio?.props.children)[0];
+      if (!isValidElement<HostProps>(top) || typeof top.type !== "function") {
+        throw new Error("No card header");
+      }
+      const CardTop = top.type as (props: HostProps) => ReactNode;
+      let tree: ReactNode = null;
+      const Probe = () => {
+        tree = CardTop(top.props);
+        return null;
+      };
+      await root.render(<Probe />);
+      expect(findAll(hostTree(tree), "Image")).toHaveLength(0);
+      const onLayout = findAll(tree, "View")[0]?.props.onLayout;
+      if (typeof onLayout !== "function")
+        throw new Error("No header layout handler");
+
+      const layout = { y: 12, height: 48 };
+      await act(async () => onLayout({ nativeEvent: { layout } }));
+
+      const measuredTree = hostTree(tree);
+      const images = findAll(measuredTree, "Image");
+      expect(images).toHaveLength(1);
+      expect(images[0]?.props["aria-hidden"]).toBe(true);
+
+      const frame = findAll(measuredTree, "View").find(
+        (view) => view.props.pointerEvents === "none"
+      );
+      const style = flatStyle(frame?.props.style);
+      expect(style.right).toBe(0);
+      expect(style.top).toBeGreaterThan(layout.y + layout.height);
     }
-    const CardTop = top.type as (props: HostProps) => ReactNode;
-    let tree: ReactNode = null;
-    const Probe = () => {
-      tree = CardTop(top.props);
-      return null;
-    };
-    await root.render(<Probe />);
-    expect(findAll(hostTree(tree), "Image")).toHaveLength(0);
-    const onLayout = findAll(tree, "View")[0]?.props.onLayout;
-    if (typeof onLayout !== "function")
-      throw new Error("No header layout handler");
-
-    const layout = { y: 12, height: 48 };
-    await act(async () => onLayout({ nativeEvent: { layout } }));
-
-    const frame = findAll(hostTree(tree), "View").find(
-      (view) => view.props.pointerEvents === "none"
-    );
-    const style = flatStyle(frame?.props.style);
-    expect(style.right).toBe(0);
-    expect(style.top).toBeGreaterThan(layout.y + layout.height);
-  });
+  );
 
   test("the Reserved Desk shows its workstation once one is added", () => {
     expect(tierArtwork("reserved-desk", true)).not.toBe(
