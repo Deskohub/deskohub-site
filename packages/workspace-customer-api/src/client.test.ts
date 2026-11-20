@@ -100,8 +100,8 @@ describe("makeWorkspaceCustomerApiClient", () => {
     expect(requests.map((request) => request.url)).toEqual([
       `${baseUrl}/api/customer/account`,
     ]);
-    expect(requests[0]?.headers.get(customerApiClientHeader.name)).toBe(
-      customerApiClientHeader.value
+    expect(requests[0]?.headers.get("x-deskohub-client")).toBe(
+      "workspace-customer-api"
     );
   });
 

@@ -231,7 +231,7 @@ describe("the typed client's profile phone", () => {
     ]);
   });
 
-  test("sends a blank phone, which clears the stored phone", async () => {
+  test("sends a blank phone to the profile handler as an explicit clear", async () => {
     const updated = await callTypedClient((client) =>
       client.account.updateProfile({
         payload: { firstName: "Ada", phone: "" },
@@ -253,12 +253,15 @@ describe("the typed client's profile phone", () => {
     expect(ran).toEqual([]);
   });
 
-  test("never delivers a phone without a phone number", async () => {
+  test("refuses an invalid phone before sending an update or completion request", async () => {
     const updated = await callTypedClient((client) =>
       client.account.updateProfile({
         payload: { firstName: "Ada", phone: "not a phone" },
       })
     );
+    expect(Result.isFailure(updated)).toBe(true);
+    expect(ran).toEqual([]);
+
     const completed = await callTypedClient((client) =>
       client.account.completeProfile({
         headers: {},
@@ -266,10 +269,7 @@ describe("the typed client's profile phone", () => {
       })
     );
 
-    expect([Result.isFailure(updated), Result.isFailure(completed)]).toEqual([
-      true,
-      true,
-    ]);
-    expect(received).toEqual([]);
+    expect(Result.isFailure(completed)).toBe(true);
+    expect(ran).toEqual([]);
   });
 });

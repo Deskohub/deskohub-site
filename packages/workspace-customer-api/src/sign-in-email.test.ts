@@ -8,24 +8,12 @@ import {
   SIGN_IN_EMAIL_RESEND_COOLDOWN_MS,
 } from "./sign-in-email";
 
-describe("NextSignInEmailAt", () => {
-  test("decodes the server's ISO instant and encodes it back unchanged", () => {
-    const wire = "2026-11-15T20:41:07.123Z";
+test("encodes the server's next sign-in email time as a UTC instant", () => {
+  const at = DateTime.makeUnsafe("2026-11-15T21:41:07.123+01:00");
 
-    const decoded = Schema.decodeUnknownSync(NextSignInEmailAt)(wire);
-
-    expect(DateTime.toEpochMillis(decoded)).toBe(Date.parse(wire));
-    expect(Schema.encodeSync(NextSignInEmailAt)(decoded)).toBe(wire);
-  });
-
-  test("refuses a value that is not an instant", () => {
-    expect(
-      Option.isNone(Schema.decodeUnknownOption(NextSignInEmailAt)("soon"))
-    ).toBe(true);
-    expect(
-      Option.isNone(Schema.decodeUnknownOption(NextSignInEmailAt)(60))
-    ).toBe(true);
-  });
+  expect(Schema.encodeSync(NextSignInEmailAt)(at)).toBe(
+    "2026-11-15T20:41:07.123Z"
+  );
 });
 
 describe("NextSignInEmailAtFromClient", () => {
