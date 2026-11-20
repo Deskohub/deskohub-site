@@ -135,10 +135,10 @@ test("groups the customer fields by kind and sorts each group by path", async ()
   for (const group of groups) {
     const paths = within(group)
       .getAllByRole("option")
-      .map((option) => option.getAttribute("data-value"));
+      .map((option) => option.querySelector("code")?.textContent ?? "");
     expect(paths.length).toBeGreaterThan(0);
     expect(paths).toEqual(
-      paths.toSorted((left = "", right = "") => left.localeCompare(right, "en"))
+      paths.toSorted((left, right) => left.localeCompare(right, "en"))
     );
   }
 });
