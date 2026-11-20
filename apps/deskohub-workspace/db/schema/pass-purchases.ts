@@ -61,6 +61,8 @@ export const passPurchases = pgTable(
       .$type<PlainDate>(),
     /** Exclusive cutoff after an Unlimited pass is withdrawn. */
     accessEndsOn: date("access_ends_on", { mode: "string" }).$type<PlainDate>(),
+    /** First verified delivery of the paid Unlimited confirmation to the buyer. */
+    buyerConfirmationDeliveredAt: instant("buyer_confirmation_delivered_at"),
     quote: jsonb("quote")
       .notNull()
       .$type<typeof passPurchaseQuoteCodec.Encoded>(),
