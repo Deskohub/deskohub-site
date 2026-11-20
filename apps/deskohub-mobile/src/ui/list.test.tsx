@@ -159,6 +159,14 @@ describe("ListRow", () => {
     expect(root.props.accessible).toBe(true);
     expect(root.props["aria-label"]).toBe("l, v, d");
     expect(root.props.role).toBeUndefined();
+    expect(rowRoot({ label: "l" }).props["aria-label"]).toBe("l");
+    for (const value of [undefined, ""]) {
+      expect(
+        rowRoot({ label: "l", value, description: "d", kind: "action" }).props[
+          "aria-label"
+        ]
+      ).toBe("l, d");
+    }
   });
 
   test("a badge sits beside the label and is read with the row", () => {

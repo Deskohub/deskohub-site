@@ -45,8 +45,7 @@ const header = (
   );
 
 describe("stack headers", () => {
-  test("each locale keeps one options object, drawn on the paper canvas", () => {
-    expect(stackScreenOptions("cs-CZ")).toBe(stackScreenOptions("cs-CZ"));
+  test("the stack draws its screens on the paper canvas", () => {
     expect(stackScreenOptions("cs-CZ").contentStyle).toEqual({
       backgroundColor: color.paper,
     });

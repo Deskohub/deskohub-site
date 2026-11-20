@@ -145,7 +145,8 @@ describe("CompanyLookup over the customer API", () => {
     await lookup.press();
     await lookup.settled();
     await lookup.found()?.apply();
-    expect(Object.keys(lookup.applied[0] ?? {})).not.toContain("vatId");
+    expect(lookup.applied).toHaveLength(1);
+    expect(lookup.applied[0]).not.toHaveProperty("vatId");
   });
 
   test("Dismiss leaves the draft unchanged", async () => {
@@ -159,10 +160,12 @@ describe("CompanyLookup over the customer API", () => {
   });
 
   test("an empty field calls nothing and says the ID is invalid", async () => {
-    const lookup = await mountLookup({ companyId: "  " });
-    await lookup.press();
-    expect(lookup.workspace.calls).not.toContain("lookupCompany");
-    expect(lookup.status()?.tone).toBe("danger");
+    for (const companyId of ["", "  "]) {
+      const lookup = await mountLookup({ companyId });
+      await lookup.press();
+      expect(lookup.workspace.calls).not.toContain("lookupCompany");
+      expect(lookup.status()?.tone).toBe("danger");
+    }
   });
 
   test("not found and registry unavailable offer Try again", async () => {

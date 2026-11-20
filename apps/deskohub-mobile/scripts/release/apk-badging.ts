@@ -9,7 +9,7 @@ export type ApkIdentity = {
 const attribute = (line: string, name: string): string | undefined =>
   new RegExp(`\\b${name}='([^']*)'`).exec(line)?.[1];
 
-export const apkIdentity = (badging: string): ApkIdentity => {
+const apkIdentity = (badging: string): ApkIdentity => {
   const line = badging
     .split("\n")
     .find((entry) => entry.startsWith("package:"));

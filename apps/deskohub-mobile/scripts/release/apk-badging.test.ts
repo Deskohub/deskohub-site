@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { apkIdentity, verifyApkIdentity } from "./apk-badging";
+import { verifyApkIdentity } from "./apk-badging";
 
 const badging = (versionCode: string, versionName: string) =>
   [
@@ -15,17 +15,13 @@ const expected = {
   versionName: "1.2.3",
 };
 
-describe("apkIdentity", () => {
-  test("reads the package name and version from badging output", () => {
-    expect(apkIdentity(badging("1002003", "1.2.3"))).toEqual(expected);
-  });
-
-  test("rejects output without a package line", () => {
-    expect(() => apkIdentity("application-label:'Example'")).toThrow();
-  });
-});
-
 describe("verifyApkIdentity", () => {
+  test("rejects output without a package line", () => {
+    expect(() =>
+      verifyApkIdentity("application-label:'Example'", expected)
+    ).toThrow("aapt2 badging has no package name and version.");
+  });
+
   test("accepts an APK with the expected identity", () => {
     expect(verifyApkIdentity(badging("1002003", "1.2.3"), expected)).toEqual(
       expected

@@ -19,7 +19,6 @@ import {
 } from "./analytics-consent";
 import {
   type AnalyticsGate,
-  carriedAnalyticsDecision,
   consentAnalyticsGate,
   nativeHandoffAnalyticsGate,
 } from "./analytics-gate";
@@ -68,36 +67,6 @@ const openedByApp = (
 const settled = (gate: AnalyticsGate) =>
   Effect.runPromise(eventually(() => gate.status() !== "loading"));
 
-describe("carriedAnalyticsDecision", () => {
-  test("takes either answer where the browser holds no choice", () => {
-    expect(carriedAnalyticsDecision(undecided, granted)).toEqual({
-      analytics: true,
-      decidedAt,
-    });
-    expect(carriedAnalyticsDecision(undecided, denied)).toEqual({
-      analytics: false,
-      decidedAt,
-    });
-  });
-
-  test("withdraws a grant", () => {
-    expect(carriedAnalyticsDecision(siteGrant, denied)).toEqual({
-      analytics: false,
-      decidedAt,
-    });
-  });
-
-  test("never grants over a refusal, nor replaces a grant", () => {
-    expect(carriedAnalyticsDecision(siteDecline, granted)).toBeUndefined();
-    expect(carriedAnalyticsDecision(siteDecline, denied)).toBeUndefined();
-    expect(carriedAnalyticsDecision(siteGrant, granted)).toBeUndefined();
-    // A malformed cookie reads as a refusal with no categories.
-    expect(
-      carriedAnalyticsDecision({ kind: "decided", categories: [] }, granted)
-    ).toBeUndefined();
-  });
-});
-
 describe("page the native app opened with its answer", () => {
   test("stores a carried grant, dated as the app stored it", async () => {
     const { gate, writes, consent } = openedByApp(undecided, granted);
@@ -128,11 +97,19 @@ describe("page the native app opened with its answer", () => {
     ]);
   });
 
-  test("keeps the site's refusal over a carried grant", async () => {
-    const { gate, writes } = openedByApp(siteDecline, granted);
-    await settled(gate);
-    expect(gate.status()).toBe("denied");
-    expect(writes).toEqual([]);
+  test("keeps the site's refusal over either carried answer", async () => {
+    // A malformed cookie reads as a refusal with no categories.
+    const malformed: StoredConsent = { kind: "decided", categories: [] };
+    for (const [stored, answer] of [
+      [siteDecline, granted],
+      [siteDecline, denied],
+      [malformed, granted],
+    ] as const) {
+      const { gate, writes } = openedByApp(stored, answer);
+      await settled(gate);
+      expect(gate.status()).toBe("denied");
+      expect(writes).toEqual([]);
+    }
   });
 
   test("keeps the site's grant as it is over a carried grant", async () => {
