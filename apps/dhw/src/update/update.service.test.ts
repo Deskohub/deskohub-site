@@ -39,17 +39,19 @@ const release = (
 
 describe("selectAvailableUpdate", () => {
   test("selects the newest immutable release for the embedded target", () => {
+    const target = "linux-x64-baseline";
     const update = selectAvailableUpdate(
       [
-        release("0.2.0", "darwin-arm64"),
-        release("0.1.0", "linux-x64-baseline"),
-        release("0.3.0", "linux-x64-baseline"),
+        release("0.2.0", target),
+        release("0.10.0", target),
+        release("0.9.0", target),
+        release("0.11.0", "darwin-arm64"),
       ],
-      "linux-x64-baseline"
+      target
     );
 
-    expect(update?.version).toBe("0.3.0");
-    expect(update?.target).toBe("linux-x64-baseline");
+    expect(update?.version).toBe("0.10.0");
+    expect(update?.target).toBe(target);
   });
 
   test("rejects assets outside the repository release path", () => {
