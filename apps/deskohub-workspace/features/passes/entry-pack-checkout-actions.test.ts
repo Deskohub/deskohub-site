@@ -8,7 +8,7 @@ mock.module("@/shared/backend/workspace-action", () => ({
   ...workspaceAction,
   defineWorkspaceAction:
     <Input, Output>(
-      _options: unknown,
+      _options: Parameters<typeof workspaceAction.defineWorkspaceAction>[0],
       run: (input: Input) => Effect.Effect<Output, unknown>
     ) =>
     (input: Input) =>
@@ -40,6 +40,9 @@ test("the exported Pay action supplies provider admission and late verification"
     billing: { purpose: "personal", invoice: "none" },
   });
 
-  expect(result).toMatchObject({ status: "pending", statusUrl: "/fixture/status" });
+  expect(result).toMatchObject({
+    status: "pending",
+    statusUrl: "/fixture/status",
+  });
   expect(observeProviders).toHaveBeenCalledWith(["nexi"]);
 });

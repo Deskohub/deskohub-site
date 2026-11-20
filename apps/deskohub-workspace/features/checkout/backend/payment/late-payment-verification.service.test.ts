@@ -145,7 +145,11 @@ describe("LatePaymentVerificationService", () => {
     const harness = makeHarness({
       verification: {
         ...declined,
-        provider: { ...declined.provider, authorizedAmount: "0", capturedAmount: "0" },
+        provider: {
+          ...declined.provider,
+          authorizedAmount: "0",
+          capturedAmount: "0",
+        },
       },
     });
 

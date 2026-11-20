@@ -507,18 +507,22 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           const verification = yield* LatePaymentVerificationService;
           return LatePaymentVerificationService.of({
             startRecoveryIfSettled: (input) =>
-              verification.startRecoveryIfSettled(input).pipe(
-                Effect.map((result) =>
-                  priorClosureVerified && result === "not_settled"
-                    ? ("confirmed_unpaid" as const)
-                    : result
-                )
-              ),
+              verification
+                .startRecoveryIfSettled(input)
+                .pipe(
+                  Effect.map((result) =>
+                    priorClosureVerified && result === "not_settled"
+                      ? ("confirmed_unpaid" as const)
+                      : result
+                  )
+                ),
           });
         })
       ).pipe(
         Layer.provide(
-          LatePaymentVerificationService.Default.pipe(Layer.provide(infrastructure))
+          LatePaymentVerificationService.Default.pipe(
+            Layer.provide(infrastructure)
+          )
         )
       );
       const services = Layer.merge(infrastructure, retryVerification);
