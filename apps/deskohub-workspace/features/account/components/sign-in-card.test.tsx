@@ -186,6 +186,12 @@ const codeInput = (view: ReturnType<typeof render>) =>
     m.accountSignInCodeLabel({}, { locale })
   ) as HTMLInputElement;
 
+const typeCode = async (view: ReturnType<typeof render>) => {
+  await act(async () => {
+    fireEvent.input(codeInput(view), { target: { value: "482913" } });
+  });
+};
+
 const submitEmail = async (
   view: ReturnType<typeof render>,
   requestLocale: "en-US" | "cs-CZ" = locale
@@ -843,9 +849,7 @@ describe("account components", () => {
     const { SignInCard } = await import("./sign-in-card");
 
     const view = render(<SignInCard locale={locale} />);
-    await act(async () => {
-      fireEvent.change(codeInput(view), { target: { value: "482913" } });
-    });
+    await typeCode(view);
     // A focus check after the verified code must not navigate again.
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
@@ -908,12 +912,6 @@ describe("account components", () => {
       },
       error: null,
     } as const);
-
-  const typeCode = async (view: ReturnType<typeof render>) => {
-    await act(async () => {
-      fireEvent.change(codeInput(view), { target: { value: "482913" } });
-    });
-  };
 
   const focusSignedInTab = async () => {
     getSession.mockImplementation(signedInSession);
