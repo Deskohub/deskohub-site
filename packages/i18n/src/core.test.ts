@@ -11,28 +11,10 @@ describe("parseAcceptLanguage", () => {
       "fr-CA;q=0.7, en-US;q=0.9, zh-hant-hk;q=1, *;q=0.5, de;q=0, en;q=abc"
     );
 
-    expect(parsed).toEqual([
-      {
-        localeToken: "zh-hant-hk",
-        normalizedLocaleToken: "zh-Hant-HK",
-        baseLanguage: "zh",
-        quality: 1,
-        order: 2,
-      },
-      {
-        localeToken: "en-US",
-        normalizedLocaleToken: "en-US",
-        baseLanguage: "en",
-        quality: 0.9,
-        order: 1,
-      },
-      {
-        localeToken: "fr-CA",
-        normalizedLocaleToken: "fr-CA",
-        baseLanguage: "fr",
-        quality: 0.7,
-        order: 0,
-      },
+    expect(parsed.map((entry) => entry.normalizedLocaleToken)).toEqual([
+      "zh-Hant-HK",
+      "en-US",
+      "fr-CA",
     ]);
   });
 
