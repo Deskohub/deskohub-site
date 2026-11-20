@@ -3,6 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { expect, test } from "bun:test";
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import { prefixPathnameWithLocale } from "@deskohub/i18n/pathname";
+import { fioPollTopic } from "@/features/checkout/backend/fio/fio-poll-wake.service";
 import { paidFulfillmentTopic } from "@/features/checkout/backend/fulfillment/paid-fulfillment-queue.service";
 import { reservationHoldCleanupTopic } from "@/features/checkout/backend/holds/reservation-hold-cleanup-queue.service";
 import { latePaymentRecoveryTopic } from "@/features/checkout/backend/payment/late-payment-recovery-queue.service";
@@ -99,6 +100,7 @@ test("lets browsers keep the mobile web app's hashed build files, and nothing el
 const queueTopics = [
   campaignSendTopic,
   automationUnitTopic,
+  fioPollTopic,
   paidFulfillmentTopic,
   latePaymentRecoveryTopic,
   reservationHoldCleanupTopic,
