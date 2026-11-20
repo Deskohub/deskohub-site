@@ -20,6 +20,7 @@ import { maskEmailAddress } from "@/shared/utils";
 import { currentInstant } from "@/shared/utils/temporal";
 import { getEntryPackPayPath } from "../entry-pack-checkout";
 import { isEntryPackQuoteExpired } from "../pass-offer";
+import { readEntryPackGiftState } from "./entry-pack-gift";
 
 const readBuyerOrder = Effect.fnUntraced(function* (
   orderId: OrderId,
@@ -161,17 +162,24 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
     } as const;
   }
   if (row.paymentState === "paid" && paidAt) {
-    const gift = row.holderAccountId !== accountId;
-    const email = gift
-      ? yield* findPurchaseLoginEmail(row.holderAccountId)
-      : undefined;
-    return {
+    const paid = {
       ...details,
       status: "paid",
       paidAt,
       validFrom,
       validUntil,
-      gift,
+    } as const;
+    if (row.holderAccountId === accountId) {
+      return { ...paid, gift: false } as const;
+    }
+
+    const { invitation, claimed } = yield* readEntryPackGiftState(orderId);
+    const email = yield* findPurchaseLoginEmail(row.holderAccountId);
+    return {
+      ...paid,
+      gift: true,
+      invitation,
+      claimed,
       maskedHolderEmail: email ? maskEmailAddress(email) : undefined,
     } as const;
   }

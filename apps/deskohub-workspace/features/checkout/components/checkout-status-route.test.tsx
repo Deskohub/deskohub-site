@@ -6,6 +6,7 @@ import { Context, Effect, Layer } from "effect";
 import type { ReactNode } from "react";
 import { prerender } from "react-dom/static";
 import type { CheckoutStatusViewModel } from "@/features/checkout/backend/checkout";
+import { m } from "@/features/i18n";
 import type { OrderKind } from "@/features/order";
 import { orderIdSchema } from "@/features/order";
 import type { EntryPackStatus } from "@/features/passes/backend/entry-pack-status";
@@ -461,30 +462,47 @@ describe("CheckoutStatusRoute", () => {
     expect(html).toContain(`href="${paymentPage}"`);
   });
 
-  test("renders the paid gift details for the buyer", async () => {
-    const holder = maskEmailAddress(testEmailAddress("pack-holder"));
-    orderKind = "pass-purchase";
-    passStatus = {
-      ...passOrder,
-      status: "paid",
-      gift: true,
-      maskedHolderEmail: holder,
-      paidAt: Temporal.Instant.from("2026-11-19T12:00:00Z"),
-      validFrom: plainDateStringSchema.make("2026-11-19"),
-      validUntil: plainDateStringSchema.make("2027-01-19"),
-    };
+  test.each([
+    ["not_sent", false, m.entryPackStatusGiftInvitationNotSent],
+    ["pending", false, m.entryPackStatusGiftInvitationPending],
+    ["sent", false, m.entryPackStatusGiftInvitationSent],
+    ["sent", true, m.entryPackStatusGiftInvitationSent],
+    ["failed", true, m.entryPackStatusGiftInvitationFailed],
+  ] as const)(
+    "renders the paid gift details for a %s invitation with claimed=%p",
+    async (invitation, claimed, invitationMessage) => {
+      const locale = "en-US";
+      const holderEmail = testEmailAddress("pack-holder");
+      const maskedHolderEmail = maskEmailAddress(holderEmail);
+      orderKind = "pass-purchase";
+      passStatus = {
+        ...passOrder,
+        status: "paid",
+        gift: true,
+        invitation,
+        claimed,
+        maskedHolderEmail,
+        paidAt: Temporal.Instant.from("2026-11-19T12:00:00Z"),
+        validFrom: plainDateStringSchema.make("2026-11-19"),
+        validUntil: plainDateStringSchema.make("2027-01-19"),
+      };
 
-    const { errors, html } = await renderRoute({ order: passOrderId });
+      const { errors, html } = await renderRoute({ order: passOrderId });
 
-    expect(errors).toEqual([]);
-    expect(html).toContain('data-entry-pack-status="paid"');
-    expect(html).toContain("Your Entry pack is paid");
-    expect(html).toContain(holder);
-    expect(html.match(/data-payment-window=/g)).toHaveLength(1);
-    expect(html).toContain("Paid on");
-    expect(html).toContain('data-auto-refresh="false"');
-    expect(html).not.toContain("Invitation sent");
-  });
+      expect(errors).toEqual([]);
+      expect(html).toContain('data-entry-pack-status="paid"');
+      expect(html).toContain("Your Entry pack is paid");
+      expect(html).toContain(maskedHolderEmail);
+      expect(html).not.toContain(holderEmail);
+      expect(html.match(/data-payment-window=/g)).toHaveLength(1);
+      expect(html).toContain("Paid on");
+      expect(html).toContain('data-auto-refresh="false"');
+      expect(html).toContain(`>${invitationMessage({}, { locale })}<`);
+      expect(html).toContain(
+        `>${claimed ? m.accountPassGiftClaimed({}, { locale }) : m.accountPassGiftNotClaimed({}, { locale })}<`
+      );
+    }
+  );
 
   test.each([
     "failed",

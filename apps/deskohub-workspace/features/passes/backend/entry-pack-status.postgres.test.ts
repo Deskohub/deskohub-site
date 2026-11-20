@@ -194,13 +194,43 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await view(orderId)).toMatchObject({
         status: "paid",
         gift: true,
+        invitation: "not_sent",
+        claimed: false,
         maskedHolderEmail: maskEmailAddress(holderEmail),
       });
       const self = await seedOrder({ paymentState: "paid" });
-      expect(await view(self.orderId)).toMatchObject({
+      const selfStatus = await view(self.orderId);
+      expect(selfStatus).toMatchObject({
         status: "paid",
         gift: false,
-        maskedHolderEmail: undefined,
+      });
+      expect(selfStatus).not.toHaveProperty("maskedHolderEmail");
+      expect(selfStatus).not.toHaveProperty("invitation");
+    });
+
+    test("reads a recorded delivery and claim for the buyer", async () => {
+      const { orderId } = await seedOrder({
+        paymentState: "paid",
+        holderAccountId: holder,
+      });
+      await database.pool.query(
+        `insert into entry_pack_gift_invitations
+          (order_id, holder_account_id, locale, generation, attempts, requested_at, sent_at, key_id)
+          values ($1, $2, 'en-US', 0, 1, $3, $3, 'fixture-key')`,
+        [orderId, holder, now.toString()]
+      );
+      expect(await view(orderId)).toMatchObject({
+        invitation: "sent",
+        claimed: false,
+      });
+
+      await database.pool.query(
+        "update pass_purchases set gift_claimed_at = $2 where id = $1",
+        [orderId, now.toString()]
+      );
+      expect(await view(orderId)).toMatchObject({
+        invitation: "sent",
+        claimed: true,
       });
     });
 

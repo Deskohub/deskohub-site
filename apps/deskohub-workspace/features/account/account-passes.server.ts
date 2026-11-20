@@ -1,18 +1,35 @@
 import "server-only";
 
+import { and, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { cache } from "react";
 import { WorkspaceDatabase } from "@/db/database.service";
+import { orders, passPurchases } from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import { findEntryPackPurchasePartyContacts } from "@/features/account/backend/customer-account-by-email";
+import { CustomerProfileService } from "@/features/account/backend/customer-profile.service";
+import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { Locale } from "@/features/i18n";
+import type { OrderId } from "@/features/order";
+import {
+  type EntryPackGiftState,
+  readEntryPackGiftStates,
+} from "@/features/passes/backend/entry-pack-gift";
 import {
   type HeldEntryPack,
   listHeldEntryPacks,
 } from "@/features/passes/backend/held-entry-packs";
 import { getEntryPackLastUsableDate } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
-import { getCoworkReservationPath } from "@/features/reservation/routes";
-import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
+import {
+  getCoworkReservationPath,
+  reservationStatusPath,
+} from "@/features/reservation/routes";
+import {
+  catchRecoverableCause,
+  runWorkspaceEffectOrElse,
+} from "@/shared/backend/workspace-effect";
+import { maskEmailAddress } from "@/shared/utils";
 import {
   formatInstantDate,
   formatPlainDate,
@@ -29,9 +46,26 @@ export type AccountEntryPack = {
   readonly lastUsableDay: string;
   readonly status: "active" | "expired" | "depleted" | "ended";
   readonly bookPath?: string;
+  readonly gift?: {
+    readonly orderId: OrderId;
+    readonly buyerName?: string;
+  };
 };
 
-export type AccountPasses = readonly AccountEntryPack[] | "unavailable";
+export type AccountBoughtEntryPack = EntryPackGiftState & {
+  readonly orderId: OrderId;
+  readonly statusPath: string;
+  readonly tier: string;
+  readonly entryCount: number;
+  readonly maskedHolderEmail?: string;
+};
+
+export type AccountPasses =
+  | {
+      readonly held: readonly AccountEntryPack[];
+      readonly boughtForOthers: readonly AccountBoughtEntryPack[];
+    }
+  | "unavailable";
 
 const timeZone = workspaceSiteConstants.location.timeZone;
 
@@ -40,7 +74,8 @@ export const loadAccountPasses = Effect.fn("loadAccountPasses")(function* (
 ) {
   const account = yield* CurrentCustomerAccount;
   const standing = yield* account.peek;
-  if (standing.kind === "review") return [] as const;
+  if (standing.kind === "review")
+    return { held: [], boughtForOthers: [] } as const;
   if (
     (standing.kind !== "linked" && standing.kind !== "unlinked") ||
     standing.reviewMarker !== "absent"
@@ -48,12 +83,135 @@ export const loadAccountPasses = Effect.fn("loadAccountPasses")(function* (
     return "unavailable" as const;
   }
 
-  const [packs, today] = yield* Effect.all([
-    listHeldEntryPacks(standing.session.accountId),
-    currentPlainDate(timeZone),
-  ]);
-  return packs.map((pack, position) =>
-    toAccountEntryPack(pack, position, today, locale)
+  const { accountId } = standing.session;
+  const [packs, today, boughtForOthers] = yield* Effect.all(
+    [
+      listHeldEntryPacks(accountId),
+      currentPlainDate(timeZone),
+      listBoughtGifts(accountId, locale),
+    ],
+    { concurrency: "unbounded" }
+  );
+  const giftBuyers = yield* readHeldGiftBuyers(
+    accountId,
+    packs.map(({ id }) => id)
+  );
+  return {
+    held: packs.map((pack, position) => ({
+      ...toAccountEntryPack(pack, position, today, locale),
+      gift: giftBuyers.has(pack.id)
+        ? { orderId: pack.id, buyerName: giftBuyers.get(pack.id) }
+        : undefined,
+    })),
+    boughtForOthers,
+  };
+});
+
+const listBoughtGifts = Effect.fn("listBoughtEntryPackGifts")(function* (
+  accountId: CustomerAccountId,
+  locale: Locale
+) {
+  const { db } = yield* WorkspaceDatabase;
+  const gifts = yield* db
+    .select({
+      orderId: passPurchases.id,
+      holderAccountId: passPurchases.holderAccountId,
+      tier: passPurchases.tier,
+      entryCount: passPurchases.entryCount,
+    })
+    .from(passPurchases)
+    .innerJoin(orders, eq(orders.id, passPurchases.id))
+    .where(
+      and(
+        eq(passPurchases.buyerAccountId, accountId),
+        ne(passPurchases.holderAccountId, accountId),
+        eq(orders.kind, "pass-purchase"),
+        eq(orders.paymentState, "paid"),
+        isNotNull(orders.paidAt)
+      )
+    )
+    .orderBy(desc(orders.paidAt), desc(passPurchases.id));
+  if (gifts.length === 0) return [];
+
+  const recipientIds = [...new Set(gifts.map((gift) => gift.holderAccountId))];
+  const [states, recipients] = yield* Effect.all(
+    [
+      readEntryPackGiftStates(gifts.map((gift) => gift.orderId)),
+      findEntryPackPurchasePartyContacts(recipientIds),
+    ],
+    { concurrency: "unbounded" }
+  );
+  const result: AccountBoughtEntryPack[] = [];
+  for (const { orderId, tier, entryCount, holderAccountId } of gifts) {
+    const state = states.get(orderId);
+    // A refund can end payment eligibility between the two reads.
+    if (!state) continue;
+    const email = recipients.get(holderAccountId)?.email;
+    result.push({
+      ...state,
+      orderId,
+      statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
+      tier: getPassTierName(tier, locale),
+      entryCount,
+      maskedHolderEmail: email ? maskEmailAddress(email) : undefined,
+    });
+  }
+  return result;
+});
+
+const readHeldGiftBuyers = Effect.fn("readHeldEntryPackGiftBuyers")(function* (
+  holderAccountId: CustomerAccountId,
+  heldIds: readonly OrderId[]
+) {
+  if (heldIds.length === 0) return new Map<OrderId, string | undefined>();
+  const { db } = yield* WorkspaceDatabase;
+  const gifts = yield* db
+    .select({
+      orderId: passPurchases.id,
+      accountId: passPurchases.buyerAccountId,
+    })
+    .from(passPurchases)
+    .where(
+      and(
+        eq(passPurchases.holderAccountId, holderAccountId),
+        ne(passPurchases.buyerAccountId, holderAccountId),
+        inArray(passPurchases.id, heldIds)
+      )
+    );
+  const buyers = yield* findEntryPackPurchasePartyContacts(
+    gifts.map((gift) => gift.accountId)
+  );
+  const missingNames = [...buyers].flatMap(
+    ([accountId, { dotyposCustomerId, name }]) =>
+      !name && dotyposCustomerId ? [{ accountId, dotyposCustomerId }] : []
+  );
+  const profileNames = new Map(
+    missingNames.length === 0
+      ? []
+      : yield* Effect.gen(function* () {
+          const profiles = yield* CustomerProfileService;
+          return yield* Effect.forEach(
+            missingNames,
+            (buyer) =>
+              profiles.load(buyer).pipe(
+                Effect.map(({ firstName, lastName }) =>
+                  [firstName, lastName].join(" ").trim()
+                ),
+                catchRecoverableCause(() => Effect.succeed("")),
+                Effect.map((name) => [buyer.accountId, name] as const)
+              ),
+            { concurrency: 4 }
+          );
+        }).pipe(
+          Effect.provide(CustomerProfileService.Live),
+          catchRecoverableCause(() => Effect.succeed([]))
+        )
+  );
+  return new Map(
+    gifts.map(({ orderId, accountId }) => [
+      orderId,
+      (buyers.get(accountId)?.name ?? profileNames.get(accountId)) || undefined,
+    ])
   );
 });
 
