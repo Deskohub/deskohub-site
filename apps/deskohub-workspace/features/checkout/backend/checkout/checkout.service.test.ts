@@ -21,6 +21,7 @@ import {
   References,
   Schema,
 } from "effect";
+import { TestClock } from "effect/testing";
 import { env } from "@/env";
 import {
   type CustomerAccountSectionsFixture,
@@ -82,6 +83,7 @@ import {
   payStateTokenQueryParam,
   sealPayState,
 } from "./pay-state";
+import type { PaymentPageProviderObservation } from "./payment-page-provider-status";
 import { withoutPayStateHoldExpiry } from "./signed-pay-state.test-utils";
 
 type LogAnnotations = Context.Service.Shape<
@@ -581,6 +583,9 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly accountAuthority?: CustomerAccountSectionsFixture;
   readonly returnTarget?: PaymentReturnTarget;
   readonly resumePayment?: "card" | "qr";
+  readonly resumeNow?: Temporal.Instant;
+  readonly publicPaymentExpiresAt?: Temporal.Instant;
+  readonly observePaymentPage?: () => Effect.Effect<PaymentPageProviderObservation>;
   readonly startPayment?: {
     readonly method: "card" | "qr";
     readonly fio?: { readonly accountKey: string };
@@ -769,6 +774,12 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     options.accountAuthority ?? { session: null }
   );
 
+  const { PaymentPageProviderStatus } = await import(
+    "./payment-page-provider-status"
+  );
+  const observePaymentPage = mock(
+    options.observePaymentPage ?? (() => Effect.succeed("no_activity" as const))
+  );
   const { QrPaymentRepository } = await import(
     "../repositories/qr-payment.repository"
   );
@@ -792,6 +803,8 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
       ...(options.returnTarget && { returnTarget: options.returnTarget }),
     };
     if (options.resumePayment) {
+      if (options.resumeNow)
+        yield* TestClock.setTime(options.resumeNow.epochMilliseconds);
       return yield* service.resumeReservationPayment(
         {
           reservationId: options.orderId,
@@ -830,7 +843,9 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
                   options.resumePayment
                     ? {
                         accountKey: "receiving-account",
-                        expiresAt: testInstant(storedHoldExpiresAt),
+                        expiresAt:
+                          options.publicPaymentExpiresAt ??
+                          testInstant(storedHoldExpiresAt),
                       }
                     : null
                 ),
@@ -844,6 +859,9 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
                   amount: createdAttempt.amount,
                   expiresAt: testInstant(storedHoldExpiresAt),
                 }),
+            }),
+            Layer.mock(PaymentPageProviderStatus, {
+              observe: observePaymentPage,
             }),
             Layer.mock(FioPollWake, { wake: () => Effect.void }),
             Layer.mock(PaymentLifecycleRepository, paymentLifecycle),
@@ -862,7 +880,10 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   );
 
   return {
-    effect,
+    effect: options.resumeNow
+      ? effect.pipe(Effect.provide(TestClock.layer()))
+      : effect,
+    observePaymentPage,
     accountEvents: accountAuthority.events,
     rereadUnderAccountLock,
     affirm,
@@ -898,14 +919,26 @@ describe("CheckoutService", () => {
     expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
   });
 
-  test("resumes the existing card session for an authorized held reservation", async () => {
-    const harness = await createCheckoutHarness({
+  const createSharedCardResume = (input: {
+    readonly now: Temporal.Instant;
+    readonly observe: () => Effect.Effect<PaymentPageProviderObservation>;
+  }) =>
+    createCheckoutHarness({
       orderId: "public-card-reservation",
       resumePayment: "card",
+      resumeNow: input.now,
+      publicPaymentExpiresAt: testInstant("2026-06-01T10:30:00Z"),
+      observePaymentPage: input.observe,
       reservationOverrides: {
         paymentState: "pending",
         activePaymentAttemptId: "attempt-public-card-reservation",
       },
+    });
+
+  test("reopens the existing shared card page when the provider order shows no activity", async () => {
+    const harness = await createSharedCardResume({
+      now: testInstant("2026-06-01T10:20:00Z"),
+      observe: () => Effect.succeed("no_activity"),
     });
 
     expect(await Effect.runPromise(harness.effect)).toMatchObject({
@@ -913,8 +946,69 @@ describe("CheckoutService", () => {
       orderId: "public-card-reservation",
       redirectUrl: "https://payments.example/hosted",
     });
+    expect(harness.observePaymentPage).toHaveBeenCalledTimes(1);
     expect(harness.affirm).toHaveBeenCalledTimes(0);
     expect(harness.recordLegalEvidence).toHaveBeenCalledTimes(0);
+    expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+  });
+
+  test("does not reopen or replace the shared card page after the provider records payment or refusal", async () => {
+    const harness = await createSharedCardResume({
+      now: testInstant("2026-06-01T10:03:00Z"),
+      observe: () => Effect.succeed("activity"),
+    });
+
+    expect(await Effect.runPromise(harness.effect)).toEqual({
+      status: "in_progress",
+    });
+    expect(harness.observePaymentPage).toHaveBeenCalledTimes(1);
+    expect(harness.createPendingProviderAttempt).toHaveBeenCalledTimes(0);
+    expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+  });
+
+  test.each([
+    ["before the fallback ends", "2026-06-01T10:05:59Z", "redirect"],
+    ["at the fallback cutoff", "2026-06-01T10:06:00Z", "in_progress"],
+  ] as const)(
+    "handles unavailable Nexi observation %s",
+    async (_, now, status) => {
+      const harness = await createSharedCardResume({
+        now: testInstant(now),
+        observe: () => Effect.succeed("unknown"),
+      });
+
+      expect(await Effect.runPromise(harness.effect)).toMatchObject({ status });
+      expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+    }
+  );
+
+  test("does not reopen a card page when the shared cutoff elapses during observation", async () => {
+    const harness = await createSharedCardResume({
+      now: testInstant("2026-06-01T10:29:59Z"),
+      observe: () =>
+        TestClock.setTime(
+          testInstant("2026-06-01T10:30:00Z").epochMilliseconds
+        ).pipe(Effect.as("no_activity" as const)),
+    });
+
+    expect(await Effect.runPromise(harness.effect)).toEqual({
+      status: "in_progress",
+    });
+    expect(harness.observePaymentPage).toHaveBeenCalledTimes(1);
+    expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+  });
+
+  test("does not observe or replace the card page at the shared cutoff", async () => {
+    const harness = await createSharedCardResume({
+      now: testInstant("2026-06-01T10:30:00Z"),
+      observe: () => Effect.succeed("no_activity"),
+    });
+
+    expect(await Effect.runPromise(harness.effect)).toEqual({
+      status: "in_progress",
+    });
+    expect(harness.observePaymentPage).toHaveBeenCalledTimes(0);
+    expect(harness.createPendingProviderAttempt).toHaveBeenCalledTimes(0);
     expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
   });
 

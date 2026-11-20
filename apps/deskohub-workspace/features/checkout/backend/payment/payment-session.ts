@@ -201,6 +201,7 @@ export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
         ) {
           return {
             attachedAttempt: attempt,
+            reused: true as const,
             hostedPaymentPage: {
               providerOrderId: attempt.providerOrderId,
               hostedPage: attempt.providerRedirectUrl,

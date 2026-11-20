@@ -72,18 +72,14 @@ type PaymentPageClosure = "no_active_attempt" | "window_elapsed";
  */
 export const getPaymentPageToReopen = (
   attempt: ReopeningAttempt,
-  now: Temporal.Instant
+  now: Temporal.Instant,
+  cutoff = getPaymentAttemptAbandonmentCutoff(attempt)
 ):
   | { readonly providerRedirectUrl: string }
   | { readonly closed: PaymentPageClosure } => {
   const providerRedirectUrl = getReusableProviderRedirectUrl(attempt);
   if (!providerRedirectUrl) return { closed: "no_active_attempt" };
-  if (
-    Temporal.Instant.compare(
-      now,
-      getPaymentAttemptAbandonmentCutoff(attempt)
-    ) >= 0
-  ) {
+  if (Temporal.Instant.compare(now, cutoff) >= 0) {
     return { closed: "window_elapsed" };
   }
   return { providerRedirectUrl };
@@ -99,14 +95,10 @@ export const getPaymentPageToReopen = (
 export const decidePaymentPageReopening = (
   attempt: ReopeningAttempt,
   now: Temporal.Instant,
-  observation: PaymentPageProviderObservation
+  observation: PaymentPageProviderObservation,
+  cutoff = getPaymentAttemptAbandonmentCutoff(attempt)
 ): "open" | PaymentPageClosure => {
-  if (
-    Temporal.Instant.compare(
-      now,
-      getPaymentAttemptAbandonmentCutoff(attempt)
-    ) >= 0
-  ) {
+  if (Temporal.Instant.compare(now, cutoff) >= 0) {
     return "window_elapsed";
   }
   if (observation === "no_activity") return "open";

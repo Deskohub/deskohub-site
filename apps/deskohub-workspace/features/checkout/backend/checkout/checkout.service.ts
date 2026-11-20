@@ -42,7 +42,10 @@ import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { type Money, moneyEquals } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import { localDateTimeToInstant } from "@/shared/utils/temporal";
+import {
+  currentInstant,
+  localDateTimeToInstant,
+} from "@/shared/utils/temporal";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
 import { FioPollWake } from "../fio/fio-poll-wake.service";
 import { OrderPaymentHandlers } from "../payment/order-payment-handlers.service";
@@ -55,6 +58,7 @@ import { PaymentProvidersLive } from "../payment/payment-providers";
 import { startPaymentSession } from "../payment/payment-session";
 import { LegalEvidenceEventRepository } from "../repositories/legal-evidence-event.repository";
 import {
+  type PaymentAttempt,
   PaymentAttemptRepository,
   paymentAttemptLogFields,
 } from "../repositories/payment-attempt.repository";
@@ -77,9 +81,12 @@ import {
   toFreshPayState,
 } from "./pay-state";
 import { type OpenCheckout, PayableCheckout } from "./payable-checkout.service";
+import { PaymentPageProviderStatus } from "./payment-page-provider-status";
 import type { PriceVerdict } from "./price-verdict";
 import { getReservationStatusPath } from "./reservation-status-url";
 import {
+  decidePaymentPageReopening,
+  getPaymentPageToReopen,
   getReusableProviderRedirectUrl,
   isReusableAttemptState,
 } from "./reusable-payment-attempt";
@@ -254,6 +261,7 @@ export class CheckoutService extends Context.Service<
     Layer.provide(WorkspaceReservationRepository.Default),
     Layer.provide(WorkspaceDatabase.Default),
     Layer.provide(WorkspaceDotyposLayer),
+    Layer.provide(PaymentPageProviderStatus.Default),
     Layer.provide(PaymentProvidersLive),
     Layer.provide(CheckoutPricingService.Live),
     Layer.provide(SealedStateKeys.Default)
@@ -346,6 +354,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
         yield* Effect.serviceOption(FioPollWake)
       );
 
+      const providerPageStatus = Option.getOrUndefined(
+        yield* Effect.serviceOption(PaymentPageProviderStatus)
+      );
       const provideSealedStateKeys = Effect.provideService(
         SealedStateKeys,
         yield* SealedStateKeys
@@ -366,6 +377,78 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
         yield* Effect.logDebug("Checkout payable reservation revalidated");
         return current;
       });
+
+      const paymentInProgress = { status: "in_progress" } as const;
+      const reopenPublicCard = Effect.fn("checkout.reopenPublicCard")(
+        function* (input: {
+          readonly attempt: PaymentAttempt;
+          readonly reservation: WorkspaceReservation;
+          readonly expiresAt: Temporal.Instant;
+          readonly locale: Locale;
+        }) {
+          const { attempt, reservation, expiresAt, locale } = input;
+          if (
+            !providerPageStatus ||
+            !qrPayments ||
+            attempt.provider !== "nexi"
+          ) {
+            return paymentInProgress;
+          }
+          const page = getPaymentPageToReopen(
+            attempt,
+            yield* currentInstant,
+            expiresAt
+          );
+          if ("closed" in page) return paymentInProgress;
+
+          const observation = yield* providerPageStatus.observe({
+            attempt,
+            reservation,
+          });
+          if (observation === "activity" || observation === "inactive") {
+            return paymentInProgress;
+          }
+
+          // A settlement or termination can commit while the provider is
+          // answering. Confirm the hold and the same card attempt again.
+          const latestReservation = yield* reservations.findById(
+            reservation.id
+          );
+          if (
+            latestReservation?.reservationState !== "held" ||
+            latestReservation.paymentState !== "pending"
+          )
+            return paymentInProgress;
+          const currentCard = yield* qrPayments.findCardAttempt(
+            reservationOrderId(reservation.id)
+          );
+          if (!currentCard || currentCard.id !== attempt.id)
+            return paymentInProgress;
+
+          const now = yield* currentInstant;
+          const currentPage = getPaymentPageToReopen(
+            currentCard,
+            now,
+            expiresAt
+          );
+          if (
+            "closed" in currentPage ||
+            decidePaymentPageReopening(
+              currentCard,
+              now,
+              observation,
+              expiresAt
+            ) !== "open"
+          ) {
+            return paymentInProgress;
+          }
+          return getHostedPaymentCheckoutResult({
+            locale,
+            providerRedirectUrl: currentPage.providerRedirectUrl,
+            workspaceReservationId: reservation.id,
+          });
+        }
+      );
 
       const startProviderSession = Effect.fn("checkout.startProviderSession")(
         function* (input: {
@@ -398,48 +481,59 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
 
           const orderId = reservationOrderId(input.workspaceReservationId);
           const fio = input.fio;
-          const { attachedAttempt, hostedPaymentPage } =
-            yield* startPaymentSession({
-              kind: input.checkout.kind,
-              orderId,
-              locale: input.locale,
-              correlationId: input.correlationId,
-              amount: input.total,
-              customer: input.customer,
-              retriedAttempt,
-              beforeAttempt: Effect.gen(function* () {
-                yield* ensureReservationHasNotEnded(input.reservation);
-                yield* reservations.recordPaymentReturnTarget({
-                  id: input.workspaceReservationId,
-                  paymentReturnTarget: input.returnTarget,
-                });
-              }),
-              details: {
-                commitment: input.commitment,
-                accountingSnapshot: input.accountingSnapshot,
-              },
-              ...(fio &&
-                lifecycle &&
-                !retriedAttempt && {
-                  admitProvider: ({
+          const session = yield* startPaymentSession({
+            kind: input.checkout.kind,
+            orderId,
+            locale: input.locale,
+            correlationId: input.correlationId,
+            amount: input.total,
+            customer: input.customer,
+            retriedAttempt,
+            beforeAttempt: Effect.gen(function* () {
+              yield* ensureReservationHasNotEnded(input.reservation);
+              yield* reservations.recordPaymentReturnTarget({
+                id: input.workspaceReservationId,
+                paymentReturnTarget: input.returnTarget,
+              });
+            }),
+            details: {
+              commitment: input.commitment,
+              accountingSnapshot: input.accountingSnapshot,
+            },
+            ...(fio &&
+              lifecycle &&
+              !retriedAttempt && {
+                admitProvider: ({
+                  provider,
+                  providerOrderId,
+                }: {
+                  readonly provider: "nexi" | "mock";
+                  readonly providerOrderId: string;
+                }) =>
+                  lifecycle.createPendingProviderAttempt({
+                    orderId,
+                    amount: input.total,
+                    locale: input.locale,
+                    commitment: input.commitment,
+                    accountingSnapshot: input.accountingSnapshot,
                     provider,
                     providerOrderId,
-                  }: {
-                    readonly provider: "nexi" | "mock";
-                    readonly providerOrderId: string;
-                  }) =>
-                    lifecycle.createPendingProviderAttempt({
-                      orderId,
-                      amount: input.total,
-                      locale: input.locale,
-                      commitment: input.commitment,
-                      accountingSnapshot: input.accountingSnapshot,
-                      provider,
-                      providerOrderId,
-                      publicPayment: fio,
-                    }),
-                }),
-            }).pipe(providePaymentSession);
+                    publicPayment: fio,
+                  }),
+              }),
+          }).pipe(providePaymentSession);
+          const { attachedAttempt, hostedPaymentPage } = session;
+          if ("reused" in session) {
+            if (!fio || !qrPayments) return paymentInProgress;
+            const window = yield* qrPayments.findPaymentWindow(orderId);
+            if (window?.accountKey !== fio.accountKey) return paymentInProgress;
+            return yield* reopenPublicCard({
+              attempt: attachedAttempt,
+              reservation: input.checkout.reservation,
+              expiresAt: window.expiresAt,
+              locale: input.locale,
+            });
+          }
           yield* checkoutAnalytics.paymentStarted({
             attempt: attachedAttempt,
             timestamp: attachedAttempt.updatedAt,
@@ -773,7 +867,6 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
         };
       });
 
-      const paymentInProgress = { status: "in_progress" } as const;
       const readQrPayment = Effect.fnUntraced(function* (
         reservationId: WorkspaceReservationId
       ) {
@@ -806,10 +899,8 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           if (!window) return undefined;
           if (
             window.accountKey !== input.fio.accountKey ||
-            Temporal.Instant.compare(
-              window.expiresAt,
-              Temporal.Now.instant()
-            ) <= 0
+            Temporal.Instant.compare(window.expiresAt, yield* currentInstant) <=
+              0
           ) {
             return paymentInProgress;
           }
@@ -827,14 +918,12 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           if (input.method === "card") {
             const card = yield* qrPayments.findCardAttempt(orderId);
             if (card) {
-              const providerRedirectUrl = getReusableProviderRedirectUrl(card);
-              return providerRedirectUrl
-                ? getHostedPaymentCheckoutResult({
-                    locale,
-                    providerRedirectUrl,
-                    workspaceReservationId: input.reservationId,
-                  })
-                : paymentInProgress;
+              return yield* reopenPublicCard({
+                attempt: card,
+                reservation,
+                expiresAt: window.expiresAt,
+                locale,
+              });
             }
           } else {
             const existing = yield* readQrPayment(input.reservationId);
@@ -875,7 +964,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           });
           if ((yield* providers.selectForCustomer(customer)) !== "nexi")
             return paymentInProgress;
-          const { hostedPaymentPage } = yield* startPaymentSession({
+          const session = yield* startPaymentSession({
             kind: "reservation",
             orderId,
             locale: snapshot.locale,
@@ -893,9 +982,23 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 providerOrderId,
               }),
           }).pipe(providePaymentSession);
+          if ("reused" in session) {
+            return yield* reopenPublicCard({
+              attempt: session.attachedAttempt,
+              reservation,
+              expiresAt: window.expiresAt,
+              locale,
+            });
+          }
+          if (
+            Temporal.Instant.compare(yield* currentInstant, window.expiresAt) >=
+            0
+          ) {
+            return paymentInProgress;
+          }
           return getHostedPaymentCheckoutResult({
             locale,
-            providerRedirectUrl: hostedPaymentPage.hostedPage,
+            providerRedirectUrl: session.hostedPaymentPage.hostedPage,
             workspaceReservationId: input.reservationId,
           });
         },
