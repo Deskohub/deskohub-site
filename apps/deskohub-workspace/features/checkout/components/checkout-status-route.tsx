@@ -224,6 +224,7 @@ async function renderReservationStatus({
         paymentMethods={
           paymentMethods && {
             continuePaymentAction: continueReservationPayment,
+            expiresAt: paymentMethods.expiresAt,
             qrPayment: paymentMethods.qrPayment,
           }
         }

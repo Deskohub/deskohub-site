@@ -5,6 +5,7 @@ import { CheckoutService } from "@/features/checkout/backend/checkout/checkout.s
 import { checkoutSubmitDeadline } from "@/features/checkout/backend/checkout/checkout-submit-deadline";
 import { publicReservationPaymentStatusServices } from "@/features/checkout/backend/checkout/public-reservation-payment-status.server";
 import { m } from "@/features/i18n";
+import { ReferralReleaseGateRequest } from "@/features/referrals/referral-release-gate.server";
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 import {
   continueReservationPaymentForAuthor,
@@ -21,9 +22,10 @@ const continueReservationPaymentAction = defineWorkspaceAction(
   (input) =>
     continueReservationPaymentForAuthor(input).pipe(
       Effect.provide(
-        Layer.merge(
+        Layer.mergeAll(
           CheckoutService.Live,
-          publicReservationPaymentStatusServices
+          publicReservationPaymentStatusServices,
+          ReferralReleaseGateRequest
         )
       )
     )

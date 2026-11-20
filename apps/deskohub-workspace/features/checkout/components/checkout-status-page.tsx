@@ -52,6 +52,7 @@ type CheckoutStatusPageProps = {
   readonly locale: Locale;
   readonly paymentMethods?: {
     readonly continuePaymentAction: ContinueCheckoutPaymentAction;
+    readonly expiresAt: string;
     readonly qrPayment?: CheckoutQrPayment;
   };
   readonly presentation?: "page" | "modal";
@@ -383,6 +384,7 @@ export function CheckoutStatusPage({
       {canSwitchPayment && (
         <CheckoutStatusPaymentMethods
           continuePaymentAction={canSwitchPayment.continuePaymentAction}
+          expiresAt={canSwitchPayment.expiresAt}
           locale={locale}
           orderId={status.orderId}
           qrPayment={canSwitchPayment.qrPayment}

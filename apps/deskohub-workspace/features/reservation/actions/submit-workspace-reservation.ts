@@ -1,7 +1,7 @@
 import { Effect, Match, Struct } from "effect";
 import { CheckoutService } from "@/features/checkout/backend/checkout";
 import { CheckoutError } from "@/features/checkout/backend/checkout/checkout-error";
-import { readPublicPayStatePaymentAccount } from "@/features/checkout/backend/checkout/public-pay-state-author.server";
+import { readPublicPayStatePayment } from "@/features/checkout/backend/checkout/public-pay-state-author.server";
 import { getPublicReservationPaymentAccount } from "@/features/checkout/backend/checkout/public-reservation-payment-account";
 import { getReservationStatusPath } from "@/features/checkout/backend/checkout/reservation-status-url";
 import { type Locale, m } from "@/features/i18n";
@@ -36,9 +36,9 @@ export const submitWorkspaceReservation = Effect.fn(
     const method = input.method;
     const defaultAccount =
       method && (yield* getPublicReservationPaymentAccount());
-    const account =
-      defaultAccount &&
-      (yield* readPublicPayStatePaymentAccount(
+    const selectedPayment =
+      method &&
+      (yield* readPublicPayStatePayment(
         { payStateToken: payment.payStateToken, locale },
         defaultAccount
       ).pipe(
@@ -51,15 +51,19 @@ export const submitWorkspaceReservation = Effect.fn(
             })
         )
       ));
-    if (!account && (defaultAccount || method === "qr")) {
+    if (!selectedPayment && (defaultAccount || method === "qr")) {
       return yield* new CheckoutError({
         code: "checkout_failed",
         message: "The selected payment method is unavailable.",
       });
     }
-    const checkout = yield* method && account
+    const checkout = yield* method && selectedPayment?.kind === "account"
       ? service.startReservationPayment(
-          { ...payment, method, fio: { accountKey: account.accountKey } },
+          {
+            ...payment,
+            method,
+            fio: { accountKey: selectedPayment.accountKey },
+          },
           locale
         )
       : service.createHostedPaymentCheckout(payment, locale);

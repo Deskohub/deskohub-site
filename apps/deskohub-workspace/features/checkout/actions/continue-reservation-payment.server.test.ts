@@ -1,4 +1,5 @@
-import { expect, mock, test } from "bun:test";
+import { expect, mock, spyOn, test } from "bun:test";
+import * as qrCode from "@deskohub/qr-code";
 import { Clock, Effect, Layer } from "effect";
 import { CustomerAccountReservationOwnership } from "@/features/account/backend/customer-account-reservation-ownership";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
@@ -130,19 +131,52 @@ test("projects the pinned QR amount, reference, account and shared deadline", as
   });
 });
 
+const checkoutClock = (now: () => Temporal.Instant) => {
+  const clock = Effect.runSync(Clock.clockWith(Effect.succeed));
+  return {
+    currentTimeMillis: Effect.sync(() => now().epochMilliseconds),
+    currentTimeMillisUnsafe: () => now().epochMilliseconds,
+    currentTimeNanos: Effect.sync(() => now().epochNanoseconds),
+    currentTimeNanosUnsafe: () => now().epochNanoseconds,
+    monotonicTimeNanos: clock.monotonicTimeNanos,
+    monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+    sleep: (delay: Parameters<typeof clock.sleep>[0]) => clock.sleep(delay),
+  };
+};
+
+test("discards QR details when generation crosses the precise cutoff", async () => {
+  const windowExpiresAt = Temporal.Instant.from("2026-11-20T13:00:00.123400Z");
+  let now = Temporal.Instant.from("2026-11-20T13:00:00.123100Z");
+  const generatePng = qrCode.generateQrCodePngBuffer;
+  const renderQr = spyOn(qrCode, "generateQrCodePngBuffer").mockImplementation(
+    async (...args) => {
+      const png = await generatePng(...args);
+      now = Temporal.Instant.from("2026-11-20T13:00:00.123900Z");
+      return png;
+    }
+  );
+  try {
+    const { readStatus } = scenario({ qrStarted: true, windowExpiresAt });
+    expect(
+      await Effect.runPromise(
+        readStatus.pipe(
+          Effect.provideService(
+            Clock.Clock,
+            checkoutClock(() => now)
+          )
+        )
+      )
+    ).toBeUndefined();
+    expect(renderQr).toHaveBeenCalledTimes(1);
+  } finally {
+    renderQr.mockRestore();
+  }
+});
+
 test("hides QR details and denies continuation after the shared cutoff within the same millisecond", async () => {
   const windowExpiresAt = Temporal.Instant.from("2026-11-20T13:00:00.123400Z");
   const now = Temporal.Instant.from("2026-11-20T13:00:00.123900Z");
-  const clock = Effect.runSync(Clock.clockWith(Effect.succeed));
-  const fixedClock = {
-    currentTimeMillis: Effect.succeed(now.epochMilliseconds),
-    currentTimeMillisUnsafe: () => now.epochMilliseconds,
-    currentTimeNanos: Effect.succeed(now.epochNanoseconds),
-    currentTimeNanosUnsafe: () => now.epochNanoseconds,
-    monotonicTimeNanos: clock.monotonicTimeNanos,
-    monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
-    sleep: clock.sleep,
-  };
+  const fixedClock = checkoutClock(() => now);
   const { effect, readStatus, resumeReservationPayment } = scenario({
     qrStarted: true,
     windowExpiresAt,

@@ -42,6 +42,8 @@ const runSubmitReservation = async (options?: {
   readonly anotherAccount?: boolean;
   readonly legacyActivePayment?: boolean;
   readonly pinnedAccountKey?: string;
+  readonly alreadyPaid?: boolean;
+  readonly invalidPayState?: boolean;
   readonly bookerCustomerId?: string;
   readonly hasSettledReferral?: ReturnType<typeof mock>;
 }) => {
@@ -89,9 +91,14 @@ const runSubmitReservation = async (options?: {
   const referrals = ReferralServiceMock({
     hasSettledReferral: hasSettledReferral as never,
   });
-  const payStateToken = options?.enableQr
-    ? await sealSyntheticPayStateToken()
-    : input.payStateToken;
+  const payStateToken =
+    options?.method && !options.invalidPayState
+      ? await sealSyntheticPayStateToken()
+      : input.payStateToken;
+  const unpaidState =
+    options?.legacyActivePayment || options?.pinnedAccountKey
+      ? "pending"
+      : "not_started";
   const effect = submitWorkspaceReservation({
     ...input,
     payStateToken,
@@ -150,11 +157,8 @@ const runSubmitReservation = async (options?: {
             Effect.succeed({
               id,
               authorAccountId: testLinkedAccount.accountId,
-              reservationState: "held",
-              paymentState:
-                options?.legacyActivePayment || options?.pinnedAccountKey
-                  ? "pending"
-                  : "not_started",
+              reservationState: options?.alreadyPaid ? "confirmed" : "held",
+              paymentState: options?.alreadyPaid ? "paid" : unpaidState,
               activePaymentAttemptId: options?.legacyActivePayment
                 ? "legacy-card-attempt"
                 : null,
@@ -186,6 +190,53 @@ const runSubmitReservation = async (options?: {
 };
 
 describe("submitWorkspaceReservation", () => {
+  test.each(["card", "qr"] as const)(
+    "returns the paid reservation to a second signed Pay tab using %s",
+    async (method) => {
+      const redirectUrl =
+        "/en-US/reservation/status/reservation-id?outcome=success";
+      const createHostedPaymentCheckout = mock(() =>
+        Effect.succeed({
+          status: "redirect" as const,
+          redirectUrl,
+          paid: true as const,
+        })
+      );
+      const startReservationPayment = mock();
+      const { effect } = await runSubmitReservation({
+        method,
+        alreadyPaid: true,
+        enableQr: true,
+        createHostedPaymentCheckout,
+        startReservationPayment,
+      });
+      expect(await Effect.runPromise(effect)).toMatchObject({
+        status: "redirect",
+        redirectUrl,
+        paid: true,
+      });
+      expect(createHostedPaymentCheckout).toHaveBeenCalledTimes(1);
+      expect(startReservationPayment).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each([{ anotherAccount: true }, { invalidPayState: true }])(
+    "does not disclose the paid redirect to an unverified signed tab (%o)",
+    async (options) => {
+      const { effect, createHostedPaymentCheckout } =
+        await runSubmitReservation({
+          ...options,
+          method: "qr",
+          alreadyPaid: true,
+          enableQr: true,
+        });
+      expect(await Effect.runPromise(Effect.result(effect))).toMatchObject({
+        _tag: "Failure",
+      });
+      expect(createHostedPaymentCheckout).not.toHaveBeenCalled();
+    }
+  );
+
   test("does not return a hosted card page to a signed QR submission if card started concurrently", async () => {
     const startReservationPayment = mock(() =>
       Effect.succeed({

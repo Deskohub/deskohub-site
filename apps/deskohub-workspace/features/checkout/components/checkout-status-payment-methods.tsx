@@ -3,7 +3,14 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { useRouter } from "next/navigation";
 import type { SafeActionResult } from "next-safe-action";
-import { useEffect, useRef, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  useTransition,
+} from "react";
 import { type Locale, m } from "@/features/i18n";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { Button } from "@/shared/components/ui/button";
@@ -39,11 +46,13 @@ export type ContinueCheckoutPaymentAction = (
 
 export function CheckoutStatusPaymentMethods({
   continuePaymentAction,
+  expiresAt,
   locale,
   orderId,
   qrPayment,
 }: {
   readonly continuePaymentAction: ContinueCheckoutPaymentAction;
+  readonly expiresAt: string;
   readonly locale: Locale;
   readonly orderId: WorkspaceReservationId;
   readonly qrPayment?: CheckoutQrPayment;
@@ -51,6 +60,18 @@ export function CheckoutStatusPaymentMethods({
   const router = useRouter();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshing, startRefresh] = useTransition();
+  const expiration = Date.parse(expiresAt);
+  const expired = useSyncExternalStore(
+    useCallback(
+      (changed: () => void) => {
+        const timer = setTimeout(changed, Math.max(0, expiration - Date.now()));
+        return () => clearTimeout(timer);
+      },
+      [expiration]
+    ),
+    () => Date.now() >= expiration,
+    () => false
+  );
   const qrDetails = useRef<HTMLElement>(null);
   const focusQrDetails = useRef(false);
   useEffect(() => {
@@ -72,7 +93,7 @@ export function CheckoutStatusPaymentMethods({
         showError();
         return;
       }
-      if (data.status === "redirect") {
+      if (data.status === "redirect" && Date.now() < expiration) {
         // The current status page already owns the provider tab's return.
         if (!openCheckoutPaymentWindow(data.redirectUrl))
           router.push(data.redirectUrl);
@@ -86,10 +107,12 @@ export function CheckoutStatusPaymentMethods({
   });
   const pending = isExecuting || refreshing;
   const continueWith = (method: CheckoutPaymentMethod) => {
-    if (pending) return;
+    if (pending || Date.now() >= expiration) return;
     setErrorMessage(null);
     execute({ locale, method, orderId });
   };
+
+  if (expired) return null;
 
   return (
     <div className="mt-6 space-y-4">
@@ -118,7 +141,8 @@ export function CheckoutStatusPaymentMethods({
           onClick={() => continueWith("card")}
           size="lg"
           type="button"
-          variant="outline"
+          tone="outline"
+          variant="ghost"
         >
           {m.checkoutQrSwitchToCard({}, { locale })}
         </Button>

@@ -17,7 +17,7 @@ import {
 import { isOrderBoundPayState } from "@/features/checkout/backend/checkout/pay-state-contract";
 import {
   publicPayStateAuthorServices,
-  readPublicPayStatePaymentAccount,
+  readPublicPayStatePayment,
 } from "@/features/checkout/backend/checkout/public-pay-state-author.server";
 import { getPublicReservationPaymentAccount } from "@/features/checkout/backend/checkout/public-reservation-payment-account";
 import { FioAccounts } from "@/features/checkout/backend/fio/fio-accounts.service";
@@ -225,12 +225,9 @@ async function CheckoutPayContent({
     (await getPublicReservationPaymentAccount().pipe(
       Effect.flatMap((account) =>
         account
-          ? readPublicPayStatePaymentAccount(
-              { payStateToken, locale },
-              account
-            ).pipe(
+          ? readPublicPayStatePayment({ payStateToken, locale }, account).pipe(
               Effect.provide(publicPayStateAuthorServices),
-              Effect.map(Boolean),
+              Effect.map((payment) => payment?.kind === "account"),
               Effect.option,
               Effect.map(Option.getOrElse(() => false))
             )

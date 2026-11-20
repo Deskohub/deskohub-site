@@ -147,7 +147,10 @@ describe("CheckoutStatusPage", () => {
       const html = renderToStaticMarkup(
         <CheckoutStatusPage
           locale="en-US"
-          paymentMethods={{ continuePaymentAction: mock(async () => ({})) }}
+          paymentMethods={{
+            continuePaymentAction: mock(async () => ({})),
+            expiresAt: "2026-11-20T14:30:00Z",
+          }}
           status={status}
         />
       );

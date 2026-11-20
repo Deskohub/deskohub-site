@@ -26,11 +26,11 @@ export const publicPayStateAuthorServices = Layer.mergeAll(
   SealedStateKeys.Default
 );
 
-export const readPublicPayStatePaymentAccount = Effect.fn(
-  "checkout.readPublicPayStatePaymentAccount"
+export const readPublicPayStatePayment = Effect.fn(
+  "checkout.readPublicPayStatePayment"
 )(function* (
   input: Omit<Parameters<typeof requirePayStateAuthor>[0], "accountId">,
-  defaultAccount: FioReceivingAccountDisplay
+  defaultAccount: FioReceivingAccountDisplay | undefined
 ) {
   const ownership = yield* CustomerAccountReservationOwnership;
   const accountId = yield* ownership.activeAccountId;
@@ -48,9 +48,11 @@ export const readPublicPayStatePaymentAccount = Effect.fn(
   if (
     !reservation ||
     reservation.authorAccountId !== accountId ||
-    reservation.agentClientId ||
-    reservation.reservationState !== "held"
+    reservation.agentClientId
   )
+    return undefined;
+  if (reservation.paymentState === "paid") return { kind: "paid" } as const;
+  if (!defaultAccount || reservation.reservationState !== "held")
     return undefined;
 
   const payments = yield* QrPaymentRepository;
@@ -64,12 +66,17 @@ export const readPublicPayStatePaymentAccount = Effect.fn(
       Temporal.Instant.compare(window.expiresAt, now) <= 0
     )
       return undefined;
-    return yield* getPublicReservationPaymentAccount(window.accountKey);
+    const account = yield* getPublicReservationPaymentAccount(
+      window.accountKey
+    );
+    return (
+      account && { kind: "account" as const, accountKey: account.accountKey }
+    );
   }
 
   // A payment started before QR was available stays on its original path.
   return reservation.paymentState === "not_started" &&
     !reservation.activePaymentAttemptId
-    ? defaultAccount
+    ? { kind: "account" as const, accountKey: defaultAccount.accountKey }
     : undefined;
 });
