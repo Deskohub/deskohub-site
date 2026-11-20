@@ -9,12 +9,14 @@ import {
 } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { useState } from "react";
+import type { AccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
 import type {
   CustomerInvoiceHistory,
   CustomerProfileInput,
   CustomerReservationHistory,
 } from "@/features/account/contracts";
 import { type Locale, m } from "@/features/i18n";
+import { orderIdSchema } from "@/features/order";
 import {
   formatReferralInvitationDiscount,
   parseReferralCode,
@@ -249,7 +251,8 @@ describe("AccountPage states", () => {
 
   const renderState = async (
     state: CustomerAccountPageState,
-    locale: "en-US" | "cs-CZ" = "en-US"
+    locale: "en-US" | "cs-CZ" = "en-US",
+    unlimitedPasses?: AccountUnlimitedPasses
   ) => {
     const { AccountPage } = await import("./account-page");
     if (state.kind === "unauthenticated") {
@@ -258,6 +261,7 @@ describe("AccountPage states", () => {
           loadInvoiceHistory={loadInvoiceHistory}
           locale={locale}
           state={state}
+          unlimitedPasses={unlimitedPasses}
         />
       );
     }
@@ -276,6 +280,7 @@ describe("AccountPage states", () => {
           loadInvoiceHistory={loadInvoiceHistory}
           locale={locale}
           state={state}
+          unlimitedPasses={unlimitedPasses}
         />
       </AccountLayoutShell>
     );
@@ -958,6 +963,43 @@ describe("AccountPage states", () => {
         name: m.accountUnavailableTitle({}, en),
       })
     ).toBeTruthy();
+  });
+
+  test("keeps the holder's Unlimited period in Reservations during a profile outage", async () => {
+    const orderId = orderIdSchema.make(crypto.randomUUID());
+    const accessPath = `/en-US/reservation/access/${orderId}`;
+    const view = await renderState(
+      {
+        kind: "authenticated-unavailable",
+        deletion: "offered",
+        email: adaAddress,
+      },
+      "en-US",
+      [
+        {
+          orderId,
+          tier: "Open Space",
+          boughtOn: "Nov 10, 2026",
+          boughtForYou: false,
+          period: "Nov 10 – Dec 9, 2026",
+          seating: { kind: "shared" },
+          status: "active",
+          day: 8,
+          daysLeft: 23,
+          accessPath,
+        },
+      ]
+    );
+    expect(view.getByText(m.accountUnavailableTitle({}, en))).toBeTruthy();
+    expect(view.getByText("Day 8 of 30")).toBeTruthy();
+    expect(
+      view.queryByText(m.accountReservationsProviderUnavailable({}, en))
+    ).toBeNull();
+    expect(
+      view
+        .getByRole("link", { name: m.unlimitedAccessTodayTitle({}, en) })
+        .getAttribute("href")
+    ).toBe(accessPath);
   });
 
   test("manages passkeys under Sign-in & security while the profile is unavailable", async () => {

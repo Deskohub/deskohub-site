@@ -1866,13 +1866,27 @@
   "accountPassBoughtForYouBy": "Bought for you by {name}",
   "accountPassBoughtForYou": "Bought for you",
   "accountPassesPast": "Past passes",
-  "accountPassesEmpty": "You don’t have any Entry packs yet.",
+  "accountPassesEmpty": "You don’t have any passes yet.",
   "accountPassesUnavailable": "Your Entry packs couldn’t be loaded right now.",
   "accountPassBoughtOn": "Bought {date}",
   "accountPassBookDate": "Book a date",
   "accountPassExpired": "Expired",
   "accountPassDepleted": "Used up",
   "accountPassEnded": "Ended",
+  "accountUnlimitedPassesUnavailable": "Your Unlimited passes are temporarily unavailable.",
+  "accountUnlimitedPassPeriod": "Pass period",
+  "accountUnlimitedPassWhere": "Where to sit",
+  "accountUnlimitedPassAnyDesk": "Any free desk",
+  "accountUnlimitedPassDaysLeft": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} day left, including today",
+        "countPlural=other": "{count} days left, including today"
+      }
+    }
+  ],
   "entryPackDiscoveryTitle": "Entry packs",
   "entryPackDiscoveryIntro": "5 or 10 days of coworking to use whenever you like before the pack expires. Book each day in the usual reservation flow. You can buy a pack for someone else.",
   "entryPackDiscoveryOpenSpaceDescription": "Any free desk in the shared open space.",

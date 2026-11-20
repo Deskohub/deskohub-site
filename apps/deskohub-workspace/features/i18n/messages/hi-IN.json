@@ -1866,13 +1866,27 @@
   "accountPassBoughtForYouBy": "{name} की ओर से उपहार",
   "accountPassBoughtForYou": "आपके लिए खरीदा गया",
   "accountPassesPast": "पिछले पैक",
-  "accountPassesEmpty": "आपके पास अभी कोई प्रवेश पैक नहीं है।",
+  "accountPassesEmpty": "आपके पास अभी कोई पास नहीं है।",
   "accountPassesUnavailable": "अभी आपके प्रवेश पैक लोड नहीं हो सके।",
   "accountPassBoughtOn": "{date} को खरीदा गया",
   "accountPassBookDate": "दिन बुक करें",
   "accountPassExpired": "समय सीमा समाप्त",
   "accountPassDepleted": "सभी प्रवेश इस्तेमाल हो गए",
   "accountPassEnded": "समाप्त",
+  "accountUnlimitedPassesUnavailable": "आपके असीमित पास अभी उपलब्ध नहीं हैं।",
+  "accountUnlimitedPassPeriod": "वैधता अवधि",
+  "accountUnlimitedPassWhere": "बैठने की जगह",
+  "accountUnlimitedPassAnyDesk": "कोई भी खाली डेस्क",
+  "accountUnlimitedPassDaysLeft": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "आज समेत {count} दिन बाकी है",
+        "countPlural=other": "आज समेत {count} दिन बाकी हैं"
+      }
+    }
+  ],
   "entryPackDiscoveryTitle": "प्रवेश पैक",
   "entryPackDiscoveryIntro": "कोवर्किंग के 5 या 10 दिन। पैक की वैधता खत्म होने से पहले आप इनका इस्तेमाल कभी भी कर सकते हैं। हर दिन के लिए हमेशा की तरह बुकिंग करें। आप किसी और के लिए भी पैक खरीद सकते हैं।",
   "entryPackDiscoveryOpenSpaceDescription": "साझा जगह में कोई भी खाली सीट।",
