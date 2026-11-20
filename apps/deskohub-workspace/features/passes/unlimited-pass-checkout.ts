@@ -75,14 +75,21 @@ export function readUnlimitedPassSelection(query: {
   return { options, startDate };
 }
 
+export type UnlimitedPassOrderLink =
+  | { readonly kind: "resume"; readonly orderId: OrderId }
+  | { readonly kind: "replace"; readonly orderId: OrderId };
+
 export function getUnlimitedPassChoosePath(
   locale: Locale,
   options: UnlimitedPassOptions,
-  startDate?: PlainDate
+  startDate?: PlainDate,
+  order?: UnlimitedPassOrderLink
 ) {
   const query = new URLSearchParams({
     tier: options.tier,
     ...(startDate !== undefined && { startDate }),
+    ...(order?.kind === "resume" && { order: order.orderId }),
+    ...(order?.kind === "replace" && { supersedeOrder: order.orderId }),
     ...(options.tier === "open-space" && options.coffee && { coffee: "true" }),
     ...(options.tier === "reserved-desk-workstation" && {
       monitorOption: options.monitorOption,
@@ -94,14 +101,15 @@ export function getUnlimitedPassChoosePath(
 export function getUnlimitedPassDetailsPath(
   locale: Locale,
   selection: UnlimitedPassSelection,
-  orderId?: OrderId
+  order?: UnlimitedPassOrderLink
 ) {
   const path = getUnlimitedPassChoosePath(
     locale,
     selection,
-    selection.startDate
+    selection.startDate,
+    order
   );
-  return `${path}&step=details${orderId !== undefined ? `&order=${orderId}` : ""}`;
+  return `${path}&step=details`;
 }
 
 export function getUnlimitedPassPayPath(locale: Locale, orderId: OrderId) {

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -85,16 +85,15 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
   fireEvent.click(
     view.getByRole("radio", { name: /reserved desk with workstation/i })
   );
-  expect(continueButton.disabled).toBe(false);
-  expect(
-    view.getByRole<HTMLInputElement>("radio", { name: /32.*qhd/i }).disabled
-  ).toBe(true);
-  const enabledStart = view.getByRole("button", {
-    name: /November 1st, 2026/i,
-  });
-  fireEvent.click(enabledStart);
   expect(continueButton.disabled).toBe(true);
+  fireEvent.click(view.getByRole("button", { name: /November 1st, 2026/i }));
+  expect(continueButton.disabled).toBe(false);
+  expect(view.getAllByText("Not free on all 30 days")).toHaveLength(3);
   fireEvent.click(view.getByRole("radio", { name: /32.*qhd/i }));
+  expect(new URL(window.location.href).searchParams.has("startDate")).toBe(
+    false
+  );
+  expect(continueButton.disabled).toBe(true);
   const unavailableStart = view.getByRole<HTMLButtonElement>("button", {
     name: /November 1st, 2026/i,
   });
@@ -175,6 +174,23 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
     }
   );
   fireEvent.click(
+    view.getByRole("switch", {
+      name: m.reservationPurposeBusinessLabel({}, { locale }),
+    })
+  );
+  const billingFields = [
+    [m.reservationBillingCompanyNameLabel({}, { locale }), "Fixture Company"],
+    [m.reservationBillingCompanyIdLabel({}, { locale }), "12345679"],
+    [m.reservationBillingAddressLine1Label({}, { locale }), "Fixture Street 1"],
+    [m.reservationBillingCityLabel({}, { locale }), "Praha"],
+    [m.reservationBillingPostalCodeLabel({}, { locale }), "18000"],
+  ] as const;
+  for (const [label, value] of billingFields) {
+    fireEvent.change(view.getByLabelText(label, { exact: false }), {
+      target: { value },
+    });
+  }
+  fireEvent.click(
     view.getByRole("button", {
       name: m.reservationSelectionChange({}, { locale }),
     })
@@ -191,6 +207,13 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
       m.entryPackCheckoutHolderEmail({}, { locale })
     ).value
   ).toBe(holderEmail);
+  expect(
+    view.getByLabelText<HTMLInputElement>(
+      m.reservationBillingCompanyNameLabel({}, { locale }),
+      { exact: false }
+    ).value
+  ).toBe("Fixture Company");
+
   fireEvent.click(view.getByRole("button", { name: /continue/i }));
   await waitFor(() =>
     expect(view.getByText(earlyStart, { exact: false })).toBeDefined()
@@ -216,11 +239,26 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
     expect(payments).toEqual([
       expect.objectContaining({
         accepted: true,
+        unlimitedEarlyStartAccepted: true,
         acceptedDocuments: [
           { key: "terms-and-conditions", hash: "one" },
           { key: "operating-rules", hash: "two" },
         ],
-        billing: { purpose: "personal", invoice: "none" },
+        billing: {
+          purpose: "business",
+          invoice: "required",
+          buyer: {
+            kind: "business",
+            legalName: "Fixture Company",
+            companyId: "12345679",
+            address: {
+              line1: "Fixture Street 1",
+              city: "Praha",
+              postalCode: "18000",
+              country: "CZ",
+            },
+          },
+        },
         displayedPriceFingerprint: "a".repeat(64),
       }),
     ])
@@ -241,7 +279,7 @@ test("editing an owned draft sends a new order and reports the capacity refusal"
           coffee: false,
           startDate: openSpaceStart,
         }}
-        draft={{ orderId: existingOrderId }}
+        draft={{ kind: "resume", orderId: existingOrderId }}
         beginCheckout={async (input) => {
           requests.push(input);
           return {
@@ -279,4 +317,145 @@ test("editing an owned draft sends a new order and reports the capacity refusal"
   expect(
     view.getByRole<HTMLButtonElement>("button", { name: /continue/i }).disabled
   ).toBe(true);
+});
+
+test("Details cannot hand off another selection while Begin is creating holds", async () => {
+  const response = Promise.withResolvers<{
+    data: { status: "purchase_error"; reason: "unavailable" };
+  }>();
+  const beginCheckout = mock(() => response.promise);
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{
+          tier: "open-space",
+          coffee: false,
+          startDate: openSpaceStart,
+        }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  const submit = view.getByRole<HTMLButtonElement>("button", {
+    name: /continue/i,
+  });
+  fireEvent.click(submit);
+  await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(1));
+  expect(
+    view.queryByRole("button", { name: /choose your 30 days/i })
+  ).toBeNull();
+  expect(
+    view.getByRole<HTMLButtonElement>("button", {
+      name: m.reservationSelectionChange({}, { locale }),
+    }).disabled
+  ).toBe(true);
+
+  const form = submit.form;
+  if (!form) throw new Error("Continue is missing its form");
+  fireEvent.submit(form);
+  expect(beginCheckout).toHaveBeenCalledTimes(1);
+  response.resolve({
+    data: { status: "purchase_error", reason: "unavailable" },
+  });
+  await waitFor(() =>
+    expect(
+      view.getByRole("button", { name: /choose your 30 days/i })
+    ).toBeDefined()
+  );
+});
+
+test("later calendar months load their own authoritative availability", async () => {
+  const futureMonth = plainDateStringSchema.make("2027-02-01");
+  const futureStart = plainDateStringSchema.make("2027-02-10");
+  const getAvailability = mock(async ({ startsOn }: { startsOn?: string }) => ({
+    data: {
+      ...availability,
+      starts: {
+        ...availability.starts,
+        "open-space": startsOn === futureMonth ? [futureStart] : [],
+      },
+    },
+  }));
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialStartDate={futureStart}
+        initialBounds={{
+          today,
+          lastStartDate: plainDateStringSchema.make("2027-04-25"),
+        }}
+        getAvailability={getAvailability}
+      />
+    </QueryProvider>
+  );
+  await waitFor(() =>
+    expect(
+      view.getByRole<HTMLButtonElement>("button", { name: /continue/i })
+        .disabled
+    ).toBe(false)
+  );
+  expect(getAvailability).toHaveBeenCalledWith({
+    locale,
+    startsOn: futureMonth,
+  });
+  fireEvent.click(view.getByRole("button", { name: /next month/i }));
+  await waitFor(() =>
+    expect(getAvailability).toHaveBeenCalledWith({
+      locale,
+      startsOn: "2027-03-01",
+    })
+  );
+  expect(
+    view.getByRole<HTMLButtonElement>("button", { name: /continue/i }).disabled
+  ).toBe(true);
+});
+
+test("an expired status-originated payment retry returns to that same order", async () => {
+  const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000002");
+  const replace = spyOn(window.location, "replace").mockImplementation(
+    () => {}
+  );
+  try {
+    const view = render(
+      <QueryProvider>
+        <UnlimitedPassCheckout
+          {...base}
+          retryPayment={{
+            orderId,
+            selection: {
+              tier: "open-space",
+              coffee: false,
+              startDate: openSpaceStart,
+            },
+            state: {
+              validFrom: openSpaceStart,
+              lastUsableDate: "2026-11-30",
+              billing: { purpose: "personal", invoice: "none" },
+              disclosure: { documents: [] },
+              price: {
+                fingerprint: "a".repeat(64),
+                subtotal: currencyCZK(349000),
+                total: currencyCZK(349000),
+                discounts: [],
+              },
+            },
+          }}
+          payCheckout={async () => ({
+            data: { status: "purchase_error", reason: "quote-expired" },
+          })}
+        />
+      </QueryProvider>
+    );
+    fireEvent.click(view.getByRole("checkbox"));
+    fireEvent.click(view.getByRole("button", { name: /pay/i }));
+    await waitFor(() =>
+      expect(replace).toHaveBeenCalledWith(
+        `/en-US/reservation/status/${orderId}`
+      )
+    );
+  } finally {
+    replace.mockRestore();
+  }
 });

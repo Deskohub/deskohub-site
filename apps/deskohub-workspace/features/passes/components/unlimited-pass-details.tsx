@@ -1,11 +1,13 @@
 import { getAccountSignInPath } from "@/features/account/routes";
 import { m } from "@/features/i18n";
-import type { OrderId } from "@/features/order";
 import { formatMoney, moneyWithValue } from "@/shared/money/money";
 import { getUnlimitedPassPrice, unlimitedPassCoffeePrice } from "../pass-offer";
 import { formatPassDate, getPassTierName } from "../pass-offer.i18n";
 import type { UnlimitedPassSelection } from "../unlimited-pass";
-import { getUnlimitedPassDetailsPath } from "../unlimited-pass-checkout";
+import {
+  getUnlimitedPassDetailsPath,
+  type UnlimitedPassOrderLink,
+} from "../unlimited-pass-checkout";
 import {
   PassPurchaseDetails,
   type PassPurchaseDetailsProps,
@@ -14,11 +16,11 @@ import {
 
 export function UnlimitedPassDetails({
   selection,
-  orderId,
+  order,
   ...props
 }: PassPurchaseDetailsProps & {
   readonly selection: UnlimitedPassSelection;
-  readonly orderId?: OrderId;
+  readonly order?: UnlimitedPassOrderLink;
 }) {
   const { locale } = props;
   const passPrice = getUnlimitedPassPrice({
@@ -35,14 +37,11 @@ export function UnlimitedPassDetails({
   return (
     <PassPurchaseDetails
       {...props}
-      buyerNote={m.unlimitedPassCheckoutBuyerNote({}, { locale })}
-      holderLabel={m.unlimitedPassCheckoutHolder({}, { locale })}
-      signInNote={m.unlimitedPassCheckoutSignInNote({}, { locale })}
+      product={{ kind: "unlimited" }}
       signInPath={getAccountSignInPath(
         locale,
-        getUnlimitedPassDetailsPath(locale, selection, orderId)
+        getUnlimitedPassDetailsPath(locale, selection, order)
       )}
-      summaryTitle={m.passUnlimited({}, { locale })}
       summary={
         <>
           <PassPurchaseSummaryItem

@@ -26,6 +26,7 @@ export function EntryPackPay({
     <PassPurchasePay
       {...props}
       state={state}
+      product="entry-pack"
       signInPath={getAccountSignInPath(
         locale,
         continuationPath ?? getEntryPackDetailsPath(locale, product, orderId)

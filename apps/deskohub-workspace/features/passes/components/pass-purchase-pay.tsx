@@ -62,7 +62,9 @@ export function PassPurchasePay({
   discountCodeEntryEnabled,
   signInPath,
   orderLabel,
+  product,
   orderDetail,
+  returnExpiredQuoteToStatus,
   repriceCheckout,
   payCheckout,
   headingRef,
@@ -73,7 +75,9 @@ export function PassPurchasePay({
     readonly state: PassPurchasePayState;
     readonly signInPath: string;
     readonly orderLabel: string;
+    readonly product: "entry-pack" | "unlimited";
     readonly orderDetail?: string;
+    readonly returnExpiredQuoteToStatus?: boolean;
   }) {
   const [price, setPrice] = useState(state.price);
   const [disclosure, setDisclosure] = useState(state.disclosure);
@@ -94,6 +98,10 @@ export function PassPurchasePay({
     if (reason === "billing-changed" || reason === "payment-in-progress") {
       goToStatus();
     } else if (reason === "quote-expired") {
+      if (returnExpiredQuoteToStatus) {
+        goToStatus();
+        return;
+      }
       setExpired(true);
       setError(m.entryPackCheckoutQuoteExpired({}, { locale }));
     } else {
@@ -165,6 +173,9 @@ export function PassPurchasePay({
     pay.execute({
       ...input,
       accepted: checked,
+      ...(product === "unlimited" && {
+        unlimitedEarlyStartAccepted: Boolean(disclosure.earlyStartRequest),
+      }),
       acceptedDocuments: disclosure.documents.map(({ key, hash }) => ({
         key,
         hash,

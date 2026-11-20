@@ -25,16 +25,10 @@ export function EntryPackDetails({
   return (
     <PassPurchaseDetails
       {...props}
-      buyerNote={m.entryPackCheckoutBuyerNote({}, { locale })}
-      holderLabel={m.entryPackCheckoutHolder({}, { locale })}
-      signInNote={m.entryPackCheckoutSignInNote({}, { locale })}
+      product={product}
       signInPath={getAccountSignInPath(
         locale,
         getEntryPackDetailsPath(locale, product, orderId)
-      )}
-      summaryTitle={m.entryPackCheckoutPackLabel(
-        { count: product.size },
-        { locale }
       )}
       summary={
         <>

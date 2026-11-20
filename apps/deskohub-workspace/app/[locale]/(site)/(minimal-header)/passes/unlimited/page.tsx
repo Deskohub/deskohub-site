@@ -13,7 +13,6 @@ import { type OrderId, orderIdSchema } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { readOwnedPassPurchaseOrderLocale } from "@/features/passes/backend/entry-pack-order";
 import { readPassPurchaseBuyer } from "@/features/passes/backend/pass-purchase-buyer";
-import { unlimitedStartRangeMaxDays } from "@/features/passes/backend/unlimited-pass-capacity";
 import { loadUnlimitedCheckoutContinuation } from "@/features/passes/backend/unlimited-pass-purchase";
 import { UnlimitedPassCheckout } from "@/features/passes/components/unlimited-pass-checkout";
 import { unlimitedPassDays } from "@/features/passes/pass-offer";
@@ -24,12 +23,15 @@ import {
   repriceUnlimitedCheckout,
 } from "@/features/passes/unlimited-checkout-actions";
 import {
+  getUnlimitedPassChoosePath,
   getUnlimitedPassDetailsPath,
   getUnlimitedPassPayPath,
   readUnlimitedPassSelection,
+  type UnlimitedPassOrderLink,
 } from "@/features/passes/unlimited-pass-checkout";
 import { createNoindexedPageMetadata } from "@/features/public-pages/page-metadata";
 import { reservationStatusPath } from "@/features/reservation/routes";
+import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import { QueryProvider } from "@/shared/components/query-provider";
 import { workspaceSiteConstants } from "@/shared/utils";
@@ -46,6 +48,7 @@ export const maxDuration = 240;
 type Query = Parameters<typeof readUnlimitedPassSelection>[0] & {
   readonly step?: string | string[];
   readonly order?: string | string[];
+  readonly supersedeOrder?: string | string[];
 };
 
 const customerServices = Layer.mergeAll(
@@ -80,10 +83,20 @@ async function leaveUnavailableOrder(orderId: OrderId): Promise<never> {
   notFound();
 }
 
+function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
+  if (query.order !== undefined && query.supersedeOrder !== undefined)
+    notFound();
+  if (query.supersedeOrder !== undefined && query.step === "pay") notFound();
+  const orderId = query.order ?? query.supersedeOrder;
+  if (orderId === undefined) return undefined;
+  if (!Schema.is(orderIdSchema)(orderId)) notFound();
+  return { kind: query.order !== undefined ? "resume" : "replace", orderId };
+}
+
 async function requirePageOpen(searchParams: Promise<Query>) {
   if (await isCoworkPassesPageOpenAfterConnection()) return;
-  const { order } = await searchParams;
-  if (Schema.is(orderIdSchema)(order)) await leaveUnavailableOrder(order);
+  const order = readOrderLink(await searchParams);
+  if (order) await leaveUnavailableOrder(order.orderId);
   notFound();
 }
 
@@ -128,14 +141,27 @@ async function UnlimitedPassPageContent({
   readonly locale: Locale;
 }) {
   const query = await searchParams;
-  const orderId = Schema.is(orderIdSchema)(query.order)
-    ? query.order
-    : undefined;
-  if (query.order !== undefined && orderId === undefined) notFound();
-
-  const isRetry = orderId !== undefined && query.step === "pay";
+  const order = readOrderLink(query);
+  const orderId = order?.orderId;
+  const isRetry = order?.kind === "resume" && query.step === "pay";
   const { options, startDate } = readUnlimitedPassSelection(query);
   const requestedSelection = startDate && { ...options, startDate };
+  const checkoutPath = (
+    targetLocale: Locale,
+    selection: typeof requestedSelection = requestedSelection
+  ) => {
+    if (isRetry && orderId)
+      return getUnlimitedPassPayPath(targetLocale, orderId);
+    if (query.step === "details" && selection) {
+      return getUnlimitedPassDetailsPath(targetLocale, selection, order);
+    }
+    return getUnlimitedPassChoosePath(
+      targetLocale,
+      selection ?? options,
+      selection?.startDate,
+      order
+    );
+  };
   const [checkout, continuation] = await Promise.all([
     Effect.all({
       buyer: readPassPurchaseBuyer(),
@@ -155,27 +181,18 @@ async function UnlimitedPassPageContent({
     orderId && readContinuation(orderId, isRetry),
   ]);
   if (orderId && checkout.buyer.kind === "signed-out") {
-    const path = isRetry
-      ? getUnlimitedPassPayPath(locale, orderId)
-      : requestedSelection &&
-        getUnlimitedPassDetailsPath(locale, requestedSelection, orderId);
-    if (path) redirect(getAccountSignInPath(locale, path));
+    redirect(getAccountSignInPath(locale, checkoutPath(locale)));
   }
   if (orderId && !continuation) await leaveUnavailableOrder(orderId);
+
+  const selection =
+    order?.kind === "resume" ? continuation?.selection : requestedSelection;
   if (orderId && continuation) {
     if (isRetry && !continuation.retryPayment) {
       redirect(`/${continuation.locale}${reservationStatusPath}/${orderId}`);
     }
     if (continuation.locale !== locale) {
-      redirect(
-        isRetry
-          ? getUnlimitedPassPayPath(continuation.locale, orderId)
-          : getUnlimitedPassDetailsPath(
-              continuation.locale,
-              continuation.selection,
-              orderId
-            )
-      );
+      redirect(checkoutPath(continuation.locale, selection));
     }
   }
 
@@ -190,23 +207,21 @@ async function UnlimitedPassPageContent({
         locale={locale}
         buyer={checkout.buyer}
         discountCodeEntryEnabled={checkout.discountCodeEntryEnabled}
-        initialOptions={continuation?.selection ?? options}
-        initialStartDate={continuation?.selection.startDate ?? startDate}
-        initialDetails={
-          continuation?.selection ??
-          (query.step === "details" ? requestedSelection : undefined)
-        }
+        initialOptions={selection ?? options}
+        initialStartDate={selection?.startDate}
+        initialDetails={query.step === "details" ? selection : undefined}
         initialBounds={{
           today,
           lastStartDate: plainDateStringSchema.make(
-            Temporal.PlainDate.from(today)
-              .add({ days: unlimitedStartRangeMaxDays - 1 })
-              .toString()
+            getWorkspaceAvailabilityRange(today).to
           ),
         }}
         draft={
-          orderId &&
-          continuation && { orderId, holderEmail: continuation.holderEmail }
+          order &&
+          continuation && {
+            ...order,
+            holderEmail: continuation.holderEmail ?? undefined,
+          }
         }
         retryPayment={
           orderId && isRetry && continuation?.retryPayment
@@ -215,7 +230,7 @@ async function UnlimitedPassPageContent({
                 selection: continuation.selection,
                 state: {
                   ...continuation.retryPayment,
-                  holderEmail: continuation.holderEmail,
+                  holderEmail: continuation.holderEmail ?? undefined,
                 },
               }
             : undefined

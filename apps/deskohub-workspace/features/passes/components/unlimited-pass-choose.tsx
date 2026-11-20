@@ -64,9 +64,11 @@ export function UnlimitedPassChoose({
   today,
   lastStartDate,
   options,
+  calendarMonth,
   startDate,
   availability,
   onOptionsChange,
+  onMonthChange,
   onStartDateChange,
   onRetry,
   onContinue,
@@ -75,9 +77,14 @@ export function UnlimitedPassChoose({
   readonly today: PlainDate;
   readonly lastStartDate: PlainDate;
   readonly options: UnlimitedPassOptions;
+  readonly calendarMonth: PlainDate;
   readonly startDate?: PlainDate;
   readonly availability: UnlimitedPassAvailability;
-  readonly onOptionsChange: (options: UnlimitedPassOptions) => void;
+  readonly onOptionsChange: (
+    options: UnlimitedPassOptions,
+    date?: PlainDate
+  ) => void;
+  readonly onMonthChange: (month: PlainDate) => void;
   readonly onStartDateChange: (date: PlainDate | undefined) => void;
   readonly onRetry: () => void;
   readonly onContinue: (selection: UnlimitedPassSelection) => void;
@@ -102,12 +109,16 @@ export function UnlimitedPassChoose({
   );
   const selected =
     startDate !== undefined && enabled.has(startDate) ? startDate : undefined;
-  const defaultMonth =
-    startDate &&
-    Temporal.PlainDate.compare(startDate, today) >= 0 &&
-    Temporal.PlainDate.compare(startDate, lastStartDate) <= 0
-      ? startDate
-      : today;
+  const changeOptions = (next: UnlimitedPassOptions) => {
+    const date =
+      startDate !== undefined &&
+      starts !== undefined &&
+      !availableUnlimitedPassStarts(starts, next).includes(startDate)
+        ? undefined
+        : startDate;
+    onOptionsChange(next, date);
+  };
+
   return (
     <ReservationFormCard>
       <form
@@ -121,9 +132,7 @@ export function UnlimitedPassChoose({
           className="lg:grid-cols-3"
           locale={locale}
           tier={options.tier}
-          onChange={(tier) =>
-            onOptionsChange(unlimitedPassOptionsForTier(tier))
-          }
+          onChange={(tier) => changeOptions(unlimitedPassOptionsForTier(tier))}
           priceForTier={(tier) => (
             <>
               {formatMoney(
@@ -175,9 +184,12 @@ export function UnlimitedPassChoose({
               weekStartsOn={1}
               startMonth={toCalendarDate(firstDay)}
               endMonth={toCalendarDate(lastDay)}
-              defaultMonth={toCalendarDate(
-                Temporal.PlainDate.from(defaultMonth)
-              )}
+              month={toCalendarDate(Temporal.PlainDate.from(calendarMonth))}
+              onMonthChange={(date) =>
+                onMonthChange(
+                  plainDateStringSchema.make(fromCalendarDate(date).toString())
+                )
+              }
               selected={
                 selected
                   ? toCalendarDate(Temporal.PlainDate.from(selected))
@@ -258,7 +270,7 @@ export function UnlimitedPassChoose({
                   aria-describedby={`${coffeeId}-note`}
                   checked={options.coffee}
                   onCheckedChange={(coffee) =>
-                    onOptionsChange({ ...options, coffee })
+                    changeOptions({ ...options, coffee })
                   }
                 />
                 <span className="ml-auto font-semibold text-sm">
@@ -280,7 +292,7 @@ export function UnlimitedPassChoose({
                   {m.unlimitedPassCheckoutMonitors({ days }, { locale })}
                 </legend>
                 {workspaceProductMonitorOptions.map((monitorOption) => {
-                  const disabled =
+                  const unavailableOnSelectedDate =
                     selected !== undefined &&
                     starts !== undefined &&
                     !starts[options.tier][monitorOption].includes(selected);
@@ -289,7 +301,7 @@ export function UnlimitedPassChoose({
                       key={monitorOption}
                       className={cn(
                         "cursor-pointer rounded-2xl border border-navy-blue/10 bg-white/75 p-3 focus-within:outline-2 focus-within:outline-navy-blue",
-                        disabled && "cursor-not-allowed opacity-55",
+                        unavailableOnSelectedDate && "bg-white/50",
                         options.monitorOption === monitorOption &&
                           "border-aquamarine-green bg-white ring-4 ring-aquamarine-green/15"
                       )}
@@ -299,17 +311,16 @@ export function UnlimitedPassChoose({
                         type="radio"
                         name="monitorOption"
                         value={monitorOption}
-                        disabled={disabled}
                         checked={options.monitorOption === monitorOption}
                         onChange={() =>
-                          onOptionsChange({ ...options, monitorOption })
+                          changeOptions({ ...options, monitorOption })
                         }
                       />
                       <span className="block font-semibold">
                         {getWorkspaceProductMonitorTitle(monitorOption, locale)}
                       </span>
                       <span className="mt-1 block text-sm text-navy-blue/70">
-                        {disabled
+                        {unavailableOnSelectedDate
                           ? m.unlimitedPassCheckoutMonitorsUnavailable(
                               { days },
                               { locale }

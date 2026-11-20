@@ -17,6 +17,7 @@ import {
   FormMessage,
 } from "@/shared/components/ui/form";
 import { Input } from "@/shared/components/ui/input";
+import type { EntryPackProduct } from "../pass-offer";
 import {
   type PassPurchaseBuyer,
   passPurchaseDetailsSchema,
@@ -45,19 +46,13 @@ export function PassPurchaseDetails({
   draftRef,
   error,
   signInPath,
-  signInNote,
-  buyerNote,
-  holderLabel,
-  summaryTitle,
+  product,
   summary,
   onChangeSelection,
   onSubmit,
 }: PassPurchaseDetailsProps & {
   readonly signInPath: string;
-  readonly signInNote: string;
-  readonly buyerNote: string;
-  readonly holderLabel: string;
-  readonly summaryTitle: string;
+  readonly product: EntryPackProduct | { readonly kind: "unlimited" };
   readonly summary: ReactNode;
 }) {
   const schema = passPurchaseDetailsSchema(locale);
@@ -88,7 +83,14 @@ export function PassPurchaseDetails({
       <div className="space-y-7">
         <section className="rounded-3xl border border-navy-blue/10 bg-white p-4">
           <div className="flex items-start justify-between gap-4">
-            <h2 className="font-semibold text-lg">{summaryTitle}</h2>
+            <h2 className="font-semibold text-lg">
+              {product.kind === "entry-pack"
+                ? m.entryPackCheckoutPackLabel(
+                    { count: product.size },
+                    { locale }
+                  )
+                : m.passUnlimited({}, { locale })}
+            </h2>
             <button
               className="cursor-pointer font-semibold text-burned-orange underline underline-offset-4"
               disabled={pending}
@@ -102,7 +104,12 @@ export function PassPurchaseDetails({
         </section>
         {buyer.kind === "signed-out" && (
           <div className="space-y-3">
-            <p className="text-sm text-navy-blue/75">{signInNote}</p>
+            <p className="text-sm text-navy-blue/75">
+              {{
+                "entry-pack": m.entryPackCheckoutSignInNote,
+                unlimited: m.unlimitedPassCheckoutSignInNote,
+              }[product.kind]({}, { locale })}
+            </p>
             <Button asChild>
               <Link href={signInPath}>
                 {m.accountSignInTitle({}, { locale })}
@@ -167,11 +174,19 @@ export function PassPurchaseDetails({
                   </div>
                 )}
                 <p className="text-sm leading-6 text-navy-blue/75">
-                  {buyerNote}
+                  {{
+                    "entry-pack": m.entryPackCheckoutBuyerNote,
+                    unlimited: m.unlimitedPassCheckoutBuyerNote,
+                  }[product.kind]({}, { locale })}
                 </p>
               </fieldset>
               <fieldset disabled={pending} className="space-y-3">
-                <legend className="sr-only">{holderLabel}</legend>
+                <legend className="sr-only">
+                  {{
+                    "entry-pack": m.entryPackCheckoutHolder,
+                    unlimited: m.unlimitedPassCheckoutHolder,
+                  }[product.kind]({}, { locale })}
+                </legend>
                 <label className="flex cursor-pointer items-center gap-2 font-semibold text-sm">
                   <input
                     type="checkbox"
