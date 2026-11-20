@@ -35,11 +35,13 @@ export const getOfferedEntryPack = (
   { packs, claimedDates }: CoworkEntryPacks,
   {
     date,
+    excludedPackId,
     tier,
     workstation,
     workstationRequired,
   }: {
     readonly date: string;
+    readonly excludedPackId?: OrderId;
     readonly tier: WorkspaceCoworkCurrentTier;
     readonly workstation: boolean;
     readonly workstationRequired: boolean;
@@ -55,6 +57,7 @@ export const getOfferedEntryPack = (
 
   return packs.find(
     (pack) =>
+      pack.id !== excludedPackId &&
       (pack.tier === selectedTier ||
         (selectedTier === "reserved-desk-workstation" &&
           workstationRequired &&

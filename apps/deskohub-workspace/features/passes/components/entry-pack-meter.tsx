@@ -18,6 +18,9 @@ export function EntryPackMeter({
 }) {
   const selected = applying && entriesLeft > 0 ? 1 : 0;
   const available = entriesLeft - selected;
+  const remainingMessage = inline
+    ? m.coworkEntryPackRemaining
+    : m.entryPackEntriesLeft;
   const used = entryCount - entriesLeft;
   const segments = [
     { count: used, color: "bg-navy-blue/20" },
@@ -38,7 +41,7 @@ export function EntryPackMeter({
       <p className={cn("font-semibold leading-tight", inline && "order-2")}>
         {applying
           ? m.entryPackEntriesLeftAfter({ left: available }, { locale })
-          : m.entryPackEntriesLeft(
+          : remainingMessage(
               { left: entriesLeft, total: entryCount },
               { locale }
             )}

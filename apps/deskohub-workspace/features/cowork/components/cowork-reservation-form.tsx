@@ -217,7 +217,10 @@ export function CoworkReservationForm({
     InitialCoworkEntryPack | { readonly kind: "card" } | undefined
   >(initialEntryPack);
   const [cardChange, setCardChange] = useState<(() => void) | undefined>();
-  const [rejectedDate, setRejectedDate] = useState<string>();
+  const [rejectedBooking, setRejectedBooking] = useState<{
+    readonly date: string;
+    readonly packId: OrderId;
+  }>();
   const {
     entryTier: selectedTier,
     monitorOption: selectedMonitorOption,
@@ -255,13 +258,15 @@ export function CoworkReservationForm({
       ? bookingPasses?.packs.find((pack) => pack.id === packSelection.packId)
       : undefined;
   const workstationCovered = appliedPack?.tier === "reserved-desk-workstation";
-  const selectedDateRejected =
-    rejectedDate !== undefined && rejectedDate === selection.date;
+  const rejectedPackId =
+    rejectedBooking?.date === selection.date
+      ? rejectedBooking?.packId
+      : undefined;
   const packUnavailable =
     packSelection?.kind === "unavailable" ||
     (packSelection?.kind === "applied" &&
       (!appliedPack ||
-        selectedDateRejected ||
+        appliedPack.id === rejectedPackId ||
         (workstationCovered && !selectedMonitorOption) ||
         getEntryPackCoworkTier(appliedPack.tier) !== selectedTier ||
         !entryPackCoversDate(appliedPack, selection.date) ||
@@ -269,12 +274,12 @@ export function CoworkReservationForm({
   const offeredPack =
     bookingPasses &&
     (!packSelection || packSelection.kind === "card") &&
-    !selectedDateRejected &&
     !availability.isPending &&
     !availability.unavailableMessage &&
     isWorkspaceCoworkCurrentProductTier(selectedTier)
       ? getOfferedEntryPack(bookingPasses, {
           date: selection.date,
+          excludedPackId: rejectedPackId,
           tier: selectedTier,
           workstation: Boolean(selectedMonitorOption),
           workstationRequired: isWorkstationRequired,
@@ -350,7 +355,8 @@ export function CoworkReservationForm({
       getReservation={getCoworkCurrentReservationOrder}
       locale={locale}
       onEntryPackUnavailable={() => {
-        setRejectedDate(selection.date);
+        if (appliedPack)
+          setRejectedBooking({ date: selection.date, packId: appliedPack.id });
         router.refresh();
       }}
       selectionSummary={getCoworkReservationSelectionSummary(selection, locale)}

@@ -1871,6 +1871,7 @@
   "coworkEntryPackPayAddon": "Pay for your add-on",
   "coworkEntryPackBookWithEntry": "Book with 1 entry",
   "coworkEntryPackBookingNotice": "Days booked with an Entry pack can’t be cancelled or moved.",
+  "coworkEntryPackRemaining": "{left} of {total} left",
   "passEarlyStartConsent": "I request that my Entry pack can be used right away, within the statutory withdrawal period.",
   "passEmailSubject": "Your Entry pack is paid",
   "passEmailSelfBody": "Your entries are in your account. Each visit uses one entry.",

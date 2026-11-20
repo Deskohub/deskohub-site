@@ -568,16 +568,10 @@ describe("CoworkReservationForm advertised pricing", () => {
       expect(view.queryByRole("button", { name: "Use pass" })).toBeNull();
     });
 
-    test("keeps the pack after a conflicting date is rejected and another day is selected", async () => {
+    const rejectAppliedPack = async () => {
       const { preparePayState } = await import(
         "@/features/reservation/actions/prepare-pay-state"
       );
-      workspaceRouterRefresh.mockClear();
-      const view = renderForm({
-        bookingPasses,
-        initialEntryPack: { kind: "applied", packId: openSpacePack.id },
-        initialValues,
-      });
       const runCallback = workspaceUseAction.mock.calls.findLast(
         ([action]) => action === preparePayState
       )?.[1] as {
@@ -598,12 +592,46 @@ describe("CoworkReservationForm advertised pricing", () => {
           },
         })
       );
+    };
+
+    test("keeps the pack after a conflicting date is rejected and another day is selected", async () => {
+      workspaceRouterRefresh.mockClear();
+      const view = renderForm({
+        bookingPasses,
+        initialEntryPack: { kind: "applied", packId: openSpacePack.id },
+        initialValues,
+      });
+      await rejectAppliedPack();
       expect(
         view.getByText("This pass can’t be used for booking")
       ).toBeDefined();
       expect(workspaceRouterRefresh).toHaveBeenCalled();
       await selectCalendarDate(view, "2099-07-31");
       expect(view.getByText("Booking with your Entry pack")).toBeDefined();
+    });
+
+    test("offers another eligible pack on the same date after a pack is rejected", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(jsonResponse(availabilityResponse))
+      ) as typeof fetch;
+      const laterPack = {
+        ...openSpacePack,
+        id: orderIdSchema.make("6fd5c251-6506-4697-8006-ca57bb324303"),
+        validUntil: plainDateStringSchema.make("2099-10-01"),
+        entriesLeft: 5,
+      };
+      const view = renderForm({
+        bookingPasses: { packs: [openSpacePack, laterPack], claimedDates: [] },
+        initialEntryPack: { kind: "applied", packId: openSpacePack.id },
+        initialValues,
+      });
+      await rejectAppliedPack();
+      fireEvent.click(
+        view.getByRole("button", { name: "Pay by card instead" })
+      );
+      expect(await view.findByText("5 of 5 left")).toBeDefined();
+      fireEvent.click(view.getByRole("button", { name: "Use pass" }));
+      expect(window.location.search).toContain(`pass=${laterPack.id}`);
     });
 
     test("keeps the selected workstation from a covered pack when changing dates", async () => {

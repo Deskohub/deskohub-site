@@ -1871,6 +1871,7 @@
   "coworkEntryPackPayAddon": "अपनी अतिरिक्त सुविधा का भुगतान करें",
   "coworkEntryPackBookWithEntry": "1 एंट्री से बुक करें",
   "coworkEntryPackBookingNotice": "प्रवेश पैक से बुक किए गए दिन रद्द या बदले नहीं जा सकते।",
+  "coworkEntryPackRemaining": "{total} में से {left} बाकी",
   "passEarlyStartConsent": "मैं अनुरोध करता/करती हूँ कि वैधानिक वापसी अवधि के दौरान ही मेरा प्रवेश पैक तुरंत इस्तेमाल किया जा सके।",
   "passEmailSubject": "आपके प्रवेश पैक का भुगतान हो गया है",
   "passEmailSelfBody": "आपके प्रवेश आपके खाते में हैं। हर बार आने पर एक प्रवेश इस्तेमाल होता है।",

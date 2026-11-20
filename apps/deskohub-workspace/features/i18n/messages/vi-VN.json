@@ -1853,6 +1853,7 @@
   "coworkEntryPackPayAddon": "Thanh toán dịch vụ bổ sung",
   "coworkEntryPackBookWithEntry": "Đặt chỗ bằng 1 lượt vào",
   "coworkEntryPackBookingNotice": "Bạn không thể hủy hoặc đổi ngày đã đặt bằng gói lượt vào.",
+  "coworkEntryPackRemaining": "Còn {left}/{total} lượt",
   "passEarlyStartConsent": "Tôi yêu cầu được sử dụng ngay gói lượt vào của mình trong thời hạn rút khỏi hợp đồng theo luật định.",
   "passEmailSubject": "Gói lượt vào của bạn đã được thanh toán",
   "passEmailSelfBody": "Bạn có thể xem số lượt vào trong tài khoản. Mỗi lần đến sử dụng một lượt.",
