@@ -1,6 +1,9 @@
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { WorkspaceLockSections } from "@/db/workspace-locks";
+import {
+  holdCustomerAccountAndPassPurchase,
+  WorkspaceLockSections,
+} from "@/db/workspace-locks";
 import type { OrderId } from "@/features/order";
 import {
   CustomerAccountAccessError,
@@ -176,10 +179,7 @@ export class CustomerAccountSections extends Context.Service<
         passPurchaseOrderId?: OrderId
       ): Effect.Effect<A, E | CustomerAccountAccessError, R> =>
         (passPurchaseOrderId
-          ? WorkspaceLockSections.customerAccountAndPassPurchase(
-              accountId,
-              passPurchaseOrderId
-            )
+          ? holdCustomerAccountAndPassPurchase(accountId, passPurchaseOrderId)
           : WorkspaceLockSections.customerAccount(accountId))(
           work.pipe(Effect.mapError((error) => new SectionFailure({ error })))
         ).pipe(

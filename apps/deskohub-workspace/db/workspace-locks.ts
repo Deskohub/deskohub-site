@@ -48,6 +48,16 @@ const passPurchaseFulfillmentSection = (orderId: OrderId) => ({
   pair: ["pass-purchase-fulfillment", orderId] as const,
 });
 
+/** Takes two existing section keys together without another pool permit. */
+export const holdCustomerAccountAndPassPurchase = (
+  accountId: CustomerAccountId,
+  orderId: OrderId
+) =>
+  holdSections([
+    customerAccountSection(accountId),
+    passPurchaseFulfillmentSection(orderId),
+  ]);
+
 /**
  * Advisory locks held until the current Workspace transaction ends. Take them
  * in ascending rank; equal ranks in ascending key. Each keeps its
@@ -185,14 +195,6 @@ export const WorkspaceLockSections = {
     }),
   customerAccount: (accountId: CustomerAccountId) =>
     holdSection(customerAccountSection(accountId)),
-  customerAccountAndPassPurchase: (
-    accountId: CustomerAccountId,
-    orderId: OrderId
-  ) =>
-    holdSections([
-      customerAccountSection(accountId),
-      passPurchaseFulfillmentSection(orderId),
-    ]),
   passPurchaseFulfillment: (orderId: OrderId) =>
     holdSection(passPurchaseFulfillmentSection(orderId)),
   reservationInviteeNotices: (orderId: WorkspaceReservationId) =>

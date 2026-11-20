@@ -74,12 +74,14 @@ import {
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { entryPackPurchaseQuoteCodec } from "../entry-pack-purchase-quote";
+import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate.server";
 import {
   claimEntryPackGifts,
   queueEntryPackGiftResend,
   readEntryPackGiftState,
   resolveEntryPackGiftInvitation,
 } from "./entry-pack-gift";
+import { requestEntryPackGiftResend } from "./entry-pack-gift-resend";
 import { readOwnedEntryPackOrderLocale } from "./entry-pack-order";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
@@ -289,7 +291,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             CustomerAccountLinkRepository.Default.pipe(Layer.provide(db.layer)),
             fulfillmentLockLayer,
             Layer.mock(CustomerAuthentication, {
-              currentUser: Effect.succeed(null),
+              currentUser: Effect.succeed(session),
             })
           )
         )
@@ -676,6 +678,21 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         rejectNextInvitation: () => {
           failInvitationSend = true;
         },
+        resendAsBuyer: (at: Temporal.Instant, signal: AbortSignal) =>
+          Effect.runPromise(
+            requestEntryPackGiftResend(orderId).pipe(
+              Effect.provide(backgroundAccountSections),
+              Effect.provide(
+                Layer.mergeAll(
+                  db.layer,
+                  purchaseServices,
+                  CoworkPassesReleaseGate.fromDecision(true)
+                )
+              ),
+              atInstant(at)
+            ),
+            { signal }
+          ),
         providerOrders,
         verifiedOrders,
         status: () =>
@@ -1722,8 +1739,13 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         expect((await readGift()).claimed).toBe(false);
 
         if (internal) {
-          expect(await resend(accountId, later)).toBe(true);
-          expect(await resend(accountId, later)).toBe(false);
+          const resendSignal = AbortSignal.timeout(5_000);
+          expect(await payment.resendAsBuyer(later, resendSignal)).toBe(
+            "queued"
+          );
+          expect(await payment.resendAsBuyer(later, resendSignal)).toBe(
+            "unavailable"
+          );
           expect(await resolve(secret, later)).toBeUndefined();
           await payment.reconcile(later.add({ minutes: 1 }));
           expect(payment.invitations).toHaveLength(2);
