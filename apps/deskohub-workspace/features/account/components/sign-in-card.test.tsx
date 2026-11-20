@@ -12,6 +12,10 @@ import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/brow
 import { StrictMode } from "react";
 import { m } from "@/features/i18n";
 import {
+  isEntryPackGiftSignInDocument,
+  prepareEntryPackGiftSignInDocument,
+} from "@/features/passes/entry-pack-gift-sign-in.browser";
+import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
@@ -171,6 +175,7 @@ mock.module("@/features/account/auth.client", () => ({
 const codeRequestStorageKey = "deskohub:account-sign-in-code";
 const navigations: string[] = [];
 const originalReplace = window.location.replace;
+const originalHref = window.location.href;
 
 const sentWithCode = (): Promise<AuthResponse> =>
   Promise.resolve({ data: { status: true, signInCode: true }, error: null });
@@ -234,9 +239,7 @@ describe("account components", () => {
 
   afterEach(async () => {
     cleanup();
-    if (window.location.hash) {
-      window.history.replaceState(null, "", window.location.pathname);
-    }
+    window.happyDOM.setURL(originalHref);
     // Settle what a test left pending, so no attempt outlives it.
     for (const request of passkeyRequests) {
       request.reject(new DOMException("Aborted", "AbortError"));
@@ -582,7 +585,12 @@ describe("account components", () => {
         return { data: { email: adaAddress, returnTo, alreadySignedIn: true } };
       }
     );
-    window.history.replaceState(null, "", `#gift=${secret}`);
+    window.happyDOM.setURL(
+      `https://deskohub.test/en-US/auth/sign-in?gift-sign-in=1#gift=${secret}`
+    );
+    prepareEntryPackGiftSignInDocument();
+    expect(window.location.hash).toBe("");
+    expect(isEntryPackGiftSignInDocument()).toBe(true);
     const card = (
       <StrictMode>
         <SignInCard locale={locale} resolveGiftSignIn={resolveGiftSignIn} />
@@ -628,6 +636,74 @@ describe("account components", () => {
       m.accountSignInEmailLabel({}, { locale })
     );
     expect((email as HTMLInputElement).disabled).toBe(false);
+  });
+
+  test("replaces a pending lookup when another gift link opens in the same document", async () => {
+    const { SignInCard } = await import("./sign-in-card");
+    const newerAddress = testEmailAddress("newer-gift-holder");
+    const gift = (email: string) => ({
+      data: {
+        email,
+        returnTo: "/en-US/account/passes",
+        alreadySignedIn: false,
+      },
+    });
+    const older = Promise.withResolvers<ReturnType<typeof gift>>();
+    const resolveGiftSignIn = mock(
+      ({ secret }: { readonly secret: string }) => {
+        expect(window.location.hash).toBe("");
+        return secret.startsWith("older.")
+          ? older.promise
+          : Promise.resolve(gift(newerAddress));
+      }
+    );
+    const view = render(
+      <SignInCard locale={locale} resolveGiftSignIn={resolveGiftSignIn} />
+    );
+
+    for (const prefix of ["older", "newer"]) {
+      await act(async () => {
+        window.history.replaceState(
+          null,
+          "",
+          `#gift=${prefix}.${"a".repeat(43)}`
+        );
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      });
+    }
+    await act(async () => older.resolve(gift(adaAddress)));
+
+    expect(resolveGiftSignIn).toHaveBeenCalledTimes(2);
+    expect(view.queryByDisplayValue(adaAddress)).toBeNull();
+    expect(view.getByDisplayValue(newerAddress)).toBeTruthy();
+  });
+
+  test("keeps a gift review login's username out of the password step's HTML", async () => {
+    const { SignInCard } = await import("./sign-in-card");
+    const resolveGiftSignIn = async () => ({
+      data: {
+        email: adaAddress,
+        returnTo: "/en-US/account/passes",
+        alreadySignedIn: false,
+      },
+    });
+    signInMagicLink.mockImplementationOnce(passwordStep);
+    window.history.replaceState(null, "", `#gift=synthetic.${"a".repeat(43)}`);
+    const view = render(
+      <SignInCard locale={locale} resolveGiftSignIn={resolveGiftSignIn} />
+    );
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.submit(view.container.querySelector("#account-sign-in-form")!);
+    });
+
+    const username = view.container.querySelector<HTMLInputElement>(
+      '#account-sign-in-password-form input[autocomplete="username"]'
+    );
+    expect(username?.value).toBe(adaAddress);
+    expect(username?.getAttribute("value")).toBeNull();
+    expect(view.container.innerHTML).not.toContain(adaAddress);
+    expect(sessionStorage.length).toBe(0);
   });
 
   test("sign-in card shows a visible pending submit and sends only once", async () => {

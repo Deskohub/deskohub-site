@@ -1,4 +1,5 @@
 const giftFragmentPrefix = "#gift=";
+export const entryPackGiftSignInModeParam = "gift-sign-in";
 
 export const entryPackGiftSignInSecretPattern =
   /^[A-Za-z0-9_-]{1,400}\.[A-Za-z0-9_-]{43}$/;

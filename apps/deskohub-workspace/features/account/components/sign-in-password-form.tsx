@@ -36,6 +36,7 @@ type SignInPasswordFormProps = {
   readonly locale: Locale;
   /** The review login's address, offered to password managers. */
   readonly email: string;
+  readonly privateEmail?: boolean;
   readonly signedInMessage: string;
   readonly signIn: (password: string) => Promise<PasswordSignIn>;
   readonly onSignedIn: () => void;
@@ -51,6 +52,7 @@ type SignInPasswordFormProps = {
 export function SignInPasswordForm({
   locale,
   email,
+  privateEmail = false,
   signedInMessage,
   signIn,
   onSignedIn,
@@ -103,7 +105,14 @@ export function SignInPasswordForm({
             type="email"
             name="email"
             autoComplete="username"
-            value={email}
+            value={privateEmail ? undefined : email}
+            ref={
+              privateEmail
+                ? (input) => {
+                    if (input) input.value = email;
+                  }
+                : undefined
+            }
             readOnly
             hidden
           />

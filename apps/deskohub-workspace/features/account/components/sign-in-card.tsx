@@ -24,9 +24,9 @@ import {
 import type { SignInPurpose } from "@/features/account/routes";
 import type { Locale } from "@/features/i18n";
 import {
-  isEntryPackGiftSignInHash,
-  readEntryPackGiftSignInSecret,
-} from "@/features/passes/entry-pack-gift-sign-in";
+  removeEntryPackGiftSignInFragment,
+  takeEntryPackGiftSignInSecret,
+} from "@/features/passes/entry-pack-gift-sign-in.browser";
 import { useClientReady } from "@/shared/browser/use-client-ready";
 import { parseSameOriginPath } from "@/shared/utils/same-origin-path";
 
@@ -57,8 +57,8 @@ export function SignInCard({ resolveGiftSignIn, ...props }: SignInCardProps) {
   const gift = useGiftSignIn(resolveGiftSignIn);
   return (
     <SignInCardForm
-      {...props}
       key={gift ? "gift" : "sign-in"}
+      {...props}
       gift={gift ?? undefined}
       giftLoading={Boolean(resolveGiftSignIn && gift === undefined)}
     />
@@ -74,38 +74,41 @@ function useGiftSignIn(resolve: SignInCardProps["resolveGiftSignIn"]) {
 
   useEffect(() => {
     if (!resolve) return;
-    if (lookup.current === undefined) {
-      lookup.current = null;
-      const { hash, pathname, search } = window.location;
-      if (isEntryPackGiftSignInHash(hash)) {
-        try {
-          window.history.replaceState(
-            window.history.state,
-            "",
-            pathname + search
-          );
-          const secret = readEntryPackGiftSignInSecret(hash);
-          if (secret) lookup.current = resolve({ secret });
-        } catch {
-          // Only exchange a fragment after removing it from the address bar.
-        }
-      }
-    }
-    if (lookup.current === null) {
-      setGift(null);
-      return;
-    }
     let active = true;
-    void lookup.current.then(
-      (result) => {
-        if (active) setGift(result?.data ?? null);
-      },
-      () => {
-        if (active) setGift(null);
+    const showResult = (pending: typeof lookup.current) => {
+      if (!pending) {
+        setGift(null);
+        return;
       }
-    );
+      void pending.then(
+        (result) => {
+          if (active && lookup.current === pending)
+            setGift(result?.data ?? null);
+        },
+        () => {
+          if (active && lookup.current === pending) setGift(null);
+        }
+      );
+    };
+    const start = (secret: string | null | undefined) => {
+      try {
+        lookup.current = secret ? resolve({ secret }) : null;
+      } catch {
+        lookup.current = null;
+      }
+      if (lookup.current) setGift(undefined);
+      showResult(lookup.current);
+    };
+    const replaceInvitation = () => {
+      const secret = removeEntryPackGiftSignInFragment();
+      if (secret !== undefined) start(secret);
+    };
+    if (lookup.current === undefined) start(takeEntryPackGiftSignInSecret());
+    else showResult(lookup.current);
+    window.addEventListener("hashchange", replaceInvitation);
     return () => {
       active = false;
+      window.removeEventListener("hashchange", replaceInvitation);
     };
   }, [resolve]);
   return gift;
@@ -221,6 +224,7 @@ function SignInCardForm({
         <SignInPasswordStep
           locale={locale}
           authReturn={authReturn}
+          privateEmail={gift !== undefined}
           request={request}
           onUseDifferentEmail={() => changeEmail(request)}
         />
