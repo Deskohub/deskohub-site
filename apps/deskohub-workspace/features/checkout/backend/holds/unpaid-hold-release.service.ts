@@ -8,6 +8,7 @@ import {
 } from "@deskohub/dotypos";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer, Predicate } from "effect";
+import type { SqlError } from "effect/sql/SqlError";
 import type { WorkspaceReservationDetailsMalformedError } from "@/features/reservation/backend/stored-reservation-details.server";
 import {
   type ExpectedReservationHold,
@@ -119,6 +120,7 @@ type UnpaidHoldReleaseOutcome =
 type UnpaidHoldReleaseError =
   | DotyposWriteFailure
   | EffectDrizzleQueryError
+  | SqlError
   | WorkspaceReservationDetailsMalformedError
   | WorkspaceReservationStateError;
 

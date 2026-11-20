@@ -28,6 +28,7 @@ import {
   promoteCheckoutAttemptToSessionId,
 } from "@/features/checkout/checkout-identifiers";
 import { checkoutDetailsSchema } from "@/features/checkout/schemas/checkout-details";
+import { orderIdSchema } from "@/features/order";
 import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import {
@@ -675,6 +676,103 @@ describe.skipIf(!postgresDatabase)(
         });
         expect(rows[0]?.reservationState).toBe("held");
         expect(dotypos.createReservation).toHaveBeenCalledTimes(2);
+      });
+
+      test("checks the bare desk again before retrying a pack-funded workstation hold", async () => {
+        const author = await newAuthor();
+        const passId = orderIdSchema.make(crypto.randomUUID());
+        const reservedDesk = Schema.decodeUnknownSync(
+          reservationOrderIssuanceSchema("CZ")
+        )({
+          ...reservation,
+          entryTier: "reserved-desk",
+          coffee: false,
+          monitorOption: "2x27-qhd",
+        });
+        if (reservedDesk.kind !== "cowork") throw new Error("Expected cowork");
+        const cart = holdRequest({ author, reservation: reservedDesk });
+        const request: HoldRequest = {
+          ...cart,
+          checkoutDetails: {
+            ...cart.checkoutDetails,
+            reservation: {
+              kind: "cowork",
+              date: reservedDesk.date,
+              entryTier: "reserved-desk",
+              monitorOption: "2x27-qhd",
+            },
+          },
+          entryPack: {
+            passId,
+            holderAccountId: author,
+            tier: "reserved-desk",
+            date: reservedDesk.date,
+          },
+        };
+        await postgres.pool.query(
+          `insert into orders
+            (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
+            values ($1, 'pass-purchase', 'fixture-buyer', 'paid', 'not_started', now())`,
+          [passId]
+        );
+        try {
+          await postgres.pool.query(
+            `insert into pass_purchases
+              (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
+              values ($1, $2, $2, 'entry-pack', 'reserved-desk', 5, 'active', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
+            [passId, author]
+          );
+          let bareDeskAvailable = false;
+          const ensureAvailable = mock(
+            (candidate: { monitorOption?: string }) =>
+              candidate.monitorOption || bareDeskAvailable
+                ? Effect.void
+                : Effect.fail(
+                    new WorkspaceTableUnavailableError({
+                      date: reservedDesk.date,
+                      reservation: {
+                        kind: "cowork",
+                        entryTier: "reserved-desk",
+                      },
+                    })
+                  )
+          );
+          const dotypos = makeDotypos();
+          const createFailed = dotyposUnavailable("createReservation");
+          dotypos.createReservation.mockImplementationOnce(
+            () => Effect.fail(createFailed) as never
+          );
+          const holds = makeHolds({ dotypos, ensureAvailable });
+
+          expect(await holds.holdFailure(request)).toBe(createFailed);
+          expect(await rowsOf(author)).toMatchObject([
+            { reservationState: "draft", dotyposReservationId: null },
+          ]);
+
+          bareDeskAvailable = true;
+          expect(await holds.holdFailure(request)).toMatchObject({
+            _tag: "EntryPackUnavailableError",
+          });
+          expect(dotypos.createReservation).toHaveBeenCalledTimes(1);
+          expect(
+            await postgres.pool.query(
+              "select status from pass_entry_claims where pass_id = $1",
+              [passId]
+            )
+          ).toMatchObject({ rows: [] });
+        } finally {
+          await postgres.pool.query(
+            "delete from pass_entry_claims where pass_id = $1",
+            [passId]
+          );
+          await postgres.pool.query(
+            "delete from pass_purchases where id = $1",
+            [passId]
+          );
+          await postgres.pool.query("delete from orders where id = $1", [
+            passId,
+          ]);
+        }
       });
 
       test("cancels the Dotypos hold and releases the claim when attaching it fails", async () => {

@@ -16,6 +16,7 @@ import {
   paymentPricingFrom,
 } from "@/features/checkout/backend/checkout/checkout-pricing.service.mock";
 import { CheckoutUnavailableError } from "@/features/checkout/backend/checkout/checkout-unavailable";
+import type { CoworkCustomerQuote } from "@/features/checkout/backend/checkout/cowork-checkout-pricing";
 import {
   buildSignedPayState,
   PayState,
@@ -41,6 +42,7 @@ import {
   canonicalPromotionCodeSchema,
 } from "@/features/discounts/contracts";
 import type { Locale } from "@/features/i18n";
+import { orderIdSchema } from "@/features/order/order";
 import type { ReferralService as ReferralServiceTag } from "@/features/referrals";
 import { ReferralError } from "@/features/referrals/contracts";
 import { WithheldReferralService } from "@/features/referrals/referral.service.mock";
@@ -107,6 +109,7 @@ const codePriceChanged = (changedKeys: CheckoutSummaryChangedKeys) => ({
 });
 
 const makePayStateToken = async (input?: {
+  readonly funded?: CoworkCustomerQuote;
   readonly requestedDiscountCode?: CanonicalPromotionCode;
   readonly locale?: Locale;
   readonly changedKeys?: CheckoutSummaryChangedKeys;
@@ -120,8 +123,8 @@ const makePayStateToken = async (input?: {
     buildSignedPayState(
       {
         locale: input?.locale ?? "en-US",
-        reservation,
-        quote,
+        reservation: input?.funded?.reservation ?? reservation,
+        quote: input?.funded?.quote ?? quote,
         orderId: "reservation-id",
         bookedAt: payStateBookedAt,
         holdExpiresAt: payStateHoldExpiresAt,
@@ -353,6 +356,55 @@ const runSubmissionWithinDeadline = async (
 };
 
 describe("applyDiscountCodeToPayState", () => {
+  test.each(["SAVE20", "RFL12345"])(
+    "rejects %s on a signed Entry pack order before looking up the code",
+    async (submittedCode) => {
+      const { quoteCoworkEntryPack } = await import(
+        "./cowork-checkout-pricing"
+      );
+      const funded = await Effect.runPromise(
+        quoteCoworkEntryPack({
+          reservation: {
+            ...reservation,
+            entryTier: "open-space",
+            coffee: true,
+          },
+          entryPack: {
+            passId: orderIdSchema.make("00000000-0000-4000-8000-000000000001"),
+            tier: "open-space",
+          },
+        })
+      );
+      const token = await makePayStateToken({ funded });
+      await expect(
+        makePayStateToken({
+          funded,
+          requestedDiscountCode:
+            canonicalPromotionCodeSchema.make(submittedCode),
+        })
+      ).rejects.toBeInstanceOf(PayStateTokenError);
+      const opened = await Effect.runPromise(
+        PayState.open(token).pipe(Effect.provide(TestSealedStateKeys))
+      );
+
+      expect(opened.quote).toEqual(funded.quote);
+      const scenario = await runSubmission({
+        submittedCode,
+        payStateToken: token,
+      });
+
+      expect(scenario.result).toEqual({
+        status: "unavailable",
+        reason: "code",
+        freshPayUrl: undefined,
+      });
+      expect(scenario.lookupCodeKind).not.toHaveBeenCalled();
+      expect(scenario.acceptCode).not.toHaveBeenCalled();
+      expect(scenario.applyDiscountCode).not.toHaveBeenCalled();
+      expect(scenario.reissues).toEqual([]);
+    }
+  );
+
   test.each(["accepted", "already_accepted"] as const)(
     "remembers a typed referral code once it is %s, replacing the stored one",
     async (status) => {

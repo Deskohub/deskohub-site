@@ -33,6 +33,7 @@ import {
   fioPaymentSettlements,
   latePaymentRecoveries,
   type PaymentAttemptRow,
+  passEntryClaims,
   paymentAttempts,
   type ReservationCancellationCause,
   reservationAccessGrants,
@@ -55,6 +56,16 @@ import type { PaymentReturnTarget } from "@/features/checkout/payment-return-tar
 import type { DiscountClaimError } from "@/features/discounts/errors";
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
 import { endedUnpaidPaymentStates } from "@/features/order";
+import {
+  checkEntryPackClaim,
+  type EntryPackRedemption,
+  type EntryPackUnavailableError,
+  type entryPackUnavailableFailureCode,
+  findReservationEntryClaim,
+  releaseReservedEntryPackClaim,
+  reserveEntryPackClaim,
+  reserveReleasedEntryPackClaim,
+} from "@/features/passes/backend/entry-pack-redemption";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import type { AgentSelectionKey } from "@/features/reservation/backend/booking-agent";
 import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
@@ -316,11 +327,22 @@ export interface IWorkspaceReservationRepository {
   readonly findPaymentReturnTarget: (
     id: WorkspaceReservationId
   ) => Effect.Effect<PaymentReturnTarget | undefined, EffectDrizzleQueryError>;
+  readonly findEntryPackClaim: (
+    id: WorkspaceReservationId
+  ) => ReturnType<typeof findReservationEntryClaim>;
   readonly claimHoldCreation: (
     id: WorkspaceReservationId
   ) => Effect.Effect<boolean, EffectDrizzleQueryError>;
+  readonly checkEntryPackAvailable: (
+    id: WorkspaceReservationId,
+    entryPack: EntryPackRedemption
+  ) => Effect.Effect<
+    void,
+    EffectDrizzleQueryError | EntryPackUnavailableError | SqlError.SqlError
+  >;
   readonly releaseHoldCreation: (
-    id: WorkspaceReservationId
+    id: WorkspaceReservationId,
+    reason?: typeof entryPackUnavailableFailureCode
   ) => Effect.Effect<
     void,
     EffectDrizzleQueryError | WorkspaceReservationStateError
@@ -330,9 +352,13 @@ export interface IWorkspaceReservationRepository {
     readonly dotyposReservationId: DotyposReservationId;
     readonly reservationCreatedAt: Temporal.Instant;
     readonly reservationHoldExpiresAt: Temporal.Instant;
+    readonly entryPack?: EntryPackRedemption;
   }) => Effect.Effect<
     void,
-    EffectDrizzleQueryError | WorkspaceReservationStateError
+    | EffectDrizzleQueryError
+    | EntryPackUnavailableError
+    | SqlError.SqlError
+    | WorkspaceReservationStateError
   >;
   readonly markAttachFailedCancellationRequired: (input: {
     readonly id: WorkspaceReservationId;
@@ -392,7 +418,10 @@ export interface IWorkspaceReservationRepository {
     readonly heldUntilAfter: Temporal.Instant;
   }) => Effect.Effect<
     WorkspaceReservation | null,
-    EffectDrizzleQueryError | WorkspaceReservationDetailsMalformedError
+    | EffectDrizzleQueryError
+    | EntryPackUnavailableError
+    | SqlError.SqlError
+    | WorkspaceReservationDetailsMalformedError
   >;
   /**
    * Puts a new Dotypos hold on an order whose own unpaid hold was released
@@ -408,7 +437,10 @@ export interface IWorkspaceReservationRepository {
     readonly reservationHoldExpiresAt: Temporal.Instant;
   }) => Effect.Effect<
     WorkspaceReservation | null,
-    EffectDrizzleQueryError | WorkspaceReservationDetailsMalformedError
+    | EffectDrizzleQueryError
+    | EntryPackUnavailableError
+    | SqlError.SqlError
+    | WorkspaceReservationDetailsMalformedError
   >;
   readonly claimSupersessionCancellation: (
     id: WorkspaceReservationId
@@ -454,7 +486,7 @@ export interface IWorkspaceReservationRepository {
     readonly holdExpiredAt?: Temporal.Instant;
   }) => Effect.Effect<
     void,
-    EffectDrizzleQueryError | WorkspaceReservationStateError
+    EffectDrizzleQueryError | SqlError.SqlError | WorkspaceReservationStateError
   >;
   /**
    * Records a requested cancellation the claim stamped `claimedAt` completed,
@@ -1482,6 +1514,9 @@ export class WorkspaceReservationRepository extends Context.Service<
           (effect, reservationId) =>
             effect.pipe(Effect.annotateLogs({ reservationId }))
         ),
+        findEntryPackClaim: (id) => findReservationEntryClaim(db, id),
+        checkEntryPackAvailable: (id, entryPack) =>
+          transaction(checkEntryPackClaim(id, entryPack)),
         claimHoldCreation: Effect.fn("workspaceReservations.claimHoldCreation")(
           function* (id) {
             const updated = yield* db
@@ -1504,11 +1539,12 @@ export class WorkspaceReservationRepository extends Context.Service<
         ),
         releaseHoldCreation: Effect.fn(
           "workspaceReservations.releaseHoldCreation"
-        )(function* (id) {
+        )(function* (id, reason) {
           const updated = yield* db
             .update(workspaceReservations)
             .set({
               reservationState: "draft",
+              ...(reason && { failureCode: reason }),
               updatedAt: Temporal.Now.instant(),
             })
             .where(
@@ -1528,27 +1564,44 @@ export class WorkspaceReservationRepository extends Context.Service<
         }),
         attachHold: Effect.fn("workspaceReservations.attachHold")(
           function* (input) {
-            const updated = yield* db
+            const { entryPack } = input;
+            const attach = db
               .update(workspaceReservations)
               .set({
                 dotyposReservationId: input.dotyposReservationId,
                 reservationState: "held",
                 reservationCreatedAt: input.reservationCreatedAt,
                 reservationHoldExpiresAt: input.reservationHoldExpiresAt,
+                ...(entryPack && { failureCode: null }),
                 updatedAt: Temporal.Now.instant(),
               })
               .where(
                 and(
                   eq(workspaceReservations.id, input.id),
-                  eq(workspaceReservations.reservationState, "creating_hold")
+                  eq(workspaceReservations.reservationState, "creating_hold"),
+                  entryPack &&
+                    eq(
+                      workspaceReservations.authorAccountId,
+                      entryPack.holderAccountId
+                    )
                 )
               )
-              .returning({ id: workspaceReservations.id });
-            yield* ensureUpdated(
-              updated,
-              "workspaceReservations.attachHold",
-              input.id,
-              "Only creating_hold reservations can attach a Dotypos hold."
+              .returning({ id: workspaceReservations.id })
+              .pipe(
+                Effect.flatMap((updated) =>
+                  ensureUpdated(
+                    updated,
+                    "workspaceReservations.attachHold",
+                    input.id,
+                    "Only creating_hold reservations can attach a Dotypos hold."
+                  )
+                )
+              );
+            if (!entryPack) return yield* attach;
+            return yield* transaction(
+              attach.pipe(
+                Effect.andThen(reserveEntryPackClaim(input.id, entryPack))
+              )
             );
           }
         ),
@@ -1597,6 +1650,22 @@ export class WorkspaceReservationRepository extends Context.Service<
                   ]),
                   sql`${workspaceReservations.paymentState} <> 'paid'`,
                   sql`${workspaceReservations.reservationState} <> 'confirmed'`,
+                  input.cause === "hold_expired"
+                    ? or(
+                        ne(workspaceReservations.paymentState, "pending"),
+                        notExists(
+                          db
+                            .select({ id: passEntryClaims.reservationId })
+                            .from(passEntryClaims)
+                            .where(
+                              eq(
+                                passEntryClaims.reservationId,
+                                workspaceReservations.id
+                              )
+                            )
+                        )
+                      )
+                    : undefined,
                   // A retry releases only the hold of a payment that ended,
                   // never one a payment admitted meanwhile is using.
                   input.cause === "payment_retry"
@@ -1651,8 +1720,9 @@ export class WorkspaceReservationRepository extends Context.Service<
               )
             )
             .returning();
+          if (released) yield* reserveReleasedEntryPackClaim(input.id);
           return yield* decodeOptionalWorkspaceReservation(released);
-        }),
+        }, transaction),
         attachRetryHold: Effect.fn("workspaceReservations.attachRetryHold")(
           function* (input) {
             const [attached] = yield* db
@@ -1679,8 +1749,10 @@ export class WorkspaceReservationRepository extends Context.Service<
                 )
               )
               .returning();
+            if (attached) yield* reserveReleasedEntryPackClaim(input.id);
             return yield* decodeOptionalWorkspaceReservation(attached);
-          }
+          },
+          transaction
         ),
         claimSupersessionCancellation: Effect.fn(
           "workspaceReservations.claimSupersessionCancellation"
@@ -1727,14 +1799,21 @@ export class WorkspaceReservationRepository extends Context.Service<
                   sql`${workspaceReservations.reservationConfirmedAt} is null`
                 )
               )
-              .returning({ id: workspaceReservations.id });
+              .returning({
+                id: workspaceReservations.id,
+                paymentState: workspaceReservations.paymentState,
+              });
             yield* ensureUpdated(
               updated,
               "workspaceReservations.markCancelled",
               input.id,
               "Only an unpaid reservation still cancelling under the claim can be marked cancelled."
             );
-          }
+            if (updated[0]?.paymentState !== "pending") {
+              yield* releaseReservedEntryPackClaim(input.id);
+            }
+          },
+          transaction
         ),
         completeRequestedCancellation,
         markAdministrationCancelled: (input) =>
@@ -1771,6 +1850,9 @@ export class WorkspaceReservationRepository extends Context.Service<
                     "Only an unpaid supersession cancellation can create its replacement.",
                 });
               }
+              yield* releaseReservedEntryPackClaim(
+                input.cancelledReservationId
+              );
 
               const [replacement] = yield* db
                 .insert(workspaceReservations)

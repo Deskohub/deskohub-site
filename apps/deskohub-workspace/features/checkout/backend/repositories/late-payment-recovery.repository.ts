@@ -19,6 +19,12 @@ import {
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { DiscountClaimError } from "@/features/discounts/errors";
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
+import {
+  consumeEntryPackClaim,
+  type EntryPackUnavailableError,
+  releaseReservedEntryPackClaim,
+  reserveReleasedEntryPackClaim,
+} from "@/features/passes/backend/entry-pack-redemption";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { recordCustomerEvent } from "@/shared/backend/customer-events/customer-event-outbox";
@@ -83,6 +89,7 @@ type RecoverySettlement = RecoverySettlementInput & {
 
 type LatePaymentRecoveryRepositoryError =
   | DiscountClaimError
+  | EntryPackUnavailableError
   | EffectDrizzleQueryError
   | LatePaymentRecoveryStateError
   | OriginalHoldNotReusableError
@@ -214,6 +221,10 @@ export class LatePaymentRecoveryRepository extends Context.Service<
               );
 
               if (input.state === "recovered") {
+                yield* reserveReleasedEntryPackClaim(
+                  input.workspaceReservationId
+                );
+                yield* consumeEntryPackClaim(input.workspaceReservationId);
                 yield* PromotionClaims.redeem({
                   paymentAttemptId: input.paymentAttemptId,
                   redeemedAt: recovery.verifiedPaidAt,
@@ -229,6 +240,11 @@ export class LatePaymentRecoveryRepository extends Context.Service<
 
               if (isActiveAttempt) {
                 yield* settleActiveReservation(input, recovery);
+                if (input.state === "refund_required") {
+                  yield* releaseReservedEntryPackClaim(
+                    input.workspaceReservationId
+                  );
+                }
               }
 
               yield* markRecoverySettled(input, recovery);

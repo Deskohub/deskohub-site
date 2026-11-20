@@ -44,6 +44,11 @@ import {
 } from "@/features/checkout/schemas/checkout-details";
 import type { Locale } from "@/features/i18n";
 import type { ValidOfficePeople } from "@/features/office/office-people";
+import {
+  type EntryPackRedemption,
+  EntryPackUnavailableError,
+  entryPackUnavailableFailureCode,
+} from "@/features/passes/backend/entry-pack-redemption";
 import type { PreparePayStateInput } from "@/features/reservation/actions/prepare-pay-state.schema";
 import {
   AgentBookingPaymentInProgressError,
@@ -82,6 +87,7 @@ type ReservationHoldRequest = {
   };
   /** The normalized reservation the advertisement priced; attempt keys bind it. */
   readonly reservation: PreparePayStateInput["reservation"];
+  readonly entryPack?: EntryPackRedemption;
   /** Who books, for whom, and how the stored draft is attributed. */
   readonly booking: {
     readonly author: CustomerAccountId;
@@ -223,8 +229,11 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
   const dotypos = yield* DotyposService;
   const checkoutAnalytics = yield* CheckoutAnalytics;
 
-  const releaseHoldCreation = (reservationId: WorkspaceReservationId) =>
-    reservations.releaseHoldCreation(reservationId).pipe(
+  const releaseHoldCreation = (
+    reservationId: WorkspaceReservationId,
+    reason?: typeof entryPackUnavailableFailureCode
+  ) =>
+    reservations.releaseHoldCreation(reservationId, reason).pipe(
       Effect.tapError((releaseCause) =>
         Effect.logError("Reservation hold creation release failed", {
           cause: releaseCause,
@@ -263,6 +272,7 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
     checkoutSessionId: checkout.checkoutSessionId,
     checkoutAttemptId: checkout.checkoutAttemptId,
     reservation,
+    ...(request.entryPack && { entryPack: request.entryPack }),
     ...(request.officePeople && { people: request.officePeople.valid }),
     draft: {
       ...(request.officePeople && {
@@ -405,7 +415,23 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
     }
     yield* Effect.logDebug("Workspace reservation hold creation claimed");
 
-    const { checkoutDetails } = request;
+    const { checkoutDetails, entryPack } = request;
+    if (entryPack) {
+      const availability = yield* WorkspaceAvailabilityService;
+      yield* ensureEntryPackWorkstationRequired(availability, request).pipe(
+        Effect.andThen(
+          reservations.checkEntryPackAvailable(reservationDraft.id, entryPack)
+        ),
+        Effect.tapError((cause) =>
+          releaseHoldCreation(
+            reservationDraft.id,
+            cause._tag === "EntryPackUnavailableError"
+              ? entryPackUnavailableFailureCode
+              : undefined
+          )
+        )
+      );
+    }
     yield* Effect.annotateLogsScoped(checkoutDetailsLogFields(checkoutDetails));
 
     const dotyposReservation = yield* createWorkspaceDotyposReservation({
@@ -443,6 +469,7 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
         dotyposReservationId,
         reservationCreatedAt,
         reservationHoldExpiresAt: holdExpiresAt,
+        ...(entryPack && { entryPack }),
       })
       .pipe(
         Effect.catch(
@@ -497,7 +524,12 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
                 })
               )
             );
-            yield* releaseHoldCreation(reservationDraft.id);
+            yield* releaseHoldCreation(
+              reservationDraft.id,
+              cause._tag === "EntryPackUnavailableError"
+                ? entryPackUnavailableFailureCode
+                : undefined
+            );
 
             return yield* cause;
           })
@@ -753,6 +785,7 @@ type ReservationDraftRequest = {
   readonly checkoutSessionId: CheckoutSessionId;
   readonly checkoutAttemptId: CheckoutAttemptId;
   readonly reservation: PreparePayStateInput["reservation"];
+  readonly entryPack?: EntryPackRedemption;
   readonly people?: ValidOfficePeople;
   readonly draft: Omit<
     CreateWorkspaceReservationInput,
@@ -764,6 +797,28 @@ type ReservationDraftServices = {
   readonly reservations: IWorkspaceReservationRepository;
   readonly availability: typeof WorkspaceAvailabilityService.Service;
 };
+
+const ensureEntryPackWorkstationRequired = Effect.fnUntraced(function* (
+  availability: ReservationDraftServices["availability"],
+  request: Pick<ReservationHoldRequest, "entryPack" | "reservation">
+) {
+  const { entryPack, reservation } = request;
+  if (
+    entryPack?.tier === "reserved-desk" &&
+    reservation.kind === "cowork" &&
+    reservation.monitorOption
+  ) {
+    const bareDeskAvailable = yield* availability
+      .ensureAvailable({ ...reservation, monitorOption: undefined })
+      .pipe(
+        Effect.as(true),
+        Effect.catchTag("WorkspaceTableUnavailableError", () =>
+          Effect.succeed(false)
+        )
+      );
+    if (bareDeskAvailable) return yield* new EntryPackUnavailableError({});
+  }
+});
 
 type CheckoutSessionKeys = Effect.Success<
   ReturnType<typeof deriveCheckoutSessionKeys>
@@ -969,6 +1024,16 @@ const resolveSessionReservation = Effect.fnUntraced(function* (input: {
   readonly checkoutAttemptKey: CheckoutAttemptKeys["current"];
 }) {
   const { checkoutSessionId, currentReservation } = input;
+  if (
+    currentReservation.reservationState === "draft" &&
+    currentReservation.failureCode === entryPackUnavailableFailureCode
+  ) {
+    return yield* rotateCheckoutSession({
+      checkoutSessionId,
+      checkoutAttemptId: input.request.checkoutAttemptId,
+      reservation: currentReservation,
+    });
+  }
   if (isSessionReservationPending(currentReservation)) {
     return yield* awaitSessionReservation(
       input.services.reservations,
@@ -1055,6 +1120,7 @@ const prepareDraftInSession = Effect.fnUntraced(function* (
     checkoutAttemptId: request.checkoutAttemptId,
     reservation: request.reservation,
     people: request.people,
+    ...(request.entryPack && { entryPackId: request.entryPack.passId }),
   });
 
   const existingAttempt = yield* findSettledAttemptReservation(

@@ -352,12 +352,13 @@ export const applyDiscountCodeToPayState = Effect.fn(
   "checkout.applyDiscountCodeToPayState"
 )(
   function* (input: ApplyDiscountCodeInput) {
-    const referrals = yield* ReferralService;
-
     const state = yield* PayState.open(input.payStateToken, {
       locale: input.locale,
     });
 
+    if ("entryPack" in state.quote) {
+      return unavailableBecause({ status: "unavailable", reason: "code" });
+    }
     if (state.changedKeys) return priceReviewPending;
     if (state.submittedCode) {
       return unavailableBecause({
@@ -382,6 +383,7 @@ export const applyDiscountCodeToPayState = Effect.fn(
 
     // A registry that can't classify the code applies nothing; a retry can
     // still work.
+    const referrals = yield* ReferralService;
     const codeKind = yield* referrals
       .lookupCodeKind({ code: submittedCode })
       .pipe(Effect.orElseSucceed(() => undefined));
