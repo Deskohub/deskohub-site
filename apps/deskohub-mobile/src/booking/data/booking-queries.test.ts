@@ -161,6 +161,7 @@ describe("booking catalog queries", () => {
   test("returns the advertised offerings without spending the account read budget", async () => {
     const { registry, workspace } = makeFakeCustomerData("linked");
     const booking = fakeBooking(workspace);
+    booking.now = () => new Date("2026-11-20T09:00:00Z");
     const advertisedOn = booking.today();
 
     const result = await settle(registry, bookingOfferingsAtom("en-US"));
