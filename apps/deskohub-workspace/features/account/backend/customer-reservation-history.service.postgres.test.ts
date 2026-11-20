@@ -34,6 +34,7 @@ import {
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { maskEmailAddress } from "@/shared/utils";
 import {
   type CustomerAccountId,
   customerAccountIdSchema,
@@ -515,16 +516,120 @@ describe.skipIf(!testDatabase)(
           )
         )
       );
-      expect(lastDay).toEqual([
-        expect.objectContaining({
-          status: "active",
-          entriesLeft: 2,
-          lastUsableDay: "Feb 29, 2000",
-          bookPath: `/en-US/reservation/cowork?pass=${passId}`,
-        }),
-      ]);
-      expect(expiry).toEqual([expect.objectContaining({ status: "expired" })]);
+      expect(lastDay).toEqual({
+        boughtForOthers: [],
+        held: [
+          expect.objectContaining({
+            status: "active",
+            entriesLeft: 2,
+            lastUsableDay: "Feb 29, 2000",
+            bookPath: `/en-US/reservation/cowork?pass=${passId}`,
+          }),
+        ],
+      });
+      expect(expiry).toEqual({
+        boughtForOthers: [],
+        held: [expect.objectContaining({ status: "expired" })],
+      });
       expect(JSON.stringify(expiry)).not.toContain(passId);
+    });
+
+    test("keeps bought gifts and holder passes separate", async () => {
+      const buyer = customerAccountIdSchema.make(uniqueId());
+      const holder = customerAccountIdSchema.make(uniqueId());
+      const other = customerAccountIdSchema.make(uniqueId());
+      const holderEmail = testEmailAddress(`recipient-${holder}`);
+      await insertAuthUser(buyer, testEmailAddress(`buyer-${buyer}`));
+      await insertAuthUser(holder, holderEmail);
+      await insertAuthUser(other, testEmailAddress(`other-${other}`));
+      await testDatabase!.pool.query(
+        `update auth."user" set name = 'Pat Example' where id = $1`,
+        [buyer]
+      );
+      const giftId = uniqueId();
+      const unpaidId = uniqueId();
+      await testDatabase!.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
+         values ($1, 'pass-purchase', $3, 'paid', 'not_started', now()),
+                ($2, 'pass-purchase', $3, 'not_started', 'not_started', null)`,
+        [giftId, unpaidId, uniqueDotyposId()]
+      );
+      await testDatabase!.pool.query(
+        `insert into pass_purchases
+           (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $3, $4, 'entry-pack', 'open-space', 5, 'active', '2026-01-01', '2099-01-01', '{}', 'en-US', now()),
+                ($2, $3, $4, 'entry-pack', 'open-space', 5, 'pending_payment', '2026-01-01', '2099-01-01', '{}', 'en-US', now())`,
+        [giftId, unpaidId, buyer, holder]
+      );
+
+      const createdAt = Temporal.Instant.from("2026-01-01T00:00:00Z");
+      const loadFor = (accountId: CustomerAccountId) =>
+        Effect.runPromise(
+          loadAccountPasses("en-US").pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                testDatabaseLayer(),
+                Layer.mock(CurrentCustomerAccount, {
+                  peek: Effect.succeed({
+                    kind: "unlinked",
+                    reviewMarker: "absent",
+                    session: {
+                      accountId,
+                      email: reservationCustomerEmailSchema.make(
+                        testEmailAddress(`session-${accountId}`)
+                      ),
+                      deletionRequested: false,
+                      displayName: null,
+                      accountCreatedAt: createdAt,
+                      accountUpdatedAt: createdAt,
+                    },
+                  }),
+                })
+              )
+            )
+          )
+        );
+
+      const buyerView = await loadFor(buyer);
+      expect(buyerView).toEqual({
+        held: [],
+        boughtForOthers: [
+          {
+            orderId: giftId,
+            statusPath: `/en-US/reservation/status/${giftId}`,
+            tier: "Open Space",
+            entryCount: 5,
+            maskedHolderEmail: maskEmailAddress(holderEmail),
+            invitation: "not_sent",
+            claimed: false,
+            canResend: true,
+          },
+        ],
+      });
+      expect(JSON.stringify(buyerView)).not.toContain(holderEmail);
+      expect(await loadFor(holder)).toEqual({
+        boughtForOthers: [],
+        held: [
+          expect.objectContaining({
+            gift: { orderId: giftId, buyerName: "Pat Example" },
+            bookPath: `/en-US/reservation/cowork?pass=${giftId}`,
+          }),
+        ],
+      });
+      expect(await loadFor(other)).toEqual({ boughtForOthers: [], held: [] });
+
+      await testDatabase!.pool.query(
+        `update auth."user" set deletion_requested_at = now() where id = $1`,
+        [buyer]
+      );
+      expect(await loadFor(holder)).toEqual({
+        boughtForOthers: [],
+        held: [
+          expect.objectContaining({
+            gift: { orderId: giftId, buyerName: undefined },
+          }),
+        ],
+      });
     });
 
     const seedParties = async () => {
