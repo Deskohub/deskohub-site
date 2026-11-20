@@ -1,8 +1,7 @@
 import { effectSchemaResolver } from "@deskohub/effect-schema-resolver";
 import { Gift } from "lucide-react";
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { useState } from "react";
+import { type ReactNode, type Ref, useImperativeHandle, useState } from "react";
 import { useForm } from "react-hook-form";
 import { type Locale, m } from "@/features/i18n";
 import { ReservationBillingFields } from "@/features/reservation/components/reservation-billing-fields";
@@ -24,13 +23,15 @@ import {
 } from "../pass-purchase-details";
 import { PassCheckoutContinue } from "./pass-checkout-continue";
 
+type DetailsSchema = ReturnType<typeof passPurchaseDetailsSchema>;
+type DetailsDraft = DetailsSchema["Encoded"];
+
 export type PassPurchaseDetailsProps = {
   readonly buyer: PassPurchaseBuyer;
   readonly locale: Locale;
-  readonly initialValues?: ReturnType<
-    typeof passPurchaseDetailsSchema
-  >["Encoded"];
+  readonly initialValues?: DetailsDraft;
   readonly error?: string;
+  readonly draftRef?: Ref<() => DetailsDraft>;
   readonly onChangeSelection: () => void;
   readonly onSubmit: (
     values: ReturnType<typeof passPurchaseDetailsSchema>["Type"]
@@ -41,6 +42,7 @@ export function PassPurchaseDetails({
   buyer,
   locale,
   initialValues,
+  draftRef,
   error,
   signInPath,
   signInNote,
@@ -69,6 +71,17 @@ export function PassPurchaseDetails({
     },
   });
   const [gift, setGift] = useState(initialValues?.holderEmail !== undefined);
+  const { getValues } = form;
+  useImperativeHandle(
+    draftRef,
+    () => () => {
+      const values = getValues();
+      return gift
+        ? { ...values, holderEmail: values.holderEmail ?? "" }
+        : values;
+    },
+    [getValues, gift]
+  );
   const pending = form.formState.isSubmitting;
   return (
     <ReservationFormCard>
@@ -79,7 +92,7 @@ export function PassPurchaseDetails({
             <button
               className="cursor-pointer font-semibold text-burned-orange underline underline-offset-4"
               disabled={pending}
-              onClick={onChangeSelection}
+              onClick={() => onChangeSelection()}
               type="button"
             >
               {m.reservationSelectionChange({}, { locale })}

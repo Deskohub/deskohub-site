@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
 import {
   registerWorkspaceComponentTestEnv,
@@ -173,6 +174,23 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
       target: { value: holderEmail },
     }
   );
+  fireEvent.click(
+    view.getByRole("button", {
+      name: m.reservationSelectionChange({}, { locale }),
+    })
+  );
+  await waitFor(() =>
+    expect(
+      view.getByRole<HTMLButtonElement>("button", { name: /continue/i })
+        .disabled
+    ).toBe(false)
+  );
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  expect(
+    view.getByLabelText<HTMLInputElement>(
+      m.entryPackCheckoutHolderEmail({}, { locale })
+    ).value
+  ).toBe(holderEmail);
   fireEvent.click(view.getByRole("button", { name: /continue/i }));
   await waitFor(() =>
     expect(view.getByText(earlyStart, { exact: false })).toBeDefined()
@@ -207,4 +225,58 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
       }),
     ])
   );
+});
+
+test("editing an owned draft sends a new order and reports the capacity refusal", async () => {
+  const existingOrderId = orderIdSchema.make(
+    "018f8000-0000-7000-8000-000000000001"
+  );
+  const requests: unknown[] = [];
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{
+          tier: "open-space",
+          coffee: false,
+          startDate: openSpaceStart,
+        }}
+        draft={{ orderId: existingOrderId }}
+        beginCheckout={async (input) => {
+          requests.push(input);
+          return {
+            data: {
+              status: "capacity_unavailable",
+              blockingDates: [monitorStart],
+            },
+          };
+        }}
+      />
+    </QueryProvider>
+  );
+  fireEvent.click(
+    view.getByRole("checkbox", {
+      name: m.entryPackCheckoutGift({}, { locale }),
+    })
+  );
+  fireEvent.change(
+    view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
+    {
+      target: { value: holderEmail },
+    }
+  );
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  await waitFor(() =>
+    expect(view.getByText(/pass can’t cover Nov 2, 2026/i)).toBeDefined()
+  );
+  expect(requests).toEqual([
+    expect.objectContaining({
+      orderId: expect.not.stringMatching(existingOrderId),
+      supersedeOrderId: existingOrderId,
+      holderEmail,
+    }),
+  ]);
+  expect(
+    view.getByRole<HTMLButtonElement>("button", { name: /continue/i }).disabled
+  ).toBe(true);
 });

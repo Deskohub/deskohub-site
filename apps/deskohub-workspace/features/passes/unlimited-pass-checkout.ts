@@ -124,16 +124,3 @@ export type UnlimitedPassAvailabilityData = {
   readonly lastStartDate: PlainDate;
   readonly starts: UnlimitedPassStartDates;
 };
-
-const unlimitedPassStartDateCount = 62;
-
-export function getUnlimitedPassStartDateBounds(today: PlainDate) {
-  return {
-    today,
-    lastStartDate: plainDateStringSchema.make(
-      Temporal.PlainDate.from(today)
-        .add({ days: unlimitedPassStartDateCount - 1 })
-        .toString()
-    ),
-  };
-}

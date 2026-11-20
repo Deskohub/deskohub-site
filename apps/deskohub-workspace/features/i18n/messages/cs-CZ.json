@@ -1924,6 +1924,7 @@
   "unlimitedPassCheckoutSignInNote": "Pro nákup neomezeného členství se přihlaste.",
   "unlimitedPassCheckoutOrderLabel": "Neomezené členství, {tier}",
   "unlimitedPassCheckoutStartUnavailable": "Vybraný termín už není volný. Vyberte jiné datum začátku.",
+  "unlimitedPassCheckoutBlockingDates": "Členství nelze využít v těchto dnech vybraného období: {dates}. Vyberte jiné datum začátku.",
   "unlimitedPassCheckoutMetadataDescription": "Vyberte si místo a datum začátku neomezeného členství do Deskohub Workspace na {days} dní.",
   "unlimitedPassEarlyStartConsent": "Žádám, aby mé neomezené členství začalo během zákonné 14denní lhůty pro odstoupení. Beru na vědomí, že pokud uplatním právo odstoupit v den začátku členství nebo později, případná vrácená částka se vypočte poměrně podle data odstoupení.",
   "passEarlyStartConsent": "Žádám, abych mohl/a balíček vstupů využít ihned, ještě během zákonné lhůty pro odstoupení.",
