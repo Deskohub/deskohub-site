@@ -19,6 +19,10 @@ import { getAccountSignInPath } from "@/features/account/routes";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { OrderId } from "@/features/order";
+import {
+  entryPackGiftSignInHash,
+  entryPackGiftSignInModeParam,
+} from "@/features/passes/entry-pack-gift-sign-in";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import { renderWorkspaceEmail } from "@/shared/backend/email/render-react-email";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
@@ -108,8 +112,8 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
       invitation.callbackOrigin ??
       (yield* getWorkspaceRuntimeCallbackOrigin).origin;
     const claimUrl = new URL(getAccountSignInPath(locale), origin);
-    claimUrl.searchParams.set("gift-sign-in", "1");
-    claimUrl.hash = new URLSearchParams({ gift: context }).toString();
+    claimUrl.searchParams.set(entryPackGiftSignInModeParam, "1");
+    claimUrl.hash = entryPackGiftSignInHash(context);
     const rendered = yield* renderWorkspaceEmail(
       <EntryPackGiftInvitationEmail
         buyerName={buyerName}

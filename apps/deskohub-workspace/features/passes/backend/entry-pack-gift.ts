@@ -11,7 +11,7 @@ import {
   ne,
   or,
 } from "drizzle-orm";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
   customerAccounts,
@@ -21,8 +21,8 @@ import {
   paymentAttempts,
 } from "@/db/schema";
 import {
-  findActiveCustomerAccountByEmail,
   findPurchaseLoginEmail,
+  hasVerifiedActiveLogin,
 } from "@/features/account/backend/customer-account-by-email";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { type OrderId, orderIdSchema } from "@/features/order";
@@ -259,13 +259,6 @@ export const claimEntryPackGifts = Effect.fn("claimEntryPackGifts")(function* (
   accountId: CustomerAccountId,
   signedInAt: Temporal.Instant
 ) {
-  const email = yield* findPurchaseLoginEmail(accountId);
-  if (!email) return;
-  const verified = yield* findActiveCustomerAccountByEmail(email);
-  if (Option.isNone(verified) || verified.value.accountId !== accountId) {
-    return;
-  }
-
   const { db } = yield* WorkspaceDatabase;
   yield* db
     .update(passPurchases)
@@ -275,6 +268,7 @@ export const claimEntryPackGifts = Effect.fn("claimEntryPackGifts")(function* (
         eq(passPurchases.holderAccountId, accountId),
         ne(passPurchases.buyerAccountId, accountId),
         isNull(passPurchases.giftClaimedAt),
+        hasVerifiedActiveLogin(db, accountId),
         inArray(
           passPurchases.id,
           db

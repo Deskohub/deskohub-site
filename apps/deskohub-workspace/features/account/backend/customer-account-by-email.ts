@@ -1,6 +1,10 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, exists, inArray, isNull } from "drizzle-orm";
 import { Data, Effect, Option } from "effect";
-import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
+import {
+  WorkspaceDatabase,
+  type WorkspaceDatabaseClient,
+  WorkspaceTransaction,
+} from "@/db/database.service";
 import { authUser } from "@/db/schema/auth";
 import { customerAccounts } from "@/db/schema/customer-accounts";
 import type { Locale } from "@/features/i18n";
@@ -45,6 +49,26 @@ export const findActiveCustomerAccountByEmail = Effect.fn(
     )
   );
 });
+
+/** Keeps a verified active login check inside a caller's guarded write. */
+export const hasVerifiedActiveLogin = (
+  db: WorkspaceDatabaseClient,
+  accountId: CustomerAccountId
+) =>
+  exists(
+    db
+      .select({ id: authUser.id })
+      .from(authUser)
+      .innerJoin(customerAccounts, eq(customerAccounts.id, authUser.id))
+      .where(
+        and(
+          eq(customerAccounts.id, accountId),
+          eq(authUser.emailVerified, true),
+          isNull(authUser.deletionRequestedAt),
+          isNull(customerAccounts.deletedAt)
+        )
+      )
+  );
 
 /** A pass can name a holder before the holder verifies their login. */
 export const findPassHolderAccount = Effect.fn(
