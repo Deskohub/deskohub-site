@@ -1,5 +1,5 @@
-import { FioPollWake } from "../fio/fio-poll-wake.service";
 import { reservationOrderId } from "@/features/reservation/persistence-contracts";
+import { FioPollWake } from "../fio/fio-poll-wake.service";
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -706,6 +706,69 @@ describe.skipIf(!testDatabase)(
         changed: false,
         attempt: { id: card.id, state: "paid", refundState: "required" },
       });
+    });
+
+    test("expires a QR-first window and admits only one durable late receipt for recovery", async () => {
+      const repository = await makeRepository();
+      const customer = customerId();
+      const reservation = await createHeldReservation(customer);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        customer
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const qr = await Effect.runPromise(
+        repository
+          .createPendingQrAttempt({
+            ...admission,
+            orderId,
+            locale,
+            accountingSnapshot: snapshot,
+            publicPayment: { accountKey: "synthetic-fio-account" },
+          })
+          .pipe(Effect.provideService(FioPollWake, { wake: () => Effect.void }))
+      );
+      const card = await Effect.runPromise(
+        repository.createPendingProviderAttempt({
+          orderId,
+          amount: admission.amount,
+          locale,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+          publicPayment: {
+            accountKey: "synthetic-fio-account",
+            useAcceptedCommitment: true,
+          },
+        })
+      );
+      expect(card.id).not.toBe(qr.id);
+      const checkedAt = Temporal.Now.instant().add({ minutes: 31 });
+      expect(
+        await Effect.runPromise(
+          repository.expirePublicPaymentWindow({ orderId, checkedAt })
+        )
+      ).toBe(true);
+
+      const record = (providerOperationId: string) =>
+        Effect.runPromise(
+          repository.recordVerifiedQrPayment({
+            orderId,
+            id: qr.id,
+            paidAt: checkedAt,
+            providerOperationId,
+          })
+        );
+      expect(await record("synthetic-late-credit")).toEqual({
+        status: "recover",
+      });
+      expect(await record("synthetic-late-duplicate")).toEqual({
+        status: "refund",
+      });
+      expect(
+        await Effect.runPromise(
+          repository.expirePublicPaymentWindow({ orderId, checkedAt })
+        )
+      ).toBe(false);
     });
 
     test("admits only one successor of the exact marked Nexi attempt", async () => {
