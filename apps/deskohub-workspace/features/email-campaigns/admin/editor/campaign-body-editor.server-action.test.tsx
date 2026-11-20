@@ -66,11 +66,14 @@ test("sends the edited body to the preview Server Action as plain data", async (
     editor
       .chain()
       .setNodeSelection(8)
-      .updateAttributes("image", { align: "left" })
+      .updateAttributes("image", { align: "left", roundedCorners: false })
       .run();
   });
   const edited = changes.at(-1);
-  expect(edited?.content?.[1]?.attrs).toMatchObject({ align: "left" });
+  expect(edited?.content?.[1]?.attrs).toMatchObject({
+    align: "left",
+    roundedCorners: false,
+  });
 
   // The composer's preview request, encoded the way the browser sends it.
   const request = toCampaignPreviewInput({

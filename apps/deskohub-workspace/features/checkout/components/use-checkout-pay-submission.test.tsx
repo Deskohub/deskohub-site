@@ -233,7 +233,7 @@ describe("useCheckoutPaySubmission", () => {
       hook.result.current.setLegalConsent(true);
     });
     act(() => {
-      hook.result.current.submit();
+      hook.result.current.submit("card");
     });
 
     expect(hook.result.current.errorMessage).toBeNull();
@@ -251,21 +251,38 @@ describe("useCheckoutPaySubmission", () => {
     });
 
     act(() => {
-      hook.result.current.submit();
+      hook.result.current.setLegalConsent(true);
+    });
+    act(() => {
+      hook.result.current.submit("card");
     });
 
     expect(execute).toHaveBeenCalledWith({
       locale: "en-US",
       payStateToken: "signed-summary",
-      legalConsent: false,
+      legalConsent: true,
     });
+  });
+
+  test("does not start payment before legal consent", () => {
+    const { execute, hook } = renderSubmission();
+
+    act(() => {
+      hook.result.current.submit("card");
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(hook.result.current.errorMessage).toBeNull();
   });
 
   test("refuses to submit without a Pay state", () => {
     const { execute, hook } = renderSubmission({ payStateToken: "" });
 
     act(() => {
-      hook.result.current.submit();
+      hook.result.current.setLegalConsent(true);
+    });
+    act(() => {
+      hook.result.current.submit("card");
     });
 
     expect(execute).not.toHaveBeenCalled();
@@ -289,7 +306,10 @@ describe("useCheckoutPaySubmission", () => {
 
       expect(hook.result.current.isSubmitPending).toBe(true);
       act(() => {
-        hook.result.current.submit();
+        hook.result.current.setLegalConsent(true);
+      });
+      act(() => {
+        hook.result.current.submit("card");
       });
       expect(execute).not.toHaveBeenCalled();
     }
