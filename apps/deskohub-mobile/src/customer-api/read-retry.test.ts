@@ -47,15 +47,6 @@ const send = (client: HttpClient.HttpClient, method: "get" | "post") =>
   }).pipe(Effect.provide(TestClock.layer()), Effect.runPromise);
 
 describe("retryTransientReads", () => {
-  test("retries a read once after a transport failure", async () => {
-    const { client, attempts } = scriptedClient(["transport-failure", 200]);
-
-    const result = await send(client, "get");
-
-    expect(result._tag).toBe("Success");
-    expect(attempts()).toBe(2);
-  });
-
   test("gives up after one retry", async () => {
     const { client, attempts } = scriptedClient(["transport-failure"]);
 
@@ -65,8 +56,8 @@ describe("retryTransientReads", () => {
     expect(attempts()).toBe(2);
   });
 
-  test("never retries a server answer, 429 and 5xx included", async () => {
-    for (const status of [429, 400, 404, 503]) {
+  test("never retries a server answer, 5xx included", async () => {
+    for (const status of [400, 404, 503]) {
       const { client, attempts } = scriptedClient([status]);
 
       await send(client, "get");

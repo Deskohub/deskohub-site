@@ -91,7 +91,7 @@ const signInCodeRejections: Readonly<Record<string, WebSignInFailureReason>> = {
 };
 
 /** The reason for a Better Auth error answer, mirroring the site's mapping. */
-export const webSignInFailureReason = (
+const webSignInFailureReason = (
   operation: WebSignInOperation,
   { status, code }: { readonly status?: number; readonly code?: string }
 ): WebSignInFailureReason => {

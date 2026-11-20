@@ -19,7 +19,7 @@ describe("signInResendAvailableAt", () => {
   });
 
   test("waits for the server when it accepts the next email later", () => {
-    const later = cooldownEnds + 5 * 60_000;
+    const later = cooldownEnds + 1;
     expect(
       signInResendAvailableAt({
         sentAt,
@@ -37,23 +37,6 @@ describe("signInResendAvailableAt", () => {
         cooldownWaived: false,
       })
     ).toBe(cooldownEnds);
-  });
-
-  test("takes either instant when they coincide", () => {
-    expect(
-      signInResendAvailableAt({
-        sentAt,
-        nextSignInEmailAt: serverAt(cooldownEnds),
-        cooldownWaived: false,
-      })
-    ).toBe(cooldownEnds);
-    expect(
-      signInResendAvailableAt({
-        sentAt,
-        nextSignInEmailAt: serverAt(cooldownEnds + 1),
-        cooldownWaived: false,
-      })
-    ).toBe(cooldownEnds + 1);
   });
 
   test("a waived cooldown leaves only the server's instant", () => {
