@@ -63,6 +63,7 @@ export class PaymentPageProviderStatus extends Context.Service<
           function* ({ attempt, reservation }) {
             if (
               attempt.provider === "internal" ||
+              attempt.provider === "fio" ||
               !providers.activeProviders.includes(attempt.provider)
             )
               return "inactive" as const;

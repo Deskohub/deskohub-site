@@ -7,6 +7,7 @@ import {
   asc,
   desc,
   eq,
+  exists,
   gt,
   inArray,
   isNotNull,
@@ -29,11 +30,13 @@ import { retryDatabaseRead } from "@/db/retry-database-read";
 import {
   contractWithdrawals,
   customerEvents,
+  fioPaymentSettlements,
   latePaymentRecoveries,
   type PaymentAttemptRow,
   paymentAttempts,
   type ReservationCancellationCause,
   reservationAccessGrants,
+  reservationPaymentWindows,
   type WorkspaceReservationRow,
   workspaceReservations,
 } from "@/db/schema";
@@ -941,6 +944,45 @@ const expireAccessGrant = Effect.fnUntraced(function* (
     .where(eq(reservationAccessGrants.id, grantId));
 });
 
+const updateWinningFioRefundDisposition = Effect.fnUntraced(function* (input: {
+  readonly paymentAttemptId: PaymentAttemptId;
+  readonly disposition: "winner" | "refund_required";
+}) {
+  const { db } = yield* WorkspaceTransaction;
+  const requiresRefund = input.disposition === "refund_required";
+  yield* db
+    .update(fioPaymentSettlements)
+    .set({ disposition: input.disposition })
+    .where(
+      and(
+        eq(fioPaymentSettlements.paymentAttemptId, input.paymentAttemptId),
+        eq(
+          fioPaymentSettlements.disposition,
+          requiresRefund ? "winner" : "refund_required"
+        ),
+        exists(
+          db
+            .select({ id: paymentAttempts.id })
+            .from(paymentAttempts)
+            .where(
+              and(
+                eq(paymentAttempts.id, input.paymentAttemptId),
+                eq(paymentAttempts.provider, "fio"),
+                eq(
+                  paymentAttempts.refundState,
+                  requiresRefund ? "required" : "not_required"
+                ),
+                eq(
+                  paymentAttempts.lastProviderOperationId,
+                  fioPaymentSettlements.movementId
+                )
+              )
+            )
+        )
+      )
+    );
+});
+
 export class WorkspaceReservationRepository extends Context.Service<
   WorkspaceReservationRepository,
   IWorkspaceReservationRepository
@@ -1186,6 +1228,12 @@ export class WorkspaceReservationRepository extends Context.Service<
                     eq(paymentAttempts.refundState, "not_required")
                   )
                 );
+            }
+            if (activeAttempt) {
+              yield* updateWinningFioRefundDisposition({
+                paymentAttemptId: activeAttempt,
+                disposition: "refund_required",
+              });
             }
             if (input.refund?.releasesPromotions) {
               yield* releasePaidPromotions(input.id, input.cancelledAt);
@@ -1855,16 +1903,36 @@ export class WorkspaceReservationRepository extends Context.Service<
               });
             }
 
-            // Refunds Nexi already recorded stay as they are.
+            // A completed refund and a losing attempt's own refund stay in place.
             yield* db
               .update(paymentAttempts)
               .set({ refundState: "not_required", updatedAt: input.restoredAt })
               .where(
                 and(
                   eq(paymentAttempts.workspaceReservationId, input.id),
-                  eq(paymentAttempts.refundState, "required")
+                  eq(paymentAttempts.refundState, "required"),
+                  or(
+                    sql`${paymentAttempts.id} = ${restored.activePaymentAttemptId}`,
+                    notExists(
+                      db
+                        .select({ id: reservationPaymentWindows.orderId })
+                        .from(reservationPaymentWindows)
+                        .where(
+                          eq(
+                            reservationPaymentWindows.orderId,
+                            reservationOrderId(input.id)
+                          )
+                        )
+                    )
+                  )
                 )
               );
+            if (restored.activePaymentAttemptId) {
+              yield* updateWinningFioRefundDisposition({
+                paymentAttemptId: restored.activePaymentAttemptId,
+                disposition: "winner",
+              });
+            }
             const attempts = yield* db
               .select({
                 amountExponent: paymentAttempts.amountExponent,

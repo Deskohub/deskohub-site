@@ -58,6 +58,7 @@ export class PaymentRetryProviderCheck extends Context.Service<
           if (!attempt.providerOrderId) return "no_provider_order" as const;
           if (
             attempt.provider === "internal" ||
+            attempt.provider === "fio" ||
             !providers.activeProviders.includes(attempt.provider)
           ) {
             return yield* new PaymentRetryUnavailableError({

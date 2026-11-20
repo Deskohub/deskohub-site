@@ -27,6 +27,7 @@ import {
   readLimitSentinel,
   requireWithinReadLimit,
 } from "@/shared/backend/read-limit";
+import { FioPaymentSettlementRepository } from "./fio-payment-settlement.repository";
 
 /**
  * Availability and table assignment treat an unpaid hold past its deadline as
@@ -165,6 +166,7 @@ export class LatePaymentRecoveryRepository extends Context.Service<
     this,
     Effect.gen(function* () {
       const { db, transaction } = yield* WorkspaceDatabase;
+      const fioSettlements = yield* FioPaymentSettlementRepository;
 
       const findByPaymentAttemptId = Effect.fn(
         "LatePaymentRecoveryRepository.findByPaymentAttemptId"
@@ -206,7 +208,10 @@ export class LatePaymentRecoveryRepository extends Context.Service<
                 });
               }
 
-              yield* markLatePaymentAttemptPaid(input, recovery);
+              const provider = yield* markLatePaymentAttemptPaid(
+                input,
+                recovery
+              );
 
               if (input.state === "recovered") {
                 yield* PromotionClaims.redeem({
@@ -227,6 +232,14 @@ export class LatePaymentRecoveryRepository extends Context.Service<
               }
 
               yield* markRecoverySettled(input, recovery);
+              if (provider === "fio" && recovery.providerOperationId) {
+                yield* fioSettlements.resolveRecovery({
+                  paymentAttemptId: input.paymentAttemptId,
+                  movementId: recovery.providerOperationId,
+                  disposition:
+                    input.state === "recovered" ? "winner" : input.state,
+                });
+              }
             })
           );
         }
@@ -463,7 +476,7 @@ export class LatePaymentRecoveryRepository extends Context.Service<
         ),
       } satisfies ILatePaymentRecoveryRepository;
     })
-  );
+  ).pipe(Layer.provide(FioPaymentSettlementRepository.Default));
 }
 
 /** Reads the reservation's customer, whose first-booking lock comes next. */
@@ -661,7 +674,7 @@ const markLatePaymentAttemptPaid = Effect.fnUntraced(function* (
         ])
       )
     )
-    .returning({ id: paymentAttempts.id });
+    .returning({ provider: paymentAttempts.provider });
   if (!attempt) {
     return yield* recoveryStateError(
       "settle",
@@ -669,6 +682,7 @@ const markLatePaymentAttemptPaid = Effect.fnUntraced(function* (
       "Only a terminal late payment can settle as paid."
     );
   }
+  return attempt.provider;
 });
 
 /** The booking columns a settlement writes beside the payment columns. */

@@ -365,6 +365,8 @@ function makeProviderPaymentFinalizationServiceLayer(
         if (!paidSuccess) {
           return "not_pending" as const;
         }
+        if (paidSuccess.settlement === "refund_required")
+          return "not_pending" as const;
         if (paidSuccess.changed) {
           yield* checkoutAnalytics.paymentCompleted({
             attempt: paidSuccess.attempt,
