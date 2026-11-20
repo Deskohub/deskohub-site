@@ -19,7 +19,10 @@ type NewPaymentAttempt = {
   readonly workspaceReservationId: WorkspaceReservationId | null;
   readonly amount: Money;
 } & (
-  | { readonly provider: PaymentProvider; readonly providerOrderId: string }
+  | {
+      readonly provider: PaymentProvider | "fio";
+      readonly providerOrderId: string;
+    }
   | { readonly provider: "internal"; readonly paidAt: Temporal.Instant }
 );
 

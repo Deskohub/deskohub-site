@@ -580,6 +580,11 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly run?: ReturnType<typeof mock>;
   readonly accountAuthority?: CustomerAccountSectionsFixture;
   readonly returnTarget?: PaymentReturnTarget;
+  readonly resumePayment?: "card" | "qr";
+  readonly startPayment?: {
+    readonly method: "card" | "qr";
+    readonly fio?: { readonly accountKey: string };
+  };
 };
 
 const createCheckoutHarness = async <ReservationOverrides extends object>(
@@ -660,7 +665,9 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     findByProviderOrderId: mock(() => Effect.succeed(null)),
     findDisplayableForReservation: mock(() => Effect.succeed(null)),
   } satisfies PaymentAttemptRepositoryType;
+  const createPendingQrAttempt = mock(() => Effect.succeed(createdAttempt));
   const paymentLifecycle = {
+    createPendingQrAttempt,
     createPendingProviderAttempt: (input) =>
       createPendingProviderAttempt(input).pipe(
         Effect.map((attempt) => ({
@@ -762,27 +769,45 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     options.accountAuthority ?? { session: null }
   );
 
+  const { QrPaymentRepository } = await import(
+    "../repositories/qr-payment.repository"
+  );
+  const { FioPollWake } = await import("../fio/fio-poll-wake.service");
   const effect = Effect.gen(function* () {
     const service = yield* CheckoutService;
-    return yield* service.createHostedPaymentCheckout(
-      {
-        payStateToken:
-          options.payStateToken ??
-          buildPayStateToken({
-            orderId: options.orderId,
-            locale,
-            quote: options.acceptedQuote,
-            checkoutSessionId: options.checkoutSessionId,
-            submittedCode: options.submittedCode,
-            requestedDiscountCode: options.requestedDiscountCode,
-            changedKeys: options.changedKeys,
-          }),
-        legalConsent: options.legalConsent ?? true,
-        earlyPerformanceConsent: options.earlyPerformanceConsent ?? true,
-        ...(options.returnTarget && { returnTarget: options.returnTarget }),
-      },
-      locale
-    );
+    const input = {
+      payStateToken:
+        options.payStateToken ??
+        buildPayStateToken({
+          orderId: options.orderId,
+          locale,
+          quote: options.acceptedQuote,
+          checkoutSessionId: options.checkoutSessionId,
+          submittedCode: options.submittedCode,
+          requestedDiscountCode: options.requestedDiscountCode,
+          changedKeys: options.changedKeys,
+        }),
+      legalConsent: options.legalConsent ?? true,
+      earlyPerformanceConsent: options.earlyPerformanceConsent ?? true,
+      ...(options.returnTarget && { returnTarget: options.returnTarget }),
+    };
+    if (options.resumePayment) {
+      return yield* service.resumeReservationPayment(
+        {
+          reservationId: options.orderId,
+          method: options.resumePayment,
+          fio: { accountKey: "receiving-account" },
+        },
+        locale
+      );
+    }
+    if (options.startPayment) {
+      return yield* service.startReservationPayment(
+        { ...input, ...options.startPayment },
+        locale
+      );
+    }
+    return yield* service.createHostedPaymentCheckout(input, locale);
   }).pipe(
     Effect.provide(
       CheckoutService.Default.pipe(
@@ -799,6 +824,28 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
               Layer.provide(TestSealedStateKeys)
             ),
             Layer.mock(PaymentAttemptRepository, paymentAttempts),
+            Layer.mock(QrPaymentRepository, {
+              findPaymentWindow: () =>
+                Effect.succeed(
+                  options.resumePayment
+                    ? {
+                        accountKey: "receiving-account",
+                        expiresAt: testInstant(storedHoldExpiresAt),
+                      }
+                    : null
+                ),
+              findCardAttempt: () => Effect.succeed(attachedAttempt),
+              findForReservation: () =>
+                Effect.succeed({
+                  orderId: options.orderId,
+                  attemptId: createdAttempt.id,
+                  accountKey: "receiving-account",
+                  variableSymbol: "1000000382",
+                  amount: createdAttempt.amount,
+                  expiresAt: testInstant(storedHoldExpiresAt),
+                }),
+            }),
+            Layer.mock(FioPollWake, { wake: () => Effect.void }),
             Layer.mock(PaymentLifecycleRepository, paymentLifecycle),
             Layer.mock(ReservationFulfillment, {
               run: fulfillPaidOrder,
@@ -837,6 +884,40 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
 };
 
 describe("CheckoutService", () => {
+  test("starts a public QR payment against the accepted reservation", async () => {
+    const harness = await createCheckoutHarness({
+      orderId: "public-qr-reservation",
+      startPayment: { method: "qr", fio: { accountKey: "receiving-account" } },
+    });
+
+    expect(await Effect.runPromise(harness.effect)).toMatchObject({
+      status: "qr_pending",
+      orderId: "public-qr-reservation",
+      accountKey: "receiving-account",
+    });
+    expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+  });
+
+  test("resumes the existing card session for an authorized held reservation", async () => {
+    const harness = await createCheckoutHarness({
+      orderId: "public-card-reservation",
+      resumePayment: "card",
+      reservationOverrides: {
+        paymentState: "pending",
+        activePaymentAttemptId: "attempt-public-card-reservation",
+      },
+    });
+
+    expect(await Effect.runPromise(harness.effect)).toMatchObject({
+      status: "redirect",
+      orderId: "public-card-reservation",
+      redirectUrl: "https://payments.example/hosted",
+    });
+    expect(harness.affirm).toHaveBeenCalledTimes(0);
+    expect(harness.recordLegalEvidence).toHaveBeenCalledTimes(0);
+    expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+  });
+
   test("does not require an early-performance request after the withdrawal period", async () => {
     const harness = await createCheckoutHarness({
       orderId: "reservation-after-withdrawal-period",
