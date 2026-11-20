@@ -1,3 +1,4 @@
+import { FioPollWake } from "../fio/fio-poll-wake.service";
 import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import "@/shared/testing/workspace-test-env";
 
@@ -648,6 +649,65 @@ const admit = (
 describe.skipIf(!testDatabase)(
   "PaymentLifecycleRepository admission after a late payment on disposable Postgres",
   () => {
+    test("a QR settlement can win after card started the public payment window", async () => {
+      const repository = await makeRepository();
+      const customer = customerId();
+      const reservation = await createHeldReservation(customer);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        customer
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const accountKey = "synthetic-fio-account";
+      const card = await Effect.runPromise(
+        repository.createPendingProviderAttempt({
+          ...admission,
+          locale,
+          orderId,
+          accountingSnapshot: snapshot,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+          publicPayment: { accountKey },
+        })
+      );
+      const qr = await Effect.runPromise(
+        repository
+          .createPendingQrAttempt({
+            orderId,
+            amount: admission.amount,
+            locale,
+            publicPayment: { accountKey, useAcceptedCommitment: true },
+          })
+          .pipe(Effect.provideService(FioPollWake, { wake: () => Effect.void }))
+      );
+      const paidAt = Temporal.Now.instant();
+      const settled = await Effect.runPromise(
+        repository.recordVerifiedQrPayment({
+          orderId,
+          id: qr.id,
+          providerOperationId: "synthetic-fio-movement",
+          paidAt,
+        })
+      );
+      expect(settled).toMatchObject({
+        status: "winner",
+        transition: { attempt: { id: qr.id }, changed: true },
+      });
+
+      const duplicate = await Effect.runPromise(
+        repository.markPaid({
+          orderId,
+          id: card.id,
+          providerOperationId: "synthetic-nexi-operation",
+          paidAt,
+        })
+      );
+      expect(duplicate).toMatchObject({
+        changed: false,
+        attempt: { id: card.id, state: "paid", refundState: "required" },
+      });
+    });
+
     test("admits only one successor of the exact marked Nexi attempt", async () => {
       const repository = await makeRepository();
       const dotyposCustomerId = customerId();

@@ -1,11 +1,17 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import { and, eq, inArray, notExists, sql } from "drizzle-orm";
+import { FioPollWake } from "../fio/fio-poll-wake.service";
+import type { QueueMessageSendError } from "@/shared/backend/queue/queue-publisher";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
   discountApplications,
+  discountCodeRedemptions,
+  referralInvitationClaims,
+  reservationPaymentWindows,
+  voucherRedemptions,
   latePaymentRecoveries,
   paymentAttempts,
   type WorkspaceReservationRow,
@@ -71,22 +77,70 @@ export type PaymentLifecycleRepositoryError =
   | DiscountClaimError
   | EffectDrizzleQueryError
   | PaymentLifecycleStateError
-  | SqlError;
+  | SqlError
+  | QueueMessageSendError;
 
 export const administrationForcedPaymentCancellationFailureCode =
   "admin_forced_payment_cancellation";
 
+type PublicPayment = { readonly accountKey: string };
+
+type FirstPaymentAdmission = {
+  readonly commitment: DiscountCommitment;
+  readonly accountingSnapshot: AccountingDocumentSnapshot;
+  readonly publicPayment?: PublicPayment & {
+    readonly useAcceptedCommitment?: false;
+  };
+};
+
+type ResumePaymentAdmission = {
+  readonly commitment?: never;
+  readonly accountingSnapshot?: never;
+  readonly publicPayment: PublicPayment & {
+    readonly useAcceptedCommitment: true;
+  };
+};
+
+type PaymentAdmissionInput = {
+  readonly orderId: OrderId;
+  readonly amount: Money;
+  readonly locale: Locale;
+} & (FirstPaymentAdmission | ResumePaymentAdmission);
+
+type CardPaymentAdmission = PaymentAdmissionInput & {
+  readonly provider: PaymentProvider;
+  readonly providerOrderId: string;
+  readonly retriedAttempt?: RetriedPaymentAttempt;
+};
+
+type QrPaymentAdmission = PaymentAdmissionInput & {
+  readonly publicPayment: PublicPayment;
+};
+
+type RecordedQrPayment =
+  | {
+      readonly status: "winner";
+      readonly transition: PaymentLifecycleTransition;
+    }
+  | { readonly status: "recover" | "refund" };
+
 export interface IPaymentLifecycleRepository {
-  readonly createPendingProviderAttempt: (input: {
+  readonly createPendingProviderAttempt: (
+    input: CardPaymentAdmission
+  ) => Effect.Effect<PaymentAttempt, PaymentLifecycleRepositoryError>;
+  readonly createPendingQrAttempt: (
+    input: QrPaymentAdmission
+  ) => Effect.Effect<
+    PaymentAttempt,
+    PaymentLifecycleRepositoryError,
+    FioPollWake
+  >;
+  readonly recordVerifiedQrPayment: (input: {
     readonly orderId: OrderId;
-    readonly provider: PaymentProvider;
-    readonly providerOrderId: string;
-    readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
-    readonly amount: Money;
-    readonly commitment: DiscountCommitment;
-    readonly locale: Locale;
-    readonly accountingSnapshot: AccountingDocumentSnapshot;
-  }) => Effect.Effect<PaymentAttempt, PaymentLifecycleRepositoryError>;
+    readonly id: PaymentAttemptId;
+    readonly providerOperationId: string;
+    readonly paidAt: Temporal.Instant;
+  }) => Effect.Effect<RecordedQrPayment, PaymentLifecycleRepositoryError>;
   readonly completeInternalPayment: (input: {
     readonly orderId: OrderId;
     readonly amount: Money;
@@ -145,6 +199,89 @@ const noLatePaymentRecovery = notExists(
   sql`(select 1 from ${latePaymentRecoveries} where ${latePaymentRecoveries.workspaceReservationId} = ${workspaceReservations.id})`
 );
 
+const bindAcceptedClaimsToWinner = Effect.fnUntraced(function* (
+  original: PaymentAttemptId,
+  winner: PaymentAttemptId
+) {
+  const { db } = yield* WorkspaceTransaction;
+  yield* db
+    .update(discountApplications)
+    .set({ paymentAttemptId: winner })
+    .where(eq(discountApplications.paymentAttemptId, original));
+  yield* db
+    .update(discountCodeRedemptions)
+    .set({ paymentAttemptId: winner })
+    .where(eq(discountCodeRedemptions.paymentAttemptId, original));
+  yield* db
+    .update(voucherRedemptions)
+    .set({ paymentAttemptId: winner })
+    .where(eq(voucherRedemptions.paymentAttemptId, original));
+  yield* db
+    .update(referralInvitationClaims)
+    .set({ paymentAttemptId: winner })
+    .where(eq(referralInvitationClaims.paymentAttemptId, original));
+});
+
+const refundDuplicateCardAttempt = Effect.fnUntraced(function* (
+  input: Parameters<IPaymentLifecycleRepository["markPaid"]>[0]
+) {
+  const { db } = yield* WorkspaceTransaction;
+  const [attempt] = yield* db
+    .select()
+    .from(paymentAttempts)
+    .where(eq(paymentAttempts.id, input.id))
+    .limit(1)
+    .for("update");
+  if (!attempt || attempt.provider !== "nexi") {
+    return yield* lifecycleStateError(
+      "markPaid",
+      { type: "paymentAttemptId", id: input.id },
+      "Only the card provider can settle a duplicate on this path."
+    );
+  }
+  if (attempt.state === "paid") {
+    return {
+      attempt: toPaymentAttempt(attempt),
+      changed: false,
+      timestamp: attempt.updatedAt,
+      settlement: "refund_required" as const,
+    };
+  }
+
+  const [refundable] = yield* db
+    .update(paymentAttempts)
+    .set({
+      state: "paid",
+      refundState: "required",
+      failureCode: null,
+      lastWebhookEventId: input.webhookEventId,
+      lastProviderOperationId: input.providerOperationId,
+      lastProviderStatus: input.providerStatus,
+      updatedAt: input.paidAt,
+    })
+    .where(eq(paymentAttempts.id, input.id))
+    .returning();
+  if (!refundable)
+    return yield* Effect.die("Card settlement update returned no row.");
+  return {
+    attempt: toPaymentAttempt(refundable),
+    changed: false,
+    timestamp: input.paidAt,
+    settlement: "refund_required" as const,
+  };
+});
+
+const nextQrReference = Effect.gen(function* () {
+  const { db } = yield* WorkspaceTransaction;
+  const result = yield* db.execute<{ reference: string }>(
+    sql`select nextval('qr_payment_references')::text as reference`
+  );
+  const reference = result.rows[0]?.reference;
+  if (!reference)
+    return yield* Effect.die("Could not allocate a QR payment reference.");
+  return reference;
+});
+
 export class PaymentLifecycleRepository extends Context.Service<
   PaymentLifecycleRepository,
   IPaymentLifecycleRepository
@@ -162,18 +299,19 @@ export class PaymentLifecycleRepository extends Context.Service<
       const accountingSnapshots = yield* AccountingDocumentSnapshots;
       const terminalTransitions = yield* PaymentTerminalTransitions;
 
-      const createPendingProviderAttempt = Effect.fn(
-        "PaymentLifecycleRepository.createPendingProviderAttempt"
-      )(function* (input: {
-        readonly orderId: OrderId;
-        readonly provider: PaymentProvider;
-        readonly providerOrderId: string;
-        readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
-        readonly amount: Money;
-        readonly commitment: DiscountCommitment;
-        readonly locale: Locale;
-        readonly accountingSnapshot: AccountingDocumentSnapshot;
-      }) {
+      const admitFirstAttempt = Effect.fn(
+        "PaymentLifecycleRepository.admitFirstAttempt"
+      )(function* (
+        input: FirstPaymentAdmission & {
+          readonly orderId: OrderId;
+          readonly provider: PaymentProvider | "fio";
+          readonly providerOrderId: string;
+          readonly retriedAttempt?: RetriedPaymentAttempt;
+          readonly amount: Money;
+          readonly locale: Locale;
+          readonly expiresAt?: Temporal.Instant;
+        }
+      ) {
         const workspaceReservationId = reservationIdForOrder(input.orderId);
         const accountingSnapshot = yield* accountingSnapshots.prepare({
           snapshot: input.accountingSnapshot,
@@ -314,6 +452,7 @@ export class PaymentLifecycleRepository extends Context.Service<
               .set({
                 activePaymentAttemptId: attemptRow.id,
                 paymentState: "pending",
+                reservationHoldExpiresAt: input.expiresAt,
                 updatedAt: now,
               })
               .where(
@@ -355,13 +494,226 @@ export class PaymentLifecycleRepository extends Context.Service<
               paymentAttemptId: attemptRow.id,
               locale: input.locale,
               reservationCustomerId: reservation.dotyposCustomerId,
-              reservationExpiresAt: reservation.reservationHoldExpiresAt,
+              reservationExpiresAt:
+                input.expiresAt ?? reservation.reservationHoldExpiresAt,
               firstServiceDate,
             });
 
             return toPaymentAttempt(attemptRow);
           })
         );
+      });
+
+      const admitPublicAttempt = Effect.fn(
+        "PaymentLifecycleRepository.admitPublicAttempt"
+      )(function* (
+        input: PaymentAdmissionInput & {
+          readonly publicPayment: PublicPayment;
+          readonly provider: "nexi" | "fio";
+          readonly providerOrderId?: string;
+          readonly wake?: FioPollWake["Service"]["wake"];
+        }
+      ) {
+        const workspaceReservationId = reservationIdForOrder(input.orderId);
+        const reference = {
+          type: "workspaceReservationId",
+          id: workspaceReservationId,
+        } as const;
+        const unavailable = (message: string) =>
+          lifecycleStateError("admitPublicAttempt", reference, message);
+        if (
+          input.amount.currency !== "CZK" ||
+          input.amount.value <= 0 ||
+          input.amount.exponent !== 2 ||
+          input.publicPayment.accountKey.length === 0
+        ) {
+          return yield* unavailable(
+            "Public payments require a positive CZK amount and a receiving account."
+          );
+        }
+
+        return yield* transaction(
+          Effect.gen(function* () {
+            const dotyposCustomerId = yield* findPaymentReservationCustomer(
+              "admitPublicAttempt",
+              workspaceReservationId
+            );
+            yield* ReferralInvitationLedger.lockFirstBooking({
+              dotyposCustomerId,
+              records: "nothing",
+            });
+            const [reservation] = yield* db
+              .select()
+              .from(workspaceReservations)
+              .where(eq(workspaceReservations.id, workspaceReservationId))
+              .limit(1)
+              .for("update");
+            const [window] = yield* db
+              .select()
+              .from(reservationPaymentWindows)
+              .where(eq(reservationPaymentWindows.orderId, input.orderId))
+              .limit(1);
+            const now = Temporal.Now.instant();
+            const expiresAt = window?.expiresAt ?? now.add({ minutes: 30 });
+            if (
+              !reservation ||
+              reservation.reservationState !== "held" ||
+              reservation.paymentState === "paid" ||
+              Temporal.Instant.compare(expiresAt, now) <= 0 ||
+              (window && window.accountKey !== input.publicPayment.accountKey)
+            ) {
+              return yield* unavailable(
+                "The public reservation payment window is closed."
+              );
+            }
+
+            const existingId =
+              input.provider === "fio"
+                ? window?.qrAttemptId
+                : window?.cardAttemptId;
+            const [existing] = existingId
+              ? yield* db
+                  .select()
+                  .from(paymentAttempts)
+                  .where(eq(paymentAttempts.id, existingId))
+                  .limit(1)
+              : [];
+            if (existing) {
+              const attempt = toPaymentAttempt(existing);
+              if (!moneyEquals(attempt.amount, input.amount)) {
+                return yield* unavailable(
+                  "The payment amount differs from the accepted price."
+                );
+              }
+              if (input.wake) yield* input.wake(input.publicPayment.accountKey);
+              return attempt;
+            }
+
+            const providerOrderId =
+              input.providerOrderId ?? (yield* nextQrReference);
+            if (!window) {
+              if (
+                !input.commitment ||
+                !input.accountingSnapshot ||
+                reservation.activePaymentAttemptId
+              ) {
+                return yield* unavailable(
+                  "A public payment can only start from a fresh held reservation."
+                );
+              }
+              const attempt = yield* admitFirstAttempt({
+                orderId: input.orderId,
+                publicPayment: input.publicPayment,
+                amount: input.amount,
+                locale: input.locale,
+                commitment: input.commitment,
+                accountingSnapshot: input.accountingSnapshot,
+                provider: input.provider,
+                providerOrderId,
+                expiresAt,
+              });
+              yield* db.insert(reservationPaymentWindows).values({
+                orderId: input.orderId,
+                accountKey: input.publicPayment.accountKey,
+                expiresAt,
+                cardAttemptId: input.provider === "nexi" ? attempt.id : null,
+                qrAttemptId: input.provider === "fio" ? attempt.id : null,
+              });
+              if (input.wake) yield* input.wake(input.publicPayment.accountKey);
+              return attempt;
+            }
+
+            if (
+              reservation.paymentState !== "pending" ||
+              !reservation.activePaymentAttemptId
+            ) {
+              return yield* unavailable(
+                "A public payment can only switch while the reservation is payable."
+              );
+            }
+            const [original] = yield* db
+              .select()
+              .from(paymentAttempts)
+              .where(eq(paymentAttempts.id, reservation.activePaymentAttemptId))
+              .limit(1);
+            if (
+              !original ||
+              !moneyEquals(toPaymentAttempt(original).amount, input.amount)
+            ) {
+              return yield* unavailable(
+                "The payment amount differs from the accepted price."
+              );
+            }
+            const snapshot = yield* accountingSnapshots.find(original.id);
+            if (!snapshot)
+              return yield* unavailable(
+                "The accepted accounting snapshot is unavailable."
+              );
+            const prepared = yield* accountingSnapshots.prepare({
+              snapshot,
+              orderId: input.orderId,
+              amount: input.amount,
+              locale: input.locale,
+              reference: { type: "providerOrderId", id: providerOrderId },
+            });
+            const attempt = yield* insertPaymentAttempt({
+              workspaceReservationId,
+              orderId: input.orderId,
+              amount: input.amount,
+              provider: input.provider,
+              providerOrderId,
+            });
+            yield* prepared.record({
+              paymentAttemptId: attempt.id,
+              dotyposCustomerId,
+              dotyposReservationId: reservation.dotyposReservationId,
+            });
+            yield* db
+              .update(reservationPaymentWindows)
+              .set(
+                input.provider === "fio"
+                  ? { qrAttemptId: attempt.id }
+                  : { cardAttemptId: attempt.id }
+              )
+              .where(eq(reservationPaymentWindows.orderId, input.orderId));
+            if (input.wake) yield* input.wake(input.publicPayment.accountKey);
+            return toPaymentAttempt(attempt);
+          })
+        );
+      });
+
+      const createPendingProviderAttempt = (input: CardPaymentAdmission) => {
+        if (
+          input.publicPayment &&
+          input.provider === "nexi" &&
+          !input.retriedAttempt
+        ) {
+          return admitPublicAttempt({
+            ...input,
+            provider: "nexi",
+            publicPayment: input.publicPayment,
+          });
+        }
+        if (input.commitment && input.accountingSnapshot) {
+          const { publicPayment: _publicPayment, ...legacy } = input;
+          return admitFirstAttempt({
+            ...legacy,
+            commitment: input.commitment,
+            accountingSnapshot: input.accountingSnapshot,
+          });
+        }
+        return lifecycleStateError(
+          "createPendingProviderAttempt",
+          { type: "providerOrderId", id: input.providerOrderId },
+          "A standalone provider payment requires an accepted commitment."
+        );
+      };
+
+      const createPendingQrAttempt = Effect.fn(
+        "PaymentLifecycleRepository.createPendingQrAttempt"
+      )(function* (input: QrPaymentAdmission) {
+        const { wake } = yield* FioPollWake;
+        return yield* admitPublicAttempt({ ...input, provider: "fio", wake });
       });
 
       const completeInternalPayment = Effect.fn(
@@ -550,14 +902,103 @@ export class PaymentLifecycleRepository extends Context.Service<
           const workspaceReservationId = reservationIdForOrder(input.orderId);
           return yield* transaction(
             Effect.gen(function* () {
+              const [window] = yield* db
+                .select()
+                .from(reservationPaymentWindows)
+                .where(eq(reservationPaymentWindows.orderId, input.orderId))
+                .limit(1);
+              const [orderBeforeLock] = window
+                ? yield* db
+                    .select({
+                      activeAttemptId:
+                        workspaceReservations.activePaymentAttemptId,
+                    })
+                    .from(workspaceReservations)
+                    .where(eq(workspaceReservations.id, workspaceReservationId))
+                    .limit(1)
+                : [];
               const dotyposCustomerId = yield* findPaymentReservationCustomer(
                 "markPaid",
                 workspaceReservationId
               );
               yield* ReferralInvitationLedger.lockFirstBooking({
                 dotyposCustomerId,
-                records: { claimOf: input.id },
+                records: {
+                  claimOf: orderBeforeLock?.activeAttemptId ?? input.id,
+                },
               });
+              if (window) {
+                const [reservation] = yield* db
+                  .select()
+                  .from(workspaceReservations)
+                  .where(eq(workspaceReservations.id, workspaceReservationId))
+                  .limit(1)
+                  .for("update");
+                if (
+                  window.cardAttemptId !== input.id &&
+                  window.qrAttemptId !== input.id
+                ) {
+                  return yield* lifecycleStateError(
+                    "markPaid",
+                    { type: "paymentAttemptId", id: input.id },
+                    "The attempt is outside the public reservation payment window."
+                  );
+                }
+
+                if (
+                  reservation?.paymentState === "paid" &&
+                  window.qrAttemptId === input.id &&
+                  reservation.activePaymentAttemptId === input.id
+                ) {
+                  const [settled] = yield* db
+                    .select()
+                    .from(paymentAttempts)
+                    .where(eq(paymentAttempts.id, input.id))
+                    .limit(1);
+                  if (settled)
+                    return {
+                      attempt: toPaymentAttempt(settled),
+                      changed: false,
+                      timestamp: reservation.paidAt ?? input.paidAt,
+                    };
+                }
+
+                if (
+                  reservation?.paymentState === "paid" &&
+                  reservation.activePaymentAttemptId !== input.id
+                ) {
+                  return yield* refundDuplicateCardAttempt(input);
+                }
+
+                if (reservation?.paymentState !== "paid") {
+                  if (
+                    reservation?.reservationState !== "held" ||
+                    reservation.paymentState !== "pending" ||
+                    !reservation.activePaymentAttemptId ||
+                    Temporal.Instant.compare(window.expiresAt, input.paidAt) <=
+                      0
+                  ) {
+                    return yield* lifecycleStateError(
+                      "markPaid",
+                      { type: "paymentAttemptId", id: input.id },
+                      "The public reservation payment window has closed."
+                    );
+                  }
+                  if (reservation.activePaymentAttemptId !== input.id) {
+                    yield* bindAcceptedClaimsToWinner(
+                      reservation.activePaymentAttemptId,
+                      input.id
+                    );
+                    yield* db
+                      .update(workspaceReservations)
+                      .set({ activePaymentAttemptId: input.id })
+                      .where(
+                        eq(workspaceReservations.id, workspaceReservationId)
+                      );
+                  }
+                }
+              }
+
               yield* ReferralInvitationLedger.ensureFirstPaid({
                 dotyposCustomerId,
                 workspaceReservationId,
@@ -648,6 +1089,42 @@ export class PaymentLifecycleRepository extends Context.Service<
         }
       );
 
+      const recordVerifiedQrPayment = Effect.fn(
+        "PaymentLifecycleRepository.recordVerifiedQrPayment"
+      )(function* (
+        input: Parameters<
+          IPaymentLifecycleRepository["recordVerifiedQrPayment"]
+        >[0]
+      ) {
+        return yield* transaction(
+          Effect.gen(function* () {
+            const [window] = yield* db
+              .select()
+              .from(reservationPaymentWindows)
+              .where(eq(reservationPaymentWindows.orderId, input.orderId))
+              .limit(1);
+            if (window?.qrAttemptId !== input.id)
+              return { status: "refund" } as const;
+
+            const transition = yield* markPaid(input).pipe(
+              Effect.catchTag("PaymentLifecycleStateError", () =>
+                Effect.succeed(null)
+              )
+            );
+            if (
+              transition?.attempt.provider === "fio" &&
+              transition.attempt.lastProviderOperationId ===
+                input.providerOperationId
+            ) {
+              return { status: "winner", transition } as const;
+            }
+            if (transition) return { status: "refund" } as const;
+
+            return { status: "recover" } as const;
+          })
+        );
+      });
+
       const markTerminal = Effect.fn("PaymentLifecycleRepository.markTerminal")(
         function* (
           input: Parameters<IPaymentLifecycleRepository["markTerminal"]>[0]
@@ -658,6 +1135,8 @@ export class PaymentLifecycleRepository extends Context.Service<
 
       return {
         createPendingProviderAttempt,
+        createPendingQrAttempt,
+        recordVerifiedQrPayment,
         completeInternalPayment,
         attachProviderSession: (input) =>
           attachPaymentProviderSession(input).pipe(

@@ -63,7 +63,8 @@ export type ProviderPaymentAttempt = PaymentAttempt & {
 export const isProviderPaymentAttempt = (
   attempt: PaymentAttempt
 ): attempt is ProviderPaymentAttempt =>
-  attempt.provider !== "internal" && attempt.providerOrderId !== null;
+  (attempt.provider === "nexi" || attempt.provider === "mock") &&
+  attempt.providerOrderId !== null;
 
 /**
  * A payment attempt as the customer may see it: what was charged and refunded

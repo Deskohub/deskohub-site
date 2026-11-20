@@ -11,7 +11,7 @@ import { FioAccountPollRepository } from "./fio-account-poll.repository";
 
 const pollJobSchema = Schema.Struct({
   accountKey: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
-  deliveryId: Schema.UUID,
+  deliveryId: Schema.String.check(Schema.isUUID(4)),
 });
 
 export type FioPollJob = typeof pollJobSchema.Type;
