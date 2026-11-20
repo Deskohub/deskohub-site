@@ -34,6 +34,7 @@ export interface PaymentLifecycleTransition {
   readonly attempt: PaymentAttempt;
   readonly changed: boolean;
   readonly timestamp: Temporal.Instant;
+  readonly settlement?: "refund_required";
 }
 
 export type NonTerminalPaymentAttemptState = Extract<
@@ -61,6 +62,7 @@ export const lifecycleStateError = (
 export const findPaymentReservationCustomer = Effect.fnUntraced(function* (
   operation:
     | "createPendingProviderAttempt"
+    | "admitPublicAttempt"
     | "completeInternalPayment"
     | "markPaid"
     | "markTerminal",

@@ -7,7 +7,7 @@ import { env } from "@/env";
 export interface FioReceivingAccountDisplay {
   readonly accountKey: string;
   readonly accountNumber: string;
-  readonly accountPrefix?: string;
+  readonly accountPrefix?: string | undefined;
   readonly bankCode: string;
 }
 

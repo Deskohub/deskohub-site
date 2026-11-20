@@ -14,6 +14,7 @@ import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoi
 import { ReservationInvoiceService } from "@/features/accounting/backend/reservation-invoice.service";
 import { PaidFulfillmentQueueService } from "@/features/checkout/backend/fulfillment/paid-fulfillment-queue.service";
 import { WorkspaceReservationEmailService } from "@/features/checkout/backend/fulfillment/workspace-reservation-email.service";
+import { FioPaymentSettlementRepository } from "@/features/checkout/backend/repositories/fio-payment-settlement.repository";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
@@ -31,6 +32,18 @@ const testDatabase = await createWorkspacePostgresSuiteDatabase(
 afterAll(() => testDatabase?.close());
 
 const kit = makeInvoiceCancellationTestKit(testDatabase!);
+const runFioRepository = <A, E>(
+  effect: Effect.Effect<A, E, FioPaymentSettlementRepository>
+) =>
+  Effect.runPromise(
+    effect.pipe(
+      Effect.provide(
+        FioPaymentSettlementRepository.Default.pipe(
+          Layer.provide(testDatabase!.layer)
+        )
+      )
+    )
+  );
 const testKeyId = "K202611";
 const missingKey = new AccountingSnapshotKeyError({
   keyId: testKeyId,
@@ -357,6 +370,84 @@ describe.skipIf(!testDatabase)(
       expect(reservationCause?.cancellation_cause).toBe("operator");
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(deliver.mock.calls[0]![0].invoiceId).toBe(invoice.id);
+    });
+
+    test("tracks and preserves a manually refunded Fio winner independently of its duplicate", async () => {
+      const { reservation, paymentAttemptId } =
+        await kit.issueReservationInvoice();
+      await kit.query(
+        "update payment_attempts set provider = 'fio', provider_order_id = '9000000000', last_provider_operation_id = 'manual-fio-winner' where id = $1",
+        [paymentAttemptId]
+      );
+      await kit.query(
+        `insert into fio_payment_settlements
+          (order_id, payment_attempt_id, account_key, movement_id, variable_symbol, amount_value, currency, booking_date, observed_at, disposition)
+          select order_id, id, 'synthetic-account', evidence.movement_id, '9000000000', amount_value, currency, current_date, now(), evidence.disposition
+          from payment_attempts cross join (values ('manual-fio-winner', 'winner'), ('manual-fio-duplicate', 'refund_required')) as evidence(movement_id, disposition)
+          where id = $1`,
+        [paymentAttemptId]
+      );
+      const listEvidence = () =>
+        runFioRepository(
+          Effect.flatMap(FioPaymentSettlementRepository, (repo) =>
+            repo.listForOrder(reservation.id)
+          )
+        );
+      const before = await listEvidence();
+      const winner = before.find(
+        ({ movementId }) => movementId === "manual-fio-winner"
+      )!;
+      const duplicate = before.find(
+        ({ movementId }) => movementId === "manual-fio-duplicate"
+      )!;
+
+      const { cancel } = makeCancellation();
+      expect(
+        await cancel(await cancellationInput(reservation.id))
+      ).toMatchObject({
+        outcome: "cancelled",
+      });
+      const cancelled = await listEvidence();
+      expect(cancelled.find(({ id }) => id === winner.id)?.disposition).toBe(
+        "refund_required"
+      );
+      expect(cancelled.find(({ id }) => id === duplicate.id)).toEqual(
+        duplicate
+      );
+
+      const refundedAt = Temporal.Now.instant().round({
+        smallestUnit: "millisecond",
+      });
+      const recordRefund = (id: string, at: Temporal.Instant) =>
+        runFioRepository(
+          Effect.flatMap(FioPaymentSettlementRepository, (repo) =>
+            repo.markManualRefunded(id, at)
+          )
+        );
+      expect(await recordRefund(winner.id, refundedAt)).toMatchObject({
+        disposition: "refunded",
+      });
+      expect(
+        (
+          await recordRefund(winner.id, refundedAt.add({ seconds: 1 }))
+        )?.refundedAt?.equals(refundedAt)
+      ).toBe(true);
+
+      const { restore } = makeRestoration();
+      expect(await restore(reservation.id)).toMatchObject({
+        outcome: "restored",
+      });
+      const restored = await listEvidence();
+      expect(restored.find(({ id }) => id === winner.id)?.disposition).toBe(
+        "refunded"
+      );
+      expect(restored.find(({ id }) => id === duplicate.id)).toEqual(duplicate);
+      expect(
+        await kit.query(
+          "select refund_state from payment_attempts where id = $1",
+          [paymentAttemptId]
+        )
+      ).toEqual([{ refund_state: "refunded" }]);
     });
 
     test("a failed invoice cancellation rolls the reservation's completion back with it", async () => {

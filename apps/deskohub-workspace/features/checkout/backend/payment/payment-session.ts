@@ -10,8 +10,11 @@ import { CheckoutError } from "../checkout/checkout-error";
 import { appendVercelPreviewProtectionBypass } from "../checkout/vercel-preview-protection-bypass";
 import {
   isProviderPaymentAttempt,
+  type PaymentAttempt,
   paymentAttemptLogFields,
 } from "../repositories/payment-attempt.repository";
+import type { PaymentLifecycleRepositoryError } from "../repositories/payment-lifecycle.repository";
+import { lifecycleStateError } from "../repositories/payment-lifecycle-state";
 import type { PaymentAdmission } from "./order-payment-handler";
 import {
   OrderPaymentHandlers,
@@ -94,19 +97,35 @@ const getNotificationUrl = Effect.fn("getPaymentNotificationUrl")(
     effect.pipe(Effect.catchTag("WorkspaceUrlConfigError", toCheckoutUrlError))
 );
 
+type AdmitHostedAttempt = (input: {
+  readonly provider: PaymentProvider;
+  readonly providerOrderId: string;
+}) => Effect.Effect<PaymentAttempt, PaymentLifecycleRepositoryError>;
+
 /** Starts a hosted payment for a prepared order using the lifecycle operations of its kind. */
 export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
   Kind extends OrderKind,
   PrepareError,
   PrepareServices,
 >(
-  input: PaymentAdmission<PaymentAdmissionDetailsFor<Kind>> & {
-    readonly kind: Kind;
-    readonly correlationId: string;
-    readonly customer: PaymentCustomer;
-    readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
-    readonly beforeAttempt: Effect.Effect<void, PrepareError, PrepareServices>;
-  }
+  input: Omit<PaymentAdmission<PaymentAdmissionDetailsFor<Kind>>, "details"> &
+    (
+      | {
+          readonly details: PaymentAdmissionDetailsFor<Kind>;
+          readonly admitProvider?: AdmitHostedAttempt;
+        }
+      | { readonly details?: never; readonly admitProvider: AdmitHostedAttempt }
+    ) & {
+      readonly kind: Kind;
+      readonly correlationId: string;
+      readonly customer: PaymentCustomer;
+      readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
+      readonly beforeAttempt: Effect.Effect<
+        void,
+        PrepareError,
+        PrepareServices
+      >;
+    }
 ) {
   const { byKind } = yield* OrderPaymentHandlers;
   const providers = yield* PaymentProviders;
@@ -155,15 +174,47 @@ export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
   // attempt; the Nexi request timeout still bounds this section.
   return yield* Effect.uninterruptible(
     Effect.gen(function* () {
-      const attempt = yield* handler.admitProvider({
-        orderId: input.orderId,
-        amount: input.amount,
-        locale: input.locale,
-        details: input.details,
-        provider,
-        providerOrderId: prepared.providerOrderId,
-        retriedAttempt: input.retriedAttempt,
-      });
+      const attempt = yield* input.admitProvider
+        ? input.admitProvider({
+            provider,
+            providerOrderId: prepared.providerOrderId,
+          })
+        : handler.admitProvider({
+            orderId: input.orderId,
+            amount: input.amount,
+            locale: input.locale,
+            details: input.details,
+            provider,
+            providerOrderId: prepared.providerOrderId,
+            retriedAttempt: input.retriedAttempt,
+          });
+      if (
+        input.admitProvider &&
+        isProviderPaymentAttempt(attempt) &&
+        attempt.provider === provider &&
+        attempt.providerOrderId !== prepared.providerOrderId
+      ) {
+        if (
+          attempt.state === "pending" &&
+          attempt.providerRedirectUrl &&
+          attempt.securityToken
+        ) {
+          return {
+            attachedAttempt: attempt,
+            reused: true as const,
+            hostedPaymentPage: {
+              providerOrderId: attempt.providerOrderId,
+              hostedPage: attempt.providerRedirectUrl,
+              securityToken: attempt.securityToken,
+            },
+          };
+        }
+        return yield* lifecycleStateError(
+          "startPaymentSession",
+          { type: "paymentAttemptId", id: attempt.id },
+          "The existing hosted payment page is not available yet."
+        );
+      }
       if (
         !isProviderPaymentAttempt(attempt) ||
         attempt.provider !== provider ||
