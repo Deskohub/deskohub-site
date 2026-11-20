@@ -1011,7 +1011,11 @@ describe.skipIf(!testDatabase)(
       ).toBe(false);
     });
 
-    test.each(["eligible", "superseded"] as const)(
+    test.each([
+      "eligible",
+      "superseded",
+      "operation ID arrives later",
+    ] as const)(
       "reconciles the first verified expired-card webhook on a QR-first %s booking",
       async (booking) => {
         const { NexiWebhookService } = await import(
@@ -1102,6 +1106,8 @@ describe.skipIf(!testDatabase)(
         }
 
         const operationId = "synthetic-verified-card-operation";
+        let verifiedOperationId =
+          booking === "operation ID arrives later" ? undefined : operationId;
         const enqueue = mock(() => Effect.void);
         const fulfill = mock(() => Effect.void);
         const databaseLayer = testDatabase!.layer;
@@ -1123,7 +1129,7 @@ describe.skipIf(!testDatabase)(
               verify: () =>
                 Effect.succeed({
                   status: "success" as const,
-                  providerOperationId: operationId,
+                  providerOperationId: verifiedOperationId,
                   providerStatus: "EXECUTED",
                   hasActivity: true,
                   mismatches: [],
@@ -1131,25 +1137,38 @@ describe.skipIf(!testDatabase)(
             }),
           })
         ).pipe(withReservationPaymentHandlers);
-        const eventId = `evt-${uniqueId()}`;
         try {
           const outcome = await Effect.runPromise(
             Effect.gen(function* () {
               const webhook = yield* NexiWebhookService;
               const reservations = yield* WorkspaceReservationRepository;
               const paymentAttempts = yield* PaymentAttemptRepository;
-              const result = yield* webhook.processNotification({
-                eventId,
-                securityToken,
-                operation: {
-                  orderId: providerOrderId,
-                  operationId,
-                  operationType: "CAPTURE",
-                  operationResult: "EXECUTED",
-                  operationAmount: String(admission.amount.value),
-                  operationCurrency: "CZK",
-                },
-              });
+              const notify = () =>
+                webhook.processNotification({
+                  eventId: `evt-${uniqueId()}`,
+                  securityToken,
+                  operation: {
+                    orderId: providerOrderId,
+                    operationId,
+                    operationType: "CAPTURE",
+                    operationResult: "EXECUTED",
+                    operationAmount: String(admission.amount.value),
+                    operationCurrency: "CZK",
+                  },
+                });
+              const result = yield* notify();
+              if (booking === "operation ID arrives later") {
+                expect(
+                  yield* recoveries.findByPaymentAttemptId(card.id)
+                ).toMatchObject({
+                  state: "pending",
+                  providerOperationId: null,
+                });
+                verifiedOperationId = operationId;
+                expect((yield* notify()).status).toBe("accepted");
+                verifiedOperationId = undefined;
+                expect((yield* notify()).status).toBe("accepted");
+              }
               return {
                 result,
                 reservation: yield* reservations.findById(reservation.id),
@@ -1166,8 +1185,12 @@ describe.skipIf(!testDatabase)(
           );
           expect(outcome.result.status).toBe("accepted");
           expect(fulfill).toHaveBeenCalledTimes(0);
-          if (booking === "eligible") {
+          if (booking !== "superseded") {
             expect(outcome.reservation?.activePaymentAttemptId).toBe(card.id);
+            expect(outcome.attempt).toMatchObject({
+              state: "expired",
+              refundState: "not_required",
+            });
             expect(outcome.recovery).toMatchObject({
               state: "pending",
               providerOperationId: operationId,

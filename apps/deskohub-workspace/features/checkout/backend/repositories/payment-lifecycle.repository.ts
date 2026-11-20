@@ -1,5 +1,5 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { and, eq, inArray, ne, notExists, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, notExists, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
@@ -268,11 +268,28 @@ const admitLatePublicSettlement = Effect.fnUntraced(function* (
     )
     .limit(1);
   if (recovery) {
-    if (
-      recovery.paymentAttemptId !== input.id ||
-      recovery.providerOperationId !== (input.providerOperationId ?? null)
-    )
+    if (recovery.paymentAttemptId !== input.id) return undefined;
+
+    const receivedOperationId = input.providerOperationId ?? null;
+    const savedOperationId = recovery.providerOperationId;
+    const cardReplayWithMissingId =
+      window.cardAttemptId === input.id &&
+      (savedOperationId === null || receivedOperationId === null);
+    if (savedOperationId !== receivedOperationId && !cardReplayWithMissingId)
       return undefined;
+
+    if (savedOperationId === null && receivedOperationId !== null) {
+      yield* db
+        .update(latePaymentRecoveries)
+        .set({ providerOperationId: receivedOperationId })
+        .where(
+          and(
+            eq(latePaymentRecoveries.paymentAttemptId, input.id),
+            isNull(latePaymentRecoveries.providerOperationId)
+          )
+        );
+    }
+
     const [attempt] = yield* db
       .select()
       .from(paymentAttempts)
