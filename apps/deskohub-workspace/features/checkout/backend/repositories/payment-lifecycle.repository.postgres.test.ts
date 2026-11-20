@@ -29,6 +29,7 @@ import {
   promotionCodes,
   referralAttributions,
   referralCodes,
+  voucherRedemptions,
   vouchers,
   workspaceReservations,
 } from "@/db/schema";
@@ -1012,11 +1013,23 @@ describe.skipIf(!testDatabase)(
     });
 
     test.each([
+      "open after card failure",
+      "open after card failure with no verified operation ID",
+      "open after card failure at provider finalization",
+      "open with a processing card recovery",
+      "open with a different card operation in recovery",
+      "open with a card refund required",
+      "open with a card refund completed",
+      "paid by QR after card failure",
+      "paid by QR while card recovery lacked an operation ID",
+      "paid by QR before a late card operation ID is known",
+      "paid by card with a partial refund",
       "eligible",
+      "expired after card failure",
       "superseded",
       "operation ID arrives later",
     ] as const)(
-      "reconciles the first verified expired-card webhook on a QR-first %s booking",
+      "reconciles a verified card payment on a QR-first booking that is %s",
       async (booking) => {
         const { NexiWebhookService } = await import(
           "../payment/nexi-webhook.service"
@@ -1033,11 +1046,20 @@ describe.skipIf(!testDatabase)(
         const { PaymentAttemptRepository } = await import(
           "./payment-attempt.repository"
         );
+        const { PaymentRefundRepository } = await import(
+          "./payment-refund.repository"
+        );
         const { WebhookEventRepository } = await import(
           "./webhook-event.repository"
         );
         const { ReservationFulfillment } = await import(
           "../fulfillment/reservation-fulfillment.service"
+        );
+        const { PaidFulfillmentQueueService } = await import(
+          "../fulfillment/paid-fulfillment-queue.service"
+        );
+        const { ProviderPaymentFinalizationService } = await import(
+          "../payment/provider-payment-finalization.service"
         );
         const { CheckoutAnalytics } = await import(
           "../analytics/checkout-analytics.service"
@@ -1051,10 +1073,27 @@ describe.skipIf(!testDatabase)(
         const customer = customerId();
         const reservation = await createHeldReservation(customer);
         const orderId = reservationOrderId(reservation.id);
-        const { admission, locale, snapshot } = makeOrdinaryAdmission(
-          reservation,
-          customer
-        );
+        const conflictingCardOperation =
+          booking === "open with a different card operation in recovery";
+        const existingCardRecovery =
+          booking === "open with a processing card recovery" ||
+          conflictingCardOperation;
+        const cardRefundCompleted =
+          booking === "open with a card refund completed";
+        const existingCardRefund =
+          booking === "open with a card refund required" || cardRefundCompleted;
+        const voucher =
+          existingCardRecovery || existingCardRefund
+            ? await createVoucher(customer)
+            : undefined;
+        const { admission, locale, snapshot } = voucher
+          ? makeCodeAdmission({
+              reservation,
+              dotyposCustomerId: customer,
+              candidate: voucher.candidate,
+              firstServiceDate: "2099-01-01",
+            })
+          : makeOrdinaryAdmission(reservation, customer);
         const accountKey = "synthetic-fio-account";
         const qr = await Effect.runPromise(
           lifecycle
@@ -1089,9 +1128,48 @@ describe.skipIf(!testDatabase)(
           })
         );
         const expiresAt = Temporal.Now.instant().add({ minutes: 31 });
-        await Effect.runPromise(
-          lifecycle.expirePublicPaymentWindow({ orderId, checkedAt: expiresAt })
-        );
+        const throughFinalization =
+          booking === "open after card failure at provider finalization";
+        const missingWinnerOperationId =
+          booking === "open after card failure with no verified operation ID";
+        const workerRecordedRefundFirst =
+          booking === "paid by QR before a late card operation ID is known";
+        const workerLacksOperationId =
+          booking === "paid by QR while card recovery lacked an operation ID" ||
+          workerRecordedRefundFirst;
+        const cardPartiallyRefunded =
+          booking === "paid by card with a partial refund";
+        const qrWins =
+          booking === "paid by QR after card failure" || workerLacksOperationId;
+        const windowOpen =
+          booking === "open after card failure" ||
+          missingWinnerOperationId ||
+          throughFinalization ||
+          existingCardRecovery ||
+          existingCardRefund ||
+          cardPartiallyRefunded ||
+          qrWins;
+        if (windowOpen || booking === "expired after card failure") {
+          await Effect.runPromise(
+            lifecycle.markTerminal({
+              orderId,
+              id: card.id,
+              state: "failed",
+              failureCode: "nexi_payment_failed",
+              providerOperationId: missingWinnerOperationId
+                ? "synthetic-declined-operation"
+                : undefined,
+            })
+          );
+        }
+        if (!windowOpen) {
+          await Effect.runPromise(
+            lifecycle.expirePublicPaymentWindow({
+              orderId,
+              checkedAt: expiresAt,
+            })
+          );
+        }
         if (booking === "superseded") {
           await Effect.runPromise(
             testDatabase!.db
@@ -1106,13 +1184,21 @@ describe.skipIf(!testDatabase)(
         }
 
         const operationId = "synthetic-verified-card-operation";
+        const recoveryOperationId = conflictingCardOperation
+          ? "synthetic-other-operation-in-recovery"
+          : operationId;
         let verifiedOperationId =
-          booking === "operation ID arrives later" ? undefined : operationId;
+          booking === "operation ID arrives later" || missingWinnerOperationId
+            ? undefined
+            : operationId;
         const enqueue = mock(() => Effect.void);
+        const enqueuePaid = mock(() => Effect.void);
         const fulfill = mock(() => Effect.void);
+        const paymentCompleted = mock(() => Effect.void);
         const databaseLayer = testDatabase!.layer;
         const dependencies = Layer.mergeAll(
           PaymentAttemptRepository.Default.pipe(Layer.provide(databaseLayer)),
+          PaymentRefundRepository.Default.pipe(Layer.provide(databaseLayer)),
           WebhookEventRepository.Default.pipe(Layer.provide(databaseLayer)),
           WorkspaceReservationRepository.Default.pipe(
             Layer.provide(databaseLayer)
@@ -1120,8 +1206,9 @@ describe.skipIf(!testDatabase)(
           Layer.succeed(PaymentLifecycleRepository, lifecycle),
           Layer.succeed(LatePaymentRecoveryRepository, recoveries),
           Layer.mock(LatePaymentRecoveryQueueService, { enqueue }),
+          Layer.mock(PaidFulfillmentQueueService, { enqueue: enqueuePaid }),
           Layer.mock(ReservationFulfillment, { run: fulfill }),
-          Layer.mock(CheckoutAnalytics, {}),
+          Layer.mock(CheckoutAnalytics, { paymentCompleted }),
           Layer.mock(PaymentRefundService, {}),
           Layer.mock(PaymentProviders, {
             activeProviders: ["nexi"],
@@ -1141,11 +1228,34 @@ describe.skipIf(!testDatabase)(
           const outcome = await Effect.runPromise(
             Effect.gen(function* () {
               const webhook = yield* NexiWebhookService;
+              const finalization = yield* ProviderPaymentFinalizationService;
               const reservations = yield* WorkspaceReservationRepository;
               const paymentAttempts = yield* PaymentAttemptRepository;
-              const notify = () =>
+              const refunds = yield* PaymentRefundRepository;
+              const refundCard = Effect.fnUntraced(function* (
+                refundedAmountValue = admission.amount.value
+              ) {
+                const refundedAt = Temporal.Now.instant();
+                expect(
+                  yield* refunds.recordRefund({
+                    id: card.id,
+                    refundedAmountValue,
+                    refundedAt,
+                    recordedAt: refundedAt,
+                  })
+                ).toBe("recorded");
+              });
+              const requireCardRefund = () =>
+                recoveries.requireRefund({
+                  paymentAttemptId: card.id,
+                  workspaceReservationId: reservation.id,
+                  failureCode: "late_payment_superseded_attempt",
+                  completedAt: Temporal.Now.instant(),
+                });
+              const eventId = `evt-${uniqueId()}`;
+              const notify = (id = `evt-${uniqueId()}`) =>
                 webhook.processNotification({
-                  eventId: `evt-${uniqueId()}`,
+                  eventId: id,
                   securityToken,
                   operation: {
                     orderId: providerOrderId,
@@ -1156,7 +1266,130 @@ describe.skipIf(!testDatabase)(
                     operationCurrency: "CZK",
                   },
                 });
-              const result = yield* notify();
+              if (
+                existingCardRecovery ||
+                existingCardRefund ||
+                workerLacksOperationId
+              ) {
+                const observedAt = Temporal.Now.instant();
+                yield* recoveries.start({
+                  paymentAttemptId: card.id,
+                  workspaceReservationId: reservation.id,
+                  providerOperationId: workerLacksOperationId
+                    ? undefined
+                    : recoveryOperationId,
+                  providerStatus: workerLacksOperationId
+                    ? undefined
+                    : "EXECUTED",
+                  verifiedPaidAt: observedAt,
+                });
+                expect(
+                  yield* recoveries.claim({
+                    paymentAttemptId: card.id,
+                    staleProcessingBefore: observedAt,
+                  })
+                ).toMatchObject({ state: "processing" });
+                if (existingCardRefund) {
+                  yield* requireCardRefund();
+                  if (cardRefundCompleted) yield* refundCard();
+                }
+              }
+              if (qrWins) {
+                expect(
+                  yield* lifecycle.recordVerifiedQrPayment({
+                    orderId,
+                    id: qr.id,
+                    providerOperationId: "synthetic-winning-qr-transfer",
+                    paidAt: Temporal.Now.instant(),
+                  })
+                ).toMatchObject({ status: "winner" });
+              }
+              if (workerRecordedRefundFirst) yield* requireCardRefund();
+              if (throughFinalization) {
+                expect(
+                  yield* finalization.finalizePendingProviderPayment({
+                    orderId,
+                    paymentAttemptId: card.id,
+                  })
+                ).toBe("paid");
+              } else if (conflictingCardOperation) {
+                expect(yield* Effect.flip(notify(eventId))).toMatchObject({
+                  errorCode: "nexi_webhook_transition_failed",
+                });
+              } else {
+                expect((yield* notify(eventId)).status).toBe("accepted");
+              }
+              if (existingCardRecovery || existingCardRefund) {
+                expect(
+                  yield* reservations.findById(reservation.id)
+                ).toMatchObject({
+                  paymentState: "pending",
+                  activePaymentAttemptId: qr.id,
+                });
+                if (existingCardRecovery) {
+                  expect(
+                    yield* paymentAttempts.findById(card.id)
+                  ).toMatchObject({
+                    state: "failed",
+                  });
+                  yield* requireCardRefund();
+                }
+                expect(
+                  yield* lifecycle.recordVerifiedQrPayment({
+                    orderId,
+                    id: qr.id,
+                    providerOperationId: "synthetic-winning-qr-transfer",
+                    paidAt: Temporal.Now.instant(),
+                  })
+                ).toMatchObject({ status: "winner" });
+              } else if (qrWins) {
+                expect(yield* paymentAttempts.findById(card.id)).toMatchObject({
+                  state: "paid",
+                  refundState: "required",
+                  lastProviderOperationId: operationId,
+                });
+                if (workerLacksOperationId && !workerRecordedRefundFirst) {
+                  yield* requireCardRefund();
+                  expect(
+                    yield* paymentAttempts.findById(card.id)
+                  ).toMatchObject({
+                    state: "paid",
+                    refundState: "required",
+                    lastProviderOperationId: operationId,
+                    lastProviderStatus: "EXECUTED",
+                  });
+                }
+                yield* refundCard();
+                expect((yield* notify()).status).toBe("accepted");
+              } else if (windowOpen) {
+                expect(
+                  yield* lifecycle.recordVerifiedQrPayment({
+                    orderId,
+                    id: qr.id,
+                    providerOperationId: "synthetic-distinct-qr-transfer",
+                    paidAt: Temporal.Now.instant(),
+                  })
+                ).toEqual({ status: "refund" });
+                if (!throughFinalization) {
+                  expect((yield* notify(eventId)).status).toBe("duplicate");
+                }
+                if (cardPartiallyRefunded) {
+                  yield* refundCard(1);
+                  expect((yield* notify()).status).toBe("accepted");
+                }
+                if (missingWinnerOperationId) {
+                  expect(
+                    yield* paymentAttempts.findById(card.id)
+                  ).toMatchObject({
+                    state: "paid",
+                    lastProviderOperationId: null,
+                  });
+                  verifiedOperationId = operationId;
+                  expect((yield* notify()).status).toBe("accepted");
+                  verifiedOperationId = undefined;
+                  expect((yield* notify()).status).toBe("accepted");
+                }
+              }
               if (booking === "operation ID arrives later") {
                 expect(
                   yield* recoveries.findByPaymentAttemptId(card.id)
@@ -1170,20 +1403,107 @@ describe.skipIf(!testDatabase)(
                 expect((yield* notify()).status).toBe("accepted");
               }
               return {
-                result,
                 reservation: yield* reservations.findById(reservation.id),
                 attempt: yield* paymentAttempts.findById(card.id),
                 recovery: yield* recoveries.findByPaymentAttemptId(card.id),
               };
             }).pipe(
               Effect.provide(
-                NexiWebhookService.Default.pipe(
-                  Layer.provideMerge(dependencies)
-                )
+                Layer.merge(
+                  NexiWebhookService.Default,
+                  ProviderPaymentFinalizationService.Default
+                ).pipe(Layer.provideMerge(dependencies))
               )
             )
           );
-          expect(outcome.result.status).toBe("accepted");
+          if (existingCardRecovery || existingCardRefund) {
+            expect(outcome.reservation).toMatchObject({
+              paymentState: "paid",
+              activePaymentAttemptId: qr.id,
+            });
+            expect(outcome.attempt).toMatchObject({
+              state: "paid",
+              refundState: cardRefundCompleted ? "refunded" : "required",
+              lastProviderOperationId: recoveryOperationId,
+            });
+            expect(outcome.recovery).toMatchObject({
+              state: "refund_required",
+              providerOperationId: recoveryOperationId,
+            });
+            expect(
+              await Effect.runPromise(
+                testDatabase!.db
+                  .select({
+                    paymentAttemptId: voucherRedemptions.paymentAttemptId,
+                    state: voucherRedemptions.state,
+                  })
+                  .from(voucherRedemptions)
+                  .where(eq(voucherRedemptions.paymentAttemptId, qr.id))
+              )
+            ).toEqual([{ paymentAttemptId: qr.id, state: "redeemed" }]);
+            expect(enqueue).toHaveBeenCalledTimes(
+              existingCardRecovery && !conflictingCardOperation ? 1 : 0
+            );
+            expect(enqueuePaid).toHaveBeenCalledTimes(0);
+            expect(paymentCompleted).toHaveBeenCalledTimes(0);
+            expect(fulfill).toHaveBeenCalledTimes(0);
+            return;
+          }
+          if (qrWins) {
+            expect(outcome.reservation).toMatchObject({
+              paymentState: "paid",
+              activePaymentAttemptId: qr.id,
+            });
+            expect(outcome.attempt).toMatchObject({
+              state: "paid",
+              refundState: "refunded",
+              lastProviderOperationId: operationId,
+            });
+            if (workerLacksOperationId) {
+              expect(outcome.recovery).toMatchObject({
+                state: "refund_required",
+              });
+            } else {
+              expect(outcome.recovery).toBeNull();
+            }
+            expect(enqueue).toHaveBeenCalledTimes(0);
+            expect(enqueuePaid).toHaveBeenCalledTimes(0);
+            expect(paymentCompleted).toHaveBeenCalledTimes(0);
+            expect(fulfill).toHaveBeenCalledTimes(0);
+            return;
+          }
+          if (windowOpen) {
+            expect(outcome.reservation).toMatchObject({
+              paymentState: "paid",
+              activePaymentAttemptId: card.id,
+            });
+            expect(outcome.attempt).toMatchObject({
+              state: "paid",
+              refundState: cardPartiallyRefunded ? "refunded" : "not_required",
+              lastWebhookEventId: throughFinalization
+                ? null
+                : expect.any(String),
+              lastProviderOperationId: operationId,
+              lastProviderStatus: "EXECUTED",
+            });
+            expect(outcome.recovery).toBeNull();
+            expect(enqueue).toHaveBeenCalledTimes(0);
+            expect(paymentCompleted).toHaveBeenCalledTimes(1);
+            if (throughFinalization) {
+              expect(fulfill).toHaveBeenCalledTimes(0);
+              expect(enqueuePaid).toHaveBeenCalledTimes(1);
+              expect(enqueuePaid).toHaveBeenCalledWith({ orderId });
+            } else {
+              expect(enqueuePaid).toHaveBeenCalledTimes(0);
+              expect(fulfill).toHaveBeenCalledTimes(
+                1 +
+                  (cardPartiallyRefunded ? 1 : 0) +
+                  (missingWinnerOperationId ? 2 : 0)
+              );
+              expect(fulfill).toHaveBeenCalledWith(orderId);
+            }
+            return;
+          }
           expect(fulfill).toHaveBeenCalledTimes(0);
           if (booking !== "superseded") {
             expect(outcome.reservation?.activePaymentAttemptId).toBe(card.id);
@@ -1213,6 +1533,13 @@ describe.skipIf(!testDatabase)(
             "delete from webhook_events where payment_attempt_id = $1",
             [card.id]
           );
+          if (voucher) {
+            await testDatabase!.pool.query(
+              "delete from voucher_redemptions where voucher_id = $1",
+              [voucher.candidate.provenance.providerReference]
+            );
+            await voucher.cleanup();
+          }
         }
       }
     );

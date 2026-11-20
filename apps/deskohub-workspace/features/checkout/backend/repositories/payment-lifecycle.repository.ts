@@ -8,6 +8,7 @@ import {
   discountApplications,
   discountCodeRedemptions,
   latePaymentRecoveries,
+  type PaymentAttemptRow,
   paymentAttempts,
   referralInvitationClaims,
   reservationPaymentWindows,
@@ -63,6 +64,8 @@ import {
   insertPaymentAttempt,
   markPaymentAttemptPaid,
   markPaymentAttemptTerminal,
+  type SharedCardSettlement,
+  verifiedSettlementEvidence,
 } from "./payment-attempt-writes";
 import {
   findPaymentReservationCustomer,
@@ -362,16 +365,18 @@ const bindAcceptedClaimsToWinner = Effect.fnUntraced(function* (
     .where(eq(referralInvitationClaims.paymentAttemptId, original));
 });
 
+const cardRefundTransition = (attempt: PaymentAttemptRow) => ({
+  attempt: toPaymentAttempt(attempt),
+  changed: false,
+  timestamp: attempt.updatedAt,
+  settlement: "refund_required" as const,
+});
+
 const requireCardSettlementRefund = Effect.fnUntraced(function* (
-  input: Parameters<IPaymentLifecycleRepository["markPaid"]>[0]
+  input: Parameters<IPaymentLifecycleRepository["markPaid"]>[0],
+  attempt: PaymentAttemptRow | undefined
 ) {
   const { db } = yield* WorkspaceTransaction;
-  const [attempt] = yield* db
-    .select()
-    .from(paymentAttempts)
-    .where(eq(paymentAttempts.id, input.id))
-    .limit(1)
-    .for("update");
   if (attempt?.provider !== "nexi") {
     return yield* lifecycleStateError(
       "markPaid",
@@ -379,36 +384,33 @@ const requireCardSettlementRefund = Effect.fnUntraced(function* (
       "Only the card provider can settle a duplicate on this path."
     );
   }
-  if (attempt.state === "paid") {
-    return {
-      attempt: toPaymentAttempt(attempt),
-      changed: false,
-      timestamp: attempt.updatedAt,
-      settlement: "refund_required" as const,
-    };
+  const alreadyPaid = attempt.state === "paid";
+  const evidence = verifiedSettlementEvidence(input, attempt);
+  if (
+    alreadyPaid &&
+    evidence.lastWebhookEventId === attempt.lastWebhookEventId &&
+    evidence.lastProviderOperationId === attempt.lastProviderOperationId &&
+    evidence.lastProviderStatus === attempt.lastProviderStatus
+  ) {
+    return cardRefundTransition(attempt);
   }
 
   const [refundable] = yield* db
     .update(paymentAttempts)
     .set({
-      state: "paid",
-      refundState: "required",
-      failureCode: null,
-      lastWebhookEventId: input.webhookEventId,
-      lastProviderOperationId: input.providerOperationId,
-      lastProviderStatus: input.providerStatus,
-      updatedAt: input.paidAt,
+      ...evidence,
+      ...(!alreadyPaid && {
+        state: "paid",
+        refundState: "required",
+        failureCode: null,
+        updatedAt: input.paidAt,
+      }),
     })
     .where(eq(paymentAttempts.id, input.id))
     .returning();
   if (!refundable)
     return yield* Effect.die("Card settlement update returned no row.");
-  return {
-    attempt: toPaymentAttempt(refundable),
-    changed: false,
-    timestamp: input.paidAt,
-    settlement: "refund_required" as const,
-  };
+  return cardRefundTransition(refundable);
 });
 
 const nextQrReference = Effect.gen(function* () {
@@ -1085,13 +1087,70 @@ export class PaymentLifecycleRepository extends Context.Service<
                   claimOf: orderBeforeLock?.activeAttemptId ?? input.id,
                 },
               });
+              let sharedCard: SharedCardSettlement | undefined;
               if (window) {
+                const isSharedCard = window.cardAttemptId === input.id;
                 const [reservation] = yield* db
                   .select()
                   .from(workspaceReservations)
                   .where(eq(workspaceReservations.id, workspaceReservationId))
                   .limit(1)
                   .for("update");
+                const [card] = isSharedCard
+                  ? yield* db
+                      .select()
+                      .from(paymentAttempts)
+                      .where(
+                        and(
+                          eq(paymentAttempts.orderId, input.orderId),
+                          eq(paymentAttempts.id, input.id)
+                        )
+                      )
+                      .limit(1)
+                      .for("update")
+                  : [];
+                const cardAlreadyWon =
+                  reservation?.paymentState === "paid" &&
+                  reservation.activePaymentAttemptId === input.id;
+                // A recorded recovery owns this card's outcome. Reject conflicting
+                // evidence before either settlement path can replace it.
+                const [cardRecovery] =
+                  card && !cardAlreadyWon
+                    ? yield* db
+                        .select({
+                          providerOperationId:
+                            latePaymentRecoveries.providerOperationId,
+                        })
+                        .from(latePaymentRecoveries)
+                        .where(
+                          eq(latePaymentRecoveries.paymentAttemptId, card.id)
+                        )
+                        .limit(1)
+                    : [];
+                if (
+                  cardRecovery?.providerOperationId &&
+                  input.providerOperationId &&
+                  cardRecovery.providerOperationId !== input.providerOperationId
+                ) {
+                  return yield* lifecycleStateError(
+                    "markPaid",
+                    { type: "paymentAttemptId", id: input.id },
+                    "Verified card operation conflicts with the recorded recovery."
+                  );
+                }
+                const refundInput = cardRecovery?.providerOperationId
+                  ? {
+                      ...input,
+                      providerOperationId: cardRecovery.providerOperationId,
+                    }
+                  : input;
+                if (
+                  card &&
+                  !cardAlreadyWon &&
+                  card.refundState !== "not_required"
+                ) {
+                  return yield* requireCardSettlementRefund(refundInput, card);
+                }
                 if (
                   reservation?.paymentState === "paid" &&
                   window.qrAttemptId === input.id &&
@@ -1114,7 +1173,7 @@ export class PaymentLifecycleRepository extends Context.Service<
                   reservation?.paymentState === "paid" &&
                   reservation.activePaymentAttemptId !== input.id
                 ) {
-                  return yield* requireCardSettlementRefund(input);
+                  return yield* requireCardSettlementRefund(refundInput, card);
                 }
 
                 if (reservation?.paymentState !== "paid") {
@@ -1127,9 +1186,10 @@ export class PaymentLifecycleRepository extends Context.Service<
                       reservation.activePaymentAttemptId
                     ) ||
                     Temporal.Instant.compare(window.expiresAt, input.paidAt) <=
-                      0
+                      0 ||
+                    cardRecovery
                   ) {
-                    if (window.cardAttemptId === input.id) {
+                    if (isSharedCard) {
                       const attempt = yield* admitLatePublicSettlement(
                         input,
                         reservation,
@@ -1142,7 +1202,10 @@ export class PaymentLifecycleRepository extends Context.Service<
                           timestamp: input.paidAt,
                           settlement: "recovery_pending" as const,
                         };
-                      return yield* requireCardSettlementRefund(input);
+                      return yield* requireCardSettlementRefund(
+                        refundInput,
+                        card
+                      );
                     }
                     return yield* lifecycleStateError(
                       "markPaid",
@@ -1163,6 +1226,11 @@ export class PaymentLifecycleRepository extends Context.Service<
                       );
                   }
                 }
+                if (card)
+                  sharedCard = {
+                    attempt: card,
+                    windowEligible: !cardAlreadyWon,
+                  };
               }
 
               yield* ReferralInvitationLedger.ensureFirstPaid({
@@ -1171,13 +1239,13 @@ export class PaymentLifecycleRepository extends Context.Service<
                 paymentAttemptId: input.id,
               });
 
-              const attempt = yield* markPaymentAttemptPaid(input);
+              const attempt = yield* markPaymentAttemptPaid(input, sharedCard);
 
               if (!attempt) {
                 return yield* lifecycleStateError(
                   "markPaid",
                   { type: "paymentAttemptId", id: input.id },
-                  "Only a created, pending, or already-paid attempt can mark a reservation paid."
+                  "The payment attempt cannot settle this reservation."
                 );
               }
 

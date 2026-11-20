@@ -93,6 +93,7 @@ const createdAt = Temporal.Instant.from("2026-06-01T10:00:00Z");
 const pendingAttempt = {
   orderId: "reservation-id" as never,
   orderKind: "reservation" as const,
+  isSharedWindowCard: false,
   id: "attempt-id",
   workspaceReservationId: "reservation-id",
   provider: "nexi",
@@ -1266,7 +1267,6 @@ describe("NexiWebhookService.processNotification trace", () => {
         "Warn Nexi payment settled after the local payment attempt became terminal (eventId=event-id, paymentAttemptId=attempt-id, paymentAttemptState=expired, providerOrderId=provider-order-id, orderId=reservation-id) {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call latePaymentRecoveries.start(paymentAttemptId=attempt-id, workspaceReservationId=reservation-id, webhookEventId=event-id, providerOperationId=operation-id, providerStatus=EXECUTED, verifiedPaidAt=<Instant>)",
         "call latePaymentRecoveryQueue.enqueue(paymentAttemptId=attempt-id)",
-        "Info Nexi webhook verification did not require payment transition {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "call webhookEvents.markProcessed(type=eventId, provider=nexi, eventId=event-id, processedAt=<Instant>)",
         "Info Nexi webhook event marked processed {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState} in nexiWebhook.processNotification",
         "Info Nexi webhook processing accepted {activePaymentAttemptId,amount,correlationId,currency,dotyposReservationId,eventId,fulfillmentState,operationId,operationResult,operationType,orderId,paymentAttemptId,paymentAttemptState,paymentState,provider,providerOperationId,providerOrderId,providerOrderStatus,providerStatus,reservationId,reservationState,tokenCheckStatus,verificationMismatches,verificationStatus,webhookEventId,webhookEventInsertStatus,webhookEventState,webhookResultStatus} in nexiWebhook.processNotification",

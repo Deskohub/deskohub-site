@@ -11,7 +11,6 @@ import {
   type PaymentAttemptWithOrderKind,
   paymentAttemptLogFields,
 } from "../repositories/payment-attempt.repository";
-import { publicPaymentWindowExpiredFailureCode } from "../repositories/payment-lifecycle-state";
 import {
   type IWebhookEventRepository,
   type WebhookEventIdentity,
@@ -112,6 +111,7 @@ interface NotificationIdentity {
 /** A notification resolved to its authenticated attempt and owning order. */
 interface PaymentNotification extends NotificationIdentity {
   readonly attempt: VerifiableProviderPaymentAttempt;
+  readonly isSharedWindowCard: boolean;
   readonly order: PaymentOrder;
   readonly handler: OrderPaymentHandler;
 }
@@ -758,7 +758,6 @@ export const makePaymentWebhookProcessor = <
       yield* Effect.logInfo(`${label} webhook payment attempt marked terminal`);
     });
 
-    /** Shared expiry still allows a verified card to win recovery for the order. */
     const applyVerifiedOutcome = Effect.fnUntraced(function* (
       payment: VerifiedPaymentNotification
     ) {
@@ -766,10 +765,7 @@ export const makePaymentWebhookProcessor = <
         const attemptEnded = isTerminalPaymentAttemptState(
           payment.attempt.state
         );
-        const expiredSharedCard =
-          payment.attempt.provider === "nexi" &&
-          payment.attempt.failureCode === publicPaymentWindowExpiredFailureCode;
-        if (attemptEnded && !expiredSharedCard) {
+        if (attemptEnded && !payment.isSharedWindowCard) {
           yield* startLatePaymentRecovery(payment);
         } else {
           yield* markPaidAndFulfill(payment);
@@ -814,6 +810,7 @@ export const makePaymentWebhookProcessor = <
           const settlement = yield* resolveSettlement(attempt, notification);
           const payment: PaymentNotification = {
             ...notification,
+            isSharedWindowCard: attempt.isSharedWindowCard,
             attempt: yield* authenticateAttempt(
               envelope,
               attempt,

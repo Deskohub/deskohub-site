@@ -10,6 +10,7 @@ import {
   type PaymentRefundState,
   type PaymentState,
   paymentAttempts,
+  reservationPaymentWindows,
   workspaceReservations,
 } from "@/db/schema";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
@@ -41,6 +42,7 @@ export type PaymentAttempt = ReturnType<typeof toPaymentAttempt>;
 
 export type PaymentAttemptWithOrderKind = PaymentAttempt & {
   readonly orderKind: OrderKind;
+  readonly isSharedWindowCard: boolean;
 };
 
 /**
@@ -146,9 +148,20 @@ export class PaymentAttemptRepository extends Context.Service<
         "PaymentAttemptRepository.findByProviderOrderId"
       )(function* (provider: PaymentProvider, providerOrderId: string) {
         const [row] = yield* db
-          .select({ attempt: paymentAttempts, orderKind: orders.kind })
+          .select({
+            attempt: paymentAttempts,
+            orderKind: orders.kind,
+            sharedCardAttemptId: reservationPaymentWindows.cardAttemptId,
+          })
           .from(paymentAttempts)
           .innerJoin(orders, eq(orders.id, paymentAttempts.orderId))
+          .leftJoin(
+            reservationPaymentWindows,
+            and(
+              eq(reservationPaymentWindows.orderId, paymentAttempts.orderId),
+              eq(reservationPaymentWindows.cardAttemptId, paymentAttempts.id)
+            )
+          )
           .where(
             and(
               eq(paymentAttempts.provider, provider),
@@ -157,7 +170,11 @@ export class PaymentAttemptRepository extends Context.Service<
           )
           .limit(1);
         return row
-          ? { ...toPaymentAttempt(row.attempt), orderKind: row.orderKind }
+          ? {
+              ...toPaymentAttempt(row.attempt),
+              orderKind: row.orderKind,
+              isSharedWindowCard: row.sharedCardAttemptId !== null,
+            }
           : null;
       });
 

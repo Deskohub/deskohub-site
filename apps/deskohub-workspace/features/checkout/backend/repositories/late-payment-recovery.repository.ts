@@ -654,8 +654,13 @@ const markLatePaymentAttemptPaid = Effect.fnUntraced(function* (
       ...(recovery.webhookEventId && {
         lastWebhookEventId: recovery.webhookEventId,
       }),
-      lastProviderOperationId: recovery.providerOperationId,
-      lastProviderStatus: recovery.providerStatus,
+      // A verified replay can fill in missing facts before this worker settles.
+      lastProviderOperationId:
+        recovery.providerOperationId ??
+        sql`case when ${paymentAttempts.state} = 'paid' then ${paymentAttempts.lastProviderOperationId} end`,
+      lastProviderStatus:
+        recovery.providerStatus ??
+        sql`case when ${paymentAttempts.state} = 'paid' then ${paymentAttempts.lastProviderStatus} end`,
       failureCode: null,
       updatedAt: recovery.verifiedPaidAt,
     })
