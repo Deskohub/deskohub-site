@@ -29,7 +29,7 @@ export const unlimitedPassProductSchema = Schema.Struct({
   kind: Schema.Literal("unlimited"),
   tier: passTierSchema,
 });
-type UnlimitedPassProduct = typeof unlimitedPassProductSchema.Type;
+export type UnlimitedPassProduct = typeof unlimitedPassProductSchema.Type;
 
 export const entryPackProductKeySchema = Schema.TemplateLiteral([
   "entry-pack:",
@@ -62,9 +62,14 @@ const unlimitedPassPrices = {
   "reserved-desk": 5990,
   "reserved-desk-workstation": 8490,
 } as const;
+export const unlimitedPassDays = 30;
+export const unlimitedPassCoffeePrice = currencyCZK(690 * 100);
 
 export const getEntryPackPrice = ({ tier, size }: EntryPackProduct) =>
   currencyCZK(entryPackPrices[tier][size] * 100);
+
+export const getUnlimitedPassPrice = ({ tier }: UnlimitedPassProduct) =>
+  currencyCZK(unlimitedPassPrices[tier] * 100);
 
 export const entryPackOffers = passTiers.flatMap((tier) =>
   entryPackSizes.map((size) => ({
@@ -74,11 +79,14 @@ export const entryPackOffers = passTiers.flatMap((tier) =>
   }))
 );
 
-export const unlimitedPassOffers = passTiers.map((tier) => ({
-  product: unlimitedPassProductSchema.make({ kind: "unlimited", tier }),
-  price: currencyCZK(unlimitedPassPrices[tier] * 100),
-  validityDays: 30,
-}));
+export const unlimitedPassOffers = passTiers.map((tier) => {
+  const product = unlimitedPassProductSchema.make({ kind: "unlimited", tier });
+  return {
+    product,
+    price: getUnlimitedPassPrice(product),
+    validityDays: unlimitedPassDays,
+  };
+});
 
 const entryPackLocalDate = (instant: Temporal.Instant) =>
   temporalInstantToPlainDate({

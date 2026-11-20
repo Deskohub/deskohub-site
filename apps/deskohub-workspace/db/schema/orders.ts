@@ -17,8 +17,9 @@ import { postgresUuidV7 } from "../uuid-v7";
 import { quotedSqlList } from "./sql-list";
 
 /**
- * Orders. Each workspace reservation is mirrored into a `reservation` order
- * with the same ID and correlation ID; the reservation stays authoritative.
+ * Orders. A workspace reservation checked out on its own is mirrored into a
+ * `reservation` order with the same ID and correlation ID. A pass day belongs
+ * to its pass purchase order and has no mirror.
  *
  * The database owns the mirror: triggers on `workspace_reservations` (see the
  * `payment_order_mirror` migration) upsert the order after every reservation

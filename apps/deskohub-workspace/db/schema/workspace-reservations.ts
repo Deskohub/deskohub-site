@@ -1,6 +1,7 @@
 import type {
   DotyposCustomerId,
   DotyposReservationId,
+  DotyposTableId,
 } from "@deskohub/dotypos";
 import type { EmailDeliveryId } from "@deskohub/email";
 import type { NexiCorrelationId } from "@deskohub/nexi";
@@ -8,6 +9,7 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  date,
   index,
   jsonb,
   pgTable,
@@ -25,19 +27,25 @@ import {
   paymentReturnTargets,
 } from "@/features/checkout/payment-return-target";
 import type { Locale } from "@/features/i18n";
-import { orderFulfillmentStates, orderPaymentStates } from "@/features/order";
+import {
+  type OrderId,
+  orderFulfillmentStates,
+  orderPaymentStates,
+} from "@/features/order";
 import type { AgentSelectionKey } from "@/features/reservation/backend/booking-agent";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import {
   type ReservationPurpose,
   reservationPurposeSchema,
 } from "@/features/reservation/reservation-purpose";
+import type { PlainDate } from "@/shared/utils/temporal";
 import inlangSettings from "../../project.inlang/settings.json" with {
   type: "json",
 };
 import { instant } from "../instant";
 import { postgresUuidV7 } from "../uuid-v7";
 import { customerAccounts } from "./customer-accounts";
+import { passPurchases } from "./pass-purchases";
 import { quotedSqlList } from "./sql-list";
 
 export const reservationStates = [
@@ -102,6 +110,12 @@ export const workspaceReservations = pgTable(
       .primaryKey()
       .default(postgresUuidV7)
       .$type<WorkspaceReservationId>(),
+    passId: text("pass_id")
+      .$type<OrderId>()
+      .references(() => passPurchases.id),
+    serviceDate: date("service_date", { mode: "string" }).$type<PlainDate>(),
+    passDayTableId: text("pass_day_table_id").$type<DotyposTableId>(),
+    passDayHoldRequestedAt: instant("pass_day_hold_requested_at"),
     checkoutSessionKey: text("checkout_session_key")
       .notNull()
       .default(postgresUuidV7)
@@ -194,6 +208,16 @@ export const workspaceReservations = pgTable(
     updatedAt: instant("updated_at").notNull().default(sql`now()`),
   },
   (t) => [
+    check(
+      "workspace_reservations_pass_day_check",
+      sql`(${t.passId} is null and ${t.serviceDate} is null and ${t.passDayTableId} is null
+          and ${t.passDayHoldRequestedAt} is null)
+        or (${t.passId} is not null and ${t.serviceDate} is not null and ${t.passDayTableId} is not null
+          and ${t.activePaymentAttemptId} is null and ${t.activeCustomerEmailDeliveryId} is null)`
+    ),
+    uniqueIndex("workspace_reservations_pass_date_idx")
+      .on(t.passId, t.serviceDate)
+      .where(sql`${t.passId} is not null`),
     check(
       "workspace_reservations_reservation_state_check",
       sql`${t.reservationState} in (${quotedSqlList(reservationStates)})`
