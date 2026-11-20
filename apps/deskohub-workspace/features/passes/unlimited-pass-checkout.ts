@@ -117,3 +117,10 @@ export function availableUnlimitedPassStarts(
     ? starts[options.tier][options.monitorOption]
     : starts[options.tier];
 }
+
+export type UnlimitedPassAvailabilityData = {
+  readonly status: "ready";
+  readonly today: PlainDate;
+  readonly lastStartDate: PlainDate;
+  readonly starts: UnlimitedPassStartDates;
+};

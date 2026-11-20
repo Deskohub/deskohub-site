@@ -95,10 +95,15 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
   fireEvent.click(enabledStart);
   expect(continueButton.disabled).toBe(true);
   fireEvent.click(view.getByRole("radio", { name: /32.*qhd/i }));
+  const unavailableStart = view.getByRole<HTMLButtonElement>("button", {
+    name: /November 1st, 2026/i,
+  });
   expect(
-    view.getByRole<HTMLButtonElement>("button", { name: /November 1st, 2026/i })
-      .disabled
+    unavailableStart.disabled ||
+      unavailableStart.getAttribute("aria-disabled") === "true"
   ).toBe(true);
+  fireEvent.click(unavailableStart);
+  expect(continueButton.disabled).toBe(true);
   fireEvent.click(view.getByRole("button", { name: /November 2nd, 2026/i }));
   expect(continueButton.disabled).toBe(false);
   fireEvent.click(continueButton);

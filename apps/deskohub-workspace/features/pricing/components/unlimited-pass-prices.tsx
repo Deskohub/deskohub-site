@@ -1,5 +1,8 @@
 import { type Locale, m } from "@/features/i18n";
-import { unlimitedPassOffers } from "@/features/passes/pass-offer";
+import {
+  unlimitedPassCoffeePrice,
+  unlimitedPassOffers,
+} from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import { getUnlimitedPassPurchasePath } from "@/features/passes/unlimited-pass-discovery";
 import { GuardedLink as Link } from "@/shared/components/guarded-link";
@@ -62,7 +65,9 @@ export function UnlimitedPassPrices({ locale }: { readonly locale: Locale }) {
                   {tier === "open-space" && (
                     <p className="mt-3 text-base leading-7 text-white/86">
                       {m.unlimitedPassDiscoveryCoffee(
-                        { price: formatMoney(currencyCZK(69_000), locale) },
+                        {
+                          price: formatMoney(unlimitedPassCoffeePrice, locale),
+                        },
                         { locale }
                       )}
                     </p>

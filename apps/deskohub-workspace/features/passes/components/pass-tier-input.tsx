@@ -9,6 +9,7 @@ import {
   ReservationTypeInput,
   ReservationTypeOption,
 } from "@/features/reservation/components/reservation-type-input";
+import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { type PassTier, passTiers } from "../pass-offer";
 import { getPassTierName } from "../pass-offer.i18n";
 
@@ -52,7 +53,9 @@ export function PassTierInput({
         {passTiers.map((option) => {
           const description = {
             "open-space": m.reservationOpenSpaceBulletDesk(
-              { until: "17:00" },
+              {
+                until: workspaceSiteConstants.openingHours.openSpaceUsableUntil,
+              },
               { locale }
             ),
             "reserved-desk": m.reservationReservedDeskBulletDesk(

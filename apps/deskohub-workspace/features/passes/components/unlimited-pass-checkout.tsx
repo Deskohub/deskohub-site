@@ -24,8 +24,8 @@ import {
   getUnlimitedPassChoosePath,
   getUnlimitedPassDetailsPath,
   getUnlimitedPassPayPath,
+  type UnlimitedPassAvailabilityData,
   type UnlimitedPassOptions,
-  type UnlimitedPassStartDates,
 } from "../unlimited-pass-checkout";
 import {
   PassPurchasePay,
@@ -54,13 +54,6 @@ const checkoutStages = {
   details: "contact",
   pay: "pay",
 } as const;
-
-export type UnlimitedPassAvailabilityData = {
-  readonly status: "ready";
-  readonly today: PlainDate;
-  readonly lastStartDate: PlainDate;
-  readonly starts: UnlimitedPassStartDates;
-};
 
 type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
   readonly locale: Locale;
@@ -93,7 +86,7 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
   }) => Promise<{
     data?:
       | (Omit<PassPurchasePayState, "billing"> & { status: "ready" })
-      | { status: "signed_out" }
+      | { status: "signed_out" | "terms_changed" }
       | { status: "purchase_error"; reason: string };
     serverError?: string;
   }>;

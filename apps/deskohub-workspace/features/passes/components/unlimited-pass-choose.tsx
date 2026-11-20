@@ -1,5 +1,6 @@
 import { Coffee } from "lucide-react";
 import { useId, useSyncExternalStore } from "react";
+import { cs, de, enUS, hi, sk, uk, vi } from "react-day-picker/locale";
 import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
 import {
   getWorkspaceProductMessage,
@@ -13,7 +14,7 @@ import {
   toCalendarDate,
 } from "@/shared/components/date-time/canonical-value";
 import { Button } from "@/shared/components/ui/button";
-import { Calendar, getCalendarLocale } from "@/shared/components/ui/calendar";
+import { Calendar } from "@/shared/components/ui/calendar";
 import { Switch } from "@/shared/components/ui/switch";
 import { formatMoney } from "@/shared/money/money";
 import { cn } from "@/shared/utils";
@@ -38,6 +39,16 @@ export type UnlimitedPassAvailability =
   | { readonly status: "loading" }
   | { readonly status: "unavailable"; readonly message?: string }
   | { readonly status: "ready"; readonly starts: UnlimitedPassStartDates };
+
+const calendarLocales = {
+  "cs-CZ": cs,
+  "de-DE": de,
+  "en-US": enUS,
+  "hi-IN": hi,
+  "sk-SK": sk,
+  "uk-UA": uk,
+  "vi-VN": vi,
+} satisfies Record<Locale, typeof enUS>;
 
 const wideCalendarQuery = "(min-width: 64rem)";
 const subscribeCalendarWidth = (onChange: () => void) => {
@@ -143,7 +154,7 @@ export function UnlimitedPassChoose({
               aria-labelledby={calendarId}
               className="relative w-full rounded-3xl border border-navy-blue/10 bg-white p-3 sm:p-4"
               classNames={{
-                root: "w-fit max-w-full text-navy-blue",
+                root: "max-w-full text-navy-blue",
                 months: "flex justify-center gap-3",
                 month: "min-w-0 flex-1 space-y-4",
                 month_grid:
@@ -156,7 +167,7 @@ export function UnlimitedPassChoose({
                 day_button:
                   "inline-flex h-9 w-full max-w-10 items-center justify-center rounded-lg text-navy-blue focus-visible:outline-2 focus-visible:outline-burned-orange disabled:opacity-45",
               }}
-              locale={getCalendarLocale(locale)}
+              locale={calendarLocales[locale]}
               mode="single"
               numberOfMonths={twoMonths ? 2 : 1}
               showOutsideDays={false}
