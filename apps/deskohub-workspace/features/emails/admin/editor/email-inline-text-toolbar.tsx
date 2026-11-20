@@ -8,13 +8,6 @@ import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { Button } from "@/shared/components/ui/button";
 import {
-  Command,
-  CommandEmpty,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/shared/components/ui/command";
-import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -23,10 +16,9 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/components/ui/dropdown-menu";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/shared/components/ui/popover";
+  SearchablePicker,
+  SearchablePickerItem,
+} from "@/shared/components/ui/searchable-picker";
 import { Toggle } from "@/shared/components/ui/toggle";
 import {
   Tooltip,
@@ -258,9 +250,6 @@ function EmailInlineValuePicker({
   readonly editor: Editor | null;
   readonly locale: Locale;
 }) {
-  const [open, setOpen] = useState(false);
-  // Whether the list closes on a choice, which hands focus back to the text.
-  const chose = useRef(false);
   const options = emailScalarValueOptions(definitions);
   const label = m.emailsEditorInlineValueInsert({}, { locale });
   const searchLabel = m.emailsEditorInlineValueSearch({}, { locale });
@@ -278,9 +267,9 @@ function EmailInlineValuePicker({
       : undefined;
   };
 
-  const insert = (option: EmailScalarValueOption) => {
-    if (!editor) return;
-    chose.current = true;
+  const insert = (value: string) => {
+    const option = options.find((option) => optionValue(option) === value);
+    if (!editor || !option) return;
     editor
       .chain()
       .insertContent({
@@ -291,67 +280,55 @@ function EmailInlineValuePicker({
         },
       })
       .run();
-    setOpen(false);
   };
 
   return (
-    <Popover onOpenChange={setOpen} open={open}>
-      <ToolbarHint label={label}>
-        <PopoverTrigger asChild>
-          <Button
-            aria-label={label}
-            disabled={!editor}
-            size="icon-sm"
-            tone="muted"
-            type="button"
-            variant="ghost"
+    <SearchablePicker
+      align="end"
+      className="w-72"
+      empty={
+        options.length > 0
+          ? m.emailsEditorInlineValueNoMatch({}, { locale })
+          : m.emailsEditorInlineValueNone({}, { locale })
+      }
+      focusOnSelect={() => editor?.commands.focus()}
+      onPick={insert}
+      search={searchLabel}
+      trigger={
+        <Button
+          aria-label={label}
+          disabled={!editor}
+          size="icon-sm"
+          tone="muted"
+          type="button"
+          variant="ghost"
+        >
+          <Braces aria-hidden className="size-4" />
+        </Button>
+      }
+      wrapTrigger={(trigger) => (
+        <ToolbarHint label={label}>{trigger}</ToolbarHint>
+      )}
+    >
+      {options.map((option) => {
+        const reference = emailValueReferenceLabel(option);
+        const hint = description(option);
+        return (
+          <SearchablePickerItem
+            key={optionValue(option)}
+            keywords={hint ? [hint] : undefined}
+            label={reference}
+            value={optionValue(option)}
           >
-            <Braces aria-hidden className="size-4" />
-          </Button>
-        </PopoverTrigger>
-      </ToolbarHint>
-      <PopoverContent
-        align="end"
-        className="w-72 p-0"
-        onCloseAutoFocus={(event) => {
-          if (!chose.current) return;
-          chose.current = false;
-          event.preventDefault();
-          editor?.commands.focus();
-        }}
-      >
-        <Command label={searchLabel}>
-          <CommandInput placeholder={searchLabel} />
-          <CommandList>
-            {options.map((option) => {
-              const reference = emailValueReferenceLabel(option);
-              const hint = description(option);
-              return (
-                <CommandItem
-                  key={optionValue(option)}
-                  keywords={hint ? [reference, hint] : [reference]}
-                  onSelect={() => insert(option)}
-                  value={optionValue(option)}
-                >
-                  <span className="min-w-0 truncate font-mono">
-                    {reference}
-                  </span>
-                  {hint && (
-                    <span className="ml-auto shrink-0 text-navy-blue/60 text-xs">
-                      {hint}
-                    </span>
-                  )}
-                </CommandItem>
-              );
-            })}
-          </CommandList>
-          <CommandEmpty>
-            {options.length > 0
-              ? m.emailsEditorInlineValueNoMatch({}, { locale })
-              : m.emailsEditorInlineValueNone({}, { locale })}
-          </CommandEmpty>
-        </Command>
-      </PopoverContent>
-    </Popover>
+            <span className="min-w-0 truncate font-mono">{reference}</span>
+            {hint && (
+              <span className="ml-auto shrink-0 text-navy-blue/60 text-xs">
+                {hint}
+              </span>
+            )}
+          </SearchablePickerItem>
+        );
+      })}
+    </SearchablePicker>
   );
 }
