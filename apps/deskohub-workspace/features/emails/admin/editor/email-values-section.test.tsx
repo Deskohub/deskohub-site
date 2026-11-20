@@ -84,7 +84,7 @@ const openCustomerPicker = async (view: View) => {
 };
 const search = async (input: HTMLElement, text: string) => {
   await act(async () => {
-    fireEvent.change(input, { target: { value: text } });
+    fireEvent.input(input, { target: { value: text } });
   });
 };
 /** Clicks the picker option for exactly the customer field `path`. */

@@ -45,18 +45,24 @@ export function SearchablePicker({
   const [query, setQuery] = useState("");
   const closeReason = useRef<ComboboxOpenChangeReason | undefined>(undefined);
   const button = (
-    <ComboboxTrigger ref={setAnchor} render={trigger} role={triggerRole} />
+    <ComboboxTrigger
+      aria-haspopup="listbox"
+      ref={setAnchor}
+      render={trigger}
+      role={triggerRole}
+    />
   );
 
   return (
     <Combobox
+      announcement={() => null}
       autoHighlight="always"
       filter={({ label, keywords }, searchText) =>
         [label, ...(keywords ?? [])].some((text) =>
           includesSearchText(text, searchText)
         )
       }
-      loop
+      loop={false}
       onOpenChange={(open, { reason }) => {
         if (open) setQuery("");
         else closeReason.current = reason;

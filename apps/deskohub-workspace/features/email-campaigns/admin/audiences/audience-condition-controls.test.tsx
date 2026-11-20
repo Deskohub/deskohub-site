@@ -193,7 +193,7 @@ describe("campaign picker", () => {
       "Jarní výprodejDraft",
       "Welcome seriesAutomated",
     ]);
-    fireEvent.change(view.getByRole("combobox", { name: "Search campaigns" }), {
+    fireEvent.input(view.getByRole("combobox", { name: "Search campaigns" }), {
       target: { value: "VYPRODEJ" },
     });
     expect(options()).toEqual(["Jarní výprodejDraft"]);
@@ -215,7 +215,7 @@ describe("campaign picker", () => {
       );
       const status = view.getByRole("status");
       expect(status.textContent).toBe("");
-      fireEvent.change(view.getByRole("combobox", { name: searchName }), {
+      fireEvent.input(view.getByRole("combobox", { name: searchName }), {
         target: { value: "autumn" },
       });
       expect(view.queryAllByRole("option")).toEqual([]);
@@ -239,6 +239,35 @@ describe("campaign picker", () => {
         campaign: { _tag: "Specific", campaignId: springSaleId },
       },
     });
+    expect(view.queryByRole("listbox")).toBeNull();
+  });
+
+  test("starts on the selected campaign and stops at the first option with ArrowUp", async () => {
+    const onChange = mock((_condition: AudienceCondition) => undefined);
+    const view = renderCampaignEmailCount(
+      {
+        ...newCondition("campaignEmailCount"),
+        params: {
+          purpose: "any",
+          period: { _tag: "Past" },
+          campaign: { _tag: "Specific", campaignId: springSaleId },
+        },
+      },
+      onChange
+    );
+    const picker = view.getByRole("combobox", { name: "Campaign" });
+    expect(picker.getAttribute("aria-haspopup")).toBe("listbox");
+    await openCampaignPicker(picker);
+
+    const search = view.getByRole("combobox", { name: "Search campaigns" });
+    const selected = view.getByRole("option", { name: /Spring sale 2026/ });
+    const first = view.getByRole("option", { name: "any campaign" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(selected.id);
+    fireEvent.keyDown(search, { key: "ArrowUp" });
+    fireEvent.keyDown(search, { key: "ArrowUp" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(first.id);
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledTimes(1);
     expect(view.queryByRole("listbox")).toBeNull();
   });
 

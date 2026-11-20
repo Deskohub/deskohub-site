@@ -133,6 +133,18 @@ describe("sign-in code step", () => {
     }
   );
 
+  test("replaces the selected digits when pasting into a partial code", async () => {
+    const { props, input } = renderStep();
+
+    await typeCode(input(), "4003");
+    input().focus();
+    input().setSelectionRange(1, 3);
+    await pasteCode(input(), "Your code is 8291");
+
+    expect(props.verifyCode).toHaveBeenCalledTimes(1);
+    expect(props.verifyCode).toHaveBeenCalledWith("482913");
+  });
+
   test("rejects typed non-digits", async () => {
     const { props, input } = renderStep();
 

@@ -117,7 +117,9 @@ describe("DateInput deferred calendar load", () => {
     "stays closed when an outside %s press starts before the calendar loads",
     async (pointerType) => {
       const { finishCalendarLoad, onBlur, trigger, view } =
-        await renderPickerWithPendingCalendar(`pending-open-${pointerType}-outside`);
+        await renderPickerWithPendingCalendar(
+          `pending-open-${pointerType}-outside`
+        );
 
       act(() => {
         fireEvent.pointerDown(view.getByText("Outside text"), { pointerType });
