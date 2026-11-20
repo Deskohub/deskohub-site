@@ -102,8 +102,8 @@ export const loadAccountUnlimitedPasses = Effect.fn(
     return [];
   }
 
-    const { accountId, verifiedSignInAt } = standing.session;
-    yield* recoverEntryPackGiftClaims(accountId, verifiedSignInAt);
+  const { accountId, verifiedSignInAt } = standing.session;
+  yield* recoverEntryPackGiftClaims(accountId, verifiedSignInAt);
   const timeZone = workspaceSiteConstants.location.timeZone;
   const [passes, currentDate] = yield* Effect.all(
     [readHolderPasses(accountId), currentPlainDate(timeZone)],
