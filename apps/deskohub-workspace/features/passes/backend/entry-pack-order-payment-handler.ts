@@ -24,13 +24,18 @@ import {
   markPaymentAttemptPaid,
   markPaymentAttemptTerminal,
 } from "@/features/checkout/backend/repositories/payment-attempt-writes";
+import type { PaymentLifecycleRepositoryError } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import {
   persistDiscountApplications,
   reserveCommittedClaims,
   validateDiscountCommitment,
   validateInternalPaymentCommitment,
 } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
-import { lifecycleStateError } from "@/features/checkout/backend/repositories/payment-lifecycle-state";
+import {
+  lifecycleStateError,
+  PaymentLifecycleStateError,
+} from "@/features/checkout/backend/repositories/payment-lifecycle-state";
+import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import {
   type DiscountCommitment,
   getDiscountCommitmentPayload,
@@ -45,9 +50,27 @@ import { sendEntryPackPurchaseEmail } from "./entry-pack-purchase-email";
 import { settleEntryPack } from "./entry-pack-settlement";
 
 export type EntryPackPaymentAdmissionDetails = {
+  readonly approvedAfterAttemptId: PaymentAttemptId | null;
+  readonly recordConsent: Effect.Effect<void, PaymentLifecycleRepositoryError>;
   readonly commitment: DiscountCommitment;
   readonly snapshot: EntryPackAccountingSnapshot;
 };
+
+const approvalOperation =
+  "PaymentLifecycleRepository.admitEntryPackPaymentApproval";
+
+export const isStaleEntryPackPaymentApproval = (
+  error: Error
+): error is PaymentLifecycleStateError =>
+  error instanceof PaymentLifecycleStateError &&
+  error.operation === approvalOperation;
+
+const staleApproval = (orderId: OrderId) =>
+  new PaymentLifecycleStateError({
+    operation: approvalOperation,
+    paymentReference: { type: "orderId", id: orderId },
+    message: "The approved Entry pack payment attempt changed.",
+  });
 
 type Handler = AdmittingOrderPaymentHandler<EntryPackPaymentAdmissionDetails>;
 type ProviderAdmission = Pick<
@@ -198,26 +221,13 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       );
     }
     if (
-      providerAdmission === undefined &&
-      order.paymentState === "paid" &&
-      order.activePaymentAttemptId
-    ) {
-      const [existing] = yield* readAttempt(
-        order.id,
-        order.activePaymentAttemptId
-      );
-      if (existing?.provider === "internal")
-        return transition(existing, false, order.paidAt ?? existing.updatedAt);
-    }
-    if (
-      order.paymentState !== "not_started" &&
-      !isEndedUnpaidPaymentState(order.paymentState)
-    ) {
-      return yield* paymentError(
-        order.id,
-        "The Entry pack already has a payment."
-      );
-    }
+      order.activePaymentAttemptId !== input.details.approvedAfterAttemptId ||
+      (order.activePaymentAttemptId
+        ? !isEndedUnpaidPaymentState(order.paymentState)
+        : order.paymentState !== "not_started")
+    )
+      return yield* staleApproval(order.id);
+
     if (order.activePaymentAttemptId) {
       const [prior] = yield* readAttempt(
         order.id,
@@ -227,12 +237,8 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         !prior ||
         !isEndedUnpaidPaymentState(prior.state) ||
         prior.refundState !== "not_required"
-      ) {
-        return yield* paymentError(
-          order.id,
-          "The previous payment has not ended unpaid."
-        );
-      }
+      )
+        return yield* staleApproval(order.id);
     }
     const now = yield* currentInstant;
     if (isEntryPackQuoteExpired(now, pack.validUntil)) {
@@ -251,6 +257,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       )
     );
 
+    yield* input.details.recordConsent;
     const attempt = yield* insertPaymentAttempt({
       orderId: order.id,
       workspaceReservationId: null,

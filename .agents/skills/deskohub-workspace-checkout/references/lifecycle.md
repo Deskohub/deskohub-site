@@ -208,6 +208,11 @@ activity. Admission checks that the checkout is still unpaid, has no
 unresolved recovery, and still has the marked attempt as its newest attempt.
 Every attempt uses its stored provider for later operations.
 
+Entry pack Pay carries the exact ended attempt shown by retry Pay. The initial
+submission carries no prior attempt. Admission checks the submitted identity
+under the order lock and writes legal evidence in the same transaction as the
+new attempt. Stale approvals return the buyer to private status.
+
 The mock payment page requires a session capability. Its database table holds
 the capability digest and the first approved or declined outcome, independently
 of the checkout attempt. The form redirects through the standard checkout

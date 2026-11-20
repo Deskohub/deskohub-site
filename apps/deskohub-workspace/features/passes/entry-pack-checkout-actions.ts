@@ -10,7 +10,6 @@ import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accou
 import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
 import { checkoutSubmitDeadline } from "@/features/checkout/backend/checkout/checkout-submit-deadline";
-import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentProvidersLive } from "@/features/checkout/backend/payment/payment-providers";
@@ -19,10 +18,14 @@ import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { normalizeSubmittedPromotionCode } from "@/features/discounts/promotion-code";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
+import { orderIdSchema } from "@/features/order";
 import { ReferralService } from "@/features/referrals";
 import { ReferralReleaseGateRequest } from "@/features/referrals/referral-release-gate.server";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
+import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
+import type { ResolveIssuedActionLocale } from "@/shared/utils/action-middleware/locale";
+import { readOwnedEntryPackOrderLocale } from "./backend/entry-pack-order";
 import {
   beginEntryPackPurchase,
   displayEntryPackCheckoutPrice,
@@ -64,12 +67,33 @@ const payLayer = Layer.mergeAll(
     )
   ),
   OrderPaymentHandlers.Live,
-  PaymentPageProviderStatus.Live,
   LatePaymentVerificationService.Live,
   LegalEvidenceEventRepository.Live,
   CheckoutAnalytics.Live,
   PaymentProvidersLive
 );
+
+const readActionOrder = Schema.decodeUnknownOption(
+  Schema.Struct({ orderId: orderIdSchema })
+);
+
+const resolveIssuedOrderLocale: ResolveIssuedActionLocale = async (
+  clientInput
+) => {
+  const order = readActionOrder(clientInput);
+  if (Option.isNone(order)) return undefined;
+
+  return readOwnedEntryPackOrderLocale(order.value.orderId).pipe(
+    Effect.provide(
+      Layer.mergeAll(WorkspaceDatabase.Default, CurrentCustomerAccount.Live)
+    ),
+    runWorkspaceEffectOrElse("passes.action-order-locale", {
+      boundary: "action",
+      failureCode: "entry_pack_order_locale_unavailable",
+      orElse: () => undefined,
+    })
+  );
+};
 
 const readReferralCode = Effect.gen(function* () {
   const remembered = yield* RememberedReferral;
@@ -147,6 +171,7 @@ const beginAction = defineWorkspaceAction(
 const repriceAction = defineWorkspaceAction(
   {
     operation: "passes.reprice-entry-pack-checkout",
+    resolveIssuedLocale: resolveIssuedOrderLocale,
     schema: Schema.toStandardSchemaV1(repriceEntryPackCheckoutSchema),
     deadline: checkoutSubmitDeadline,
     logInput: false,
@@ -181,6 +206,7 @@ const repriceAction = defineWorkspaceAction(
 const payAction = defineWorkspaceAction(
   {
     operation: "passes.pay-entry-pack",
+    resolveIssuedLocale: resolveIssuedOrderLocale,
     schema: Schema.toStandardSchemaV1(payEntryPackCheckoutSchema),
     deadline: checkoutSubmitDeadline,
     logInput: false,

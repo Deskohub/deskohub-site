@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { getAccountSignInPath } from "@/features/account/routes";
+import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import {
   CheckoutFlowLayout,
   CheckoutSteps,
@@ -37,6 +38,7 @@ type CheckoutResult = Awaited<
 >["data"];
 
 export type EntryPackPayState = Extract<CheckoutResult, { status: "ready" }> & {
+  readonly priorPaymentAttemptId?: PaymentAttemptId;
   readonly billing: ReservationBillingSelection;
   readonly holderEmail?: string;
 };

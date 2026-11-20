@@ -79,7 +79,6 @@ import {
   getEntryPackPriceFingerprint,
   payForEntryPack,
   readEntryPackPaymentRetry,
-  recordEntryPackPaymentConsent,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
 import { settleEntryPack } from "./entry-pack-settlement";
@@ -649,6 +648,36 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             )
           );
         },
+        retryApproval: async () => {
+          const status = await Effect.runPromise(
+            loadEntryPackStatus(orderId).pipe(
+              Effect.provide(ProviderPaymentFinalizationService.Default),
+              Effect.provide(services)
+            )
+          );
+          if (!("retryPath" in status && status.retryPath))
+            throw new Error("Missing retry destination");
+          const retry = await Effect.runPromise(
+            readEntryPackPaymentRetry(orderId).pipe(Effect.provide(services))
+          );
+          if (retry.kind !== "retry") throw new Error("Missing retry approval");
+          return { priorPaymentAttemptId: retry.priorPaymentAttemptId };
+        },
+        evidenceCount: async () =>
+          (
+            await db.pool.query(
+              "select 1 from legal_evidence_events where order_id = $1",
+              [orderId]
+            )
+          ).rowCount,
+        alignTwoPaySubmissions: () => {
+          const bothReady = Promise.withResolvers<void>();
+          let arrived = 0;
+          beforeAdmission = Effect.promise(async () => {
+            if (++arrived === 2) bothReady.resolve();
+            await bothReady.promise;
+          });
+        },
         notify,
         readAffirmedCode: () => affirmedCode,
         initialQuote,
@@ -674,6 +703,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           at?: Temporal.Instant,
           options?: {
             billing?: ReservationBillingSelection;
+            accepted?: boolean;
+            priorPaymentAttemptId?: ReturnType<
+              typeof paymentAttemptIdSchema.make
+            >;
             displayedPriceFingerprint?: string;
             acceptedDocuments?: typeof accept.acceptedDocuments;
             submittedCode?: typeof code;
@@ -681,7 +714,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         ) => {
           const pay = payForEntryPack({
             ...accept,
-            ...(options ?? (billing && { billing })),
+            ...(billing && { billing }),
+            ...options,
           }).pipe(Effect.provide(services));
           return Effect.runPromise(at ? pay.pipe(atInstant(at)) : pay);
         },
@@ -796,14 +830,16 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await payment.pay()).toMatchObject({ status: "hosted" });
       await payment.notify("failure");
       payment.confirmProviderOrderEnded();
+      const approval = await payment.retryApproval();
       await expect(
         payment.pay(undefined, {
+          ...approval,
           billing: { purpose: "personal", invoice: "none" },
         })
       ).rejects.toMatchObject({ reason: "billing-changed" });
 
       payment.removeDiscount();
-      await expect(payment.pay()).rejects.toMatchObject({
+      await expect(payment.pay(undefined, approval)).rejects.toMatchObject({
         reason: "payment-in-progress",
       });
       expect(payment.providerOrders).toHaveLength(1);
@@ -839,6 +875,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
       await payment.notify("failure");
       payment.confirmProviderOrderEnded();
+      const approval = await payment.retryApproval();
       await expect(payment.reprice(fingerprint)).rejects.toMatchObject({
         reason: "payment-in-progress",
       });
@@ -846,6 +883,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         await payment.pay(undefined, {
           displayedPriceFingerprint: fingerprint,
           submittedCode: canonicalPromotionCodeSchema.make("STALE-CODE"),
+          ...approval,
         })
       ).toMatchObject({ status: "hosted" });
       expect(payment.readAffirmedCode()).toBe(otherCode);
@@ -884,15 +922,21 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         oldProviderOrder,
         oldProviderOrder,
       ]);
+      if (continuation.kind !== "retry") throw new Error("Missing retry Pay");
+      const approval = {
+        priorPaymentAttemptId: continuation.priorPaymentAttemptId,
+      };
       payment.changeBuyerName("Changed Fixture Name");
       await expect(
-        payment.pay(undefined, { acceptedDocuments: [] })
+        payment.pay(undefined, { ...approval, acceptedDocuments: [] })
       ).rejects.toMatchObject({
         reason: "terms-changed",
         locale: "en-US",
       });
       expect(payment.providerOrders).toHaveLength(1);
-      expect(await payment.pay()).toMatchObject({ status: "hosted" });
+      expect(await payment.pay(undefined, approval)).toMatchObject({
+        status: "hosted",
+      });
       const attempts = await db.pool.query<{ id: string }>(
         "select id from payment_attempts where order_id = $1 order by created_at",
         [payment.orderId]
@@ -956,8 +1000,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await payment.pay()).toMatchObject({ status: "hosted" });
       await payment.notify("failure");
       payment.confirmProviderOrderEnded();
+      const approval = await payment.retryApproval();
       payment.reassignCode();
-      await expect(payment.pay()).rejects.toMatchObject({
+      await expect(payment.pay(undefined, approval)).rejects.toMatchObject({
         reason: "payment-in-progress",
       });
       expect(payment.providerOrders).toHaveLength(1);
@@ -1043,65 +1088,54 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       ]);
     });
 
-    test("refuses changed billing on a hosted attempt without changing the attempt or frozen choice", async () => {
-      const db = database!;
-      const payment = await integration(db, 2_000);
-      const first = await payment.pay();
-      expect(first).toMatchObject({ status: "hosted" });
-      const frozen = () =>
-        db.pool
-          .query<{ id: string; state: string }>(
-            "select id, state from payment_attempts where order_id = $1",
-            [payment.orderId]
-          )
-          .then(({ rows }) => rows);
-      const before = await frozen();
-      await expect(
-        payment.pay(undefined, { billing: requestedInvoice })
-      ).rejects.toMatchObject({
-        reason: "billing-changed",
-      });
-      expect(await frozen()).toEqual(before);
-      expect(
-        (await payment.readAccounting(before[0]!.id)).snapshot?.billing
-      ).toEqual({
-        purpose: "personal",
-        invoice: "none",
-      });
-      expect(await payment.pay()).toEqual(first);
-      expect(
-        await payment.pay(undefined, {
-          billing: { purpose: "personal", invoice: "none" },
-        })
-      ).toEqual(first);
-      expect(payment.providerOrders).toHaveLength(1);
-      await payment.notify("failure");
-    });
+    test("only the Pay screen for the current ended attempt can admit and record consent", async () => {
+      const payment = await integration(
+        database!,
+        2_000,
+        undefined,
+        requestedInvoice
+      );
+      const pending = {
+        status: "pending",
+        statusUrl: `/en-US/reservation/status/${payment.orderId}`,
+      };
 
-    test("reopens a hosted payment with the same normalized invoice details and refuses different details", async () => {
-      const db = database!;
-      const payment = await integration(db, 2_000, undefined, requestedInvoice);
-      const first = await payment.pay();
-      expect(first).toMatchObject({ status: "hosted" });
-      expect(await payment.pay(undefined, {})).toEqual(first);
-      expect(
-        await payment.pay(undefined, {
-          billing: {
-            ...requestedInvoice,
-            address: { ...requestedInvoice.address, line1: " Synthetic 8 " },
-          },
-        })
-      ).toEqual(first);
-      await expect(
-        payment.pay(undefined, {
-          billing: {
-            ...requestedInvoice,
-            address: { ...requestedInvoice.address, line1: "Synthetic 9" },
-          },
-        })
-      ).rejects.toMatchObject({ reason: "billing-changed" });
-      expect(payment.providerOrders).toHaveLength(1);
+      expect(await payment.pay()).toMatchObject({ status: "hosted" });
+      expect(await payment.pay()).toEqual(pending);
       await payment.notify("failure");
+      payment.confirmProviderOrderEnded();
+      expect(await payment.pay()).toEqual(pending);
+      expect(await payment.evidenceCount()).toBe(2);
+      expect(payment.providerOrders).toHaveLength(1);
+
+      const firstRetry = await payment.retryApproval();
+      payment.alignTwoPaySubmissions();
+      const raced = await Promise.all([
+        payment.pay(undefined, firstRetry),
+        payment.pay(undefined, firstRetry),
+      ]);
+      expect(raced.map(({ status }) => status).sort()).toEqual([
+        "hosted",
+        "pending",
+      ]);
+      expect(payment.providerOrders).toHaveLength(2);
+      expect(await payment.evidenceCount()).toBe(4);
+
+      await payment.notify("failure", 1);
+      payment.confirmProviderOrderEnded();
+      expect(await payment.pay(undefined, firstRetry)).toEqual(pending);
+      expect(await payment.pay()).toEqual(pending);
+      expect(await payment.evidenceCount()).toBe(4);
+      expect(payment.providerOrders).toHaveLength(2);
+
+      const secondRetry = await payment.retryApproval();
+      expect(secondRetry).not.toEqual(firstRetry);
+      expect(await payment.pay(undefined, secondRetry)).toMatchObject({
+        status: "hosted",
+      });
+      expect(await payment.evidenceCount()).toBe(6);
+      expect(payment.providerOrders).toHaveLength(3);
+      await payment.notify("failure", 2);
     });
 
     test("retries only the failed internal invoice copy after confirming the purchase", async () => {
@@ -1215,7 +1249,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const db = database!;
       const payment = await integration(db, 2_000);
       expect(await payment.pay()).toMatchObject({ status: "hosted" });
-      expect(await payment.pay()).toMatchObject({ status: "hosted" });
+      expect(await payment.pay()).toMatchObject({ status: "pending" });
       expect(payment.providerOrders).toHaveLength(1);
       const claims = () =>
         db.pool.query(
@@ -1397,7 +1431,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         expect(payment.providerOrders).toHaveLength(1);
         if (attached) {
           payment.confirmProviderOrderEnded();
-          expect(await payment.pay(later)).toMatchObject({ status: "hosted" });
+          expect(
+            await payment.pay(later, await payment.retryApproval())
+          ).toMatchObject({ status: "hosted" });
           expect(payment.providerOrders).toHaveLength(2);
           expect((await read()).rows.map(({ claim }) => claim)).toEqual([
             "released",
@@ -1413,7 +1449,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       await payment.pay();
       await payment.notify("failure");
       payment.confirmProviderOrderEnded();
-      await payment.pay();
+      const approval = await payment.retryApproval();
+      await payment.pay(undefined, approval);
       expect(payment.providerOrders).toHaveLength(2);
       await payment.notify("success");
       expect(
@@ -1453,7 +1490,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       ).toEqual([{ provider: "internal", amount_value: 0, state: "redeemed" }]);
     });
 
-    test("creates one pending order with an empty ledger and stores the accepted consent", async () => {
+    test("creates one pending order with an empty entry and evidence ledger", async () => {
       const db = database!;
       const orderId = orderIdSchema.make(crypto.randomUUID());
       const holderEmail = testEmailAddress("pass-holder");
@@ -1501,34 +1538,33 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         ).rowCount
       ).toBe(0);
 
-      const consent = (
-        accepted: boolean,
-        acceptedDocuments = getEntryPackPaymentDisclosure(
-          first.locale
-        ).documents
-      ) =>
-        recordEntryPackPaymentConsent({
-          orderId,
-          accepted,
-          acceptedDocuments,
-        }).pipe(
-          Effect.provide(
-            Layer.merge(
-              purchaseServices,
-              LegalEvidenceEventRepository.Default.pipe(
-                Layer.provideMerge(db.layer)
-              )
-            )
+      expect(
+        (
+          await db.pool.query(
+            "select 1 from legal_evidence_events where order_id = $1",
+            [orderId]
           )
-        );
+        ).rowCount
+      ).toBe(0);
+    });
 
-      await expect(Effect.runPromise(consent(false))).rejects.toMatchObject({
+    test("admission records the current terms and early-start consent", async () => {
+      const db = database!;
+      const payment = await integration(db, 2_000);
+      await expect(
+        payment.pay(undefined, { accepted: false })
+      ).rejects.toMatchObject({
         reason: "consent-required",
       });
-      await expect(Effect.runPromise(consent(true, []))).rejects.toMatchObject({
+      await expect(
+        payment.pay(undefined, { acceptedDocuments: [] })
+      ).rejects.toMatchObject({
         reason: "terms-changed",
       });
-      await Effect.runPromise(consent(true));
+      expect(await payment.evidenceCount()).toBe(0);
+      expect(payment.providerOrders).toHaveLength(0);
+      expect(await payment.pay()).toMatchObject({ status: "hosted" });
+      const orderId = payment.orderId;
       const evidence = await db.pool.query(
         "select document_key, workspace_reservation_id, acknowledgements from legal_evidence_events where order_id = $1 order by document_key",
         [orderId]

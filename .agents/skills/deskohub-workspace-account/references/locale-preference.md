@@ -106,7 +106,10 @@ Rules:
   checkout off, only that buyer can reach private status through the checkout
   URL, and the redirect uses the order's locale. Checkout responses with an
   `order` parameter use `private, no-store` and keep same-origin referrers so
-  the Server Action can verify the continuation.
+  the Server Action can verify the continuation. Entry pack Pay and repricing
+  also verify the order from the submitted input before validation. This
+  preserves the issued locale when Details opens Pay in place and the document
+  omits the referrer. Unverified input follows the regular action locale chain.
 - Any verifier failure (failed lazy import, typed failure, or defect) applies
   the preference and logs `i18n.locale-bound-continuation.verify-failed` once,
   without the token. `preferenceApplyingTo` handles this inside its Effect.

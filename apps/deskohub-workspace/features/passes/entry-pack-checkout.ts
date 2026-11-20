@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { updateCustomerProfileSchema } from "@/features/account/contracts";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import type { Locale } from "@/features/i18n";
 import { locales } from "@/features/i18n";
 import { type OrderId, orderIdSchema } from "@/features/order";
@@ -97,6 +98,7 @@ export const repriceEntryPackCheckoutSchema = Schema.Struct({
 
 export const payEntryPackCheckoutSchema = Schema.Struct({
   ...entryPackOrderFields,
+  priorPaymentAttemptId: Schema.optionalKey(paymentAttemptIdSchema),
   accepted: Schema.Boolean,
   acceptedDocuments: Schema.Array(
     Schema.Struct({

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { m } from "@/features/i18n";
 import { getPaymentSubmitLegalDocuments } from "@/features/legal/payment-submit-evidence";
 import { orderIdSchema } from "@/features/order";
@@ -265,6 +266,13 @@ test.each([true, false])(
   "Pay submits billing and legal evidence with code entry enabled: %s",
   async (discountCodeEntryEnabled) => {
     const orderId = orderIdSchema.make(crypto.randomUUID());
+    const retryApproval = discountCodeEntryEnabled
+      ? {}
+      : {
+          priorPaymentAttemptId: paymentAttemptIdSchema.make(
+            crypto.randomUUID()
+          ),
+        };
     const documents = getPaymentSubmitLegalDocuments(locale);
     const billing = { purpose: "personal", invoice: "none" } as const;
     const fingerprint = "0".repeat(64);
@@ -274,6 +282,7 @@ test.each([true, false])(
         locale={locale}
         orderId={orderId}
         state={{
+          ...retryApproval,
           status: "ready",
           product,
           price: {
@@ -307,6 +316,7 @@ test.each([true, false])(
     fireEvent.click(pay);
     await waitFor(() =>
       expect(payCheckout).toHaveBeenCalledWith({
+        ...retryApproval,
         orderId,
         locale,
         accepted: true,

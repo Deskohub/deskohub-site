@@ -266,6 +266,7 @@ async function EntryPackPageContent({
                   draft.validUntil
                 ).toString(),
                 disclosure: getEntryPackPaymentDisclosure(draft.locale),
+                priorPaymentAttemptId: draft.priorPaymentAttemptId,
                 billing: draft.billing,
                 ...(draft.holderEmail && { holderEmail: draft.holderEmail }),
               },

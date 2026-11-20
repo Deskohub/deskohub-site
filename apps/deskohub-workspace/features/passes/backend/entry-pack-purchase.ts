@@ -1,15 +1,10 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import {
-  discountApplications,
-  orders,
-  passPurchases,
-  paymentAttempts,
-} from "@/db/schema";
+import { discountApplications, orders, passPurchases } from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
   ensurePassHolderAccount,
@@ -23,15 +18,11 @@ import type { CustomerAccountId } from "@/features/account/customer-account";
 import { workspaceAccountingSupplier } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
-import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
-import {
-  decidePaymentPageReopening,
-  getPaymentPageToReopen,
-} from "@/features/checkout/backend/checkout/reusable-payment-attempt";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { startPaymentSession } from "@/features/checkout/backend/payment/payment-session";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
+import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import {
   getAppliedPromotionDiscountId,
   getDiscountCommitmentPayload,
@@ -67,6 +58,7 @@ import {
   isEntryPackQuoteExpired,
 } from "../pass-offer";
 import { findOwnedEntryPackOrder } from "./entry-pack-order";
+import { isStaleEntryPackPaymentApproval } from "./entry-pack-order-payment-handler";
 import { quoteEntryPack } from "./entry-pack-quote";
 
 export class EntryPackPurchaseError extends Data.TaggedError(
@@ -402,6 +394,7 @@ export const readEntryPackPaymentRetry = Effect.fn("readEntryPackPaymentRetry")(
         : yield* findPurchaseLoginEmail(purchase.holderAccountId);
     return {
       kind: "retry" as const,
+      priorPaymentAttemptId: paymentAttemptId,
       locale: purchase.locale,
       product: snapshot.product,
       billing: snapshot.billing,
@@ -523,58 +516,50 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
 );
 
 /** Pay records the versions and the buyer's express request before starting payment. */
-export const recordEntryPackPaymentConsent = Effect.fn(
-  "recordEntryPackPaymentConsent"
-)(function* (input: {
-  readonly orderId: OrderId;
-  readonly accepted: boolean;
-  readonly acceptedDocuments: ReadonlyArray<{
-    readonly key: string;
-    readonly hash: string;
-  }>;
-}) {
-  yield* requirePassPurchasesEnabled();
-  const current = yield* CurrentCustomerAccount;
-  const session = yield* current.requireActive;
-  const purchase = yield* readPurchase(input.orderId);
-  if (!purchase || purchase.buyerAccountId !== session.accountId) {
-    return yield* new EntryPackPurchaseError({ reason: "unavailable" });
-  }
+const prepareEntryPackPaymentConsent = Effect.fn(
+  "prepareEntryPackPaymentConsent"
+)(function* (
+  input: {
+    readonly accepted: boolean;
+    readonly acceptedDocuments: ReadonlyArray<{
+      readonly key: string;
+      readonly hash: string;
+    }>;
+  },
+  locale: Locale,
+  orderId: OrderId
+) {
   if (!input.accepted) {
     return yield* new EntryPackPurchaseError({ reason: "consent-required" });
   }
-  if (
-    !isCurrentPaymentSubmitLegalAcceptance(
-      purchase.locale,
-      input.acceptedDocuments
-    )
-  ) {
+  if (!isCurrentPaymentSubmitLegalAcceptance(locale, input.acceptedDocuments)) {
     return yield* new EntryPackPurchaseError({
       reason: "terms-changed",
-      locale: purchase.locale,
+      locale: locale,
     });
   }
 
   const evidence = yield* LegalEvidenceEventRepository;
-  const acceptedAt = yield* currentInstant;
-  const { transaction } = yield* WorkspaceDatabase;
-  yield* transaction(
-    evidence.recordMany(
+  return Effect.gen(function* () {
+    const acceptedAt = yield* currentInstant;
+    yield* evidence.recordMany(
       Object.values(
         getPaymentSubmitLegalEvidence({
           acceptedAt: acceptedAt.toString(),
-          locale: purchase.locale,
+          locale,
           earlyPerformanceConsent: true,
           entryPackEarlyStartRequested: true,
         })
-      ).map((record) => ({ orderId: purchase.id, evidence: record }))
-    )
-  );
+      ).map((record) => ({ orderId, evidence: record }))
+    );
+  }).pipe(Effect.catchTag("LegalEvidenceEventInputError", Effect.die));
 });
 
 /** Starts the payment for the authenticated buyer after reconfirming the displayed quote. */
 export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
-  input: Parameters<typeof recordEntryPackPaymentConsent>[0] & {
+  input: Parameters<typeof prepareEntryPackPaymentConsent>[0] & {
+    readonly orderId: OrderId;
+    readonly priorPaymentAttemptId?: PaymentAttemptId;
     readonly submittedCode?: CanonicalPromotionCode;
     readonly referralCode?: CanonicalPromotionCode;
     readonly billing?: ReservationBillingSelection;
@@ -593,15 +578,19 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
   // Recovery can take the order section for fulfillment. Verify before
   // holding the account section, then fence the result to the same attempt.
   const prior = yield* readOwnedPurchaseOrder(input.orderId, session.accountId);
-  let confirmedUnpaidAttempt: typeof prior.order.activePaymentAttemptId = null;
-  if (prior.order.activePaymentAttemptId && hasEndedUnpaidAttempt(prior)) {
+  const approvedAfterAttemptId = input.priorPaymentAttemptId ?? null;
+  let confirmedUnpaid = false;
+  if (
+    approvedAfterAttemptId &&
+    prior.order.activePaymentAttemptId === approvedAfterAttemptId &&
+    hasEndedUnpaidAttempt(prior)
+  ) {
     const verification = yield* LatePaymentVerificationService;
     const outcome = yield* verification.startRecoveryIfSettled({
       orderId: input.orderId,
-      expectedPaymentAttemptId: prior.order.activePaymentAttemptId,
+      expectedPaymentAttemptId: approvedAfterAttemptId,
     });
-    if (outcome === "confirmed_unpaid")
-      confirmedUnpaidAttempt = prior.order.activePaymentAttemptId;
+    confirmedUnpaid = outcome === "confirmed_unpaid";
   }
 
   const result = yield* accounts.withActiveAccount(
@@ -618,10 +607,10 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return { status: "paid" as const, statusUrl };
       }
       if (
-        isEndedUnpaidPaymentState(order.paymentState) &&
-        (!confirmedUnpaidAttempt ||
-          order.activePaymentAttemptId !== confirmedUnpaidAttempt ||
-          !hasEndedUnpaidAttempt(currentPurchase))
+        order.activePaymentAttemptId !== approvedAfterAttemptId ||
+        (approvedAfterAttemptId
+          ? !confirmedUnpaid || !hasEndedUnpaidAttempt(currentPurchase)
+          : order.paymentState !== "not_started")
       )
         return { status: "pending" as const, statusUrl };
       const accepted = yield* Schema.decodeEffect(entryPackPurchaseQuoteCodec)(
@@ -632,9 +621,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         input.displayedPriceFingerprint !== undefined &&
         input.displayedPriceFingerprint !== acceptedFingerprint;
       if (stalePrice) {
-        return order.paymentState === "pending"
-          ? { status: "pending" as const, statusUrl }
-          : { status: "pricing_changed" as const, quote: accepted };
+        return { status: "pricing_changed" as const, quote: accepted };
       }
       const snapshots = yield* AccountingDocumentSnapshots;
       const frozen = order.activePaymentAttemptId
@@ -649,41 +636,6 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       ) {
         return yield* new EntryPackPurchaseError({ reason: "billing-changed" });
       }
-      if (order.paymentState === "pending" && order.activePaymentAttemptId) {
-        const [attempt] = yield* db
-          .select()
-          .from(paymentAttempts)
-          .where(
-            and(
-              eq(paymentAttempts.id, order.activePaymentAttemptId),
-              eq(paymentAttempts.orderId, order.id)
-            )
-          );
-        if (attempt) {
-          const page = getPaymentPageToReopen(attempt, yield* currentInstant);
-          if ("providerRedirectUrl" in page) {
-            const providerStatus = yield* PaymentPageProviderStatus;
-            const observation = yield* providerStatus.observe({
-              attempt,
-              reservation: order,
-            });
-            const decision = decidePaymentPageReopening(
-              attempt,
-              yield* currentInstant,
-              observation
-            );
-            if (decision === "open") {
-              return {
-                status: "hosted" as const,
-                statusUrl,
-                redirectUrl: page.providerRedirectUrl,
-              };
-            }
-          }
-        }
-        return { status: "pending" as const, statusUrl };
-      }
-
       const now = yield* currentInstant;
       if (isEntryPackQuoteExpired(now, purchase.validUntil)) {
         return yield* new EntryPackPurchaseError({
@@ -801,7 +753,13 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         amount: quote.discountedSubtotal,
         locale: purchase.locale,
         details: {
+          approvedAfterAttemptId,
           commitment,
+          recordConsent: yield* prepareEntryPackPaymentConsent(
+            input,
+            purchase.locale,
+            order.id
+          ),
           snapshot: {
             orderId: order.id,
             dotyposCustomerId: order.dotyposCustomerId,
@@ -818,8 +776,14 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       };
       const analytics = yield* CheckoutAnalytics;
       if (admission.amount.value === 0) {
-        yield* recordEntryPackPaymentConsent(input);
-        const payment = yield* handler.admitInternal(admission);
+        const payment = yield* handler
+          .admitInternal(admission)
+          .pipe(
+            Effect.catchIf(isStaleEntryPackPaymentApproval, () =>
+              Effect.succeed(undefined)
+            )
+          );
+        if (!payment) return { status: "pending" as const, statusUrl };
         if (payment.changed)
           yield* analytics.paymentCompleted({
             attempt: payment.attempt,
@@ -828,15 +792,20 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return { status: "paid" as const, statusUrl };
       }
 
-      const { hostedPaymentPage, attachedAttempt } = yield* startPaymentSession(
-        {
-          ...admission,
-          kind: "pass-purchase",
-          correlationId: order.correlationId,
-          customer: { name: contact.name, email: session.email },
-          beforeAttempt: recordEntryPackPaymentConsent(input),
-        }
-      ).pipe(Effect.scoped);
+      const payment = yield* startPaymentSession({
+        ...admission,
+        kind: "pass-purchase",
+        correlationId: order.correlationId,
+        customer: { name: contact.name, email: session.email },
+        beforeAttempt: Effect.void,
+      }).pipe(
+        Effect.scoped,
+        Effect.catchIf(isStaleEntryPackPaymentApproval, () =>
+          Effect.succeed(undefined)
+        )
+      );
+      if (!payment) return { status: "pending" as const, statusUrl };
+      const { hostedPaymentPage, attachedAttempt } = payment;
       yield* analytics.paymentStarted({
         attempt: attachedAttempt,
         timestamp: attachedAttempt.updatedAt,

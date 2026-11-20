@@ -149,6 +149,9 @@ export function EntryPackPay({
       })),
       billing: state.billing,
       displayedPriceFingerprint: price.fingerprint,
+      ...(state.priorPaymentAttemptId && {
+        priorPaymentAttemptId: state.priorPaymentAttemptId,
+      }),
     });
   };
 
