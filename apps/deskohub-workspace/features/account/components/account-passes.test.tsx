@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { renderToReadableStream } from "react-dom/server";
 import type {
   AccountBoughtEntryPack,
@@ -7,6 +8,7 @@ import type {
 import { orderIdSchema } from "@/features/order";
 import "@/shared/testing/workspace-component-module-mocks";
 import { UnsavedChangesProvider } from "@/shared/components/unsaved-changes-guard";
+import { maskEmailAddress } from "@/shared/utils";
 import { AccountPassesPanel } from "./account-passes";
 
 test("shows the purchase date and balance, and links only the bookable pack", async () => {
@@ -57,12 +59,13 @@ test("presents the buyer's order separately from passes they can use", async () 
   const orderId = orderIdSchema.make(crypto.randomUUID());
   const unavailableOrderId = orderIdSchema.make(crypto.randomUUID());
   const statusPath = `/en-US/reservation/status/${orderId}`;
+  const maskedHolderEmail = maskEmailAddress(testEmailAddress("alice"));
   const gift: AccountBoughtEntryPack = {
     orderId,
     statusPath,
     tier: "Open Space",
     entryCount: 5,
-    maskedHolderEmail: "a•••@example.test",
+    maskedHolderEmail,
     invitation: "sent",
     claimed: false,
     canResend: true,
@@ -91,7 +94,7 @@ test("presents the buyer's order separately from passes they can use", async () 
   ).text();
 
   expect(markup).toContain("Bought for others");
-  expect(markup).toContain("For a•••@example.test");
+  expect(markup).toContain(`For ${maskedHolderEmail}`);
   expect(markup).toContain(`href="${statusPath}"`);
   expect(markup).toContain("Invitation sent");
   expect(markup).toContain("Not claimed yet");
