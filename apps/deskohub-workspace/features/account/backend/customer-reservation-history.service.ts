@@ -91,6 +91,7 @@ type ReservationRow = {
   readonly reservationPurpose: (typeof workspaceReservations.$inferSelect)["reservationPurpose"];
   readonly paidAt: (typeof workspaceReservations.$inferSelect)["paidAt"];
   readonly paidWithEntryPack: boolean;
+  readonly unlimitedPassDay: boolean;
 };
 
 const getReservationProduct = (
@@ -343,14 +344,19 @@ const relateReservations = ({
     )
   );
   return mergeReservations(sources.own, sources.bookedForOthers)
-    .map((reservation): HistoryEntry => {
+    .flatMap((reservation): HistoryEntry[] => {
       const row = rowsByReservationId.get(reservation.id);
-      return {
-        reservation,
-        row,
-        booked: decodeBookedReservation(reservation, row?.reservationDetails),
-        relation: row && getPartyRelation(account, row, sources.authors),
-      };
+      // A provider hold can exist before its ID is attached locally, or
+      // outlive attachment when it is replaced or cancelled.
+      if (row?.unlimitedPassDay || reservation.unlimitedPassDay) return [];
+      return [
+        {
+          reservation,
+          row,
+          booked: decodeBookedReservation(reservation, row?.reservationDetails),
+          relation: row && getPartyRelation(account, row, sources.authors),
+        },
+      ];
     })
     .toSorted((a, b) => startOrder(b) - startOrder(a));
 };
@@ -553,6 +559,7 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
         fulfillmentState: workspaceReservations.fulfillmentState,
         reservationPurpose: workspaceReservations.reservationPurpose,
         paidAt: workspaceReservations.paidAt,
+        unlimitedPassDay: sql<boolean>`${workspaceReservations.passId} is not null`,
         paidWithEntryPack: includeEntryPackPayment
           ? sql<boolean>`${exists(
               db
@@ -610,7 +617,9 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
     records.listForCustomer({
       customerId,
       recordedIds: rows.flatMap((row) =>
-        row.dotyposCustomerId === customerId && row.dotyposReservationId
+        !row.unlimitedPassDay &&
+        row.dotyposCustomerId === customerId &&
+        row.dotyposReservationId
           ? [row.dotyposReservationId]
           : []
       ),
@@ -642,11 +651,15 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
           onSome: (customerId) => listOwn({ customerId, rows }),
         }),
         bookedForOthers: listRecorded(
-          rows.filter((row) => isBookedForOtherCustomer(account, row))
+          rows.filter(
+            (row) =>
+              !row.unlimitedPassDay && isBookedForOtherCustomer(account, row)
+          )
         ),
         authors: describeAuthors(
           rows.filter(
             (row) =>
+              !row.unlimitedPassDay &&
               !isBookedForOtherCustomer(account, row) &&
               row.authorAccountId !== account.accountId
           )

@@ -1902,13 +1902,29 @@
   "accountPassBoughtForYouBy": "Darček od {name}",
   "accountPassBoughtForYou": "Darček pre teba",
   "accountPassesPast": "Predchádzajúce balíky",
-  "accountPassesEmpty": "Zatiaľ nemáš žiadny balík vstupov.",
+  "accountPassesEmpty": "Zatiaľ nemáš žiadny balík ani pas.",
   "accountPassesUnavailable": "Balíky vstupov sa teraz nepodarilo načítať.",
   "accountPassBoughtOn": "Zakúpené {date}",
   "accountPassBookDate": "Rezervovať deň",
   "accountPassExpired": "Platnosť vypršala",
   "accountPassDepleted": "Vyčerpané",
   "accountPassEnded": "Ukončené",
+  "accountUnlimitedPassesUnavailable": "Tvoje neobmedzené pasy sa teraz nedajú načítať.",
+  "accountUnlimitedPassPeriod": "Platnosť",
+  "accountUnlimitedPassWhere": "Kde si sadnúť",
+  "accountUnlimitedPassAnyDesk": "Ktorýkoľvek voľný stôl",
+  "accountUnlimitedPassDaysLeft": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Zostáva {count} deň vrátane dneška",
+        "countPlural=few": "Zostávajú {count} dni vrátane dneška",
+        "countPlural=many": "Zostáva {count} dňa vrátane dneška",
+        "countPlural=other": "Zostáva {count} dní vrátane dneška"
+      }
+    }
+  ],
   "entryPackDiscoveryTitle": "Balíky vstupov",
   "entryPackDiscoveryIntro": "5 alebo 10 dní coworkingu, ktoré môžeš využiť kedykoľvek počas platnosti balíka. Každý deň si rezervuj ako obvykle. Balík môžeš kúpiť aj pre niekoho iného.",
   "entryPackDiscoveryOpenSpaceDescription": "Ktorékoľvek voľné miesto v otvorenom priestore.",

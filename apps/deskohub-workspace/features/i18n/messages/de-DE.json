@@ -1866,13 +1866,27 @@
   "accountPassBoughtForYouBy": "Geschenk von {name}",
   "accountPassBoughtForYou": "Für dich gekauft",
   "accountPassesPast": "Frühere Pakete",
-  "accountPassesEmpty": "Du hast noch keine Eintrittspakete.",
+  "accountPassesEmpty": "Du hast noch keine Eintrittspakete oder Pässe.",
   "accountPassesUnavailable": "Deine Eintrittspakete konnten gerade nicht geladen werden.",
   "accountPassBoughtOn": "Gekauft am {date}",
   "accountPassBookDate": "Tag reservieren",
   "accountPassExpired": "Abgelaufen",
   "accountPassDepleted": "Aufgebraucht",
   "accountPassEnded": "Beendet",
+  "accountUnlimitedPassesUnavailable": "Deine unbegrenzten Pässe konnten gerade nicht geladen werden.",
+  "accountUnlimitedPassPeriod": "Gültigkeit",
+  "accountUnlimitedPassWhere": "Sitzplatz",
+  "accountUnlimitedPassAnyDesk": "Ein beliebiger freier Schreibtisch",
+  "accountUnlimitedPassDaysLeft": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Noch {count} Tag einschließlich heute",
+        "countPlural=other": "Noch {count} Tage einschließlich heute"
+      }
+    }
+  ],
   "entryPackDiscoveryTitle": "Eintrittspakete",
   "entryPackDiscoveryIntro": "5 oder 10 Tage Coworking, die du innerhalb der Gültigkeitsdauer flexibel nutzen kannst. Reserviere jeden Tag wie gewohnt. Du kannst ein Paket auch für jemand anderen kaufen.",
   "entryPackDiscoveryOpenSpaceDescription": "Ein beliebiger freier Platz im Open Space.",
