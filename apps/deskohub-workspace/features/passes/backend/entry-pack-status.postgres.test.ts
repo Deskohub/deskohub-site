@@ -194,14 +194,18 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await view(orderId)).toMatchObject({
         status: "paid",
         gift: true,
+        invitation: "not_sent",
+        claimed: false,
         maskedHolderEmail: maskEmailAddress(holderEmail),
       });
       const self = await seedOrder({ paymentState: "paid" });
-      expect(await view(self.orderId)).toMatchObject({
+      const selfStatus = await view(self.orderId);
+      expect(selfStatus).toMatchObject({
         status: "paid",
         gift: false,
-        maskedHolderEmail: undefined,
       });
+      expect(selfStatus).not.toHaveProperty("maskedHolderEmail");
+      expect(selfStatus).not.toHaveProperty("invitation");
     });
 
     test("reads the recorded refund after checking for a late capture", async () => {
