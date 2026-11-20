@@ -271,9 +271,11 @@ describe("describePriceLine for an overnight stay", () => {
         "product:cowork:reserved-desk"
       )?.detail;
 
-    expect(detail(overnight)).toBeString();
-    expect(detail(overnight)).not.toBe(
-      detail(reservedDeskWithWorkstation.selection)
+    expect(detail(overnight)).toBe(
+      m.booking_cowork_stay_overnight({}, { locale })
+    );
+    expect(detail(reservedDeskWithWorkstation.selection)).toBe(
+      m.booking_price_line_days({ count: 1 }, { locale })
     );
   });
 });

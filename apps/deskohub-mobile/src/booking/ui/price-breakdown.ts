@@ -76,7 +76,7 @@ export interface PriceBreakdown {
  * What a summary item names: `product:<product key>`, `addon:coffee`,
  * `addon:workstation` with its monitor setup, anything else as itself.
  */
-export const summaryItemSubject = ({
+const summaryItemSubject = ({
   key,
   monitorOption,
 }: Pick<
