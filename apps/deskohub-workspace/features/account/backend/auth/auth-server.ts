@@ -424,16 +424,21 @@ const verifiedSignInPaths = new Set([
 function recordEntryPackGiftSignIn(
   ctx: {
     readonly path: string;
-    readonly context: Pick<AuthContext, "newSession">;
+    readonly context: Pick<AuthContext, "newSession" | "session">;
   },
   services: WorkspaceAuthConfig["services"]
 ) {
   if (!verifiedSignInPaths.has(ctx.path)) return;
-  // Better Auth sets newSession after setting the cookie on a successful
-  // sign-in, including a magic-link redirect. Session handoffs reuse the
-  // original proof and are excluded by the endpoint allowlist.
+  // Better Auth sets newSession when it sets a cookie, including both new
+  // sign-ins and refreshes during an existing-session read. A refresh keeps
+  // the ID of the session the guard read. Handoffs use a separate endpoint.
   const signedIn = ctx.context.newSession;
-  if (signedIn?.user.emailVerified !== true) return;
+  if (
+    signedIn?.user.emailVerified !== true ||
+    signedIn.session.id === ctx.context.session?.session.id
+  ) {
+    return;
+  }
   const accountId = decodeAccountId(signedIn.user.id);
   if (!accountId || signedIn.session.userId !== accountId) return;
 
