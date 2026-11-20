@@ -114,7 +114,8 @@ describe("ChoiceGroup", () => {
     const { radios } = group({ onChange });
     attach(radios);
     expect(keyDown(radios[0], " ").preventDefault).toHaveBeenCalled();
-    expect(onChange).toHaveBeenCalledWith("a");
+    expect(keyDown(radios[2], " ").preventDefault).toHaveBeenCalled();
+    expect(onChange.mock.calls).toEqual([["a"], ["c"]]);
   });
 
   test("other keys are left alone", () => {

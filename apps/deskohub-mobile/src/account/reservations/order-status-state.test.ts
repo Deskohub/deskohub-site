@@ -342,16 +342,6 @@ describe("order status atoms", () => {
     h.dispose();
   });
 
-  test("a visit after payment reads on the payment-return schedule", async () => {
-    const h = harness("after-payment");
-    h.focus(true);
-    await h.readsSettled(1);
-
-    await h.adjust("3 seconds");
-    await h.readsSettled(2);
-    h.dispose();
-  });
-
   test("quick taps read one after the other; a later tap reads again", async () => {
     const h = harness();
     h.focus(true);

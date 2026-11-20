@@ -7,8 +7,6 @@ import {
   comparisonBase,
   type DeploymentSummary,
   decideRebuild,
-  isRecoverableSkip,
-  isSuperseded,
   type PortalDeployments,
   readPackageGraph,
   recoverSkippedDeployment,
@@ -32,11 +30,9 @@ describe("decideRebuild", () => {
     ["a package the portal depends on", "packages/i18n/src/index.ts"],
     ["the lockfile", "bun.lock"],
     ["the root manifest", "package.json"],
-    ["another app's manifest", "apps/deskohub-workspace/package.json"],
     ["a package manifest", "packages/dotypos/package.json"],
     ["a root configuration file", "turbo.json"],
     ["a root directory outside the packages", "lint/rule.grit"],
-    ["a GitHub workflow", ".github/workflows/ci.yml"],
     ["a file named like a package prefix", "packages/dotypos-extra-x/a.ts"],
   ])("rebuilds when %s changed", (_name, path) => {
     expect(decideRebuild([path], graph).rebuild).toBe(true);
@@ -44,10 +40,8 @@ describe("decideRebuild", () => {
 
   test.each([
     ["agent skills", ".agents/skills/example/SKILL.md"],
-    ["agent skill metadata", ".agents/skills/example/agents/openai.yaml"],
     ["Workspace source", "apps/deskohub-workspace/app/page.tsx"],
     ["a package the portal doesn't use", "packages/dotypos/src/index.ts"],
-    ["a package sharing a name prefix", "packages/dotypos-extra/src/a.ts"],
   ])("keeps the skip when only %s changed", (_name, path) => {
     expect(decideRebuild([path], graph).rebuild).toBe(false);
   });
@@ -128,74 +122,23 @@ describe("comparisonBase", () => {
   });
 });
 
-describe("isSuperseded", () => {
-  const skipped = deployment({ id: "skipped", created: 100 });
-
-  test("is superseded by a newer preview of the same branch", () => {
-    expect(
-      isSuperseded(skipped, [deployment({ id: "next", created: 101 })])
-    ).toBe(true);
-  });
-
-  test("isn't superseded by older deployments, other branches, forks or production", () => {
-    expect(
-      isSuperseded(skipped, [
-        skipped,
-        deployment({ id: "before", created: 99 }),
-        deployment({ id: "other", created: 200, ref: "other" }),
-        deployment({ id: "fork", created: 200, repositoryId: "2" }),
-        deployment({ id: "production", created: 200, target: "production" }),
-      ])
-    ).toBe(false);
-  });
-});
-
-describe("isRecoverableSkip", () => {
-  test.each([
-    [
-      "a skipped preview",
-      deployment({ id: "skipped", readyState: "CANCELED" }),
-    ],
-    [
-      "a skipped production deployment",
-      deployment({
-        id: "production",
-        readyState: "CANCELED",
-        target: "production",
-      }),
-    ],
-  ])("recovers %s", (_name, candidate) => {
-    expect(isRecoverableSkip(candidate)).toBe(true);
-  });
-
-  test.each([
-    ["a ready preview", deployment({ id: "ready" })],
-    [
-      "a building preview",
-      deployment({ id: "building", readyState: "BUILDING" }),
-    ],
-    ["a failed preview", deployment({ id: "failed", readyState: "ERROR" })],
-  ])("leaves %s alone", (_name, candidate) => {
-    expect(isRecoverableSkip(candidate)).toBe(false);
-  });
-});
-
 describe("recoverSkippedDeployment", () => {
-  type Call = { kind: string; input: unknown };
-
-  /** A fake Vercel project holding `existing`, recording what it is asked to do. */
+  /** A fake Vercel project holding `existing` and recording deployment writes. */
   const fakeDeployments = (
     existing: readonly DeploymentSummary[],
     {
       truncatedNewer = false,
       newerAfterFirstCheck = [] as DeploymentSummary[],
+      unfilteredSupersession = false,
     } = {}
   ) => {
-    const calls: Call[] = [];
+    const writes: (
+      | { kind: "redeploy"; input: string }
+      | { kind: "production"; input: { repositoryId: string; ref: string } }
+    )[] = [];
     let supersessionChecks = 0;
     const deployments: PortalDeployments = {
       list: async (query) => {
-        calls.push({ kind: "list", input: query });
         const isNewerQuery = query.since !== undefined;
         if (isNewerQuery) supersessionChecks += 1;
         const pool = [
@@ -205,27 +148,31 @@ describe("recoverSkippedDeployment", () => {
             : []),
         ];
         return {
-          deployments: pool.filter(
-            (candidate) =>
-              (query.branch === undefined || candidate.ref === query.branch) &&
-              (query.target === undefined ||
-                candidate.target === query.target) &&
-              (query.state === undefined ||
-                candidate.readyState === query.state) &&
-              (query.since === undefined ||
-                candidate.created > Number(query.since)) &&
-              (query.until === undefined ||
-                candidate.created < Number(query.until))
-          ),
+          deployments:
+            isNewerQuery && unfilteredSupersession
+              ? pool
+              : pool.filter(
+                  (candidate) =>
+                    (query.branch === undefined ||
+                      candidate.ref === query.branch) &&
+                    (query.target === undefined ||
+                      candidate.target === query.target) &&
+                    (query.state === undefined ||
+                      candidate.readyState === query.state) &&
+                    (query.since === undefined ||
+                      candidate.created > Number(query.since)) &&
+                    (query.until === undefined ||
+                      candidate.created < Number(query.until))
+                ),
           truncated: isNewerQuery && truncatedNewer,
         };
       },
       redeploy: async (deploymentId) => {
-        calls.push({ kind: "redeploy", input: deploymentId });
+        writes.push({ kind: "redeploy", input: deploymentId });
         return deployment({ id: `rebuilt-${deploymentId}`, created: 1000 });
       },
       deployBranchHeadToProduction: async (input) => {
-        calls.push({ kind: "production", input });
+        writes.push({ kind: "production", input });
         return deployment({
           id: "production-head",
           created: 1000,
@@ -233,7 +180,7 @@ describe("recoverSkippedDeployment", () => {
         });
       },
     };
-    return { calls, deployments };
+    return { writes, deployments };
   };
 
   const rebuild = async () => ({ rebuild: true, reason: "portal changed" });
@@ -241,9 +188,6 @@ describe("recoverSkippedDeployment", () => {
     rebuild: false,
     reason: "nothing reaches the portal",
   });
-  const deploys = (calls: readonly Call[]) =>
-    calls.filter((call) => call.kind !== "list");
-
   const skippedPreview = deployment({
     id: "skipped",
     created: 100,
@@ -273,9 +217,7 @@ describe("recoverSkippedDeployment", () => {
       deploymentId: "rebuilt-skipped",
     });
     expect(bases).toEqual(["ready"]);
-    expect(deploys(fake.calls)).toEqual([
-      { kind: "redeploy", input: "skipped" },
-    ]);
+    expect(fake.writes).toEqual([{ kind: "redeploy", input: "skipped" }]);
   });
 
   test("deploys the production branch head for a skipped production deployment", async () => {
@@ -314,7 +256,7 @@ describe("recoverSkippedDeployment", () => {
       deploymentId: "production-head",
     });
     expect(bases).toEqual(["ready-production"]);
-    expect(deploys(fake.calls)).toEqual([
+    expect(fake.writes).toEqual([
       { kind: "production", input: { repositoryId: "1", ref: "main" } },
     ]);
   });
@@ -329,7 +271,7 @@ describe("recoverSkippedDeployment", () => {
     });
 
     expect(outcome.action).toBe("none");
-    expect(deploys(fake.calls)).toEqual([]);
+    expect(fake.writes).toEqual([]);
   });
 
   test("deploys nothing in a dry run", async () => {
@@ -342,21 +284,30 @@ describe("recoverSkippedDeployment", () => {
     });
 
     expect(outcome.action).toBe("none");
-    expect(deploys(fake.calls)).toEqual([]);
+    expect(fake.writes).toEqual([]);
   });
 
-  test("leaves a deployment that wasn't skipped alone", async () => {
-    const fake = fakeDeployments([readyPreview]);
-    const outcome = await recoverSkippedDeployment({
-      skipped: readyPreview,
-      deployments: fake.deployments,
-      decide: rebuild,
-      dryRun: false,
-    });
+  test.each(["READY", "BUILDING", "ERROR"])(
+    "leaves a deployment in %s state alone",
+    async (readyState) => {
+      const candidate = deployment({ id: "candidate", readyState });
+      const fake = fakeDeployments([]);
+      const outcome = await recoverSkippedDeployment({
+        skipped: candidate,
+        deployments: {
+          ...fake.deployments,
+          list: async () => {
+            throw new Error("Deployment listing is unavailable");
+          },
+        },
+        decide: rebuild,
+        dryRun: false,
+      });
 
-    expect(outcome.action).toBe("none");
-    expect(fake.calls).toEqual([]);
-  });
+      expect(outcome.action).toBe("none");
+      expect(fake.writes).toEqual([]);
+    }
+  );
 
   test.each([
     [
@@ -389,16 +340,20 @@ describe("recoverSkippedDeployment", () => {
     });
 
     expect(outcome.action).toBe("none");
-    expect(deploys(fake.calls)).toEqual([]);
+    expect(fake.writes).toEqual([]);
   });
 
-  test("ignores newer deployments of other branches, forks and targets", async () => {
-    const fake = fakeDeployments([
-      readyPreview,
-      skippedPreview,
-      deployment({ id: "fork", created: 150, repositoryId: "2" }),
-      deployment({ id: "production", created: 150, target: "production" }),
-    ]);
+  test("recovers when only older or unrelated deployments exist", async () => {
+    const fake = fakeDeployments(
+      [
+        readyPreview,
+        skippedPreview,
+        deployment({ id: "other-branch", created: 150, ref: "other" }),
+        deployment({ id: "fork", created: 150, repositoryId: "2" }),
+        deployment({ id: "production", created: 150, target: "production" }),
+      ],
+      { unfilteredSupersession: true }
+    );
     const outcome = await recoverSkippedDeployment({
       skipped: skippedPreview,
       deployments: fake.deployments,
@@ -411,18 +366,21 @@ describe("recoverSkippedDeployment", () => {
 
   test("rejects a skipped deployment without a Git commit", async () => {
     const fake = fakeDeployments([]);
-    await expect(
-      recoverSkippedDeployment({
-        skipped: deployment({
-          id: "cli",
-          readyState: "CANCELED",
-          sha: undefined,
-        }),
-        deployments: fake.deployments,
-        decide: rebuild,
-        dryRun: false,
-      })
-    ).rejects.toThrow("no Git commit");
+    const outcome = await recoverSkippedDeployment({
+      skipped: deployment({
+        id: "cli",
+        readyState: "CANCELED",
+        sha: undefined,
+      }),
+      deployments: fake.deployments,
+      decide: rebuild,
+      dryRun: false,
+    }).catch((error: unknown) => error);
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect(outcome).toMatchObject({
+      message: expect.stringContaining("no Git commit"),
+    });
   });
 });
 

@@ -20,12 +20,6 @@ export type DateChoice = {
   readonly unavailable: ReadonlySet<string>;
 };
 
-/** Whether the calendar lets the customer pick `date`. */
-export const isDateSelectable = (choice: DateChoice, date: PragueDate) =>
-  date >= choice.earliest &&
-  date <= choice.latest &&
-  !choice.unavailable.has(date);
-
 /** A draft that can't name a booking yet: `missing` lists what it lacks. */
 export class SelectionIncomplete extends Data.TaggedClass(
   "SelectionIncomplete"

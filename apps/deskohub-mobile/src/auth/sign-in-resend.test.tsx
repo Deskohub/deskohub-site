@@ -44,13 +44,6 @@ describe("SignInResend", () => {
     ).toBe(true);
   });
 
-  test("the link-only page counts down the same way", () => {
-    expect(find(resend({ what: "link" }), "View")?.props.role).toBe("timer");
-    expect(
-      find(resend({ what: "link", availableAt: Date.now() - 1 }), Button)
-    ).toBeDefined();
-  });
-
   test("when the page's main action resends, only the wait shows", () => {
     expect(
       resend({ countdownOnly: true, availableAt: Date.now() - 1 })

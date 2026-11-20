@@ -24,9 +24,8 @@ mock.module("expo-router", () =>
 );
 
 const { m } = await import("../../i18n/messages");
-const { elementTree, find, findAll, flatStyle, hostTree } = await import(
-  "../../ui/testing/element-tree"
-);
+const { elementTree, find, findAll, flatStyle, hostTree, textOf } =
+  await import("../../ui/testing/element-tree");
 const { BookingBar } = await import("../ui/booking-bar");
 const { priceBreakdown } = await import("../ui/price-breakdown");
 const { describePriceLine } = await import("../ui/price-line-description");
@@ -207,14 +206,41 @@ describe("DetailsStep fields", () => {
       profile: { ...props().profile, saved },
       draft: { ...props().draft, billing: "personal-invoice" },
     });
+    const address = m.booking_details_saved_address(
+      { street: "Křižíkova 12", city: "Praha", postalCode: "186 00" },
+      { locale }
+    );
+    expect(findAll(hostTree(scrollOf(screen)), "Text").map(textOf)).toContain(
+      address
+    );
     expect(inputNames(scrollOf(screen))).not.toContain(
       m.booking_details_street({}, { locale })
     );
   });
 
-  test("the country is picked from a list, not typed", () => {
-    const names = inputNames(scrollOf(screenOf({ draft: business() })));
-    expect(names).not.toContain(m.booking_details_country({}, { locale }));
+  test("shows the company country in a picker button", () => {
+    const draft = business();
+    const scroll = scrollOf(
+      screenOf({
+        draft: {
+          ...draft,
+          company: {
+            ...draft.company,
+            address: { ...draft.company.address, country: "DE" },
+          },
+        },
+      })
+    );
+    const label = m.booking_details_country({}, { locale });
+    const picker = findAll(hostTree(scroll), "Pressable").find(
+      ({ props }) => props["aria-label"] === label
+    );
+    expect(picker?.props).toMatchObject({
+      role: "button",
+      accessibilityValue: { text: "Germany" },
+      onPress: expect.any(Function),
+    });
+    expect(inputNames(scroll)).not.toContain(label);
   });
 
   test("the news consent is offered only when booking for oneself", () => {
@@ -247,7 +273,7 @@ describe("DetailsStep errors (board 31)", () => {
     expect(bar.reason).toBe(
       m.booking_details_fix_fields({ count: 2 }, { locale })
     );
-    expect(bar.action.disabled).toBeUndefined();
+    expect(bar.action.disabled).not.toBe(true);
   });
 
   test("while the hold is made, the button is busy and the note is plain", () => {

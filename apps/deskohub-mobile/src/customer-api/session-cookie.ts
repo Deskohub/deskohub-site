@@ -4,7 +4,7 @@ import { HttpClientRequest } from "effect/http";
  * The origin Better Auth trusts for native cookie-authenticated mutations
  * (the Expo server plugin turns this header into `Origin`).
  */
-export const nativeAuthOrigin = "deskohub://";
+const nativeAuthOrigin = "deskohub://";
 
 // The typed clients run caller transforms before they prepend the base URL,
 // so a relative URL here is one the client will send to the API origin.

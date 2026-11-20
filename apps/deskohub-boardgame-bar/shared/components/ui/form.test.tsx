@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { type FieldErrors, useForm } from "react-hook-form";
-import { Form, FormField, FormItem, FormMessage } from "./form";
+import { Form, FormControl, FormField, FormItem, FormMessage } from "./form";
 
 type ContactValues = { name: string };
 
@@ -24,6 +24,9 @@ function NameMessage({
         name="name"
         render={() => (
           <FormItem>
+            <FormControl>
+              <input />
+            </FormControl>
             <FormMessage className="text-red-400">{children}</FormMessage>
           </FormItem>
         )}
@@ -33,29 +36,24 @@ function NameMessage({
 }
 
 const messageOf = (html: string) => {
-  const match = /<p id="([^"]*)" class="([^"]*)">(.*)<\/p>/.exec(html);
-  return (
-    match && { id: match[1], classes: match[2]?.split(" "), body: match[3] }
-  );
+  const match = /<p\b[^>]*\bid="([^"]*)"[^>]*>(.*)<\/p>/.exec(html);
+  return match && { id: match[1], body: match[2] };
 };
 
 describe("FormMessage", () => {
   test("shows the field's error in place of its own content", () => {
-    const message = messageOf(
-      renderToStaticMarkup(
-        <NameMessage
-          errors={{ name: { type: "required", message: "Required" } }}
-        >
-          Hint
-        </NameMessage>
-      )
+    const html = renderToStaticMarkup(
+      <NameMessage errors={{ name: { type: "required", message: "Required" } }}>
+        Hint
+      </NameMessage>
     );
+    const message = messageOf(html);
+    const describedBy = /<input[^>]*aria-describedby="([^"]*)"/.exec(html)?.[1];
 
     expect(message?.body).toBe("Required");
-    expect(message?.id).toEndWith("-form-item-message");
-    // The caller's text color replaces the default destructive one.
-    expect(message?.classes).toContain("text-red-400");
-    expect(message?.classes).not.toContain("text-destructive");
+    expect(describedBy?.split(" ")).toContain(message?.id);
+    expect(html).toContain("text-red-400");
+    expect(html).not.toContain("text-destructive");
   });
 
   test("shows its own content while the field is valid", () => {
@@ -64,13 +62,11 @@ describe("FormMessage", () => {
     );
 
     expect(message?.body).toBe("Hint");
-    expect(message?.id).toEndWith("-form-item-message");
   });
 
   test("renders nothing without an error or content", () => {
     const html = renderToStaticMarkup(<NameMessage />);
 
-    expect(html).not.toContain("<p");
-    expect(html).toBe('<div class="space-y-2"></div>');
+    expect(html).not.toMatch(/<p\b/);
   });
 });

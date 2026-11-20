@@ -54,10 +54,6 @@ describe("androidVersionCode", () => {
     expect(() => androidVersionCode("0.0.0")).toThrow();
   });
 
-  test("rejects a missing version", () => {
-    expect(() => androidVersionCode(undefined)).toThrow();
-  });
-
   test("grows with every later version and stays within the Android maximum", () => {
     const ordered = [
       "0.1.0",

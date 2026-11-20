@@ -46,7 +46,7 @@ export const holdCountdown = (
 };
 
 /** Seconds as the hold timer shows them: `m:ss`. */
-export const holdClockText = (secondsLeft: number): string =>
+const holdClockText = (secondsLeft: number): string =>
   `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")}`;
 
 /** The current time in milliseconds, read again every second while a screen reads it. */

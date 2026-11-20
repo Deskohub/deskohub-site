@@ -58,12 +58,16 @@ const makeDevice = ({
     readonly url: string;
     readonly options: CustomTabOptions | undefined;
   }> = [];
+  let providerLookups = 0;
   let customTabsLookups = 0;
   let releases = 0;
   const device = Layer.succeed(AuthSessionDevice, {
     platform,
     trustedWebActivity: {
-      findProvider,
+      findProvider: () => {
+        providerLookups += 1;
+        return findProvider();
+      },
       launch: (url, launchedProvider, colors) => {
         launches.push({ url, provider: launchedProvider, colors });
         return launch();
@@ -103,6 +107,7 @@ const makeDevice = ({
   return {
     launches,
     authSessions,
+    providerLookups: () => providerLookups,
     customTabsLookups: () => customTabsLookups,
     releases: () => releases,
     listeners: () => urlListeners.size + appStateListeners.size,
@@ -252,6 +257,7 @@ describe("auth session sign-in", () => {
     expect(device.authSessions).toEqual([
       { url: signInUrl, options: undefined },
     ]);
+    expect(device.providerLookups()).toBe(0);
     expect(device.customTabsLookups()).toBe(0);
     expect(device.launches).toEqual([]);
   });

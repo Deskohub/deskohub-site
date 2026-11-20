@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  getAllLocalizedPaths,
   getLocaleFromPathname,
   getLocalizedHref,
   pathnameHasLocale,
@@ -46,12 +45,5 @@ describe("locale pathname helpers", () => {
     expect(pathnameHasLocale("/menu")).toBe(false);
     expect(setLocaleInPathname("/menu", "cs-CZ")).toBe("/cs-CZ/menu");
     expect(removeLocaleFromPathname("/en-US/menu")).toBe("/menu");
-  });
-
-  test("lists the path in every Bar locale", () => {
-    expect(Object.fromEntries(getAllLocalizedPaths("/en-US/menu"))).toEqual({
-      "cs-CZ": "/cs-CZ/menu",
-      "en-US": "/en-US/menu",
-    });
   });
 });

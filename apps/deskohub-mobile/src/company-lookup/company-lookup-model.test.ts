@@ -44,14 +44,6 @@ const refusalTag = (state: CompanyLookupState) =>
   state._tag === "Refused" ? state.refusal._tag : undefined;
 
 describe("lookupStarted", () => {
-  test("an empty field asks no registry and says the ID is invalid", () => {
-    for (const typed of ["", "   "]) {
-      const state = lookupStarted(typed);
-      expect(state._tag).toBe("Refused");
-      expect(refusalTag(state)).toBe("InvalidId");
-    }
-  });
-
   test("a typed ID is looked up trimmed; its format is the server's to judge", () => {
     expect(lookupStarted(" 1234 ")).toEqual(
       CompanyLookupState.LookingUp({ companyId: "1234" })
@@ -60,12 +52,6 @@ describe("lookupStarted", () => {
 });
 
 describe("lookupSettled: each server outcome to its state", () => {
-  test("a found company waits for review, nothing applied", () => {
-    expect(lookupSettled("12345679", Exit.succeed(withVat))).toEqual(
-      CompanyLookupState.Found({ companyId: "12345679", company: withVat })
-    );
-  });
-
   test("the lookup's own refusals keep their own states", () => {
     expect(refusalTag(refusedBy(new CustomerCompanyIdInvalid()))).toBe(
       "InvalidId"

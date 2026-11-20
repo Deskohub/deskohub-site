@@ -113,7 +113,7 @@ export const comparisonBase = (
 };
 
 /** Whether a newer deployment of the same source makes the skipped one obsolete. */
-export const isSuperseded = (
+const isSuperseded = (
   skipped: DeploymentSummary,
   deployments: readonly DeploymentSummary[]
 ) =>
@@ -121,10 +121,6 @@ export const isSuperseded = (
     (deployment) =>
       sameSource(deployment, skipped) && deployment.created > skipped.created
   );
-
-/** Whether a deployment is one Vercel skipped (it cancels skipped ones). */
-export const isRecoverableSkip = (deployment: DeploymentSummary) =>
-  deployment.readyState === "CANCELED";
 
 export type PortalDeployments = {
   /** Deployments for a list query; `truncated` when more pages exist. */
@@ -167,7 +163,8 @@ export const recoverSkippedDeployment = async ({
   if (!ref || !sha || !repositoryId) {
     throw new Error("The skipped deployment has no Git commit");
   }
-  if (!isRecoverableSkip(skipped)) {
+  // Vercel cancels deployments it skips.
+  if (skipped.readyState !== "CANCELED") {
     return {
       action: "none",
       reason: `${skipped.id} is ${skipped.readyState}, not skipped`,

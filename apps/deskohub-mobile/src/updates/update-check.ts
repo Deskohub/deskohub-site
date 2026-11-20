@@ -12,7 +12,7 @@ import { installedByUpdater } from "./updater-install";
  * The app checks on launch and whenever it returns to the foreground, at most
  * once per interval, so switching apps back and forth doesn't poll the server.
  */
-export const updateCheckIntervalMs = 15 * 60 * 1000;
+const updateCheckIntervalMs = 15 * 60 * 1000;
 
 export const isUpdateCheckDue = (
   lastCheckStartedAt: number | undefined,

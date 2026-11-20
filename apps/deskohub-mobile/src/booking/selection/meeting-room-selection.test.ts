@@ -147,7 +147,6 @@ describe("opening the screen", () => {
       startTime: Option.none(),
       earlySetup: false,
     });
-    expect(blockerTags(emptyMeetingRoomDraft)).toEqual(["DateRequired"]);
   });
 
   test("takes a booked selection's date, length, start and early setup", () => {

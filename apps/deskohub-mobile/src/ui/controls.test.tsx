@@ -308,13 +308,14 @@ describe("TextField", () => {
   });
 
   test("the error replaces the hint and the hint describes a valid field", () => {
-    const valid = field({ hint: "h" });
+    const valid = field({ hint: "h", error: "" });
     expect(valid.hint?.children).toBe("h");
     expect(valid.input?.accessibilityHint).toBe("h");
     expect(valid.input?.["aria-describedby"]).toBe(valid.hint?.id);
     const invalid = field({ hint: "h", error: "x" });
     expect(invalid.hint).toBeUndefined();
     expect(invalid.input?.accessibilityHint).toBe("x");
+    expect(invalid.input?.["aria-describedby"]).toBe(invalid.errorRegion?.id);
   });
 
   test("the frame is a 52 dp field-outlined box with radius 14", () => {
@@ -350,6 +351,18 @@ describe("TextField", () => {
     expect(input?.editable).toBe(false);
     expect(input?.["aria-disabled"]).toBe(true);
     expect(flat(input?.style).color).toBe(color.disabledInk);
+  });
+
+  test("Enter submits an editable field and leaves a non-editable field alone", () => {
+    const onSubmitEditing = mock(() => undefined);
+    const submit = field({ onSubmitEditing }).input?.onSubmitEditing as
+      | (() => void)
+      | undefined;
+    submit?.();
+    expect(onSubmitEditing).toHaveBeenCalledTimes(1);
+    expect(
+      field({ editable: false, onSubmitEditing }).input?.onSubmitEditing
+    ).toBeUndefined();
   });
 
   test("leading and trailing icons sit inside the frame", () => {
