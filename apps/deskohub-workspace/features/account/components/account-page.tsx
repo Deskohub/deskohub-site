@@ -1,3 +1,5 @@
+import type { AccountPasses } from "@/features/account/account-passes.server";
+import { AccountPassesPanel } from "@/features/account/components/account-passes";
 import { AccountSignInRedirect } from "@/features/account/components/account-sign-in-redirect";
 import { InvoiceHistoryPanel } from "@/features/account/components/billing/invoice-history";
 import { ReservationHistory } from "@/features/account/components/reservation-history";
@@ -16,6 +18,7 @@ import type { Locale } from "@/features/i18n";
 
 export function AccountPage({
   loadInvoiceHistory,
+  loadPasses,
   locale,
   state,
 }: {
@@ -25,6 +28,7 @@ export function AccountPage({
    * section without holding up the page.
    */
   readonly loadInvoiceHistory: () => Promise<CustomerInvoiceHistory>;
+  readonly loadPasses?: () => Promise<AccountPasses>;
   readonly locale: Locale;
   readonly state: CustomerAccountPageState;
 }) {
@@ -48,6 +52,11 @@ export function AccountPage({
           )
         }
         locale={locale}
+        passes={
+          loadPasses && state.kind !== "deletion-pending" ? (
+            <AccountPassesPanel locale={locale} packs={loadPasses()} />
+          ) : undefined
+        }
         state={withRenderedReservations(state, locale)}
       />
     </>

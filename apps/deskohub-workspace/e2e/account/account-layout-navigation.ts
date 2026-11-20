@@ -30,7 +30,7 @@ const accountSections = [
 // still respond on the deployed bundle; AccountShell's browser acceptance test
 // owns the per-section geometry. The mobile switch returns to reservations so
 // later steps start from the default section.
-const desktopSentinelSection: AccountSection = "profile";
+const desktopSentinelSection = "profile";
 const mobileSentinelSection: AccountSection = "reservations";
 const accountLayoutNavigationOperation = "verify account layout navigation";
 
@@ -140,7 +140,9 @@ const setLayoutViewport = async (
  */
 export async function verifyAccountLayoutNavigation(
   page: Page,
-  captureSection: ((section: AccountSection) => Promise<void>) | undefined,
+  captureSection:
+    | ((section: (typeof accountSections)[number]) => Promise<void>)
+    | undefined,
   review: Pick<AccountReviewDestination, "screenshots">
 ): Promise<void> {
   const capture = review.screenshots ? captureSection : undefined;
@@ -155,7 +157,7 @@ export async function verifyAccountLayoutNavigation(
   let failure: unknown;
   try {
     await setLayoutViewport(page, desktopViewport);
-    const desktopSections: readonly AccountSection[] =
+    const desktopSections: readonly (typeof accountSections)[number][] =
       capture === undefined ? [desktopSentinelSection] : accountSections;
     for (const section of desktopSections) {
       if (

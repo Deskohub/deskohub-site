@@ -2,7 +2,7 @@
 
 import Interpolate from "@doist/react-interpolate";
 import Link from "next/link";
-import { type ReactNode, useEffect } from "react";
+import { type ReactElement, type ReactNode, useEffect } from "react";
 import { useAccountLayout } from "@/features/account/components/account-layout-shell";
 import { CustomerAgentConnectionsSection } from "@/features/account/components/customer-agent-connections/customer-agent-connections-section";
 import { DeleteAccountCard } from "@/features/account/components/delete-account-card";
@@ -68,6 +68,7 @@ type SignedInAccountProps = {
    * it streams in apart from the page; none for states without one.
    */
   readonly invoices?: ReactNode;
+  readonly passes?: ReactElement;
 };
 
 /**
@@ -143,6 +144,7 @@ function usePublishedAccountNavigation(
 function SignedInAccountSections({
   invoices,
   locale,
+  passes,
   state,
 }: SignedInAccountProps) {
   const { activeSection } = useAccountLayout();
@@ -171,8 +173,15 @@ function SignedInAccountSections({
             signInSecurity !== undefined,
             state.assistants !== undefined
           )}
+          passesSectionActive={
+            passes !== undefined && activeSection === "passes"
+          }
           state={state}
         />
+      )}
+
+      {passes !== undefined && (
+        <div hidden={activeSection !== "passes"}>{passes}</div>
       )}
 
       {signInSecurity && (
@@ -297,12 +306,14 @@ function AccountWithoutProfilePanels({
   accountPasskeys,
   invoices,
   locale,
+  passesSectionActive,
   sessionSectionActive,
   state,
 }: {
   readonly accountPasskeys: AccountPasskeys | undefined;
   readonly invoices: ReactNode;
   readonly locale: Locale;
+  readonly passesSectionActive: boolean;
   readonly sessionSectionActive: boolean;
   readonly state: AccountWithoutProfileState;
 }) {
@@ -310,7 +321,7 @@ function AccountWithoutProfilePanels({
   const reservations = "reservations" in state ? state.reservations : undefined;
 
   return (
-    <div hidden={sessionSectionActive}>
+    <div hidden={sessionSectionActive || passesSectionActive}>
       <div className="grid items-start gap-6">
         {reservations && (
           <div hidden={activeSection !== "reservations"}>

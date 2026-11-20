@@ -47,6 +47,13 @@ for (const locale of auditedLocales) {
     test(`${locale} ${name} has no detectable accessibility violations`, async ({
       page,
     }, testInfo) => {
+      if (section === "passes") {
+        await openSettledPage(page, getAccountPath(locale));
+        test.skip(
+          (await page.locator(`nav a[href="${path}"]`).count()) === 0,
+          "The cowork passes gate is closed"
+        );
+      }
       await openSettledPage(page, path);
       // A rejected session shows sign-in or an unavailable account instead.
       await expect(page).toHaveURL((url) => url.pathname === path);

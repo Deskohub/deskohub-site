@@ -64,6 +64,7 @@ function layoutElement(
   children: ReactNode,
   options: {
     readonly passkeysEnabled?: boolean;
+    readonly passesEnabled?: boolean;
     readonly referralsEnabled?: boolean;
     readonly signedIn?: boolean;
   } = {}
@@ -72,6 +73,7 @@ function layoutElement(
     <AccountLayoutShell
       locale="en-US"
       passkeysEnabled={options.passkeysEnabled ?? false}
+      passesEnabled={options.passesEnabled}
       referralsEnabled={options.referralsEnabled ?? true}
       signedIn={options.signedIn ?? true}
     >
@@ -84,6 +86,7 @@ function renderLayout(
   children: ReactNode,
   options: {
     readonly passkeysEnabled?: boolean;
+    readonly passesEnabled?: boolean;
     readonly referralsEnabled?: boolean;
     readonly signedIn?: boolean;
   } = {}
@@ -355,6 +358,27 @@ describe("AccountLayoutShell", () => {
 
     expect(document.title).toBe("Page metadata");
   });
+
+  test.each([false, true])(
+    "opens Passes at its path only when the release gate is %s",
+    (passesEnabled) => {
+      pathname = "/en-US/account/passes";
+      const view = renderLayout(<p>Page</p>, { passesEnabled });
+      const navigation = getDesktopNavigation(view);
+      const passes = navigation.queryByRole("link", { name: "Passes" });
+
+      if (passesEnabled) {
+        expect(passes?.getAttribute("aria-current")).toBe("page");
+      } else {
+        expect(passes).toBeNull();
+        expect(
+          navigation
+            .getByRole("link", { name: "Reservations" })
+            .getAttribute("aria-current")
+        ).toBe("page");
+      }
+    }
+  );
 
   test("never opens a withheld referral section, even at its path", () => {
     pathname = "/en-US/account/referrals";
