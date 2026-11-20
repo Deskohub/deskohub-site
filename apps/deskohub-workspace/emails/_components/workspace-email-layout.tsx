@@ -26,6 +26,7 @@ type WorkspaceEmailLayoutProps = {
   readonly footer?: ReactNode;
   readonly locale: Locale;
   readonly preview: string;
+  readonly showHeaderArtwork?: boolean | undefined;
 };
 
 export function WorkspaceEmailLayout({
@@ -33,6 +34,7 @@ export function WorkspaceEmailLayout({
   footer,
   locale,
   preview,
+  showHeaderArtwork = true,
 }: WorkspaceEmailLayoutProps) {
   return (
     <Html lang={locale}>
@@ -65,14 +67,18 @@ export function WorkspaceEmailLayout({
         >
           <Container className="mx-auto w-full max-w-[600px]">
             <Section
-              bgcolor="#00024f"
+              bgcolor={showHeaderArtwork ? "#00024f" : undefined}
               className="rounded-t-[24px] bg-navy px-5 py-6 sm:px-8 sm:py-7"
-              style={{
-                backgroundImage: `url('${headerDieMarkUrl}')`,
-                backgroundPosition: "right center",
-                backgroundRepeat: "no-repeat",
-                backgroundSize: "43% auto",
-              }}
+              style={
+                showHeaderArtwork
+                  ? {
+                      backgroundImage: `url('${headerDieMarkUrl}')`,
+                      backgroundPosition: "right center",
+                      backgroundRepeat: "no-repeat",
+                      backgroundSize: "43% auto",
+                    }
+                  : undefined
+              }
             >
               <Text className="m-0 text-[12px] font-bold leading-[16px] tracking-[2.6px] text-aquamarine uppercase">
                 Deskohub

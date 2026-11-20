@@ -50,7 +50,7 @@ import {
  * only for a deliberate change to delivery.
  */
 const pinnedOneOffPayloadHashes = {
-  replayed: "723b5b086293f9dbd89f5d9a56295f358f85a793ae40c6e861e3ea6aa312d53e",
+  replayed: "8c05cadec89241e0bc4ab73c76ad57c79e82ea0e37ef1e8e5cb1d16d1e75fb32",
   inFlight: "a04e8d48a336c15ca59d0260d86e56402b07bd9fc1e1ca4598fa943bf20abeb9",
 } as const;
 
