@@ -1,3 +1,5 @@
+import "@/shared/polyfills/temporal";
+
 import type { FioStaffSettlement } from "@/features/checkout/backend/repositories/fio-payment-settlement.repository";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { orderIdSchema } from "@/features/order/order";
