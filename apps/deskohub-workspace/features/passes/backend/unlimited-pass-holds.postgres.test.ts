@@ -5,16 +5,32 @@ import {
   DotyposCustomerIdSchema,
   DotyposService,
   DotyposTableIdSchema,
+  DotyposTableSchema,
   DotyposUncertain,
 } from "@deskohub/dotypos";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
+import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { eq } from "drizzle-orm";
-import { Effect, Result } from "effect";
+import { Effect, Layer, Result, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { customerAccounts, orders } from "@/db/schema";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import {
+  customerAccounts,
+  orders,
+  passPurchases,
+  paymentAttempts,
+} from "@/db/schema";
+import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { orderIdSchema } from "@/features/order";
+import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import {
+  deliveryReportEmailId,
+  deliveryReportEventId,
+} from "@/shared/backend/email/delivery-reports";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
@@ -24,6 +40,7 @@ import {
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
 import { settlePassPurchase } from "./entry-pack-settlement";
+import { unlimitedConfirmationDeliveryReports } from "./unlimited-confirmation-delivery";
 import {
   confirmUnlimitedPassDays,
   createUnlimitedPassHolds,
@@ -32,6 +49,7 @@ import {
   releaseUnlimitedPassDays,
 } from "./unlimited-pass-holds";
 import { recordUnlimitedPassOrder } from "./unlimited-pass-orders";
+import { prepareUnlimitedPassRecovery } from "./unlimited-pass-recovery";
 
 let database: WorkspacePostgresSuiteDatabase | null;
 beforeAll(async () => {
@@ -90,6 +108,152 @@ it("serializes overlapping entitlement purchases for the same holder", async () 
   expect(
     results.filter(Result.isFailure).map((result) => result.failure)
   ).toEqual([expect.objectContaining({ reason: "overlapping-pass" })]);
+});
+
+it("records the earliest verified buyer delivery for the winning attempt only", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(
+        getCurrentWorkspaceDate().add({ days: 100 })
+      );
+      const { db } = yield* WorkspaceDatabase;
+      const attemptId = paymentAttemptIdSchema.make(crypto.randomUUID());
+      const paidAt = Temporal.Instant.from("2026-11-20T10:00:00Z");
+      yield* db.insert(paymentAttempts).values({
+        id: attemptId,
+        orderId: purchase.id,
+        provider: "internal",
+        state: "paid",
+        amountValue: 0,
+        amountExponent: 2,
+        currency: "CZK",
+      });
+      yield* db
+        .update(orders)
+        .set({
+          paymentState: "paid",
+          paidAt,
+          activePaymentAttemptId: attemptId,
+        })
+        .where(eq(orders.id, purchase.id));
+
+      const report = (
+        minutes: number,
+        paymentId: string,
+        deployment = "preview"
+      ) =>
+        unlimitedConfirmationDeliveryReports.receive({
+          eventId: deliveryReportEventId(`fixture-delivery-${minutes}`),
+          event: "email.delivered",
+          emailId: deliveryReportEmailId(
+            EmailDeliveryIdSchema.make("fixture-email")
+          ),
+          occurredAt: paidAt.add({ minutes }),
+          tags: new Map([
+            ["orderId", purchase.id],
+            ["paymentAttemptId", paymentId],
+            ["deploymentEnvironment", deployment],
+          ]),
+          deploymentEnvironment: "preview",
+        });
+      expect((yield* report(1, "obsolete-attempt")).status).toBe("ignored");
+      expect((yield* report(2, attemptId, "production")).status).toBe(
+        "ignored"
+      );
+      expect((yield* report(8, attemptId)).status).toBe("processed");
+      expect((yield* report(4, attemptId)).status).toBe("processed");
+      expect((yield* report(10, attemptId)).status).toBe("processed");
+      const [recorded] = yield* db
+        .select({ deliveredAt: passPurchases.buyerConfirmationDeliveredAt })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, purchase.id));
+      expect(recorded?.deliveredAt?.equals(paidAt.add({ minutes: 4 }))).toBe(
+        true
+      );
+    }).pipe(Effect.provide(database!.layer))
+  );
+});
+
+it("reacquires all provider holds on the original rows after terminal payment", async () => {
+  const testDatabase = (await createWorkspacePostgresSuiteDatabase(
+    "unlimited_recovery"
+  ))!;
+  const table = Schema.decodeUnknownSync(DotyposTableSchema)({
+    id: tableId,
+    _cloudId: "1",
+    display: true,
+    enabled: true,
+    name: "Synthetic reserved desk",
+    seats: "1",
+    tags: ["cowork:reserved-desk"],
+  });
+  const provider = makeInMemoryDotypos({ tables: [table] });
+  const services = Layer.mergeAll(
+    testDatabase.layer,
+    provider.layer,
+    WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase.databasePool),
+    WorkspaceReservationRepository.Default.pipe(
+      Layer.provide(testDatabase.layer)
+    ),
+    Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
+      listLimitations: () => Effect.succeed([]),
+    })
+  );
+
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const purchase = yield* record(
+          getCurrentWorkspaceDate().add({ days: 140 })
+        );
+        yield* createUnlimitedPassHolds(purchase);
+        const initial = yield* readUnlimitedPassDays(purchase.id);
+        const { db } = yield* WorkspaceDatabase;
+        const attemptId = paymentAttemptIdSchema.make(crypto.randomUUID());
+        yield* db.insert(paymentAttempts).values({
+          id: attemptId,
+          orderId: purchase.id,
+          provider: "mock",
+          providerOrderId: "fixture-unlimited-payment",
+          state: "expired",
+          failureCode: "fixture_expired",
+          amountValue: 599_000,
+          amountExponent: 2,
+          currency: "CZK",
+        });
+        yield* db
+          .update(orders)
+          .set({ paymentState: "expired", activePaymentAttemptId: attemptId })
+          .where(eq(orders.id, purchase.id));
+        yield* settlePassPurchase(purchase.id);
+
+        const restored = yield* prepareUnlimitedPassRecovery(
+          purchase.id,
+          attemptId
+        ).pipe(WorkspaceLockSections.unlimitedPassRecovery(purchase.id));
+        expect(restored).toBe(true);
+        const replaced = yield* readUnlimitedPassDays(purchase.id);
+        expect(replaced.map(({ id }) => id)).toEqual(
+          initial.map(({ id }) => id)
+        );
+        expect(
+          replaced.every(
+            (row, index) =>
+              row.dotyposReservationId !== initial[index]?.dotyposReservationId
+          )
+        ).toBe(true);
+        const providerRecords = [...provider.reservations.values()];
+        expect(
+          providerRecords.filter((record) => record.status === "NEW")
+        ).toHaveLength(unlimitedPassDays);
+        expect(
+          providerRecords.filter((record) => record.status === "CANCELLED")
+        ).toHaveLength(unlimitedPassDays);
+      }).pipe(Effect.provide(services))
+    );
+  } finally {
+    await testDatabase.close();
+  }
 });
 
 it("adopts an ambiguous POST, reconfirms all days, then retains today on release", async () => {

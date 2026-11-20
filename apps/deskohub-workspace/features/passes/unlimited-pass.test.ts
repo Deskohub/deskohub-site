@@ -6,12 +6,22 @@ import { getUnlimitedPassPrice, unlimitedPassCoffeePrice } from "./pass-offer";
 import {
   getUnlimitedPassEndDate,
   getUnlimitedPassWithdrawal,
+  unlimitedPassRequiresEarlyStart,
   unlimitedPassSelectionSchema,
 } from "./unlimited-pass";
 
 const date = plainDateStringSchema.make;
 
 describe("Unlimited pass terms", () => {
+  test("asks for early-start consent only inside the 14-day window", () => {
+    const agreedOn = Temporal.PlainDate.from("2027-03-16");
+    expect(unlimitedPassRequiresEarlyStart(date("2027-03-30"), agreedOn)).toBe(
+      true
+    );
+    expect(unlimitedPassRequiresEarlyStart(date("2027-03-31"), agreedOn)).toBe(
+      false
+    );
+  });
   test("prices the approved offers and Open Space coffee", () => {
     expect(
       getUnlimitedPassPrice({ kind: "unlimited", tier: "open-space" })

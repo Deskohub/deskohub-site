@@ -26,6 +26,7 @@ import {
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import {
+  getBookableUnlimitedStartMatrix,
   getBookableUnlimitedStarts,
   withUnlimitedPassCapacity,
 } from "./unlimited-pass-capacity";
@@ -83,13 +84,17 @@ const capacityLayer = (input: {
   readonly tables: readonly DotyposTable[];
   readonly providerBookings?: readonly DotyposReservation[];
   readonly intents?: readonly PendingPassDayCapacity[];
+  readonly onInventoryRead?: () => void;
 }) => {
   const lock = makeRecordingAdvisoryLock();
   const services = Layer.mergeAll(
     Layer.succeed(DotyposService, {
       getTables: () => Effect.succeed(input.tables),
       listActiveReservationsOverlapping: () =>
-        Effect.succeed(input.providerBookings ?? []),
+        Effect.sync(() => {
+          input.onInventoryRead?.();
+          return input.providerBookings ?? [];
+        }),
     } as DotyposService["Service"]),
     Layer.succeed(WorkspaceReservationRepository, {
       selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
@@ -102,6 +107,40 @@ const capacityLayer = (input: {
   );
   return { services, entered: lock.entered };
 };
+
+test("loads one calendar inventory and ignores only the named draft's durable claims", async () => {
+  let reads = 0;
+  const { services } = capacityLayer({
+    tables: [firstDesk, openTable],
+    intents: [
+      {
+        passId,
+        customerId,
+        tableId: firstDesk.id,
+        tier: "reserved-desk",
+        serviceDate: plainDateStringSchema.make(startDate.toString()),
+      },
+    ],
+    onInventoryRead: () => {
+      reads += 1;
+    },
+  });
+  const range = { startsOn: startDate, endsBefore: nextDate };
+  const before = await Effect.runPromise(
+    getBookableUnlimitedStartMatrix(range).pipe(Effect.provide(services))
+  );
+  expect(reads).toBe(1);
+  expect(before["reserved-desk"]).toEqual([]);
+  expect(before["open-space"]).toEqual([startDate]);
+  const after = await Effect.runPromise(
+    getBookableUnlimitedStartMatrix({
+      ...range,
+      supersedeOrderId: passId,
+    }).pipe(Effect.provide(services))
+  );
+  expect(reads).toBe(2);
+  expect(after["reserved-desk"]).toEqual([startDate]);
+});
 
 test("Open Space changes tables by date and keeps the local DST interval", async () => {
   const { services, entered } = capacityLayer({
