@@ -229,6 +229,10 @@ export const workspaceServerEnvSchema = Schema.Struct({
   ),
   NEXI_API_KEY: nonEmptyStringSchema,
   NEXI_API_ORIGIN: urlEnvSchema,
+  FIO_RECEIVING_ACCOUNTS: toEnvSchema(Schema.optional(Schema.String)),
+  FIO_QR_PAYMENTS_ENABLED: toEnvSchema(
+    Schema.optional(Schema.Literals(["true", "false"]))
+  ),
   NEXI_CHECKOUT_CURRENCY_OVERRIDE: toEnvSchema(
     Schema.optional(Schema.Literal("EUR"))
   ),

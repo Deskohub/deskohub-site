@@ -23,6 +23,7 @@ import {
   customerMarketingConsents,
   discountApplications,
   type FulfillmentState,
+  fioPaymentSettlements,
   legalEvidenceEvents,
   paymentAttempts,
   type ReservationState,
@@ -32,6 +33,7 @@ import {
 } from "@/db/schema";
 import { ReservationAuthorDirectory } from "@/features/account";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import { FioPaymentSettlementRepository } from "@/features/checkout/backend/repositories/fio-payment-settlement.repository";
 import {
   checkoutSessionKeySchema,
   paymentAttemptIdSchema,
@@ -39,6 +41,7 @@ import {
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import {
+  reservationOrderId,
   type StoredWorkspaceReservationDetails,
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
@@ -54,6 +57,7 @@ import {
   type AdministrationReservationExportInput,
   AdministrationService,
 } from "./administration.service";
+import { getAdministrationPaymentStatus } from "./formatters";
 import { PaymentAdministrationServiceMock } from "./payment-administration.service.mock";
 import { PostHogReservationHistory } from "./posthog-reservation-history";
 
@@ -93,6 +97,10 @@ describe.skipIf(!testDatabase)(
       );
       await testDatabase.pool.query(
         "delete from legal_evidence_events where workspace_reservation_id = any($1)",
+        [reservationIds]
+      );
+      await testDatabase.pool.query(
+        "delete from fio_payment_settlements where order_id = any($1)",
         [reservationIds]
       );
       await testDatabase.pool.query(
@@ -1049,10 +1057,11 @@ describe.skipIf(!testDatabase)(
       /** Inserts a paid, cancelled checkout with one attempt per refund state. */
       const insertPaidCheckout = async (
         label: string,
-        refundStates: readonly ("not_required" | "required" | "refunded")[]
+        refundStates: readonly ("not_required" | "required" | "refunded")[],
+        checkoutCustomerId = customerId
       ) => {
         const reservationId = await insertReservation({
-          customerId,
+          customerId: checkoutCustomerId,
           label: `refund-${label}`,
           reservationState: "cancelled",
           fulfillmentState: "not_started",
@@ -1081,6 +1090,147 @@ describe.skipIf(!testDatabase)(
         }
         return reservationId;
       };
+
+      test("clears recorded Fio refunds and keeps a separate Nexi refund visible", async () => {
+        const countRefunds = () =>
+          run((administration) =>
+            administration.countReservationsNeedingRefund()
+          );
+        const before = await countRefunds();
+        const fioCustomerId = makeCustomerId("fio-refund");
+        const fioOnly = await insertPaidCheckout("fio-only", [], fioCustomerId);
+        const mixed = await insertPaidCheckout(
+          "mixed-fio-nexi",
+          ["required"],
+          fioCustomerId
+        );
+        const submittedAt = Temporal.Now.instant().add({ minutes: 1 });
+
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const { db } = testDatabase;
+            for (const reservationId of [fioOnly, mixed]) {
+              const orderId = reservationOrderId(reservationId);
+              const paymentAttemptId = paymentAttemptIdSchema.make(
+                `fio-${reservationId}`
+              );
+              yield* db.insert(paymentAttempts).values({
+                id: paymentAttemptId,
+                orderId,
+                workspaceReservationId: reservationId,
+                provider: "fio",
+                providerOrderId: reservationId,
+                state: "paid",
+                // Late recovery records this flag on the attempt as well as
+                // opening the movement-specific Fio refund work.
+                refundState: "required",
+                lastProviderOperationId: reservationId,
+                refundTargetValue: reservationId === fioOnly ? 12_500 : null,
+                amountValue: 29_000,
+                amountExponent: 2,
+                currency: "CZK",
+                createdAt: submittedAt,
+              });
+              yield* db.insert(fioPaymentSettlements).values({
+                orderId,
+                paymentAttemptId,
+                accountKey: "synthetic-fio-refund-account",
+                movementId: reservationId,
+                variableSymbol: "984201",
+                amountValue: 29_000,
+                currency: "CZK",
+                bookingDate: "2026-10-05",
+                observedAt: submittedAt,
+                disposition: "refund_required",
+              });
+            }
+
+            const fioOrderId = reservationOrderId(fioOnly);
+            const duplicateMovementId = `duplicate-${fioOnly}`;
+            yield* db.insert(fioPaymentSettlements).values({
+              orderId: fioOrderId,
+              paymentAttemptId: paymentAttemptIdSchema.make(`fio-${fioOnly}`),
+              accountKey: "synthetic-fio-refund-account",
+              movementId: duplicateMovementId,
+              variableSymbol: "984201",
+              amountValue: 29_000,
+              currency: "CZK",
+              bookingDate: "2026-10-05",
+              observedAt: submittedAt,
+              disposition: "refund_required",
+            });
+
+            const settlements = yield* FioPaymentSettlementRepository;
+            const pending = yield* settlements.listForStaff({
+              kind: "refund_required",
+            });
+            expect(pending.map(({ orderId }) => orderId).sort()).toEqual(
+              [fioOrderId, fioOrderId, reservationOrderId(mixed)].sort()
+            );
+            for (const rows of [
+              pending,
+              yield* settlements.listForOrder(fioOrderId),
+            ]) {
+              expect(
+                rows.find(({ movementId }) => movementId === fioOnly)
+              ).toMatchObject({
+                amountValue: 29_000,
+                refundTargetValue: 12_500,
+              });
+              expect(
+                rows.find(
+                  ({ movementId }) => movementId === duplicateMovementId
+                )
+              ).toMatchObject({ amountValue: 29_000, refundTargetValue: null });
+            }
+            for (const row of pending) {
+              const completion = yield* settlements.markManualRefunded(
+                row.id,
+                submittedAt
+              );
+              expect(completion?.disposition).toBe("refunded");
+            }
+            expect(
+              yield* settlements.listForStaff({ kind: "refund_required" })
+            ).toEqual([]);
+          }).pipe(
+            Effect.provide(FioPaymentSettlementRepository.Default),
+            Effect.provide(testDatabase.layer)
+          )
+        );
+
+        expect((await countRefunds()) - before).toBe(1);
+        const listed = await run((administration) =>
+          administration.listReservations({
+            customerId: fioCustomerId,
+            status: "needs_refund",
+          })
+        );
+        expect(listed.items.map(({ id }) => id)).toContain(mixed);
+        expect(listed.items.map(({ id }) => id)).not.toContain(fioOnly);
+
+        const [fioDetail, mixedDetail] = await Promise.all(
+          [fioOnly, mixed].map((id) =>
+            run((administration) => administration.loadReservation(id), {
+              getReservation: () => Effect.succeed(Option.none()),
+            })
+          )
+        );
+        expect(fioDetail?.reservation.statusNote).not.toBe("Needs refund");
+        expect(mixedDetail?.reservation.statusNote).toBe("Needs refund");
+        const latest = mixedDetail?.reservation.latestPayment;
+        expect(latest?.provider).toBe("fio");
+        expect(
+          latest && getAdministrationPaymentStatus(latest, "en-US").needsRefund
+        ).toBe(false);
+        expect(
+          mixedDetail?.paymentAttempts.some(
+            (attempt) =>
+              attempt.provider === "nexi" &&
+              getAdministrationPaymentStatus(attempt, "en-US").needsRefund
+          )
+        ).toBe(true);
+      });
 
       test("counts and filters every reservation with a payment needing a refund", async () => {
         const before = await run((administration) =>

@@ -6,6 +6,10 @@ import {
   AdministrationTableToolbar,
 } from "@/features/administration/components";
 import { OrdersAdministrationFilterForm } from "@/features/administration/filter-forms";
+import {
+  FioStaffQueueContent,
+  FioStaffQueueLinks,
+} from "@/features/administration/fio-staff-queue";
 import { m } from "@/features/administration/i18n";
 import {
   AdministrationCollectionLoading,
@@ -19,6 +23,7 @@ import {
 import { OrderTable } from "@/features/administration/payment-tables";
 import type { Locale } from "@/features/i18n";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
+import { getSearchParam } from "@/shared/utils/search-params";
 
 export default function OrdersAdministrationPage({
   searchParams,
@@ -34,13 +39,55 @@ async function OrdersAdministration({
   readonly searchParams: AdministrationSearchParams;
 }) {
   const locale = await getRequestLocale();
-  const { range, result } = loadAdministrationOrdersPage(searchParams);
 
   return (
     <AdministrationPage>
+      <Suspense
+        fallback={
+          <AdministrationCollectionLoading
+            label={m.administrationOrderListLoading({}, { locale })}
+            columns={6}
+          />
+        }
+      >
+        <OrderAdministrationContent
+          locale={locale}
+          searchParams={searchParams}
+        />
+      </Suspense>
+    </AdministrationPage>
+  );
+}
+
+async function OrderAdministrationContent({
+  locale,
+  searchParams,
+}: {
+  readonly locale: Locale;
+  readonly searchParams: AdministrationSearchParams;
+}) {
+  const query = await searchParams;
+  const fio = getSearchParam(query, "fio");
+  if (fio === "refund_required" || fio === "unmatched") {
+    return (
+      <div className="space-y-5">
+        <FioStaffQueueContent
+          cursor={getSearchParam(query, "fioBefore")}
+          kind={fio}
+          locale={locale}
+        />
+      </div>
+    );
+  }
+  const { range, result } = loadAdministrationOrdersPage(searchParams);
+  return (
+    <>
       <h1 className="sr-only">
         {m.administrationOrderListTitle({}, { locale })}
       </h1>
+      <div className="mb-5">
+        <FioStaffQueueLinks locale={locale} />
+      </div>
       <AdministrationTableToolbar
         count={
           <Suspense
@@ -71,7 +118,7 @@ async function OrdersAdministration({
       >
         <OrderResultsContent locale={locale} result={result} />
       </Suspense>
-    </AdministrationPage>
+    </>
   );
 }
 

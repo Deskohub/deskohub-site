@@ -35,16 +35,26 @@ import { Button } from "@/shared/components/ui/button";
 import { formatMoney } from "@/shared/money/money";
 import { cn } from "@/shared/utils";
 import { CheckoutFlowLayout } from "./checkout-flow-layout";
+import type { CheckoutQrPayment } from "./checkout-qr-payment-details";
 import {
   type CheckoutStatusCopy,
   getCheckoutStatusCopy,
 } from "./checkout-status-copy";
+import {
+  CheckoutStatusPaymentMethods,
+  type ContinueCheckoutPaymentAction,
+} from "./checkout-status-payment-methods";
 import { CheckoutStatusPaymentPageReopening } from "./checkout-status-payment-page-reopening";
 import { CheckoutStatusPaymentRetry } from "./checkout-status-payment-retry";
 import { WorkspaceTableMapView } from "./workspace-table-map-view";
 
 type CheckoutStatusPageProps = {
   readonly locale: Locale;
+  readonly paymentMethods?: {
+    readonly continuePaymentAction: ContinueCheckoutPaymentAction;
+    readonly expiresAt: string;
+    readonly qrPayment?: CheckoutQrPayment;
+  };
   readonly presentation?: "page" | "modal";
   /** Sends an office invitee their invitation again, where the page can. */
   readonly resendInvitation?: ResendOfficeInvitation;
@@ -271,6 +281,7 @@ const getReservationAccessHref = (
 
 export function CheckoutStatusPage({
   locale,
+  paymentMethods,
   presentation = "page",
   resendInvitation,
   status,
@@ -281,6 +292,12 @@ export function CheckoutStatusPage({
       ? withdrawal
       : undefined;
   const statusCopy = getCheckoutStatusCopy(status, locale);
+  const canSwitchPayment =
+    !withdrawn &&
+    presentation === "page" &&
+    (status.status === "pending" || status.status === "payment_pending_delayed")
+      ? paymentMethods
+      : undefined;
   const copy: CheckoutStatusCopy = withdrawn
     ? {
         ...statusCopy,
@@ -292,7 +309,13 @@ export function CheckoutStatusPage({
         tone: "unknown",
         Icon: Undo2,
       }
-    : statusCopy;
+    : {
+        ...statusCopy,
+        ...(canSwitchPayment && {
+          title: m.checkoutQrWaiting({}, { locale }),
+          lead: m.checkoutQrWaitingLead({}, { locale }),
+        }),
+      };
   const showReservationDetails = status.status !== "not_found";
   const withdrawalOffered =
     showReservationDetails && withdrawal?.status === "offered";
@@ -358,6 +381,16 @@ export function CheckoutStatusPage({
         showSupportButton={!!supportContactHref}
       />
 
+      {canSwitchPayment && (
+        <CheckoutStatusPaymentMethods
+          continuePaymentAction={canSwitchPayment.continuePaymentAction}
+          expiresAt={canSwitchPayment.expiresAt}
+          locale={locale}
+          orderId={status.orderId}
+          qrPayment={canSwitchPayment.qrPayment}
+        />
+      )}
+
       {!!supportContactHref && (
         <Button asChild size="lg" fullWidth className="mt-6">
           <Link
@@ -407,6 +440,7 @@ export function CheckoutStatusPage({
         )}
         reserveAgainPath={reserveAgainPath}
         reopensPaymentPageFor={
+          !canSwitchPayment &&
           checkoutStatusTraits[status.status].offersPaymentPageReopening &&
           paymentPageReopenable
             ? status.orderId

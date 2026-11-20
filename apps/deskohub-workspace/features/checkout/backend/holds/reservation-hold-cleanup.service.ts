@@ -1,5 +1,5 @@
 import type { DotyposWriteFailure } from "@deskohub/dotypos";
-import { Context, Data, Effect, Layer, Match, Predicate } from "effect";
+import { Context, Data, Effect, Layer, Match, Option, Predicate } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { toStoredInstant } from "@/db/instant";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -15,12 +15,14 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
+import { isReusableAttemptState } from "../checkout/reusable-payment-attempt";
 import {
   ProviderPaymentDeferral,
   ProviderPaymentFinalizationService,
   providerPaymentFinalizationLogFields,
 } from "../payment/provider-payment-finalization.service";
 import { PaymentLifecycleRepository } from "../repositories/payment-lifecycle.repository";
+import { QrPaymentRepository } from "../repositories/qr-payment.repository";
 import {
   HoldCancellationInProgress,
   UnpaidHoldRelease,
@@ -134,6 +136,7 @@ export class ReservationHoldCleanupService extends Context.Service<
     Layer.provide(UnpaidHoldRelease.Default),
     Layer.provide(ProviderPaymentFinalizationService.Live),
     Layer.provide(PaymentLifecycleRepository.Live),
+    Layer.provide(QrPaymentRepository.Default),
     Layer.provide(CheckoutAnalytics.Live),
     Layer.provide(WorkspaceReservationRepository.Default),
     Layer.provide(WorkspaceDatabase.Default),
@@ -150,6 +153,9 @@ function makeReservationHoldCleanupServiceLayer(
     Effect.gen(function* () {
       const reservations = yield* WorkspaceReservationRepository;
       const paymentLifecycle = yield* PaymentLifecycleRepository;
+      const qrPayments = Option.getOrUndefined(
+        yield* Effect.serviceOption(QrPaymentRepository)
+      );
       const finalization = yield* ProviderPaymentFinalizationService;
       const holdRelease = yield* UnpaidHoldRelease;
       const checkoutAnalytics = yield* CheckoutAnalytics;
@@ -250,6 +256,8 @@ function makeReservationHoldCleanupServiceLayer(
         readonly orderId: WorkspaceReservationId;
         readonly checkedAt?: Temporal.Instant;
         readonly paymentAttemptId: PaymentAttemptId;
+        readonly sharedWindowCutoff?: Temporal.Instant;
+        readonly requeueRecovery?: boolean;
       }) {
         yield* Effect.logInfo(
           "Reservation hold cancellation provider finalization started"
@@ -260,6 +268,9 @@ function makeReservationHoldCleanupServiceLayer(
             paymentAttemptId: input.paymentAttemptId,
             ...(input.checkedAt && {
               abandonmentCheckedAt: input.checkedAt,
+            }),
+            ...(input.sharedWindowCutoff && {
+              sharedWindowCutoff: input.sharedWindowCutoff,
             }),
           })
           .pipe(
@@ -276,6 +287,9 @@ function makeReservationHoldCleanupServiceLayer(
           "Reservation hold cancellation provider finalization completed"
         );
 
+        if (result === "recovery_pending") return "skipped" as const;
+        if (input.requeueRecovery && result === "not_pending") return undefined;
+
         if (result === "paid") {
           yield* Effect.logWarning(
             "Reservation hold cancellation skipped: provider finalized paid"
@@ -290,7 +304,9 @@ function makeReservationHoldCleanupServiceLayer(
           return result;
         }
         if (result === "abandoned") {
-          return yield* expireAbandonedPaymentAttempt(input);
+          if (!input.sharedWindowCutoff)
+            return yield* expireAbandonedPaymentAttempt(input);
+          return undefined;
         }
         if (result !== "terminal") {
           yield* Effect.logWarning(
@@ -354,6 +370,41 @@ function makeReservationHoldCleanupServiceLayer(
           );
         }
         if (Predicate.isString(outcome)) {
+          // The old deadline was read before admission committed. The
+          // compare-and-set leaves the new hold alone; redeliver this job
+          // against the admitted window instead of acknowledging it.
+          if (qrPayments) {
+            const latest = yield* loadOrder(input.orderId);
+            if (
+              latest?.reservationState === "held" &&
+              latest.paymentState === "pending" &&
+              latest.reservationHoldExpiresAt
+            ) {
+              const window = yield* qrPayments
+                .findPaymentWindow(reservationOrderId(input.orderId))
+                .pipe(
+                  Effect.mapError(
+                    ReservationHoldCleanupError.fromError(
+                      "Payment window could not be loaded."
+                    )
+                  )
+                );
+              const latestCutoff = toStoredInstant(
+                latest.reservationHoldExpiresAt
+              );
+              if (
+                window &&
+                latestCutoff.equals(toStoredInstant(window.expiresAt)) &&
+                !latestCutoff.equals(
+                  toStoredInstant(input.expectedHold.reservationHoldExpiresAt)
+                )
+              ) {
+                return new ProviderPaymentDeferral({
+                  abandonmentCutoff: window.expiresAt,
+                });
+              }
+            }
+          }
           return "skipped" as const;
         }
         if (outcome instanceof HoldCancellationInProgress) {
@@ -389,16 +440,92 @@ function makeReservationHoldCleanupServiceLayer(
           yield* Effect.logDebug(
             "Reservation hold cancellation active reservation loaded"
           );
+          const checkedAt = input.checkedAt ?? Temporal.Now.instant();
+          const orderId = reservationOrderId(input.orderId);
+          const window =
+            qrPayments && active
+              ? yield* qrPayments
+                  .findPaymentWindow(orderId)
+                  .pipe(
+                    Effect.mapError(
+                      ReservationHoldCleanupError.fromError(
+                        "Payment window could not be loaded."
+                      )
+                    )
+                  )
+              : undefined;
+          const sharedHold =
+            window &&
+            active?.reservationHoldExpiresAt &&
+            toStoredInstant(active.reservationHoldExpiresAt).equals(
+              toStoredInstant(window.expiresAt)
+            );
+          if (
+            sharedHold &&
+            active.paymentState !== "paid" &&
+            dueReservationStates.has(active.reservationState) &&
+            Temporal.Instant.compare(window.expiresAt, checkedAt) > 0
+          ) {
+            return new ProviderPaymentDeferral({
+              abandonmentCutoff: window.expiresAt,
+            });
+          }
           const expectedHold = dueHold(
             active,
-            input.holdExpiresAt,
-            input.checkedAt ?? Temporal.Now.instant()
+            sharedHold ? window.expiresAt : input.holdExpiresAt,
+            checkedAt
           );
           if (!expectedHold) {
             yield* Effect.logInfo(
               "Reservation hold cancellation skipped: hold not due"
             );
             return "not_due" as const;
+          }
+
+          if (sharedHold) {
+            const card =
+              qrPayments &&
+              (yield* qrPayments
+                .findCardAttempt(orderId)
+                .pipe(
+                  Effect.mapError(
+                    ReservationHoldCleanupError.fromError(
+                      "Card attempt could not be loaded."
+                    )
+                  )
+                ));
+            if (card) {
+              const requeueRecovery =
+                active.paymentState === "expired" &&
+                card.id === active.activePaymentAttemptId;
+              if (
+                requeueRecovery ||
+                (active.paymentState === "pending" &&
+                  isReusableAttemptState(card.state))
+              ) {
+                const outcome = yield* settlePendingProviderPayment({
+                  orderId: input.orderId,
+                  paymentAttemptId: card.id,
+                  checkedAt,
+                  sharedWindowCutoff: window.expiresAt,
+                  requeueRecovery,
+                });
+                if (outcome) return outcome;
+              }
+            }
+
+            const expired = yield* paymentLifecycle
+              .expirePublicPaymentWindow({ orderId, checkedAt })
+              .pipe(
+                Effect.mapError(
+                  ReservationHoldCleanupError.fromError(
+                    "Payment window could not be expired."
+                  )
+                )
+              );
+            return expired
+              ? yield* releaseExpiredHold({ ...input, expectedHold })
+              : ("skipped" as const);
           }
 
           const pendingPayment = pendingProviderPayment(active);

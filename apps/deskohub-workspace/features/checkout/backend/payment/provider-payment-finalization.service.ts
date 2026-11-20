@@ -10,6 +10,7 @@ import {
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { OrderId } from "@/features/order";
+import { currentPreciseInstant } from "@/shared/utils/temporal";
 import { getProviderOrderAbandonmentCutoff } from "../../provider-order-abandonment";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
 import {
@@ -19,6 +20,7 @@ import {
   paymentAttemptLogFields,
 } from "../repositories/payment-attempt.repository";
 import type { PaymentLifecycleRepositoryError } from "../repositories/payment-lifecycle.repository";
+import { lifecycleStateError } from "../repositories/payment-lifecycle-state";
 import type {
   OrderPaymentHandler,
   PaymentOrder,
@@ -52,6 +54,7 @@ export type ProviderPaymentFinalizationResult =
   | "verification_mismatch"
   | "awaiting_payment"
   | "pending"
+  | "recovery_pending"
   | "paid"
   | "terminal";
 
@@ -94,6 +97,7 @@ export interface IProviderPaymentFinalizationService {
     readonly paymentAttemptId?: PaymentAttemptId;
     readonly webhookEventId?: string;
     readonly abandonmentCheckedAt?: Temporal.Instant;
+    readonly sharedWindowCutoff?: Temporal.Instant;
     /** Bounds payment verification, retries included. */
     readonly verificationDeadline?: Duration.Input;
   }) => Effect.Effect<
@@ -142,6 +146,7 @@ function makeProviderPaymentFinalizationServiceLayer(
         readonly handler: OrderPaymentHandler;
         readonly attempt: ProviderPaymentAttempt;
         readonly checkedAt: Temporal.Instant | undefined;
+        readonly sharedWindowCutoff: Temporal.Instant | undefined;
       }): Effect.fn.Return<
         ProviderPaymentFinalizationResult,
         PaymentLifecycleRepositoryError
@@ -152,9 +157,9 @@ function makeProviderPaymentFinalizationServiceLayer(
           );
           return "not_verifiable";
         }
-        const abandonmentCutoff = getProviderOrderAbandonmentCutoff(
-          input.attempt.createdAt
-        );
+        const abandonmentCutoff =
+          input.sharedWindowCutoff ??
+          getProviderOrderAbandonmentCutoff(input.attempt.createdAt);
         if (Temporal.Instant.compare(input.checkedAt, abandonmentCutoff) < 0) {
           yield* Effect.logInfo(
             "Payment finalization deferred an unattached provider session"
@@ -347,7 +352,7 @@ function makeProviderPaymentFinalizationServiceLayer(
             webhookEventId: input.webhookEventId,
             providerOperationId,
             providerStatus,
-            paidAt: Temporal.Now.instant(),
+            paidAt: yield* currentPreciseInstant,
           })
           .pipe(
             Effect.catchTag(
@@ -364,6 +369,29 @@ function makeProviderPaymentFinalizationServiceLayer(
 
         if (!paidSuccess) {
           return "not_pending" as const;
+        }
+        if (paidSuccess.settlement === "refund_required")
+          return "not_pending" as const;
+        if (paidSuccess.settlement === "recovery_pending") {
+          yield* handler
+            .startRecovery({
+              orderId: order.id,
+              paymentAttemptId: attempt.id,
+              webhookEventId: input.webhookEventId,
+              providerOperationId,
+              providerStatus,
+              verifiedPaidAt: paidSuccess.timestamp,
+            })
+            .pipe(
+              Effect.mapError(() =>
+                lifecycleStateError(
+                  "startRecovery",
+                  { type: "paymentAttemptId", id: attempt.id },
+                  "Verified card payment recovery could not be scheduled."
+                )
+              )
+            );
+          return "recovery_pending" as const;
         }
         if (paidSuccess.changed) {
           yield* checkoutAnalytics.paymentCompleted({
@@ -447,14 +475,18 @@ function makeProviderPaymentFinalizationServiceLayer(
       ) {
         const checkedAt = input.abandonmentCheckedAt;
         const orderCreatedAt = attempt.providerOrderCreatedAt;
+        const cutoff =
+          input.sharedWindowCutoff ??
+          (orderCreatedAt
+            ? getProviderOrderAbandonmentCutoff(orderCreatedAt)
+            : undefined);
         if (!hasActivity && !checkedAt) {
           yield* Effect.logInfo(
             "Payment finalization returned awaiting_payment"
           );
           return "awaiting_payment" as const;
         }
-        if (!hasActivity && checkedAt && orderCreatedAt) {
-          const cutoff = getProviderOrderAbandonmentCutoff(orderCreatedAt);
+        if (!hasActivity && checkedAt && cutoff) {
           const abandoned = Temporal.Instant.compare(checkedAt, cutoff) >= 0;
           yield* Effect.logInfo(
             "Payment finalization resolved empty provider order",
@@ -532,6 +564,28 @@ function makeProviderPaymentFinalizationServiceLayer(
             }
             const { order, handler } = resolved;
             if (order.paymentState !== "pending") {
+              if (
+                input.sharedWindowCutoff &&
+                order.paymentState === "expired" &&
+                order.activePaymentAttemptId === paymentAttemptId
+              ) {
+                const recovery = yield* handler
+                  .resumeRecovery({
+                    orderId: order.id,
+                    paymentAttemptId,
+                    requeue: true,
+                  })
+                  .pipe(
+                    Effect.mapError(() =>
+                      lifecycleStateError(
+                        "resumeRecovery",
+                        { type: "paymentAttemptId", id: paymentAttemptId },
+                        "Verified card payment recovery could not be rescheduled."
+                      )
+                    )
+                  );
+                if (recovery) return "recovery_pending";
+              }
               return yield* resolveSettledOrder(order, handler);
             }
 
@@ -552,6 +606,7 @@ function makeProviderPaymentFinalizationServiceLayer(
                 handler,
                 attempt,
                 checkedAt: input.abandonmentCheckedAt,
+                sharedWindowCutoff: input.sharedWindowCutoff,
               });
             }
             if (!isVerifiableProviderPaymentAttempt(attempt)) {

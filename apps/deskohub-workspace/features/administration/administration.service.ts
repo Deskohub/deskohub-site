@@ -129,7 +129,7 @@ import {
   type IPaymentAdministrationService,
   PaymentAdministrationService,
 } from "./payment-administration.service";
-import { getRefundAmountDue } from "./payment-presentation";
+import { getRefundAmountDue, needsNexiRefund } from "./payment-presentation";
 import type { AdministrationPaymentTimelineEvent } from "./payment-timeline";
 import {
   buildPaymentAttemptTimeline,
@@ -879,15 +879,16 @@ const withdrawalOwesRefund = (withdrawal: ContractWithdrawal) =>
   withdrawal.refundAmount.value > 0 && withdrawal.contractCancelledAt === null;
 
 const isReservationRefunded = (
-  attempts: readonly Pick<SafePaymentAttemptRow, "refundState">[]
+  attempts: readonly Pick<SafePaymentAttemptRow, "provider" | "refundState">[]
 ) =>
-  attempts.some(({ refundState }) => refundState === "refunded") &&
-  !attempts.some(({ refundState }) => refundState === "required");
+  attempts.some(
+    ({ provider, refundState }) =>
+      provider === "nexi" && refundState === "refunded"
+  ) && !attempts.some(needsNexiRefund);
 
 const toReservationSummary = ({
   attemptRows,
   latePayment = false,
-  needsRefund = false,
   refunded = false,
   recoveryState,
   latestPayment = null,
@@ -898,8 +899,6 @@ const toReservationSummary = ({
 }: {
   readonly attemptRows: readonly SafePaymentAttemptRow[];
   readonly latePayment?: boolean;
-  /** Any payment attempt of the reservation, not only the latest, needs a refund. */
-  readonly needsRefund?: boolean;
   /** Nexi reported a refund for every payment attempt that required one. */
   readonly refunded?: boolean;
   readonly recoveryState?: LatePaymentRecoveryState;
@@ -973,8 +972,7 @@ const toReservationSummary = ({
         failureCode: row.failureCode,
         latePayment,
         needsRefund:
-          needsRefund ||
-          latestPayment?.refundState === "required" ||
+          attemptRows.some(needsNexiRefund) ||
           (withdrawal !== undefined && withdrawalOwesRefund(withdrawal)),
         recoveryState,
         refunded,
@@ -1321,6 +1319,13 @@ const buildTimeline = (row: SafeReservationRow) => {
     left.occurredAt.localeCompare(right.occurredAt)
   );
 };
+
+// These timeline and operator notices refer to Nexi refunds. Fio
+// reconciliation is projected from the movement evidence instead.
+const nexiLatePaymentAttempt = and(
+  eq(latePaymentRecoveries.paymentAttemptId, paymentAttempts.id),
+  eq(paymentAttempts.provider, "nexi")
+);
 
 const latePaymentRecoverySelection = {
   paymentAttemptId: latePaymentRecoveries.paymentAttemptId,
@@ -1792,6 +1797,7 @@ export class AdministrationService extends Context.Service<
               recoveryRows: db
                 .select(latePaymentRecoverySelection)
                 .from(latePaymentRecoveries)
+                .innerJoin(paymentAttempts, nexiLatePaymentAttempt)
                 .where(
                   equalsAny(
                     latePaymentRecoveries.workspaceReservationId,
@@ -1805,13 +1811,6 @@ export class AdministrationService extends Context.Service<
           );
           const latePaymentReservationIds = new Set(
             latePaymentRows.map(({ reservationId }) => reservationId)
-          );
-          const refundReservationIds = new Set(
-            attemptRows.flatMap((attempt) =>
-              attempt.refundState === "required"
-                ? [attempt.workspaceReservationId]
-                : []
-            )
           );
           const attemptsByReservation = Map.groupBy(
             attemptRows,
@@ -1851,7 +1850,6 @@ export class AdministrationService extends Context.Service<
                 ? recoveryByReservation.get(row.id)?.state === "refund_required"
                 : latePaymentReservationIds.has(row.id),
               recoveryState: recoveryByReservation.get(row.id)?.state,
-              needsRefund: refundReservationIds.has(row.id),
               refunded: isReservationRefunded(attempts),
               live,
               now,
@@ -2387,6 +2385,7 @@ export class AdministrationService extends Context.Service<
             recoveryRows: db
               .select(latePaymentRecoverySelection)
               .from(latePaymentRecoveries)
+              .innerJoin(paymentAttempts, nexiLatePaymentAttempt)
               .where(eq(latePaymentRecoveries.workspaceReservationId, row.id))
               .orderBy(latePaymentRecoveries.createdAt),
             live: loadLiveReservation(row),

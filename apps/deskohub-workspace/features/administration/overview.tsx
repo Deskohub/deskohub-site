@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
 import { CustomerSearch } from "./customer-search";
+import { FioRefundAttention } from "./fio-staff-queue";
 import { m } from "./i18n";
 import {
   AdministrationCustomerMetricsLoading,
@@ -57,6 +58,9 @@ export async function AdministrationOverview() {
       </section>
       <Suspense fallback={null}>
         <RefundAttention count={refundAttention} />
+      </Suspense>
+      <Suspense fallback={null}>
+        <FioRefundAttention locale={locale} />
       </Suspense>
       <section
         aria-labelledby="reservation-counts-heading"

@@ -13,6 +13,7 @@ type DisplayedPayment = Pick<
   AdministrationPaymentAttempt,
   | "amount"
   | "failureCode"
+  | "provider"
   | "refundState"
   | "refundTarget"
   | "refundedAmount"

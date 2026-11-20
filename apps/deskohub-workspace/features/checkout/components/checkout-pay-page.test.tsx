@@ -251,6 +251,68 @@ describe("CheckoutPayPage payment navigation", () => {
     ).toBe("true");
   });
 
+  test("starts QR with the same signed checkout and consents, then opens Workspace status", async () => {
+    const { CheckoutPayPage } = await import("./checkout-pay-page");
+    const execute = mock();
+    workspaceUseAction.mockReturnValue({
+      execute,
+      isExecuting: false,
+      result: {},
+    });
+    const startPaymentAction = mock(async () => ({}));
+    const openPaymentWindow = spyOn(window, "open");
+    const view = render(
+      <CheckoutPayPage
+        locale="en-US"
+        payStateToken="signed-summary"
+        startPaymentAction={startPaymentAction}
+        summary={buildCoworkCheckoutSummary({
+          entryTier: "basic",
+          coffee: false,
+        })}
+        variant="pay"
+      />
+    );
+
+    expect(view.getByRole("group", { name: "Payment method" })).toBeTruthy();
+    fireEvent.click(view.getByRole("radio", { name: "QR bank transfer" }));
+    expect(execute).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("checkbox"));
+    fireEvent.click(view.getByRole("button", { name: /Order and pay/ }));
+
+    expect(execute).toHaveBeenCalledWith({
+      locale: "en-US",
+      payStateToken: "signed-summary",
+      legalConsent: true,
+      earlyPerformanceConsent: true,
+      method: "qr",
+    });
+
+    const actionOptions = workspaceUseAction.mock.calls.at(-1)?.[1] as
+      | {
+          readonly onSuccess: (result: {
+            readonly data: {
+              readonly status: "qr_pending";
+              readonly statusUrl: string;
+            };
+          }) => void;
+        }
+      | undefined;
+    if (!actionOptions) throw new Error("Checkout action options missing");
+    act(() =>
+      actionOptions.onSuccess({
+        data: {
+          status: "qr_pending",
+          statusUrl: "/en-US/reservation/status/reservation-id",
+        },
+      })
+    );
+    expect(workspaceRouterPush).toHaveBeenCalledWith(
+      "/en-US/reservation/status/reservation-id"
+    );
+    expect(openPaymentWindow).not.toHaveBeenCalled();
+  });
+
   test("announces a payment start failure as an alert", async () => {
     const { CheckoutPayPage } = await import("./checkout-pay-page");
     const quote = buildCoworkReservationQuote({
@@ -324,10 +386,13 @@ describe("CheckoutPayPage payment navigation", () => {
       <CheckoutPayPage
         locale="en-US"
         payStateToken="signed-summary"
+        startPaymentAction={mock(async () => ({}))}
         summary={buildDiscountedCoworkCheckoutSummary({ basisPoints: 10_000 })}
         variant="pay"
       />
     );
+
+    expect(view.queryByRole("group", { name: "Payment method" })).toBeNull();
 
     fireEvent.click(view.getByRole("checkbox"));
     fireEvent.click(

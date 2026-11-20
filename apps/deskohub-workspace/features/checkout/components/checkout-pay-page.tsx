@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { type ReactNode, useId, useState } from "react";
 import type {
   CheckoutSummaryChangedKeys,
   CheckoutSummary as CheckoutSummaryData,
@@ -22,7 +22,11 @@ import {
   CheckoutPayProviderHandoff,
   CheckoutPaySubmitButton,
 } from "./checkout-pay-page-card";
-import { useCheckoutPaySubmission } from "./use-checkout-pay-submission";
+import {
+  type CheckoutPaymentMethod,
+  type StartCheckoutPaymentAction,
+  useCheckoutPaySubmission,
+} from "./use-checkout-pay-submission";
 
 type CheckoutPayPageProps = {
   readonly changedKeys?: CheckoutSummaryChangedKeys;
@@ -35,6 +39,7 @@ type CheckoutPayPageProps = {
   readonly payStateToken?: string;
   /** Who is coming to an office order with a people list. */
   readonly people?: OfficeCheckoutPeople;
+  readonly startPaymentAction?: StartCheckoutPaymentAction;
   readonly summary: CheckoutSummaryData;
   readonly variant: "pay" | "retry" | "pricingChanged";
   readonly retryOutcome?: "cancelled" | "failed";
@@ -50,9 +55,20 @@ export function CheckoutPayPage({
   payStateToken,
   people,
   retryOutcome,
+  startPaymentAction,
   summary,
   variant,
 }: CheckoutPayPageProps) {
+  const [method, setMethod] = useState<CheckoutPaymentMethod>("card");
+  const paymentMethodName = useId();
+  const providerTotal = summary.total.value > 0 ? summary.total : undefined;
+  const offersQr = Boolean(
+    startPaymentAction &&
+      payStateToken &&
+      variant === "pay" &&
+      providerTotal?.currency === "CZK"
+  );
+  const paymentMethod = offersQr ? method : "card";
   const {
     errorMessage,
     isSubmitPending,
@@ -62,7 +78,9 @@ export function CheckoutPayPage({
   } = useCheckoutPaySubmission({
     earlyPerformanceRequestRequired,
     locale,
+    method: paymentMethod,
     payStateToken,
+    startPaymentAction: offersQr ? startPaymentAction : undefined,
   });
   const isPricingChanged = variant === "pricingChanged";
   const title = {
@@ -82,9 +100,6 @@ export function CheckoutPayPage({
       pricingChanged: "pay",
     } as const
   )[variant];
-  // A free order completes without the payment provider.
-  const providerTotal = summary.total.value > 0 ? summary.total : undefined;
-
   return (
     <CheckoutPayCard lead={lead} title={title}>
       <CheckoutPayNotices
@@ -125,6 +140,36 @@ export function CheckoutPayPage({
         />
       ) : (
         <>
+          {offersQr && (
+            <fieldset disabled={isSubmitPending}>
+              <legend className="mb-2 text-sm font-semibold">
+                {m.checkoutPayMethod({}, { locale })}
+              </legend>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(
+                  [
+                    ["card", m.checkoutPayMethodCard({}, { locale })],
+                    ["qr", m.checkoutPayMethodQr({}, { locale })],
+                  ] as const
+                ).map(([option, label]) => (
+                  <label
+                    className="flex cursor-pointer items-center gap-2 rounded-xl border border-navy-blue/15 px-3 py-3 text-sm font-semibold has-checked:border-navy-blue/55 has-checked:bg-navy-blue/5 has-disabled:cursor-default"
+                    key={option}
+                  >
+                    <input
+                      checked={paymentMethod === option}
+                      className="size-4 accent-navy-blue"
+                      name={paymentMethodName}
+                      onChange={() => setMethod(option)}
+                      type="radio"
+                      value={option}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
           <CheckoutPayConsent
             checked={legalConsent}
             id="checkout-pay-legal-consent"
@@ -137,13 +182,16 @@ export function CheckoutPayPage({
           <CheckoutPaySubmitButton
             disabled={!legalConsent || isSubmitPending}
             locale={locale}
+            method={paymentMethod}
             onClick={submit}
             pending={isSubmitPending}
             total={providerTotal}
             variant={actionVariant}
           />
 
-          {!!providerTotal && <CheckoutPayProviderHandoff locale={locale} />}
+          {!!providerTotal && paymentMethod === "card" && (
+            <CheckoutPayProviderHandoff locale={locale} />
+          )}
         </>
       )}
 

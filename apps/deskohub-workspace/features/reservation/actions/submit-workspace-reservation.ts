@@ -1,6 +1,10 @@
 import { Effect, Match, Struct } from "effect";
 import { CheckoutService } from "@/features/checkout/backend/checkout";
-import { m } from "@/features/i18n";
+import { CheckoutError } from "@/features/checkout/backend/checkout/checkout-error";
+import { readPublicPayStatePayment } from "@/features/checkout/backend/checkout/public-pay-state-author.server";
+import { getPublicReservationPaymentAccount } from "@/features/checkout/backend/checkout/public-reservation-payment-account";
+import { getReservationStatusPath } from "@/features/checkout/backend/checkout/reservation-status-url";
+import { type Locale, m } from "@/features/i18n";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
 import type { SubmitReservationInput } from "@/features/reservation/actions/submit-reservation-input";
 import { WorkspaceTableUnavailableError } from "@/features/reservation/backend/workspace-availability.service";
@@ -24,14 +28,52 @@ export const submitWorkspaceReservation = Effect.fn(
       callSite: "reservation.submit",
     });
     const service = yield* CheckoutService;
-    const checkout = yield* service.createHostedPaymentCheckout(
-      {
-        payStateToken: input.payStateToken,
-        legalConsent: input.legalConsent,
-        earlyPerformanceConsent: input.earlyPerformanceConsent,
-      },
-      locale
-    );
+    const payment = {
+      payStateToken: input.payStateToken,
+      legalConsent: input.legalConsent,
+      earlyPerformanceConsent: input.earlyPerformanceConsent,
+    };
+    const method = input.method;
+    const defaultAccount =
+      method && (yield* getPublicReservationPaymentAccount());
+    const selectedPayment =
+      method &&
+      (yield* readPublicPayStatePayment(
+        { payStateToken: payment.payStateToken, locale },
+        defaultAccount
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new CheckoutError({
+              code: "checkout_failed",
+              message: "The signed-in reservation author is required.",
+              cause,
+            })
+        )
+      ));
+    if (!selectedPayment && (defaultAccount || method === "qr")) {
+      return yield* new CheckoutError({
+        code: "checkout_failed",
+        message: "The selected payment method is unavailable.",
+      });
+    }
+    const checkout = yield* method && selectedPayment?.kind === "account"
+      ? service.startReservationPayment(
+          {
+            ...payment,
+            method,
+            fio: { accountKey: selectedPayment.accountKey },
+          },
+          locale
+        )
+      : service.createHostedPaymentCheckout(payment, locale);
+
+    if (method === "qr" && checkout.status === "redirect" && !checkout.paid) {
+      return yield* new CheckoutError({
+        code: "checkout_failed",
+        message: "The selected payment method is unavailable.",
+      });
+    }
 
     // The signed-in author follows the status page by session, so the
     // checkout sets no access cookie of its own.
@@ -47,7 +89,7 @@ export const submitWorkspaceReservation = Effect.fn(
 
     return {
       message: "Checkout started successfully",
-      ...toSiteCheckoutResult(checkout),
+      ...toSiteCheckoutResult(checkout, locale),
     };
   },
   (effect, input) =>
@@ -128,8 +170,8 @@ export const submitWorkspaceReservation = Effect.fn(
     )
 );
 
-type HostedPaymentCheckout = Effect.Success<
-  ReturnType<CheckoutService["Service"]["createHostedPaymentCheckout"]>
+type ReservationPaymentCheckout = Effect.Success<
+  ReturnType<CheckoutService["Service"]["startReservationPayment"]>
 >;
 
 /**
@@ -137,9 +179,16 @@ type HostedPaymentCheckout = Effect.Success<
  * token, its expiry and the order id serve the customer HTTP API; the
  * browser follows `freshPayUrl` and `statusUrl` instead.
  */
-const toSiteCheckoutResult = (checkout: HostedPaymentCheckout) =>
+const toSiteCheckoutResult = (
+  checkout: ReservationPaymentCheckout,
+  locale: Locale
+) =>
   Match.value(checkout).pipe(
     Match.discriminatorsExhaustive("status")({
+      qr_pending: ({ orderId, status }) => ({
+        status,
+        statusUrl: getReservationStatusPath({ locale, orderId }),
+      }),
       redirect: (redirect) =>
         Struct.pick(redirect, ["status", "redirectUrl", "statusUrl", "paid"]),
       pricing_changed: (changed) =>

@@ -1,15 +1,42 @@
 "use client";
 
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { useRouter } from "next/navigation";
+import type { SafeActionResult } from "next-safe-action";
 import { useState } from "react";
 import { openCheckoutPaymentWindow } from "@/features/checkout/components/checkout-payment-window";
 import { type Locale, m } from "@/features/i18n";
 import { submitReservation } from "@/features/reservation/actions/submit-reservation";
+import type { SubmitReservationInput } from "@/features/reservation/actions/submit-reservation-input";
 import { useWorkspaceAction } from "@/shared/utils/use-workspace-action";
 
-type SubmittedReservation = NonNullable<
+type HostedSubmission = NonNullable<
   Awaited<ReturnType<typeof submitReservation>>
 >["data"];
+
+export type CheckoutPaymentMethod = "card" | "qr";
+
+type PaySubmissionInput = SubmitReservationInput & {
+  readonly method?: CheckoutPaymentMethod;
+};
+
+type SubmittedReservation =
+  | HostedSubmission
+  | {
+      readonly status: "qr_pending";
+      readonly statusUrl: string;
+    };
+
+export type StartCheckoutPaymentAction = (
+  input: SubmitReservationInput & { readonly method: CheckoutPaymentMethod }
+) => Promise<
+  SafeActionResult<
+    string,
+    StandardSchemaV1<PaySubmissionInput>,
+    unknown,
+    Exclude<SubmittedReservation, undefined>
+  >
+>;
 
 /**
  * Continues a submitted reservation and returns where this tab goes next: the
@@ -21,6 +48,7 @@ const continueSubmittedReservation = (
   data: SubmittedReservation
 ): string | undefined => {
   if (!data) return undefined;
+  if (data.status === "qr_pending") return data.statusUrl;
   if (data.status === "pricing_changed") return data.freshPayUrl;
   if (data.status === "in_progress" || !data.redirectUrl) return undefined;
 
@@ -38,19 +66,31 @@ const continueSubmittedReservation = (
 export function useCheckoutPaySubmission({
   earlyPerformanceRequestRequired,
   locale,
+  method,
   payStateToken,
+  startPaymentAction,
 }: {
   readonly earlyPerformanceRequestRequired: boolean;
   readonly locale: Locale;
+  readonly method: CheckoutPaymentMethod;
   readonly payStateToken: string | undefined;
+  readonly startPaymentAction?: StartCheckoutPaymentAction;
 }) {
   const router = useRouter();
   const [legalConsent, setLegalConsent] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const showSubmitError = () =>
     setErrorMessage(m.checkoutPaySubmitError({}, { locale }));
-  const { execute, isExecuting, result } = useWorkspaceAction(
-    submitReservation,
+  const { execute, isExecuting, result } = useWorkspaceAction<
+    string,
+    StandardSchemaV1<PaySubmissionInput>,
+    unknown,
+    Exclude<SubmittedReservation, undefined>
+  >(
+    async ({ method, ...input }) =>
+      startPaymentAction && method
+        ? startPaymentAction({ ...input, method })
+        : submitReservation(input),
     {
       onSuccess: ({ data }) => {
         const nextUrl = continueSubmittedReservation(data);
@@ -70,6 +110,7 @@ export function useCheckoutPaySubmission({
   );
   const hasCheckoutRedirect =
     result.data?.status === "pricing_changed" ||
+    result.data?.status === "qr_pending" ||
     result.data?.status === "redirect";
   const isSubmitPending = isExecuting || hasCheckoutRedirect;
 
@@ -86,6 +127,7 @@ export function useCheckoutPaySubmission({
       locale,
       payStateToken,
       legalConsent,
+      ...(startPaymentAction && { method }),
     };
     execute(
       earlyPerformanceRequestRequired

@@ -17,86 +17,112 @@ const dueHold = {
 const claimStamp = Temporal.Instant.from("2026-06-02T10:00:00.500Z");
 
 describe("ReservationHoldCleanupService", () => {
-  test("does not cancel an expired hold when the pending provider payment finalizes paid", async () => {
-    const { ProviderPaymentFinalizationService } = await import(
-      "../payment/provider-payment-finalization.service"
-    );
-    const { PaymentLifecycleRepository } = await import(
-      "../repositories/payment-lifecycle.repository"
-    );
-    const { ReservationHoldCleanupService } = await import(
-      "./reservation-hold-cleanup.service"
-    );
-    const { UnpaidHoldRelease } = await import("./unpaid-hold-release.service");
-    const { WorkspaceReservationRepository } = await import(
-      "@/features/reservation/backend/workspace-reservation.repository"
-    );
-    const { recordCheckoutAnalytics } = await import(
-      "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
-    );
+  test.each([
+    { window: "legacy", verification: "paid" },
+    { window: "shared", verification: "pending" },
+    { window: "shared", verification: "recovery_pending" },
+  ] as const)(
+    "keeps the $window hold when its exposed card verifies as $verification",
+    async ({ window, verification }) => {
+      const { ProviderPaymentFinalizationService } = await import(
+        "../payment/provider-payment-finalization.service"
+      );
+      const { PaymentLifecycleRepository } = await import(
+        "../repositories/payment-lifecycle.repository"
+      );
+      const { ReservationHoldCleanupService } = await import(
+        "./reservation-hold-cleanup.service"
+      );
+      const { QrPaymentRepository } = await import(
+        "../repositories/qr-payment.repository"
+      );
+      const { UnpaidHoldRelease } = await import(
+        "./unpaid-hold-release.service"
+      );
+      const { WorkspaceReservationRepository } = await import(
+        "@/features/reservation/backend/workspace-reservation.repository"
+      );
+      const { recordCheckoutAnalytics } = await import(
+        "@/features/checkout/backend/analytics/checkout-analytics.service.mock"
+      );
 
-    const orderId = "reservation-cleanup-provider-paid";
-    const attemptId = "attempt-cleanup-provider-paid";
-    const cancelReservation = mock(() => Effect.void);
-    const claimCancellation = mock(() => Effect.succeed(null));
-    const finalization: ProviderPaymentFinalizationServiceType = {
-      finalizePendingProviderPayment: mock(() =>
-        Effect.succeed("paid" as const)
-      ),
-    };
-    const reservations = {
-      findById: mock(() =>
-        Effect.succeed({
-          id: orderId,
-          reservationState: "held",
-          paymentState: "pending",
-          activePaymentAttemptId: attemptId,
-          ...dueHold,
-        })
-      ),
-      claimCancellation,
-    };
-    const dotypos = {
-      cancelReservation,
-    };
+      const orderId = "reservation-cleanup-provider-paid";
+      const attemptId = "attempt-cleanup-provider-paid";
+      const cancelReservation = mock(() => Effect.void);
+      const claimCancellation = mock(() => Effect.succeed(null));
+      const expirePublicPaymentWindow = mock(() => Effect.succeed(true));
+      const finalization: ProviderPaymentFinalizationServiceType = {
+        finalizePendingProviderPayment: mock(() =>
+          Effect.succeed(verification)
+        ),
+      };
+      const reservations = {
+        findById: mock(() =>
+          Effect.succeed({
+            id: orderId,
+            reservationState: "held",
+            paymentState: "pending",
+            activePaymentAttemptId:
+              window === "shared" ? "active-qr-attempt" : attemptId,
+            ...dueHold,
+          })
+        ),
+        claimCancellation,
+        recordHoldCleanupSkipped: mock(() => Effect.void),
+      };
+      const dotypos = {
+        cancelReservation,
+      };
 
-    const outcome = await Effect.gen(function* () {
-      const cleanup = yield* ReservationHoldCleanupService;
-      return yield* cleanup.cancelOrderHold({
-        orderId,
-        holdExpiresAt,
-        checkedAt: Temporal.Instant.from("2026-06-02T10:00:00.000Z"),
-      });
-    }).pipe(
-      Effect.provide(
-        ReservationHoldCleanupService.Default.pipe(
-          Layer.provide(UnpaidHoldRelease.Default),
-          Layer.provide(makeRecordingAdvisoryLock().layer),
-          Layer.provide(
-            Layer.mergeAll(
-              Layer.mock(ProviderPaymentFinalizationService, finalization),
-              Layer.mock(PaymentLifecycleRepository, {
-                markTerminal: mock(() => Effect.die("not used")),
-              }),
-              Layer.mock(WorkspaceReservationRepository, reservations),
-              recordCheckoutAnalytics().layer,
-              Layer.mock(DotyposService, dotypos)
+      const outcome = await Effect.gen(function* () {
+        const cleanup = yield* ReservationHoldCleanupService;
+        return yield* cleanup.cancelOrderHold({
+          orderId,
+          holdExpiresAt,
+          checkedAt: Temporal.Instant.from("2026-06-02T10:00:00.000Z"),
+        });
+      }).pipe(
+        Effect.provide(
+          ReservationHoldCleanupService.Default.pipe(
+            Layer.provide(UnpaidHoldRelease.Default),
+            Layer.provide(makeRecordingAdvisoryLock().layer),
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.mock(ProviderPaymentFinalizationService, finalization),
+                Layer.mock(QrPaymentRepository, {
+                  findPaymentWindow: () =>
+                    Effect.succeed(
+                      window === "shared" ? { expiresAt: holdExpiresAt } : null
+                    ),
+                  findCardAttempt: () =>
+                    Effect.succeed({ id: attemptId, state: "pending" }),
+                }),
+                Layer.mock(PaymentLifecycleRepository, {
+                  markTerminal: mock(() => Effect.die("not used")),
+                  expirePublicPaymentWindow,
+                }),
+                Layer.mock(WorkspaceReservationRepository, reservations),
+                recordCheckoutAnalytics().layer,
+                Layer.mock(DotyposService, dotypos)
+              )
             )
           )
-        )
-      ),
-      Effect.runPromise
-    );
+        ),
+        Effect.runPromise
+      );
 
-    expect(outcome).toBe("skipped");
-    expect(finalization.finalizePendingProviderPayment).toHaveBeenCalledWith({
-      orderId,
-      paymentAttemptId: attemptId,
-      abandonmentCheckedAt: Temporal.Instant.from("2026-06-02T10:00:00.000Z"),
-    });
-    expect(claimCancellation).not.toHaveBeenCalled();
-    expect(cancelReservation).not.toHaveBeenCalled();
-  });
+      expect(outcome).toBe("skipped");
+      expect(finalization.finalizePendingProviderPayment).toHaveBeenCalledWith({
+        orderId,
+        paymentAttemptId: attemptId,
+        abandonmentCheckedAt: Temporal.Instant.from("2026-06-02T10:00:00.000Z"),
+        ...(window === "shared" && { sharedWindowCutoff: holdExpiresAt }),
+      });
+      expect(expirePublicPaymentWindow).not.toHaveBeenCalled();
+      expect(claimCancellation).not.toHaveBeenCalled();
+      expect(cancelReservation).not.toHaveBeenCalled();
+    }
+  );
 
   test("counts unconfirmed pending payment cleanup as skipped without cancelling", async () => {
     const { ProviderPaymentFinalizationService } = await import(
