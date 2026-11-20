@@ -9,3 +9,6 @@ const tierNames = {
 
 export const getPassTierName = (tier: PassTier, locale: Locale) =>
   tierNames[tier]({}, { locale });
+
+export const formatPassDate = (date: string, locale: Locale) =>
+  Temporal.PlainDate.from(date).toLocaleString(locale, { dateStyle: "medium" });
