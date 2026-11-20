@@ -218,6 +218,22 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         "The Entry pack already has a payment."
       );
     }
+    if (order.activePaymentAttemptId) {
+      const [prior] = yield* readAttempt(
+        order.id,
+        order.activePaymentAttemptId
+      );
+      if (
+        !prior ||
+        !isEndedUnpaidPaymentState(prior.state) ||
+        prior.refundState !== "not_required"
+      ) {
+        return yield* paymentError(
+          order.id,
+          "The previous payment has not ended unpaid."
+        );
+      }
+    }
     const now = yield* currentInstant;
     if (isEntryPackQuoteExpired(now, pack.validUntil)) {
       return yield* paymentError(

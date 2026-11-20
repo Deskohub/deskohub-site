@@ -1879,7 +1879,12 @@
   "entryPackStatusPaidTitle": "Ваш пакет відвідувань оплачено",
   "entryPackStatusPaidGiftLead": "Ви придбали цей пакет для іншої особи. Лише ця особа може ним скористатися.",
   "entryPackStatusPendingLead": "Чекаємо, поки Nexi підтвердить ваш платіж. Сторінка оновлюється автоматично. Якщо сторінка оплати ще відкрита, завершіть оплату там.",
-  "entryPackStatusRetryLead": "Оплату не завершено. Ви можете розпочати нову покупку пакета відвідувань.",
+  "entryPackStatusNotStartedTitle": "Оплату ще не розпочато.",
+  "entryPackStatusCheckingLead": "Ми перевіряємо оплату в Nexi. Ця сторінка оновлюється автоматично.",
+  "entryPackStatusPartiallyRefundedTitle": "Частину платежу повернено.",
+  "entryPackStatusPartiallyRefundedLead": "Ми повернули {amount} на ваш початковий спосіб оплати.",
+  "entryPackStatusRefundPendingTitle": "Повернення коштів ще триває.",
+  "entryPackStatusAdditionalRefundLead": "Решту суми ще не повернено.",
   "entryPackStatusRefundLead": "Платіж надійшов після закриття замовлення. Ми не змогли видати пакет відвідувань і повернемо кошти.",
   "entryPackStatusRefundedTitle": "Кошти повернено.",
   "entryPackStatusRefundedLead": "Ми повернули кошти на той самий платіжний засіб."

@@ -11,6 +11,7 @@ import { AccountingSnapshotKeyService } from "@/features/accounting/backend/acco
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
 import { checkoutSubmitDeadline } from "@/features/checkout/backend/checkout/checkout-submit-deadline";
 import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
+import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentProvidersLive } from "@/features/checkout/backend/payment/payment-providers";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
@@ -68,6 +69,7 @@ const payLayer = Layer.mergeAll(
   ),
   OrderPaymentHandlers.Live,
   PaymentPageProviderStatus.Live,
+  LatePaymentVerificationService.Live,
   LegalEvidenceEventRepository.Live,
   CheckoutAnalytics.Live,
   PaymentProvidersLive

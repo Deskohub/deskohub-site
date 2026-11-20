@@ -1843,7 +1843,12 @@
   "entryPackStatusPaidTitle": "Dein Eintrittspaket ist bezahlt",
   "entryPackStatusPaidGiftLead": "Du hast dieses Eintrittspaket für jemand anderen gekauft. Nur diese Person kann es nutzen.",
   "entryPackStatusPendingLead": "Wir warten auf die Zahlungsbestätigung von Nexi. Diese Seite aktualisiert sich automatisch. Falls die Zahlungsseite noch offen ist, schließ die Zahlung dort ab.",
-  "entryPackStatusRetryLead": "Die Zahlung wurde nicht abgeschlossen. Du kannst ein neues Eintrittspaket kaufen.",
+  "entryPackStatusNotStartedTitle": "Die Zahlung wurde noch nicht gestartet.",
+  "entryPackStatusCheckingLead": "Wir prüfen die Zahlung bei Nexi. Diese Seite wird automatisch aktualisiert.",
+  "entryPackStatusPartiallyRefundedTitle": "Ein Teil deiner Zahlung wurde erstattet.",
+  "entryPackStatusPartiallyRefundedLead": "Wir haben {amount} über deine ursprüngliche Zahlungsmethode erstattet.",
+  "entryPackStatusRefundPendingTitle": "Die Erstattung ist noch offen.",
+  "entryPackStatusAdditionalRefundLead": "Der Rest deiner Erstattung steht noch aus.",
   "entryPackStatusRefundLead": "Deine Zahlung ging nach Abschluss der Bestellung ein. Wir konnten das Eintrittspaket nicht ausstellen und erstatten dir die Zahlung.",
   "entryPackStatusRefundedTitle": "Deine Zahlung wurde erstattet.",
   "entryPackStatusRefundedLead": "Wir haben die Zahlung auf dein ursprüngliches Zahlungsmittel zurückerstattet."

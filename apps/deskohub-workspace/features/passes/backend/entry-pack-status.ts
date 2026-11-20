@@ -18,6 +18,8 @@ import { runWorkspaceEffect } from "@/shared/backend/workspace-effect";
 import { withWorkspaceRequestContext } from "@/shared/backend/workspace-request-context";
 import { maskEmailAddress } from "@/shared/utils";
 import { currentInstant } from "@/shared/utils/temporal";
+import { getEntryPackRetryPath } from "../entry-pack-checkout";
+import { isEntryPackQuoteExpired } from "../pass-offer";
 
 const readBuyerOrder = Effect.fnUntraced(function* (
   orderId: OrderId,
@@ -27,6 +29,7 @@ const readBuyerOrder = Effect.fnUntraced(function* (
   const [row] = yield* db
     .select({
       tier: passPurchases.tier,
+      locale: passPurchases.locale,
       entryCount: passPurchases.entryCount,
       holderAccountId: passPurchases.holderAccountId,
       validFrom: passPurchases.validFrom,
@@ -38,6 +41,10 @@ const readBuyerOrder = Effect.fnUntraced(function* (
         provider: paymentAttempts.provider,
         state: paymentAttempts.state,
         refundState: paymentAttempts.refundState,
+        refundedAmountValue: paymentAttempts.refundedAmountValue,
+        amountValue: paymentAttempts.amountValue,
+        amountExponent: paymentAttempts.amountExponent,
+        currency: paymentAttempts.currency,
         providerRedirectUrl: paymentAttempts.providerRedirectUrl,
         securityToken: paymentAttempts.securityToken,
         providerOrderCreatedAt: paymentAttempts.providerOrderCreatedAt,
@@ -85,6 +92,7 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
   const { paymentState, attempt } = stored;
   let observation: "no_activity" | "unknown" | undefined;
   let checkedPayment = false;
+  let confirmedUnpaid = false;
   if (paymentState === "pending" && attempt?.provider === "nexi") {
     const finalization = yield* ProviderPaymentFinalizationService;
     const result = yield* finalization
@@ -109,10 +117,12 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
     attempt.refundState === "not_required"
   ) {
     const verification = yield* LatePaymentVerificationService;
-    yield* verification.startRecoveryIfSettled({
+    const outcome = yield* verification.startRecoveryIfSettled({
       orderId,
+      expectedPaymentAttemptId: attempt.id,
       verificationDeadline,
     });
+    confirmedUnpaid = outcome === "confirmed_unpaid";
     checkedPayment = true;
   }
 
@@ -123,6 +133,33 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
 
   const { tier, entryCount, validFrom, validUntil, paidAt } = row;
   const details = { orderId, tier, entryCount };
+  const refund = row.attempt;
+  if (
+    refund?.refundState === "required" ||
+    refund?.refundState === "refunded"
+  ) {
+    const value = refund.refundedAmountValue ?? 0;
+    if (value >= refund.amountValue && refund.refundState === "refunded") {
+      return { ...details, status: "refunded" } as const;
+    }
+    if (value > 0) {
+      return {
+        ...details,
+        status: "partially_refunded",
+        refunded: {
+          value,
+          currency: refund.currency,
+          exponent: refund.amountExponent,
+        },
+        refundPending: refund.refundState === "required",
+      } as const;
+    }
+    return {
+      ...details,
+      status: "refund_required",
+      lateCapture: row.paymentState !== "paid",
+    } as const;
+  }
   if (row.paymentState === "paid" && paidAt) {
     const gift = row.holderAccountId !== accountId;
     const email = gift
@@ -138,16 +175,8 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
       maskedHolderEmail: email ? maskEmailAddress(email) : undefined,
     } as const;
   }
-  if (
-    row.attempt?.refundState === "required" ||
-    row.attempt?.refundState === "refunded"
-  ) {
-    return {
-      ...details,
-      status:
-        row.attempt.refundState === "refunded" ? "refunded" : "refund_required",
-    } as const;
-  }
+  if (row.paymentState === "not_started")
+    return { ...details, status: "not_started" } as const;
   if (row.paymentState === "pending") {
     const now = yield* currentInstant;
     const currentAttempt = row.attempt;
@@ -167,12 +196,21 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
           : undefined,
     } as const;
   }
+  const priorConfirmed = confirmedUnpaid && row.attempt?.id === attempt?.id;
+  if (row.attempt?.provider === "nexi" && !priorConfirmed) {
+    return { ...details, status: "checking" } as const;
+  }
+  const now = yield* currentInstant;
   return {
     ...details,
     status:
       row.paymentState === "cancelled" || row.paymentState === "expired"
         ? row.paymentState
         : "failed",
+    retryPath:
+      priorConfirmed && !isEntryPackQuoteExpired(now, validUntil)
+        ? getEntryPackRetryPath(row.locale, orderId)
+        : undefined,
   } as const;
 });
 

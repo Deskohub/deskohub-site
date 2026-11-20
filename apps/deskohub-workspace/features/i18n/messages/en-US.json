@@ -1843,7 +1843,12 @@
   "entryPackStatusPaidTitle": "Your Entry pack is paid",
   "entryPackStatusPaidGiftLead": "You bought this Entry pack for someone else. Only they can use it.",
   "entryPackStatusPendingLead": "We're waiting for Nexi to confirm your payment. This page updates automatically. If your payment page is still open, finish the payment there.",
-  "entryPackStatusRetryLead": "The payment wasn't completed. You can start a new Entry pack purchase.",
+  "entryPackStatusNotStartedTitle": "Payment hasn’t started.",
+  "entryPackStatusCheckingLead": "We’re checking with Nexi. This page updates automatically.",
+  "entryPackStatusPartiallyRefundedTitle": "Part of your payment was refunded.",
+  "entryPackStatusPartiallyRefundedLead": "We refunded {amount} to your original payment method.",
+  "entryPackStatusRefundPendingTitle": "Refund pending.",
+  "entryPackStatusAdditionalRefundLead": "The rest of your refund is still pending.",
   "entryPackStatusRefundLead": "Your payment arrived after the order ended. We couldn't issue the Entry pack and will refund the payment.",
   "entryPackStatusRefundedTitle": "Your payment was refunded.",
   "entryPackStatusRefundedLead": "We refunded the payment to your original payment method."

@@ -32,6 +32,7 @@ export function EntryPackPay({
   orderId,
   state,
   discountCodeEntryEnabled,
+  continuationPath,
   headingRef,
   onExpire,
   onRequestPayment,
@@ -40,6 +41,7 @@ export function EntryPackPay({
   readonly orderId: OrderId;
   readonly state: EntryPackPayState;
   readonly discountCodeEntryEnabled: boolean;
+  readonly continuationPath?: string | undefined;
   readonly headingRef: Ref<HTMLHeadingElement>;
   readonly onExpire: () => void;
   readonly onRequestPayment: () => void;
@@ -60,7 +62,7 @@ export function EntryPackPay({
     window.location.assign(
       getAccountSignInPath(
         locale,
-        getEntryPackDetailsPath(locale, product, orderId)
+        continuationPath ?? getEntryPackDetailsPath(locale, product, orderId)
       )
     );
   const goToStatus = () =>

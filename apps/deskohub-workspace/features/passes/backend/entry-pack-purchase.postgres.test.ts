@@ -37,6 +37,7 @@ import { companyRegistrationIdSchema } from "@/features/accounting/billing-ident
 import { getInvoicePresentation } from "@/features/accounting/invoice-presentation";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
 import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
+import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { NexiWebhookService } from "@/features/checkout/backend/payment/nexi-webhook.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentProvidersFromNexi } from "@/features/checkout/backend/payment/payment-providers";
@@ -71,10 +72,12 @@ import {
   getEntryPackPaymentDisclosure,
   getEntryPackPriceFingerprint,
   payForEntryPack,
+  readEntryPackPaymentRetry,
   recordEntryPackPaymentConsent,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
 import { settleEntryPack } from "./entry-pack-settlement";
+import { loadEntryPackStatus } from "./entry-pack-status";
 import { reconcilePassPurchases } from "./pass-purchase-reconciliation";
 
 describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
@@ -145,7 +148,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       db: WorkspacePostgresSuiteDatabase,
       voucherValue: number,
       purchasedAt?: Temporal.Instant,
-      billing?: ReservationBillingSelection
+      billing?: ReservationBillingSelection,
+      holderEmail?: string
     ) => {
       const code = canonicalPromotionCodeSchema.make(
         `V${crypto.randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`
@@ -298,10 +302,12 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         )
       );
       const providerOrders: string[] = [];
+      const verifiedOrders: string[] = [];
       let captured = true;
+      let priorClosureVerified = false;
       let abandoned = false;
       let failCreation = false;
-      const services = Layer.mergeAll(
+      const infrastructure = Layer.mergeAll(
         db.layer,
         purchaseServices,
         layer,
@@ -399,6 +405,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
                   })
                 ),
               verifyPaymentOutcome: (input) => {
+                verifiedOrders.push(input.orderId);
                 if (inconclusiveProviderOrders.has(input.orderId)) {
                   return Effect.fail(
                     new NetworkError({
@@ -431,12 +438,36 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           )
         )
       );
+      // The synthetic provider can model a closure proof. The production Nexi
+      // adapter does not infer this guarantee from an unsuccessful verification.
+      const retryVerification = Layer.effect(
+        LatePaymentVerificationService,
+        Effect.gen(function* () {
+          const verification = yield* LatePaymentVerificationService;
+          return LatePaymentVerificationService.of({
+            startRecoveryIfSettled: (input) =>
+              verification.startRecoveryIfSettled(input).pipe(
+                Effect.map((result) =>
+                  priorClosureVerified && result === "not_settled"
+                    ? ("confirmed_unpaid" as const)
+                    : result
+                )
+              ),
+          });
+        })
+      ).pipe(
+        Layer.provide(
+          LatePaymentVerificationService.Default.pipe(Layer.provide(infrastructure))
+        )
+      );
+      const services = Layer.merge(infrastructure, retryVerification);
       const orderId = orderIdSchema.make(crypto.randomUUID());
       const begin = beginEntryPackPurchase({
         orderId,
         product: { kind: "entry-pack", tier: "open-space", size: 5 },
         locale: "en-US",
         submittedCode: code,
+        ...(holderEmail && { holderEmail }),
       }).pipe(Effect.provide(services));
       const initialPurchase = await Effect.runPromise(
         purchasedAt ? begin.pipe(atInstant(purchasedAt)) : begin
@@ -498,6 +529,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         abandonProviderOrder: () => {
           abandoned = true;
         },
+        confirmProviderOrderEnded: () => {
+          abandoned = false;
+          captured = false;
+          priorClosureVerified = true;
+        },
         rejectNextCreation: () => {
           failCreation = true;
         },
@@ -526,6 +562,28 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           failSend = true;
         },
         providerOrders,
+        verifiedOrders,
+        status: () =>
+          Effect.runPromise(
+            loadEntryPackStatus(orderId).pipe(
+              Effect.provide(ProviderPaymentFinalizationService.Default),
+              Effect.provide(services)
+            )
+          ),
+        openRetry: (destination: string) => {
+          const path = new URL(destination, "https://example.invalid");
+          expect(path.pathname).toBe("/en-US/passes/entry-pack");
+          expect(path.searchParams.get("step")).toBe("pay");
+          const retryOrderId = orderIdSchema.make(
+            path.searchParams.get("order")!
+          );
+          expect(retryOrderId).toBe(orderId);
+          return Effect.runPromise(
+            readEntryPackPaymentRetry(retryOrderId).pipe(
+              Effect.provide(services)
+            )
+          );
+        },
         notify,
         readAffirmedCode: () => affirmedCode,
         initialFingerprint: getEntryPackPriceFingerprint(initialQuote),
@@ -610,6 +668,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       expect(await payment.pay()).toMatchObject({ status: "hosted" });
       await payment.notify("failure");
+      payment.confirmProviderOrderEnded();
       await expect(
         payment.pay(undefined, {
           billing: { purpose: "personal", invoice: "none" },
@@ -652,6 +711,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(payment.providerOrders).toHaveLength(1);
 
       await payment.notify("failure");
+      payment.confirmProviderOrderEnded();
       await expect(payment.reprice(fingerprint)).rejects.toMatchObject({
         reason: "payment-in-progress",
       });
@@ -665,11 +725,37 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       await payment.notify("failure", 1);
     });
 
-    test("a retry reviews current terms on the same order and keeps the first attempt's invoice buyer", async () => {
+    test("status resumes the original gift, verifies the prior charge and keeps billing while collecting fresh consent", async () => {
       const db = database!;
-      const payment = await integration(db, 2_000, undefined, requestedInvoice);
+      const holderEmail = testEmailAddress("retry-gift-holder");
+      const payment = await integration(
+        db,
+        2_000,
+        undefined,
+        requestedInvoice,
+        holderEmail
+      );
       expect(await payment.pay()).toMatchObject({ status: "hosted" });
       await payment.notify("failure");
+      payment.confirmProviderOrderEnded();
+      const oldProviderOrder = payment.providerOrders[0]!;
+      payment.verifiedOrders.length = 0;
+      const ended = await payment.status();
+      expect(ended.status).toBe("failed");
+      expect(payment.verifiedOrders).toEqual([oldProviderOrder]);
+      expect("retryPath" in ended && ended.retryPath).toBeTruthy();
+      if (!("retryPath" in ended && ended.retryPath))
+        throw new Error("Missing retry destination");
+      const continuation = await payment.openRetry(ended.retryPath);
+      expect(continuation).toMatchObject({
+        kind: "retry",
+        billing: requestedInvoice,
+        holderEmail,
+      });
+      expect(payment.verifiedOrders).toEqual([
+        oldProviderOrder,
+        oldProviderOrder,
+      ]);
       payment.changeBuyerName("Changed Fixture Name");
       await expect(
         payment.pay(undefined, { acceptedDocuments: [] })
@@ -688,13 +774,60 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const second = await payment.readAccounting(attempts.rows[1]!.id);
       expect(first.snapshot?.buyer).toBeDefined();
       expect(second.snapshot?.buyer).toEqual(first.snapshot?.buyer);
-      await payment.notify("failure", 1);
+      expect(second.snapshot?.billing).toEqual(first.snapshot?.billing);
+      expect(second.snapshot?.quote).toEqual(first.snapshot?.quote);
+      expect(payment.verifiedOrders).toEqual(Array(4).fill(oldProviderOrder));
+
+      await payment.notify("success");
+      await payment.notify("success", 1);
+      await payment.notify("success", 1);
+      expect(await payment.status()).toMatchObject({
+        status: "paid",
+        gift: true,
+      });
+      expect(await payment.pay()).toMatchObject({ status: "paid" });
+      const issued = await db.pool.query(
+        `select p.id from pass_purchases p join auth."user" u on u.id = p.holder_account_id
+         where u.email = $1 and p.status = 'active'`,
+        [holderEmail]
+      );
+      expect(issued.rows).toEqual([{ id: payment.orderId }]);
+      expect(payment.providerOrders).toHaveLength(2);
+    });
+
+    test("an inconclusive terminal payment stays on private status and a late capture settles the original pack", async () => {
+      const payment = await integration(database!, 2_000);
+      await payment.pay();
+      await payment.notify("failure");
+      const checking = await payment.status();
+      expect(checking).toMatchObject({ status: "checking" });
+      expect(checking).not.toHaveProperty("retryPath");
+      const replay = () => payment.pay();
+      expect(await Promise.all([replay(), replay()])).toEqual([
+        {
+          status: "pending",
+          statusUrl: `/en-US/reservation/status/${payment.orderId}`,
+        },
+        {
+          status: "pending",
+          statusUrl: `/en-US/reservation/status/${payment.orderId}`,
+        },
+      ]);
+      expect(payment.providerOrders).toHaveLength(1);
+      await payment.notify("success");
+      expect(await payment.status()).toMatchObject({
+        status: "paid",
+        orderId: payment.orderId,
+      });
+      expect(await payment.pay()).toMatchObject({ status: "paid" });
+      expect(payment.providerOrders).toHaveLength(1);
     });
 
     test("an ended attempt cannot reserve a different promotion with the same code and price", async () => {
       const payment = await integration(database!, 2_000);
       expect(await payment.pay()).toMatchObject({ status: "hosted" });
       await payment.notify("failure");
+      payment.confirmProviderOrderEnded();
       payment.reassignCode();
       await expect(payment.pay()).rejects.toMatchObject({
         reason: "payment-in-progress",
@@ -1132,12 +1265,17 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             claim: "released",
           },
         ]);
-        expect(await payment.pay(later)).toMatchObject({ status: "hosted" });
-        expect(payment.providerOrders).toHaveLength(2);
-        expect((await read()).rows.map(({ claim }) => claim)).toEqual([
-          "released",
-          "reserved",
-        ]);
+        expect(await payment.pay(later)).toMatchObject({ status: "pending" });
+        expect(payment.providerOrders).toHaveLength(1);
+        if (attached) {
+          payment.confirmProviderOrderEnded();
+          expect(await payment.pay(later)).toMatchObject({ status: "hosted" });
+          expect(payment.providerOrders).toHaveLength(2);
+          expect((await read()).rows.map(({ claim }) => claim)).toEqual([
+            "released",
+            "reserved",
+          ]);
+        }
       }
     );
 
@@ -1146,6 +1284,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const payment = await integration(db, 2_000);
       await payment.pay();
       await payment.notify("failure");
+      payment.confirmProviderOrderEnded();
       await payment.pay();
       expect(payment.providerOrders).toHaveLength(2);
       await payment.notify("success");

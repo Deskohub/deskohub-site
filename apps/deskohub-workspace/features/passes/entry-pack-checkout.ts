@@ -14,6 +14,11 @@ import {
 
 const entryPackCheckoutPath = "/passes/entry-pack";
 
+export function getEntryPackRetryPath(locale: Locale, orderId: OrderId) {
+  const query = new URLSearchParams({ order: orderId, step: "pay" });
+  return `/${locale}${entryPackCheckoutPath}?${query}`;
+}
+
 export function readEntryPackSelection(query: {
   readonly tier?: string | string[];
   readonly size?: string | string[];

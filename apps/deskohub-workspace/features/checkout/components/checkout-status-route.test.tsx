@@ -247,6 +247,7 @@ const passOrder = {
   entryCount: 5,
 } as const;
 let passStatus: EntryPackStatus = { status: "not_found" };
+let passPurchaseOpen = true;
 const passStatusReads: [string, Headers][] = [];
 mock.module("@/features/passes/backend/entry-pack-status", () => ({
   loadEntryPackStatusPage: (id: string, request: Headers) => {
@@ -257,7 +258,7 @@ mock.module("@/features/passes/backend/entry-pack-status", () => ({
 mock.module(
   "@/features/passes/backend/cowork-passes-release-gate.server",
   () => ({
-    isCoworkPassesPageOpenAfterConnection: async () => true,
+    isCoworkPassesPageOpenAfterConnection: async () => passPurchaseOpen,
   })
 );
 
@@ -312,6 +313,7 @@ describe("CheckoutStatusRoute", () => {
     orderKindReads.length = 0;
     passStatusReads.length = 0;
     passStatus = { status: "not_found" };
+    passPurchaseOpen = true;
     readCookieNames.length = 0;
     connections = 0;
     signedOut = false;
@@ -494,17 +496,59 @@ describe("CheckoutStatusRoute", () => {
     "renders the terminal pass status %s with the appropriate action",
     async (status) => {
       orderKind = "pass-purchase";
-      passStatus = { ...passOrder, status };
+      const retryPath = `/en-US/passes/entry-pack?order=${passOrderId}&step=pay`;
+      if (status === "refund_required") {
+        passStatus = { ...passOrder, status, lateCapture: true };
+      } else if (status === "refunded") {
+        passStatus = { ...passOrder, status };
+      } else {
+        passStatus = { ...passOrder, status, retryPath };
+      }
       const { errors, html } = await renderRoute({ order: passOrderId });
 
       expect(errors).toEqual([]);
       expect(html).toContain(`data-entry-pack-status="${status}"`);
       expect(html).toContain('data-auto-refresh="false"');
-      expect(html.includes('href="/en-US/passes/entry-pack"')).toBe(
+      expect(html.includes(`href="${retryPath.replace("&", "&amp;")}"`)).toBe(
         status !== "refund_required" && status !== "refunded"
       );
     }
   );
+
+  test("the closed purchase gate shows untouched and failed status without retry controls or guidance", async () => {
+    orderKind = "pass-purchase";
+    passPurchaseOpen = false;
+    passStatus = { ...passOrder, status: "not_started" };
+    const draft = await renderRoute({ order: passOrderId });
+    expect(draft.errors).toEqual([]);
+    expect(draft.html).toContain('data-entry-pack-status="not_started"');
+    expect(draft.html).not.toContain("Payment was not completed");
+    expect(draft.html).not.toContain("/passes/entry-pack");
+    passStatus = {
+      ...passOrder,
+      status: "failed",
+      retryPath: "/en-US/passes/entry-pack",
+    };
+    const failed = await renderRoute({ order: passOrderId });
+    expect(failed.html).not.toContain("fresh secure payment");
+    expect(failed.html).not.toContain("/passes/entry-pack");
+  });
+
+  test("the pass status renders the partial refund without a payment action", async () => {
+    orderKind = "pass-purchase";
+    passStatus = {
+      ...passOrder,
+      status: "partially_refunded",
+      refunded: { value: 25000, exponent: 2, currency: "CZK" },
+      refundPending: true,
+    };
+    const { errors, html } = await renderRoute({ order: passOrderId });
+    expect(errors).toEqual([]);
+    expect(html).toContain("Part of your payment was refunded.");
+    expect(html).toContain("250");
+    expect(html).toContain("The rest of your refund is still pending.");
+    expect(html).not.toContain("Try again");
+  });
 
   test("preserves the return outcome when a pass purchase requires sign-in", async () => {
     orderKind = "pass-purchase";

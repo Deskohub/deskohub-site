@@ -4,12 +4,14 @@ import { CheckoutFlowLayout } from "@/features/checkout/components/checkout-flow
 import { type Locale, m } from "@/features/i18n";
 import { RouteAutoRefresh } from "@/shared/components/route-auto-refresh";
 import { Button } from "@/shared/components/ui/button";
+import { formatMoney } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils";
 import {
   formatInstantDateTime,
   formatPlainDateRange,
 } from "@/shared/utils/date-time-format";
 import type { EntryPackStatus } from "../backend/entry-pack-status";
+import { getEntryPackDetailsPath } from "../entry-pack-checkout";
 import { getEntryPackLastUsableDate } from "../pass-offer";
 import { getPassTierName } from "../pass-offer.i18n";
 
@@ -21,50 +23,83 @@ type OrderStatus = Exclude<
 const statusTitles = {
   paid: m.entryPackStatusPaidTitle,
   pending: m.checkoutStatusPendingTitle,
+  checking: m.checkoutStatusPaymentPendingDelayedTitle,
+  not_started: m.entryPackStatusNotStartedTitle,
   cancelled: m.checkoutStatusCancelledTitle,
   expired: m.checkoutStatusExpiredTitle,
   failed: m.checkoutStatusPaymentFailedTitle,
-  refund_required: m.checkoutStatusLatePaymentRefundTitle,
+  refund_required: m.entryPackStatusRefundPendingTitle,
   refunded: m.entryPackStatusRefundedTitle,
-};
-
-const statusLeads = {
-  pending: m.entryPackStatusPendingLead,
-  cancelled: m.entryPackStatusRetryLead,
-  expired: m.entryPackStatusRetryLead,
-  failed: m.entryPackStatusRetryLead,
-  refund_required: m.entryPackStatusRefundLead,
-  refunded: m.entryPackStatusRefundedLead,
+  partially_refunded: m.entryPackStatusPartiallyRefundedTitle,
 };
 
 const statusIcons = {
   paid: Check,
   pending: Clock,
+  checking: Clock,
+  not_started: Clock,
   cancelled: CircleAlert,
   expired: CircleAlert,
   failed: CircleAlert,
   refund_required: CircleAlert,
   refunded: Check,
+  partially_refunded: Check,
 };
 
 export function EntryPackStatusPage({
-  allowNewPurchase,
+  allowPurchaseContinuation,
   locale,
   status,
   presentation,
 }: {
-  readonly allowNewPurchase: boolean;
+  readonly allowPurchaseContinuation: boolean;
   readonly locale: Locale;
   readonly status: OrderStatus;
   readonly presentation: "page" | "modal";
 }) {
   const isPaid = status.status === "paid";
   const isPending = status.status === "pending";
+  const retryPath =
+    allowPurchaseContinuation && "retryPath" in status
+      ? status.retryPath
+      : undefined;
+  const draftPath =
+    allowPurchaseContinuation && status.status === "not_started"
+      ? getEntryPackDetailsPath(
+          locale,
+          { kind: "entry-pack", tier: status.tier, size: status.entryCount },
+          status.orderId
+        )
+      : undefined;
   const Icon = statusIcons[status.status];
   const title = statusTitles[status.status]({}, { locale });
-  const lead = isPaid
-    ? status.gift && m.entryPackStatusPaidGiftLead({}, { locale })
-    : statusLeads[status.status]({}, { locale });
+  const lead = (() => {
+    switch (status.status) {
+      case "paid":
+        return status.gift
+          ? m.entryPackStatusPaidGiftLead({}, { locale })
+          : undefined;
+      case "pending":
+        return m.entryPackStatusPendingLead({}, { locale });
+      case "checking":
+        return m.entryPackStatusCheckingLead({}, { locale });
+      case "refund_required":
+        return status.lateCapture
+          ? m.entryPackStatusRefundLead({}, { locale })
+          : undefined;
+      case "refunded":
+        return m.entryPackStatusRefundedLead({}, { locale });
+      case "partially_refunded":
+        return m.entryPackStatusPartiallyRefundedLead(
+          { amount: formatMoney(status.refunded, locale) },
+          { locale }
+        );
+      default:
+        return retryPath
+          ? m.checkoutPaymentRetryFailedBanner({}, { locale })
+          : undefined;
+    }
+  })();
   const content = (
     <div
       className={
@@ -74,7 +109,7 @@ export function EntryPackStatusPage({
       }
       data-entry-pack-status={status.status}
     >
-      <RouteAutoRefresh enabled={isPending} />
+      <RouteAutoRefresh enabled={isPending || status.status === "checking"} />
       <output className="sr-only" aria-live="polite" aria-atomic>
         {title}
       </output>
@@ -88,6 +123,11 @@ export function EntryPackStatusPage({
           </h1>
           {lead && (
             <p className="mt-4 text-lg leading-8 text-navy-blue/70">{lead}</p>
+          )}
+          {status.status === "partially_refunded" && status.refundPending && (
+            <p className="mt-2 text-navy-blue/70">
+              {m.entryPackStatusAdditionalRefundLead({}, { locale })}
+            </p>
           )}
         </div>
       </div>
@@ -152,11 +192,14 @@ export function EntryPackStatusPage({
             </a>
           </Button>
         )}
-        {allowNewPurchase && (
+        {retryPath && (
           <Button asChild size="lg">
-            <a href={`/${locale}/passes/entry-pack`}>
-              {m.checkoutStatusTryAgain({}, { locale })}
-            </a>
+            <a href={retryPath}>{m.checkoutStatusTryAgain({}, { locale })}</a>
+          </Button>
+        )}
+        {draftPath && (
+          <Button asChild size="lg">
+            <a href={draftPath}>{m.checkoutContinueButton({}, { locale })}</a>
           </Button>
         )}
         <Button asChild size="lg" variant="secondary">

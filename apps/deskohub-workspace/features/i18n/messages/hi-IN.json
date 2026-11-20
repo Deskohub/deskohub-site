@@ -1843,7 +1843,12 @@
   "entryPackStatusPaidTitle": "आपके प्रवेश पैक का भुगतान हो गया है",
   "entryPackStatusPaidGiftLead": "आपने यह प्रवेश पैक किसी और के लिए खरीदा है। केवल वही व्यक्ति इसका उपयोग कर सकता है।",
   "entryPackStatusPendingLead": "हम Nexi से आपके भुगतान की पुष्टि का इंतज़ार कर रहे हैं। यह पेज अपने आप अपडेट होता है। अगर भुगतान पेज अभी खुला है, तो वहीं भुगतान पूरा करें।",
-  "entryPackStatusRetryLead": "भुगतान पूरा नहीं हुआ। आप नया एंट्री पैक खरीदना शुरू कर सकते हैं।",
+  "entryPackStatusNotStartedTitle": "भुगतान अभी शुरू नहीं हुआ है।",
+  "entryPackStatusCheckingLead": "हम Nexi से भुगतान की पुष्टि कर रहे हैं। यह पेज अपने आप अपडेट होता है।",
+  "entryPackStatusPartiallyRefundedTitle": "आपके भुगतान का कुछ हिस्सा वापस कर दिया गया है।",
+  "entryPackStatusPartiallyRefundedLead": "हमने आपकी मूल भुगतान विधि में {amount} वापस कर दिए हैं।",
+  "entryPackStatusRefundPendingTitle": "रिफ़ंड लंबित है।",
+  "entryPackStatusAdditionalRefundLead": "आपके रिफ़ंड की बाकी रकम अभी लंबित है।",
   "entryPackStatusRefundLead": "ऑर्डर बंद होने के बाद आपका भुगतान मिला। हम एंट्री पैक जारी नहीं कर सके और आपका भुगतान वापस करेंगे।",
   "entryPackStatusRefundedTitle": "आपका भुगतान वापस कर दिया गया है।",
   "entryPackStatusRefundedLead": "हमने उसी भुगतान माध्यम पर रकम वापस की है जिसका आपने इस्तेमाल किया था।"

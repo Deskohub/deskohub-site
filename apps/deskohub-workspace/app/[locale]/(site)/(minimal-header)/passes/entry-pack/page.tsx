@@ -5,16 +5,26 @@ import { Suspense } from "react";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
+import { getAccountSignInPath } from "@/features/account/routes";
+import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
+import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
+import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { getDiscountCodeEntryEnabled } from "@/features/discounts/discount-code-entry.server";
 import { type Locale, m } from "@/features/i18n";
 import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { orderIdSchema } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
-import { readEntryPackCheckoutDraft } from "@/features/passes/backend/entry-pack-purchase";
+import { displayEntryPackCheckoutPrice } from "@/features/passes/backend/entry-pack-checkout-price";
+import {
+  getEntryPackPaymentDisclosure,
+  readEntryPackCheckoutDraft,
+  readEntryPackPaymentRetry,
+} from "@/features/passes/backend/entry-pack-purchase";
 import { EntryPackCheckout } from "@/features/passes/components/entry-pack-checkout";
 import {
   type EntryPackBuyer,
   getEntryPackDetailsPath,
+  getEntryPackRetryPath,
   readEntryPackSelection,
 } from "@/features/passes/entry-pack-checkout";
 import {
@@ -119,6 +129,7 @@ async function EntryPackPageContent({
     ? query.order
     : undefined;
   if (query.order !== undefined && !orderId) notFound();
+  const isPaymentRetry = orderId !== undefined && query.step === "pay";
   const { buyer, validity, draft, discountCodeEntryEnabled } =
     await runWorkspaceEffectOrElse("passes.entry-pack-page", {
       failureCode: "entry_pack_page_unavailable",
@@ -135,7 +146,25 @@ async function EntryPackPageContent({
         const draft =
           orderId &&
           (buyer.kind === "linked" || buyer.kind === "profile-required")
-            ? yield* readEntryPackCheckoutDraft(orderId).pipe(
+            ? yield* Effect.gen(function* () {
+                if (!isPaymentRetry)
+                  return yield* readEntryPackCheckoutDraft(orderId);
+                return yield* readEntryPackPaymentRetry(orderId).pipe(
+                  Effect.provide(
+                    Layer.mergeAll(
+                      AccountingDocumentSnapshots.Default.pipe(
+                        Layer.provide(
+                          Layer.mergeAll(
+                            WorkspaceDatabase.Default,
+                            AccountingSnapshotKeyService.Default
+                          )
+                        )
+                      ),
+                      LatePaymentVerificationService.Live
+                    )
+                  )
+                );
+              }).pipe(
                 Effect.catchTag("EntryPackPurchaseError", () =>
                   Effect.succeed({ kind: "missing" as const })
                 )
@@ -167,6 +196,20 @@ async function EntryPackPageContent({
       )
     );
   if (draft?.kind === "missing") notFound();
+  if (isPaymentRetry) {
+    if (buyer.kind === "signed-out") {
+      redirect(
+        getAccountSignInPath(locale, getEntryPackRetryPath(locale, orderId))
+      );
+    }
+    if (draft?.kind !== "retry") {
+      redirect(
+        `/${draft?.kind === "status" && "locale" in draft ? draft.locale : locale}${reservationStatusPath}/${orderId}`
+      );
+    }
+    if (draft.locale !== locale)
+      redirect(getEntryPackRetryPath(draft.locale, orderId));
+  }
   if (orderId && draft?.kind === "draft" && draft.locale !== locale) {
     redirect(getEntryPackDetailsPath(draft.locale, draft.product, orderId));
   }
@@ -174,7 +217,9 @@ async function EntryPackPageContent({
     redirect(`/${locale}${reservationStatusPath}/${orderId}`);
   }
   const product =
-    draft?.kind === "draft" ? draft.product : readEntryPackSelection(query);
+    draft?.kind === "draft" || draft?.kind === "retry"
+      ? draft.product
+      : readEntryPackSelection(query);
 
   return (
     <EntryPackCheckout
@@ -196,6 +241,25 @@ async function EntryPackPageContent({
           : undefined
       }
       validity={validity}
+      retryPayment={
+        orderId && draft?.kind === "retry"
+          ? {
+              orderId,
+              state: {
+                status: "ready",
+                product: draft.product,
+                price: displayEntryPackCheckoutPrice(draft.quote),
+                validFrom: draft.validFrom.toString(),
+                lastUsableDate: getEntryPackLastUsableDate(
+                  draft.validUntil
+                ).toString(),
+                disclosure: getEntryPackPaymentDisclosure(draft.locale),
+                billing: draft.billing,
+                ...(draft.holderEmail && { holderEmail: draft.holderEmail }),
+              },
+            }
+          : undefined
+      }
       discountCodeEntryEnabled={discountCodeEntryEnabled}
     />
   );

@@ -140,12 +140,29 @@ describe("LatePaymentVerificationService", () => {
     });
   });
 
-  test("leaves an unpaid terminal attempt alone", async () => {
-    const harness = makeHarness({ verification: verification("failure") });
+  test("a Nexi decline with zero funds does not establish that the session is closed", async () => {
+    const declined = verification("failure");
+    const harness = makeHarness({
+      verification: {
+        ...declined,
+        provider: { ...declined.provider, authorizedAmount: "0", capturedAmount: "0" },
+      },
+    });
 
     expect(await harness.run()).toBe("not_settled");
     expect(harness.spies.start).not.toHaveBeenCalled();
     expect(harness.spies.enqueue).not.toHaveBeenCalled();
+  });
+
+  test("does not authorize retry when Nexi still reports authorized funds", async () => {
+    const declined = verification("failure");
+    const harness = makeHarness({
+      verification: {
+        ...declined,
+        provider: { ...declined.provider, authorizedAmount: "29000" },
+      },
+    });
+    expect(await harness.run()).toBe("not_settled");
   });
 
   test("does not start recovery from a mismatching provider verification", async () => {

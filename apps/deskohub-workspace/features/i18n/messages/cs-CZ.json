@@ -1861,7 +1861,12 @@
   "entryPackStatusPaidTitle": "Tvůj balíček vstupů je zaplacený",
   "entryPackStatusPaidGiftLead": "Tenhle balíček je pro někoho jiného. Využít ho může jen jeho držitel.",
   "entryPackStatusPendingLead": "Čekáme na potvrzení od Nexi. Stránka se aktualizuje automaticky. Pokud máš platební stránku ještě otevřenou, dokonči platbu tam.",
-  "entryPackStatusRetryLead": "Platba se nedokončila. Můžeš zahájit nový nákup balíčku vstupů.",
+  "entryPackStatusNotStartedTitle": "Platba ještě nezačala.",
+  "entryPackStatusCheckingLead": "Ověřujeme platbu u Nexi. Stránka se aktualizuje automaticky.",
+  "entryPackStatusPartiallyRefundedTitle": "Část platby jsme ti vrátili.",
+  "entryPackStatusPartiallyRefundedLead": "Na původní platební metodu jsme ti vrátili {amount}.",
+  "entryPackStatusRefundPendingTitle": "Vrácení platby se zpracovává.",
+  "entryPackStatusAdditionalRefundLead": "Zbytek refundace se ještě zpracovává.",
   "entryPackStatusRefundLead": "Platba dorazila po ukončení objednávky. Balíček z ní nevznikl a platbu ti vrátíme.",
   "entryPackStatusRefundedTitle": "Platbu jsme vrátili.",
   "entryPackStatusRefundedLead": "Platbu jsme vrátili na původní platební prostředek."

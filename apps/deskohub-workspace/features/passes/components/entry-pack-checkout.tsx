@@ -12,10 +12,12 @@ import {
   defaultReservationBillingSelection,
   type ReservationBillingSelection,
 } from "@/features/reservation/reservation-billing";
+import { reservationStatusPath } from "@/features/reservation/routes";
 import {
   type EntryPackBuyer,
   type entryPackDetailsSchema,
   getEntryPackDetailsPath,
+  getEntryPackRetryPath,
 } from "../entry-pack-checkout";
 import { beginEntryPackCheckout } from "../entry-pack-checkout-actions";
 import type { EntryPackProduct, EntryPackSize } from "../pass-offer";
@@ -47,6 +49,7 @@ export function EntryPackCheckout({
   validity,
   discountCodeEntryEnabled,
   continuation,
+  retryPayment,
 }: {
   readonly buyer: EntryPackBuyer;
   readonly locale: Locale;
@@ -59,6 +62,10 @@ export function EntryPackCheckout({
     readonly holderEmail?: string;
     readonly validUntil?: string;
   };
+  readonly retryPayment?: {
+    readonly orderId: OrderId;
+    readonly state: EntryPackPayState;
+  };
 }) {
   const [product, setProduct] = useState(initialProduct);
   const [savedOrderId, setSavedOrderId] = useState(continuation?.orderId);
@@ -68,7 +75,7 @@ export function EntryPackCheckout({
   const displayedValidity = confirmedValidity
     ? { ...validity, [product.size]: confirmedValidity }
     : validity;
-  const [step, setStep] = useState<Step>(initialStep);
+  const [step, setStep] = useState<Step>(retryPayment ? "pay" : initialStep);
   const [details, setDetails] = useState<DetailsSchema["Encoded"] | undefined>(
     continuation?.holderEmail === undefined
       ? undefined
@@ -77,10 +84,13 @@ export function EntryPackCheckout({
           billing: defaultReservationBillingSelection,
         }
   );
-  const [payment, setPayment] = useState<{
-    orderId: OrderId;
-    state: EntryPackPayState;
-  }>();
+  const [payment, setPayment] = useState<
+    | {
+        orderId: OrderId;
+        state: EntryPackPayState;
+      }
+    | undefined
+  >(retryPayment);
   const [error, setError] = useState<string>();
   const [paymentRequested, setPaymentRequested] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -187,6 +197,7 @@ export function EntryPackCheckout({
               chooseSpace: { onSelect: () => moveTo("choose") },
             }),
             ...(step === "pay" &&
+              !retryPayment &&
               !paymentRequested && {
                 contact: { onSelect: () => moveTo("details") },
               }),
@@ -240,10 +251,21 @@ export function EntryPackCheckout({
           locale={locale}
           orderId={payment.orderId}
           state={payment.state}
-          discountCodeEntryEnabled={discountCodeEntryEnabled}
+          discountCodeEntryEnabled={discountCodeEntryEnabled && !retryPayment}
+          continuationPath={
+            retryPayment
+              ? getEntryPackRetryPath(locale, payment.orderId)
+              : undefined
+          }
           headingRef={heading}
           onRequestPayment={() => setPaymentRequested(true)}
           onExpire={() => {
+            if (retryPayment) {
+              window.location.replace(
+                `/${locale}${reservationStatusPath}/${payment.orderId}`
+              );
+              return;
+            }
             attempt.current = undefined;
             setSavedOrderId(undefined);
             setConfirmedValidity(undefined);

@@ -150,10 +150,9 @@ async function renderEntryPackStatus({
 
   return (
     <EntryPackStatusPage
-      allowNewPurchase={
-        (status.status === "failed" ||
-          status.status === "cancelled" ||
-          status.status === "expired") &&
+      allowPurchaseContinuation={
+        (status.status === "not_started" ||
+          ("retryPath" in status && status.retryPath !== undefined)) &&
         (await isCoworkPassesPageOpenAfterConnection())
       }
       locale={locale}

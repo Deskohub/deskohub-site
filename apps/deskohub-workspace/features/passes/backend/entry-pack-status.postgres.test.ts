@@ -52,7 +52,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       paymentState,
       holderAccountId = buyer,
     }: {
-      readonly paymentState: "paid" | "pending" | "expired";
+      readonly paymentState: "not_started" | "paid" | "pending" | "expired";
       readonly holderAccountId?: CustomerAccountId;
     }) => {
       const orderId = orderIdSchema.make(crypto.randomUUID());
@@ -62,7 +62,12 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         `insert into orders
           (id, kind, dotypos_customer_id, payment_state, fulfillment_state, active_payment_attempt_id, paid_at)
           values ($1, 'pass-purchase', 'fixture-buyer', $2, 'not_started', $3, $4)`,
-        [orderId, paymentState, attemptId, paidAt]
+        [
+          orderId,
+          paymentState,
+          paymentState === "not_started" ? null : attemptId,
+          paidAt,
+        ]
       );
       await database.pool.query(
         `insert into pass_purchases
@@ -72,26 +77,30 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           orderId,
           buyer,
           holderAccountId,
-          { paid: "active", pending: "pending_payment", expired: "void" }[
-            paymentState
-          ],
+          {
+            paid: "active",
+            not_started: "pending_payment",
+            pending: "pending_payment",
+            expired: "void",
+          }[paymentState],
           now.toString(),
         ]
       );
-      await database.pool.query(
-        `insert into payment_attempts
+      if (paymentState !== "not_started")
+        await database.pool.query(
+          `insert into payment_attempts
           (id, order_id, provider, provider_order_id, security_token, state, amount_value, amount_exponent, currency,
            provider_redirect_url, failure_code, provider_order_created_at)
           values ($1, $2, 'nexi', $1, 'synthetic', $3, 100000, 2, 'CZK', $4, $5, $6)`,
-        [
-          attemptId,
-          orderId,
-          paymentState,
-          paymentPage,
-          paymentState === "expired" ? "fixture_expired" : null,
-          now.toString(),
-        ]
-      );
+          [
+            attemptId,
+            orderId,
+            paymentState,
+            paymentPage,
+            paymentState === "expired" ? "fixture_expired" : null,
+            now.toString(),
+          ]
+        );
       return { orderId, attemptId };
     };
 
@@ -106,7 +115,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         readonly finalize?: (
           id: OrderId
         ) => Effect.Effect<"awaiting_payment" | "pending">;
-        readonly recover?: (id: OrderId) => Effect.Effect<"recovery_started">;
+        readonly recover?: (
+          id: OrderId
+        ) => Effect.Effect<
+          "recovery_started" | "confirmed_unpaid" | "not_settled"
+        >;
       } = {}
     ) =>
       Effect.runPromise(
@@ -211,6 +224,47 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
       await database.pool.query(
         "update payment_attempts set refund_state = 'refunded', refunded_amount_value = amount_value, refunded_at = now() where id = $1",
+        [attemptId]
+      );
+      expect(await view(orderId)).toMatchObject({ status: "refunded" });
+    });
+
+    test("an untouched draft has no provider attempt or payment failure", async () => {
+      const { orderId } = await seedOrder({ paymentState: "not_started" });
+      expect(await view(orderId)).toMatchObject({ status: "not_started" });
+    });
+
+    test("the active attempt refund takes precedence over paid gift status", async () => {
+      const { orderId, attemptId } = await seedOrder({
+        paymentState: "paid",
+        holderAccountId: holder,
+      });
+      await database.pool.query(
+        "update payment_attempts set refund_state = 'required', refund_target_value = 60000, refunded_amount_value = 25000, refunded_at = now() where id = $1",
+        [attemptId]
+      );
+      expect(await view(orderId)).toMatchObject({
+        status: "partially_refunded",
+        refunded: { value: 25000, exponent: 2, currency: "CZK" },
+        refundPending: true,
+      });
+      expect(await view(orderId)).not.toHaveProperty("maskedHolderEmail");
+      expect(await view(orderId, { viewer: holder })).toEqual({
+        status: "not_found",
+      });
+
+      await database.pool.query(
+        "update payment_attempts set refund_state = 'refunded', refunded_amount_value = refund_target_value where id = $1",
+        [attemptId]
+      );
+      expect(await view(orderId)).toMatchObject({
+        status: "partially_refunded",
+        refunded: { value: 60000, exponent: 2, currency: "CZK" },
+        refundPending: false,
+      });
+
+      await database.pool.query(
+        "update payment_attempts set refunded_amount_value = amount_value where id = $1",
         [attemptId]
       );
       expect(await view(orderId)).toMatchObject({ status: "refunded" });

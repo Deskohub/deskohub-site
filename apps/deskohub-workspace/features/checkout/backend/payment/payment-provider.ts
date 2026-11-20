@@ -77,6 +77,8 @@ interface PaymentVerificationDetails {
   readonly providerOrderStatus?: string;
   readonly mismatches: readonly string[];
   readonly hasActivity: boolean;
+  /** The provider confirms that this session ended and can no longer settle. */
+  readonly closedWithoutPayment?: true;
 }
 
 export type PaymentVerification = PaymentVerificationDetails &

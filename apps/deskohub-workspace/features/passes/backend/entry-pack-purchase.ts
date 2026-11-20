@@ -28,6 +28,7 @@ import {
   decidePaymentPageReopening,
   getPaymentPageToReopen,
 } from "@/features/checkout/backend/checkout/reusable-payment-attempt";
+import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { startPaymentSession } from "@/features/checkout/backend/payment/payment-session";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
@@ -41,7 +42,7 @@ import {
   getPaymentSubmitLegalEvidence,
   isCurrentPaymentSubmitLegalAcceptance,
 } from "@/features/legal/payment-submit-evidence";
-import type { OrderId } from "@/features/order";
+import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import {
   defaultReservationBillingSelection,
@@ -292,9 +293,23 @@ const readOwnedPurchaseOrder = Effect.fn("readOwnedEntryPackPurchaseOrder")(
   function* (orderId: OrderId, buyerAccountId: CustomerAccountId) {
     const { db } = yield* WorkspaceDatabase;
     const [entry] = yield* db
-      .select({ order: orders, purchase: passPurchases })
+      .select({
+        order: orders,
+        purchase: passPurchases,
+        activeAttempt: {
+          state: paymentAttempts.state,
+          refundState: paymentAttempts.refundState,
+        },
+      })
       .from(passPurchases)
       .innerJoin(orders, eq(orders.id, passPurchases.id))
+      .leftJoin(
+        paymentAttempts,
+        and(
+          eq(paymentAttempts.id, orders.activePaymentAttemptId),
+          eq(paymentAttempts.orderId, orders.id)
+        )
+      )
       .where(
         and(
           eq(passPurchases.id, orderId),
@@ -307,6 +322,15 @@ const readOwnedPurchaseOrder = Effect.fn("readOwnedEntryPackPurchaseOrder")(
     return entry;
   }
 );
+
+const hasEndedUnpaidAttempt = ({
+  order,
+  activeAttempt,
+}: Effect.Success<ReturnType<typeof readOwnedPurchaseOrder>>) =>
+  isEndedUnpaidPaymentState(order.paymentState) &&
+  activeAttempt !== null &&
+  isEndedUnpaidPaymentState(activeAttempt.state) &&
+  activeAttempt.refundState === "not_required";
 
 export const readEntryPackCheckoutDraft = Effect.fn(
   "readEntryPackCheckoutDraft"
@@ -340,6 +364,59 @@ export const readEntryPackCheckoutDraft = Effect.fn(
     holderEmail,
   };
 });
+
+export const readEntryPackPaymentRetry = Effect.fn("readEntryPackPaymentRetry")(
+  function* (orderId: OrderId) {
+    const account = yield* CurrentCustomerAccount;
+    const { accountId } = yield* account.requireActive;
+    const original = yield* readOwnedPurchaseOrder(orderId, accountId);
+    const { order, purchase } = original;
+    const paymentAttemptId = order.activePaymentAttemptId;
+    const now = yield* currentInstant;
+    if (
+      !paymentAttemptId ||
+      !hasEndedUnpaidAttempt(original) ||
+      isEntryPackQuoteExpired(now, purchase.validUntil)
+    )
+      return { kind: "status" as const, locale: purchase.locale };
+
+    const verification = yield* LatePaymentVerificationService;
+    const outcome = yield* verification.startRecoveryIfSettled({
+      orderId,
+      expectedPaymentAttemptId: paymentAttemptId,
+      verificationDeadline: "40 seconds",
+    });
+    if (outcome !== "confirmed_unpaid") {
+      return { kind: "status" as const, locale: purchase.locale };
+    }
+    const snapshots = yield* AccountingDocumentSnapshots;
+    const snapshot = yield* snapshots.findEntryPack(paymentAttemptId);
+    if (!snapshot) return { kind: "status" as const, locale: purchase.locale };
+    const current = yield* readOwnedPurchaseOrder(orderId, accountId);
+    if (
+      current.order.activePaymentAttemptId !== paymentAttemptId ||
+      !hasEndedUnpaidAttempt(current)
+    )
+      return { kind: "status" as const, locale: purchase.locale };
+
+    const holderEmail =
+      purchase.holderAccountId === accountId
+        ? undefined
+        : yield* findPurchaseLoginEmail(purchase.holderAccountId);
+    return {
+      kind: "retry" as const,
+      locale: purchase.locale,
+      product: snapshot.product,
+      billing: snapshot.billing,
+      holderEmail,
+      quote: yield* Schema.decodeEffect(entryPackPurchaseQuoteCodec)(
+        purchase.quote
+      ),
+      validFrom: purchase.validFrom,
+      validUntil: purchase.validUntil,
+    };
+  }
+);
 
 const saveEntryPackQuote = Effect.fn("saveEntryPackQuote")(function* (
   orderId: OrderId,
@@ -510,18 +587,40 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
   if (!handler)
     return yield* new EntryPackPurchaseError({ reason: "unavailable" });
 
+  // Recovery can take the order section for fulfillment. Verify before
+  // holding the account section, then fence the result to the same attempt.
+  const prior = yield* readOwnedPurchaseOrder(input.orderId, session.accountId);
+  let confirmedUnpaidAttempt: typeof prior.order.activePaymentAttemptId = null;
+  if (prior.order.activePaymentAttemptId && hasEndedUnpaidAttempt(prior)) {
+    const verification = yield* LatePaymentVerificationService;
+    const outcome = yield* verification.startRecoveryIfSettled({
+      orderId: input.orderId,
+      expectedPaymentAttemptId: prior.order.activePaymentAttemptId,
+    });
+    if (outcome === "confirmed_unpaid")
+      confirmedUnpaidAttempt = prior.order.activePaymentAttemptId;
+  }
+
   const result = yield* accounts.withActiveAccount(
     session.accountId,
     Effect.gen(function* () {
       const { db } = yield* WorkspaceDatabase;
-      const { order, purchase } = yield* readOwnedPurchaseOrder(
+      const currentPurchase = yield* readOwnedPurchaseOrder(
         input.orderId,
         session.accountId
       );
+      const { order, purchase } = currentPurchase;
       const statusUrl = `/${purchase.locale}${reservationStatusPath}/${order.id}`;
       if (order.paymentState === "paid") {
         return { status: "paid" as const, statusUrl };
       }
+      if (
+        isEndedUnpaidPaymentState(order.paymentState) &&
+        (!confirmedUnpaidAttempt ||
+          order.activePaymentAttemptId !== confirmedUnpaidAttempt ||
+          !hasEndedUnpaidAttempt(currentPurchase))
+      )
+        return { status: "pending" as const, statusUrl };
       const accepted = yield* Schema.decodeEffect(entryPackPurchaseQuoteCodec)(
         purchase.quote
       );
@@ -703,7 +802,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
             delivery: frozen?.delivery ?? { email: session.email },
             serviceDate: purchase.validFrom,
             product,
-            quote,
+            quote: frozen?.quote ?? quote,
           },
         },
       };
