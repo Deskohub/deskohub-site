@@ -260,7 +260,10 @@ const admitLatePublicSettlement = Effect.fnUntraced(function* (
     .select()
     .from(latePaymentRecoveries)
     .where(
-      eq(latePaymentRecoveries.workspaceReservationId, workspaceReservationId)
+      inArray(latePaymentRecoveries.paymentAttemptId, [
+        reservation.activePaymentAttemptId,
+        input.id,
+      ])
     )
     .limit(1);
   if (recovery) {
@@ -1327,16 +1330,18 @@ export class PaymentLifecycleRepository extends Context.Service<
             if (!reservation || reservation.paymentState === "paid")
               return false;
 
-            const [recovery] = yield* db
-              .select({ state: latePaymentRecoveries.state })
-              .from(latePaymentRecoveries)
-              .where(
-                eq(
-                  latePaymentRecoveries.workspaceReservationId,
-                  workspaceReservationId
-                )
-              )
-              .limit(1);
+            const [recovery] = reservation.activePaymentAttemptId
+              ? yield* db
+                  .select({ state: latePaymentRecoveries.state })
+                  .from(latePaymentRecoveries)
+                  .where(
+                    eq(
+                      latePaymentRecoveries.paymentAttemptId,
+                      reservation.activePaymentAttemptId
+                    )
+                  )
+                  .limit(1)
+              : [];
             if (recovery) return false;
             if (reservation.paymentState !== "pending") return true;
 

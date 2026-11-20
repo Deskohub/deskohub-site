@@ -2,7 +2,7 @@ import { reservationOrderId } from "@/features/reservation/persistence-contracts
 import { FioPollWake } from "../fio/fio-poll-wake.service";
 import "@/shared/testing/workspace-test-env";
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { PostHogFeatureFlagEvaluationError } from "@deskohub/analytics-posthog/feature-flags/node";
 import {
   type DotyposCustomerId,
@@ -1116,6 +1116,215 @@ describe.skipIf(!testDatabase)(
         );
         await voucher.cleanup();
       }
+    });
+
+    test("refund-only work for a losing card leaves an eligible late QR credit recoverable", async () => {
+      const lifecycle = await makeRepository();
+      const recoveries = await makeLateRecoveryRepository();
+      const customer = customerId();
+      const reservation = await createHeldReservation(customer);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        customer
+      );
+      const orderId = reservationOrderId(reservation.id);
+      const accountKey = "synthetic-fio-account";
+      const qr = await Effect.runPromise(
+        lifecycle
+          .createPendingQrAttempt({
+            ...admission,
+            orderId,
+            locale,
+            accountingSnapshot: snapshot,
+            publicPayment: { accountKey },
+          })
+          .pipe(Effect.provideService(FioPollWake, { wake: () => Effect.void }))
+      );
+      const card = await Effect.runPromise(
+        lifecycle.createPendingProviderAttempt({
+          orderId,
+          locale,
+          amount: admission.amount,
+          provider: "nexi",
+          providerOrderId: `order-${uniqueId()}`,
+          publicPayment: { accountKey, useAcceptedCommitment: true },
+        })
+      );
+      await Effect.runPromise(
+        lifecycle.markTerminal({
+          orderId,
+          id: card.id,
+          state: "cancelled",
+          failureCode: "nexi_cancelled",
+        })
+      );
+      const observedAt = Temporal.Now.instant().add({ minutes: 31 });
+      const cardSettlement = {
+        paymentAttemptId: card.id,
+        workspaceReservationId: reservation.id,
+      };
+      await Effect.runPromise(
+        recoveries.start({
+          ...cardSettlement,
+          providerOperationId: "fixture-refund-only-nexi",
+          verifiedPaidAt: observedAt,
+        })
+      );
+      await Effect.runPromise(
+        recoveries.claim({
+          paymentAttemptId: card.id,
+          staleProcessingBefore: observedAt,
+        })
+      );
+      await Effect.runPromise(
+        recoveries.requireRefund({
+          ...cardSettlement,
+          failureCode: "late_payment_superseded_attempt",
+          completedAt: observedAt,
+        })
+      );
+
+      const recordQr = (providerOperationId: string) =>
+        Effect.runPromise(
+          lifecycle.recordVerifiedQrPayment({
+            orderId,
+            id: qr.id,
+            paidAt: observedAt,
+            providerOperationId,
+          })
+        );
+      expect(await recordQr("fixture-eligible-qr")).toEqual({
+        status: "recover",
+      });
+      expect(await recordQr("fixture-eligible-qr")).toEqual({
+        status: "recover",
+      });
+      expect(await recordQr("fixture-duplicate-qr")).toEqual({
+        status: "refund",
+      });
+      expect(
+        await Effect.runPromise(recoveries.findByPaymentAttemptId(card.id))
+      ).toMatchObject({
+        state: "refund_required",
+        providerOperationId: "fixture-refund-only-nexi",
+      });
+      expect(
+        await Effect.runPromise(recoveries.findByPaymentAttemptId(qr.id))
+      ).toMatchObject({
+        state: "pending",
+        providerOperationId: "fixture-eligible-qr",
+      });
+    });
+
+    test("redelivers stale hold cleanup after an interleaved shared-window admission wins the CAS", async () => {
+      const { ReservationHoldCleanupService } = await import(
+        "../holds/reservation-hold-cleanup.service"
+      );
+      const { UnpaidHoldRelease } = await import(
+        "../holds/unpaid-hold-release.service"
+      );
+      const { CheckoutAnalytics } = await import(
+        "../analytics/checkout-analytics.service"
+      );
+      const { ProviderPaymentDeferral, ProviderPaymentFinalizationService } =
+        await import("../payment/provider-payment-finalization.service");
+      const { QrPaymentRepository } = await import("./qr-payment.repository");
+      const lifecycle = await makeRepository();
+      const customer = customerId();
+      const reservation = await createHeldReservation(customer);
+      const orderId = reservationOrderId(reservation.id);
+      const { admission, locale, snapshot } = makeOrdinaryAdmission(
+        reservation,
+        customer
+      );
+      const oldCutoff = Temporal.Now.instant().add({ minutes: 1 });
+      await Effect.runPromise(
+        testDatabase!.db
+          .update(workspaceReservations)
+          .set({ reservationHoldExpiresAt: oldCutoff })
+          .where(eq(workspaceReservations.id, reservation.id))
+      );
+
+      const admitQr = lifecycle
+        .createPendingQrAttempt({
+          ...admission,
+          orderId,
+          locale,
+          accountingSnapshot: snapshot,
+          publicPayment: { accountKey: "synthetic-fio-account" },
+        })
+        .pipe(Effect.provideService(FioPollWake, { wake: () => Effect.void }));
+      let interleavedAdmission = false;
+      const racingReservations = Layer.effect(
+        WorkspaceReservationRepository,
+        Effect.gen(function* () {
+          const reservations = yield* WorkspaceReservationRepository;
+          return {
+            ...reservations,
+            claimCancellation: Effect.fnUntraced(function* (input) {
+              if (!interleavedAdmission) {
+                interleavedAdmission = true;
+                yield* admitQr;
+              }
+              return yield* reservations.claimCancellation(input);
+            }),
+          };
+        })
+      ).pipe(
+        Layer.provide(
+          WorkspaceReservationRepository.Default.pipe(
+            Layer.provide(testDatabase!.layer)
+          )
+        )
+      );
+      const cancelReservation = mock(() => Effect.void);
+      const dependencies = Layer.mergeAll(
+        racingReservations,
+        QrPaymentRepository.Default.pipe(Layer.provide(testDatabase!.layer)),
+        WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase!.databasePool),
+        Layer.succeed(PaymentLifecycleRepository, lifecycle),
+        Layer.mock(ProviderPaymentFinalizationService, {}),
+        Layer.mock(CheckoutAnalytics, {
+          reservationAbandoned: () => Effect.void,
+        }),
+        Layer.mock(DotyposService, {
+          getReservationStatus: () => Effect.succeed("NEW" as const),
+          cancelReservation,
+        })
+      );
+      const runCleanup = (checkedAt: Temporal.Instant) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const cleanup = yield* ReservationHoldCleanupService;
+            const qr = yield* QrPaymentRepository;
+            const outcome = yield* cleanup.cancelOrderHold({
+              orderId: reservation.id,
+              holdExpiresAt: oldCutoff,
+              checkedAt,
+            });
+            return { outcome, window: yield* qr.findPaymentWindow(orderId) };
+          }).pipe(
+            Effect.provide(
+              ReservationHoldCleanupService.Default.pipe(
+                Layer.provide(UnpaidHoldRelease.Default),
+                Layer.provideMerge(dependencies)
+              )
+            )
+          )
+        );
+
+      const first = await runCleanup(oldCutoff.add({ seconds: 1 }));
+      expect(first.outcome).toBeInstanceOf(ProviderPaymentDeferral);
+      expect(
+        first.outcome instanceof ProviderPaymentDeferral &&
+          first.outcome.abandonmentCutoff.equals(first.window!.expiresAt)
+      ).toBe(true);
+      expect(interleavedAdmission).toBe(true);
+      expect(cancelReservation).toHaveBeenCalledTimes(0);
+
+      const next = await runCleanup(first.window!.expiresAt);
+      expect(next.outcome).toBe("cancelled");
+      expect(cancelReservation).toHaveBeenCalledTimes(1);
     });
 
     test("admits only one successor of the exact marked Nexi attempt", async () => {

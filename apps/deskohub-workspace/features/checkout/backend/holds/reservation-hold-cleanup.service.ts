@@ -370,6 +370,41 @@ function makeReservationHoldCleanupServiceLayer(
           );
         }
         if (Predicate.isString(outcome)) {
+          // The old deadline was read before admission committed. The
+          // compare-and-set leaves the new hold alone; redeliver this job
+          // against the admitted window instead of acknowledging it.
+          if (qrPayments) {
+            const latest = yield* loadOrder(input.orderId);
+            if (
+              latest?.reservationState === "held" &&
+              latest.paymentState === "pending" &&
+              latest.reservationHoldExpiresAt
+            ) {
+              const window = yield* qrPayments
+                .findPaymentWindow(reservationOrderId(input.orderId))
+                .pipe(
+                  Effect.mapError(
+                    ReservationHoldCleanupError.fromError(
+                      "Payment window could not be loaded."
+                    )
+                  )
+                );
+              const latestCutoff = toStoredInstant(
+                latest.reservationHoldExpiresAt
+              );
+              if (
+                window &&
+                latestCutoff.equals(toStoredInstant(window.expiresAt)) &&
+                !latestCutoff.equals(
+                  toStoredInstant(input.expectedHold.reservationHoldExpiresAt)
+                )
+              ) {
+                return new ProviderPaymentDeferral({
+                  abandonmentCutoff: window.expiresAt,
+                });
+              }
+            }
+          }
           return "skipped" as const;
         }
         if (outcome instanceof HoldCancellationInProgress) {
