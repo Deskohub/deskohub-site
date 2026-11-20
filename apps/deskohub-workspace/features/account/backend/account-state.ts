@@ -211,15 +211,21 @@ export const loadAccountState: Effect.Effect<
  * after the state. An unavailable history degrades to the section's
  * unavailable notice.
  */
-export const loadAccountStateWithHistory: Effect.Effect<
+export const loadAccountStateWithHistory = (
+  includeEntryPackPayment = false
+): Effect.Effect<
   CustomerAccountStateWithHistory,
   never,
   AccountStateCapabilities | CustomerReservationHistoryService
-> = Effect.suspend(() => loadAccount).pipe(Effect.flatMap(attachHistory));
+> =>
+  Effect.suspend(() => loadAccount).pipe(
+    Effect.flatMap((loaded) => attachHistory(loaded, includeEntryPackPayment))
+  );
 
 /** Reads the history `loaded` shows and attaches it to its state. */
 function attachHistory(
-  loaded: LoadedAccount
+  loaded: LoadedAccount,
+  includeEntryPackPayment: boolean
 ): Effect.Effect<
   CustomerAccountStateWithHistory,
   never,
@@ -229,11 +235,15 @@ function attachHistory(
     case undefined:
       return Effect.succeed(loaded.state);
     case "always":
-      return loadReservationHistory(loaded.history).pipe(
-        Effect.map((history) => ({ ...loaded.state, history }))
-      );
+      return loadReservationHistory(
+        loaded.history,
+        includeEntryPackPayment
+      ).pipe(Effect.map((history) => ({ ...loaded.state, history })));
     case "when-any":
-      return loadReservationHistory(loaded.history).pipe(
+      return loadReservationHistory(
+        loaded.history,
+        includeEntryPackPayment
+      ).pipe(
         Effect.map((history) =>
           mayHaveReservations(history)
             ? { ...loaded.state, history }
@@ -521,9 +531,14 @@ const loadLinkedAccount = Effect.fn(function* (
  * The account's reservation history. An unavailable history degrades to the
  * section's unavailable notice.
  */
-const loadReservationHistory = (account: ReservationHistoryAccount) =>
+const loadReservationHistory = (
+  account: ReservationHistoryAccount,
+  includeEntryPackPayment: boolean
+) =>
   Effect.flatMap(CustomerReservationHistoryService, (service) =>
-    service.load(account)
+    includeEntryPackPayment
+      ? service.load(account, { includeEntryPackPayment })
+      : service.load(account)
   ).pipe(
     degradable(
       "account.reservation-history.unavailable",

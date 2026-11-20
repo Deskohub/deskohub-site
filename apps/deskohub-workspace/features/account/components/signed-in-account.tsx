@@ -68,6 +68,7 @@ type SignedInAccountProps = {
    * it streams in apart from the page; none for states without one.
    */
   readonly invoices?: ReactNode;
+  readonly passes?: ReactNode;
 };
 
 /**
@@ -143,6 +144,7 @@ function usePublishedAccountNavigation(
 function SignedInAccountSections({
   invoices,
   locale,
+  passes,
   state,
 }: SignedInAccountProps) {
   const { activeSection } = useAccountLayout();
@@ -171,9 +173,14 @@ function SignedInAccountSections({
             signInSecurity !== undefined,
             state.assistants !== undefined
           )}
+          passesSectionActive={
+            passes !== undefined && activeSection === "passes"
+          }
           state={state}
         />
       )}
+
+      {passes && <div hidden={activeSection !== "passes"}>{passes}</div>}
 
       {signInSecurity && (
         <SignInSecuritySection
@@ -297,12 +304,14 @@ function AccountWithoutProfilePanels({
   accountPasskeys,
   invoices,
   locale,
+  passesSectionActive,
   sessionSectionActive,
   state,
 }: {
   readonly accountPasskeys: AccountPasskeys | undefined;
   readonly invoices: ReactNode;
   readonly locale: Locale;
+  readonly passesSectionActive: boolean;
   readonly sessionSectionActive: boolean;
   readonly state: AccountWithoutProfileState;
 }) {
@@ -310,7 +319,7 @@ function AccountWithoutProfilePanels({
   const reservations = "reservations" in state ? state.reservations : undefined;
 
   return (
-    <div hidden={sessionSectionActive}>
+    <div hidden={sessionSectionActive || passesSectionActive}>
       <div className="grid items-start gap-6">
         {reservations && (
           <div hidden={activeSection !== "reservations"}>

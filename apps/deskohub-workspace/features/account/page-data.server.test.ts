@@ -415,7 +415,7 @@ describe("loadAccountPageState", () => {
   const loadPageState = (remembered?: string) => {
     rememberedReferralCode = remembered;
     return Effect.runPromise(
-      loadAccountPageState.pipe(Effect.provide(pageLayer()))
+      loadAccountPageState().pipe(Effect.provide(pageLayer()))
     );
   };
 
@@ -1606,7 +1606,7 @@ describe("loadAccountPageState", () => {
       );
       const loadExit = () =>
         Effect.runPromiseExit(
-          loadAccountPageState.pipe(Effect.provide(pageLayer()))
+          loadAccountPageState().pipe(Effect.provide(pageLayer()))
         );
 
       test("keeps the control flow of a section read", async () => {

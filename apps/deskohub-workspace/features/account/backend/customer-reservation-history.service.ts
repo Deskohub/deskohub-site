@@ -4,12 +4,12 @@ import {
   DotyposService,
   getCustomerDisplayName,
 } from "@deskohub/dotypos";
-import { desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, exists, or, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Option } from "effect";
 import type { SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { workspaceReservations } from "@/db/schema";
+import { passEntryClaims, workspaceReservations } from "@/db/schema";
 import { defaultLocale, type Locale } from "@/features/i18n";
 import { isEndedUnpaidPaymentState } from "@/features/order";
 import {
@@ -90,6 +90,7 @@ type ReservationRow = {
   readonly fulfillmentState: (typeof workspaceReservations.$inferSelect)["fulfillmentState"];
   readonly reservationPurpose: (typeof workspaceReservations.$inferSelect)["reservationPurpose"];
   readonly paidAt: (typeof workspaceReservations.$inferSelect)["paidAt"];
+  readonly paidWithEntryPack: boolean;
 };
 
 const getReservationProduct = (
@@ -257,6 +258,7 @@ const toReservationSummary = (
   return {
     id: row?.id ?? reservation.id,
     ...(row?.id && { workspaceReservationId: row.id }),
+    ...(row?.paidWithEntryPack && { paidWithEntryPack: true }),
     ...(party && { party }),
     product: getReservationProduct(row),
     ...getBookedStartFields(reservation, booked),
@@ -458,6 +460,7 @@ export type ReservationHistoryOptions = {
    * names passes false to skip the read.
    */
   readonly includePartyNames?: boolean;
+  readonly includeEntryPackPayment?: boolean;
   /** The language of the reservations' product names; the default locale when absent. */
   readonly locale?: Locale;
 };
@@ -533,8 +536,10 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
    */
   const selectReservationRows = ({
     account,
+    includeEntryPackPayment,
   }: {
     readonly account: ReservationHistoryAccount;
+    readonly includeEntryPackPayment: boolean;
   }) =>
     db
       .select({
@@ -548,6 +553,19 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
         fulfillmentState: workspaceReservations.fulfillmentState,
         reservationPurpose: workspaceReservations.reservationPurpose,
         paidAt: workspaceReservations.paidAt,
+        paidWithEntryPack: includeEntryPackPayment
+          ? sql<boolean>`${exists(
+              db
+                .select({ reservationId: passEntryClaims.reservationId })
+                .from(passEntryClaims)
+                .where(
+                  and(
+                    eq(passEntryClaims.reservationId, workspaceReservations.id),
+                    eq(passEntryClaims.status, "consumed")
+                  )
+                )
+            )}`
+          : sql<boolean>`false`,
       })
       .from(workspaceReservations)
       .where(
@@ -720,6 +738,7 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
     Effect.succeed({
       account,
       includePartyNames: options.includePartyNames ?? true,
+      includeEntryPackPayment: options.includeEntryPackPayment ?? false,
       locale: options.locale,
     }).pipe(
       Effect.bind("rows", selectReservationRows),

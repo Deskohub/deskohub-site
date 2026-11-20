@@ -7,6 +7,7 @@ import {
   Gift,
   KeyRound,
   ShieldCheck,
+  Ticket,
   TriangleAlert,
   UserRound,
 } from "lucide-react";
@@ -49,6 +50,7 @@ export interface AccountShellProps {
   readonly onSectionChange: (section: AccountSection) => void;
   readonly children: ReactNode;
   readonly signOut: ReactNode;
+  readonly passesEnabled?: boolean;
   readonly reservationCount?: number;
   /** Badge beside Referrals, such as "-15%"; hidden when absent. */
   readonly referralBadge?: AccountNavigationBadge;
@@ -65,6 +67,7 @@ export function AccountShell({
   hiddenSections = [],
   locale,
   onSectionChange,
+  passesEnabled = false,
   referralBadge,
   reservationCount,
   sidebarFooter,
@@ -81,6 +84,7 @@ export function AccountShell({
   const sections = (
     [
       { icon: CalendarDays, key: "reservations" },
+      { icon: Ticket, key: "passes" },
       { icon: Gift, key: "referrals" },
       { icon: UserRound, key: "profile" },
       { icon: KeyRound, key: "security" },
@@ -89,7 +93,11 @@ export function AccountShell({
       { icon: ShieldCheck, key: "legal" },
       { icon: TriangleAlert, key: "danger" },
     ] as const
-  ).filter((section) => !hiddenSections.includes(section.key));
+  ).filter(
+    (section) =>
+      (section.key !== "passes" || passesEnabled) &&
+      !hiddenSections.includes(section.key)
+  );
   const mobileNavigationRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   // The section a navigation click asked for; its content starts at its top.

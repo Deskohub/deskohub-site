@@ -8,6 +8,7 @@ import { type Locale, m } from "@/features/i18n";
  */
 export const accountSections = [
   "reservations",
+  "passes",
   "referrals",
   "profile",
   "security",
@@ -31,6 +32,7 @@ export const isAccountSection = Schema.is(accountSectionSchema);
 export const accountSectionLabel = (section: AccountSection, locale: Locale) =>
   ({
     reservations: m.accountSectionReservations,
+    passes: m.accountSectionPasses,
     referrals: m.accountSectionReferrals,
     profile: m.accountSectionProfile,
     security: m.accountSectionSecurity,
@@ -52,17 +54,27 @@ export const isAccountPageSection = (
 
 export type AccountSectionRelease = {
   readonly passkeysEnabled: boolean;
+  readonly passesEnabled?: boolean;
   readonly referralsEnabled: boolean;
 };
 
 /** Sections withheld until their release flag is on. */
-export const flagGatedAccountSections = ["referrals", "security"] as const;
+export const flagGatedAccountSections = [
+  "passes",
+  "referrals",
+  "security",
+] as const;
 
 /** Whether a flag-gated section is released; other sections always are. */
 export const isAccountSectionReleased = (
   section: AccountSection,
-  { passkeysEnabled, referralsEnabled }: AccountSectionRelease
+  {
+    passesEnabled = false,
+    passkeysEnabled,
+    referralsEnabled,
+  }: AccountSectionRelease
 ) => {
+  if (section === "passes") return passesEnabled;
   if (section === "referrals") return referralsEnabled;
   if (section === "security") return passkeysEnabled;
   return true;

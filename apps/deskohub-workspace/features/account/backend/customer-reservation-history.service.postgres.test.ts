@@ -340,7 +340,7 @@ describe.skipIf(!testDatabase)(
       }
     });
 
-    test("exposes a workspace ID only for an owner-matched local reservation", async () => {
+    test("exposes a workspace ID and Entry pack marker only for an owner-matched local reservation", async () => {
       const account = customerAccountIdSchema.make(uniqueId());
       const dotyposCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
       const foreignCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
@@ -380,10 +380,31 @@ describe.skipIf(!testDatabase)(
         authorAccountId: fixtureReservationAuthorId,
       });
 
+      const passId = uniqueId();
+      await testDatabase!.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
+         values ($1, 'pass-purchase', $2, 'paid', 'not_started', now())`,
+        [passId, dotyposCustomerId]
+      );
+      await testDatabase!.pool.query(
+        `insert into pass_purchases
+           (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $2, 'entry-pack', 'open-space', 5, 'active', '2000-01-01', '2000-03-01', '{}', 'en-US', now())`,
+        [passId, account]
+      );
+      await testDatabase!.pool.query(
+        `insert into pass_entry_claims (reservation_id, pass_id, date, status)
+         values ($1, $3, '2000-01-01', 'consumed'), ($2, $3, '2000-01-04', 'consumed')`,
+        [matchedWorkspaceReservationId, foreignWorkspaceReservationId, passId]
+      );
+
       const history = await Effect.runPromise(
         Effect.gen(function* () {
           const service = yield* CustomerReservationHistoryService;
-          return yield* service.load({ accountId: account, dotyposCustomerId });
+          return yield* service.load(
+            { accountId: account, dotyposCustomerId },
+            { includeEntryPackPayment: true }
+          );
         }).pipe(
           Effect.provide(
             makeHistoryLayer([
@@ -416,6 +437,13 @@ describe.skipIf(!testDatabase)(
       if (history.kind !== "available") throw new Error("History unavailable");
 
       const summaries = history.groups.past;
+      expect(summaries.map((summary) => summary.paidWithEntryPack)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ]);
+      expect(JSON.stringify(history)).not.toContain(passId);
       expect(summaries.map((summary) => summary.id)).toEqual([
         foreignDotyposReservationId,
         laterProviderOnlyDotyposReservationId,

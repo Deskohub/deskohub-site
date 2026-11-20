@@ -24,6 +24,7 @@ const accountMobileNavigationSelector = `nav[aria-label=${JSON.stringify(account
  */
 export const accountSectionLandmarks = {
   reservations: "#account-reservations-past-title",
+  passes: "#account-passes-title",
   referrals: "[data-screen='referrals-screen']",
   profile: "[data-screen='profile-screen']",
   security: "#account-security-passkeys-title",
@@ -166,6 +167,7 @@ const accountSectionHydrationAnchors: Readonly<
   Partial<Record<AccountSection, string>>
 > = {
   reservations: accountSectionLandmarks.reservations,
+  passes: accountSectionLandmarks.passes,
   referrals: accountSectionLandmarks.referrals,
   profile: accountSectionLandmarks.profile,
   security: accountSectionLandmarks.security,
