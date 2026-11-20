@@ -41,9 +41,6 @@ export const getClosestVirtualIndex = (
   return currentVirtualIndex + delta;
 };
 
-export const truncateTowardZero = (value: number) =>
-  value < 0 ? Math.ceil(value) : Math.floor(value);
-
 const getDefaultSwipeDistance = (stageWidth: number) =>
   Math.max(96, Math.min(stageWidth * 0.28, 260));
 
@@ -63,7 +60,7 @@ export const getSwipeTargetVirtualIndex = ({
   if (swipeDistance <= 0) return currentVirtualIndex;
 
   const rawTimelineOffset = -offsetX / swipeDistance;
-  const wholeSteps = truncateTowardZero(rawTimelineOffset);
+  const wholeSteps = Math.trunc(rawTimelineOffset);
   const fractionalOffset = rawTimelineOffset - wholeSteps;
   const isHorizontalDrag =
     Math.abs(offsetX) >= swipeClickSuppressionDistance &&
@@ -135,7 +132,7 @@ export function useMotionSwipeCarousel({
   };
   const applyDragOffset = (offsetX: number) => {
     const rawTimelineOffset = -offsetX / getSwipeTimelineDistance();
-    const wholeSteps = truncateTowardZero(rawTimelineOffset);
+    const wholeSteps = Math.trunc(rawTimelineOffset);
     const fractionalOffset = rawTimelineOffset - wholeSteps;
     const nextIndex = dragStartVirtualIndexRef.current + wholeSteps;
 

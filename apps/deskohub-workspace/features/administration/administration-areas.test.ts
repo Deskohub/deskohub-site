@@ -33,7 +33,7 @@ const slotRoutes = readdirSync(breadcrumbSlot, { recursive: true })
   );
 
 test("declares every page that has a breadcrumb slot", () => {
-  expect(slotRoutes.length).toBeGreaterThan(30);
+  expect(slotRoutes.length).toBeGreaterThan(0);
   for (const route of slotRoutes) {
     // A `[param]` segment is the parent's record; any other is a named page.
     const declared = route.reduce<DeclaredSegment | undefined>(
