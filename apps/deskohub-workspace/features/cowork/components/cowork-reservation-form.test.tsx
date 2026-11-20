@@ -458,12 +458,13 @@ describe("CoworkReservationForm advertised pricing", () => {
     await unregisterWorkspaceComponentTestEnv();
   });
 
-  describe("Entry pack discovery", () => {
-    test("omits the purchase link while the release is off", () => {
+  describe("Cowork pass discovery", () => {
+    test("omits the purchase links while the release is off", () => {
       const view = renderForm();
       expect(
         view.queryByRole("link", { name: /entry packs from/i })
       ).toBeNull();
+      expect(view.queryByRole("link", { name: "Unlimited pass" })).toBeNull();
     });
 
     test("links to the selected cowork tier and advertises the catalog minimum", () => {
@@ -482,7 +483,31 @@ describe("CoworkReservationForm advertised pricing", () => {
       );
     });
 
-    test("preselects the workstation pack when a monitor setup is selected", () => {
+    test("prefills the Unlimited pass tier and date from the current selection", async () => {
+      const view = renderForm({ entryPackOffered: true });
+      const link = view.getByRole("link", { name: "Unlimited pass" });
+      expect(link.getAttribute("href")).toBe(
+        "/en-US/passes/unlimited?tier=open-space&startDate=2099-07-30"
+      );
+
+      fireEvent.click(view.getByRole("radio", { name: /Reserved Desk/i }));
+      await selectCalendarDate(view, "2099-07-29");
+      expect(link.getAttribute("href")).toBe(
+        "/en-US/passes/unlimited?tier=reserved-desk&startDate=2099-07-29"
+      );
+    });
+
+    test("omits the Unlimited start date before a day is chosen", () => {
+      const view = renderForm({
+        entryPackOffered: true,
+        initialValues: reservedDeskFormValues(""),
+      });
+      expect(
+        view.getByRole("link", { name: "Unlimited pass" }).getAttribute("href")
+      ).toBe("/en-US/passes/unlimited?tier=reserved-desk");
+    });
+
+    test("preselects the workstation tier when a monitor setup is selected", () => {
       const view = renderForm({
         entryPackOffered: true,
         initialValues: reservedDeskFormValues("2099-07-30", "2x27-qhd"),
@@ -492,6 +517,11 @@ describe("CoworkReservationForm advertised pricing", () => {
           .getByRole("link", { name: /entry packs from/i })
           .getAttribute("href")
       ).toBe("/en-US/passes/entry-pack?tier=reserved-desk-workstation");
+      expect(
+        view.getByRole("link", { name: "Unlimited pass" }).getAttribute("href")
+      ).toBe(
+        "/en-US/passes/unlimited?tier=reserved-desk-workstation&startDate=2099-07-30"
+      );
     });
 
     test("omits the single-day link for an overnight stay", () => {
@@ -503,6 +533,7 @@ describe("CoworkReservationForm advertised pricing", () => {
       expect(
         view.queryByRole("link", { name: /entry packs from/i })
       ).toBeNull();
+      expect(view.queryByRole("link", { name: "Unlimited pass" })).toBeNull();
     });
   });
 
