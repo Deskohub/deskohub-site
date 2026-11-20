@@ -96,6 +96,7 @@ export const getPaymentSubmitLegalEvidence = (input: {
   readonly earlyPerformanceConsent: boolean;
   /** The Entry pack checkout also asked the buyer to request immediate use. */
   readonly entryPackEarlyStartRequested?: true;
+  readonly unlimitedPassEarlyStartRequested?: true;
 }): LegalEvidenceMap => {
   const termsAndConditions = getAcceptedDocument(
     input.locale,
@@ -117,6 +118,9 @@ export const getPaymentSubmitLegalEvidence = (input: {
             earlyPerformanceConsent: true,
             ...(input.entryPackEarlyStartRequested && {
               entryPackEarlyStartRequested: true,
+            }),
+            ...(input.unlimitedPassEarlyStartRequested && {
+              unlimitedPassEarlyStartRequested: true,
             }),
           }
         : undefined,

@@ -13,7 +13,10 @@ import { officeReservationQuoteSchema } from "@/features/checkout/reservation-qu
 import { discountQuoteCodec } from "@/features/discounts/contracts";
 import type { Locale } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
-import { entryPackProductSchema } from "@/features/passes/pass-offer";
+import {
+  entryPackProductSchema,
+  unlimitedPassProductSchema,
+} from "@/features/passes/pass-offer";
 import { getMeetingRoomReservationDate } from "@/features/reservation/meeting-room-reservation-time";
 import { officeReservationDetailsSchema } from "@/features/reservation/office-reservation";
 import {
@@ -158,7 +161,7 @@ export const accountingDocumentSnapshotSchema = Schema.Union([
 export type AccountingDocumentSnapshot =
   typeof accountingDocumentSnapshotSchema.Type;
 
-export const entryPackAccountingSnapshotSchema = Schema.Struct({
+export const passPurchaseAccountingSnapshotSchema = Schema.Struct({
   orderId: orderIdSchema,
   dotyposCustomerId: accountingDocumentIdentitySchema.fields.dotyposCustomerId,
   locale: accountingDocumentIdentitySchema.fields.locale,
@@ -166,13 +169,14 @@ export const entryPackAccountingSnapshotSchema = Schema.Struct({
   buyer: accountingBuyerSchema,
   billing: reservationBillingSelectionSchema,
   delivery: accountingDocumentDeliverySchema,
-  product: entryPackProductSchema,
+  product: Schema.Union([entryPackProductSchema, unlimitedPassProductSchema]),
+  unlimitedCoffee: Schema.optionalKey(Schema.Literal(true)),
   serviceDate: plainDateStringSchema,
   quote: discountQuoteCodec,
 });
 
-export type EntryPackAccountingSnapshot =
-  typeof entryPackAccountingSnapshotSchema.Type;
+export type PassPurchaseAccountingSnapshot =
+  typeof passPurchaseAccountingSnapshotSchema.Type;
 
 /**
  * Prague date the snapshot's reservation starts. Discount-code service dates

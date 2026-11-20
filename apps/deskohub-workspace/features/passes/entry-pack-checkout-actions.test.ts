@@ -15,7 +15,7 @@ import { getLocale } from "@/features/i18n/paraglide/runtime.js";
 import type { OrderId } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId as accountId } from "@/shared/testing/workspace-fixtures.test-utils";
-import { entryPackPurchaseQuoteCodec } from "./entry-pack-purchase-quote";
+import { passPurchaseQuoteCodec } from "./pass-purchase-quote";
 
 const requestHeaders = new AsyncLocalStorage<Headers>();
 mock.module("next/headers", () => ({
@@ -76,7 +76,7 @@ mock.module("./backend/entry-pack-purchase", () => ({
         entryCount: input.product.size,
         validFrom: Temporal.PlainDate.from("2026-11-20"),
         validUntil: Temporal.PlainDate.from("2027-01-19"),
-        quote: Schema.encodeSync(entryPackPurchaseQuoteCodec)({
+        quote: Schema.encodeSync(passPurchaseQuoteCodec)({
           product: input.product,
           discountableSubtotal: amount,
           discountedSubtotal: amount,

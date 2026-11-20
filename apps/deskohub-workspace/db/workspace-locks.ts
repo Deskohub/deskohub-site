@@ -193,6 +193,12 @@ export const WorkspaceLockSections = {
       rank: 5,
       pair: ["reservation-order", orderId],
     }),
+  unlimitedPassRecovery: (orderId: OrderId) =>
+    holdSection({
+      name: "unlimitedPassRecovery",
+      rank: 6,
+      pair: ["unlimited-pass-recovery", orderId],
+    }),
   customerAccount: (accountId: CustomerAccountId) =>
     holdSection(customerAccountSection(accountId)),
   passPurchaseFulfillment: (orderId: OrderId) =>

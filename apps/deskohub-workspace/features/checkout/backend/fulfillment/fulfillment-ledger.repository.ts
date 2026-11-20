@@ -208,6 +208,7 @@ export class FulfillmentLedger extends Context.Service<
             .where(
               and(
                 eq(workspaceReservations.id, input.id),
+                isNull(workspaceReservations.passId),
                 eq(workspaceReservations.paymentState, "paid"),
                 inArray(workspaceReservations.reservationState, [
                   "held",

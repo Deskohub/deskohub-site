@@ -10,13 +10,14 @@ import { accountingDocumentSnapshots } from "@/db/schema";
 import {
   type AccountingDocumentSnapshot,
   accountingDocumentSnapshotSchema,
-  type EntryPackAccountingSnapshot,
   encodeStoredAccountingDocumentSnapshot,
-  entryPackAccountingSnapshotSchema,
+  type PassPurchaseAccountingSnapshot,
+  passPurchaseAccountingSnapshotSchema,
 } from "@/features/accounting/accounting-document-snapshot";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
+import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
 import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { type Money, moneyEquals, sameMoneyUnit } from "@/shared/money/money";
 import {
@@ -49,14 +50,14 @@ interface PreparedAccountingDocumentSnapshot {
 }
 
 export interface IAccountingDocumentSnapshots {
-  readonly findEntryPack: (
+  readonly findPassPurchase: (
     paymentAttemptId: PaymentAttemptId
   ) => Effect.Effect<
-    EntryPackAccountingSnapshot | null,
+    PassPurchaseAccountingSnapshot | null,
     AccountingRecordUnavailable | EffectDrizzleQueryError
   >;
-  readonly recordEntryPack: (input: {
-    readonly snapshot: EntryPackAccountingSnapshot;
+  readonly recordPassPurchase: (input: {
+    readonly snapshot: PassPurchaseAccountingSnapshot;
     readonly paymentAttemptId: PaymentAttemptId;
     readonly orderId: OrderId;
     readonly dotyposCustomerId: DotyposCustomerId;
@@ -110,8 +111,8 @@ const sealedEntryPackSnapshots = sealedAccountingJson({
   keyId: accountingDocumentSnapshots.keyId,
   ciphertext: accountingDocumentSnapshots.encryptedSnapshot,
   plaintext: {},
-  encode: Schema.encodeSync(entryPackAccountingSnapshotSchema),
-  schema: entryPackAccountingSnapshotSchema,
+  encode: Schema.encodeSync(passPurchaseAccountingSnapshotSchema),
+  schema: passPurchaseAccountingSnapshotSchema,
 });
 
 /** The immutable source snapshot every payment attempt records. */
@@ -138,8 +139,8 @@ export class AccountingDocumentSnapshots extends Context.Service<
         return opened?.value ?? null;
       });
 
-      const findEntryPack = Effect.fn(
-        "AccountingDocumentSnapshots.findEntryPack"
+      const findPassPurchase = Effect.fn(
+        "AccountingDocumentSnapshots.findPassPurchase"
       )(function* (paymentAttemptId: PaymentAttemptId) {
         const opened = yield* entryPacks.open({
           reference: { type: "paymentAttemptId", id: paymentAttemptId },
@@ -151,10 +152,10 @@ export class AccountingDocumentSnapshots extends Context.Service<
         return opened?.value ?? null;
       });
 
-      const recordEntryPack = Effect.fn(
-        "AccountingDocumentSnapshots.recordEntryPack"
+      const recordPassPurchase = Effect.fn(
+        "AccountingDocumentSnapshots.recordPassPurchase"
       )(function* (
-        input: Parameters<IAccountingDocumentSnapshots["recordEntryPack"]>[0]
+        input: Parameters<IAccountingDocumentSnapshots["recordPassPurchase"]>[0]
       ) {
         const { db } = yield* WorkspaceTransaction;
         const reference = {
@@ -166,17 +167,26 @@ export class AccountingDocumentSnapshots extends Context.Service<
             operation: "validate",
             reference,
             message:
-              "Entry pack accounting snapshot does not match the payment attempt.",
+              "Pass purchase accounting snapshot does not match the payment attempt.",
           });
         const snapshot = yield* Schema.decodeUnknownEffect(
-          Schema.toType(entryPackAccountingSnapshotSchema),
+          Schema.toType(passPurchaseAccountingSnapshotSchema),
           { onExcessProperty: "error" }
         )(input.snapshot).pipe(Effect.mapError(invalid));
         if (
           snapshot.orderId !== input.orderId ||
           snapshot.dotyposCustomerId !== input.dotyposCustomerId ||
           snapshot.locale !== input.locale ||
-          !moneyEquals(snapshot.quote.discountedSubtotal, input.amount)
+          (snapshot.unlimitedCoffee &&
+            (snapshot.product.kind !== "unlimited" ||
+              snapshot.product.tier !== "open-space")) ||
+          !moneyEquals(
+            withPassPurchaseAddons(
+              snapshot.quote.discountedSubtotal,
+              snapshot.unlimitedCoffee
+            ),
+            input.amount
+          )
         ) {
           return yield* invalid();
         }
@@ -252,8 +262,8 @@ export class AccountingDocumentSnapshots extends Context.Service<
       const service: IAccountingDocumentSnapshots = {
         find,
         prepare,
-        findEntryPack,
-        recordEntryPack,
+        findPassPurchase,
+        recordPassPurchase,
       };
       return service;
     })

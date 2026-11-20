@@ -16,13 +16,13 @@ import {
 } from "@/features/checkout/product-catalog";
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
-import type { entryPackPurchaseQuoteCodec } from "@/features/passes/entry-pack-purchase-quote";
 import { type PassStatus, passStatuses } from "@/features/passes/pass";
 import {
   type EntryPackSize,
   type PassTier,
   passTiers,
 } from "@/features/passes/pass-offer";
+import type { passPurchaseQuoteCodec } from "@/features/passes/pass-purchase-quote";
 import type { PlainDate } from "@/shared/utils/temporal";
 import { instant } from "../instant";
 import { customerAccounts } from "./customer-accounts";
@@ -63,7 +63,7 @@ export const passPurchases = pgTable(
     accessEndsOn: date("access_ends_on", { mode: "string" }).$type<PlainDate>(),
     quote: jsonb("quote")
       .notNull()
-      .$type<typeof entryPackPurchaseQuoteCodec.Encoded>(),
+      .$type<typeof passPurchaseQuoteCodec.Encoded>(),
     locale: text("locale").notNull().$type<Locale>(),
     createdAt: instant("created_at").notNull(),
     giftIssuedAt: instant("gift_issued_at"),

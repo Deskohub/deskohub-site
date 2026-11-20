@@ -25,9 +25,9 @@ import {
   invoiceDocumentSchema,
   isManualInvoiceDocument,
   type ManualInvoiceDocument,
-  makeEntryPackInvoiceDocument,
   makeInvoiceDocument,
   makeManualInvoiceDocument,
+  makePassPurchaseInvoiceDocument,
   type ReservationInvoiceDocument,
 } from "@/features/accounting/invoice";
 import type { InvoiceCancellationFact } from "@/features/accounting/invoice-cancellation";
@@ -400,7 +400,7 @@ export class InvoiceRepository extends Context.Service<
           paymentAttemptId,
         }: Parameters<IInvoiceRepository["issueEntryPack"]>[0]) {
           const source =
-            yield* accountingSnapshots.findEntryPack(paymentAttemptId);
+            yield* accountingSnapshots.findPassPurchase(paymentAttemptId);
           if (!source || source.orderId !== orderId) {
             return yield* wrapInvoiceEligibilityError(
               paymentAttemptId,
@@ -454,7 +454,7 @@ export class InvoiceRepository extends Context.Service<
                 id: paymentAttemptId,
               } satisfies AccountingRecordReference;
               const numbering = yield* allocateInvoiceNumber(reference);
-              const document = makeEntryPackInvoiceDocument({
+              const document = makePassPurchaseInvoiceDocument({
                 source,
                 buyer,
                 paymentAttemptId,

@@ -35,6 +35,8 @@ const readBuyerOrder = Effect.fnUntraced(function* (
       holderAccountId: passPurchases.holderAccountId,
       validFrom: passPurchases.validFrom,
       validUntil: passPurchases.validUntil,
+      purchaseStatus: passPurchases.status,
+      holdsExpireAt: passPurchases.holdsExpireAt,
       paidAt: orders.paidAt,
       paymentState: orders.paymentState,
       attempt: {
@@ -162,6 +164,12 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
     } as const;
   }
   if (row.paymentState === "paid" && paidAt) {
+    if (entryCount === null && row.purchaseStatus === "void") {
+      return { ...details, status: "failed" } as const;
+    }
+    if (entryCount === null && row.purchaseStatus === "pending_payment") {
+      return { ...details, status: "checking" } as const;
+    }
     const paid = {
       ...details,
       status: "paid",
@@ -183,8 +191,15 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
       maskedHolderEmail: email ? maskEmailAddress(email) : undefined,
     } as const;
   }
-  if (row.paymentState === "not_started")
-    return { ...details, status: "not_started" } as const;
+  if (row.paymentState === "not_started") {
+    const now = yield* currentInstant;
+    const ended =
+      entryCount === null &&
+      (row.purchaseStatus === "void" ||
+        !row.holdsExpireAt ||
+        Temporal.Instant.compare(now, row.holdsExpireAt) >= 0);
+    return { ...details, status: ended ? "expired" : "not_started" } as const;
+  }
   if (row.paymentState === "pending") {
     const now = yield* currentInstant;
     const currentAttempt = row.attempt;
@@ -209,16 +224,26 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
     return { ...details, status: "checking" } as const;
   }
   const now = yield* currentInstant;
+  const quoteAvailable =
+    entryCount === null
+      ? row.purchaseStatus === "pending_payment" &&
+        row.holdsExpireAt &&
+        Temporal.Instant.compare(now, row.holdsExpireAt) < 0
+      : !isEntryPackQuoteExpired(now, validUntil);
+  let retryPath: string | undefined;
+  if (priorConfirmed && quoteAvailable) {
+    retryPath =
+      entryCount === null
+        ? `/${row.locale}/passes/unlimited?order=${orderId}&step=pay`
+        : getEntryPackPayPath(row.locale, orderId);
+  }
   return {
     ...details,
     status:
       row.paymentState === "cancelled" || row.paymentState === "expired"
         ? row.paymentState
         : "failed",
-    retryPath:
-      priorConfirmed && !isEntryPackQuoteExpired(now, validUntil)
-        ? getEntryPackPayPath(row.locale, orderId)
-        : undefined,
+    retryPath,
   } as const;
 });
 
