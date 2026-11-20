@@ -127,21 +127,24 @@ const updateProfile = (body: unknown, headers: Record<string, string> = {}) => {
   );
 };
 
+let sentRequests = 0;
+
 /** The customer API's typed client, answered by the served endpoints. */
 const typedClient = makeWorkspaceCustomerApiClient({
   baseUrl: "https://workspace.deskohub.test",
 }).pipe(
   Effect.provideService(
     HttpClient.HttpClient,
-    HttpClient.make((request) =>
-      HttpClientRequest.toWeb(request).pipe(
+    HttpClient.make((request) => {
+      sentRequests++;
+      return HttpClientRequest.toWeb(request).pipe(
         Effect.flatMap((webRequest) =>
           Effect.promise(() => server.handler(webRequest))
         ),
         Effect.map((response) => HttpClientResponse.fromWeb(request, response)),
         Effect.orDie
-      )
-    )
+      );
+    })
   )
 );
 
@@ -150,6 +153,7 @@ const callTypedClient = <A, E>(
 ) => {
   ran.length = 0;
   received.length = 0;
+  sentRequests = 0;
   return Effect.runPromise(
     typedClient.pipe(Effect.flatMap(call), Effect.result)
   );
@@ -231,7 +235,7 @@ describe("the typed client's profile phone", () => {
     ]);
   });
 
-  test("sends a blank phone, which clears the stored phone", async () => {
+  test("sends a blank phone to the profile handler as an explicit clear", async () => {
     const updated = await callTypedClient((client) =>
       client.account.updateProfile({
         payload: { firstName: "Ada", phone: "" },
@@ -250,15 +254,18 @@ describe("the typed client's profile phone", () => {
     );
 
     expect(Result.isFailure(updated)).toBe(true);
-    expect(ran).toEqual([]);
+    expect(sentRequests).toBe(0);
   });
 
-  test("never delivers a phone without a phone number", async () => {
+  test("refuses an invalid phone before sending an update or completion request", async () => {
     const updated = await callTypedClient((client) =>
       client.account.updateProfile({
         payload: { firstName: "Ada", phone: "not a phone" },
       })
     );
+    expect(Result.isFailure(updated)).toBe(true);
+    expect(sentRequests).toBe(0);
+
     const completed = await callTypedClient((client) =>
       client.account.completeProfile({
         headers: {},
@@ -266,10 +273,7 @@ describe("the typed client's profile phone", () => {
       })
     );
 
-    expect([Result.isFailure(updated), Result.isFailure(completed)]).toEqual([
-      true,
-      true,
-    ]);
-    expect(received).toEqual([]);
+    expect(Result.isFailure(completed)).toBe(true);
+    expect(sentRequests).toBe(0);
   });
 });
