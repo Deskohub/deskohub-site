@@ -5,9 +5,15 @@ import {
   SIGN_IN_EMAIL_RESEND_COOLDOWN_MS,
 } from "@deskohub/workspace-customer-api/sign-in-email";
 import { useAtomValue } from "@effect/atom-react";
-import { REGEXP_ONLY_DIGITS } from "input-otp";
+import {
+  createOTPInputController,
+  OTPInput,
+  OTPInputGroup,
+  OTPInputSeparator,
+  OTPInputSlot,
+} from "@ui-sdk/react/otp-input";
 import { CheckCircle2, Loader2 } from "lucide-react";
-import { type RefObject, useRef, useState } from "react";
+import { Fragment, type RefObject, useRef, useState } from "react";
 import type {
   SignInCodeVerification,
   SignInEmailFailure,
@@ -16,12 +22,6 @@ import { signInEmailFailureMessage } from "@/features/account/components/sign-in
 import { SIGN_IN_CODE_LENGTH } from "@/features/account/email-sign-in-request";
 import { type Locale, m } from "@/features/i18n";
 import { Button } from "@/shared/components/ui/button";
-import {
-  InputOTP,
-  InputOTPGroup,
-  InputOTPSeparator,
-  InputOTPSlot,
-} from "@/shared/components/ui/input-otp";
 import { cn } from "@/shared/utils";
 
 type CodeStatus = "idle" | SignInCodeVerification | "verifying";
@@ -64,7 +64,8 @@ export function SignInCodeStep({
   const [status, setStatus] = useState<CodeStatus>("idle");
   const [resendStatus, setResendStatus] = useState<ResendStatus>("idle");
   const [shownRequestedAt, setShownRequestedAt] = useState(requestedAt);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [codeInput] = useState(createOTPInputController);
+  const codeFieldRef = useRef<HTMLDivElement>(null);
   const resendRef = useRef<HTMLButtonElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
   const cooldownSeconds = useAtomValue(
@@ -80,7 +81,7 @@ export function SignInCodeStep({
 
   const submitCode = async (value: string) => {
     // The disabled input keeps no focus ring while the code is checked.
-    inputRef.current?.blur();
+    codeFieldRef.current?.querySelector("input")?.blur();
     setStatus("verifying");
     setResendStatus("idle");
     const verification = await verifyCode(value);
@@ -93,7 +94,7 @@ export function SignInCodeStep({
     // Move focus once the controls re-enable: back into the input for another
     // try, or to the way out when this code can no longer work.
     requestAnimationFrame(() => {
-      if (!isDeadCode(verification)) inputRef.current?.focus();
+      if (!isDeadCode(verification)) codeInput.focus();
       else if (resendRef.current?.disabled === false) resendRef.current.focus();
       else statusRef.current?.focus();
     });
@@ -103,7 +104,7 @@ export function SignInCodeStep({
     setResendStatus("sending");
     const outcome = await requestNewEmail();
     setResendStatus(outcome === "cancelled" ? "idle" : outcome);
-    if (outcome === "sent") inputRef.current?.focus();
+    if (outcome === "sent") codeInput.focus();
   };
 
   const dead = isDeadCode(status);
@@ -127,43 +128,59 @@ export function SignInCodeStep({
       >
         {m.accountSignInCodeLabel({}, { locale })}
       </label>
-      <InputOTP
-        ref={inputRef}
+      <OTPInput
+        ref={codeFieldRef}
+        controller={codeInput}
         id="account-sign-in-code"
         autoFocus
         maxLength={SIGN_IN_CODE_LENGTH}
-        pattern={REGEXP_ONLY_DIGITS}
-        pasteTransformer={(pasted) => pasted.replace(/\D/g, "")}
         value={code}
-        onChange={setCode}
-        onComplete={submitCode}
+        onValueChange={setCode}
+        onValueCommit={submitCode}
+        onPasteCapture={(event) => {
+          const input = event.target;
+          if (!(input instanceof HTMLInputElement) || input.disabled) return;
+          // A code copied from the email can include the surrounding text.
+          event.preventDefault();
+          event.stopPropagation();
+          const digits = event.clipboardData
+            .getData("text/plain")
+            .replace(/\D/g, "");
+          const start = input.selectionStart ?? code.length;
+          const end = input.selectionEnd ?? start;
+          codeInput.setValue(code.slice(0, start) + digits + code.slice(end), {
+            reason: "paste",
+            event: event.nativeEvent,
+          });
+        }}
         disabled={dead || settling}
         aria-invalid={invalid}
         aria-describedby="account-sign-in-code-status"
-        containerClassName="mt-2 w-full max-w-[22rem] gap-2 sm:gap-3"
+        className="mt-2 flex w-full max-w-[22rem] items-center gap-2 data-disabled:opacity-50 sm:gap-3"
       >
-        <InputOTPGroup className="flex-1 gap-1.5 sm:gap-2">
-          {[0, 1, 2].map((index) => (
-            <InputOTPSlot
-              key={index}
-              index={index}
-              invalid={invalid}
-              className="w-full"
-            />
-          ))}
-        </InputOTPGroup>
-        <InputOTPSeparator />
-        <InputOTPGroup className="flex-1 gap-1.5 sm:gap-2">
-          {[3, 4, 5].map((index) => (
-            <InputOTPSlot
-              key={index}
-              index={index}
-              invalid={invalid}
-              className="w-full"
-            />
-          ))}
-        </InputOTPGroup>
-      </InputOTP>
+        {[
+          [0, 1, 2],
+          [3, 4, 5],
+        ].map((group, index) => (
+          <Fragment key={group[0]}>
+            {index > 0 && (
+              <OTPInputSeparator className="h-0.5 w-3 shrink-0 rounded-full bg-navy-blue/30" />
+            )}
+            <OTPInputGroup className="flex flex-1 items-center gap-1.5 sm:gap-2">
+              {group.map((slot) => (
+                <OTPInputSlot
+                  key={slot}
+                  index={slot}
+                  className={cn(
+                    "relative flex h-14 w-full items-center justify-center rounded-xl border bg-white text-2xl font-semibold tabular-nums text-navy-blue transition data-active:z-10 data-active:border-burned-orange data-active:ring-2 data-active:ring-burned-orange/70 data-[fake-caret]:after:h-6 data-[fake-caret]:after:w-px data-[fake-caret]:after:animate-caret-blink data-[fake-caret]:after:bg-navy-blue",
+                    invalid ? "border-red-700/70" : "border-navy-blue/45"
+                  )}
+                />
+              ))}
+            </OTPInputGroup>
+          </Fragment>
+        ))}
+      </OTPInput>
 
       <div
         ref={statusRef}

@@ -59,7 +59,7 @@ const renderStep = ({
 
 const typeCode = async (input: HTMLInputElement, value: string) => {
   await act(async () => {
-    fireEvent.change(input, { target: { value } });
+    fireEvent.input(input, { target: { value } });
   });
 };
 
@@ -122,7 +122,7 @@ describe("sign-in code step", () => {
     }
   );
 
-  test.each(["482 913", "482913", " 482-913\n"])(
+  test.each(["482 913", "482913", " 482-913\n", "Your code is 482913"])(
     "normalises a pasted code %p and submits it",
     async (pasted) => {
       const { props, input } = renderStep();
