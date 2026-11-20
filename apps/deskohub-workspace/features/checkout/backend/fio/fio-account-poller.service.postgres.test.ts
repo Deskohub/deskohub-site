@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { Effect, Layer, Redacted } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { AccountingStorage } from "@/features/accounting/backend/accounting-storage";
+import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import {
   PaidFulfillmentQueueError,
   PaidFulfillmentQueueService,
@@ -77,7 +77,9 @@ const createHarness = () => {
         attempts,
         FioPaymentSettlementRepository.Default.pipe(Layer.provide(db)),
         PaymentLifecycleRepository.Default.pipe(
-          Layer.provide(Layer.merge(db, Layer.mock(AccountingStorage, {})))
+          Layer.provide(
+            Layer.merge(db, Layer.mock(AccountingDocumentSnapshots, {}))
+          )
         ),
         PaidFulfillmentQueueService.Default.pipe(
           Layer.provide(dispatchPublisher)
