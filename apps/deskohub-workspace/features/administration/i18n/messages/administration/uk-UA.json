@@ -84,7 +84,6 @@
   "administrationFioNonCredit": "Немає вхідного платежу",
   "administrationFioObservedAt": "Зафіксовано у Workspace",
   "administrationFioOlderMovements": "Старіші операції",
-  "administrationFioOrder": "Замовлення з оплатою через Fio",
   "administrationFioOutcome": "Результат",
   "administrationFioProvider": "Постачальник",
   "administrationFioQueueEmpty": "У цьому списку немає операцій.",

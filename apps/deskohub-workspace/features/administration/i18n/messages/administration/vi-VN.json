@@ -78,7 +78,6 @@
   "administrationFioNonCredit": "Không có khoản ghi có",
   "administrationFioObservedAt": "Workspace ghi nhận lúc",
   "administrationFioOlderMovements": "Giao dịch cũ hơn",
-  "administrationFioOrder": "Đơn hàng thanh toán qua Fio",
   "administrationFioOutcome": "Kết quả",
   "administrationFioProvider": "Nhà cung cấp",
   "administrationFioQueueEmpty": "Danh sách này chưa có giao dịch nào.",

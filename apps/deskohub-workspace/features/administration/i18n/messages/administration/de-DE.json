@@ -80,7 +80,6 @@
   "administrationFioNonCredit": "Kein Zahlungseingang",
   "administrationFioObservedAt": "Von Workspace erfasst",
   "administrationFioOlderMovements": "Ältere Bewegungen",
-  "administrationFioOrder": "Bestellung mit Fio-Zahlung",
   "administrationFioOutcome": "Ergebnis",
   "administrationFioProvider": "Anbieter",
   "administrationFioQueueEmpty": "Diese Liste enthält keine Kontobewegungen.",

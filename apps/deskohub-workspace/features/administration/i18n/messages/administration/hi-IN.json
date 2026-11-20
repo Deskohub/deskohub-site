@@ -80,7 +80,6 @@
   "administrationFioNonCredit": "कोई आवक भुगतान नहीं",
   "administrationFioObservedAt": "Workspace में पता चलने का समय",
   "administrationFioOlderMovements": "पुराने लेन-देन",
-  "administrationFioOrder": "Fio से भुगतान वाला ऑर्डर",
   "administrationFioOutcome": "नतीजा",
   "administrationFioProvider": "प्रदाता",
   "administrationFioQueueEmpty": "इस सूची में कोई लेन-देन नहीं है।",

@@ -80,7 +80,6 @@
   "administrationFioNonCredit": "No incoming credit",
   "administrationFioObservedAt": "Observed by Workspace",
   "administrationFioOlderMovements": "Older movements",
-  "administrationFioOrder": "Fio payment order",
   "administrationFioOutcome": "Outcome",
   "administrationFioProvider": "Provider",
   "administrationFioQueueEmpty": "There are no movements in this list.",

@@ -69,10 +69,7 @@ export async function OrderAdministrationDetail({
   if (movements.length) {
     return (
       <>
-        <AdministrationPageHeader
-          eyebrow={m.administrationFioOrder({}, { locale })}
-          title={orderId}
-        />
+        <AdministrationPageHeader title={orderId} />
         <FioMovementEvidence
           locale={locale}
           movements={movements}
