@@ -24,6 +24,8 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
   readonly paidAt: Temporal.Instant;
   readonly buyer: EmailRecipient;
   readonly holderEmail: string | null;
+  readonly gift?: boolean;
+  readonly invitationSent?: boolean;
   readonly invoiceRequested: boolean;
 }) {
   const { purchase, buyer } = input;
@@ -39,6 +41,8 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
       {...purchase}
       orderId={id}
       holderEmail={input.holderEmail}
+      gift={input.gift}
+      invitationSent={input.invitationSent}
       quote={quote}
       paidAt={input.paidAt}
       statusUrl={

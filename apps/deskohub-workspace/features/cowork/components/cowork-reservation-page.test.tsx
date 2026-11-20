@@ -13,6 +13,7 @@ import { getWorkspaceProductByTier } from "@/features/checkout/product-catalog";
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
+import type { HeldEntryPack } from "@/features/passes/backend/held-entry-packs";
 import { recordReservationPagePreloads } from "@/features/reservation/backend/reservation-page-preloads.service.mock";
 import {
   type NormalizedCoworkReservationOrder,
@@ -413,7 +414,10 @@ describe("a linked Entry pack", () => {
     validUntil: plainDateStringSchema.make("2099-09-09"),
     claimedDates: [],
     reservedEntryDates: {},
-  };
+    giftIssuedAt: null,
+    giftClaimedAt: null,
+    giftPaymentIsUsable: true,
+  } satisfies HeldEntryPack;
   const pageData = {
     entryPackOffered: true,
     heldEntryPacks: [pack],
@@ -438,6 +442,18 @@ describe("a linked Entry pack", () => {
   test.each([
     ["another holder", []],
     ["depleted", [{ ...pack, entriesLeft: 0 }]],
+    ["unclaimed", [{ ...pack, giftIssuedAt: pack.paidAt }]],
+    [
+      "refunded",
+      [
+        {
+          ...pack,
+          giftIssuedAt: pack.paidAt,
+          giftClaimedAt: pack.paidAt,
+          giftPaymentIsUsable: false,
+        },
+      ],
+    ],
     [
       "expired at Prague midnight",
       [{ ...pack, validUntil: plainDateStringSchema.make("2099-07-30") }],

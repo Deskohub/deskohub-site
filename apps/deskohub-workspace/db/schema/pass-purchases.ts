@@ -54,6 +54,8 @@ export const passPurchases = pgTable(
       .$type<typeof entryPackPurchaseQuoteCodec.Encoded>(),
     locale: text("locale").notNull().$type<Locale>(),
     createdAt: instant("created_at").notNull(),
+    giftIssuedAt: instant("gift_issued_at"),
+    giftClaimedAt: instant("gift_claimed_at"),
   },
   (t) => [
     check("pass_purchases_product_check", sql`${t.product} = 'entry-pack'`),
@@ -69,6 +71,10 @@ export const passPurchases = pgTable(
     check(
       "pass_purchases_validity_check",
       sql`${t.validFrom} < ${t.validUntil}`
+    ),
+    check(
+      "pass_purchases_gift_claim_check",
+      sql`(${t.giftIssuedAt} is null and ${t.giftClaimedAt} is null) or ${t.holderAccountId} <> ${t.buyerAccountId}`
     ),
     index("pass_purchases_buyer_idx").on(t.buyerAccountId),
     index("pass_purchases_holder_idx").on(t.holderAccountId),

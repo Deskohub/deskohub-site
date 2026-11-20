@@ -1,13 +1,19 @@
 import "server-only";
 
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, lte, ne } from "drizzle-orm";
 import { Context, Effect, Result } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { orders, passPurchases, paymentAttempts } from "@/db/schema";
+import {
+  entryPackGiftInvitations,
+  orders,
+  passPurchases,
+  paymentAttempts,
+} from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { findPurchaseLoginEmail } from "@/features/account/backend/customer-account-by-email";
+import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
 import type { EntryPackAccountingSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
@@ -43,9 +49,12 @@ import {
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
 import { isEntryPackQuoteExpired } from "../pass-offer";
+import { recordConfirmationInvitationState } from "./entry-pack-gift";
+import { deliverPendingEntryPackInvitation } from "./entry-pack-gift-delivery";
 import { sendEntryPackPurchaseEmail } from "./entry-pack-purchase-email";
 import { settleEntryPack } from "./entry-pack-settlement";
 
@@ -140,6 +149,7 @@ const redeemClaims = Effect.fnUntraced(function* (
 export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   const { db, transaction } = yield* WorkspaceDatabase;
   const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
+  const customerAccounts = yield* CustomerAccountSections;
   const email = yield* EmailServiceTag;
   const emailConfig = yield* EmailConfigTag;
   const snapshots = yield* AccountingDocumentSnapshots;
@@ -149,7 +159,8 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   const services = Context.make(WorkspaceDatabase, { db, transaction });
   const sendingServices = services.pipe(
     Context.add(EmailServiceTag, email),
-    Context.add(EmailConfigTag, emailConfig)
+    Context.add(EmailConfigTag, emailConfig),
+    Context.add(AccountingDocumentSnapshots, snapshots)
   );
 
   const readOrder = (orderId: OrderId) =>
@@ -309,22 +320,13 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     return transition(attempt, true, now);
   });
 
-  const fulfill = Effect.fn("entryPack.fulfill")(
+  const fulfillBuyer = Effect.fn("entryPack.fulfillBuyer")(
     function* (orderId: OrderId) {
       const [paid] = yield* db
         .select({ order: orders, purchase: passPurchases })
         .from(orders)
         .innerJoin(passPurchases, eq(orders.id, passPurchases.id))
-        .where(
-          and(
-            eq(orders.id, orderId),
-            eq(orders.paymentState, "paid"),
-            inArray(orders.fulfillmentState, [
-              "not_started",
-              "awaiting_delivery",
-            ])
-          )
-        );
+        .where(and(eq(orders.id, orderId), eq(orders.paymentState, "paid")));
       if (!paid) return;
       const {
         purchase,
@@ -335,6 +337,13 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           orderId,
           "Paid Entry pack has no active payment attempt."
         );
+      const gift = purchase.buyerAccountId !== purchase.holderAccountId;
+      if (
+        fulfillmentState !== "not_started" &&
+        fulfillmentState !== "awaiting_delivery"
+      ) {
+        return;
+      }
       const attemptIsActive = and(
         eq(orders.id, orderId),
         eq(orders.paymentState, "paid"),
@@ -353,16 +362,22 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           purchase.buyerAccountId
         ).pipe(Effect.provide(services));
         if (buyer) {
-          const holderEmail =
-            purchase.buyerAccountId === purchase.holderAccountId
-              ? null
-              : ((yield* findPurchaseLoginEmail(purchase.holderAccountId).pipe(
-                  Effect.provide(services)
-                )) ?? null);
+          const holderEmail = gift
+            ? ((yield* findPurchaseLoginEmail(purchase.holderAccountId).pipe(
+                Effect.provide(services)
+              )) ?? null)
+            : null;
+          const invitationSent = gift
+            ? yield* recordConfirmationInvitationState(orderId).pipe(
+                Effect.provide(services)
+              )
+            : false;
           yield* sendEntryPackPurchaseEmail({
             purchase,
             buyer: { email: buyer },
             holderEmail,
+            gift,
+            invitationSent,
             paidAt,
             invoiceRequested: snapshot.billing.invoice !== "none",
           }).pipe(Effect.provide(sendingServices));
@@ -419,6 +434,82 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock)
       )
   );
+
+  const fulfillGift = Effect.fn("entryPack.fulfillGift")(function* (
+    orderId: OrderId
+  ) {
+    const [target] = yield* db
+      .select({
+        generation: entryPackGiftInvitations.generation,
+        holderAccountId: passPurchases.holderAccountId,
+        paymentAttemptId: orders.activePaymentAttemptId,
+      })
+      .from(entryPackGiftInvitations)
+      .innerJoin(
+        passPurchases,
+        eq(passPurchases.id, entryPackGiftInvitations.orderId)
+      )
+      .innerJoin(orders, eq(orders.id, passPurchases.id))
+      .where(
+        and(
+          eq(orders.id, orderId),
+          eq(orders.paymentState, "paid"),
+          eq(
+            entryPackGiftInvitations.holderAccountId,
+            passPurchases.holderAccountId
+          ),
+          ne(passPurchases.buyerAccountId, passPurchases.holderAccountId),
+          lte(entryPackGiftInvitations.nextAttemptAt, yield* currentInstant)
+        )
+      );
+    if (!target?.paymentAttemptId) return;
+
+    // Account deletion takes this same section. Acquire it before the order
+    // section, and release it before the buyer's independent fulfillment.
+    yield* customerAccounts
+      .withActiveAccount(
+        target.holderAccountId,
+        deliverPendingEntryPackInvitation(
+          orderId,
+          target.paymentAttemptId
+        ).pipe(
+          Effect.provide(sendingServices),
+          Effect.provide(SealedStateKeys.Default),
+          Effect.timeout("10 seconds")
+        ),
+        { recheck: "active", passPurchaseOrderId: orderId }
+      )
+      .pipe(
+        Effect.catchTag("CustomerAccountAccessError", (failure) =>
+          failure.reason === "unauthenticated" ||
+          failure.linkReason === "deletion-requested"
+            ? db
+                .update(entryPackGiftInvitations)
+                .set({ nextAttemptAt: null })
+                .where(
+                  and(
+                    eq(entryPackGiftInvitations.orderId, orderId),
+                    eq(entryPackGiftInvitations.generation, target.generation),
+                    eq(
+                      entryPackGiftInvitations.holderAccountId,
+                      target.holderAccountId
+                    )
+                  )
+                )
+                .pipe(Effect.asVoid)
+            : Effect.logWarning("Entry pack gift holder could not be rechecked")
+        )
+      );
+  });
+
+  const fulfill = Effect.fn("entryPack.fulfill")(function* (orderId: OrderId) {
+    yield* fulfillGift(orderId).pipe(
+      Effect.catch(() =>
+        Effect.logWarning("Entry pack gift fulfillment could not complete")
+      )
+    );
+    yield* fulfillBuyer(orderId);
+  });
 
   const recordLateCapture = Effect.fnUntraced(function* (
     input: Verification,

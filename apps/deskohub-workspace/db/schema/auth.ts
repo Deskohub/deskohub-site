@@ -68,6 +68,7 @@ export const authSession = authSchema.table(
       .$onUpdate(() => new Date()),
     ipAddress: sensitiveText("ip_address"),
     userAgent: sensitiveText("user_agent"),
+    signedInWithCredential: boolean("signed_in_with_credential"),
     userId: text("user_id")
       .notNull()
       .references(() => authUser.id, { onDelete: "cascade" }),

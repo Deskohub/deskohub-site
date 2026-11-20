@@ -18,15 +18,18 @@ import { Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { promotionCodes, vouchers } from "@/db/schema";
+import { WorkspaceLockSections } from "@/db/workspace-locks";
 import {
   CurrentCustomerAccount,
   requireVerifiedIdentity,
 } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
+import { CustomerAccountLinkRepository } from "@/features/account/backend/customer-account-link.repository";
 import {
   CustomerAccountSections,
   HeldCustomerAccount,
 } from "@/features/account/backend/customer-account-sections";
+import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { accountingSnapshotKeyIdSchema } from "@/features/accounting/accounting-document-snapshot";
@@ -62,6 +65,7 @@ import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
 import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId as accountId } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
@@ -70,6 +74,14 @@ import {
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { entryPackPurchaseQuoteCodec } from "../entry-pack-purchase-quote";
+import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate.server";
+import {
+  claimEntryPackGifts,
+  queueEntryPackGiftResend,
+  readEntryPackGiftState,
+  resolveEntryPackGiftInvitation,
+} from "./entry-pack-gift";
+import { requestEntryPackGiftResend } from "./entry-pack-gift-resend";
 import { readOwnedEntryPackOrderLocale } from "./entry-pack-order";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
@@ -81,6 +93,7 @@ import {
   readEntryPackPaymentRetry,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
+import { loadEntryPackRedemption } from "./entry-pack-redemption";
 import { settleEntryPack } from "./entry-pack-settlement";
 import { loadEntryPackStatus } from "./entry-pack-status";
 import { reconcilePassPurchases } from "./pass-purchase-reconciliation";
@@ -244,8 +257,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         },
       };
       const mail: EmailMessage[] = [];
+      const invitations: EmailMessage[] = [];
       const attemptedKeys: (string | undefined)[] = [];
       let failSend = false;
+      let failInvitationSend = false;
       let failInternalInvoice = false;
       let beforeAdmission = Effect.void;
       const rejectedConfirmations = new Set<string>();
@@ -264,6 +279,23 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         })
       );
       const deliveryAttempts: string[] = [];
+      // Use the smallest supported lock permit budget. A nested account/order
+      // acquisition exhausts it even when SQL queries have spare connections.
+      const fulfillmentLockLayer = WorkspaceDatabaseAdvisoryLock.makeLayer({
+        ...db.databasePool,
+        maxConnections: 2,
+      });
+      const backgroundAccountSections = CustomerAccountSections.Default.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            CustomerAccountLinkRepository.Default.pipe(Layer.provide(db.layer)),
+            fulfillmentLockLayer,
+            Layer.mock(CustomerAuthentication, {
+              currentUser: Effect.succeed(session),
+            })
+          )
+        )
+      );
       const emailLayer = Layer.merge(
         Layer.succeed(EmailConfigTag, {
           defaultFrom: { email: testEmailAddress("pass-sender") },
@@ -272,7 +304,22 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           send: (message) =>
             Effect.suspend(() => {
               const key = message.idempotencyKey ?? "";
-              if (key.startsWith("entry-pack-purchase:")) {
+              if (key.startsWith("entry-pack-gift-invitation:")) {
+                invitations.push(message);
+                if (failInvitationSend) {
+                  failInvitationSend = false;
+                  return Effect.fail(
+                    new EmailServiceError(
+                      "Synthetic uncertain gift delivery.",
+                      undefined,
+                      undefined,
+                      {
+                        failureKind: "unknown-outcome",
+                      }
+                    )
+                  );
+                }
+              } else if (key.startsWith("entry-pack-purchase:")) {
                 attemptedKeys.push(key);
                 if (failSend || rejectedConfirmations.has(key)) {
                   failSend = false;
@@ -343,7 +390,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               invoiceDeliveryLedger,
               invoiceDelivery,
               emailLayer,
-              WorkspaceDatabaseAdvisoryLock.makeLayer(db.databasePool)
+              backgroundAccountSections,
+              fulfillmentLockLayer
             )
           )
         )
@@ -571,7 +619,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       };
       return {
         orderId,
+        initialPurchase,
         mail,
+        invitations,
         attemptedKeys,
         invoiceDeliveries,
         deliveryAttempts,
@@ -625,6 +675,24 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         rejectNextEmail: () => {
           failSend = true;
         },
+        rejectNextInvitation: () => {
+          failInvitationSend = true;
+        },
+        resendAsBuyer: (at: Temporal.Instant, signal: AbortSignal) =>
+          Effect.runPromise(
+            requestEntryPackGiftResend(orderId).pipe(
+              Effect.provide(backgroundAccountSections),
+              Effect.provide(
+                Layer.mergeAll(
+                  db.layer,
+                  purchaseServices,
+                  CoworkPassesReleaseGate.fromDecision(true)
+                )
+              ),
+              atInstant(at)
+            ),
+            { signal }
+          ),
         providerOrders,
         verifiedOrders,
         status: () =>
@@ -710,14 +778,17 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             displayedPriceFingerprint?: string;
             acceptedDocuments?: typeof accept.acceptedDocuments;
             submittedCode?: typeof code;
-          }
+          },
+          signal?: AbortSignal
         ) => {
           const pay = payForEntryPack({
             ...accept,
             ...(billing && { billing }),
             ...options,
           }).pipe(Effect.provide(services));
-          return Effect.runPromise(at ? pay.pipe(atInstant(at)) : pay);
+          return Effect.runPromise(at ? pay.pipe(atInstant(at)) : pay, {
+            signal,
+          });
         },
       };
     };
@@ -1479,6 +1550,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await payment.pay()).toMatchObject({ status: "paid" });
       expect(payment.providerOrders).toEqual([]);
       expect(payment.mail).toHaveLength(1);
+      expect(payment.invitations).toHaveLength(0);
       expect(
         (
           await db.pool.query(
@@ -1488,6 +1560,333 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           )
         ).rows
       ).toEqual([{ provider: "internal", amount_value: 0, state: "redeemed" }]);
+    });
+
+    test("fulfills simultaneous gifts when the pool has one lock permit", async () => {
+      const db = database!;
+      const recipients = [
+        "concurrent-gift-first",
+        "concurrent-gift-second",
+      ].map(testEmailAddress);
+      const purchases = await Promise.all(
+        recipients.map((holderEmail) =>
+          integration(db, 115_000, undefined, undefined, undefined, holderEmail)
+        )
+      );
+      const signal = AbortSignal.timeout(5_000);
+      const paid = await Promise.all(
+        purchases.map((purchase) => purchase.pay(undefined, undefined, signal))
+      );
+      expect(paid.map(({ status }) => status)).toEqual(["paid", "paid"]);
+      for (const [index, purchase] of purchases.entries()) {
+        expect(purchase.invitations).toHaveLength(1);
+        expect(purchase.invitations[0]?.to).toEqual({
+          email: recipients[index],
+        });
+        expect(purchase.mail).toHaveLength(1);
+        expect(purchase.mail[0]?.to).toEqual({ email });
+      }
+    });
+
+    test.each([2_000, 115_000])(
+      "issues a holder-only gift after paid settlement with voucher value %i",
+      async (voucherValue) => {
+        const db = database!;
+        const internal = voucherValue === 115_000;
+        const holderEmail = testEmailAddress(
+          internal ? "internal-gift-recipient" : "provider-gift-recipient"
+        );
+        const existingHolder = internal
+          ? undefined
+          : customerAccountIdSchema.make(crypto.randomUUID());
+        if (existingHolder) {
+          await db.pool.query(
+            "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
+            [existingHolder, "synthetic-linked-gift-holder"]
+          );
+          await db.pool.query(
+            'insert into auth."user" (id, name, email, email_verified) values ($1, $2, $3, true)',
+            [existingHolder, "", holderEmail]
+          );
+        }
+        const payment = await integration(
+          db,
+          voucherValue,
+          undefined,
+          undefined,
+          undefined,
+          holderEmail
+        );
+        const {
+          orderId,
+          initialPurchase: { holderAccountId, validFrom },
+        } = payment;
+        if (existingHolder) expect(holderAccountId).toBe(existingHolder);
+        const readGift = () =>
+          Effect.runPromise(
+            readEntryPackGiftState(orderId).pipe(Effect.provide(db.layer))
+          );
+        const markClaimed = (
+          id: typeof holderAccountId,
+          at: Temporal.Instant
+        ) =>
+          Effect.runPromise(
+            claimEntryPackGifts(id, at).pipe(Effect.provide(db.layer))
+          );
+        const quote = (id: typeof holderAccountId) =>
+          Effect.runPromise(
+            loadEntryPackRedemption(db.db, {
+              passId: orderId,
+              holderAccountId: id,
+              date: validFrom,
+            })
+          );
+        const resend = (id: typeof holderAccountId, at: Temporal.Instant) =>
+          Effect.runPromise(
+            queueEntryPackGiftResend(orderId, id).pipe(
+              WorkspaceLockSections.passPurchaseFulfillment(orderId),
+              Effect.provide(
+                Layer.merge(
+                  db.layer,
+                  WorkspaceDatabaseAdvisoryLock.makeLayer(db.databasePool)
+                )
+              ),
+              atInstant(at)
+            )
+          );
+        const resolve = (secret: string, at: Temporal.Instant) =>
+          Effect.runPromise(
+            resolveEntryPackGiftInvitation(secret).pipe(
+              Effect.provide(Layer.merge(db.layer, SealedStateKeys.Default)),
+              atInstant(at)
+            )
+          );
+        const extractContext = (message: EmailMessage) => {
+          const href = message.html?.match(
+            /href="([^"]*\/auth\/sign-in\?gift-sign-in=1#[^"]+)"/
+          )?.[1];
+          if (!href)
+            throw new Error("Gift email did not link to site sign-in.");
+          const link = new URL(href);
+          expect(link.search).toBe("?gift-sign-in=1");
+          const context = new URLSearchParams(link.hash.slice(1)).get("gift");
+          if (!context) throw new Error("The sign-in link lacks gift context.");
+          return context;
+        };
+
+        const beforePayment = Temporal.Now.instant();
+        expect(await readGift()).toEqual({
+          invitation: "not_sent",
+          claimed: false,
+          canResend: false,
+        });
+        expect(await resend(accountId, beforePayment)).toBe(false);
+        expect(payment.invitations).toHaveLength(0);
+        if (!internal) payment.rejectNextInvitation();
+        expect(await payment.pay()).toMatchObject({
+          status: internal ? "paid" : "hosted",
+        });
+        if (!internal) {
+          expect(payment.invitations).toHaveLength(0);
+          await payment.notify("success");
+          await payment.notify("success");
+        }
+        expect(payment.mail).toHaveLength(1);
+        expect(payment.invitations).toHaveLength(1);
+        expect(await readGift()).toMatchObject({
+          invitation: internal ? "sent" : "pending",
+          claimed: false,
+        });
+        const first = payment.invitations[0]!;
+        expect(first.to).toEqual({ email: holderEmail });
+        expect(first.sensitiveContent).toBe(true);
+        expect(first.html?.includes("Claim your pass")).toBe(true);
+        expect(first.html?.includes("coffee when you book")).toBe(true);
+        expect(first.html?.includes("invoice")).toBe(false);
+        expect(payment.mail[0]?.html?.includes("emailed an invitation")).toBe(
+          internal
+        );
+        const secret = extractContext(first);
+        const later = Temporal.Now.instant().add({ minutes: 20 });
+        if (!internal) {
+          await payment.reconcile(later);
+          await payment.reconcile(later);
+          expect(payment.invitations).toHaveLength(2);
+          expect(payment.invitations[1]?.idempotencyKey).toBe(
+            first.idempotencyKey
+          );
+          expect(payment.invitations[1]?.html === first.html).toBe(true);
+          expect(payment.mail).toHaveLength(1);
+        }
+        expect(await readGift()).toMatchObject({
+          invitation: "sent",
+          claimed: false,
+        });
+        expect(await resolve(secret, later)).toEqual({
+          orderId,
+          email: holderEmail,
+          holderAccountId,
+        });
+        expect(
+          await resolve(`${secret.slice(0, -2)}!!`, later)
+        ).toBeUndefined();
+        expect(
+          await resolve(secret, later.add({ hours: 7 * 24 }))
+        ).toBeUndefined();
+        expect(await resend(holderAccountId, later)).toBe(false);
+        await expect(quote(holderAccountId)).rejects.toBeDefined();
+        if (internal) await markClaimed(holderAccountId, later);
+        expect((await readGift()).claimed).toBe(false);
+
+        if (internal) {
+          const resendSignal = AbortSignal.timeout(5_000);
+          expect(await payment.resendAsBuyer(later, resendSignal)).toBe(
+            "queued"
+          );
+          expect(await payment.resendAsBuyer(later, resendSignal)).toBe(
+            "unavailable"
+          );
+          expect(await resolve(secret, later)).toBeUndefined();
+          await payment.reconcile(later.add({ minutes: 1 }));
+          expect(payment.invitations).toHaveLength(2);
+          expect(payment.invitations[1]?.idempotencyKey).not.toBe(
+            first.idempotencyKey
+          );
+        }
+        const currentSecret = extractContext(payment.invitations.at(-1)!);
+        await db.pool.query(
+          'update auth."user" set email_verified = true where id = $1',
+          [holderAccountId]
+        );
+        await markClaimed(holderAccountId, beforePayment);
+        await markClaimed(accountId, later);
+        expect((await readGift()).claimed).toBe(false);
+        if (!internal) {
+          await db.pool.query(
+            "update payment_attempts set refund_state = 'required' where order_id = $1",
+            [orderId]
+          );
+          expect(await resolve(currentSecret, later)).toBeUndefined();
+          await markClaimed(holderAccountId, later);
+          expect((await readGift()).claimed).toBe(false);
+          await db.pool.query(
+            "update payment_attempts set refund_state = 'not_required' where order_id = $1",
+            [orderId]
+          );
+        }
+        await markClaimed(holderAccountId, later.add({ minutes: 2 }));
+        await markClaimed(holderAccountId, later.add({ minutes: 3 }));
+        expect(await readGift()).toMatchObject({
+          claimed: true,
+          canResend: false,
+        });
+        expect(
+          await resolve(currentSecret, later.add({ minutes: 4 }))
+        ).toBeUndefined();
+        expect(await resend(accountId, later.add({ hours: 1 }))).toBe(false);
+        await expect(quote(accountId)).rejects.toBeDefined();
+        expect(await quote(holderAccountId)).toMatchObject({
+          passId: orderId,
+          holderAccountId,
+        });
+        if (!internal) {
+          await db.pool.query(
+            "update payment_attempts set refund_state = 'required' where order_id = $1",
+            [orderId]
+          );
+          await expect(quote(holderAccountId)).rejects.toBeDefined();
+        }
+      }
+    );
+
+    test("allows the paid buyer confirmation when holder deletion blocks the invitation", async () => {
+      const db = database!;
+      const payment = await integration(
+        db,
+        115_000,
+        undefined,
+        undefined,
+        undefined,
+        testEmailAddress("deleting-gift-recipient")
+      );
+      await db.pool.query(
+        'update auth."user" set deletion_requested_at = now() where id = $1',
+        [payment.initialPurchase.holderAccountId]
+      );
+      expect(await payment.pay()).toMatchObject({ status: "paid" });
+      expect(payment.invitations).toHaveLength(0);
+      expect(payment.mail).toHaveLength(1);
+    });
+
+    test("preserves bookability of a paid gift from before gift activation tracking", async () => {
+      const db = database!;
+      const payment = await integration(
+        db,
+        115_000,
+        undefined,
+        undefined,
+        undefined,
+        testEmailAddress("legacy-gift-recipient")
+      );
+      await payment.pay();
+      const {
+        orderId,
+        initialPurchase: { holderAccountId, validFrom },
+      } = payment;
+      await db.pool.query(
+        "delete from entry_pack_gift_invitations where order_id = $1",
+        [orderId]
+      );
+      await db.pool.query(
+        "update pass_purchases set gift_issued_at = null where id = $1",
+        [orderId]
+      );
+
+      expect(
+        await Effect.runPromise(
+          readEntryPackGiftState(orderId).pipe(Effect.provide(db.layer))
+        )
+      ).toEqual({ invitation: "not_sent", claimed: false, canResend: true });
+      expect(
+        await Effect.runPromise(
+          loadEntryPackRedemption(db.db, {
+            passId: orderId,
+            holderAccountId,
+            date: validFrom,
+          })
+        )
+      ).toMatchObject({ passId: orderId, holderAccountId });
+    });
+
+    test("does not replay an uncertain invitation with changed content", async () => {
+      const db = database!;
+      const payment = await integration(
+        db,
+        115_000,
+        undefined,
+        undefined,
+        undefined,
+        testEmailAddress("fingerprint-gift-recipient")
+      );
+      payment.rejectNextInvitation();
+      await payment.pay();
+      const { orderId } = payment;
+      await db.pool.query(
+        "update entry_pack_gift_invitations set delivery_fingerprint = $2 where order_id = $1",
+        [orderId, "previous-template-fingerprint"]
+      );
+      const later = Temporal.Now.instant().add({ minutes: 20 });
+      await payment.reconcile(later);
+      expect(payment.invitations).toHaveLength(1);
+      expect(payment.mail).toHaveLength(1);
+      expect(
+        await Effect.runPromise(
+          readEntryPackGiftState(orderId).pipe(
+            Effect.provide(db.layer),
+            atInstant(later)
+          )
+        )
+      ).toEqual({ invitation: "failed", claimed: false, canResend: true });
     });
 
     test("creates one pending order with an empty entry and evidence ledger", async () => {

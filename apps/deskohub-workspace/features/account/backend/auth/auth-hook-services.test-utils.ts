@@ -51,6 +51,7 @@ export type AuthHookServiceOverrides = {
   readonly registerReviewAccount?: ReviewAccounts["Service"]["register"];
   readonly createCustomerAccount?: Records["createCustomerAccount"];
   readonly captureLocalePreference?: Records["captureLocalePreference"];
+  readonly recordEntryPackGiftSignIn?: Records["recordEntryPackGiftSignIn"];
   /**
    * The ledger's mirror of a signing-in device's consent choice: the real
    * ledger over Postgres, and a no-op over an in-memory store.
@@ -134,6 +135,9 @@ export const postgresAuthHookServices = (
         ...(overrides.captureLocalePreference && {
           captureLocalePreference: overrides.captureLocalePreference,
         }),
+        ...(overrides.recordEntryPackGiftSignIn && {
+          recordEntryPackGiftSignIn: overrides.recordEntryPackGiftSignIn,
+        }),
       })
     )
   ).pipe(Layer.provide(LoginLifecycleRecords.Default));
@@ -179,6 +183,8 @@ export const memoryAuthHookServices = (
         overrides.createCustomerAccount ?? (() => Effect.void),
       captureLocalePreference:
         overrides.captureLocalePreference ?? (() => Effect.void),
+      recordEntryPackGiftSignIn:
+        overrides.recordEntryPackGiftSignIn ?? (() => Effect.void),
       revokeUnconsentedAdministrationTokens: () => Effect.void,
     }),
     Layer.mock(ReviewAccounts, {

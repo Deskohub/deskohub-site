@@ -5,8 +5,15 @@ import { unsafeReturnTargets } from "@/shared/testing/unsafe-return-targets.test
 const events: string[] = [];
 const arePasskeysEnabled = mock(() => Promise.resolve(false));
 const connection = mock(() => Promise.resolve());
+const continueEntryPackGiftSignIn = mock(() => Promise.resolve({}));
 
 mock.module("next/server", () => ({ connection }));
+mock.module(
+  "@/features/account/actions/continue-entry-pack-gift-sign-in",
+  () => ({
+    continueEntryPackGiftSignIn,
+  })
+);
 mock.module("@/features/account/server/account-release-gates.server", () => ({
   arePasskeysEnabled,
 }));
@@ -53,6 +60,7 @@ describe("sign-in route card", () => {
         locale: "en-US",
         noLongerWaiting: false,
         passkeysEnabled,
+        resolveGiftSignIn: continueEntryPackGiftSignIn,
         returnTo: undefined,
       });
     }

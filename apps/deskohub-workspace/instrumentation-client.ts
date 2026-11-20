@@ -2,9 +2,20 @@ import "./shared/polyfills/temporal-installed";
 
 import { initBotId } from "botid/client/core";
 import { getClientEnv } from "./client-env";
+import { isEntryPackGiftSignInHash } from "./features/passes/entry-pack-gift-sign-in";
+import {
+  isEntryPackGiftSignInDocument,
+  prepareEntryPackGiftSignInDocument,
+} from "./features/passes/entry-pack-gift-sign-in.browser";
 import { initializeWorkspaceBotId } from "./shared/bot-protection/bot-protection.policy.js";
 
-initializeWorkspaceBotId(getClientEnv().NEXT_PUBLIC_VERCEL_ENV, () =>
+prepareEntryPackGiftSignInDocument();
+initializeWorkspaceBotId(getClientEnv().NEXT_PUBLIC_VERCEL_ENV, () => {
+  if (
+    isEntryPackGiftSignInDocument() &&
+    isEntryPackGiftSignInHash(window.location.hash)
+  )
+    return;
   initBotId({
     protect: [
       {
@@ -46,5 +57,5 @@ initializeWorkspaceBotId(getClientEnv().NEXT_PUBLIC_VERCEL_ENV, () =>
         method: "POST",
       },
     ],
-  })
-);
+  });
+});

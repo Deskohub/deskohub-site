@@ -77,7 +77,12 @@ export function EntryPackStatusPage({
     switch (status.status) {
       case "paid":
         return status.gift
-          ? m.entryPackStatusPaidGiftLead({}, { locale })
+          ? {
+              not_sent: m.entryPackStatusGiftInvitationNotSent,
+              pending: m.entryPackStatusGiftInvitationPending,
+              sent: m.entryPackStatusGiftInvitationSent,
+              failed: m.entryPackStatusGiftInvitationFailed,
+            }[status.invitation]({}, { locale })
           : undefined;
       case "pending":
         return m.entryPackStatusPendingLead({}, { locale });
@@ -124,6 +129,13 @@ export function EntryPackStatusPage({
           {lead && (
             <p className="mt-4 text-lg leading-8 text-navy-blue/70">{lead}</p>
           )}
+          {isPaid && status.gift && (
+            <p className="mt-2 text-navy-blue/70">
+              {status.claimed
+                ? m.accountPassGiftClaimed({}, { locale })
+                : m.accountPassGiftNotClaimed({}, { locale })}
+            </p>
+          )}
           {status.status === "partially_refunded" && status.refundPending && (
             <p className="mt-2 text-navy-blue/70">
               {m.entryPackStatusAdditionalRefundLead({}, { locale })}
@@ -160,7 +172,7 @@ export function EntryPackStatusPage({
             </dt>
             <dd className="break-all text-sm">{status.orderId}</dd>
           </div>
-          {isPaid && status.maskedHolderEmail && (
+          {isPaid && status.gift && status.maskedHolderEmail && (
             <div>
               <dt className="text-sm text-navy-blue/70">
                 {m.passEmailFor({}, { locale })}

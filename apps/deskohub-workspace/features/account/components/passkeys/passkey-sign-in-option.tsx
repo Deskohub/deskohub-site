@@ -30,7 +30,7 @@ export function PasskeySignInOption({
   // settles. Its failures stay quiet: the customer never asked for it, and
   // hosts that can't run passkey ceremonies reject it.
   useEffect(() => {
-    if (pending) return;
+    if (!ready || pending) return;
     const autofill = new AbortController();
     void supportsPasskeyAutofill().then((supported) => {
       if (!supported) return;
@@ -42,7 +42,7 @@ export function PasskeySignInOption({
       });
     });
     return () => autofill.abort();
-  }, [locale, returnTo, pending]);
+  }, [locale, returnTo, pending, ready]);
 
   // A button attempt continues to the destination it started for. Another
   // destination, or unmounting the option, cancels it.

@@ -10,6 +10,7 @@ type SignInPasswordStepProps = {
   readonly locale: Locale;
   readonly authReturn: AuthReturnLifecycle;
   readonly request: EmailSignInRequest;
+  readonly privateEmail?: boolean;
   readonly onUseDifferentEmail: () => void;
 };
 
@@ -22,6 +23,7 @@ export function SignInPasswordStep({
   locale,
   authReturn,
   request,
+  privateEmail,
   onUseDifferentEmail,
 }: SignInPasswordStepProps) {
   return (
@@ -38,6 +40,7 @@ export function SignInPasswordStep({
       <SignInPasswordForm
         locale={locale}
         email={request.email}
+        privateEmail={privateEmail}
         signedInMessage={
           request.returnTo === undefined
             ? m.accountSignInCodeVerified({}, { locale })

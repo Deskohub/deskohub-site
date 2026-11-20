@@ -4,6 +4,7 @@ const SENSITIVE_QUERY_PARAMS = new Set([
   "accesstoken",
   "invoiceid",
   "orderid",
+  "pass",
   "paystate",
   "paystateref",
   "reservationid",

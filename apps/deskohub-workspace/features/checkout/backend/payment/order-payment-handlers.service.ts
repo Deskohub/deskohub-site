@@ -2,6 +2,7 @@ import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
 import { AccountingStorage } from "@/features/accounting/backend/accounting-storage";
 import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/invoice-email-delivery.repository";
 import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
@@ -87,6 +88,7 @@ export class OrderPaymentHandlers extends Context.Service<
         WorkspaceReservationRepository.Default,
         WorkspaceEmailLayer,
         WorkspaceDatabaseAdvisoryLock.Default,
+        CustomerAccountSections.Live,
         AccountingStorage.Live,
         InvoiceEmailDeliveryService.Live,
         InvoiceEmailDeliveryRepository.Live,

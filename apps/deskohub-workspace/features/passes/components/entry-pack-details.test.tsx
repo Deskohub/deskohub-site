@@ -60,6 +60,11 @@ test("submits the gift holder independently of the authenticated buyer", async (
     name: m.entryPackCheckoutGift({}, { locale }),
   });
   fireEvent.click(gift);
+  expect(
+    view.getByText(
+      "We email them an invitation once you’ve paid. They claim it with their email. Only they can use the pass."
+    )
+  ).toBeDefined();
   fireEvent.change(view.getByLabelText(fieldName), {
     target: { value: holderEmail },
   });

@@ -7,6 +7,7 @@ import { WorkspaceTransaction } from "./database.service";
 import type { DatabaseQueryError } from "./sql-constraint";
 import {
   holdSection,
+  holdSections,
   type LockWait,
   type TransactionLockRequest,
   takeTransactionLock,
@@ -34,6 +35,28 @@ const reservationInviteeNotices = (orderId: WorkspaceReservationId) => ({
   rank: 55,
   pair: ["reservation-invitee-notices", orderId] as const,
 });
+
+const customerAccountSection = (accountId: CustomerAccountId) => ({
+  name: "customerAccount",
+  rank: 20,
+  pair: ["customer-account", accountId] as const,
+});
+
+const passPurchaseFulfillmentSection = (orderId: OrderId) => ({
+  name: "passPurchaseFulfillment",
+  rank: 30,
+  pair: ["pass-purchase-fulfillment", orderId] as const,
+});
+
+/** Takes two existing section keys together without another pool permit. */
+export const holdCustomerAccountAndPassPurchase = (
+  accountId: CustomerAccountId,
+  orderId: OrderId
+) =>
+  holdSections([
+    customerAccountSection(accountId),
+    passPurchaseFulfillmentSection(orderId),
+  ]);
 
 /**
  * Advisory locks held until the current Workspace transaction ends. Take them
@@ -171,17 +194,9 @@ export const WorkspaceLockSections = {
       pair: ["reservation-order", orderId],
     }),
   customerAccount: (accountId: CustomerAccountId) =>
-    holdSection({
-      name: "customerAccount",
-      rank: 20,
-      pair: ["customer-account", accountId],
-    }),
+    holdSection(customerAccountSection(accountId)),
   passPurchaseFulfillment: (orderId: OrderId) =>
-    holdSection({
-      name: "passPurchaseFulfillment",
-      rank: 30,
-      pair: ["pass-purchase-fulfillment", orderId],
-    }),
+    holdSection(passPurchaseFulfillmentSection(orderId)),
   reservationInviteeNotices: (orderId: WorkspaceReservationId) =>
     holdSection(reservationInviteeNotices(orderId)),
 } as const;

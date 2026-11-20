@@ -372,7 +372,7 @@ export async function loadCustomerInvoiceHistory() {
 
 const fixtureAccountPasses = `
 export async function loadCustomerAccountPasses() {
-  return [];
+  return { held: [], boughtForOthers: [] };
 }
 `;
 

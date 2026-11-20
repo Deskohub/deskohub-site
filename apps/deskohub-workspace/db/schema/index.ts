@@ -86,6 +86,7 @@ export {
   emailValueSnapshots,
   emailVersions,
 } from "./emails";
+export { entryPackGiftInvitations } from "./entry-pack-gift-invitations";
 export { fioAccountPolls } from "./fio-account-polls";
 export { fioPaymentSettlements } from "./fio-payment-settlements";
 export { invoiceArchives } from "./invoice-archives";

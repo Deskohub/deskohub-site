@@ -16,6 +16,7 @@ import {
   makeTestAuth,
   signInForMagicLink,
   type TestAuth,
+  type TestAuthOptions,
   testDatabase,
   uniqueEmail,
   uniqueIp,
@@ -212,10 +213,16 @@ describe("magic-link App Link", () => {
   });
 
   describe("with a session already in the app", () => {
-    const appSignIns = ({ signInCodes = false } = {}) => {
+    const appSignIns = ({
+      signInCodes = false,
+      recordEntryPackGiftSignIn,
+    }: Pick<TestAuthOptions, "recordEntryPackGiftSignIn"> & {
+      readonly signInCodes?: boolean;
+    } = {}) => {
       const sentLinks: CapturedMagicLink[] = [];
-      const { auth } = makeMemoryTestAuth({
+      const { auth, store } = makeMemoryTestAuth({
         sentLinks,
+        recordEntryPackGiftSignIn,
         signInCodeFlag: Effect.succeed(signInCodes),
       });
       const sendLink = async (email: string) => {
@@ -248,7 +255,7 @@ describe("magic-link App Link", () => {
         return ((await session.json()) as { user?: { email: string } } | null)
           ?.user?.email;
       };
-      return { auth, sendLink, verify, signedIn, signedInEmail };
+      return { auth, store, sendLink, verify, signedIn, signedInEmail };
     };
 
     for (const signInCodes of [false, true]) {
@@ -306,13 +313,35 @@ describe("magic-link App Link", () => {
       ).toBe(current.toLowerCase());
     });
 
-    test("answers an unusable link as invalid, not as a switch", async () => {
-      const app = appSignIns();
+    test("answers an unusable link as invalid without recording a refreshed session as a sign-in", async () => {
+      const signIns: { accountId: string; signedInAt: number }[] = [];
+      const app = appSignIns({
+        recordEntryPackGiftSignIn: (accountId, signedInAt) =>
+          Effect.sync(() => {
+            signIns.push({
+              accountId,
+              signedInAt: signedInAt.epochMilliseconds,
+            });
+          }),
+      });
       const cookie = await app.signedIn(uniqueEmail("app-current"));
+      const original = app.store.session[0]!;
+      const originalUpdatedAt = original.updatedAt.getTime();
+      expect(signIns).toEqual([
+        {
+          accountId: original.userId,
+          signedInAt: original.createdAt.getTime(),
+        },
+      ]);
+      setSystemTime(new Date(Date.now() + 2 * 24 * 60 * 60_000));
 
       const unknown = await app.verify("unknown", cookie);
       expect(unknown.status).toBe(400);
       expect(await errorCode(unknown)).toBe("INVALID_TOKEN");
+      expect(app.store.session[0]!.updatedAt.getTime()).toBeGreaterThan(
+        originalUpdatedAt
+      );
+      expect(signIns).toHaveLength(1);
     });
 
     test("keeps the redirect for a link that names a callback", async () => {
@@ -710,7 +739,13 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
   });
 
   test("keeps the browser sign-in time, so a handoff never refreshes freshness", async () => {
-    const auth = makeTestAuth();
+    const signIns: string[] = [];
+    const auth = makeTestAuth({
+      recordEntryPackGiftSignIn: (accountId) =>
+        Effect.sync(() => {
+          signIns.push(accountId);
+        }),
+    });
     const signedInAt = Date.now();
     const { cookie } = await signIn(auth);
     const handOff = async (sessionCookie: string, native: boolean) => {
@@ -747,6 +782,13 @@ describe.skipIf(!testDatabase)("native sign-in handoff", () => {
     setSystemTime(new Date(signedInAt + 5 * 60 * 1000));
     const app = await handOff(cookie, false);
     expect(app.status).toBe(200);
+    expect(signIns).toHaveLength(1);
+    const session = await callHandler(auth, "/get-session", {
+      headers: { cookie: app.cookie! },
+    });
+    expect(await session.json()).toMatchObject({
+      session: { signedInWithCredential: false },
+    });
 
     // Ten minutes after the browser sign-in, the app's session is as stale
     // as the browser's, and minting from it can't make a fresh one.
