@@ -5,10 +5,7 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import {
-  CloudinarySignatureRedactor,
-  redactCloudinarySignatures,
-} from "./telemetry";
+import { CloudinarySignatureRedactor } from "./telemetry";
 
 const syntheticSignature = "s--fake-signature--";
 const signedUrl = `https://res.cloudinary.test/demo/image/list/${syntheticSignature}/gallery.json`;
@@ -25,29 +22,6 @@ const recordedText = (exporter: InMemorySpanExporter) =>
       status: span.status,
     }))
   );
-
-describe("redactCloudinarySignatures", () => {
-  test("replaces signature path segments", () => {
-    expect(redactCloudinarySignatures(signedUrl)).toBe(redactedUrl);
-    expect(redactCloudinarySignatures(`fetch GET ${signedUrl}`)).toBe(
-      `fetch GET ${redactedUrl}`
-    );
-    expect(
-      redactCloudinarySignatures(`${syntheticSignature}/gallery.json`)
-    ).toBe("s--REDACTED--/gallery.json");
-    expect(
-      redactCloudinarySignatures(
-        `https://res.cloudinary.test/demo/image/upload/${syntheticSignature}?x=1`
-      )
-    ).toBe("https://res.cloudinary.test/demo/image/upload/s--REDACTED--?x=1");
-  });
-
-  test("leaves text without a signature segment unchanged", () => {
-    const unsigned =
-      "https://res.cloudinary.test/demo/image/upload/v1/gallery/s--not-a-segment.jpg";
-    expect(redactCloudinarySignatures(unsigned)).toBe(unsigned);
-  });
-});
 
 describe("CloudinarySignatureRedactor", () => {
   let provider: BasicTracerProvider | undefined;
@@ -70,12 +44,19 @@ describe("CloudinarySignatureRedactor", () => {
 
   test("redacts the name and attributes a span starts with", () => {
     const { exporter, tracer } = exportedSpans();
+    const unsignedUrl =
+      "https://res.cloudinary.test/demo/image/upload/v1/gallery/s--not-a-segment.jpg";
 
     tracer
       .startSpan(`fetch GET ${signedUrl}`, {
         attributes: {
           "http.url": signedUrl,
-          "url.full": [signedUrl, "unrelated"],
+          "url.full": [
+            signedUrl,
+            `${syntheticSignature}/gallery.json`,
+            `https://res.cloudinary.test/demo/image/upload/${syntheticSignature}?x=1`,
+            unsignedUrl,
+          ],
           "http.status_code": 200,
         },
       })
@@ -85,7 +66,12 @@ describe("CloudinarySignatureRedactor", () => {
     expect(span?.name).toBe(`fetch GET ${redactedUrl}`);
     expect(span?.attributes).toEqual({
       "http.url": redactedUrl,
-      "url.full": [redactedUrl, "unrelated"],
+      "url.full": [
+        redactedUrl,
+        "s--REDACTED--/gallery.json",
+        "https://res.cloudinary.test/demo/image/upload/s--REDACTED--?x=1",
+        unsignedUrl,
+      ],
       "http.status_code": 200,
     });
     expect(recordedText(exporter)).not.toContain(syntheticSignature);
