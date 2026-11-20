@@ -21,11 +21,10 @@ const noPass = { state: "not-found" } as const;
 
 const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   orderId: OrderId,
-  accountId: CustomerAccountId,
-  now: Temporal.Instant
+  accountId: CustomerAccountId
 ) {
   const { db } = yield* WorkspaceDatabase;
-  const date = getCurrentWorkspaceDate(now);
+  const requestedDate = getCurrentWorkspaceDate(yield* currentInstant);
   const [access] = yield* db
     .select({
       tier: passPurchases.tier,
@@ -46,7 +45,7 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
         eq(workspaceReservations.passId, passPurchases.id),
         eq(
           workspaceReservations.serviceDate,
-          plainDateStringSchema.make(date.toString())
+          plainDateStringSchema.make(requestedDate.toString())
         ),
         eq(workspaceReservations.paymentState, "paid"),
         eq(workspaceReservations.reservationState, "confirmed")
@@ -75,6 +74,9 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   const { tier, validFrom, accessEndsOn, reservation, status } = access;
   const validUntil = accessEndsOn ?? access.validUntil;
   const period = { tier, validFrom, validUntil };
+  // The statement can straddle a product cutoff or Prague midnight.
+  const now = yield* currentInstant;
+  const date = getCurrentWorkspaceDate(now);
   const day = getUnlimitedPassAccessDay({ ...access, date });
 
   if (status === "active" && Temporal.PlainDate.compare(date, validFrom) < 0) {
@@ -103,7 +105,9 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   if (Temporal.Instant.compare(now, bounds.endsAt) >= 0) {
     return { ...view, state: "closed" } as const;
   }
-  if (!reservation?.dotyposId) return { ...view, state: "retry" } as const;
+  if (!requestedDate.equals(date) || !reservation?.dotyposId) {
+    return { ...view, state: "retry" } as const;
+  }
 
   return {
     state: "open",
@@ -114,6 +118,18 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
     tableId: reservation.tableId,
   } as const;
 });
+
+type OpenAccessDay = Extract<
+  Effect.Success<ReturnType<typeof readPassAccess>>,
+  { readonly state: "open" }
+>;
+
+const isSamePassDay = (expected: OpenAccessDay, actual: OpenAccessDay) =>
+  expected.reservationId === actual.reservationId &&
+  expected.dotyposId === actual.dotyposId &&
+  expected.tableId === actual.tableId &&
+  expected.bounds.startsAt.equals(actual.bounds.startsAt) &&
+  expected.bounds.endsAt.equals(actual.bounds.endsAt);
 
 export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
   function* (
@@ -145,32 +161,27 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
     }
 
     const { accountId } = session.success;
-    const access = yield* readPassAccess(
-      orderId,
-      accountId,
-      yield* currentInstant
-    );
+    const access = yield* readPassAccess(orderId, accountId);
     if (access.state !== "open") return access;
 
     const dotypos = yield* DotyposService;
-    const read = yield* dotypos.getReservation(access.dotyposId).pipe(
-      Effect.timeout("8 seconds"),
-      Effect.orElseSucceed(() => Option.none())
-    );
-    const record = Option.getOrUndefined(read)?.reservation;
+    const record = yield* dotypos
+      .getReservationWithoutCustomer(access.dotyposId)
+      .pipe(
+        Effect.timeout("8 seconds"),
+        Effect.orElseSucceed(() => undefined)
+      );
     const booked =
       record && Option.getOrUndefined(decodeBookedReservation(record).interval);
-    if (
-      record?.status !== "CONFIRMED" ||
-      record._tableId !== access.tableId ||
-      !booked?.startsAt.equals(access.bounds.startsAt) ||
-      !booked.endsAt.equals(access.bounds.endsAt)
-    ) {
-      return { ...access.view, state: "retry" };
-    }
+    const matchesBooking =
+      record?.status === "CONFIRMED" &&
+      record.id === access.dotyposId &&
+      record._tableId === access.tableId &&
+      booked?.startsAt.equals(access.bounds.startsAt) &&
+      booked.endsAt.equals(access.bounds.endsAt);
 
     const deskLabel =
-      access.view.tier === "open-space"
+      !matchesBooking || access.view.tier === "open-space"
         ? undefined
         : yield* dotypos.getTables().pipe(
             Effect.map((tables) =>
@@ -181,13 +192,9 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
           );
 
     // Time and entitlement can change while the venue reads are in flight.
-    const latest = yield* readPassAccess(
-      orderId,
-      accountId,
-      yield* currentInstant
-    );
+    const latest = yield* readPassAccess(orderId, accountId);
     if (latest.state !== "open") return latest;
-    if (latest.reservationId !== access.reservationId) {
+    if (!matchesBooking || !isSamePassDay(access, latest)) {
       return { ...latest.view, state: "retry" };
     }
 
@@ -205,16 +212,13 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
         Effect.option
       );
 
-    const settled = yield* readPassAccess(
-      orderId,
-      accountId,
-      yield* currentInstant
-    );
+    const settledAccount = yield* Effect.option(account.requireActive);
+    if (Option.getOrUndefined(settledAccount)?.accountId !== accountId) {
+      return noPass;
+    }
+    const settled = yield* readPassAccess(orderId, accountId);
     if (settled.state !== "open") return settled;
-    if (
-      settled.reservationId !== access.reservationId ||
-      Option.isNone(issued)
-    ) {
+    if (!isSamePassDay(access, settled) || Option.isNone(issued)) {
       return { ...settled.view, state: "retry" };
     }
 

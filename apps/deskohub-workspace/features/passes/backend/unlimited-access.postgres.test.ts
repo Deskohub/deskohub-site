@@ -1,14 +1,14 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { DotyposService } from "@deskohub/dotypos";
+import { DotyposRejected, DotyposService } from "@deskohub/dotypos";
 import {
   AlgoPinSchema,
   IgloohomePinIdSchema,
   IgloohomeService,
 } from "@deskohub/igloohome";
 import { NodeCrypto } from "@effect/platform-node";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import {
   CurrentCustomerAccount,
@@ -98,6 +98,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         pinId: ReturnType<typeof IgloohomePinIdSchema.make>;
       }>;
       readonly reads?: string[];
+      readonly readReservation?: DotyposService["Service"]["getReservationWithoutCustomer"];
+      readonly intervalEndsEarly?: boolean;
+      readonly isSignedIn?: () => boolean;
     };
 
     const load = (
@@ -124,37 +127,43 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               database.layer,
               accessCodes,
               Layer.mock(CurrentCustomerAccount, {
-                requireActive: requireVerifiedIdentity(
-                  viewer === null
-                    ? null
-                    : {
-                        ...testSessionProfile,
-                        accountId: viewer,
-                        deletionRequested: false,
-                        email: "test-holder@example.invalid",
-                      }
+                requireActive: Effect.suspend(() =>
+                  requireVerifiedIdentity(
+                    viewer === null || provider.isSignedIn?.() === false
+                      ? null
+                      : {
+                          ...testSessionProfile,
+                          accountId: viewer,
+                          deletionRequested: false,
+                          email: "test-holder@example.invalid",
+                        }
+                  )
                 ),
               }),
               Layer.mock(DotyposService, {
-                getReservation: (id) =>
-                  Effect.sync(() => {
-                    const date = id.slice(-10);
-                    provider.reads?.push(date);
-                    const { startsAt, endsAt } = getCoworkReservationInterval(
-                      tier === "open-space" ? "open-space" : "reserved-desk",
-                      date
-                    );
-                    return Option.some({
-                      reservation: {
+                getReservationWithoutCustomer:
+                  provider.readReservation ??
+                  ((id) =>
+                    Effect.sync(() => {
+                      const date = id.slice(-10);
+                      provider.reads?.push(date);
+                      const { startsAt, endsAt } = getCoworkReservationInterval(
+                        tier === "open-space" ? "open-space" : "reserved-desk",
+                        date
+                      );
+                      return {
                         id,
                         _tableId: "14",
                         status: "CONFIRMED",
                         startDate: startsAt,
-                        endDate: endsAt,
+                        endDate: provider.intervalEndsEarly
+                          ? Temporal.Instant.from(endsAt)
+                              .subtract({ minutes: 1 })
+                              .toString()
+                          : endsAt,
                         seats: 1,
-                      },
-                    });
-                  }),
+                      };
+                    })),
                 getTables: () =>
                   Effect.succeed([{ id: "14", name: "Desk 14" }]),
               })
@@ -310,6 +319,66 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       expect(access).toMatchObject({ state: "closed" });
       expect(access).not.toHaveProperty("code");
+    });
+
+    test("uses live reservation facts without requiring the provider's customer profile", async () => {
+      const { orderId } = await seedPass("open-space");
+      const reads: string[] = [];
+      expect(
+        await load(orderId, "open-space", buyer, during, { issue, reads })
+      ).toMatchObject({
+        state: "available",
+        code: syntheticPin,
+      });
+      expect(reads).toEqual([firstDay]);
+      const access = await load(orderId, "open-space", buyer, during, {
+        issue,
+        intervalEndsEarly: true,
+      });
+      expect(access.state).toBe("retry");
+      expect(access).not.toHaveProperty("code");
+    });
+
+    test("shows closed when the venue read fails at the Open Space cutoff", async () => {
+      const { orderId } = await seedPass("open-space");
+      const access = await load(
+        orderId,
+        "open-space",
+        buyer,
+        openSpaceClosing.subtract({ seconds: 1 }),
+        {
+          issue: () => Effect.die("Unexpected issuance"),
+          readReservation: () =>
+            TestClock.setTime(openSpaceClosing.epochMilliseconds).pipe(
+              Effect.andThen(
+                new DotyposRejected({
+                  operation: "getReservationWithoutCustomer",
+                  request: "reservation.get",
+                  reason: "not-found",
+                  message: "Synthetic venue record missing",
+                })
+              )
+            ),
+        }
+      );
+      expect(access).toMatchObject({
+        state: "closed",
+        continuesTomorrow: true,
+      });
+      expect(access).not.toHaveProperty("code");
+    });
+
+    test("withholds a newly issued PIN if the holder's session ended during issuance", async () => {
+      const { orderId } = await seedPass("open-space");
+      let signedIn = true;
+      const access = await load(orderId, "open-space", buyer, during, {
+        isSignedIn: () => signedIn,
+        issue: () =>
+          Effect.sync(() => {
+            signedIn = false;
+          }).pipe(Effect.andThen(issue())),
+      });
+      expect(access).toEqual({ state: "not-found" });
     });
   }
 );
