@@ -3,14 +3,15 @@ import "server-only";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { orders, passPurchases } from "@/db/schema";
+import { orders, passPurchases, workspaceReservations } from "@/db/schema";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { currentInstant } from "@/shared/utils/temporal";
 import { queueInitialEntryPackGift } from "./entry-pack-gift";
 
 /** Reconcile the pack from the authoritative order after shared settlement. */
-export const settleEntryPack = Effect.fn("settleEntryPack")(function* (
-  id: OrderId
+export const settlePassPurchase = Effect.fn("settlePassPurchase")(function* (
+  id: OrderId,
+  unlimitedConfirmation?: "completed"
 ) {
   const { db, transaction } = yield* WorkspaceDatabase;
   return yield* transaction(
@@ -23,7 +24,31 @@ export const settleEntryPack = Effect.fn("settleEntryPack")(function* (
 
       if (!order) return undefined;
 
+      const [pass] = yield* db
+        .select({ product: passPurchases.product })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, id));
+      if (!pass) return undefined;
+
       if (order.paymentState === "paid") {
+        if (pass.product === "unlimited" && !unlimitedConfirmation) {
+          yield* db
+            .update(workspaceReservations)
+            .set({
+              reservationState: "confirming",
+              paymentState: "paid",
+              fulfillmentState: "processing",
+              paidAt: order.paidAt,
+              updatedAt: order.updatedAt,
+            })
+            .where(
+              and(
+                eq(workspaceReservations.passId, id),
+                eq(workspaceReservations.reservationState, "held")
+              )
+            );
+          return undefined;
+        }
         const activatedAt = yield* currentInstant;
         const [purchase] = yield* db
           .update(passPurchases)
@@ -44,6 +69,15 @@ export const settleEntryPack = Effect.fn("settleEntryPack")(function* (
       }
 
       if (isEndedUnpaidPaymentState(order.paymentState)) {
+        if (pass.product === "unlimited") {
+          yield* db
+            .update(workspaceReservations)
+            .set({
+              paymentState: order.paymentState,
+              updatedAt: order.updatedAt,
+            })
+            .where(eq(workspaceReservations.passId, id));
+        }
         yield* db
           .update(passPurchases)
           .set({ status: "void" })

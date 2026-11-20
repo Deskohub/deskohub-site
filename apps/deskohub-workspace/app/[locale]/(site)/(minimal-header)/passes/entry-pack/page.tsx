@@ -14,9 +14,9 @@ import { type Locale, m } from "@/features/i18n";
 import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
-import { readOwnedEntryPackOrderLocale } from "@/features/passes/backend/entry-pack-order";
+import { readOwnedPassPurchaseOrderLocale } from "@/features/passes/backend/entry-pack-order";
 import {
-  displayEntryPackCheckoutPrice,
+  displayPassPurchasePrice,
   getEntryPackPaymentDisclosure,
   readEntryPackCheckoutDraft,
   readEntryPackPaymentRetry,
@@ -47,7 +47,7 @@ type Query = {
 };
 
 const readOrderLocale = cache((orderId: OrderId) =>
-  readOwnedEntryPackOrderLocale(orderId).pipe(
+  readOwnedPassPurchaseOrderLocale(orderId, "entry-pack").pipe(
     Effect.provide(
       Layer.mergeAll(WorkspaceDatabase.Default, CurrentCustomerAccount.Live)
     ),
@@ -260,7 +260,7 @@ async function EntryPackPageContent({
               state: {
                 status: "ready",
                 product: draft.product,
-                price: displayEntryPackCheckoutPrice(draft.quote),
+                price: displayPassPurchasePrice(draft.quote),
                 validFrom: draft.validFrom.toString(),
                 lastUsableDate: getEntryPackLastUsableDate(
                   draft.validUntil

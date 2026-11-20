@@ -13,6 +13,7 @@ import {
   makeEntryPackOrderPaymentHandler,
 } from "@/features/passes/backend/entry-pack-order-payment-handler";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
 import { PaidFulfillmentQueueService } from "../fulfillment/paid-fulfillment-queue.service";
 import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
@@ -87,6 +88,7 @@ export class OrderPaymentHandlers extends Context.Service<
       Layer.mergeAll(
         WorkspaceReservationRepository.Default,
         WorkspaceEmailLayer,
+        WorkspaceDotyposLayer,
         WorkspaceDatabaseAdvisoryLock.Default,
         CustomerAccountSections.Live,
         AccountingStorage.Live,

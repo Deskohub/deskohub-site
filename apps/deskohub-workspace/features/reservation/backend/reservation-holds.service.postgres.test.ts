@@ -7,11 +7,12 @@ import {
   DotyposReservationIdSchema,
   type DotyposReservationStatus,
   DotyposService,
+  DotyposTableSchema,
   DotyposUnavailable,
 } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { asc, eq, inArray } from "drizzle-orm";
-import { Effect, Latch, Layer, Ref, Result, Schema } from "effect";
+import { Effect, Fiber, Latch, Layer, Ref, Result, Schema } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { workspaceReservations } from "@/db/schema";
 import { customerAgentClientIdSchema } from "@/features/account/backend/auth/customer-agent-authorization.service";
@@ -35,6 +36,7 @@ import {
   checkoutSessionIdSchema,
   promoteCheckoutAttemptToSessionId,
 } from "@/features/checkout/checkout-identifiers";
+import { workspaceProductMonitorOptionTableTags } from "@/features/checkout/product-catalog";
 import { checkoutDetailsSchema } from "@/features/checkout/schemas/checkout-details";
 import { orderIdSchema } from "@/features/order";
 import { EntryPackUnavailableError } from "@/features/passes/backend/entry-pack-redemption";
@@ -49,16 +51,23 @@ import {
   workspaceFixtures,
 } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
+  holdPostgresTransaction,
+  waitForAdvisoryLockWaiter,
+} from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
+import {
   connectWorkspacePostgresTestDatabase,
   type WorkspacePostgresTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
+import { AdvisoryAvailabilityInventory } from "./availability-inventory";
 import { agentSelectionKeySchema, type BookingAgent } from "./booking-agent";
+import { GoogleCalendarWorkspaceLimitationsService } from "./google-calendar-workspace-limitations.service";
 import {
   type ReservationHold,
   ReservationHolds,
 } from "./reservation-holds.service";
 import {
+  type AvailabilityReservation,
   WorkspaceAvailabilityService,
   WorkspaceTableUnavailableError,
 } from "./workspace-availability.service";
@@ -216,6 +225,7 @@ describe.skipIf(!postgresDatabase)(
       const layer = ReservationHolds.Default.pipe(
         Layer.provide(
           Layer.mergeAll(
+            WorkspaceDatabaseAdvisoryLock.makeLayer(postgres.databasePool),
             observeReservations
               ? Layer.effect(
                   WorkspaceReservationRepository,
@@ -688,6 +698,39 @@ describe.skipIf(!postgresDatabase)(
         expect(dotypos.createReservation).toHaveBeenCalledTimes(2);
       });
 
+      test("releases an interrupted date-lock wait so the same attempt can be booked", async () => {
+        const author = await newAuthor();
+        const holds = makeHolds();
+        const request = holdRequest({ author });
+        if (request.reservation.kind !== "cowork")
+          throw new Error("Expected cowork");
+        const date = request.reservation.date;
+        const key = ["reservation-capacity", date] as const;
+        const held = await holdPostgresTransaction(
+          postgres.pool,
+          "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+          key
+        );
+        const waiting = Effect.runFork(holds.hold(request));
+        let draftId: string | undefined;
+        try {
+          await waitForAdvisoryLockWaiter(postgres.pool, key);
+          await Effect.runPromise(Fiber.interrupt(waiting));
+          const [draft] = await rowsOf(author);
+          expect(draft?.reservationState).toBe("draft");
+          draftId = draft?.id;
+          expect(holds.dotypos.createReservation).not.toHaveBeenCalled();
+        } finally {
+          await held.commit();
+          await Effect.runPromise(Fiber.interrupt(waiting));
+        }
+        expect(await holds.holdForAttempt(request)).toMatchObject({
+          kind: "created",
+          reservationId: draftId,
+        });
+        expect(holds.dotypos.createReservation).toHaveBeenCalledTimes(1);
+      });
+
       test.each(["day", "overnight"] as const)(
         "checks the bare desk before retrying a pack-funded workstation hold for a %s stay",
         async (stay) => {
@@ -739,19 +782,57 @@ describe.skipIf(!postgresDatabase)(
               [passId, author]
             );
             let bareDeskAvailable = false;
-            const ensureAvailable = mock(
-              (candidate: { monitorOption?: string }) =>
-                candidate.monitorOption || bareDeskAvailable
-                  ? Effect.void
-                  : Effect.fail(
-                      new WorkspaceTableUnavailableError({
-                        date: reservedDesk.date,
-                        reservation: {
-                          kind: "cowork",
-                          entryTier: "reserved-desk",
-                        },
-                      })
-                    )
+            const makeTable = (
+              id: string,
+              monitorTags: readonly string[] = []
+            ) =>
+              Schema.decodeSync(DotyposTableSchema)({
+                _cloudId: "1",
+                id,
+                display: true,
+                enabled: true,
+                seats: "1",
+                name: `Table ${id}`,
+                tags: ["cowork:reserved-desk", ...monitorTags],
+              });
+            const bareDesk = makeTable("9");
+            const workstation = makeTable(
+              "10",
+              workspaceProductMonitorOptionTableTags["2x27-qhd"]
+            );
+            const pendingDay = {
+              passId: orderIdSchema.make(crypto.randomUUID()),
+              customerId: syntheticDotyposCustomerId(),
+              serviceDate: reservedDesk.date,
+              tableId: bareDesk.id,
+              tier: "reserved-desk" as const,
+            };
+            const availability = WorkspaceAvailabilityService.Default.pipe(
+              Layer.provide(AdvisoryAvailabilityInventory.Provider),
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.mock(DotyposService, {
+                    getTables: () => Effect.succeed([bareDesk, workstation]),
+                    listActiveReservationsOverlapping: () => Effect.succeed([]),
+                  }),
+                  Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
+                    listLimitations: () => Effect.succeed([]),
+                  }),
+                  Layer.mock(WorkspaceReservationRepository, {
+                    selectPendingPassDayCapacity: () =>
+                      Effect.sync(() =>
+                        bareDeskAvailable ? [] : [pendingDay]
+                      ),
+                    selectExpiredHoldDotyposReservationIds: () =>
+                      Effect.succeed([]),
+                  })
+                )
+              )
+            );
+            const ensureAvailable = mock((candidate: AvailabilityReservation) =>
+              Effect.flatMap(WorkspaceAvailabilityService, (service) =>
+                service.ensureAvailable(candidate)
+              ).pipe(Effect.provide(availability))
             );
             const dotypos = makeDotypos();
             const createFailed = dotyposUnavailable("createReservation");

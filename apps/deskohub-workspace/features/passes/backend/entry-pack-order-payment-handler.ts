@@ -1,8 +1,9 @@
 import "server-only";
 
+import { DotyposService } from "@deskohub/dotypos";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
 import { and, eq, lte, ne } from "drizzle-orm";
-import { Context, Effect, Result } from "effect";
+import { Context, Effect, Option, Result } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
@@ -10,11 +11,12 @@ import {
   orders,
   passPurchases,
   paymentAttempts,
+  workspaceReservations,
 } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { findPurchaseLoginEmail } from "@/features/account/backend/customer-account-by-email";
 import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
-import type { EntryPackAccountingSnapshot } from "@/features/accounting/accounting-document-snapshot";
+import type { PassPurchaseAccountingSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
 import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/invoice-email-delivery.repository";
@@ -49,20 +51,27 @@ import {
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
 import { isEntryPackQuoteExpired } from "../pass-offer";
+import { withPassPurchaseAddons } from "../pass-purchase-quote";
 import { recordConfirmationInvitationState } from "./entry-pack-gift";
 import { deliverPendingEntryPackInvitation } from "./entry-pack-gift-delivery";
 import { sendEntryPackPurchaseEmail } from "./entry-pack-purchase-email";
-import { settleEntryPack } from "./entry-pack-settlement";
+import { settlePassPurchase } from "./entry-pack-settlement";
+import {
+  confirmUnlimitedPassDays,
+  readPayableUnlimitedHolds,
+} from "./unlimited-pass-holds";
+import { prepareUnlimitedPassRecovery } from "./unlimited-pass-recovery";
 
 export type EntryPackPaymentAdmissionDetails = {
   readonly approvedAfterAttemptId: PaymentAttemptId | null;
   readonly recordConsent: Effect.Effect<void, PaymentLifecycleRepositoryError>;
   readonly commitment: DiscountCommitment;
-  readonly snapshot: EntryPackAccountingSnapshot;
+  readonly snapshot: PassPurchaseAccountingSnapshot;
 };
 
 const approvalOperation =
@@ -118,7 +127,7 @@ const setPaid = Effect.fnUntraced(function* (
       updatedAt: paidAt,
     })
     .where(eq(orders.id, order.id));
-  yield* settleEntryPack(order.id);
+  yield* settlePassPurchase(order.id);
   return transition(attempt, true, paidAt);
 });
 
@@ -149,6 +158,10 @@ const redeemClaims = Effect.fnUntraced(function* (
 export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   const { db, transaction } = yield* WorkspaceDatabase;
   const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
+  const dotypos = yield* Effect.serviceOption(DotyposService);
+  const reservations = yield* Effect.serviceOption(
+    WorkspaceReservationRepository
+  );
   const customerAccounts = yield* CustomerAccountSections;
   const email = yield* EmailServiceTag;
   const emailConfig = yield* EmailConfigTag;
@@ -214,17 +227,29 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       .select()
       .from(passPurchases)
       .where(eq(passPurchases.id, order.id));
+    const snapshotProduct = input.details.snapshot.product;
     if (
       !pack ||
       pack.locale !== input.locale ||
-      commitment.product.kind !== "entry-pack" ||
+      commitment.product.kind !== pack.product ||
       commitment.product.tier !== pack.tier ||
-      commitment.product.size !== pack.entryCount ||
+      (commitment.product.kind === "entry-pack" &&
+        commitment.product.size !== pack.entryCount) ||
       commitment.firstServiceDate !== pack.validFrom ||
-      input.details.snapshot.product.tier !== pack.tier ||
-      input.details.snapshot.product.size !== pack.entryCount ||
+      snapshotProduct.kind !== pack.product ||
+      snapshotProduct.tier !== pack.tier ||
+      (snapshotProduct.kind === "entry-pack" &&
+        snapshotProduct.size !== pack.entryCount) ||
       input.details.snapshot.serviceDate !== pack.validFrom ||
-      !moneyEquals(pack.quote.discountedSubtotal, input.amount)
+      Boolean(input.details.snapshot.unlimitedCoffee) !==
+        Boolean(pack.unlimitedCoffee) ||
+      !moneyEquals(
+        withPassPurchaseAddons(
+          pack.quote.discountedSubtotal,
+          pack.unlimitedCoffee
+        ),
+        input.amount
+      )
     ) {
       return yield* paymentError(
         order.id,
@@ -252,10 +277,20 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         return yield* staleApproval(order.id);
     }
     const now = yield* currentInstant;
-    if (isEntryPackQuoteExpired(now, pack.validUntil)) {
+    if (
+      pack.product === "entry-pack" &&
+      isEntryPackQuoteExpired(now, pack.validUntil)
+    ) {
       return yield* paymentError(
         order.id,
         "The Entry pack quote expired. Request a new quote."
+      );
+    }
+    if (pack.product === "unlimited") {
+      yield* readPayableUnlimitedHolds(pack).pipe(
+        Effect.catchTag("UnlimitedPassHoldsUnavailable", () =>
+          Effect.fail(staleApproval(order.id))
+        )
       );
     }
     yield* ReferralInvitationLedger.admitFirstBooking({
@@ -275,7 +310,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       amount: input.amount,
       ...(providerAdmission ?? { provider: "internal", paidAt: now }),
     });
-    yield* snapshots.recordEntryPack({
+    yield* snapshots.recordPassPurchase({
       snapshot: input.details.snapshot,
       paymentAttemptId: attempt.id,
       orderId: order.id,
@@ -309,6 +344,12 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         updatedAt: now,
       })
       .where(eq(orders.id, order.id));
+    if (pack.product === "unlimited") {
+      yield* db
+        .update(workspaceReservations)
+        .set({ paymentState: "pending", updatedAt: now })
+        .where(eq(workspaceReservations.passId, order.id));
+    }
     if (pack.status === "void") {
       yield* db
         .update(passPurchases)
@@ -351,7 +392,9 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       );
       const confirmation = yield* Effect.gen(function* () {
         if (fulfillmentState !== "not_started") return;
-        const snapshot = yield* snapshots.findEntryPack(activePaymentAttemptId);
+        const snapshot = yield* snapshots.findPassPurchase(
+          activePaymentAttemptId
+        );
         if (!snapshot) {
           return yield* paymentError(
             orderId,
@@ -502,7 +545,106 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       );
   });
 
-  const fulfill = Effect.fn("entryPack.fulfill")(function* (orderId: OrderId) {
+  const fulfillUnlimited = Effect.fn("unlimitedPass.fulfillDays")(
+    function* (orderId: OrderId) {
+      const [purchase] = yield* db
+        .select()
+        .from(passPurchases)
+        .where(eq(passPurchases.id, orderId));
+      if (purchase?.product !== "unlimited" || purchase.status === "active")
+        return true;
+      if (purchase.status !== "pending_payment") return false;
+      const [order] = yield* readOrder(orderId);
+      if (order?.paymentState !== "paid") return false;
+      if (Option.isNone(dotypos))
+        return yield* paymentError(
+          orderId,
+          "Pass day provider is unavailable."
+        );
+      const confirmation = yield* confirmUnlimitedPassDays(purchase).pipe(
+        Effect.provideService(DotyposService, dotypos.value),
+        Effect.result
+      );
+      if (Result.isFailure(confirmation)) {
+        const cause = confirmation.failure;
+        if (
+          cause._tag !== "DotyposReservationCancelledError" &&
+          !(cause._tag === "DotyposRejected" && cause.reason === "not-found") &&
+          !(
+            cause._tag === "UnlimitedPassHoldsUnavailable" &&
+            cause.reason === "changed"
+          )
+        ) {
+          return yield* paymentError(
+            orderId,
+            "Unlimited pass day confirmation needs reconciliation."
+          );
+        }
+        if (!order.activePaymentAttemptId) {
+          return yield* paymentError(
+            orderId,
+            "Paid Unlimited pass has no active payment attempt."
+          );
+        }
+        const attemptId = order.activePaymentAttemptId;
+        const failedAt = yield* currentInstant;
+        yield* transaction(
+          Effect.gen(function* () {
+            const [currentOrder] =
+              yield* readOrder(orderId).for("no key update");
+            if (
+              currentOrder?.activePaymentAttemptId !== attemptId ||
+              currentOrder.paymentState !== "paid"
+            )
+              return;
+            yield* db
+              .update(passPurchases)
+              .set({ status: "void" })
+              .where(
+                and(
+                  eq(passPurchases.id, orderId),
+                  eq(passPurchases.status, "pending_payment")
+                )
+              );
+            yield* db
+              .update(orders)
+              .set({
+                fulfillmentState: "failed",
+                fulfillmentFailedAt: failedAt,
+                fulfillmentFailureCode: "unlimited_pass_day_unavailable",
+                updatedAt: failedAt,
+              })
+              .where(eq(orders.id, orderId));
+            yield* db
+              .update(paymentAttempts)
+              .set({ refundState: "required", updatedAt: failedAt })
+              .where(
+                and(
+                  eq(paymentAttempts.id, attemptId),
+                  eq(paymentAttempts.orderId, orderId),
+                  ne(paymentAttempts.provider, "internal"),
+                  eq(paymentAttempts.refundState, "not_required")
+                )
+              );
+          })
+        );
+        return false;
+      }
+      yield* settlePassPurchase(orderId, "completed");
+      return true;
+    },
+    (effect, orderId) =>
+      effect.pipe(
+        WorkspaceLockSections.passPurchaseFulfillment(orderId),
+        Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock),
+        Effect.provide(services)
+      )
+  );
+
+  const fulfill = Effect.fn("passPurchase.fulfill")(function* (
+    orderId: OrderId
+  ) {
+    if (!(yield* fulfillUnlimited(orderId))) return;
     yield* fulfillGift(orderId).pipe(
       Effect.catch(() =>
         Effect.logWarning("Entry pack gift fulfillment could not complete")
@@ -537,8 +679,9 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     return paid;
   });
 
-  const recover = Effect.fn("entryPack.recoverPayment")(function* (
-    input: Verification
+  const recover = Effect.fn("passPurchase.recoverPayment")(function* (
+    input: Verification,
+    unlimitedHoldsReady: boolean | undefined
   ) {
     const order = yield* lockOrder(input.orderId, { claimOf: input.id });
     const [attempt] = yield* readAttempt(order.id, input.id).for("update");
@@ -562,10 +705,25 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
 
     if (
       order.activePaymentAttemptId === attempt.id &&
-      isEndedUnpaidPaymentState(order.paymentState)
+      isEndedUnpaidPaymentState(order.paymentState) &&
+      unlimitedHoldsReady !== false
     ) {
       const recovered = yield* transaction(
         Effect.gen(function* () {
+          if (unlimitedHoldsReady) {
+            const [purchase] = yield* db
+              .select()
+              .from(passPurchases)
+              .where(eq(passPurchases.id, order.id));
+            if (!purchase) return false;
+            const holds = yield* readPayableUnlimitedHolds(purchase).pipe(
+              Effect.catchTag(
+                "UnlimitedPassHoldsUnavailable",
+                () => Effect.undefined
+              )
+            );
+            if (!holds) return false;
+          }
           yield* redeemClaims(order, attempt.id, input.paidAt, true);
           const paid = yield* recordLateCapture(input, attempt, false);
           yield* setPaid(order, paid, input.paidAt);
@@ -577,6 +735,21 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       if (recovered) return true;
     }
     yield* recordLateCapture(input, attempt, true);
+    if (
+      unlimitedHoldsReady !== undefined &&
+      order.activePaymentAttemptId === attempt.id &&
+      isEndedUnpaidPaymentState(order.paymentState)
+    ) {
+      yield* db
+        .update(passPurchases)
+        .set({ status: "void" })
+        .where(
+          and(
+            eq(passPurchases.id, order.id),
+            eq(passPurchases.status, "pending_payment")
+          )
+        );
+    }
     return false;
   });
 
@@ -670,7 +843,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
               .update(orders)
               .set({ paymentState: input.state, updatedAt: terminalAt })
               .where(eq(orders.id, order.id));
-            yield* settleEntryPack(order.id);
+            yield* settlePassPurchase(order.id);
           }
           return transition(terminal, true);
         }).pipe(Effect.provide(services))
@@ -684,14 +857,47 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           })
         )
       ),
-    startRecovery: ({ paymentAttemptId, verifiedPaidAt, ...input }) =>
-      transaction(
-        recover({ ...input, id: paymentAttemptId, paidAt: verifiedPaidAt })
-      ).pipe(
-        Effect.flatMap((recovered) =>
-          recovered ? fulfill(input.orderId) : Effect.void
-        )
-      ),
+    startRecovery: Effect.fn("passPurchase.startRecovery")(function* ({
+      paymentAttemptId,
+      verifiedPaidAt,
+      ...input
+    }: Parameters<Handler["startRecovery"]>[0]) {
+      const [pass] = yield* db
+        .select({ product: passPurchases.product })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, input.orderId));
+      const settle = (ready?: boolean) =>
+        transaction(
+          recover(
+            { ...input, id: paymentAttemptId, paidAt: verifiedPaidAt },
+            ready
+          )
+        );
+      const recovered =
+        pass?.product === "unlimited"
+          ? yield* Effect.gen(function* () {
+              const ready =
+                Option.isSome(dotypos) &&
+                Option.isSome(reservations) &&
+                (yield* prepareUnlimitedPassRecovery(
+                  input.orderId,
+                  paymentAttemptId
+                ).pipe(
+                  Effect.provideService(DotyposService, dotypos.value),
+                  Effect.provideService(
+                    WorkspaceReservationRepository,
+                    reservations.value
+                  ),
+                  Effect.catch(() => Effect.succeed(false))
+                ));
+              return yield* settle(ready);
+            }).pipe(
+              WorkspaceLockSections.unlimitedPassRecovery(input.orderId),
+              Effect.provideService(WorkspaceDatabaseAdvisoryLock, advisoryLock)
+            )
+          : yield* settle();
+      if (recovered) yield* fulfill(input.orderId);
+    }, Effect.provide(services)),
     resumeRecovery: Effect.fn("entryPack.resumeRecovery")(function* ({
       orderId,
       paymentAttemptId,

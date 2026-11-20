@@ -193,8 +193,26 @@ export const WorkspaceLockSections = {
       rank: 5,
       pair: ["reservation-order", orderId],
     }),
+  unlimitedPassRecovery: (orderId: OrderId) =>
+    holdSection({
+      name: "unlimitedPassRecovery",
+      rank: 6,
+      pair: ["unlimited-pass-recovery", orderId],
+    }),
   customerAccount: (accountId: CustomerAccountId) =>
     holdSection(customerAccountSection(accountId)),
+  /** All local dates touched by a booking, inside its account section if any. */
+  reservationCapacity: (dates: readonly Temporal.PlainDate[]) => {
+    const [first, ...rest] = Array.from(new Set(dates.map(String)))
+      .sort(Order.String)
+      .map((date) => ({
+        name: "reservationCapacity",
+        rank: 21,
+        pair: ["reservation-capacity", date] as const,
+      }));
+    if (!first) throw new Error("Reservation capacity locks require a date");
+    return holdSections([first, ...rest]);
+  },
   passPurchaseFulfillment: (orderId: OrderId) =>
     holdSection(passPurchaseFulfillmentSection(orderId)),
   reservationInviteeNotices: (orderId: WorkspaceReservationId) =>

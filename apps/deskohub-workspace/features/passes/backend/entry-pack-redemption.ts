@@ -36,6 +36,7 @@ const passForBooking = (
 ) =>
   and(
     eq(passPurchases.id, request.passId),
+    eq(passPurchases.product, "entry-pack"),
     eq(passPurchases.holderAccountId, request.holderAccountId),
     eq(passPurchases.status, "active"),
     or(
@@ -92,7 +93,11 @@ export const checkEntryPackClaim = Effect.fn("checkEntryPackClaim")(function* (
     .from(passPurchases)
     .where(passForBooking(db, request))
     .for("no key update");
-  if (!pass || (request.tier && pass.tier !== request.tier)) {
+  if (
+    !pass ||
+    pass.entryCount === null ||
+    (request.tier && pass.tier !== request.tier)
+  ) {
     return yield* new EntryPackUnavailableError({});
   }
 

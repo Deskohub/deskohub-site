@@ -20,7 +20,7 @@ export type EntryPackGiftInvitationEmailProps = {
   readonly buyerName: string | null;
   readonly claimUrl: string;
   readonly holderEmail: string;
-  readonly entryCount: EntryPackSize;
+  readonly entryCount: EntryPackSize | null;
   readonly locale: Locale;
   readonly tier: PassTier;
   readonly validUntil: PlainDate;
@@ -29,10 +29,14 @@ export type EntryPackGiftInvitationEmailProps = {
 export const entryPackGiftInvitationSubject = ({
   buyerName,
   locale,
-}: Pick<EntryPackGiftInvitationEmailProps, "buyerName" | "locale">) =>
-  buyerName
+  entryCount,
+}: Pick<EntryPackGiftInvitationEmailProps, "buyerName" | "locale"> &
+  Partial<Pick<EntryPackGiftInvitationEmailProps, "entryCount">>) => {
+  if (entryCount === null) return m.unlimitedPassGiftMailTitle({}, { locale });
+  return buyerName
     ? m.passGiftMailSubject({ buyer: buyerName }, { locale })
     : m.passGiftMailSubjectUnnamed({}, { locale });
+};
 
 export function EntryPackGiftInvitationEmail({
   buyerName,
@@ -44,9 +48,18 @@ export function EntryPackGiftInvitationEmail({
   validUntil,
 }: EntryPackGiftInvitationEmailProps) {
   const options = { locale };
-  const product = m.passEntryPack({}, options);
-  const entries = m.passEntryCount({ count: entryCount }, options);
+  const product =
+    entryCount === null
+      ? m.passUnlimited({}, options)
+      : m.passEntryPack({}, options);
+  const entries =
+    entryCount === null
+      ? null
+      : m.passEntryCount({ count: entryCount }, options);
   const space = getPassTierName(tier, locale);
+  const packTitle = buyerName
+    ? m.passGiftMailTitle({ buyer: buyerName }, options)
+    : m.passGiftMailTitleUnnamed({}, options);
   const lastDay = formatPlainDate({
     date: getEntryPackLastUsableDate(validUntil),
     locale,
@@ -55,15 +68,21 @@ export function EntryPackGiftInvitationEmail({
   return (
     <WorkspaceEmailLayout
       locale={locale}
-      preview={entryPackGiftInvitationSubject({ buyerName, locale })}
+      preview={entryPackGiftInvitationSubject({
+        buyerName,
+        locale,
+        entryCount,
+      })}
     >
       <WorkspaceEmailHeading>
-        {buyerName
-          ? m.passGiftMailTitle({ buyer: buyerName }, options)
-          : m.passGiftMailTitleUnnamed({}, options)}
+        {entryCount === null
+          ? m.unlimitedPassGiftMailTitle({}, options)
+          : packTitle}
       </WorkspaceEmailHeading>
       <WorkspaceEmailBody>
-        {m.passGiftMailBody({ entries, space }, options)}
+        {entries === null
+          ? m.unlimitedPassGiftMailBody({}, options)
+          : m.passGiftMailBody({ entries, space }, options)}
       </WorkspaceEmailBody>
       <EntryPackEmailCard
         action={{ label: m.passGiftMailClaim({}, options), url: claimUrl }}
@@ -79,17 +98,19 @@ export function EntryPackGiftInvitationEmail({
             : []),
           {
             label: m.passGiftMailPass({}, options),
-            value: `${product}, ${entries}`,
+            value: entries === null ? product : `${product}, ${entries}`,
           },
           { label: m.passGiftMailSpace({}, options), value: space },
           { label: m.entryPackCheckoutValidUntil({}, options), value: lastDay },
           { label: m.passGiftMailYourEmail({}, options), value: holderEmail },
         ]}
       />
-      <WorkspaceEmailNote>
-        {m.passGiftMailBooking({}, options)}
-        {tier === "open-space" && ` ${m.passGiftMailCoffee({}, options)}`}
-      </WorkspaceEmailNote>
+      {entryCount !== null && (
+        <WorkspaceEmailNote>
+          {m.passGiftMailBooking({}, options)}
+          {tier === "open-space" && ` ${m.passGiftMailCoffee({}, options)}`}
+        </WorkspaceEmailNote>
+      )}
       <WorkspaceEmailNote>
         {m.passGiftMailIgnore({ email: holderEmail }, options)}
       </WorkspaceEmailNote>

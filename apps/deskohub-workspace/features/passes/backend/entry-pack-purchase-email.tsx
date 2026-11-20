@@ -53,6 +53,12 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
           .href
       }
       invoiceRequested={input.invoiceRequested}
+      unlimitedCoffee={purchase.unlimitedCoffee === true}
+      {...(purchase.product === "unlimited" &&
+        purchase.holderAccountId === purchase.buyerAccountId && {
+          accessUrl: new URL(`/${locale}/reservation/access/${id}`, origin)
+            .href,
+        })}
     />
   );
 
@@ -60,7 +66,10 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
     ...rendered,
     from: defaultFrom,
     to: buyer,
-    subject: entryPackPurchaseEmailSubject({ locale }),
+    subject: entryPackPurchaseEmailSubject({
+      locale,
+      entryCount: purchase.entryCount,
+    }),
     idempotencyKey: `entry-pack-purchase:${id}`,
     tags: ["entry_pack_purchase"],
     sensitiveContent: true,

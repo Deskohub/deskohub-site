@@ -753,7 +753,7 @@ describe("Workspace lock sections", () => {
         effect: Effect.Effect<A, E, WorkspaceDatabaseAdvisoryLock>
       ) => Effect.runPromiseExit(effect.pipe(Effect.provide(layer)));
 
-      // Another key nests, and leaves when its section ends.
+      // Another key nests on the same connection and leaves at its section end.
       expect(
         await run(
           enter(
@@ -764,7 +764,7 @@ describe("Workspace lock sections", () => {
           )
         )
       ).toStrictEqual(Exit.succeed("nested"));
-      expect(fake.connected).toBe(3);
+      expect(fake.connected).toBe(1);
 
       // The same key inside its own section dies before taking a connection.
       const reentered = await run(enter(first, enter(first, Effect.void)));
@@ -772,7 +772,7 @@ describe("Workspace lock sections", () => {
         Exit.isFailure(reentered) &&
           Cause.pretty(reentered.cause).includes("not reentrant")
       ).toBe(true);
-      expect(fake.connected).toBe(4);
+      expect(fake.connected).toBe(2);
 
       // The key leaves after a failed section too.
       expect(
@@ -782,8 +782,6 @@ describe("Workspace lock sections", () => {
         Exit.succeed("again")
       );
       expect(fake.released).toEqual([
-        undefined,
-        undefined,
         undefined,
         undefined,
         undefined,

@@ -30,6 +30,13 @@ export const getUnlimitedPassEndDate = (startDate: PlainDate): PlainDate =>
       .toString()
   );
 
+export function unlimitedPassRequiresEarlyStart(
+  startDate: PlainDate,
+  agreedOn: Temporal.PlainDate
+) {
+  return Temporal.PlainDate.compare(startDate, agreedOn.add({ days: 14 })) <= 0;
+}
+
 /** Withdrawal includes the current service date and releases later dates. */
 export function getUnlimitedPassWithdrawal(input: {
   readonly startDate: PlainDate;

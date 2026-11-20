@@ -234,6 +234,54 @@ describe.skipIf(!suiteDatabase)(
         expect(await freeElsewhereNow(probe)).toBe(true);
       });
 
+      test("capacity dates nest under an order with one permit and release on failure", async () => {
+        const orderId = `capacity-${id}` as WorkspaceReservationId;
+        const day = Temporal.PlainDate.from("2099-03-29");
+        const followingDay = day.add({ days: 1 });
+        const dates = [followingDay, day, followingDay];
+        const order = pairProbe("reservation-order", orderId);
+        const dateProbes = dates
+          .slice(0, 2)
+          .map((date) => pairProbe("reservation-capacity", date.toString()));
+        const smallPool = await openDatabasePool({
+          connectionString: pool.options.connectionString!,
+          maxConnections: 2,
+        });
+        try {
+          const result = await WorkspaceLockSections.reservationOrder(orderId)(
+            Effect.gen(function* () {
+              const inner = yield* WorkspaceLockSections.reservationCapacity(
+                dates
+              )(
+                Effect.gen(function* () {
+                  const free = yield* Effect.forEach(
+                    [order, ...dateProbes],
+                    freeElsewhere
+                  );
+                  return yield* Effect.fail(free);
+                })
+              ).pipe(Effect.flip);
+              const after = yield* Effect.forEach(
+                [order, ...dateProbes],
+                freeElsewhere
+              );
+              return { inner, after };
+            })
+          ).pipe(
+            Effect.provide(WorkspaceDatabaseAdvisoryLock.makeLayer(smallPool)),
+            Effect.timeout("5 seconds"),
+            Effect.runPromise
+          );
+          expect(result).toEqual({
+            inner: [false, false, false],
+            after: [false, true, true],
+          });
+          expect(await freeElsewhereNow(order)).toBe(true);
+        } finally {
+          await smallPool.close();
+        }
+      });
+
       test("customerAccount section", async () => {
         const account = accountId();
         const probe = accountProbe(account);
@@ -594,14 +642,20 @@ describe.skipIf(!suiteDatabase)(
       /** Enters the named section on a fresh synthetic key. */
       const enter =
         (name: SectionName) =>
-        <A, E>(effect: Effect.Effect<A, E, WorkspaceDatabaseAdvisoryLock>) =>
-          (
+        <A, E>(effect: Effect.Effect<A, E, WorkspaceDatabaseAdvisoryLock>) => {
+          if (name === "reservationCapacity") {
+            return WorkspaceLockSections.reservationCapacity([
+              Temporal.PlainDate.from("2099-01-01"),
+            ])(effect);
+          }
+          return (
             WorkspaceLockSections[name] as (
               key: string
             ) => (
               effect: Effect.Effect<A, E, WorkspaceDatabaseAdvisoryLock>
             ) => Effect.Effect<A, unknown, WorkspaceDatabaseAdvisoryLock>
           )(`${name}-${crypto.randomUUID()}`)(effect);
+        };
       const declared = Object.keys(WorkspaceLockSections) as Array<SectionName>;
 
       for (const [index, outer] of declared.entries()) {

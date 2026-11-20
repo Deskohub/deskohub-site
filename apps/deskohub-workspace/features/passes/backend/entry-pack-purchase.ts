@@ -45,21 +45,29 @@ import {
   reservationBillingSelectionSchema,
 } from "@/features/reservation/reservation-billing";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
+import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { currentInstant } from "@/shared/utils/temporal";
 import type { EntryPackCheckoutPrice } from "../entry-pack-checkout";
 import {
-  type EntryPackPurchaseQuote,
-  entryPackPurchaseQuoteCodec,
-} from "../entry-pack-purchase-quote";
-import {
   type EntryPackProduct,
   getEntryPackPrice,
+  getUnlimitedPassPrice,
   isEntryPackQuoteExpired,
 } from "../pass-offer";
-import { findOwnedEntryPackOrder } from "./entry-pack-order";
+import {
+  type PassPurchaseQuote,
+  passPurchaseQuoteCodec,
+  withPassPurchaseAddons,
+} from "../pass-purchase-quote";
+import { unlimitedPassRequiresEarlyStart } from "../unlimited-pass";
+import {
+  findOwnedEntryPackOrder,
+  findOwnedPassPurchaseOrder,
+} from "./entry-pack-order";
 import { isStaleEntryPackPaymentApproval } from "./entry-pack-order-payment-handler";
 import { quoteEntryPack } from "./entry-pack-quote";
+import { reconfirmUnlimitedPassHolds } from "./unlimited-pass-holds";
 
 export class EntryPackPurchaseError extends Data.TaggedError(
   "EntryPackPurchaseError"
@@ -73,8 +81,10 @@ export class EntryPackPurchaseError extends Data.TaggedError(
     | "terms-changed"
     | "quote-expired"
     | "payment-in-progress"
+    | "holds-unavailable"
     | "billing-changed";
   readonly locale?: Locale;
+  readonly earlyStartRequired?: boolean;
 }> {}
 
 const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
@@ -83,7 +93,7 @@ const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
 const billingMatches = Schema.toEquivalence(reservationBillingSelectionSchema);
 
 /** The terms of a price the buyer has seen, independent of labels and timers. */
-export const getEntryPackPriceFingerprint = (quote: EntryPackPurchaseQuote) =>
+export const getPassPurchasePriceFingerprint = (quote: PassPurchaseQuote) =>
   createHash("sha256")
     .update(
       JSON.stringify([
@@ -92,16 +102,23 @@ export const getEntryPackPriceFingerprint = (quote: EntryPackPurchaseQuote) =>
         quote.discounts.map(({ discount, amount }) => [discount.id, amount]),
         quote.selection?.submittedCode,
         quote.selection?.referralCode,
+        ...(quote.unlimitedCoffee ? [true] : []),
       ])
     )
     .digest("hex");
 
-export const displayEntryPackCheckoutPrice = (
-  quote: EntryPackPurchaseQuote
+export const displayPassPurchasePrice = (
+  quote: PassPurchaseQuote
 ): EntryPackCheckoutPrice => ({
-  fingerprint: getEntryPackPriceFingerprint(quote),
-  subtotal: quote.discountableSubtotal,
-  total: quote.discountedSubtotal,
+  fingerprint: getPassPurchasePriceFingerprint(quote),
+  subtotal: withPassPurchaseAddons(
+    quote.discountableSubtotal,
+    quote.unlimitedCoffee
+  ),
+  total: withPassPurchaseAddons(
+    quote.discountedSubtotal,
+    quote.unlimitedCoffee
+  ),
   ...(quote.selection?.submittedCode !== undefined &&
     quote.discounts.some(
       ({ discount }) => discount.id === quote.submittedCodeDiscountId
@@ -113,14 +130,14 @@ export const displayEntryPackCheckoutPrice = (
   })),
 });
 
-const requirePassPurchasesEnabled = Effect.fn("requirePassPurchasesEnabled")(
-  function* () {
-    const flags = yield* WorkspaceFeatureFlagService;
-    if (!(yield* flags.isEnabled("cowork_passes"))) {
-      return yield* new EntryPackPurchaseError({ reason: "unavailable" });
-    }
+export const requirePassPurchasesEnabled = Effect.fn(
+  "requirePassPurchasesEnabled"
+)(function* () {
+  const flags = yield* WorkspaceFeatureFlagService;
+  if (!(yield* flags.isEnabled("cowork_passes"))) {
+    return yield* new EntryPackPurchaseError({ reason: "unavailable" });
   }
-);
+});
 
 const readPurchase = Effect.fn("readEntryPackPurchase")(function* (
   id: OrderId
@@ -130,7 +147,9 @@ const readPurchase = Effect.fn("readEntryPackPurchase")(function* (
     .select()
     .from(passPurchases)
     .where(eq(passPurchases.id, id));
-  return purchase;
+  if (purchase?.product === "entry-pack" && purchase.entryCount !== null) {
+    return { ...purchase, entryCount: purchase.entryCount };
+  }
 });
 
 const verifyRetry = Effect.fn("verifyEntryPackPurchaseRetry")(function* (
@@ -142,6 +161,8 @@ const verifyRetry = Effect.fn("verifyEntryPackPurchaseRetry")(function* (
   }
 ) {
   if (
+    purchase.product !== "entry-pack" ||
+    purchase.entryCount === null ||
     purchase.buyerAccountId !== input.buyerAccountId ||
     purchase.tier !== input.product.tier ||
     purchase.entryCount !== input.product.size
@@ -155,7 +176,7 @@ const verifyRetry = Effect.fn("verifyEntryPackPurchaseRetry")(function* (
   if (purchase.holderAccountId !== holderAccountId) {
     return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
   }
-  return purchase;
+  return { ...purchase, entryCount: purchase.entryCount };
 });
 
 /** Continue creates the order and pending pack in one transaction. Reuse its ID on retry. */
@@ -223,7 +244,7 @@ export const beginEntryPackPurchase = Effect.fn("beginEntryPackPurchase")(
           purchasedAt,
         });
         const acceptedQuote = yield* Schema.encodeEffect(
-          entryPackPurchaseQuoteCodec
+          passPurchaseQuoteCodec
         )({
           ...quote,
           selection: {
@@ -288,9 +309,9 @@ export const beginEntryPackPurchase = Effect.fn("beginEntryPackPurchase")(
               })
               .returning();
 
-            if (!purchase)
+            if (!purchase || purchase.entryCount === null)
               return yield* Effect.die("Entry pack insert returned no row.");
-            return purchase;
+            return { ...purchase, entryCount: purchase.entryCount };
           })
         );
       })
@@ -312,10 +333,53 @@ const readOwnedPurchaseOrder = Effect.fn("readOwnedEntryPackPurchaseOrder")(
   }
 );
 
+type PassPurchase = typeof passPurchases.$inferSelect;
+
+const readOwnedPayablePass = Effect.fn("readOwnedPayablePass")(function* (
+  orderId: OrderId,
+  buyer: CustomerAccountId,
+  productKind: PassPurchase["product"]
+) {
+  const entry = yield* findOwnedPassPurchaseOrder(orderId, buyer, productKind);
+  if (!entry)
+    return yield* new EntryPackPurchaseError({ reason: "unavailable" });
+  const { purchase } = entry;
+  if (purchase.product === "unlimited") {
+    const product = { kind: "unlimited", tier: purchase.tier } as const;
+    return {
+      ...entry,
+      product,
+      discountableSubtotal: getUnlimitedPassPrice(product),
+    };
+  }
+  if (purchase.entryCount === null) {
+    return yield* new EntryPackPurchaseError({ reason: "unavailable" });
+  }
+  const product = {
+    kind: "entry-pack",
+    tier: purchase.tier,
+    size: purchase.entryCount,
+  } as const;
+  return {
+    ...entry,
+    product,
+    discountableSubtotal: getEntryPackPrice(product),
+  };
+});
+
+const hasPassQuoteExpired = (now: Temporal.Instant, purchase: PassPurchase) =>
+  purchase.product === "entry-pack"
+    ? isEntryPackQuoteExpired(now, purchase.validUntil)
+    : !purchase.holdsExpireAt ||
+      Temporal.Instant.compare(now, purchase.holdsExpireAt) >= 0;
+
 const hasEndedUnpaidAttempt = ({
   order,
   activeAttempt,
-}: Effect.Success<ReturnType<typeof readOwnedPurchaseOrder>>) =>
+}: Pick<
+  Effect.Success<ReturnType<typeof readOwnedPurchaseOrder>>,
+  "order" | "activeAttempt"
+>) =>
   isEndedUnpaidPaymentState(order.paymentState) &&
   activeAttempt !== null &&
   isEndedUnpaidPaymentState(activeAttempt.state) &&
@@ -379,8 +443,9 @@ export const readEntryPackPaymentRetry = Effect.fn("readEntryPackPaymentRetry")(
       return { kind: "status" as const, locale: purchase.locale };
     }
     const snapshots = yield* AccountingDocumentSnapshots;
-    const snapshot = yield* snapshots.findEntryPack(paymentAttemptId);
-    if (!snapshot) return { kind: "status" as const, locale: purchase.locale };
+    const snapshot = yield* snapshots.findPassPurchase(paymentAttemptId);
+    if (snapshot?.product.kind !== "entry-pack")
+      return { kind: "status" as const, locale: purchase.locale };
     const current = yield* readOwnedPurchaseOrder(orderId, accountId);
     if (
       current.order.activePaymentAttemptId !== paymentAttemptId ||
@@ -399,9 +464,7 @@ export const readEntryPackPaymentRetry = Effect.fn("readEntryPackPaymentRetry")(
       product: snapshot.product,
       billing: snapshot.billing,
       holderEmail,
-      quote: yield* Schema.decodeEffect(entryPackPurchaseQuoteCodec)(
-        purchase.quote
-      ),
+      quote: yield* Schema.decodeEffect(passPurchaseQuoteCodec)(purchase.quote),
       validFrom: purchase.validFrom,
       validUntil: purchase.validUntil,
     };
@@ -410,23 +473,22 @@ export const readEntryPackPaymentRetry = Effect.fn("readEntryPackPaymentRetry")(
 
 const saveEntryPackQuote = Effect.fn("saveEntryPackQuote")(function* (
   orderId: OrderId,
-  quote: EntryPackPurchaseQuote
+  quote: PassPurchaseQuote
 ) {
   const { db } = yield* WorkspaceDatabase;
-  const encoded = yield* Schema.encodeEffect(entryPackPurchaseQuoteCodec)(
-    quote
-  );
+  const encoded = yield* Schema.encodeEffect(passPurchaseQuoteCodec)(quote);
   yield* db
     .update(passPurchases)
     .set({ quote: encoded })
     .where(eq(passPurchases.id, orderId));
 });
 
-/** Reprices an unpaid pack without making a payment attempt. */
+/** Reprices an unpaid pass without making a payment attempt. */
 export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
   function* (input: {
     readonly orderId: OrderId;
     readonly displayedPriceFingerprint: string;
+    readonly productKind?: PassPurchase["product"];
     readonly submittedCode?: CanonicalPromotionCode;
     readonly referralCode?: CanonicalPromotionCode;
   }) {
@@ -438,10 +500,12 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
     return yield* accounts.withActiveAccount(
       session.accountId,
       Effect.gen(function* () {
-        const { order, purchase } = yield* readOwnedPurchaseOrder(
-          input.orderId,
-          session.accountId
-        );
+        const { order, purchase, product, discountableSubtotal } =
+          yield* readOwnedPayablePass(
+            input.orderId,
+            session.accountId,
+            input.productKind ?? "entry-pack"
+          );
         if (
           order.paymentState !== "not_started" ||
           order.activePaymentAttemptId
@@ -451,28 +515,23 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
           });
         }
         const bookedAt = yield* currentInstant;
-        if (isEntryPackQuoteExpired(bookedAt, purchase.validUntil)) {
+        if (hasPassQuoteExpired(bookedAt, purchase)) {
           return yield* new EntryPackPurchaseError({ reason: "quote-expired" });
         }
         const storedQuote = yield* Schema.decodeUnknownEffect(
-          entryPackPurchaseQuoteCodec
+          passPurchaseQuoteCodec
         )(purchase.quote);
         if (
           input.displayedPriceFingerprint !==
-          getEntryPackPriceFingerprint(storedQuote)
+          getPassPurchasePriceFingerprint(storedQuote)
         ) {
           return { status: "pricing_changed" as const, quote: storedQuote };
         }
 
         const discounts = yield* DiscountService;
-        const product = {
-          kind: "entry-pack",
-          tier: purchase.tier,
-          size: purchase.entryCount,
-        } as const;
         const discountInput = {
           product,
-          discountableSubtotal: getEntryPackPrice(product),
+          discountableSubtotal,
           firstServiceDate: purchase.validFrom,
           lastServiceDate: purchase.validFrom,
           bookedAt,
@@ -495,6 +554,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
 
         const selectedQuote = {
           ...quote,
+          ...(purchase.unlimitedCoffee && { unlimitedCoffee: true as const }),
           ...(submittedCodeDiscountId !== undefined &&
             quote.discounts.some(
               ({ discount }) => discount.id === submittedCodeDiscountId
@@ -525,17 +585,25 @@ const prepareEntryPackPaymentConsent = Effect.fn(
       readonly key: string;
       readonly hash: string;
     }>;
+    readonly unlimitedEarlyStartAccepted?: boolean;
   },
   locale: Locale,
-  orderId: OrderId
+  orderId: OrderId,
+  productKind: PassPurchase["product"],
+  earlyStartRequired: boolean
 ) {
   if (!input.accepted) {
     return yield* new EntryPackPurchaseError({ reason: "consent-required" });
   }
-  if (!isCurrentPaymentSubmitLegalAcceptance(locale, input.acceptedDocuments)) {
+  if (
+    !isCurrentPaymentSubmitLegalAcceptance(locale, input.acceptedDocuments) ||
+    (productKind === "unlimited" &&
+      Boolean(input.unlimitedEarlyStartAccepted) !== earlyStartRequired)
+  ) {
     return yield* new EntryPackPurchaseError({
       reason: "terms-changed",
       locale: locale,
+      ...(productKind === "unlimited" && { earlyStartRequired }),
     });
   }
 
@@ -547,8 +615,11 @@ const prepareEntryPackPaymentConsent = Effect.fn(
         getPaymentSubmitLegalEvidence({
           acceptedAt: acceptedAt.toString(),
           locale,
-          earlyPerformanceConsent: true,
-          entryPackEarlyStartRequested: true,
+          earlyPerformanceConsent:
+            productKind === "entry-pack" || earlyStartRequired,
+          ...(productKind === "entry-pack"
+            ? { entryPackEarlyStartRequested: true }
+            : earlyStartRequired && { unlimitedPassEarlyStartRequested: true }),
         })
       ).map((record) => ({ orderId, evidence: record }))
     );
@@ -559,6 +630,7 @@ const prepareEntryPackPaymentConsent = Effect.fn(
 export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
   input: Parameters<typeof prepareEntryPackPaymentConsent>[0] & {
     readonly orderId: OrderId;
+    readonly productKind?: PassPurchase["product"];
     readonly priorPaymentAttemptId?: PaymentAttemptId;
     readonly submittedCode?: CanonicalPromotionCode;
     readonly referralCode?: CanonicalPromotionCode;
@@ -577,7 +649,12 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
 
   // Recovery can take the order section for fulfillment. Verify before
   // holding the account section, then fence the result to the same attempt.
-  const prior = yield* readOwnedPurchaseOrder(input.orderId, session.accountId);
+  const productKind = input.productKind ?? "entry-pack";
+  const prior = yield* readOwnedPayablePass(
+    input.orderId,
+    session.accountId,
+    productKind
+  );
   const approvedAfterAttemptId = input.priorPaymentAttemptId ?? null;
   let confirmedUnpaid = false;
   if (
@@ -597,11 +674,13 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
     session.accountId,
     Effect.gen(function* () {
       const { db } = yield* WorkspaceDatabase;
-      const currentPurchase = yield* readOwnedPurchaseOrder(
+      const currentPurchase = yield* readOwnedPayablePass(
         input.orderId,
-        session.accountId
+        session.accountId,
+        productKind
       );
-      const { order, purchase } = currentPurchase;
+      const { order, purchase, product, discountableSubtotal } =
+        currentPurchase;
       const statusUrl = `/${purchase.locale}${reservationStatusPath}/${order.id}`;
       if (order.paymentState === "paid") {
         return { status: "paid" as const, statusUrl };
@@ -613,10 +692,10 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           : order.paymentState !== "not_started")
       )
         return { status: "pending" as const, statusUrl };
-      const accepted = yield* Schema.decodeEffect(entryPackPurchaseQuoteCodec)(
+      const accepted = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
         purchase.quote
       );
-      const acceptedFingerprint = getEntryPackPriceFingerprint(accepted);
+      const acceptedFingerprint = getPassPurchasePriceFingerprint(accepted);
       const stalePrice =
         input.displayedPriceFingerprint !== undefined &&
         input.displayedPriceFingerprint !== acceptedFingerprint;
@@ -625,7 +704,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       }
       const snapshots = yield* AccountingDocumentSnapshots;
       const frozen = order.activePaymentAttemptId
-        ? yield* snapshots.findEntryPack(order.activePaymentAttemptId)
+        ? yield* snapshots.findPassPurchase(order.activePaymentAttemptId)
         : undefined;
       const billing = yield* decodeBilling(
         input.billing ?? frozen?.billing ?? defaultReservationBillingSelection
@@ -637,20 +716,24 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         return yield* new EntryPackPurchaseError({ reason: "billing-changed" });
       }
       const now = yield* currentInstant;
-      if (isEntryPackQuoteExpired(now, purchase.validUntil)) {
+      if (hasPassQuoteExpired(now, purchase)) {
         return yield* new EntryPackPurchaseError({
           reason: order.activePaymentAttemptId
             ? "payment-in-progress"
             : "quote-expired",
         });
       }
+      if (productKind === "unlimited") {
+        yield* reconfirmUnlimitedPassHolds(purchase).pipe(
+          Effect.catchTag("UnlimitedPassHoldsUnavailable", () =>
+            Effect.fail(
+              new EntryPackPurchaseError({ reason: "holds-unavailable" })
+            )
+          )
+        );
+      }
 
       const discountService = yield* DiscountService;
-      const product = {
-        kind: "entry-pack",
-        tier: purchase.tier,
-        size: purchase.entryCount,
-      } as const;
       const selection = accepted.selection ?? {
         ...(input.submittedCode !== undefined && {
           submittedCode: input.submittedCode,
@@ -662,7 +745,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       const { quote, commitment } =
         yield* discountService.affirmDisplayedDiscounts({
           product,
-          discountableSubtotal: getEntryPackPrice(product),
+          discountableSubtotal,
           firstServiceDate: purchase.validFrom,
           lastServiceDate: purchase.validFrom,
           bookedAt: now,
@@ -679,12 +762,14 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       );
       const refreshedQuote = {
         ...quote,
+        ...(purchase.unlimitedCoffee && { unlimitedCoffee: true as const }),
         ...(accepted.selection && { selection }),
         ...(submittedCodeDiscountId !== undefined && {
           submittedCodeDiscountId,
         }),
       };
-      const currentFingerprint = getEntryPackPriceFingerprint(refreshedQuote);
+      const currentFingerprint =
+        getPassPurchasePriceFingerprint(refreshedQuote);
       if (acceptedFingerprint !== currentFingerprint) {
         // An ended attempt may still settle late at its original price.
         if (order.activePaymentAttemptId) {
@@ -750,7 +835,10 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         }) ?? { kind: "person" as const, legalName: contact.name };
       const admission = {
         orderId: order.id,
-        amount: quote.discountedSubtotal,
+        amount: withPassPurchaseAddons(
+          quote.discountedSubtotal,
+          purchase.unlimitedCoffee
+        ),
         locale: purchase.locale,
         details: {
           approvedAfterAttemptId,
@@ -758,7 +846,13 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           recordConsent: yield* prepareEntryPackPaymentConsent(
             input,
             purchase.locale,
-            order.id
+            order.id,
+            productKind,
+            productKind === "unlimited" &&
+              unlimitedPassRequiresEarlyStart(
+                purchase.validFrom,
+                getCurrentWorkspaceDate(now)
+              )
           ),
           snapshot: {
             orderId: order.id,
@@ -770,6 +864,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
             delivery: frozen?.delivery ?? { email: session.email },
             serviceDate: purchase.validFrom,
             product,
+            ...(purchase.unlimitedCoffee && { unlimitedCoffee: true as const }),
             quote: frozen?.quote ?? quote,
           },
         },
@@ -815,7 +910,10 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         statusUrl,
         redirectUrl: hostedPaymentPage.hostedPage,
       };
-    })
+    }),
+    productKind === "unlimited"
+      ? { passPurchaseOrderId: input.orderId }
+      : undefined
   );
   // Fulfillment takes its order section after the account section ends.
   if (result.status === "paid") {

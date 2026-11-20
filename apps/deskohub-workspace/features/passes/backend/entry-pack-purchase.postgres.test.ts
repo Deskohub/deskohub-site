@@ -73,7 +73,7 @@ import {
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
-import { entryPackPurchaseQuoteCodec } from "../entry-pack-purchase-quote";
+import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate.server";
 import {
   claimEntryPackGifts,
@@ -86,15 +86,15 @@ import { readOwnedEntryPackOrderLocale } from "./entry-pack-order";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
   beginEntryPackPurchase,
-  displayEntryPackCheckoutPrice,
+  displayPassPurchasePrice,
   getEntryPackPaymentDisclosure,
-  getEntryPackPriceFingerprint,
+  getPassPurchasePriceFingerprint,
   payForEntryPack,
   readEntryPackPaymentRetry,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
 import { loadEntryPackRedemption } from "./entry-pack-redemption";
-import { settleEntryPack } from "./entry-pack-settlement";
+import { settlePassPurchase } from "./entry-pack-settlement";
 import { loadEntryPackStatus } from "./entry-pack-status";
 import { reconcilePassPurchases } from "./pass-purchase-reconciliation";
 
@@ -584,7 +584,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const initialPurchase = await Effect.runPromise(
         purchasedAt ? begin.pipe(atInstant(purchasedAt)) : begin
       );
-      const initialQuote = Schema.decodeSync(entryPackPurchaseQuoteCodec)(
+      const initialQuote = Schema.decodeSync(passPurchaseQuoteCodec)(
         initialPurchase.quote
       );
       const accept = {
@@ -665,7 +665,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               const snapshots = yield* AccountingDocumentSnapshots;
               const invoices = yield* InvoiceRepository;
               return {
-                snapshot: yield* snapshots.findEntryPack(
+                snapshot: yield* snapshots.findPassPurchase(
                   paymentAttemptIdSchema.make(attemptId)
                 ),
                 invoice: invoiceId ? yield* invoices.findById(invoiceId) : null,
@@ -749,7 +749,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         notify,
         readAffirmedCode: () => affirmedCode,
         initialQuote,
-        initialFingerprint: getEntryPackPriceFingerprint(initialQuote),
+        initialFingerprint: getPassPurchasePriceFingerprint(initialQuote),
         reprice: (
           displayedPriceFingerprint: string,
           submittedCode?: typeof code
@@ -821,7 +821,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
       expect(
         await payment.pay(undefined, {
-          displayedPriceFingerprint: getEntryPackPriceFingerprint(
+          displayedPriceFingerprint: getPassPurchasePriceFingerprint(
             refreshed.quote
           ),
         })
@@ -854,22 +854,23 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       const code = payment.initialQuote.selection?.submittedCode;
       expect(code).toBeDefined();
-      expect(
-        displayEntryPackCheckoutPrice(payment.initialQuote)
-      ).toHaveProperty("appliedDiscountCode", code);
+      expect(displayPassPurchasePrice(payment.initialQuote)).toHaveProperty(
+        "appliedDiscountCode",
+        code
+      );
 
       const { submittedCodeDiscountId, ...legacyQuote } = payment.initialQuote;
       expect(submittedCodeDiscountId).toBeDefined();
-      const legacyStoredQuote = Schema.decodeSync(entryPackPurchaseQuoteCodec)(
-        Schema.encodeSync(entryPackPurchaseQuoteCodec)(legacyQuote)
+      const legacyStoredQuote = Schema.decodeSync(passPurchaseQuoteCodec)(
+        Schema.encodeSync(passPurchaseQuoteCodec)(legacyQuote)
       );
       expect(legacyStoredQuote.selection?.submittedCode).toBe(code);
-      expect(getEntryPackPriceFingerprint(legacyStoredQuote)).toBe(
+      expect(getPassPurchasePriceFingerprint(legacyStoredQuote)).toBe(
         payment.initialFingerprint
       );
-      expect(
-        displayEntryPackCheckoutPrice(legacyStoredQuote)
-      ).not.toHaveProperty("appliedDiscountCode");
+      expect(displayPassPurchasePrice(legacyStoredQuote)).not.toHaveProperty(
+        "appliedDiscountCode"
+      );
 
       payment.removeDiscount();
       const refreshed = await payment.pay();
@@ -880,7 +881,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         refreshed.quote.discounts.map(({ discount }) => discount.id)
       ).toEqual([customerDiscount.discount.id]);
       expect(refreshed.quote).not.toHaveProperty("submittedCodeDiscountId");
-      expect(displayEntryPackCheckoutPrice(refreshed.quote)).not.toHaveProperty(
+      expect(displayPassPurchasePrice(refreshed.quote)).not.toHaveProperty(
         "appliedDiscountCode"
       );
       expect(payment.providerOrders).toHaveLength(0);
@@ -924,7 +925,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         otherCode
       );
       expect(updated.status).toBe("ready");
-      const fingerprint = getEntryPackPriceFingerprint(updated.quote);
+      const fingerprint = getPassPurchasePriceFingerprint(updated.quote);
       expect(fingerprint).not.toBe(payment.initialFingerprint);
       const staleRemove = await payment.reprice(payment.initialFingerprint);
       expect(staleRemove).toEqual({
@@ -2020,7 +2021,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         }).pipe(Effect.provide(Layer.merge(db.layer, purchaseServices)))
       );
       expect(purchase.holderAccountId).toBe(accountId);
-      const settle = settleEntryPack(orderId).pipe(Effect.provide(db.layer));
+      const settle = settlePassPurchase(orderId).pipe(Effect.provide(db.layer));
 
       await db.pool.query(
         "update orders set payment_state = 'expired' where id = $1",

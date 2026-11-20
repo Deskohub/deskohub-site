@@ -29,11 +29,12 @@ export const continuesInIssuedLocale = Effect.fn(
   }
 
   if (continuation.kind === "entry-pack-order") {
-    const { readOwnedEntryPackOrderLocale } = yield* Effect.tryPromise(
+    const { readOwnedPassPurchaseOrderLocale } = yield* Effect.tryPromise(
       () => import("@/features/passes/backend/entry-pack-order")
     );
-    const issuedLocale = yield* readOwnedEntryPackOrderLocale(
-      continuation.orderId
+    const issuedLocale = yield* readOwnedPassPurchaseOrderLocale(
+      continuation.orderId,
+      "entry-pack"
     ).pipe(
       Effect.provide(
         Layer.mergeAll(WorkspaceDatabase.Default, CurrentCustomerAccount.Live)

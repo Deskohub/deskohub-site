@@ -7,7 +7,9 @@ import {
   type DotyposWriteFailure,
   type Reservation,
 } from "@deskohub/dotypos";
+import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Effect, Match } from "effect";
+import { WorkspaceLockSections } from "@/db/workspace-locks";
 import {
   getWorkspaceMeetingRoomDurationLabel,
   getWorkspaceMeetingRoomProductTitle,
@@ -18,12 +20,19 @@ import {
 import type { CheckoutDetails } from "@/features/checkout/schemas/checkout-details";
 import { getMeetingRoomSetupStart } from "@/features/reservation/meeting-room-early-setup";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
-import { getReservationDate } from "@/features/reservation/reservation-interval";
+import {
+  getReservationDate,
+  getReservationDateBounds,
+  type ReservationInterval,
+} from "@/features/reservation/reservation-interval";
 import type { ReservationIntervalValidationError } from "@/features/reservation/reservation-interval-domain";
 import { staffLocale } from "@/shared/backend/staff-locale";
 import { formatMoney, moneyWithValue } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import { temporalInstantToDate } from "@/shared/utils/temporal";
+import {
+  getPlainDatesBetween,
+  temporalInstantToDate,
+} from "@/shared/utils/temporal";
 import {
   getWorkspaceReservationInterval,
   getWorkspaceReservationSeats,
@@ -44,6 +53,17 @@ export const dotyposReservationLogFields = (reservation: Reservation) => ({
   dotyposReservationStatus: reservation.status,
 });
 
+/** Serializes work that could claim overlapping booking capacity. */
+export const withWorkspaceReservationCapacity = <A, E, R>(
+  interval: ReservationInterval,
+  effect: Effect.Effect<A, E, R>
+) => {
+  const { first, last } = getReservationDateBounds(interval);
+  return WorkspaceLockSections.reservationCapacity(
+    getPlainDatesBetween(first, last)
+  )(effect);
+};
+
 export interface CreateWorkspaceDotyposReservationInput {
   readonly paymentOrderId: WorkspaceReservationId;
   readonly dotyposCustomerId: DotyposCustomerId;
@@ -57,6 +77,7 @@ export const createWorkspaceDotyposReservation: (
 ) => Effect.Effect<
   Reservation,
   | DotyposWriteFailure
+  | EffectDrizzleQueryError
   | InvalidDotyposTableSeats
   | ReservationIntervalValidationError
   | TableAssignmentUnavailableError

@@ -102,7 +102,7 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
 
   const sent = yield* Effect.gen(function* () {
     const snapshots = yield* AccountingDocumentSnapshots;
-    const snapshot = yield* snapshots.findEntryPack(paymentAttemptId);
+    const snapshot = yield* snapshots.findPassPurchase(paymentAttemptId);
     // Only the buyer's supplied personal name belongs in the invitation.
     // The frozen accounting identity keeps the body stable across attempts.
     const personalName =
@@ -134,7 +134,11 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
       ...rendered,
       from: defaultFrom,
       to: { email: holder.email },
-      subject: entryPackGiftInvitationSubject({ buyerName, locale }),
+      subject: entryPackGiftInvitationSubject({
+        buyerName,
+        locale,
+        entryCount: purchase.entryCount,
+      }),
       idempotencyKey: `entry-pack-gift-invitation:${orderId}:${generation}`,
       tags: ["entry_pack_gift_invitation"],
       sensitiveContent: true,

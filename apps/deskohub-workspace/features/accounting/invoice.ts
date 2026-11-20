@@ -1,6 +1,8 @@
 import { Schema } from "effect";
 import { type Locale, m } from "@/features/i18n";
+import { unlimitedPassCoffeePrice } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
+import { withPassPurchaseAddons } from "@/features/passes/pass-purchase-quote";
 import { workspaceCurrencyCodeSchema } from "@/shared/money/currencies";
 import { moneyToDecimalString } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
@@ -15,10 +17,10 @@ import {
   type AccountingDocumentSnapshot,
   accountingDocumentIdentitySchema,
   coworkAccountingDocumentSnapshotSchema,
-  type EntryPackAccountingSnapshot,
-  entryPackAccountingSnapshotSchema,
   meetingRoomAccountingDocumentSnapshotSchema,
   officeAccountingDocumentSnapshotSchema,
+  type PassPurchaseAccountingSnapshot,
+  passPurchaseAccountingSnapshotSchema,
   workspaceAccountingSupplier,
 } from "./accounting-document-snapshot";
 import type { InvoiceBuyer } from "./billing-identity";
@@ -170,12 +172,12 @@ export type ManualInvoiceDocument = typeof manualInvoiceDocumentSchema.Type;
 
 const entryPackInvoiceDocumentSchema = Schema.Struct({
   documentKind: Schema.Literal("pass-purchase"),
-  orderId: entryPackAccountingSnapshotSchema.fields.orderId,
+  orderId: passPurchaseAccountingSnapshotSchema.fields.orderId,
   dotyposCustomerId: invoiceIdentitySchema.fields.dotyposCustomerId,
   locale: invoiceIdentitySchema.fields.locale,
   supplier: invoiceSupplierSchema,
   buyer: storedInvoiceBuyerSchema,
-  delivery: entryPackAccountingSnapshotSchema.fields.delivery,
+  delivery: passPurchaseAccountingSnapshotSchema.fields.delivery,
   paymentAttemptId: invoiceIdentitySchema.fields.paymentAttemptId,
   invoiceNumber: invoiceNumberSchema,
   issuedAt: instantStringSchema,
@@ -345,8 +347,8 @@ export const makeManualInvoiceDocument = (input: {
   });
 };
 
-export const makeEntryPackInvoiceDocument = (input: {
-  readonly source: EntryPackAccountingSnapshot;
+export const makePassPurchaseInvoiceDocument = (input: {
+  readonly source: PassPurchaseAccountingSnapshot;
   readonly buyer: InvoiceBuyer;
   readonly paymentAttemptId: string;
   readonly invoiceNumber: InvoiceNumber;
@@ -359,9 +361,13 @@ export const makeEntryPackInvoiceDocument = (input: {
     temporalInstantToIsoString(input.issuedAt)
   );
   const description = [
-    m.passEntryPack({}, { locale }),
+    product.kind === "entry-pack"
+      ? m.passEntryPack({}, { locale })
+      : m.passUnlimited({}, { locale }),
     getPassTierName(product.tier, locale),
-    m.passEntryCount({ count: product.size }, { locale }),
+    ...(product.kind === "entry-pack"
+      ? [m.passEntryCount({ count: product.size }, { locale })]
+      : []),
   ].join(" · ");
   return entryPackInvoiceDocumentSchema.make({
     documentKind: "pass-purchase",
@@ -397,8 +403,18 @@ export const makeEntryPackInvoiceDocument = (input: {
         description: discount.label,
         price: moneyToDecimalString({ ...amount, value: -amount.value }),
       })),
+      ...(source.unlimitedCoffee
+        ? [
+            {
+              description: m.checkoutSummaryItemCoffee({}, { locale }),
+              price: moneyToDecimalString(unlimitedPassCoffeePrice),
+            },
+          ]
+        : []),
     ],
-    total: moneyToDecimalString(quote.discountedSubtotal),
+    total: moneyToDecimalString(
+      withPassPurchaseAddons(quote.discountedSubtotal, source.unlimitedCoffee)
+    ),
     provenance: getInvoiceGenerationProvenance(issuedAt),
   });
 };
