@@ -129,6 +129,7 @@ describe("recoverSkippedDeployment", () => {
     {
       truncatedNewer = false,
       newerAfterFirstCheck = [] as DeploymentSummary[],
+      unfilteredSupersession = false,
     } = {}
   ) => {
     const writes: (
@@ -147,20 +148,22 @@ describe("recoverSkippedDeployment", () => {
             : []),
         ];
         return {
-          // Recovery checks the source and age of each supersession candidate.
-          deployments: isNewerQuery
-            ? pool
-            : pool.filter(
-                (candidate) =>
-                  (query.branch === undefined ||
-                    candidate.ref === query.branch) &&
-                  (query.target === undefined ||
-                    candidate.target === query.target) &&
-                  (query.state === undefined ||
-                    candidate.readyState === query.state) &&
-                  (query.until === undefined ||
-                    candidate.created < Number(query.until))
-              ),
+          deployments:
+            isNewerQuery && unfilteredSupersession
+              ? pool
+              : pool.filter(
+                  (candidate) =>
+                    (query.branch === undefined ||
+                      candidate.ref === query.branch) &&
+                    (query.target === undefined ||
+                      candidate.target === query.target) &&
+                    (query.state === undefined ||
+                      candidate.readyState === query.state) &&
+                    (query.since === undefined ||
+                      candidate.created > Number(query.since)) &&
+                    (query.until === undefined ||
+                      candidate.created < Number(query.until))
+                ),
           truncated: isNewerQuery && truncatedNewer,
         };
       },
@@ -288,10 +291,15 @@ describe("recoverSkippedDeployment", () => {
     "leaves a deployment in %s state alone",
     async (readyState) => {
       const candidate = deployment({ id: "candidate", readyState });
-      const fake = fakeDeployments([candidate]);
+      const fake = fakeDeployments([]);
       const outcome = await recoverSkippedDeployment({
         skipped: candidate,
-        deployments: fake.deployments,
+        deployments: {
+          ...fake.deployments,
+          list: async () => {
+            throw new Error("Deployment listing is unavailable");
+          },
+        },
         decide: rebuild,
         dryRun: false,
       });
@@ -336,13 +344,16 @@ describe("recoverSkippedDeployment", () => {
   });
 
   test("recovers when only older or unrelated deployments exist", async () => {
-    const fake = fakeDeployments([
-      readyPreview,
-      skippedPreview,
-      deployment({ id: "other-branch", created: 150, ref: "other" }),
-      deployment({ id: "fork", created: 150, repositoryId: "2" }),
-      deployment({ id: "production", created: 150, target: "production" }),
-    ]);
+    const fake = fakeDeployments(
+      [
+        readyPreview,
+        skippedPreview,
+        deployment({ id: "other-branch", created: 150, ref: "other" }),
+        deployment({ id: "fork", created: 150, repositoryId: "2" }),
+        deployment({ id: "production", created: 150, target: "production" }),
+      ],
+      { unfilteredSupersession: true }
+    );
     const outcome = await recoverSkippedDeployment({
       skipped: skippedPreview,
       deployments: fake.deployments,
