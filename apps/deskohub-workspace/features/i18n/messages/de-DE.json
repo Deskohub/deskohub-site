@@ -1873,6 +1873,7 @@
   "accountPassExpired": "Abgelaufen",
   "accountPassDepleted": "Aufgebraucht",
   "accountPassEnded": "Beendet",
+  "accountUnlimitedPassesUnavailable": "Deine unbegrenzten Pässe konnten gerade nicht geladen werden.",
   "accountUnlimitedPassPeriod": "Gültigkeit",
   "accountUnlimitedPassWhere": "Sitzplatz",
   "accountUnlimitedPassAnyDesk": "Ein beliebiger freier Schreibtisch",

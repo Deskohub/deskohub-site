@@ -3,7 +3,6 @@ import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-
 import { type Locale, m } from "@/features/i18n";
 import { UnlimitedDayMeter } from "@/features/passes/components/unlimited-day-meter";
 import { unlimitedPassDays } from "@/features/passes/pass-offer";
-import { GuardedLink } from "@/shared/components/guarded-link";
 import { Button } from "@/shared/components/ui/button";
 import { StatusBadge } from "@/shared/components/ui/status-badge";
 import { formatCount } from "@/shared/utils/number";
@@ -41,10 +40,10 @@ function UnlimitedDoorCodeLink({
 }) {
   return (
     <Button asChild size="sm" wrap>
-      <GuardedLink href={href} prefetch={false}>
+      <a href={href}>
         <KeyRound aria-hidden="true" className="size-4 shrink-0" />
         {m.unlimitedAccessTodayTitle({}, { locale })}
-      </GuardedLink>
+      </a>
     </Button>
   );
 }

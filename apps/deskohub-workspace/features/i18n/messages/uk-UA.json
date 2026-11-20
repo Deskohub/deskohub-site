@@ -1909,6 +1909,7 @@
   "accountPassExpired": "Термін дії минув",
   "accountPassDepleted": "Вичерпано",
   "accountPassEnded": "Завершено",
+  "accountUnlimitedPassesUnavailable": "Ваші безлімітні абонементи тимчасово недоступні.",
   "accountUnlimitedPassPeriod": "Період дії",
   "accountUnlimitedPassWhere": "Де сісти",
   "accountUnlimitedPassAnyDesk": "Будь-який вільний стіл",

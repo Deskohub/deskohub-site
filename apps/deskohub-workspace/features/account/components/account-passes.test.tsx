@@ -88,7 +88,6 @@ test("presents the buyer's order separately from passes they can use", async () 
                 product: "unlimited",
                 invitation: "sent",
                 claimed: false,
-                canResend: false,
               },
             ],
           })}

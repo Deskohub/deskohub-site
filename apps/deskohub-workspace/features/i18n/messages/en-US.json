@@ -1873,6 +1873,7 @@
   "accountPassExpired": "Expired",
   "accountPassDepleted": "Used up",
   "accountPassEnded": "Ended",
+  "accountUnlimitedPassesUnavailable": "Your Unlimited passes are temporarily unavailable.",
   "accountUnlimitedPassPeriod": "Pass period",
   "accountUnlimitedPassWhere": "Where to sit",
   "accountUnlimitedPassAnyDesk": "Any free desk",

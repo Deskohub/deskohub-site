@@ -1,5 +1,5 @@
 import type { AccountPasses } from "@/features/account/account-passes.server";
-import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
+import type { AccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
 import { AccountPassesPanel } from "@/features/account/components/account-passes";
 import { AccountSignInRedirect } from "@/features/account/components/account-sign-in-redirect";
 import { InvoiceHistoryPanel } from "@/features/account/components/billing/invoice-history";
@@ -33,7 +33,7 @@ export function AccountPage({
   readonly loadPasses?: () => Promise<AccountPasses>;
   readonly locale: Locale;
   readonly state: CustomerAccountPageState;
-  readonly unlimitedPasses?: readonly AccountUnlimitedPass[];
+  readonly unlimitedPasses?: AccountUnlimitedPasses;
 }) {
   if (state.kind === "unauthenticated") {
     return <AccountSignInRedirect locale={locale} />;
@@ -80,14 +80,17 @@ function withRenderedReservations(
     { readonly kind: "unauthenticated" | "unavailable" }
   >,
   locale: Locale,
-  unlimitedPasses: readonly AccountUnlimitedPass[]
+  unlimitedPasses: AccountUnlimitedPasses
 ): SignedInAccountState {
-  const currentPassCount = unlimitedPasses.filter(
-    (pass) => pass.status === "active" || pass.status === "upcoming"
-  ).length;
+  const currentPassCount =
+    unlimitedPasses === "unavailable"
+      ? undefined
+      : unlimitedPasses.filter(
+          (pass) => pass.status === "active" || pass.status === "upcoming"
+        ).length;
   const render = (history: CustomerReservationHistory) => ({
     count:
-      history.kind === "available"
+      history.kind === "available" && currentPassCount !== undefined
         ? history.groups.current.length + currentPassCount
         : undefined,
     history: (
@@ -108,7 +111,8 @@ function withRenderedReservations(
     case "support-required": {
       const { history, ...rest } = state;
       if (history) return { ...rest, reservations: render(history) };
-      if (unlimitedPasses.length === 0) return rest;
+      if (unlimitedPasses !== "unavailable" && unlimitedPasses.length === 0)
+        return rest;
       return {
         ...rest,
         reservations: render({
@@ -117,7 +121,18 @@ function withRenderedReservations(
         }),
       };
     }
-    case "authenticated-unavailable":
+    case "authenticated-unavailable": {
+      // The holder's pass periods can load independently of the profile.
+      if (unlimitedPasses === "unavailable" || unlimitedPasses.length === 0)
+        return state;
+      return {
+        ...state,
+        reservations: render({
+          kind: "unavailable",
+          reason: "provider-unavailable",
+        }),
+      };
+    }
     case "deletion-pending":
       return state;
   }

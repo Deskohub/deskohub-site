@@ -422,11 +422,14 @@ describe.skipIf(!testDatabase)(
         "Deskohub Unlimited"
       );
 
-      const readPasses = (accountId: CustomerAccountId, now: string) =>
+      const readPassViews = (accountId: CustomerAccountId, now: string) =>
         Effect.runPromise(
           Effect.andThen(
             TestClock.setTime(Temporal.Instant.from(now).epochMilliseconds),
-            loadAccountUnlimitedPasses("en-US")
+            Effect.all({
+              unlimited: loadAccountUnlimitedPasses("en-US"),
+              packs: loadAccountPasses("en-US"),
+            })
           ).pipe(
             Effect.provide(
               Layer.mergeAll(
@@ -453,36 +456,62 @@ describe.skipIf(!testDatabase)(
             Effect.provide(TestClock.layer())
           )
         );
-      expect(await readPasses(buyer, "2026-03-15T23:00:00Z")).toEqual([]);
-      expect(await readPasses(holder, "2026-03-15T23:00:00Z")).toEqual([]);
-      await testDatabase!.pool.query(
-        "update pass_purchases set gift_claimed_at = now() where id = $1",
-        [passId]
+      const firstDay = "2026-03-15T23:00:00Z";
+      const holderEmail = testEmailAddress(`h-${holder}`);
+      const buyerView = await readPassViews(buyer, firstDay);
+      expect(buyerView.unlimited).toEqual([]);
+      expect(buyerView.packs).toMatchObject({
+        held: [],
+        boughtForOthers: [
+          {
+            orderId: passId,
+            product: "unlimited",
+            statusPath: `/en-US/reservation/status/${passId}`,
+            maskedHolderEmail: maskEmailAddress(holderEmail),
+            claimed: false,
+          },
+        ],
+      });
+      expect(JSON.stringify(buyerView.packs)).not.toContain("canResend");
+      expect(JSON.stringify(buyerView.packs)).not.toContain(
+        "/reservation/access/"
       );
-      expect(await readPasses(holder, "2026-03-15T22:59:59Z")).toMatchObject([
-        { status: "upcoming" },
-      ]);
-      expect(await readPasses(holder, "2026-03-15T23:00:00Z")).toMatchObject([
-        {
-          status: "active",
-          day: 1,
-          daysLeft: 30,
-          accessPath: `/en-US/reservation/access/${passId}`,
-        },
-      ]);
-      expect(await readPasses(holder, "2026-04-14T22:00:00Z")).toMatchObject([
-        { status: "expired" },
-      ]);
+      expect(JSON.stringify(buyerView.packs)).not.toContain(holderEmail);
+      expect(await readPassViews(holder, firstDay)).toEqual({
+        unlimited: [],
+        packs: { held: [], boughtForOthers: [] },
+      });
+      await testDatabase!.pool.query(
+        "update pass_purchases set gift_claimed_at = $2 where id = $1",
+        [passId, firstDay]
+      );
+      expect(
+        (await readPassViews(holder, "2026-03-15T22:59:59Z")).unlimited
+      ).toMatchObject([{ status: "upcoming" }]);
+      expect(await readPassViews(holder, firstDay)).toMatchObject({
+        unlimited: [
+          {
+            status: "active",
+            day: 1,
+            daysLeft: 30,
+            accessPath: `/en-US/reservation/access/${passId}`,
+          },
+        ],
+        packs: { held: [], boughtForOthers: [] },
+      });
+      expect(
+        (await readPassViews(holder, "2026-04-14T22:00:00Z")).unlimited
+      ).toMatchObject([{ status: "expired" }]);
       await testDatabase!.pool.query(
         "update pass_purchases set status = 'withdrawn', access_ends_on = '2026-03-17' where id = $1",
         [passId]
       );
-      expect(await readPasses(holder, "2026-03-16T22:59:59Z")).toMatchObject([
-        { status: "active", day: 1, daysLeft: 1 },
-      ]);
-      expect(await readPasses(holder, "2026-03-16T23:00:00Z")).toMatchObject([
-        { status: "ended" },
-      ]);
+      expect(
+        (await readPassViews(holder, "2026-03-16T22:59:59Z")).unlimited
+      ).toMatchObject([{ status: "active", day: 1, daysLeft: 1 }]);
+      expect(
+        (await readPassViews(holder, "2026-03-16T23:00:00Z")).unlimited
+      ).toMatchObject([{ status: "ended" }]);
     });
 
     test("scopes Entry pack payment to an owner-matched reservation and booking to the pack's validity", async () => {

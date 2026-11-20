@@ -1873,6 +1873,7 @@
   "accountPassExpired": "समय सीमा समाप्त",
   "accountPassDepleted": "सभी प्रवेश इस्तेमाल हो गए",
   "accountPassEnded": "समाप्त",
+  "accountUnlimitedPassesUnavailable": "आपके असीमित पास अभी उपलब्ध नहीं हैं।",
   "accountUnlimitedPassPeriod": "वैधता अवधि",
   "accountUnlimitedPassWhere": "बैठने की जगह",
   "accountUnlimitedPassAnyDesk": "कोई भी खाली डेस्क",

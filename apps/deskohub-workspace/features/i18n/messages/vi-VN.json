@@ -1855,6 +1855,7 @@
   "accountPassExpired": "Đã hết hạn",
   "accountPassDepleted": "Đã dùng hết",
   "accountPassEnded": "Đã kết thúc",
+  "accountUnlimitedPassesUnavailable": "Hiện chưa thể tải thẻ không giới hạn của bạn.",
   "accountUnlimitedPassPeriod": "Thời hạn",
   "accountUnlimitedPassWhere": "Chỗ ngồi",
   "accountUnlimitedPassAnyDesk": "Bất kỳ bàn trống nào",

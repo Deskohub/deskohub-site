@@ -1,6 +1,9 @@
 import { CalendarDays, UserRound, Users } from "lucide-react";
 import type { ReactNode } from "react";
-import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
+import type {
+  AccountUnlimitedPass,
+  AccountUnlimitedPasses,
+} from "@/features/account/account-unlimited-passes.server";
 import { UnlimitedReservationItem } from "@/features/account/components/account-unlimited-pass";
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import type {
@@ -192,17 +195,18 @@ export function ReservationHistory({
 }: {
   readonly history: CustomerReservationHistory;
   readonly locale: Locale;
-  readonly unlimitedPasses?: readonly AccountUnlimitedPass[];
+  readonly unlimitedPasses?: AccountUnlimitedPasses;
 }) {
-  if (history.kind === "unavailable" && unlimitedPasses.length === 0) {
+  const periods = unlimitedPasses === "unavailable" ? [] : unlimitedPasses;
+  if (history.kind === "unavailable" && periods.length === 0) {
     return <ProviderUnavailableNotice locale={locale} />;
   }
 
   const groups = history.kind === "available" ? history.groups : undefined;
-  const currentPasses = unlimitedPasses.filter(
+  const currentPasses = periods.filter(
     (pass) => pass.status === "active" || pass.status === "upcoming"
   );
-  const pastPasses = unlimitedPasses.filter(
+  const pastPasses = periods.filter(
     (pass) => pass.status === "expired" || pass.status === "ended"
   );
 
@@ -230,6 +234,11 @@ export function ReservationHistory({
       )}
       {history.kind === "unavailable" && (
         <ProviderUnavailableNotice locale={locale} />
+      )}
+      {unlimitedPasses === "unavailable" && (
+        <p className="text-sm text-slate-600">
+          {m.accountUnlimitedPassesUnavailable({}, { locale })}
+        </p>
       )}
     </div>
   );

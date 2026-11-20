@@ -57,13 +57,17 @@ export type AccountEntryPack = {
   };
 };
 
-export type AccountBoughtPass = EntryPackGiftState & {
+export type AccountBoughtPass = Omit<EntryPackGiftState, "canResend"> & {
   readonly orderId: OrderId;
   readonly statusPath: string;
   readonly tier: string;
   readonly maskedHolderEmail?: string;
 } & (
-    | { readonly product: "entry-pack"; readonly entryCount: EntryPackSize }
+    | {
+        readonly product: "entry-pack";
+        readonly entryCount: EntryPackSize;
+        readonly canResend: boolean;
+      }
     | { readonly product: "unlimited" }
   );
 
@@ -160,12 +164,12 @@ const listBoughtGifts = Effect.fn("listBoughtPassGifts")(function* (
     const state = states.get(orderId);
     // A refund can end payment eligibility between the two reads.
     if (!state) continue;
+    const { canResend, ...invitation } = state;
     const email = recipients.get(holderAccountId)?.email;
     const masked = email ? maskEmailAddress(email) : undefined;
     const maskedHolderEmail = masked === email ? undefined : masked;
     const summary = {
-      ...state,
-      canResend: state.canResend && maskedHolderEmail !== undefined,
+      ...invitation,
       orderId,
       statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
       tier: getPassTierName(tier, locale),
@@ -173,7 +177,12 @@ const listBoughtGifts = Effect.fn("listBoughtPassGifts")(function* (
     };
     if (product === "unlimited") result.push({ ...summary, product });
     else if (entryCount !== null)
-      result.push({ ...summary, product, entryCount });
+      result.push({
+        ...summary,
+        product,
+        entryCount,
+        canResend: canResend && maskedHolderEmail !== undefined,
+      });
   }
   return result;
 });

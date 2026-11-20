@@ -1891,6 +1891,7 @@
   "accountPassExpired": "Platnost vypršela",
   "accountPassDepleted": "Vyčerpáno",
   "accountPassEnded": "Ukončeno",
+  "accountUnlimitedPassesUnavailable": "Neomezená členství se teď nepodařilo načíst.",
   "accountUnlimitedPassPeriod": "Platnost",
   "accountUnlimitedPassWhere": "Kde se posadit",
   "accountUnlimitedPassAnyDesk": "Kterýkoliv volný stůl",

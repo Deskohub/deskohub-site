@@ -5,7 +5,10 @@ import type {
   AccountEntryPack,
   AccountPasses,
 } from "@/features/account/account-passes.server";
-import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
+import type {
+  AccountUnlimitedPass,
+  AccountUnlimitedPasses,
+} from "@/features/account/account-unlimited-passes.server";
 import { AccountUnlimitedPassCard } from "@/features/account/components/account-unlimited-pass";
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import { type Locale, m } from "@/features/i18n";
@@ -21,7 +24,7 @@ import { FocusedGiftPassCard, GiftInvitationResend } from "./account-pass-gift";
 type PassesPanelProps = {
   readonly packs: Promise<AccountPasses>;
   readonly locale: Locale;
-  readonly unlimitedPasses?: readonly AccountUnlimitedPass[];
+  readonly unlimitedPasses?: AccountUnlimitedPasses;
 };
 
 export function AccountPassesPanel({
@@ -71,26 +74,27 @@ function AccountPassesBody({
   const held = loaded === "unavailable" ? [] : loaded.held;
   const boughtForOthers =
     loaded === "unavailable" ? [] : loaded.boughtForOthers;
+  const periods = unlimitedPasses === "unavailable" ? [] : unlimitedPasses;
   if (
     held.length === 0 &&
     boughtForOthers.length === 0 &&
-    unlimitedPasses.length === 0
+    periods.length === 0 &&
+    loaded !== "unavailable" &&
+    unlimitedPasses !== "unavailable"
   ) {
     return (
       <p className="text-sm text-slate-600">
-        {loaded === "unavailable"
-          ? m.accountPassesUnavailable({}, { locale })
-          : m.accountPassesEmpty({}, { locale })}
+        {m.accountPassesEmpty({}, { locale })}
       </p>
     );
   }
 
   const active = held.filter((pack) => pack.status === "active");
   const past = held.filter((pack) => pack.status !== "active");
-  const currentUnlimited = unlimitedPasses.filter(
+  const currentUnlimited = periods.filter(
     (pass) => pass.status === "active" || pass.status === "upcoming"
   );
-  const pastUnlimited = unlimitedPasses.filter(
+  const pastUnlimited = periods.filter(
     (pass) => pass.status === "expired" || pass.status === "ended"
   );
   return (
@@ -117,6 +121,11 @@ function AccountPassesBody({
       {loaded === "unavailable" && (
         <p className="text-sm text-slate-600">
           {m.accountPassesUnavailable({}, { locale })}
+        </p>
+      )}
+      {unlimitedPasses === "unavailable" && (
+        <p className="text-sm text-slate-600">
+          {m.accountUnlimitedPassesUnavailable({}, { locale })}
         </p>
       )}
     </div>
@@ -199,11 +208,13 @@ function BoughtPassGifts({
                   failed: m.entryPackStatusGiftInvitationFailed,
                 }[gift.invitation]({}, { locale })}
               </StatusBadge>
-              <GiftInvitationResend
-                canResend={gift.canResend}
-                locale={locale}
-                orderId={gift.orderId}
-              />
+              {gift.product === "entry-pack" && (
+                <GiftInvitationResend
+                  canResend={gift.canResend}
+                  locale={locale}
+                  orderId={gift.orderId}
+                />
+              )}
             </div>
           </li>
         ))}

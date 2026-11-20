@@ -45,7 +45,12 @@ function MockNextLink({
   ...props
 }: MockNextLinkProps) {
   return (
-    <a href={href} {...props} onClick={onNavigate}>
+    <a
+      data-client-navigation="true"
+      href={href}
+      {...props}
+      onClick={onNavigate}
+    >
       {children}
     </a>
   );
@@ -65,6 +70,7 @@ mock.module(
 );
 
 const { ReservationHistory } = await import("./reservation-history");
+const { AccountUnlimitedPassCard } = await import("./account-unlimited-pass");
 
 const renderHistory = (locale: Locale, history: CustomerReservationHistory) =>
   render(<ReservationHistory history={history} locale={locale} />);
@@ -191,12 +197,36 @@ describe("ReservationHistory", () => {
     expect(
       view.getAllByRole("link", { name: /today’s door code/i })
     ).toHaveLength(1);
-    expect(
-      view
-        .getByRole("link", { name: /today’s door code/i })
-        .getAttribute("href")
-    ).toBe(pass.accessPath);
+    const doorCodeLink = view.getByRole("link", { name: /today’s door code/i });
+    expect(doorCodeLink.getAttribute("href")).toBe(pass.accessPath);
+    expect(doorCodeLink.hasAttribute("data-client-navigation")).toBe(false);
     expect(view.getByText("Starts Dec 10, 2026")).toBeDefined();
+    expect(
+      view.getByText(m.accountReservationsPastTitle({}, { locale: "en-US" }))
+    ).toBeDefined();
+
+    view.rerender(<AccountUnlimitedPassCard locale="en-US" pass={pass} />);
+    const cardDoorCodeLink = view.getByRole("link", {
+      name: /today’s door code/i,
+    });
+    expect(cardDoorCodeLink.getAttribute("href")).toBe(pass.accessPath);
+    expect(cardDoorCodeLink.hasAttribute("data-client-navigation")).toBe(false);
+  });
+
+  test("keeps ordinary history visible when the Unlimited lookup fails", () => {
+    const view = render(
+      <ReservationHistory
+        history={availableHistory}
+        locale="en-US"
+        unlimitedPasses="unavailable"
+      />
+    );
+    expect(
+      view.getByText("Your Unlimited passes are temporarily unavailable.")
+    ).toBeDefined();
+    expect(
+      view.getByText(m.accountReservationsCurrentTitle({}, { locale: "en-US" }))
+    ).toBeDefined();
     expect(
       view.getByText(m.accountReservationsPastTitle({}, { locale: "en-US" }))
     ).toBeDefined();

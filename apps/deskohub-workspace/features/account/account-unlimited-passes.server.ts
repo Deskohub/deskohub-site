@@ -47,6 +47,10 @@ export type AccountUnlimitedPass = {
   | { readonly status: "expired" | "ended" }
 );
 
+export type AccountUnlimitedPasses =
+  | readonly AccountUnlimitedPass[]
+  | "unavailable";
+
 const readHolderPasses = Effect.fn("account.readHolderUnlimitedPasses")(
   function* (accountId: CustomerAccountId) {
     const { db } = yield* WorkspaceDatabase;
@@ -203,7 +207,7 @@ export const loadCustomerAccountUnlimitedPasses = cache((locale: Locale) =>
     runWorkspaceEffectOrElse("account.unlimited-passes", {
       boundary: "page",
       failureCode: "account.unlimited-passes.unavailable",
-      orElse: (): readonly AccountUnlimitedPass[] => [],
+      orElse: (): AccountUnlimitedPasses => "unavailable",
     })
   )
 );
