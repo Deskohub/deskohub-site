@@ -23,6 +23,8 @@ type CheckoutFlowLayoutProps = {
 
 type CheckoutStepsProps = {
   readonly activeStepKey: CheckoutFlowStage;
+  readonly label?: string;
+  readonly labels?: Partial<Record<CheckoutStepKey, string>>;
   readonly locale: Locale;
   readonly stepLinks?: Partial<Record<CheckoutStepKey, CheckoutStepLink>>;
 };
@@ -54,6 +56,8 @@ type CheckoutFlowStage = CheckoutStepKey | "complete";
 
 export function CheckoutSteps({
   activeStepKey,
+  label,
+  labels,
   locale,
   stepLinks,
 }: CheckoutStepsProps) {
@@ -65,7 +69,7 @@ export function CheckoutSteps({
   return (
     <ol
       className="grid gap-2 sm:grid-cols-3"
-      aria-label={m.checkoutOrderStepsLabel({}, { locale })}
+      aria-label={label ?? m.checkoutOrderStepsLabel({}, { locale })}
     >
       {checkoutFlowSteps.map((step, index) => {
         const isCurrentStep = step.key === activeStepKey;
@@ -82,7 +86,7 @@ export function CheckoutSteps({
               <CheckoutStepContent
                 isCompleted={index < activeStepIndex}
                 isCurrentStep={isCurrentStep}
-                label={step.getLabel({}, { locale })}
+                label={labels?.[step.key] ?? step.getLabel({}, { locale })}
                 locale={locale}
                 number={index + 1}
               />

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Effect } from "effect";
 import { sealSyntheticCoworkPayState } from "@/features/checkout/backend/checkout/pay-state.test-utils";
+import type { OrderId } from "@/features/order";
 import { createReservationAccessToken } from "@/features/reservation/backend/reservation-access-token";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 
@@ -30,6 +31,16 @@ const { makeFakeSavedLocalePreference, syntheticSessionCookie } = await import(
 const reader = makeFakeSavedLocalePreference();
 mock.module("@/features/account/server/saved-locale-preference.server", () => ({
   savedLocalePreference: reader.savedLocalePreference,
+}));
+
+const ownedPackOrder = "5413f44e-80ef-430e-9663-ddd7242a2ed0";
+const entryPackOrders = await import(
+  "@/features/passes/backend/entry-pack-order"
+);
+mock.module("@/features/passes/backend/entry-pack-order", () => ({
+  ...entryPackOrders,
+  readOwnedEntryPackOrderLocale: (orderId: OrderId) =>
+    Effect.succeed(orderId === ownedPackOrder ? "en-US" : undefined),
 }));
 
 beforeEach(() => {
@@ -167,6 +178,27 @@ describe("action locale middleware", () => {
       contextLocale: "en-US",
       messageLocale: "en-US",
     });
+  });
+
+  test("an action from an owned Entry pack checkout keeps its issued locale", async () => {
+    reader.fake.savedPreference = "cs-CZ";
+    const readLocale = await createLocaleReader();
+
+    for (const [order, expectedLocale] of [
+      [ownedPackOrder, "en-US"],
+      ["ec53ffbb-eae2-477c-b9ae-7b29e4525b25", "cs-CZ"],
+      ["malformed", "cs-CZ"],
+    ]) {
+      const result = await request("cs-CZ", () => readLocale(), {
+        referer: `https://deskohub.test/en-US/passes/entry-pack?order=${order}&step=pay`,
+        signedIn: true,
+      });
+
+      expect(result.data).toEqual({
+        contextLocale: expectedLocale,
+        messageLocale: expectedLocale,
+      });
+    }
   });
 
   test("an action from a page with a continuation parameter it does not support follows the preference", async () => {

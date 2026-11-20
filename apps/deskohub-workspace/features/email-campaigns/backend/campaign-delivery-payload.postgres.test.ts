@@ -44,13 +44,13 @@ import {
  */
 const pinnedPayloadHashes = {
   "one-off marketing":
-    "a3bc988a1a2f8295b9d7239e451c4f4a99d4f89d0a89e7d465c44e47cf9b925c",
+    "2a9e14b8743f61f215a7987722fc0877c2ce683e94b86a60e9118c1ae8ee9286",
   "one-off operational":
-    "ded2997f180873775501be4e23ee2acf5ab15747f161bc57a8dadf4e44e1ccd7",
+    "64ec4baec4b96a91b7bdadaf20b21f30c3247312fdae0d0d14a5898c87c14cc4",
   "automated marketing":
-    "79011e454d025ed0544d576f9b3145417826a4f2ec0cc9403fe4c764fc47bc57",
+    "5a60902cd571cc7eb35a8bbc1c47fdaa6e0c8e785ef0510ff5f02db011902aad",
   "automated operational":
-    "deb8754e7610a71a6496fac049b42aa8ecd2f4657c57dd7c6f7f243268591445",
+    "4c31471b5187917dd8818116d25348c71e2bb884feacf5359fe1cc46d83f156e",
 } as const;
 
 const sendIds = {

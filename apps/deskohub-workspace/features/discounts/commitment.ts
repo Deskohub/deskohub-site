@@ -3,7 +3,7 @@ import {
   type WorkspaceProductIdentity,
 } from "@/features/checkout/product-identity";
 import type { CalculatedDiscountApplication } from "./calculator";
-import type { AppliedDiscount } from "./contracts";
+import type { AppliedDiscount, DiscountQuote } from "./contracts";
 import type { DiscountClaimInstruction, DiscountProvenance } from "./provider";
 
 interface DiscountCommitmentApplication {
@@ -11,6 +11,21 @@ interface DiscountCommitmentApplication {
   readonly provenance: DiscountProvenance;
   readonly claim?: DiscountClaimInstruction;
 }
+
+export const getAppliedPromotionDiscountId = (
+  quote: DiscountQuote,
+  applications: readonly Pick<
+    DiscountCommitmentApplication,
+    "application" | "claim"
+  >[]
+) =>
+  applications.find(
+    ({ application, claim }) =>
+      (claim?.kind === "discount_code" || claim?.kind === "voucher") &&
+      quote.discounts.some(
+        ({ discount }) => discount.id === application.discount.id
+      )
+  )?.application.discount.id;
 
 export interface DiscountCommitmentPayload {
   readonly product: WorkspaceProductIdentity;

@@ -1,5 +1,6 @@
 "use client";
 
+import { NodeSelection } from "@tiptap/pm/state";
 import { type Editor, useEditorState } from "@tiptap/react";
 import { Effect, Option, Result } from "effect";
 import {
@@ -35,6 +36,7 @@ import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { runWorkspaceBrowserEffectUntilAbort } from "@/shared/browser/workspace-browser-effect";
 import { Button } from "@/shared/components/ui/button";
+import { Checkbox } from "@/shared/components/ui/checkbox";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
 import {
@@ -67,8 +69,18 @@ type BlockType = "paragraph" | "h1" | "h2" | "h3";
 
 const headingLevels = { h1: 1, h2: 2, h3: 3 } as const;
 
-const selectToolbarState = ({ editor }: { editor: Editor | null }) =>
-  editor && {
+const selectedImage = (editor: Editor) => {
+  const { selection } = editor.state;
+  return selection instanceof NodeSelection &&
+    selection.node.type.name === "image"
+    ? selection.node
+    : undefined;
+};
+
+const selectToolbarState = ({ editor }: { editor: Editor | null }) => {
+  if (!editor) return null;
+  const image = selectedImage(editor);
+  return {
     blockType: (["h1", "h2", "h3"] as const).find((block) =>
       editor.isActive("heading", { level: headingLevels[block] })
     ) satisfies BlockType | undefined,
@@ -84,10 +96,12 @@ const selectToolbarState = ({ editor }: { editor: Editor | null }) =>
     image: editor.isActive("image"),
     imageAlign: selectedImageAlignment(editor),
     imageWidth: editor.getAttributes("image").width,
+    imageRoundedCorners: image && image.attrs.roundedCorners !== false,
     imagePosition: editor.state.selection.from,
     canUndo: editor.can().undo(),
     canRedo: editor.can().redo(),
   };
+};
 
 type ToolbarState = NonNullable<ReturnType<typeof selectToolbarState>>;
 
@@ -106,6 +120,7 @@ const idleToolbarState: ToolbarState = {
   image: false,
   imageAlign: defaultCampaignImageAlignment,
   imageWidth: undefined,
+  imageRoundedCorners: undefined,
   imagePosition: 0,
   canUndo: false,
   canRedo: false,
@@ -127,6 +142,7 @@ export function CampaignBodyToolbar({
     useEditorState({ editor, selector: selectToolbarState }) ??
     selectToolbarState({ editor });
   const [ctaDialogOpen, setCtaDialogOpen] = useState(false);
+  const imageRoundedCornersId = useId();
   const disabled = !editor || !state;
   const toolbar = state ?? idleToolbarState;
 
@@ -210,6 +226,26 @@ export function CampaignBodyToolbar({
                 width={toolbar.imageWidth}
               />
             </>
+          )}
+          {toolbar.imageRoundedCorners !== undefined && (
+            <div className="flex items-center gap-1.5 px-1">
+              <Checkbox
+                checked={toolbar.imageRoundedCorners}
+                className="size-5"
+                disabled={disabled}
+                id={imageRoundedCornersId}
+                onCheckedChange={(checked) => {
+                  if (editor && selectedImage(editor)) {
+                    editor.commands.updateAttributes("image", {
+                      roundedCorners: checked === true ? null : false,
+                    });
+                  }
+                }}
+              />
+              <Label className="text-xs" htmlFor={imageRoundedCornersId}>
+                {m.emailCampaignsImageRoundCorners({}, { locale })}
+              </Label>
+            </div>
           )}
           <ToolbarButton
             disabled={disabled}

@@ -62,6 +62,7 @@ export type CampaignEmailOccasion = Data.TaggedEnum<{
       readonly dotyposCustomerId: DotyposCustomerId;
     };
     readonly audience: CampaignDeliveryAudience;
+    readonly showHeaderArtwork?: boolean | undefined;
   };
 }>;
 
@@ -110,6 +111,7 @@ const renderCampaign = (
   input: CampaignEmailContent & {
     readonly footer: WorkspaceCampaignFooter;
     readonly confirmationCode?: CampaignConfirmationCode;
+    readonly showHeaderArtwork?: boolean | undefined;
   }
 ) => {
   const { Email } = campaignTemplates[input.templateKey];
@@ -131,6 +133,7 @@ const renderCampaign = (
       footer={input.footer}
       locale={input.locale}
       preview={input.content.preheader}
+      showHeaderArtwork={input.showHeaderArtwork}
     />
   ).pipe(
     Effect.map(
@@ -201,9 +204,10 @@ export const campaignEmailMessage = Effect.fn("campaignEmailMessage")(
             })
           )
         ),
-      Delivery: ({ to, recipient, audience }) =>
+      Delivery: ({ to, recipient, audience, showHeaderArtwork }) =>
         renderCampaign({
           ...input,
+          showHeaderArtwork,
           footer: Match.valueTags(audience, {
             Marketing: ({ unsubscribeUrl }) =>
               WorkspaceCampaignFooter.Marketing({

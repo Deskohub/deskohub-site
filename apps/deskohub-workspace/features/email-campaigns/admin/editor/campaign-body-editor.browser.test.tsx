@@ -65,6 +65,9 @@ const dimensions = (image: Locator) =>
     return { width, height };
   });
 
+const cornerRadius = (image: Locator) =>
+  image.evaluate((element) => getComputedStyle(element).borderTopLeftRadius);
+
 for (const { locale, initialWidth } of [
   { locale: "en-US", initialWidth: 1068 },
   { locale: "cs-CZ", initialWidth: 1068 },
@@ -125,7 +128,19 @@ for (const { locale, initialWidth } of [
           width: 534,
           height: 267,
         });
+        expect(await cornerRadius(editorImage)).not.toBe("0px");
         await editorImage.click();
+        const cornersLabel = m.emailCampaignsImageRoundCorners({}, { locale });
+        const corners = page.getByRole("checkbox", { name: cornersLabel });
+        await corners.waitFor();
+        expect(await corners.getAttribute("aria-checked")).toBe("true");
+        await page.getByText(cornersLabel, { exact: true }).click();
+        expect(await corners.getAttribute("aria-checked")).toBe("false");
+        expect(await cornerRadius(editorImage)).toBe("0px");
+        await corners.press("Space");
+        expect(await corners.getAttribute("aria-checked")).toBe("true");
+        expect(await cornerRadius(editorImage)).not.toBe("0px");
+        await corners.press("Space");
         const input = page.getByRole("spinbutton", {
           name: m.emailCampaignsImageWidth({}, { locale }),
         });
@@ -154,12 +169,15 @@ for (const { locale, initialWidth } of [
           .click();
         await editorImage.click();
         expect(await input.inputValue()).toBe("180");
+        expect(await corners.getAttribute("aria-checked")).toBe("false");
+        expect(await cornerRadius(editorImage)).toBe("0px");
         const saved: CampaignBodyNode = JSON.parse(
           (await page.getByTestId("document").textContent()) ?? "null"
         );
         expect(saved.content?.[0]?.attrs).toMatchObject({
           width: 180,
           height: null,
+          roundedCorners: false,
         });
         const render = (body: CampaignBodyNode) =>
           Effect.runPromise(
@@ -181,6 +199,7 @@ for (const { locale, initialWidth } of [
         expect(htmlImage).toContain('width="180"');
         expect(htmlImage).toContain("height:auto");
         expect(htmlImage).toContain("max-width:100%");
+        expect(htmlImage).toMatch(/border-radius:0(?:px)?[;"]/);
         await page
           .getByTitle("Email preview", { exact: true })
           .evaluate((element, html) => {
@@ -194,6 +213,7 @@ for (const { locale, initialWidth } of [
           width: 180,
           height: 90,
         });
+        expect(await cornerRadius(previewImage)).toBe("0px");
         // Maximum size must still fit the editor and rendered email on mobile.
         await input.fill(String(campaignBodyColumnWidth));
         const wide: CampaignBodyNode = JSON.parse(

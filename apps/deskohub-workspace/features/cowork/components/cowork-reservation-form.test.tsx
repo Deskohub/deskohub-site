@@ -455,6 +455,54 @@ describe("CoworkReservationForm advertised pricing", () => {
     await unregisterWorkspaceComponentTestEnv();
   });
 
+  describe("Entry pack discovery", () => {
+    test("omits the purchase link while the release is off", () => {
+      const view = renderForm();
+      expect(
+        view.queryByRole("link", { name: /entry packs from/i })
+      ).toBeNull();
+    });
+
+    test("links to the selected cowork tier and advertises the catalog minimum", () => {
+      const view = renderForm({ entryPackOffered: true });
+      const link = view.getByRole("link", {
+        name: /^Entry packs from CZK\s219 a day$/,
+      });
+      expect(link.getAttribute("href")).toBe(
+        "/en-US/passes/entry-pack?tier=open-space"
+      );
+
+      fireEvent.click(view.getByRole("radio", { name: /Reserved Desk/i }));
+
+      expect(link.getAttribute("href")).toBe(
+        "/en-US/passes/entry-pack?tier=reserved-desk"
+      );
+    });
+
+    test("preselects the workstation pack when a monitor setup is selected", () => {
+      const view = renderForm({
+        entryPackOffered: true,
+        initialValues: reservedDeskFormValues("2099-07-30", "2x27-qhd"),
+      });
+      expect(
+        view
+          .getByRole("link", { name: /entry packs from/i })
+          .getAttribute("href")
+      ).toBe("/en-US/passes/entry-pack?tier=reserved-desk-workstation");
+    });
+
+    test("omits the single-day link for an overnight stay", () => {
+      const view = renderForm({
+        entryPackOffered: true,
+        overnightStayOffered: true,
+        initialValues: { ...reservedDeskFormValues(), stay: "overnight" },
+      });
+      expect(
+        view.queryByRole("link", { name: /entry packs from/i })
+      ).toBeNull();
+    });
+  });
+
   test("offers the tier prices the form first shows in the page's structured data", async () => {
     workspaceUseSearchParams.mockReturnValue(new URLSearchParams());
     globalThis.fetch = mock((request: RequestInfo | URL) =>
@@ -2803,7 +2851,7 @@ describe("CoworkReservationFormFallback", () => {
       <CoworkReservationFormFallback locale="cs-CZ" />
     );
     // The shell HTML escapes text the way React writes it.
-    const shellText = (text: string) => renderToStaticMarkup(<>{text}</>);
+    const shellText = (text: string) => renderToStaticMarkup(text);
 
     for (const tier of workspaceCoworkCurrentTiers) {
       expect(html).toContain(

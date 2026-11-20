@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import { getAccountSignInPath } from "@/features/account/routes";
 import { continueReservationPayment } from "@/features/checkout/actions/continue-reservation-payment";
 import {
   CheckoutStatusService,
@@ -28,6 +29,10 @@ import { CheckoutStatusReferralCodeSettlement } from "@/features/checkout/compon
 import type { Locale } from "@/features/i18n";
 import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { loadOrderKind } from "@/features/order/backend/order-kind";
+import { orderIdSchema } from "@/features/order/order";
+import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import { loadEntryPackStatusPage } from "@/features/passes/backend/entry-pack-status";
+import { EntryPackStatusPage } from "@/features/passes/components/entry-pack-status-page";
 import { resendReservationInvitation } from "@/features/reservation/actions/resend-reservation-invitation";
 import { readReservationAccessCookie } from "@/features/reservation/backend/reservation-access-cookie";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
@@ -35,6 +40,7 @@ import {
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
+import { reservationStatusPath } from "@/features/reservation/routes";
 import { readReservationWithdrawalEntry } from "@/features/withdrawal/backend/withdrawal-entry.server";
 import {
   runWorkspaceEffect,
@@ -57,6 +63,7 @@ type CheckoutStatusRouteProps = {
 const decodeCheckoutStatusParams = Schema.decodeUnknownOption(
   Schema.Struct({ orderId: workspaceReservationIdSchema })
 );
+const decodePassOrderId = Schema.decodeUnknownOption(orderIdSchema);
 
 const decodeCheckoutStatusSearchParams = getSearchParamsDecoder(
   Schema.Struct({
@@ -103,8 +110,12 @@ async function CheckoutStatusContent({
     await connection();
     switch (await loadOrderKind(orderId)) {
       case "pass-purchase":
-        // Pass purchase orders have no status page yet.
-        return notFound();
+        return renderEntryPackStatus({
+          locale,
+          orderId,
+          presentation,
+          searchParams,
+        });
       case "reservation":
       case undefined:
         // Without an order row the reservation page still answers: it owns
@@ -118,6 +129,47 @@ async function CheckoutStatusContent({
         });
     }
   });
+}
+
+async function renderEntryPackStatus({
+  locale,
+  orderId,
+  presentation,
+  searchParams,
+}: {
+  readonly locale: Locale;
+  readonly orderId: string;
+  readonly presentation: CheckoutStatusPresentation;
+  readonly searchParams: Promise<SearchParamsRecord>;
+}) {
+  const id = Option.getOrElse(decodePassOrderId(orderId), () => notFound());
+  const status = await loadEntryPackStatusPage(id, await headers());
+  if (status.status === "not_found") notFound();
+  if (status.status === "sign_in") {
+    const outcome = Option.getOrUndefined(
+      decodeCheckoutStatusSearchParams(await searchParams)
+    )?.outcome;
+    const path = `/${locale}${reservationStatusPath}/${id}`;
+    redirect(
+      getAccountSignInPath(
+        locale,
+        outcome ? `${path}?${new URLSearchParams({ outcome })}` : path
+      )
+    );
+  }
+
+  return (
+    <EntryPackStatusPage
+      allowPurchaseContinuation={
+        (status.status === "not_started" ||
+          ("retryPath" in status && status.retryPath !== undefined)) &&
+        (await isCoworkPassesPageOpenAfterConnection())
+      }
+      locale={locale}
+      presentation={presentation}
+      status={status}
+    />
+  );
 }
 
 async function renderReservationStatus({

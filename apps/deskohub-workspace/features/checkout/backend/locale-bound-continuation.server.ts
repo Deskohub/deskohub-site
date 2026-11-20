@@ -1,6 +1,8 @@
 import "server-only";
 
-import { Effect, Option, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
+import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { PayState } from "@/features/checkout/backend/checkout/pay-state";
 import type { LocaleBoundContinuation } from "@/features/checkout/locale-bound-continuation";
 import { openReservationAccessToken } from "@/features/reservation/backend/reservation-access-token";
@@ -11,10 +13,9 @@ import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 /**
  * Whether a candidate continuation validates for its page and URL locale with
  * the page's own checks: an authentic, unexpired Pay state for that locale and
- * restoration kind, or an invoice access token with a valid signature for
- * that order and locale (these tokens carry no expiry). Anything else,
- * including a missing secret, is not a continuation, so the saved preference
- * applies. The value is verified exactly as the page reads it.
+ * restoration kind, an invoice access token with a valid signature for
+ * that order and locale, or an Entry pack order owned by the active buyer
+ * and issued in the URL locale.
  */
 export const continuesInIssuedLocale = Effect.fn(
   "LocaleBoundContinuation.verify"
@@ -25,6 +26,20 @@ export const continuesInIssuedLocale = Effect.fn(
       reservationKind: continuation.reservationKind,
     }).pipe(Effect.provide(SealedStateKeys.Default), Effect.option);
     return Option.isSome(state);
+  }
+
+  if (continuation.kind === "entry-pack-order") {
+    const { readOwnedEntryPackOrderLocale } = yield* Effect.tryPromise(
+      () => import("@/features/passes/backend/entry-pack-order")
+    );
+    const issuedLocale = yield* readOwnedEntryPackOrderLocale(
+      continuation.orderId
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(WorkspaceDatabase.Default, CurrentCustomerAccount.Live)
+      )
+    );
+    return issuedLocale === continuation.locale;
   }
 
   const token = Option.getOrUndefined(

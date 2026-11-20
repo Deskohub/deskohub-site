@@ -12,6 +12,7 @@ import {
   m,
 } from "@/features/i18n";
 import { requestLocaleScope } from "@/features/i18n/server/request-locale-scope";
+import type { ResolveIssuedActionLocale } from "@/shared/utils/action-middleware/locale";
 import {
   createWorkspaceActionClient,
   PublicSafeActionError,
@@ -97,6 +98,8 @@ export interface WorkspaceActionOptions<S extends StandardSchemaV1> {
   readonly logInput?: boolean;
   /** Stable, low-cardinality name without IDs or payload data. */
   readonly operation: string;
+  /** Resolves an authorized continuation's locale before validation. */
+  readonly resolveIssuedLocale?: ResolveIssuedActionLocale;
   /**
    * The input schema, or the schema for the action's locale when what the
    * input accepts depends on it, such as a phone number read in the locale's
@@ -138,6 +141,9 @@ const createActionClient = <S extends StandardSchemaV1>(
   options: WorkspaceActionOptions<S>
 ) =>
   createWorkspaceActionClient({
+    ...(options.resolveIssuedLocale && {
+      resolveIssuedLocale: options.resolveIssuedLocale,
+    }),
     // The shared runtime may be what failed, so this log goes through the
     // standalone one.
     logUnexpectedFailure: (error) =>

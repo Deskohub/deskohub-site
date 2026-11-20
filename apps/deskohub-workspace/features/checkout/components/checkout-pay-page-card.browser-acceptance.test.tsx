@@ -9,6 +9,7 @@ import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser
 import { compileWorkspaceAppStyles } from "@/shared/testing/workspace-app-styles.test-utils";
 import {
   CheckoutPayCard,
+  CheckoutPayMethodButtons,
   CheckoutPaySubmitButton,
 } from "./checkout-pay-page-card";
 
@@ -21,12 +22,17 @@ const viewportWidths = [320, 369, 370, 390, 1280] as const;
 const chromiumAvailable = await playwrightChromiumAvailable();
 let browser: Browser | undefined;
 let appStyles = "";
+let wordmarkDataUrl = "";
 
 beforeAll(async () => {
   if (!chromiumAvailable) return;
   const brandFont = await readFile(
     join(appDirectory, "assets/fonts/Sculpin/regular.woff2")
   );
+  const wordmark = await readFile(
+    join(appDirectory, "public/payment/nexi-wordmark-white.png")
+  );
+  wordmarkDataUrl = `data:image/png;base64,${wordmark.toString("base64")}`;
   // Production text widths come from the brand font that next/font injects.
   appStyles = `@font-face { font-family: "Sculpin"; font-weight: 400; src: url(data:font/woff2;base64,${brandFont.toString("base64")}) format("woff2"); }
 :root { --font-sculpin: "Sculpin"; }
@@ -68,6 +74,7 @@ const payCardMarkup = (locale: Locale) =>
           total={largeTotal}
           variant="pay"
         />
+        <CheckoutPayMethodButtons locale={locale} total={largeTotal} />
       </CheckoutPayCard>
     </main>
   );
@@ -80,11 +87,22 @@ test.skipIf(!chromiumAvailable)(
     for (const locale of locales) {
       const page = await browser.newPage();
       try {
-        await page.setContent(
-          `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${payCardMarkup(locale)}</body></html>`
+        const markup = payCardMarkup(locale).replaceAll(
+          "/payment/nexi-wordmark-white.png",
+          wordmarkDataUrl
         );
-        await page.addStyleTag({ content: appStyles });
+        await page.setContent(
+          `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${markup}</body></html>`
+        );
+        await page.addStyleTag({
+          content: `${appStyles}\n* { transition: none !important; }`,
+        });
         await page.evaluate(() => document.fonts.ready);
+        await page.locator("button img").evaluateAll(async (images) => {
+          await Promise.all(
+            images.map((image) => (image as HTMLImageElement).decode())
+          );
+        });
         for (const width of viewportWidths) {
           await page.setViewportSize({ height: 900, width });
 
@@ -103,9 +121,45 @@ test.skipIf(!chromiumAvailable)(
               if (!labelElement) throw new Error("Missing pay button label");
               label.selectNodeContents(labelElement);
               const labelBox = labelElement.getBoundingClientRect();
-              const icon = button.querySelector("svg")?.getBoundingClientRect();
+              const iconElement = button.querySelector("svg, img");
+              const icon = iconElement?.getBoundingClientRect();
+              let iconCenterFraction = 0.5;
+              let iconLeftFraction = 0;
+              // Align the visible wordmark, including any transparent margins.
+              if (iconElement instanceof HTMLImageElement) {
+                const canvas = document.createElement("canvas");
+                canvas.width = iconElement.naturalWidth;
+                canvas.height = iconElement.naturalHeight;
+                const context = canvas.getContext("2d");
+                if (!context) throw new Error("Missing wordmark canvas");
+                context.drawImage(iconElement, 0, 0);
+                const { data } = context.getImageData(
+                  0,
+                  0,
+                  canvas.width,
+                  canvas.height
+                );
+                let left = canvas.width;
+                let right = 0;
+                for (let i = 3; i < data.length; i += 4) {
+                  if (data[i] === 0) continue;
+                  const x = ((i - 3) / 4) % canvas.width;
+                  left = Math.min(left, x);
+                  right = Math.max(right, x + 1);
+                }
+                iconCenterFraction = (left + right) / (2 * canvas.width);
+                iconLeftFraction = left / canvas.width;
+              }
               return {
+                background: style.backgroundColor,
+                height: box.height,
+                top: box.top,
+                buttonCenterX: (box.left + box.right) / 2,
+                payment: button.getAttribute("value"),
                 iconWidth: icon?.width,
+                iconCenterX:
+                  icon && icon.left + icon.width * iconCenterFraction,
+                iconLeftX: icon && icon.left + icon.width * iconLeftFraction,
                 iconCentered:
                   !!icon &&
                   Math.abs(
@@ -119,26 +173,48 @@ test.skipIf(!chromiumAvailable)(
             })
           );
 
-          expect(buttons).toHaveLength(4);
+          expect(buttons).toHaveLength(6);
           // The pending button shows no icon.
-          const [pay, retry, , largePay] = buttons;
-          for (const { iconCentered, iconWidth, wrapped } of [
-            pay,
-            retry,
-            largePay,
-          ]) {
+          const [pay, retry, , largePay, qr, card] = buttons;
+          expect(qr.payment).toBe("qr");
+          expect(card.payment).toBe("card");
+          for (const [button, imageWidth] of [
+            [pay, 48],
+            [retry, 16],
+            [largePay, 48],
+            [card, 48],
+            [qr, 16],
+          ] as const) {
+            const { iconCentered, iconWidth, wrapped } = button;
             sawWrappedLabel ||= wrapped;
             expect({ locale, width, iconCentered, iconWidth }).toEqual({
               locale,
               width,
               iconCentered: true,
-              iconWidth: 16,
+              iconWidth: imageWidth,
             });
           }
-          for (const { content, label } of buttons) {
-            expect({ locale, width, overflow: false }).toEqual({
+          expect(card.background).toBe("rgb(45, 50, 170)");
+          expect(qr.background).toBe(retry.background);
+          expect(card.top).toBeGreaterThanOrEqual(qr.top + qr.height);
+          expect(
+            Math.abs((card.iconCenterX ?? -1) - (qr.iconCenterX ?? -1))
+          ).toBeLessThanOrEqual(0.5);
+          expect(card.label.left).toBeCloseTo(qr.label.left);
+          if (!qr.wrapped && !card.wrapped) {
+            const blockLeft = Math.min(card.iconLeftX ?? 0, qr.iconLeftX ?? 0);
+            const blockRight = Math.max(card.label.right, qr.label.right);
+            const blockCenter = (blockLeft + blockRight) / 2;
+            expect(
+              Math.abs(blockCenter - card.buttonCenterX)
+            ).toBeLessThanOrEqual(6);
+          }
+          for (const { content, height, label, payment } of buttons) {
+            expect(height).toBeGreaterThanOrEqual(48);
+            expect({ locale, width, payment, overflow: false }).toEqual({
               locale,
               width,
+              payment,
               overflow:
                 label.left < content.left - 0.5 ||
                 label.right > content.right + 0.5,

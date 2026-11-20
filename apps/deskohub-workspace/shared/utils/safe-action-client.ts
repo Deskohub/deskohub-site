@@ -1,7 +1,10 @@
 import { Data } from "effect";
 import { createSafeActionClient } from "next-safe-action";
 import { baseLocale, isLocale, type LocalizedCopy } from "@/features/i18n";
-import { localeMiddleware } from "./action-middleware/locale";
+import {
+  makeLocaleMiddleware,
+  type ResolveIssuedActionLocale,
+} from "./action-middleware/locale";
 
 export type SafeActionFailure =
   | Error
@@ -23,6 +26,7 @@ export interface WorkspaceActionClientOptions {
    * failure it logs into a `PublicSafeActionError`.
    */
   readonly logUnexpectedFailure: (error: Error) => Promise<void>;
+  readonly resolveIssuedLocale?: ResolveIssuedActionLocale;
   /** Reported for every failure that isn't a `PublicSafeActionError`. */
   readonly unexpectedFailure: LocalizedCopy;
 }
@@ -34,6 +38,7 @@ export interface WorkspaceActionClientOptions {
  */
 export const createWorkspaceActionClient = ({
   logUnexpectedFailure,
+  resolveIssuedLocale,
   unexpectedFailure,
 }: WorkspaceActionClientOptions) =>
   createSafeActionClient({
@@ -49,4 +54,4 @@ export const createWorkspaceActionClient = ({
       return unexpectedFailure({}, { locale });
     },
     defaultValidationErrorsShape: "flattened",
-  }).use(localeMiddleware);
+  }).use(makeLocaleMiddleware(resolveIssuedLocale));
