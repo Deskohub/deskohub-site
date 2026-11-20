@@ -136,6 +136,26 @@ const expectGuidanceWithoutAddress = (
 };
 
 describe("CheckoutStatusPage", () => {
+  test("hides payment switching after a reservation is paid or expires", () => {
+    const expiredStatus = {
+      ...baseStatus,
+      status: "expired",
+      paymentStatus: "expired",
+      fulfillmentStatus: "not_started",
+    } as const;
+    for (const status of [baseStatus, expiredStatus]) {
+      const html = renderToStaticMarkup(
+        <CheckoutStatusPage
+          locale="en-US"
+          paymentMethods={{ continuePaymentAction: mock(async () => ({})) }}
+          status={status}
+        />
+      );
+      expect(html).not.toContain("Show QR payment");
+      expect(html).not.toContain("Continue to card payment");
+    }
+  });
+
   beforeAll(() => {
     registerWorkspaceComponentTestEnv();
   });
