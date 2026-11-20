@@ -9,7 +9,7 @@ import type { PostHogPersonsRequest } from "./errors";
  * nothing was applied (a 429, or deletion errors naming a step before the
  * person was deleted), with a jittered exponential backoff from 1 second.
  */
-export const postHogPersonsRequestCeilings = {
+const postHogPersonsRequestCeilings = {
   "persons.bulkDelete": { baseDelay: "1 second", maxRetries: 2 },
 } as const satisfies Record<
   PostHogPersonsRequest,

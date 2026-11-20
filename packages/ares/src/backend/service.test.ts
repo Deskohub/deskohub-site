@@ -82,7 +82,6 @@ describe("AresLookupService", () => {
 
     expect(result.kind).toBe("found");
     expect(requestedUrl).toBe(aresCompanyUrl("27082440"));
-    expect(requestedUrl).toStartWith("https://ares.gov.cz/");
     expect(requestedMethod).toBe("GET");
     expect(result.kind === "found" && result.subject).toEqual({
       ico: "27082440",

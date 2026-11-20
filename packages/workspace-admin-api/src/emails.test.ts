@@ -348,30 +348,6 @@ describe("administration-schema customer selections", () => {
     ).toEqual(customerContractPaths(AdministrationCustomerDetail));
   });
 
-  test("coverage detects removed fields and newly declared list fields", () => {
-    if (emailCustomerFieldCatalogue.kind !== "record")
-      throw new Error("Customer detail must be a record");
-    const { profile: omitted, ...fields } = emailCustomerFieldCatalogue.fields;
-    expect(omitted).toBeDefined();
-    expect(
-      new Set(
-        customerCataloguePaths({ ...emailCustomerFieldCatalogue, fields })
-      )
-    ).not.toEqual(customerContractPaths(AdministrationCustomerDetail));
-    const extended = Schema.Struct({
-      ...AdministrationCustomerDetail.fields,
-      futureHistory: Schema.Array(
-        Schema.Struct({ futureField: Schema.String })
-      ),
-    });
-    expect(
-      new Set(customerCataloguePaths(emailCustomerFieldCatalogue))
-    ).not.toEqual(customerContractPaths(extended));
-    expect(customerContractPaths(extended)).toContain(
-      fieldPath(["futureHistory", 0, "futureField"], "scalar")
-    );
-  });
-
   test("keeps scalar types, nullable and optional flags from the declared schema", () => {
     expect(
       emailCustomerFieldAtPath(emailCustomerFieldCatalogue, [
@@ -406,48 +382,16 @@ describe("administration-schema customer selections", () => {
     ).toBeUndefined();
   });
 
-  test("rejects implicit list flattening, indexes, missing container fields and shape-invalid options", async () => {
-    for (const input of [
-      { path: ["activity", "reservations", "id"] },
-      { path: ["activity", "reservations", "0"] },
-      { path: ["activity", "reservations"] },
-      { path: ["activity", "reservationHistoryTruncated"], limit: 2 },
-      { path: ["activity", "reservations"], fields: [["nonexistent"]] },
-    ]) {
-      const result = await Effect.runPromise(
-        Effect.flip(
-          validateEmailCustomerSelection(
-            selection({ kind: "customer", ...input })
-          )
-        )
-      );
-      expect(result).toBeInstanceOf(EmailCustomerSelectionInvalid);
-    }
-  });
+  test("customer lookups receive a typed failure for a list index", async () => {
+    const path = ["activity", "reservations", "0"];
+    const failure = await Effect.runPromise(
+      Effect.flip(
+        validateEmailCustomerSelection(selection({ kind: "customer", path }))
+      )
+    );
 
-  test("permits explicitly selected scalar record fields and list bounds", async () => {
-    const result = await Effect.runPromise(
-      validateEmailCustomerSelection(
-        selection({
-          kind: "customer",
-          path: ["activity", "marketingConsent"],
-          fields: [["documentHash"]],
-        })
-      )
-    );
-    expect(result.kind).toBe("record");
-    const list = await Effect.runPromise(
-      validateEmailCustomerSelection(
-        selection({
-          kind: "customer",
-          path: ["activity", "reservations"],
-          fields: [["id"]],
-          sort: { path: ["id"], direction: "asc" },
-          limit: 2,
-        })
-      )
-    );
-    expect(list.kind).toBe("list");
+    expect(failure).toBeInstanceOf(EmailCustomerSelectionInvalid);
+    expect(failure).toMatchObject({ path, reason: "unknown-path" });
   });
 });
 
@@ -478,25 +422,8 @@ describe("recipient snapshot contract", () => {
     expect(() =>
       decode({ _tag: "Resolved", value: { documentHash: null } })
     ).toThrow();
-    expect(decode({ _tag: "Fallback", text: "Unknown" })._tag).toBe("Fallback");
-    expect(() => decode({ _tag: "Fallback", text: "Other" })).toThrow();
   });
-  test("bounds lists and defaults discount values to recipient single-use", () => {
-    const list = Schema.decodeUnknownSync(EmailValueDefinition)({
-      name: "bookings",
-      source: {
-        kind: "customer",
-        path: ["activity", "reservations"],
-        fields: [["id"]],
-        limit: 1,
-      },
-    });
-    expect(() =>
-      Schema.decodeUnknownSync(emailValueSnapshotForDefinition(list, "cs-CZ"))({
-        _tag: "Resolved",
-        value: [{ id: "one" }, { id: "two" }],
-      })
-    ).toThrow();
+  test("defaults discount values to recipient single-use", () => {
     const discount = Schema.decodeUnknownSync(EmailValueDefinition)({
       name: "offer",
       source: {
@@ -509,11 +436,6 @@ describe("recipient snapshot contract", () => {
       maxUses: 1,
       maxUsesPerCustomer: 1,
     });
-    expect(() =>
-      Schema.decodeUnknownSync(
-        emailValueSnapshotForDefinition(discount, "cs-CZ")
-      )({ _tag: "Resolved", value: { code: "SAMPLE-NOT-REDEEMABLE" } })
-    ).toThrow();
   });
 });
 

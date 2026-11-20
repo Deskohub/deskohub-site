@@ -4,11 +4,10 @@ import {
   isTestEmailAddress,
   testEmailAddress,
 } from "@deskohub/test-email";
-import { addressesOnlyTestRecipients } from "./email-routing";
 import { isTestEmailRecipient } from "./test-recipients";
 
 // These edge cases intentionally differ until auth and delivery policy is decided.
-test.each([
+test.each<{ address: string; delivery: boolean; auth: boolean }>([
   { address: testEmailAddress("recipient"), delivery: true, auth: true },
   {
     address: ` ${testEmailAddress("recipient")} `,
@@ -22,7 +21,7 @@ test.each([
     auth: true,
   },
   {
-    address: testEmailAddress("recipient") + ".invalid",
+    address: `${testEmailAddress("recipient")}.invalid`,
     delivery: false,
     auth: false,
   },
@@ -31,8 +30,5 @@ test.each([
   ({ address, delivery, auth }) => {
     expect(isTestEmailRecipient(address)).toBe(delivery);
     expect(isTestEmailAddress(address)).toBe(auth);
-    expect(addressesOnlyTestRecipients({ to: { email: address } })).toBe(
-      delivery
-    );
   }
 );

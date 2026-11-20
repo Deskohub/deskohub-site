@@ -329,21 +329,7 @@ const runRetryingInstantly = <A, E>(effect: Effect.Effect<A, E>) =>
   );
 
 describe("CloudinaryService", () => {
-  test("requests tags and context when getting an image by public ID", async () => {
-    queuedResourceResults = [asset];
-
-    const service = await makeService();
-    await Effect.runPromise(service.getByPublicId(galleryImagePublicId));
-
-    expect(resourceCalls).toMatchObject([
-      {
-        publicId: "gallery/image",
-        options: { tags: true, context: true },
-      },
-    ]);
-  });
-
-  test("retries 500 public ID lookup failures", async () => {
+  test("retries 500 public ID lookup failures with the same request options", async () => {
     queuedResourceResults = [
       { throw: { http_code: 500, message: "first" } },
       asset,
@@ -355,7 +341,11 @@ describe("CloudinaryService", () => {
     );
 
     expect(result).toEqual(asset);
-    expect(resourceAttempts).toBe(2);
+    const request = {
+      publicId: "gallery/image",
+      options: { tags: true, context: true },
+    };
+    expect(resourceCalls).toMatchObject([request, request]);
   });
 
   test("ignores malformed public ID lookup error fields without echoing provider text", async () => {

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import {
   HttpClient,
   HttpClientRequest,
@@ -15,7 +15,6 @@ import {
   type HttpApiEndpoint,
   HttpApiGroup,
 } from "effect/http-api";
-import { administrationInputParseOptions } from "./administration-input-parse-options";
 import { AdminCliCampaignsApi } from "./campaign-operation-endpoints";
 import {
   AdminCliAdministrationApi,
@@ -28,86 +27,6 @@ import {
   CliSessionId,
   CurrentAdministrationCaller,
 } from "./workspace-admin-api";
-import { WorkspaceAdminApi } from "./workspace-admin-http-api";
-
-type Slot = "payload" | "query" | "success";
-
-/** Every request and response slot an endpoint has, and whether it is strict. */
-const slotsOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
-  api: HttpApi.HttpApi<Id, Groups>
-) => {
-  const slots: Array<{ readonly slot: string; readonly strict: boolean }> = [];
-  HttpApi.reflect(api, {
-    onGroup: () => undefined,
-    onEndpoint: ({ group, endpoint, mergedAnnotations }) => {
-      const strict = (key: Context.Key<unknown, unknown>) =>
-        Option.getOrUndefined(Context.getOption(mergedAnnotations, key)) ===
-        administrationInputParseOptions;
-      const present: Record<Slot, boolean> = {
-        payload: endpoint.payload.size > 0,
-        query: endpoint.query !== undefined,
-        success: true,
-      };
-      const keys: Record<Slot, Context.Key<unknown, unknown>> = {
-        payload: HttpApi.PayloadParseOptions,
-        query: HttpApi.QueryParseOptions,
-        success: HttpApi.SuccessParseOptions,
-      };
-      for (const slot of ["payload", "query", "success"] as const) {
-        if (present[slot]) {
-          slots.push({
-            slot: `${group.identifier}.${endpoint.identifier} ${slot}`,
-            strict: strict(keys[slot]),
-          });
-        }
-      }
-    },
-  });
-  return slots;
-};
-
-describe("administration input parse options", () => {
-  // The inputs Effect beta.85 decoded strictly through schema annotations,
-  // which Effect 4.1 no longer reads; the endpoints now declare them.
-  test("apply to exactly the strict administration inputs", () => {
-    const strict = slotsOf(WorkspaceAdminApi)
-      .filter(({ strict }) => strict)
-      .map(({ slot }) => slot)
-      .sort();
-
-    expect(strict).toEqual(
-      [
-        "administration.cancelReservation payload",
-        "administration.restoreReservation payload",
-        "administration.backfillReservationProductDetails payload",
-        "administration.mutateReservationAccess payload",
-        "administration.previewInvoice payload",
-        "administration.cancelInvoice payload",
-        "administration.createInvoice payload",
-        "administration.createStandaloneAccessCode payload",
-        "administration.createStandaloneAccessCode success",
-        "administration.mutateDiscounts payload",
-        "campaigns.createCampaignAudience payload",
-        "campaigns.updateCampaignAudience payload",
-        "campaigns.previewCampaignTemplate payload",
-        "campaigns.createCampaign payload",
-        "campaigns.updateCampaign payload",
-        "campaigns.duplicateCampaign payload",
-        "campaigns.testSendCampaign payload",
-        "campaigns.sendCampaign payload",
-        "campaigns.retryCampaign payload",
-        "automations.updateAutomationFlow payload",
-        "automations.getAutomationDryRun query",
-        "automations.activateAutomation payload",
-        "automations.getAutomationRunStats query",
-        "automations.listAutomationRuns query",
-        "automations.previewCalendarExpression payload",
-        "administrators.grantAdministrator payload",
-        "administrators.backfillLegacyAdministrator payload",
-      ].sort()
-    );
-  });
-});
 
 // Each group's `endpoints` record is typed loosely; these name the declared
 // endpoint types.

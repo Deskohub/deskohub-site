@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
@@ -28,35 +27,33 @@ const definitions: readonly PostHogFeatureFlagDefinition[] = [
 
 const projectId = PostHogProjectId.make("project");
 
-describe("generatePostHogFeatureFlagContractFromDefinitions", () => {
-  test("uses the same output path as HTTP generation", async () => {
-    const httpDefinitions = [...definitions].reverse();
-
-    await withOutputFiles(async (direct, http) => {
-      await Effect.runPromise(
-        generatePostHogFeatureFlagContractFromDefinitions({
-          definitions: httpDefinitions,
-          outputFile: direct.contract,
-          snapshotFile: direct.snapshot,
-        })
-      );
-      await Effect.runPromise(
+describe("generatePostHogFeatureFlagContract", () => {
+  test("writes the contract and snapshot for the flags returned by PostHog", async () => {
+    await withOutputFiles(async ({ contract, snapshot }) => {
+      const result = await Effect.runPromise(
         generatePostHogFeatureFlagContract({
           apiKey: "synthetic-api-key",
           host: new URL("https://posthog.example"),
-          outputFile: http.contract,
+          outputFile: contract,
           projectId,
-          snapshotFile: http.snapshot,
-        }).pipe(respondWith(httpDefinitions))
+          snapshotFile: snapshot,
+        }).pipe(respondWith(definitions))
       );
 
-      expect(await Bun.file(direct.contract).text()).toBe(
-        await Bun.file(http.contract).text()
+      expect(result).toEqual({ flagCount: 2, status: "updated" });
+      expect(await import(contract)).toHaveProperty(
+        "postHogFeatureFlags.keys",
+        ["feature_a", "feature_b"]
       );
-      expect(await Bun.file(http.snapshot).exists()).toBeTrue();
+      expect(await import(snapshot)).toHaveProperty(
+        "postHogFeatureFlagSnapshot.constantValues",
+        { feature_a: true, feature_b: null }
+      );
     });
   });
+});
 
+describe("generatePostHogFeatureFlagContractFromDefinitions", () => {
   test("reports render errors through the Effect error channel", async () => {
     await withOutputFiles(async ({ contract, snapshot }) => {
       const result = await Effect.runPromiseExit(
@@ -78,8 +75,8 @@ describe("generatePostHogFeatureFlagContractFromDefinitions", () => {
 });
 
 describe("generatePostHogFeatureFlagSnapshot", () => {
-  test("rewrites only the snapshot, for the given contract keys", async () => {
-    await withOutputFiles(async ({ contract, snapshot }) => {
+  test("writes snapshot values for the given contract keys", async () => {
+    await withOutputFiles(async ({ snapshot }) => {
       const result = await Effect.runPromise(
         generatePostHogFeatureFlagSnapshot({
           apiKey: "synthetic-api-key",
@@ -91,11 +88,10 @@ describe("generatePostHogFeatureFlagSnapshot", () => {
       );
 
       expect(result).toEqual({ flagCount: 2 });
-      expect(await Bun.file(contract).exists()).toBeFalse();
-      const source = await Bun.file(snapshot).text();
-      expect(source).toContain('"feature_a": true');
-      expect(source).toContain('"feature_c": null');
-      expect(source).not.toContain("feature_b");
+      expect(await import(snapshot)).toHaveProperty(
+        "postHogFeatureFlagSnapshot.constantValues",
+        { feature_a: true, feature_c: null }
+      );
     });
   });
 });
@@ -129,21 +125,15 @@ interface OutputFiles {
 }
 
 const withOutputFiles = async (
-  callback: (direct: OutputFiles, http: OutputFiles) => Promise<void>
+  callback: (files: OutputFiles) => Promise<void>
 ) => {
-  const directory = mkdtempSync(join(tmpdir(), "posthog-feature-flags-"));
+  const directory = mkdtempSync(join(import.meta.dir, ".tmp-codegen-test-"));
 
   try {
-    await callback(
-      {
-        contract: join(directory, "direct-contract.ts"),
-        snapshot: join(directory, "direct-snapshot.ts"),
-      },
-      {
-        contract: join(directory, "http-contract.ts"),
-        snapshot: join(directory, "http-snapshot.ts"),
-      }
-    );
+    await callback({
+      contract: join(directory, "contract.ts"),
+      snapshot: join(directory, "snapshot.ts"),
+    });
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }

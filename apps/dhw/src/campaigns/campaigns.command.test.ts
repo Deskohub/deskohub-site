@@ -2,10 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   AdministrationCampaignAudience,
   AdministrationCampaignDetail,
+  type AdministrationCampaignLocaleType,
   AdministrationCampaignRecipientPreview,
   AdministrationCampaignSendStatusResult,
   AdministrationCampaignSettings,
@@ -677,7 +679,7 @@ describe("dhw campaigns inspection", () => {
     );
   });
 
-  test("exports bodies to Markdown files", async () => {
+  test("exports a partially translated campaign without changing its Markdown", async () => {
     const directory = join(await makeTemporaryDirectory(), "export");
     const { layer, output } = makeCampaignLayer();
 
@@ -689,13 +691,66 @@ describe("dhw campaigns inspection", () => {
     const csPath = join(directory, "cs.md");
     const enPath = join(directory, "en.md");
     expect(await readFile(csPath, "utf8")).toBe(
-      campaign.content["cs-CZ"]!.bodyMarkdown
+      "# Ahoj\n\n[[button: Rezervovat](https://example.com)]\n"
     );
     expect(await readFile(enPath, "utf8")).toBe("# Hello\n");
-    expect(JSON.parse(output.join(""))).toMatchObject({
-      id: "campaign-1",
-      exportedFiles: { "cs-CZ": csPath, "en-US": enPath },
+    const result = JSON.parse(output.join(""));
+    expect(result.id).toBe("campaign-1");
+    expect(result.exportedFiles).toEqual({ "cs-CZ": csPath, "en-US": enPath });
+  });
+
+  test("exports Markdown bodies for the remaining supported languages", async () => {
+    const locales = supportedLocales.filter(
+      (locale) => locale !== "cs-CZ" && locale !== "en-US"
+    );
+    const fileNames = {
+      "de-DE": "de.md",
+      "hi-IN": "hi.md",
+      "sk-SK": "sk.md",
+      "uk-UA": "uk.md",
+      "vi-VN": "vi.md",
+    } satisfies Record<
+      Exclude<AdministrationCampaignLocaleType, "cs-CZ" | "en-US">,
+      string
+    >;
+    const localizedCampaign = Schema.decodeUnknownSync(
+      AdministrationCampaignDetail
+    )({
+      ...campaign,
+      locales,
+      content: Object.fromEntries(
+        locales.map((locale) => [
+          locale,
+          {
+            subject: "Autumn news",
+            preheader: "",
+            bodyMarkdown: `# Autumn news (${locale})\n`,
+          },
+        ])
+      ),
     });
+    const directory = join(await makeTemporaryDirectory(), "export");
+    const { layer, output } = makeCampaignLayer({
+      getCampaign: () => Effect.succeed(localizedCampaign),
+    });
+
+    await run(
+      ["--json", "campaigns", "show", "campaign-1", "--export-dir", directory],
+      layer
+    ).pipe(Effect.runPromise);
+
+    const result = JSON.parse(output.join(""));
+    expect(result.id).toBe(campaign.id);
+    expect(result.exportedFiles).toEqual(
+      Object.fromEntries(
+        locales.map((locale) => [locale, join(directory, fileNames[locale])])
+      )
+    );
+    for (const locale of locales) {
+      expect(await readFile(join(directory, fileNames[locale]), "utf8")).toBe(
+        `# Autumn news (${locale})\n`
+      );
+    }
   });
 
   test("previews recipients, exclusions, and shared emails", async () => {

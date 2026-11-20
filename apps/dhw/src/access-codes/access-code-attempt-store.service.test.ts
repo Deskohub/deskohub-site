@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -172,15 +171,14 @@ describe("AccessCodeAttemptStore", () => {
       });
       yield* keyValueStore.set(key, "{not valid json");
       const malformedError = yield* Effect.flip(store.reserve(identityA));
-      const unaffected = yield* store.reserve(identityB);
-      return { malformedError, unaffected };
+      yield* store.reserve(identityB);
+      return malformedError;
     }).pipe(Effect.provide(PlatformLive), Effect.runPromise);
 
     expect(
-      result.malformedError instanceof Schema.SchemaError ||
-        result.malformedError instanceof KeyValueStore.KeyValueStoreError
+      result instanceof Schema.SchemaError ||
+        result instanceof KeyValueStore.KeyValueStoreError
     ).toBe(true);
-    expect(result.unaffected).toBeDefined();
   });
 
   test("fails closed when the reservation cannot be written", async () => {
@@ -192,38 +190,39 @@ describe("AccessCodeAttemptStore", () => {
     expect(result).toBeInstanceOf(KeyValueStore.KeyValueStoreError);
   });
 
-  test("stores each reservation in a file named after the SHA-256 of its identity", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "dhw-store-layout-"));
+  test("resumes an access-code attempt saved by an earlier CLI version", async () => {
+    const reservation = {
+      sessionId: "01980000-0000-7000-8000-000000000001",
+      request: {
+        name: "Booth A",
+        startsAt: "2026-09-10T10:00",
+        endsAt: "2026-09-10T12:00",
+      },
+      attemptId: "01980000-0000-7000-8000-000000000009",
+      concluded: false,
+    };
+    const identity = {
+      sessionId: sessionIdFor(reservation.sessionId),
+      request: Schema.decodeSync(AdministrationStandaloneAccessCodeCreateInput)(
+        reservation.request
+      ),
+    };
+    const directory = mkdtempSync(join(tmpdir(), "dhw-store-upgrade-"));
     try {
-      const attemptId = await Effect.gen(function* () {
-        const store = yield* makeFileStore(directory);
-        return yield* store.reserve(identityA);
-      }).pipe(Effect.runPromise);
+      // A reservation written before the switch to Effect's Digest service.
+      writeFileSync(
+        join(
+          directory,
+          "access-code-attempt-b7cf52a3c867012273745115fa05b4a569b9ccb26708cb1c214ad75b70df4bb4"
+        ),
+        JSON.stringify(reservation)
+      );
+      const attemptId = await makeFileStore(directory).pipe(
+        Effect.flatMap((store) => store.reserve(identity)),
+        Effect.runPromise
+      );
 
-      const identityDigest = createHash("sha256")
-        .update(
-          [
-            identityA.sessionId,
-            identityA.request.name,
-            identityA.request.startsAt,
-            identityA.request.endsAt,
-          ].join("\u0000")
-        )
-        .digest("hex");
-      const fileName = `access-code-attempt-${identityDigest}`;
-      expect(readdirSync(directory)).toEqual([fileName]);
-      expect(
-        JSON.parse(readFileSync(join(directory, fileName), "utf8"))
-      ).toEqual({
-        sessionId: identityA.sessionId,
-        request: {
-          name: identityA.request.name,
-          startsAt: identityA.request.startsAt,
-          endsAt: identityA.request.endsAt,
-        },
-        attemptId,
-        concluded: false,
-      });
+      expect(String(attemptId)).toBe(reservation.attemptId);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -312,7 +311,7 @@ describe("AccessCodeAttemptStore", () => {
       const digest = yield* Digest.Digest;
       const fileSystem = yield* FileSystem.FileSystem;
       const store = yield* makeFileStore(directory);
-      const attemptId = yield* store.reserve(identityA);
+      yield* store.reserve(identityA);
       const reservationKey = yield* accessCodeAttemptReservationKey({
         digest,
         identity: identityA,
@@ -331,7 +330,6 @@ describe("AccessCodeAttemptStore", () => {
       expect(yield* fileSystem.readFileString(lockPath)).toBe(
         "owned by someone else"
       );
-      expect(attemptId).toBeDefined();
     })
       .pipe(Effect.provide(PlatformLive), Effect.runPromise)
       .finally(() => {

@@ -6,7 +6,7 @@ describe("foldSearchText", () => {
     expect(foldSearchText("Česko Österreich Việt Nam")).toBe(
       "cesko osterreich viet nam"
     );
-    expect(foldSearchText("УКРАЇНА")).toBe(foldSearchText("україна"));
+    expect(foldSearchText("УКРАЇНА")).toBe("украіна");
   });
 });
 

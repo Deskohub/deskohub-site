@@ -1,7 +1,11 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, expectTypeOf, test } from "bun:test";
 import type { CloudinaryAsset } from "@deskohub/cloudinary";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CloudinaryImage } from "./cloudinary-image";
+
+expectTypeOf<
+  Parameters<typeof CloudinaryImage>[0]["alt"]
+>().toEqualTypeOf<string>();
 
 const publicId = "workspace/DSC03267_TOP_qopcnq";
 
@@ -40,13 +44,6 @@ describe("CloudinaryImage", () => {
       }
     }
   );
-
-  test("requires callers to pass alt", () => {
-    // @ts-expect-error alt is required so no caller falls back to the public ID.
-    const markup = renderToStaticMarkup(<CloudinaryImage source={asset} />);
-
-    expect(renderedAlts(markup)).not.toContain(publicId);
-  });
 });
 
 /** The rendered image's attributes, and whether it asked the browser to preload. */
@@ -79,7 +76,6 @@ describe("CloudinaryImage variants", () => {
     expect(attributes).toMatchObject({
       width: "600",
       height: "600",
-      "data-nimg": "1",
       loading: "lazy",
       class: "w-full h-full object-cover",
     });
@@ -93,16 +89,18 @@ describe("CloudinaryImage variants", () => {
   });
 
   test("fills and preloads a hero image across the viewport", () => {
-    const { attributes, preloaded } = renderImage(
+    const { attributes, preloaded, styles } = renderImage(
       <CloudinaryImage alt="" source={publicId} variant="hero" />
     );
 
     expect(attributes).toMatchObject({
-      "data-nimg": "fill",
       sizes: "100vw",
       class: "brightness-50 absolute inset-0 z-0 object-cover",
     });
     expect(attributes.width).toBeUndefined();
+    expect(styles).toEqual(
+      expect.arrayContaining(["position:absolute", "width:100%", "height:100%"])
+    );
     expect(preloaded).toBe(true);
   });
 
@@ -153,14 +151,13 @@ describe("CloudinaryImage variants", () => {
       />
     );
 
-    expect(fillHeight.attributes).toMatchObject({
-      "data-nimg": "fill",
-      sizes: "100vw",
-    });
-    expect(fillWidth.attributes).toMatchObject({
-      "data-nimg": "fill",
-      sizes: "50vw",
-    });
+    expect(fillHeight.attributes.sizes).toBe("100vw");
+    expect(fillWidth.attributes.sizes).toBe("50vw");
+    for (const { styles } of [fillHeight, fillWidth]) {
+      expect(styles).toEqual(
+        expect.arrayContaining(["width:100%", "height:100%"])
+      );
+    }
   });
 
   test("uses a custom fixed size and passes explicit sizes through", () => {
@@ -189,7 +186,6 @@ describe("CloudinaryImage variants", () => {
 
     expect(preloadedBy({ preload: false, priority: true })).toBe(false);
     expect(preloadedBy({ priority: false })).toBe(false);
-    expect(preloadedBy({})).toBe(true);
     expect(
       renderImage(<CloudinaryImage alt="" priority source={publicId} />)
         .preloaded

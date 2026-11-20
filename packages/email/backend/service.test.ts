@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
+import {
+  EMAIL_TEST_DOMAIN,
+  resendSimulatorAddress,
+  testEmailAddress,
+} from "@deskohub/test-email";
 import { Effect, Layer, References } from "effect";
 import {
   type EmailBatchResult,
@@ -669,9 +673,10 @@ test("an observer that throws synchronously never fails a send", async () => {
 });
 
 describe("Console routing", () => {
+  const testRecipientAddress = testEmailAddress("delivered");
   const testRecipientMessage: EmailMessage = {
     ...message,
-    to: { email: testEmailAddress("delivered") },
+    to: { email: testRecipientAddress },
   };
 
   test("RecipientRouted sends mail for test recipients only through Console", async () => {
@@ -682,6 +687,14 @@ describe("Console routing", () => {
         send(testRecipientMessage),
         send({
           ...testRecipientMessage,
+          to: { email: ` ${testRecipientAddress} ` },
+        }),
+        send({
+          ...testRecipientMessage,
+          to: { email: `@${EMAIL_TEST_DOMAIN}` },
+        }),
+        send({
+          ...testRecipientMessage,
           cc: realRecipient,
         }),
       ]),
@@ -690,6 +703,8 @@ describe("Console routing", () => {
     );
 
     expect(results.map((result) => result.provider)).toEqual([
+      "console",
+      "console",
       "console",
       "resend",
     ]);

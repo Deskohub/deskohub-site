@@ -11,7 +11,6 @@ type Locale = "cs-CZ" | "en-US";
 function createRuntime() {
   const runtime = createTestParaglideRuntime<Locale>("cs-CZ");
   const scope = createRequestLocaleScope<Locale>({
-    origin: "https://example.test",
     overwriteServerAsyncLocalStorage: runtime.overwriteServerAsyncLocalStorage,
   });
 
@@ -19,7 +18,7 @@ function createRuntime() {
 }
 
 describe("createRequestLocaleScope", () => {
-  test("provides the locale and origin to Paraglide across async continuations", async () => {
+  test("provides the locale to Paraglide across async continuations", async () => {
     const { runtime, scope } = createRuntime();
 
     const locale = await scope.runWithLocale("en-US", async () => {

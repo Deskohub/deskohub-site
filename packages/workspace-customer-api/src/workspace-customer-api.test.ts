@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Context, Option, Schema } from "effect";
 import { HttpApi, type HttpApiGroup, OpenApi } from "effect/http-api";
-import { customerInputParseOptions } from "./customer-profile";
 import {
   CustomerReservationInvitee,
   CustomerReservationPeople,
@@ -115,7 +114,10 @@ describe("WorkspaceCustomerApi", () => {
         "booking.clearCheckoutDiscountCode",
         "booking.acceptCheckoutPriceChange",
         "booking.submitCheckout",
-      ].map((reference) => ({ reference, options: customerInputParseOptions }))
+      ].map((reference) => ({
+        reference,
+        options: { errors: "all", onExcessProperty: "error" },
+      }))
     );
   });
 
