@@ -3,11 +3,17 @@
 import { Clock, Data, Effect, Schema } from "effect";
 import { defineAdministrationAction } from "@/features/administrators/server/administration-request.server";
 import { FioPaymentSettlementRepository } from "@/features/checkout/backend/repositories/fio-payment-settlement.repository";
+import type { OrderId } from "@/features/order/order";
 import { administrationHref } from "./administration-href";
 import { administrationFioSettlements } from "./fio-settlement-layer.server";
 import { m } from "./i18n";
 
 class FioRefundUnavailable extends Data.TaggedError("FioRefundUnavailable") {}
+
+type RecordedFioRefund = {
+  readonly orderId: OrderId;
+  readonly refundedAt: string;
+};
 
 const recordRefund = defineAdministrationAction(
   {
@@ -27,7 +33,7 @@ const recordRefund = defineAdministrationAction(
       failure instanceof FioRefundUnavailable
         ? m.administrationFioRefundUnavailable({}, { locale })
         : undefined,
-    revalidates: (_, { orderId }) => [
+    revalidates: (_, { orderId }: RecordedFioRefund) => [
       administrationHref("/[locale]/admin"),
       administrationHref("/[locale]/admin/orders"),
       administrationHref("/[locale]/admin/orders/[orderId]", { orderId }),
