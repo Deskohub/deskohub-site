@@ -684,6 +684,7 @@ export const makePaymentWebhookProcessor = <
         providerStatus,
         paidAt: Temporal.Now.instant(),
       });
+      if (transition.settlement === "refund_required") return;
       if (transition.changed) {
         yield* checkoutAnalytics.paymentCompleted({
           attempt: transition.attempt,

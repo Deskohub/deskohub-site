@@ -1,5 +1,5 @@
 import type { DotyposWriteFailure } from "@deskohub/dotypos";
-import { Context, Data, Effect, Layer, Match, Predicate } from "effect";
+import { Context, Data, Effect, Layer, Match, Option, Predicate } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { toStoredInstant } from "@/db/instant";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -21,6 +21,7 @@ import {
   providerPaymentFinalizationLogFields,
 } from "../payment/provider-payment-finalization.service";
 import { PaymentLifecycleRepository } from "../repositories/payment-lifecycle.repository";
+import { QrPaymentRepository } from "../repositories/qr-payment.repository";
 import {
   HoldCancellationInProgress,
   UnpaidHoldRelease,
@@ -134,6 +135,7 @@ export class ReservationHoldCleanupService extends Context.Service<
     Layer.provide(UnpaidHoldRelease.Default),
     Layer.provide(ProviderPaymentFinalizationService.Live),
     Layer.provide(PaymentLifecycleRepository.Live),
+    Layer.provide(QrPaymentRepository.Default),
     Layer.provide(CheckoutAnalytics.Live),
     Layer.provide(WorkspaceReservationRepository.Default),
     Layer.provide(WorkspaceDatabase.Default),
@@ -150,6 +152,9 @@ function makeReservationHoldCleanupServiceLayer(
     Effect.gen(function* () {
       const reservations = yield* WorkspaceReservationRepository;
       const paymentLifecycle = yield* PaymentLifecycleRepository;
+      const qrPayments = Option.getOrUndefined(
+        yield* Effect.serviceOption(QrPaymentRepository)
+      );
       const finalization = yield* ProviderPaymentFinalizationService;
       const holdRelease = yield* UnpaidHoldRelease;
       const checkoutAnalytics = yield* CheckoutAnalytics;
@@ -389,16 +394,61 @@ function makeReservationHoldCleanupServiceLayer(
           yield* Effect.logDebug(
             "Reservation hold cancellation active reservation loaded"
           );
+          const checkedAt = input.checkedAt ?? Temporal.Now.instant();
+          const orderId = reservationOrderId(input.orderId);
+          const window =
+            qrPayments && active
+              ? yield* qrPayments
+                  .findPaymentWindow(orderId)
+                  .pipe(
+                    Effect.mapError(
+                      ReservationHoldCleanupError.fromError(
+                        "Payment window could not be loaded."
+                      )
+                    )
+                  )
+              : undefined;
+          const sharedHold =
+            window &&
+            active?.reservationHoldExpiresAt &&
+            toStoredInstant(active.reservationHoldExpiresAt).equals(
+              toStoredInstant(window.expiresAt)
+            );
+          if (
+            sharedHold &&
+            active.paymentState !== "paid" &&
+            dueReservationStates.has(active.reservationState) &&
+            Temporal.Instant.compare(window.expiresAt, checkedAt) > 0
+          ) {
+            return new ProviderPaymentDeferral({
+              abandonmentCutoff: window.expiresAt,
+            });
+          }
           const expectedHold = dueHold(
             active,
-            input.holdExpiresAt,
-            input.checkedAt ?? Temporal.Now.instant()
+            sharedHold ? window.expiresAt : input.holdExpiresAt,
+            checkedAt
           );
           if (!expectedHold) {
             yield* Effect.logInfo(
               "Reservation hold cancellation skipped: hold not due"
             );
             return "not_due" as const;
+          }
+
+          if (sharedHold) {
+            const expired = yield* paymentLifecycle
+              .expirePublicPaymentWindow({ orderId, checkedAt })
+              .pipe(
+                Effect.mapError(
+                  ReservationHoldCleanupError.fromError(
+                    "Payment window could not be expired."
+                  )
+                )
+              );
+            return expired
+              ? yield* releaseExpiredHold({ ...input, expectedHold })
+              : ("skipped" as const);
           }
 
           const pendingPayment = pendingProviderPayment(active);
