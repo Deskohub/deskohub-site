@@ -21,7 +21,7 @@ import {
 import type { createPatchedFetcher } from "next/dist/server/lib/patch-fetch";
 import { parsePlainDate } from "@/shared/utils/temporal";
 
-export interface FioReceivingAccount {
+interface FioReceivingAccount {
   readonly accountNumber: string;
   readonly accountPrefix?: string;
   readonly bankCode: string;

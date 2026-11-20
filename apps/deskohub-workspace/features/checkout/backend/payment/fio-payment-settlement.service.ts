@@ -27,7 +27,7 @@ import {
   LatePaymentRecoveryQueueService,
 } from "./late-payment-recovery-queue.service";
 
-export type FioMovementAmount =
+type FioMovementAmount =
   | { readonly _tag: "CZK"; readonly minorUnits: number }
   | {
       readonly _tag: "OtherCurrency";
