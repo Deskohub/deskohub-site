@@ -5,6 +5,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { customerAccounts, passPurchases } from "@/db/schema";
+import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
   ensurePassHolderAccount,
@@ -24,6 +25,7 @@ import { type Locale, m } from "@/features/i18n";
 import { getPaymentSubmitLegalDocuments } from "@/features/legal/payment-submit-evidence";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import {
   getEntryPackLastUsableDate,
@@ -193,7 +195,10 @@ export const beginUnlimitedPassPurchase = Effect.fn(
         const startDate = Temporal.PlainDate.from(input.selection.startDate);
         if (
           Temporal.PlainDate.compare(startDate, today) < 0 ||
-          Temporal.PlainDate.compare(startDate, today.add({ months: 6 })) > 0
+          Temporal.PlainDate.compare(
+            startDate,
+            getWorkspaceAvailabilityRange(today.toString()).to
+          ) > 0
         ) {
           return yield* new EntryPackPurchaseError({
             reason: "holds-unavailable",
@@ -236,7 +241,9 @@ export const beginUnlimitedPassPurchase = Effect.fn(
                 ...(input.recipientName && {
                   recipientName: input.recipientName,
                 }),
-              }),
+              }).pipe(
+                WorkspaceLockSections.unlimitedGiftCustomer(holderAccountId)
+              ),
             }
           : buyer;
 

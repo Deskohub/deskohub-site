@@ -28,6 +28,7 @@ import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservatio
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { reservationCustomerNameSchema } from "@/features/reservation/reservation-contact";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
@@ -376,7 +377,9 @@ const unlimitedAvailabilityAction = defineWorkspaceAction(
     if (!(yield* flags.isEnabled("cowork_passes")))
       return { status: "unavailable" as const };
     const today = getCurrentWorkspaceDate(yield* currentInstant);
-    const lastStartDate = today.add({ months: 6 });
+    const lastStartDate = Temporal.PlainDate.from(
+      getWorkspaceAvailabilityRange(today.toString()).to
+    );
     const requested = input.startsOn && Temporal.PlainDate.from(input.startsOn);
     const startsOn =
       requested && Temporal.PlainDate.compare(requested, today) > 0

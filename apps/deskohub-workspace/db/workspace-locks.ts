@@ -213,6 +213,12 @@ export const WorkspaceLockSections = {
     if (!first) throw new Error("Reservation capacity locks require a date");
     return holdSections([first, ...rest]);
   },
+  unlimitedGiftCustomer: (holder: CustomerAccountId) =>
+    holdSection({
+      name: "unlimitedGiftCustomer",
+      rank: 22,
+      pair: ["unlimited-gift-customer", holder],
+    }),
   passPurchaseFulfillment: (orderId: OrderId) =>
     holdSection(passPurchaseFulfillmentSection(orderId)),
   reservationInviteeNotices: (orderId: WorkspaceReservationId) =>
