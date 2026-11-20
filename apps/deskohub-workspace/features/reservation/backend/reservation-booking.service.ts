@@ -742,8 +742,7 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
             reviewAccount ||
             Option.isSome(bookingAgent) ||
             input.customer !== "account" ||
-            reservation.kind !== "cowork" ||
-            ("stay" in reservation && reservation.stay === "overnight")
+            reservation.kind !== "cowork"
           ) {
             return yield* new EntryPackUnavailableError({});
           }
