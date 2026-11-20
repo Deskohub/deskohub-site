@@ -466,6 +466,62 @@ describe.skipIf(!postgresDatabase)(
       expect((await rowOf(order.orderId)).dotyposReservationId).toBe(orphan);
     });
 
+    test("cancels an interrupted retry's NEW hold when the Entry pack can no longer attach", async () => {
+      const order = await retriedOrder({
+        reservation: "cancelled",
+        overrides: { cancellationCause: "payment_retry" },
+      });
+      const row = await rowOf(order.orderId);
+      const packId = crypto.randomUUID();
+      await postgres.pool.query(
+        `insert into orders
+          (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
+          values ($1, 'pass-purchase', 'fixture-buyer', 'paid', 'not_started', now())`,
+        [packId]
+      );
+      try {
+        await postgres.pool.query(
+          `insert into pass_purchases
+            (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
+            values ($1, $2, $2, 'entry-pack', 'open-space', 5, 'cancelled', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
+          [packId, row.authorAccountId]
+        );
+        await postgres.pool.query(
+          `insert into pass_entry_claims (reservation_id, pass_id, date, status)
+            values ($1, $2, '2099-06-12', 'released')`,
+          [order.orderId, packId]
+        );
+
+        const orphan = DotyposReservationIdSchema.make(
+          "entry-pack-retry-orphan"
+        );
+        const harness = makeHarness({
+          overlapping: [
+            {
+              id: orphan,
+              status: "NEW",
+              note: `Platební objednávka: ${order.orderId}`,
+            },
+          ],
+        });
+        expect(await harness.secure(order)).toEqual({
+          kind: "spot_unavailable",
+        });
+        expect(harness.spies.cancelReservation).toHaveBeenCalledWith(orphan);
+        expect(harness.spies.createReservation).not.toHaveBeenCalled();
+        expect((await rowOf(order.orderId)).reservationState).toBe("cancelled");
+      } finally {
+        await postgres.pool.query(
+          "delete from pass_entry_claims where pass_id = $1",
+          [packId]
+        );
+        await postgres.pool.query("delete from pass_purchases where id = $1", [
+          packId,
+        ]);
+        await postgres.pool.query("delete from orders where id = $1", [packId]);
+      }
+    });
+
     test("cancels the reservation it created when the order changed before it could be attached", async () => {
       const order = await retriedOrder({
         reservation: "cancelled",

@@ -60,6 +60,7 @@ import { supersedableReservationPaymentStates } from "@/features/reservation/bac
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import {
   type CreateWorkspaceReservationInput,
+  entryPackAttachCancellationFailureCode,
   type IWorkspaceReservationRepository,
   reservationLogFields,
   type WorkspaceReservation,
@@ -498,7 +499,9 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
                       id: reservationDraft.id,
                       dotyposReservationId,
                       reservationCreatedAt: Temporal.Now.instant(),
-                      failureCode: "attach_failed_cancel_failed",
+                      failureCode: entryPack
+                        ? entryPackAttachCancellationFailureCode
+                        : "attach_failed_cancel_failed",
                     })
                     .pipe(
                       Effect.tapError((markerCause) =>
@@ -512,6 +515,13 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
                         )
                       )
                     );
+
+                  if (entryPack) {
+                    yield* enqueueReservationHoldCleanup({
+                      orderId: reservationDraft.id,
+                      reservationHoldExpiresAt: holdExpiresAt,
+                    });
+                  }
 
                   yield* Effect.logWarning(
                     "Workspace reservation hold cancellation marked for retry",

@@ -18,6 +18,7 @@ import {
   type NonTerminalPaymentAttemptState,
   type PaymentLifecycleStateError,
   type PaymentLifecycleTransition,
+  paymentAbandonedAfterProviderCutoffFailureCode,
 } from "./payment-lifecycle-state";
 
 export interface IPaymentTerminalTransitions {
@@ -124,7 +125,12 @@ export class PaymentTerminalTransitions extends Context.Service<
                 .returning({ updatedAt: workspaceReservations.updatedAt });
 
               if (reservation) {
-                yield* releaseReservedEntryPackClaim(workspaceReservationId);
+                if (
+                  input.failureCode !==
+                  paymentAbandonedAfterProviderCutoffFailureCode
+                ) {
+                  yield* releaseReservedEntryPackClaim(workspaceReservationId);
+                }
                 yield* PromotionClaims.release({
                   paymentAttemptId: input.id,
                   releasedAt: terminalAt,

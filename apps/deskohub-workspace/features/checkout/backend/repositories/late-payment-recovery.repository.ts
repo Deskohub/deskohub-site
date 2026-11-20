@@ -3,7 +3,7 @@ import "@/shared/polyfills/temporal";
 import type { DotyposReservationId } from "@deskohub/dotypos";
 import { and, asc, desc, eq, gt, inArray, lte, ne, or, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Option } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { equalsAny } from "@/db/equals-any";
@@ -16,6 +16,8 @@ import {
   type WorkspaceReservationRow,
   workspaceReservations,
 } from "@/db/schema";
+import { activeCheckoutSessionIndex } from "@/db/schema/workspace-reservations";
+import { findViolatedConstraint } from "@/db/sql-constraint";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import type { DiscountClaimError } from "@/features/discounts/errors";
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
@@ -220,6 +222,11 @@ export class LatePaymentRecoveryRepository extends Context.Service<
                 recovery
               );
 
+              // Both recovery and payment retry take the active checkout
+              // session slot before locking the holder to readmit an entry.
+              if (isActiveAttempt)
+                yield* settleActiveReservation(input, recovery);
+
               if (input.state === "recovered") {
                 yield* reserveReleasedEntryPackClaim(
                   input.workspaceReservationId
@@ -238,13 +245,10 @@ export class LatePaymentRecoveryRepository extends Context.Service<
                 });
               }
 
-              if (isActiveAttempt) {
-                yield* settleActiveReservation(input, recovery);
-                if (input.state === "refund_required") {
-                  yield* releaseReservedEntryPackClaim(
-                    input.workspaceReservationId
-                  );
-                }
+              if (isActiveAttempt && input.state === "refund_required") {
+                yield* releaseReservedEntryPackClaim(
+                  input.workspaceReservationId
+                );
               }
 
               yield* markRecoverySettled(input, recovery);
@@ -756,7 +760,22 @@ const settleActiveReservation = Effect.fnUntraced(function* (
     .returning({
       dotyposCustomerId: workspaceReservations.dotyposCustomerId,
       reservationConfirmedAt: workspaceReservations.reservationConfirmedAt,
-    });
+    })
+    .pipe(
+      Effect.catchIf(
+        (cause) =>
+          Option.exists(
+            findViolatedConstraint(cause),
+            (constraint) => constraint === activeCheckoutSessionIndex
+          ),
+        () =>
+          recoveryStateError(
+            "settle",
+            input.paymentAttemptId,
+            "The checkout session already has an active reservation."
+          )
+      )
+    );
   if (!updatedReservation) {
     return yield* recoveryStateError(
       "settle",

@@ -41,6 +41,7 @@ import {
   type WorkspaceReservationRow,
   workspaceReservations,
 } from "@/db/schema";
+import { activeCheckoutSessionIndex } from "@/db/schema/workspace-reservations";
 import { findViolatedConstraint } from "@/db/sql-constraint";
 import { postgresUuidV7 } from "@/db/uuid-v7";
 import { WorkspaceLocks } from "@/db/workspace-locks";
@@ -183,6 +184,9 @@ export class WorkspaceReservationSessionTakenError extends Data.TaggedError(
   readonly reservationId: WorkspaceReservationId;
   readonly message: string;
 }> {}
+
+export const entryPackAttachCancellationFailureCode =
+  "entry_pack_attach_failed_cancel_failed";
 
 /** The payment facts of a restored reservation, read in its restore. */
 type RestoredReservationPaymentAttempt = Pick<
@@ -441,6 +445,7 @@ export interface IWorkspaceReservationRepository {
     | EntryPackUnavailableError
     | SqlError.SqlError
     | WorkspaceReservationDetailsMalformedError
+    | WorkspaceReservationSessionTakenError
   >;
   readonly claimSupersessionCancellation: (
     id: WorkspaceReservationId
@@ -954,10 +959,7 @@ const cancelPendingPaymentAttempt = Effect.fnUntraced(function* (
 /** The statement gave the checkout session a second active reservation. */
 const isActiveSessionTaken = (error: EffectDrizzleQueryError) =>
   findViolatedConstraint(error).pipe(
-    Option.exists(
-      (constraint) =>
-        constraint === "workspace_reservations_active_session_unique_idx"
-    )
+    Option.exists((constraint) => constraint === activeCheckoutSessionIndex)
   );
 
 /** Expires the grant and forgets its access code. */
@@ -1199,6 +1201,7 @@ export class WorkspaceReservationRepository extends Context.Service<
                   workspaceReservations.activePaymentAttemptId,
                 officeContactAttends:
                   workspaceReservations.officeContactAttends,
+                paymentState: workspaceReservations.paymentState,
                 dotyposCustomerId: workspaceReservations.dotyposCustomerId,
                 reservationConfirmedAt:
                   workspaceReservations.reservationConfirmedAt,
@@ -1210,6 +1213,13 @@ export class WorkspaceReservationRepository extends Context.Service<
               "Only a reservation still cancelling under the claim can be marked cancelled."
             );
             const [cancelled] = updated;
+            if (
+              cancelled?.paymentState === "not_started" ||
+              cancelled?.paymentState === "failed" ||
+              cancelled?.paymentState === "expired"
+            ) {
+              yield* releaseReservedEntryPackClaim(input.id);
+            }
             // Only a booked reservation's cancellation is a customer event;
             // an unconfirmed one was never booked.
             if (cancelled?.reservationConfirmedAt) {
@@ -1752,7 +1762,21 @@ export class WorkspaceReservationRepository extends Context.Service<
             if (attached) yield* reserveReleasedEntryPackClaim(input.id);
             return yield* decodeOptionalWorkspaceReservation(attached);
           },
-          transaction
+          transaction,
+          (effect, input) =>
+            effect.pipe(
+              Effect.catchIf(
+                (cause) =>
+                  cause._tag === "EffectDrizzleQueryError" &&
+                  isActiveSessionTaken(cause),
+                () =>
+                  new WorkspaceReservationSessionTakenError({
+                    reservationId: input.id,
+                    message:
+                      "The checkout session already has an active reservation.",
+                  })
+              )
+            )
         ),
         claimSupersessionCancellation: Effect.fn(
           "workspaceReservations.claimSupersessionCancellation"
@@ -2180,7 +2204,19 @@ export class WorkspaceReservationRepository extends Context.Service<
               .from(workspaceReservations)
               .where(
                 and(
-                  eq(workspaceReservations.reservationState, "held"),
+                  or(
+                    eq(workspaceReservations.reservationState, "held"),
+                    and(
+                      eq(
+                        workspaceReservations.reservationState,
+                        "cancellation_failed"
+                      ),
+                      eq(
+                        workspaceReservations.failureCode,
+                        entryPackAttachCancellationFailureCode
+                      )
+                    )
+                  ),
                   sql`${workspaceReservations.paymentState} <> 'paid'`,
                   lte(workspaceReservations.reservationHoldExpiresAt, input.now)
                 )
