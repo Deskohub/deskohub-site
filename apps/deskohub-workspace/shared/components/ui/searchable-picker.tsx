@@ -63,17 +63,17 @@ export function SearchablePicker({
       }}
       onOpenChangeComplete={(open) => {
         if (open) return;
-        if (closeReason.current === "item-press") {
-          if (focusOnSelect === false) return;
-          if (focusOnSelect) focusOnSelect();
-          else anchor?.focus();
-        }
-        if (
-          closeReason.current === "escape-key" ||
-          closeReason.current === "trigger-press"
-        ) {
-          anchor?.focus();
-        }
+        const reason = closeReason.current;
+        // The popup returns focus to its opener after the completion callback.
+        queueMicrotask(() => {
+          if (reason === "item-press") {
+            if (focusOnSelect === false) return;
+            if (focusOnSelect) focusOnSelect();
+            else anchor?.focus({ preventScroll: true });
+          } else if (reason === "escape-key" || reason === "trigger-press") {
+            anchor?.focus({ preventScroll: true });
+          }
+        });
       }}
       onQueryChange={setQuery}
       onValueChange={(picked, details) => {
