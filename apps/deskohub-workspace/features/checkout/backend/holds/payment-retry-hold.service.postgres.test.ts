@@ -10,7 +10,8 @@ import {
 } from "@deskohub/dotypos";
 import { NexiOrderIdSchema } from "@deskohub/nexi";
 import { eq, inArray } from "drizzle-orm";
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer } from "effect";
+import { TestClock } from "effect/testing";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   latePaymentRecoveries,
@@ -30,13 +31,20 @@ import {
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
+  holdPostgresTransaction,
+  waitForAdvisoryLockWaiter,
+} from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
+import {
   connectWorkspacePostgresTestDatabase,
   type WorkspacePostgresTestDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
 import { rebuildAcceptedReservation } from "../reservation/order-dotypos-reservation";
-import { WorkspaceTableAssignmentService } from "../reservation/workspace-table-assignment.service";
+import {
+  getWorkspaceReservationInterval,
+  WorkspaceTableAssignmentService,
+} from "../reservation/workspace-table-assignment.service";
 import { PaymentRetryHoldService } from "./payment-retry-hold.service";
 import { ReservationHoldCleanupScheduleService } from "./reservation-hold-cleanup-queue.service";
 import { UnpaidHoldRelease } from "./unpaid-hold-release.service";
@@ -204,7 +212,7 @@ describe.skipIf(!postgresDatabase)(
           )
         )
       );
-      const secure = (order: {
+      const secureEffect = (order: {
         readonly orderId: WorkspaceReservationId;
         readonly attemptId: PaymentAttemptId;
       }) =>
@@ -216,10 +224,14 @@ describe.skipIf(!postgresDatabase)(
               recreated,
             })
           ),
-          Effect.provide(layer),
-          Effect.runPromise
+          Effect.provide(layer)
         );
-      return { spies, secure };
+      return {
+        spies,
+        secureEffect,
+        secure: (order: Parameters<typeof secureEffect>[0]) =>
+          Effect.runPromise(secureEffect(order)),
+      };
     };
 
     test("keeps a live hold, and clears the retried attempt so its late payment can only be refunded", async () => {
@@ -297,6 +309,46 @@ describe.skipIf(!postgresDatabase)(
       expect(result.kind).toBe("reacquired");
       expect(harness.spies.cancelReservation).not.toHaveBeenCalled();
       expect((await rowOf(order.orderId)).reservationState).toBe("held");
+    });
+
+    test("does not rebook a reservation that ends while waiting for capacity", async () => {
+      const order = await retriedOrder({
+        reservation: "cancelled",
+        overrides: { cancellationCause: "hold_expired" },
+      });
+      const harness = makeHarness();
+      const { reservation } = recreated;
+      if (reservation.kind !== "cowork") throw new Error("Expected cowork");
+      const interval = await Effect.runPromise(
+        getWorkspaceReservationInterval(reservation)
+      );
+      const end = Temporal.Instant.from(interval.endsAt).epochMilliseconds;
+      const key = ["reservation-capacity", reservation.date] as const;
+      const holder = await holdPostgresTransaction(
+        postgres.pool,
+        "select pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+        key
+      );
+      let committed = false;
+      try {
+        const outcome = await Effect.gen(function* () {
+          yield* TestClock.setTime(end - 1);
+          const waiting = yield* Effect.forkChild(harness.secureEffect(order));
+          yield* Effect.promise(() =>
+            waitForAdvisoryLockWaiter(postgres.pool, key)
+          );
+          yield* TestClock.adjust("2 millis");
+          yield* Effect.promise(async () => {
+            await holder.commit();
+            committed = true;
+          });
+          return yield* Fiber.join(waiting);
+        }).pipe(Effect.provide(TestClock.layer()), Effect.runPromise);
+        expect(outcome).toEqual({ kind: "refused", reason: "not_retryable" });
+        expect(harness.spies.createReservation).not.toHaveBeenCalled();
+      } finally {
+        if (!committed) await holder.commit();
+      }
     });
 
     test("keeps the same hold when a prepared retry is prepared again", async () => {

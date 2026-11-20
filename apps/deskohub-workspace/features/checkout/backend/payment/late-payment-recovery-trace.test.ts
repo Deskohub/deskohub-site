@@ -3,6 +3,8 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, test } from "bun:test";
 import { DotyposService, DotyposUnavailable } from "@deskohub/dotypos";
 import { Cause, Effect, Exit, Layer, Predicate } from "effect";
+import { TestClock } from "effect/testing";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import {
@@ -19,6 +21,7 @@ import {
   WorkspaceReservationRepository,
   WorkspaceReservationStateError,
 } from "@/features/reservation/backend/workspace-reservation.repository";
+import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { moneyWithValue } from "@/shared/money/money";
 import {
@@ -75,6 +78,7 @@ interface Scenario {
     readonly note: string | null;
   }>;
   readonly createdId?: string;
+  readonly endsWhileWaitingAt?: Temporal.Instant;
   readonly claimCancellation?: boolean;
   readonly ensureAvailable?: Step;
   readonly assignTableId?: Step;
@@ -236,7 +240,19 @@ const recover = async (scenario: Scenario) => {
           scenario.snapshot ?? makeCoworkInvoiceDocument("en-US")
         );
 
-  const exit = await Effect.gen(function* () {
+  const bookingEnd = scenario.endsWhileWaitingAt?.epochMilliseconds;
+  const advisoryLock =
+    bookingEnd === undefined
+      ? makeRecordingAdvisoryLock().layer
+      : Layer.succeed(WorkspaceDatabaseAdvisoryLock, {
+          withTransactionPermit: (effect) => effect,
+          withLock: ([namespace], effect) =>
+            namespace === "reservation-capacity"
+              ? TestClock.setTime(bookingEnd + 1).pipe(Effect.andThen(effect))
+              : effect,
+          withLocks: (_keys, effect) => effect,
+        });
+  const recovery = Effect.gen(function* () {
     const service = yield* LatePaymentRecoveryService;
     return yield* recordEffectTrace(
       trace,
@@ -246,7 +262,7 @@ const recover = async (scenario: Scenario) => {
     Effect.provide(
       LatePaymentRecoveryService.Default.pipe(
         Layer.provide(UnpaidHoldRelease.Default),
-        Layer.provide(makeRecordingAdvisoryLock().layer),
+        Layer.provide(advisoryLock),
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(LatePaymentRecoveryRepository, recoveries as never),
@@ -275,8 +291,15 @@ const recover = async (scenario: Scenario) => {
           )
         )
       )
-    ),
-    Effect.runPromise
+    )
+  );
+  const exit = await Effect.runPromise(
+    bookingEnd === undefined
+      ? recovery
+      : TestClock.setTime(bookingEnd - 1).pipe(
+          Effect.andThen(recovery),
+          Effect.provide(TestClock.layer())
+        )
   );
   return {
     outcome: outcomeOf(exit),
@@ -1605,6 +1628,42 @@ describe("LatePaymentRecoveryService.recover reservation recreation", () => {
       ]
     `);
   });
+
+  test.each([false, true])(
+    "settles without a new provider write after the interval ends during the date wait (confirmed replacement: %s)",
+    async (hasReplacement) => {
+      const endsAt = Temporal.Instant.from(
+        getCoworkReservationInterval("basic", "2099-01-01").endsAt
+      );
+      const { calls, outcome, trace } = await recover({
+        endsWhileWaitingAt: endsAt,
+        overlapping: hasReplacement
+          ? [
+              {
+                id: "replacement-id",
+                status: "CONFIRMED",
+                note: "Platební objednávka: reservation-id",
+              },
+            ]
+          : [],
+      });
+
+      expect(calls.createReservation).not.toHaveBeenCalled();
+      if (hasReplacement) {
+        expect(outcome).toBe("recovered");
+        expect(trace).toContainEqual(
+          expect.stringContaining(
+            "recoveredDotyposReservationId=replacement-id, reservationState=confirmed"
+          )
+        );
+      } else {
+        expect(outcome).toBe("refund_required");
+        expect(trace).toContainEqual(
+          expect.stringContaining("failureCode=late_payment_reservation_ended")
+        );
+      }
+    }
+  );
 
   test("refunds when the slot is no longer available", async () => {
     const { outcome, trace } = await recover({

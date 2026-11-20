@@ -200,6 +200,9 @@ const bookAgain = Effect.fnUntraced(function* (input: {
   const result = yield* withWorkspaceReservationCapacity(
     interval,
     Effect.gen(function* () {
+      if (hasReservationIntervalEnded(interval, yield* currentInstant)) {
+        return refused("not_retryable");
+      }
       // Only a NEW reservation an interrupted earlier retry of this order created
       // is taken over; a confirmed one, or more than one, is left alone.
       const found = yield* findOrderDotyposReservations({
