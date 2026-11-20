@@ -323,6 +323,25 @@ describe("CheckoutPayPage payment navigation", () => {
     expect(openPaymentWindow).not.toHaveBeenCalled();
   });
 
+  test("shows the German order and pay heading with the signed total", async () => {
+    const { CheckoutPayPage } = await import("./checkout-pay-page");
+    const view = render(
+      <CheckoutPayPage
+        locale="de-DE"
+        payStateToken="signed-summary"
+        startPaymentAction={mock(async () => ({}))}
+        summary={buildDiscountedCoworkCheckoutSummary({ basisPoints: 5000 })}
+        variant="pay"
+      />
+    );
+
+    expect(
+      view.getByRole("heading", {
+        name: /^Für 175\sCZK bestellen und bezahlen$/,
+      })
+    ).toBeDefined();
+  });
+
   test("starts card directly and blocks both methods while card checkout starts", async () => {
     const { CheckoutPayPage } = await import("./checkout-pay-page");
     const execute = mock();

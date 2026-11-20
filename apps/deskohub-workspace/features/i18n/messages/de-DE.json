@@ -781,7 +781,7 @@
   "checkoutPayConsent": "Ich stimme <terms>den Allgemeinen Geschäftsbedingungen</terms> und <operatingRules>der Hausordnung</operatingRules> zu.<earlyPerformance> Ich verlange die Leistung zum reservierten Termin, innerhalb der Widerrufsfrist, und nehme zur Kenntnis, dass mein Widerrufsrecht mit ihrer vollständigen Erbringung erlischt.</earlyPerformance>",
   "checkoutPayOrderAndPayButton": "Zahlungspflichtig bestellen",
   "checkoutPayOrderAndPayAmountButton": "Zahlungspflichtig bestellen",
-  "checkoutPayMethodsTotal": "Zu zahlender Betrag {amount}",
+  "checkoutPayMethodsTotal": "Für {amount} bestellen und bezahlen",
   "checkoutPayByCard": "Zahlungspflichtig per Karte bestellen",
   "checkoutPayByQr": "Zahlungspflichtig per QR-Code bestellen",
   "checkoutPayMethodQr": "QR-Überweisung",
