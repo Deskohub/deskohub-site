@@ -27,8 +27,7 @@ const monitorStart = plainDateStringSchema.make("2026-11-02");
 const lastStartDate = plainDateStringSchema.make("2026-11-24");
 const buyerEmail = testEmailAddress("unlimited-pass-buyer");
 const holderEmail = testEmailAddress("unlimited-pass-holder");
-const earlyStart =
-  "I request that my Unlimited Pass start on the chosen date, within the statutory withdrawal period.";
+const earlyStart = m.unlimitedPassEarlyStartConsent({}, { locale });
 const availability = {
   status: "ready",
   today,
