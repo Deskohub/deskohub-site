@@ -1,12 +1,7 @@
 import { CircleAlert, CircleCheck } from "lucide-react";
 import { type Locale, m } from "@/features/i18n";
 import { Button } from "@/shared/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/shared/components/ui/tooltip";
+import { Tooltip } from "@/shared/components/ui/tooltip";
 
 export function EmailVerificationStatus({
   emailVerified,
@@ -33,27 +28,23 @@ export function EmailVerificationStatus({
   const label = status.label({}, { locale });
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            aria-label={label}
-            className="shrink-0"
-            size="icon-sm"
-            tone={status.tone}
-            type="button"
-            variant="ghost"
-          >
-            <Icon aria-hidden="true" className="size-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent
-          collisionPadding={16}
-          className="w-[min(22rem,calc(100vw-2rem))] break-words whitespace-normal"
+    <Tooltip
+      collisionPadding={16}
+      contentClassName="w-[min(22rem,calc(100vw-2rem))] break-words whitespace-normal"
+      trigger={
+        <Button
+          aria-label={label}
+          className="shrink-0"
+          size="icon-sm"
+          tone={status.tone}
+          type="button"
+          variant="ghost"
         >
-          {label}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+          <Icon aria-hidden="true" className="size-4" />
+        </Button>
+      }
+    >
+      {label}
+    </Tooltip>
   );
 }

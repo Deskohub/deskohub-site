@@ -1544,13 +1544,13 @@ class FakeBrowser {
     this.navigate(this.withLocale(this.currentUrl, locale));
   }
 
-  waitForHandler(selector: string, handler: string) {
-    if (selector === signInCodeSelector) {
-      if (handler !== "onChange" || this.codeStep === undefined) {
-        throw new Error("the sign-in code input is not shown");
-      }
-      return;
+  waitForSignInCodeInput() {
+    if (this.codeStep === undefined) {
+      throw new Error("the sign-in code input is not shown");
     }
+  }
+
+  waitForHandler(selector: string, handler: string) {
     if (selector.endsWith(languageTriggerSelector)) {
       if (handler !== "onPointerDown" || this.selectedSection !== "profile") {
         throw new Error("the language trigger is not on the profile section");
@@ -2113,9 +2113,7 @@ const fakeAccountBrowser = (
     }),
   waitForCoworkSelection: (_description, entryTier) =>
     Effect.sync(() => browser().waitForCoworkSelection(entryTier)),
-  waitForSignInCodeInput: Effect.sync(() =>
-    browser().waitForHandler(signInCodeSelector, "onChange")
-  ),
+  waitForSignInCodeInput: Effect.sync(() => browser().waitForSignInCodeInput()),
   waitForSignInForm: Effect.sync(() =>
     browser().waitForFormSubmitHandler(signInFormSelector, [
       signInEmailSelector,

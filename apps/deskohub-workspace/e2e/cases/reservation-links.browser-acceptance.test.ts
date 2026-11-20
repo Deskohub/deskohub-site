@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { CheckoutSummaryLine } from "@/features/checkout/components/checkout-summary-line";
 import { formatDiscountAdjustment } from "@/features/checkout/format-discount-adjustment";
 import { m } from "@/features/i18n";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -55,23 +58,27 @@ const zeroText = (data: CheckoutData) =>
 test.skipIf(!chromiumAvailable)(
   "exact-total check requires exactly one zero total row per locale",
   async () => {
-    const totalRow = (label: string, amount: string) => `
-    <div><span>${label}</span><span>${amount}</span></div>`;
+    const summaryLine = (
+      label: string,
+      locale: CheckoutData["locale"],
+      amount = 0
+    ) =>
+      renderToStaticMarkup(
+        createElement(CheckoutSummaryLine, {
+          amount: currencyCZK(amount),
+          label,
+          locale,
+        })
+      );
+    const enTotal = summaryLine("Total to pay", "en-US");
     const en = toAppliedZeroTotalPaySummary(enData);
+    const enApplied = `<p>${en.appliedMessage}</p>`;
 
+    expect(await holdsOn(enTotal, isAppliedZeroTotalPaySummary, en)).toBe(
+      false
+    );
     expect(
-      await holdsOn(
-        totalRow("Total to pay", zeroText(enData)),
-        isAppliedZeroTotalPaySummary,
-        en
-      )
-    ).toBe(false);
-    expect(
-      await holdsOn(
-        `${totalRow("Total to pay", zeroText(enData))}<p>${en.appliedMessage}</p>`,
-        isAppliedZeroTotalPaySummary,
-        en
-      )
+      await holdsOn(enTotal + enApplied, isAppliedZeroTotalPaySummary, en)
     ).toBe(true);
 
     const csApplied = m.checkoutDiscountCodeApplied(
@@ -80,7 +87,7 @@ test.skipIf(!chromiumAvailable)(
     );
     expect(
       await holdsOn(
-        `${totalRow("Celkem k platbě", zeroText(csData))}<p>${csApplied}</p>`,
+        `${summaryLine("Celkem k platbě", "cs-CZ")}<p>${csApplied}</p>`,
         isAppliedZeroTotalPaySummary,
         toAppliedZeroTotalPaySummary(csData)
       )
@@ -88,7 +95,7 @@ test.skipIf(!chromiumAvailable)(
 
     expect(
       await holdsOn(
-        `${totalRow("Total to pay", "100 Kč")}<p>Promotion applied: 100% off 🎉</p>`,
+        summaryLine("Total to pay", "en-US", 100) + enApplied,
         isAppliedZeroTotalPaySummary,
         en
       )
@@ -96,7 +103,9 @@ test.skipIf(!chromiumAvailable)(
 
     expect(
       await holdsOn(
-        `${totalRow("E2E 100% discount", "0 Kč")}${totalRow("Total to pay", "350 Kč")}`,
+        summaryLine("E2E 100% discount", "en-US") +
+          summaryLine("Total to pay", "en-US", 350) +
+          enApplied,
         isAppliedZeroTotalPaySummary,
         en
       )
@@ -104,7 +113,7 @@ test.skipIf(!chromiumAvailable)(
 
     expect(
       await holdsOn(
-        `${totalRow("Total to pay", zeroText(enData))}${totalRow("Total to pay", zeroText(enData))}<p>${en.appliedMessage}</p>`,
+        enTotal + enTotal + enApplied,
         isAppliedZeroTotalPaySummary,
         en
       )

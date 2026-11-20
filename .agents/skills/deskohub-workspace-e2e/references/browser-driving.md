@@ -35,6 +35,7 @@ Run a check every paid case could repeat, such as post-fulfillment support or re
 
 - App Router prefetch also needs hydration: `window.next.router` is exposed before Next initializes its action queue. `prefetchRoute` waits for the public header link's React click handler before prefetching; keep prefetch errors visible.
 - Wait for the specific React handler the component uses before you interact (`e2e/react-handlers.ts`). React props alone don't prove Radix or another composed primitive has installed its handler. Never use network idle as readiness; analytics keeps it open.
+- The UI SDK sign-in OTP attaches native input listeners when React mounts the control. Both the account lane and the signed-out checkout modal use `waitForReactHydration` on the OTP input before filling it.
 - Use Playwright locators and native fill, keyboard, and click, so handlers receive trusted events. Select the control by accessibility role, not a wrapping label. Prefer a stable app-owned ID or form-scoped selector for critical activation.
 - Never replace native form submission or link navigation with an evaluated DOM click. An evaluated click can navigate while leaving the driver blocked on the destroyed execution context.
 - Detaching any CDP session from a page resets Chromium's virtual authenticator environment there, which removes the passkey authenticator and its credentials. On a page where `holdsVirtualAuthenticator` (`e2e/virtual-authenticator.ts`) is true, leave your own CDP session attached; it ends with the page.

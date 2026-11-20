@@ -34,7 +34,7 @@ import {
   waitForPageCondition,
   waitForPageText,
   waitForPageUrl,
-  waitForReactHandler,
+  waitForReactHydration,
 } from "../browser";
 import type {
   E2EBrowserSession,
@@ -566,14 +566,14 @@ export const isSignedOutContactStep = ({
  * and reports which one it is: the code step while `login_email_code` is on,
  * the inbox notice otherwise.
  */
-const waitSignInAccepted = Effect.fn(
+export const waitSignInAccepted = Effect.fn(
   "SignedOutVerification.waitSignInAccepted"
 )(function* ({
   config,
   locale,
   session,
 }: {
-  readonly config: WorkspaceE2EConfig;
+  readonly config: Pick<WorkspaceE2EConfig, "timeouts">;
   readonly locale: CheckoutData["locale"];
   readonly session: E2EBrowserSession;
 }) {
@@ -587,7 +587,8 @@ const waitSignInAccepted = Effect.fn(
   });
   if (!pageText.includes(codeTitle))
     return "inbox" satisfies SignInConfirmation;
-  yield* waitForReactHandler(session, signInCodeSelector, "onChange", {
+  // The OTP component attaches native listeners to the hydrated input.
+  yield* waitForReactHydration(session, signInCodeSelector, {
     timeoutMs: config.timeouts.browserAction,
   });
   return "code" satisfies SignInConfirmation;

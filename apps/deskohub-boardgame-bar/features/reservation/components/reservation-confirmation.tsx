@@ -1,5 +1,6 @@
 "use client";
 
+import { Separator } from "@ui-sdk/react/separator";
 import { cva } from "class-variance-authority";
 import { Calendar, Clock, Mail, Phone, Users } from "lucide-react";
 import Link from "next/link";
@@ -16,7 +17,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/shared/components/ui/card";
-import { Separator } from "@/shared/components/ui/separator";
 import { cn } from "@/shared/utils";
 import { siteConstants } from "@/shared/utils/constants";
 import {
@@ -418,7 +418,7 @@ function ReservationPreferences({
 
   return (
     <>
-      <Separator className="my-6" />
+      <Separator decorative className="my-6 h-px w-full shrink-0 bg-border" />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {tablePreference && (
           <div>

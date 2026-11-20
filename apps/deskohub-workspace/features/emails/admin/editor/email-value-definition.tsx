@@ -218,12 +218,11 @@ function EmailValueCustomerPath({
       <EmailValueCustomerPicker
         selectedPath={path}
         onSelect={onSelect}
-        trigger={(open) => (
+        triggerRole="combobox"
+        trigger={
           <button
             id={pathId}
             type="button"
-            role="combobox"
-            aria-expanded={open}
             className={cn(
               fieldTriggerVariants({
                 variant: pathProblems.invalid ? "error" : "default",
@@ -243,7 +242,7 @@ function EmailValueCustomerPath({
               aria-hidden
             />
           </button>
-        )}
+        }
       />
       <EmailFieldProblems fieldId={pathId} />
     </div>

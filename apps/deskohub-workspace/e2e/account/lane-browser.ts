@@ -15,6 +15,7 @@ import {
   waitForPageUrl,
   waitForReactFormSubmit,
   waitForReactHandler,
+  waitForReactHydration,
 } from "../browser";
 import type {
   E2EBrowserSession,
@@ -569,8 +570,9 @@ const makeAccountBrowser = (
           { timeoutMs: timeouts.uiTransition }
         )
       ),
+    // The OTP component attaches native listeners to the hydrated input.
     waitForSignInCodeInput: withSession((opened) =>
-      waitForReactHandler(opened, signInCodeSelector, "onChange", {
+      waitForReactHydration(opened, signInCodeSelector, {
         timeoutMs: timeouts.browserAction,
       })
     ),

@@ -1,6 +1,7 @@
 "use client";
 
 import * as SheetPrimitive from "@radix-ui/react-dialog";
+import { bindDrag } from "@ui-sdk/core";
 import { cva, type VariantProps } from "class-variance-authority";
 import { X } from "lucide-react";
 import * as React from "react";
@@ -123,7 +124,7 @@ function SheetPanel({
         <div
           aria-hidden
           className="-mt-6 mb-2 flex cursor-grab touch-none justify-center pt-2.5 pb-3 active:cursor-grabbing"
-          {...swipe.handle}
+          onPointerDown={swipe.startSwipe}
         >
           <span className="h-1.25 w-10 rounded-full bg-navy-blue/15" />
         </div>
@@ -161,15 +162,15 @@ function useSwipeDownDismiss(onDismiss: (() => void) | undefined) {
   const [offset, setOffset] = React.useState(0);
   const [dragging, setDragging] = React.useState(false);
   const [dismissing, setDismissing] = React.useState(false);
-  const start = React.useRef<{ y: number; time: number } | null>(null);
+  const stopDrag = React.useRef<() => void>(undefined);
   const slideOut = React.useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  React.useEffect(() => () => clearTimeout(slideOut.current), []);
-
-  const end = () => {
-    start.current = null;
-    setDragging(false);
-  };
+  React.useEffect(
+    () => () => {
+      stopDrag.current?.();
+      clearTimeout(slideOut.current);
+    },
+    []
+  );
 
   return {
     dismissing,
@@ -177,35 +178,31 @@ function useSwipeDownDismiss(onDismiss: (() => void) | undefined) {
       transform: dismissing ? "translateY(100%)" : `translateY(${offset}px)`,
       transition: dragging ? "none" : `transform ${swipeSlideOutMs}ms ease-out`,
     } satisfies React.CSSProperties,
-    handle: {
-      onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => {
-        if (event.button !== 0 || dismissing) return;
-        event.currentTarget.setPointerCapture(event.pointerId);
-        start.current = { y: event.clientY, time: event.timeStamp };
-        setDragging(true);
-      },
-      onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => {
-        if (start.current)
-          setOffset(Math.max(0, event.clientY - start.current.y));
-      },
-      onPointerUp: (event: React.PointerEvent<HTMLDivElement>) => {
-        const swipe = start.current;
-        end();
-        if (!swipe) return;
-        const distance = Math.max(0, event.clientY - swipe.y);
-        const velocity = distance / Math.max(1, event.timeStamp - swipe.time);
-        const dismissed =
-          distance >= swipeDismissDistance ||
-          (distance >= swipeDismissMinimumDistance &&
-            velocity >= swipeDismissVelocity);
-        if (!dismissed) return setOffset(0);
-        setDismissing(true);
-        slideOut.current = setTimeout(() => onDismiss?.(), swipeSlideOutMs);
-      },
-      onPointerCancel: () => {
-        end();
-        setOffset(0);
-      },
+    startSwipe(event: React.PointerEvent<HTMLDivElement>) {
+      if (event.button !== 0 || dismissing) return;
+      stopDrag.current?.();
+      const down = event.nativeEvent;
+      setDragging(true);
+      stopDrag.current = bindDrag(event.currentTarget, down, {
+        onMove: ({ y }) => setOffset(Math.max(0, y - down.clientY)),
+        onEnd(up, canceled) {
+          stopDrag.current = undefined;
+          setDragging(false);
+          const distance = up.clientY - down.clientY;
+          const velocity =
+            distance / Math.max(1, up.timeStamp - down.timeStamp);
+          if (
+            canceled ||
+            distance < swipeDismissMinimumDistance ||
+            (distance < swipeDismissDistance && velocity < swipeDismissVelocity)
+          ) {
+            setOffset(0);
+            return;
+          }
+          setDismissing(true);
+          slideOut.current = setTimeout(() => onDismiss?.(), swipeSlideOutMs);
+        },
+      });
     },
   };
 }

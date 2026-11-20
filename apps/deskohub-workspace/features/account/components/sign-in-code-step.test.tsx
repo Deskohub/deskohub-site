@@ -59,7 +59,7 @@ const renderStep = ({
 
 const typeCode = async (input: HTMLInputElement, value: string) => {
   await act(async () => {
-    fireEvent.change(input, { target: { value } });
+    fireEvent.input(input, { target: { value } });
   });
 };
 
@@ -122,7 +122,7 @@ describe("sign-in code step", () => {
     }
   );
 
-  test.each(["482 913", "482913", " 482-913\n"])(
+  test.each(["482 913", "482913", " 482-913\n", "Your code is 482913"])(
     "normalises a pasted code %p and submits it",
     async (pasted) => {
       const { props, input } = renderStep();
@@ -132,6 +132,18 @@ describe("sign-in code step", () => {
       expect(props.verifyCode).toHaveBeenCalledWith("482913");
     }
   );
+
+  test("replaces the selected digits when pasting into a partial code", async () => {
+    const { props, input } = renderStep();
+
+    await typeCode(input(), "4003");
+    input().focus();
+    input().setSelectionRange(1, 3);
+    await pasteCode(input(), "Your code is 8291");
+
+    expect(props.verifyCode).toHaveBeenCalledTimes(1);
+    expect(props.verifyCode).toHaveBeenCalledWith("482913");
+  });
 
   test("rejects typed non-digits", async () => {
     const { props, input } = renderStep();

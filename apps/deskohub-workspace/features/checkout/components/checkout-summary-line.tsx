@@ -106,14 +106,14 @@ export function CheckoutSummaryLine({
       ) : (
         <span>{label}</span>
       )}
-      <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+      <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
         {amount ? (
           <span className="shrink-0 font-semibold tabular-nums">
             {formatMoney(amount, locale)}
           </span>
         ) : null}
         {children}
-      </span>
+      </div>
     </div>
   );
 }

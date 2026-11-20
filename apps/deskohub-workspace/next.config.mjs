@@ -105,6 +105,7 @@ const nextConfig = {
   transpilePackages: [
     "@deskohub/cloudinary",
     "@deskohub/cloudinary-image",
+    "@deskohub/tooltip",
     "@deskohub/workspace-admin-api",
     "@deskohub/workspace-customer-api",
   ],
