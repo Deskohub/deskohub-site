@@ -441,12 +441,22 @@ describe("drafts and publication", () => {
     expect(document.values[2]?.fallback).toBeUndefined();
   });
 
-  test("blocks publication of drafts with a missing purpose or invalid component settings", () => {
+  test("blocks publication and reports a missing purpose or invalid components", () => {
     const { purpose: _, ...withoutPurpose } = richDocument;
     const cases = [
       {
         input: withoutPurpose,
         problem: { _tag: "PurposeMissing" },
+      },
+      {
+        input: {
+          ...richDocument,
+          structure: [
+            ...richDocument.structure,
+            { _tag: "Divider", id: "rule" },
+          ],
+        },
+        problem: { _tag: "ComponentIdDuplicate", componentId: "rule" },
       },
       {
         input: {

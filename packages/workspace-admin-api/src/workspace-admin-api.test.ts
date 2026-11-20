@@ -1309,12 +1309,13 @@ describe("administration operation groups", () => {
   });
 });
 
-test("campaign and invoice contracts accept every supported locale", () => {
+test("campaign and invoice contracts accept exactly the supported locales", () => {
   for (const schema of [
     AdministrationCampaignLocale,
     AdministrationInvoiceCreateInput.fields.locale,
     AdministrationInvoiceDetail.fields.locale,
   ]) {
+    expect([...schema.literals]).toEqual([...supportedLocales]);
     const decode = Schema.decodeUnknownSync(schema);
     expect(supportedLocales.map((locale) => decode(locale))).toEqual([
       ...supportedLocales,
