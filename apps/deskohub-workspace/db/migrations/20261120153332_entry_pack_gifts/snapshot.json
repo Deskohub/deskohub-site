@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "25501a16-d3b8-4ceb-92f4-b42fa159952c",
+  "id": "99c5331f-7846-43fc-a4a1-f37da9bb550a",
   "prevIds": [
     "ec5a5feb-8b15-4d99-849b-36d4fb549c1e"
   ],
@@ -8028,6 +8028,19 @@
       "generated": null,
       "identity": null,
       "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "gift_issued_at",
       "entityType": "columns",
       "schema": "public",
       "table": "pass_purchases"
@@ -21638,7 +21651,7 @@
       "table": "pass_purchases"
     },
     {
-      "value": "\"gift_claimed_at\" is null or \"holder_account_id\" <> \"buyer_account_id\"",
+      "value": "(\"gift_issued_at\" is null and \"gift_claimed_at\" is null) or \"holder_account_id\" <> \"buyer_account_id\"",
       "name": "pass_purchases_gift_claim_check",
       "entityType": "checks",
       "schema": "public",
