@@ -124,6 +124,7 @@ test.skipIf(!chromiumAvailable)(
               const iconElement = button.querySelector("svg, img");
               const icon = iconElement?.getBoundingClientRect();
               let iconCenterFraction = 0.5;
+              let iconLeftFraction = 0;
               // Align the visible wordmark, including any transparent margins.
               if (iconElement instanceof HTMLImageElement) {
                 const canvas = document.createElement("canvas");
@@ -147,15 +148,18 @@ test.skipIf(!chromiumAvailable)(
                   right = Math.max(right, x + 1);
                 }
                 iconCenterFraction = (left + right) / (2 * canvas.width);
+                iconLeftFraction = left / canvas.width;
               }
               return {
                 background: style.backgroundColor,
                 height: box.height,
                 top: box.top,
+                buttonCenterX: (box.left + box.right) / 2,
                 payment: button.getAttribute("value"),
                 iconWidth: icon?.width,
                 iconCenterX:
                   icon && icon.left + icon.width * iconCenterFraction,
+                iconLeftX: icon && icon.left + icon.width * iconLeftFraction,
                 iconCentered:
                   !!icon &&
                   Math.abs(
@@ -197,6 +201,14 @@ test.skipIf(!chromiumAvailable)(
             Math.abs((card.iconCenterX ?? -1) - (qr.iconCenterX ?? -1))
           ).toBeLessThanOrEqual(0.5);
           expect(card.label.left).toBeCloseTo(qr.label.left);
+          if (!qr.wrapped && !card.wrapped) {
+            const blockLeft = Math.min(card.iconLeftX ?? 0, qr.iconLeftX ?? 0);
+            const blockRight = Math.max(card.label.right, qr.label.right);
+            const blockCenter = (blockLeft + blockRight) / 2;
+            expect(
+              Math.abs(blockCenter - card.buttonCenterX)
+            ).toBeLessThanOrEqual(6);
+          }
           for (const { content, height, label, payment } of buttons) {
             expect(height).toBeGreaterThanOrEqual(48);
             expect({ locale, width, payment, overflow: false }).toEqual({

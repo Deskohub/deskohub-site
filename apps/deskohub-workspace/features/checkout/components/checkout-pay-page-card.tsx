@@ -259,24 +259,31 @@ export function CheckoutPayMethodButtons({
           {formatMoney(total, locale)}
         </span>
       </h2>
-      <div className="grid gap-2">
+      {/* Equal outer tracks center the shared columns around the wider label. */}
+      <div
+        className={cn(
+          "grid gap-y-2 [--payment-inset:1.5rem] @max-[18rem]:[--payment-inset:0.75rem]",
+          "supports-[grid-template-columns:subgrid]:grid-cols-[minmax(var(--payment-inset),1fr)_3rem_minmax(0,max-content)_minmax(var(--payment-inset),1fr)]",
+          "supports-[grid-template-columns:subgrid]:[&>button]:grid supports-[grid-template-columns:subgrid]:[&>button]:grid-cols-subgrid"
+        )}
+      >
         <CheckoutPayButton
-          align="start"
           describedBy={totalId}
           disabled={disabled}
           label={m.checkoutPayByQr({}, { locale })}
           locale={locale}
           pending={pendingMethod === "qr"}
           payment="qr"
+          sharedColumns
         />
         <CheckoutPayButton
-          align="start"
           describedBy={`${totalId} ${cardHandoffId}`}
           disabled={disabled}
           label={m.checkoutPayByCard({}, { locale })}
           locale={locale}
           pending={pendingMethod === "card"}
           payment="card"
+          sharedColumns
         />
       </div>
       <CheckoutPayProviderHandoff id={cardHandoffId} locale={locale} />
@@ -285,7 +292,6 @@ export function CheckoutPayMethodButtons({
 }
 
 function CheckoutPayButton({
-  align = "center",
   describedBy,
   disabled,
   label,
@@ -293,8 +299,8 @@ function CheckoutPayButton({
   onClick,
   payment,
   pending,
+  sharedColumns = false,
 }: {
-  readonly align?: "center" | "start";
   readonly describedBy?: string;
   readonly disabled?: boolean;
   readonly label: string;
@@ -302,9 +308,10 @@ function CheckoutPayButton({
   readonly onClick?: () => void;
   readonly payment: CheckoutPaymentMethod | "free" | "retry";
   readonly pending?: boolean;
+  readonly sharedColumns?: boolean;
 }) {
   const iconClassName = "size-4 shrink-0";
-  const compact = align === "start" || payment === "card";
+  const compact = sharedColumns || payment === "card";
   const icon = pending
     ? null
     : {
@@ -313,7 +320,7 @@ function CheckoutPayButton({
           // biome-ignore lint/performance/noImgElement: The fixed-size provider wordmark is served at its authored resolution.
           <img
             alt=""
-            className="-mr-3.5 shrink-0"
+            className="-mr-3.5 max-w-none shrink-0"
             height={15}
             src="/payment/nexi-wordmark-white.png"
             width={48}
@@ -327,6 +334,7 @@ function CheckoutPayButton({
     <Button
       aria-describedby={describedBy}
       caps
+      className={sharedColumns ? "col-span-full" : undefined}
       disabled={disabled}
       fullWidth
       name="method"
@@ -340,14 +348,17 @@ function CheckoutPayButton({
     >
       <span
         className={cn(
-          align === "start"
-            ? "grid w-full grid-cols-[3rem_minmax(0,1fr)] items-center gap-x-2 text-start @max-[18rem]:gap-x-1"
+          sharedColumns
+            ? "grid max-w-full min-w-0 grid-cols-[3rem_minmax(0,1fr)] items-center text-start supports-[grid-template-columns:subgrid]:col-span-2 supports-[grid-template-columns:subgrid]:col-start-2 supports-[grid-template-columns:subgrid]:grid-cols-subgrid"
             : "flex min-w-0 items-center justify-center gap-3",
-          align === "center" && compact && "@max-[18rem]:gap-1"
+          !sharedColumns && compact && "@max-[18rem]:gap-1"
         )}
       >
-        {align === "start" ? (
-          <span className="flex justify-center" aria-hidden="true">
+        {sharedColumns ? (
+          <span
+            className="flex justify-center pe-2 @max-[18rem]:pe-1"
+            aria-hidden="true"
+          >
             {icon}
           </span>
         ) : (
@@ -356,7 +367,7 @@ function CheckoutPayButton({
         <span
           className={cn(
             "min-w-0",
-            align === "center" && "text-balance",
+            !sharedColumns && "text-balance",
             compact
               ? "@max-[21rem]:text-xs @max-[21rem]:tracking-[0.08em]"
               : "@max-[18rem]:text-xs @max-[18rem]:tracking-[0.08em]"
