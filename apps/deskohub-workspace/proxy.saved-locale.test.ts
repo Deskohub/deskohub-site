@@ -44,7 +44,7 @@ const readOwnedEntryPackOrderLocale = mock((orderId: OrderId) =>
 );
 mock.module("@/features/passes/backend/entry-pack-order", () => ({
   ...entryPackOrders,
-  readOwnedEntryPackOrderLocale,
+  readOwnedPassPurchaseOrderLocale: readOwnedEntryPackOrderLocale,
 }));
 
 // Keep the real verifier, but let one test make it throw.

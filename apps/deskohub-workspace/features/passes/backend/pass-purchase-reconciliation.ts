@@ -199,7 +199,11 @@ const reconcileUnlimitedPassReleases = Effect.fn(
   const { db } = yield* WorkspaceDatabase;
   const due = (now: Temporal.Instant) =>
     or(
-      inArray(passPurchases.status, ["void", "withdrawn", "cancelled"]),
+      eq(passPurchases.status, "void"),
+      and(
+        inArray(passPurchases.status, ["withdrawn", "cancelled"]),
+        sql`${passPurchases.accessEndsOn} is not null`
+      ),
       and(
         eq(passPurchases.status, "pending_payment"),
         eq(orders.paymentState, "not_started"),

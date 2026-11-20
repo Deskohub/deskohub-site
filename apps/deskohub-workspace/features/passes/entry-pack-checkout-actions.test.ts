@@ -56,7 +56,7 @@ const readOwnedLocale = mock((orderId: OrderId) =>
 );
 mock.module("./backend/entry-pack-order", () => ({
   ...entryPackOrders,
-  readOwnedEntryPackOrderLocale: readOwnedLocale,
+  readOwnedPassPurchaseOrderLocale: readOwnedLocale,
 }));
 
 const amount = currencyCZK(115_000);

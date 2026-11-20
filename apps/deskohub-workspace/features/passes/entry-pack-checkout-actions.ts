@@ -2,6 +2,7 @@
 
 import { Duration, Effect, Layer, Option, Schema, Struct } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
 import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
@@ -14,16 +15,16 @@ import { LatePaymentVerificationService } from "@/features/checkout/backend/paym
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentProvidersLive } from "@/features/checkout/backend/payment/payment-providers";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
-import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
 import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { normalizeSubmittedPromotionCode } from "@/features/discounts/promotion-code";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { locales } from "@/features/i18n";
-import { orderIdSchema } from "@/features/order";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import { ReferralService } from "@/features/referrals";
 import { ReferralReleaseGateRequest } from "@/features/referrals/referral-release-gate.server";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
+import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { reservationCustomerNameSchema } from "@/features/reservation/reservation-contact";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
@@ -32,7 +33,10 @@ import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import type { ResolveIssuedActionLocale } from "@/shared/utils/action-middleware/locale";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
-import { readOwnedPassPurchaseOrderLocale } from "./backend/entry-pack-order";
+import {
+  findOwnedPassPurchaseOrder,
+  readOwnedPassPurchaseOrderLocale,
+} from "./backend/entry-pack-order";
 import {
   beginEntryPackPurchase,
   displayPassPurchasePrice,
@@ -42,7 +46,7 @@ import {
   repriceEntryPackPurchase,
 } from "./backend/entry-pack-purchase";
 import {
-  getBookableUnlimitedStarts,
+  getBookableUnlimitedStartMatrix,
   unlimitedStartRangeMaxDays,
 } from "./backend/unlimited-pass-capacity";
 import {
@@ -273,6 +277,8 @@ const payUnlimitedAction = makePayAction("unlimited");
 const unlimitedPurchaseLayer = Layer.mergeAll(
   purchaseLayer,
   WorkspaceDotyposLayer,
+  WorkspaceDatabaseAdvisoryLock.Default,
+  GoogleCalendarWorkspaceLimitationsService.Live,
   WorkspaceReservationRepository.Default.pipe(
     Layer.provide(WorkspaceDatabase.Default)
   )
@@ -356,6 +362,7 @@ const unlimitedAvailabilityAction = defineWorkspaceAction(
       Schema.Struct({
         locale: Schema.Literals(locales),
         startsOn: Schema.optionalKey(plainDateStringSchema),
+        supersedeOrderId: Schema.optionalKey(orderIdSchema),
       })
     ),
     deadline: Duration.seconds(18),
@@ -363,6 +370,7 @@ const unlimitedAvailabilityAction = defineWorkspaceAction(
   },
   Effect.fnUntraced(function* (input: {
     readonly startsOn?: typeof plainDateStringSchema.Type;
+    readonly supersedeOrderId?: OrderId;
   }) {
     const flags = yield* WorkspaceFeatureFlagService;
     if (!(yield* flags.isEnabled("cowork_passes")))
@@ -382,36 +390,35 @@ const unlimitedAvailabilityAction = defineWorkspaceAction(
       Temporal.PlainDate.compare(rangeEnd, lastStartDate) > 0
         ? lastStartDate.add({ days: 1 })
         : rangeEnd;
-    const read = (
-      selection: Parameters<typeof getBookableUnlimitedStarts>[0]["selection"]
-    ) =>
-      getBookableUnlimitedStarts({ selection, startsOn, endsBefore }).pipe(
-        Effect.map((dates) =>
-          dates.map((date) => plainDateStringSchema.make(date.toString()))
-        )
+    let supersedeOrderId: OrderId | undefined;
+    if (input.supersedeOrderId) {
+      const actor = yield* CurrentCustomerAccount;
+      const session = yield* actor.requireActive.pipe(
+        Effect.catchTag("CustomerAccountAccessError", () => Effect.undefined)
       );
-    const [open, reserved, workstation] = yield* Effect.all([
-      read({ tier: "open-space" }),
-      read({ tier: "reserved-desk" }),
-      Effect.all({
-        "2x27-qhd": read({
-          tier: "reserved-desk-workstation",
-          monitorOption: workspaceProductMonitorOptions[0],
-        }),
-        "2x32-qhd": read({
-          tier: "reserved-desk-workstation",
-          monitorOption: workspaceProductMonitorOptions[1],
-        }),
-        "2x27-4k": read({
-          tier: "reserved-desk-workstation",
-          monitorOption: workspaceProductMonitorOptions[2],
-        }),
-        "2x32-4k": read({
-          tier: "reserved-desk-workstation",
-          monitorOption: workspaceProductMonitorOptions[3],
-        }),
-      }),
-    ]);
+      if (session) {
+        const owned = yield* findOwnedPassPurchaseOrder(
+          input.supersedeOrderId,
+          session.accountId,
+          "unlimited"
+        );
+        if (
+          owned?.order.paymentState === "not_started" &&
+          !owned.order.activePaymentAttemptId &&
+          owned.purchase.status === "pending_payment"
+        ) {
+          supersedeOrderId = owned.order.id;
+        }
+      }
+    }
+    const matrix = yield* getBookableUnlimitedStartMatrix({
+      startsOn,
+      endsBefore,
+      ...(supersedeOrderId && { supersedeOrderId }),
+    });
+    const toDates = (dates: readonly Temporal.PlainDate[]) =>
+      dates.map((date) => plainDateStringSchema.make(date.toString()));
+    const workstation = matrix["reserved-desk-workstation"];
     return {
       status: "ready" as const,
       today: plainDateStringSchema.make(today.toString()),
@@ -419,9 +426,14 @@ const unlimitedAvailabilityAction = defineWorkspaceAction(
         endsBefore.subtract({ days: 1 }).toString()
       ),
       starts: {
-        "open-space": open,
-        "reserved-desk": reserved,
-        "reserved-desk-workstation": workstation,
+        "open-space": toDates(matrix["open-space"]),
+        "reserved-desk": toDates(matrix["reserved-desk"]),
+        "reserved-desk-workstation": {
+          "2x27-qhd": toDates(workstation["2x27-qhd"]),
+          "2x32-qhd": toDates(workstation["2x32-qhd"]),
+          "2x27-4k": toDates(workstation["2x27-4k"]),
+          "2x32-4k": toDates(workstation["2x32-4k"]),
+        },
       },
     };
   }, Effect.provide(unlimitedPurchaseLayer))

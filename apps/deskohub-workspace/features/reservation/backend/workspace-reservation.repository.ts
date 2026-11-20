@@ -1821,6 +1821,7 @@ export class WorkspaceReservationRepository extends Context.Service<
             .where(
               and(
                 eq(workspaceReservations.id, id),
+                isNull(workspaceReservations.passId),
                 eq(workspaceReservations.reservationState, "held"),
                 inArray(
                   workspaceReservations.paymentState,
@@ -2234,6 +2235,7 @@ export class WorkspaceReservationRepository extends Context.Service<
               .from(workspaceReservations)
               .where(
                 and(
+                  isNull(workspaceReservations.passId),
                   or(
                     eq(workspaceReservations.reservationState, "held"),
                     and(
@@ -2275,6 +2277,7 @@ export class WorkspaceReservationRepository extends Context.Service<
             .from(workspaceReservations)
             .where(
               and(
+                isNull(workspaceReservations.passId),
                 eq(workspaceReservations.reservationState, "held"),
                 inArray(workspaceReservations.paymentState, [
                   "not_started",
@@ -2309,7 +2312,14 @@ export class WorkspaceReservationRepository extends Context.Service<
             )
             .where(
               and(
-                eq(workspaceReservations.reservationState, "creating_hold"),
+                inArray(workspaceReservations.reservationState, [
+                  "creating_hold",
+                  "held",
+                  "confirming",
+                  "confirmed",
+                  "cancelling",
+                  "cancellation_failed",
+                ]),
                 gte(
                   workspaceReservations.serviceDate,
                   plainDateStringSchema.make(first.toString())

@@ -48,7 +48,10 @@ export function EntryPackPay({
 }) {
   const { product } = state;
   const [price, setPrice] = useState(state.price);
-  const [disclosure, setDisclosure] = useState(state.disclosure);
+  const [disclosure, setDisclosure] = useState<{
+    readonly documents: typeof state.disclosure.documents;
+    readonly earlyStartRequest?: string;
+  }>(state.disclosure);
   const [checked, setChecked] = useState(false);
   const { appliedDiscountCode } = price;
   const [draft, setDraft] = useState("");

@@ -20,9 +20,9 @@ import {
 } from "@/features/checkout/checkout-identifiers";
 import type { Locale } from "@/features/i18n";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
-import { getReservationHoldExpiresAt } from "@/features/reservation/backend/reservation-holds.service";
 import { StoredReservationDetails } from "@/features/reservation/backend/stored-reservation-details.server";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { getReservationHoldExpiresAt } from "@/features/reservation/reservation-hold-deadline";
 import type { PlainDate } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
 import {

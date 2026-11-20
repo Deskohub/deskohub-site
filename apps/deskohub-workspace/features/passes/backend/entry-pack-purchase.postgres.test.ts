@@ -82,7 +82,7 @@ import {
   resolveEntryPackGiftInvitation,
 } from "./entry-pack-gift";
 import { requestEntryPackGiftResend } from "./entry-pack-gift-resend";
-import { readOwnedEntryPackOrderLocale } from "./entry-pack-order";
+import { readOwnedPassPurchaseOrderLocale } from "./entry-pack-order";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
 import {
   beginEntryPackPurchase,
@@ -175,7 +175,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
       const localeFor = (viewer: typeof session | null, id = orderId) =>
         Effect.runPromise(
-          readOwnedEntryPackOrderLocale(id).pipe(
+          readOwnedPassPurchaseOrderLocale(id, "entry-pack").pipe(
             Effect.provide(
               Layer.mergeAll(
                 db.layer,

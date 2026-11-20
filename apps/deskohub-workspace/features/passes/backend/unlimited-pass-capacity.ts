@@ -13,7 +13,11 @@ import {
   type WorkspaceTableCandidate,
 } from "@/features/checkout/backend/reservation";
 import { selectWorkspaceTableFromCandidates } from "@/features/checkout/backend/reservation/workspace-table-selection";
-import type { WorkspaceProductMonitorOption } from "@/features/checkout/product-catalog";
+import {
+  type WorkspaceProductMonitorOption,
+  workspaceProductMonitorOptions,
+} from "@/features/checkout/product-catalog";
+import type { OrderId } from "@/features/order";
 import {
   getFullyOccupiedCalendarDates,
   makeProviderInventory,
@@ -72,17 +76,13 @@ const getCapacityQuery = (
     ? { entryTier: "reserved-desk", monitorOption: selection.monitorOption }
     : { entryTier: selection.tier };
 
-const loadUnlimitedCapacity = Effect.fn("loadUnlimitedCapacity")(function* (
-  selection: UnlimitedPassCapacitySelection,
+const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
   dates: readonly Temporal.PlainDate[],
-  now: Temporal.Instant
+  now: Temporal.Instant,
+  supersedeOrderId?: OrderId
 ) {
   const inventory = yield* makeProviderInventory;
   const workspaceReservations = yield* WorkspaceReservationRepository;
-  const query = getCapacityQuery(selection);
-  const intervals = dates.map((date) =>
-    getCoworkReservationInterval(query.entryTier, date.toString())
-  );
   const first = dates[0]!;
   const last = dates.at(-1)!;
   // Read intents before the provider list so a concurrent attach cannot
@@ -96,8 +96,16 @@ const loadUnlimitedCapacity = Effect.fn("loadUnlimitedCapacity")(function* (
     {
       tables: inventory.tables,
       reservations: inventory.listActiveReservationsOverlapping({
-        startDate: new Date(getOccupancyWindow(intervals[0]!).startsAt),
-        endDate: new Date(getOccupancyWindow(intervals.at(-1)!).endsAt),
+        startDate: new Date(
+          getOccupancyWindow(
+            getCoworkReservationInterval("reserved-desk", first.toString())
+          ).startsAt
+        ),
+        endDate: new Date(
+          getOccupancyWindow(
+            getCoworkReservationInterval("reserved-desk", last.toString())
+          ).endsAt
+        ),
       }),
       limitations: inventory.listLimitations({
         from: first.toString(),
@@ -110,48 +118,71 @@ const loadUnlimitedCapacity = Effect.fn("loadUnlimitedCapacity")(function* (
     { concurrency: "unbounded" }
   );
 
-  const candidates = yield* Effect.fromResult(
-    decodeTableCandidates(
-      getWorkspaceTableCandidatesByPredicate(tables, (tags) =>
-        isWorkspaceCoworkTableCandidate(tags, query)
-      )
-    )
-  );
-  const closedDates = getFullyOccupiedCalendarDates(limitations);
-  const bookings = getBookingsWithPassDayIntents(
-    excludeDotyposReservationsById(reservations, expiredIds),
-    intents
-  );
-  const today = getCurrentWorkspaceDate(now);
-  const days = dates.map((serviceDate, index) => {
-    const interval = intervals[index]!;
-    const occupancy = getTableBookingOccupancyById(
-      bookings,
-      getOccupancyWindow(interval)
-    );
-    const date = serviceDate.toString();
-    const closed =
-      Temporal.PlainDate.compare(serviceDate, today) < 0 ||
-      closedDates.has(date) ||
-      isCoworkOpenSpaceDayCutoffReached({
-        entryTier: query.entryTier,
-        date,
-        now,
-      });
-    const freeTables = closed
-      ? []
-      : candidates
-          .filter((candidate) => hasCandidateCapacity([candidate], occupancy))
-          .map(({ table }) => table);
-
-    return { serviceDate, interval, occupancy, freeTables };
-  });
-
-  return { tables, days };
+  return {
+    tables,
+    closedDates: getFullyOccupiedCalendarDates(limitations),
+    bookings: getBookingsWithPassDayIntents(
+      excludeDotyposReservationsById(reservations, expiredIds),
+      intents,
+      supersedeOrderId
+    ),
+  };
 });
 
+const evaluateUnlimitedCapacity = Effect.fn("evaluateUnlimitedCapacity")(
+  function* (
+    selection: UnlimitedPassCapacitySelection,
+    dates: readonly Temporal.PlainDate[],
+    now: Temporal.Instant,
+    {
+      tables,
+      closedDates,
+      bookings,
+    }: Effect.Success<ReturnType<typeof loadUnlimitedInventory>>
+  ) {
+    const query = getCapacityQuery(selection);
+
+    const candidates = yield* Effect.fromResult(
+      decodeTableCandidates(
+        getWorkspaceTableCandidatesByPredicate(tables, (tags) =>
+          isWorkspaceCoworkTableCandidate(tags, query)
+        )
+      )
+    );
+    const today = getCurrentWorkspaceDate(now);
+    const days = dates.map((serviceDate) => {
+      const interval = getCoworkReservationInterval(
+        query.entryTier,
+        serviceDate.toString()
+      );
+      const occupancy = getTableBookingOccupancyById(
+        bookings,
+        getOccupancyWindow(interval)
+      );
+      const date = serviceDate.toString();
+      const closed =
+        Temporal.PlainDate.compare(serviceDate, today) < 0 ||
+        closedDates.has(date) ||
+        isCoworkOpenSpaceDayCutoffReached({
+          entryTier: query.entryTier,
+          date,
+          now,
+        });
+      const freeTables = closed
+        ? []
+        : candidates
+            .filter((candidate) => hasCandidateCapacity([candidate], occupancy))
+            .map(({ table }) => table);
+
+      return { serviceDate, interval, occupancy, freeTables };
+    });
+
+    return { tables, days };
+  }
+);
+
 type CapacityInventory = Effect.Success<
-  ReturnType<typeof loadUnlimitedCapacity>
+  ReturnType<typeof evaluateUnlimitedCapacity>
 >;
 type CapacityDay = CapacityInventory["days"][number];
 
@@ -160,37 +191,98 @@ const getCommonDesks = (days: readonly CapacityDay[]) =>
     days.every(({ freeTables }) => freeTables.some((table) => table.id === id))
   );
 
-/** Loads a calendar-sized range of possible starts with one inventory read. */
-export const getBookableUnlimitedStarts = Effect.fn(
-  "getBookableUnlimitedStarts"
-)(function* (input: {
-  readonly selection: UnlimitedPassCapacitySelection;
+type UnlimitedStartRange = {
   readonly startsOn: Temporal.PlainDate;
   readonly endsBefore: Temporal.PlainDate;
-}) {
+  readonly supersedeOrderId?: OrderId;
+};
+
+const getStartRangeDates = Effect.fnUntraced(function* (
+  input: UnlimitedStartRange
+) {
   const dayCount = input.startsOn.until(input.endsBefore).days;
   if (dayCount < 0 || dayCount > unlimitedStartRangeMaxDays) {
     return yield* new InvalidUnlimitedStartRange({
       message: `Unlimited start range must cover at most ${unlimitedStartRangeMaxDays} days in chronological order.`,
     });
   }
-  if (dayCount === 0) return [];
+  const dates =
+    dayCount === 0
+      ? []
+      : getPlainDatesBetween(
+          input.startsOn,
+          input.endsBefore.add({ days: unlimitedPassDays - 2 })
+        );
+  return { dayCount, dates };
+});
 
-  const dates = getPlainDatesBetween(
-    input.startsOn,
-    input.endsBefore.add({ days: unlimitedPassDays - 2 })
-  );
-  const { days } = yield* loadUnlimitedCapacity(
-    input.selection,
-    dates,
-    Temporal.Now.instant()
-  );
-
-  return dates.slice(0, dayCount).filter((_, index) => {
+const filterBookableStarts = (
+  selection: UnlimitedPassCapacitySelection,
+  dates: readonly Temporal.PlainDate[],
+  dayCount: number,
+  days: readonly CapacityDay[]
+) =>
+  dates.slice(0, dayCount).filter((_, index) => {
     const window = days.slice(index, index + unlimitedPassDays);
-    return input.selection.tier === "open-space"
+    return selection.tier === "open-space"
       ? window.every(({ freeTables }) => freeTables.length > 0)
       : getCommonDesks(window).length > 0;
+  });
+
+/** Loads a calendar-sized range of possible starts with one inventory read. */
+export const getBookableUnlimitedStarts = Effect.fn(
+  "getBookableUnlimitedStarts"
+)(function* (
+  input: UnlimitedStartRange & {
+    readonly selection: UnlimitedPassCapacitySelection;
+  }
+) {
+  const { dayCount, dates } = yield* getStartRangeDates(input);
+  if (!dayCount) return [];
+  const now = Temporal.Now.instant();
+  const inventory = yield* loadUnlimitedInventory(
+    dates,
+    now,
+    input.supersedeOrderId
+  );
+  const { days } = yield* evaluateUnlimitedCapacity(
+    input.selection,
+    dates,
+    now,
+    inventory
+  );
+  return filterBookableStarts(input.selection, dates, dayCount, days);
+});
+
+/** All offers on a visible calendar share the same provider inventory read. */
+export const getBookableUnlimitedStartMatrix = Effect.fn(
+  "getBookableUnlimitedStartMatrix"
+)(function* (input: UnlimitedStartRange) {
+  const { dates, dayCount } = yield* getStartRangeDates(input);
+  const now = Temporal.Now.instant();
+  const inventory = dayCount
+    ? yield* loadUnlimitedInventory(dates, now, input.supersedeOrderId)
+    : undefined;
+  const read = (selection: UnlimitedPassCapacitySelection) =>
+    inventory
+      ? evaluateUnlimitedCapacity(selection, dates, now, inventory).pipe(
+          Effect.map(({ days }) =>
+            filterBookableStarts(selection, dates, dayCount, days)
+          )
+        )
+      : Effect.succeed([]);
+  const workstation = (monitorOption: WorkspaceProductMonitorOption) =>
+    read({ tier: "reserved-desk-workstation", monitorOption });
+  const [first, second, third, fourth] = workspaceProductMonitorOptions;
+  return yield* Effect.all({
+    "open-space": read({ tier: "open-space" }),
+    "reserved-desk": read({ tier: "reserved-desk" }),
+    "reserved-desk-workstation": Effect.all({
+      [first]: workstation(first),
+      [second]: workstation(second),
+      [third]: workstation(third),
+      [fourth]: workstation(fourth),
+    }),
   });
 });
 
@@ -204,10 +296,13 @@ const allocateUnlimitedPass = Effect.fn("allocateUnlimitedPass")(function* (
   selection: UnlimitedPassCapacitySelection,
   dates: readonly Temporal.PlainDate[]
 ) {
-  const { tables, days } = yield* loadUnlimitedCapacity(
+  const now = Temporal.Now.instant();
+  const inventory = yield* loadUnlimitedInventory(dates, now);
+  const { tables, days } = yield* evaluateUnlimitedCapacity(
     selection,
     dates,
-    Temporal.Now.instant()
+    now,
+    inventory
   );
   const blocked = days.filter(({ freeTables }) => freeTables.length === 0);
   if (blocked.length > 0) {
