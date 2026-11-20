@@ -223,6 +223,12 @@ export async function areReferralsEnabled(): Promise<boolean> {
 }
 `;
 
+const fixtureCoworkPassesReleaseGate = `
+export async function isCoworkPassesPageOpenAfterConnection(): Promise<boolean> {
+  return false;
+}
+`;
+
 const fixtureMarketingPreferences = `
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import type { Locale } from "@/features/i18n";
@@ -361,6 +367,12 @@ export async function loadCustomerAccountPage() {
 const fixtureInvoiceHistory = `
 export async function loadCustomerInvoiceHistory() {
   return { kind: "unavailable" as const };
+}
+`;
+
+const fixtureAccountPasses = `
+export async function loadCustomerAccountPasses() {
+  return [];
 }
 `;
 
@@ -511,8 +523,11 @@ const writeFixture = async (
     "fixture/analytics-preference.server.ts": fixtureAnalyticsPreference,
     "fixture/account-draft.tsx": fixtureAccountDraft,
     "fixture/account-page.tsx": fixtureAccountPage,
+    "fixture/account-passes.server.ts": fixtureAccountPasses,
     "fixture/account-page-data.server.ts": fixtureAccountPageData,
     "fixture/customer-authentication.service.ts": fixtureAuthentication,
+    "fixture/cowork-passes-release-gate.server.ts":
+      fixtureCoworkPassesReleaseGate,
     ...(realCookieConsent
       ? {}
       : { "fixture/cookie-consent.ts": fixtureCookieConsent }),
@@ -567,6 +582,9 @@ const writeFixture = async (
         "@/features/account/invoice-history.server": [
           "./fixture/invoice-history.server.ts",
         ],
+        "@/features/account/account-passes.server": [
+          "./fixture/account-passes.server.ts",
+        ],
         "@/features/account/backend/customer-authentication.service": [
           "./fixture/customer-authentication.service.ts",
         ],
@@ -581,6 +599,9 @@ const writeFixture = async (
           "./fixture/marketing-preferences.server.ts",
         ],
         "@/features/legal/actions": ["./fixture/marketing-actions.ts"],
+        "@/features/passes/backend/cowork-passes-release-gate.server": [
+          "./fixture/cowork-passes-release-gate.server.ts",
+        ],
         "@/features/referrals/referral-release-gate.server": [
           "./fixture/referral-release-gate.server.ts",
         ],

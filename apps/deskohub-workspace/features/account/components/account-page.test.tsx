@@ -66,11 +66,12 @@ mock.module("@/features/account/analytics-identity", () => ({
   refreshAnalyticsAccountIdentity,
   subscribeAnalyticsAccountIdentity: () => () => undefined,
 }));
+let pathname = "/en-US/account";
 mock.module("next/navigation", () => ({
   unstable_rethrow: (cause: unknown) => {
     throw cause;
   },
-  usePathname: () => "/en-US/account",
+  usePathname: () => pathname,
   useRouter: () => ({
     push: workspaceRouterPush,
     refresh: workspaceRouterRefresh,
@@ -224,6 +225,7 @@ describe("AccountPage states", () => {
 
   afterEach(() => {
     cleanup();
+    pathname = "/en-US/account";
     completeCustomerProfile.mockClear();
     workspaceRouterRefresh.mockClear();
     workspaceRouterRefresh.mockImplementation(() => undefined);
@@ -871,6 +873,41 @@ describe("AccountPage states", () => {
     expect(
       view.container.querySelector('[data-slot="invoice-history"]')
     ).toBeNull();
+  });
+
+  test("keeps the deletion notice and retry visible at the Passes path", async () => {
+    pathname = "/en-US/account/passes";
+    const { AccountPage } = await import("./account-page");
+    const { AccountLayoutShell } = await import("./account-layout-shell");
+    const loadPasses = mock(async () => []);
+    const view = render(
+      <AccountLayoutShell
+        locale="en-US"
+        passkeysEnabled={false}
+        passesEnabled
+        referralsEnabled
+        signedIn
+      >
+        <AccountPage
+          loadInvoiceHistory={loadInvoiceHistory}
+          loadPasses={loadPasses}
+          locale="en-US"
+          state={{
+            kind: "deletion-pending",
+            deletion: "pending",
+            email: adaAddress,
+          }}
+        />
+      </AccountLayoutShell>
+    );
+
+    expect(
+      view.getByRole("heading", { name: m.accountDeletionPendingTitle({}, en) })
+    ).toBeTruthy();
+    expect(
+      view.getByRole("button", { name: m.accountDeletionConfirm({}, en) })
+    ).toBeTruthy();
+    expect(loadPasses).not.toHaveBeenCalled();
   });
 
   test("redirects unauthenticated visitors without loading account data", async () => {

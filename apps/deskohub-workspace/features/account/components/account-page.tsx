@@ -53,10 +53,9 @@ export function AccountPage({
         }
         locale={locale}
         passes={
-          loadPasses &&
-          state.kind !== "deletion-pending" && (
+          loadPasses && state.kind !== "deletion-pending" ? (
             <AccountPassesPanel locale={locale} packs={loadPasses()} />
-          )
+          ) : undefined
         }
         state={withRenderedReservations(state, locale)}
       />

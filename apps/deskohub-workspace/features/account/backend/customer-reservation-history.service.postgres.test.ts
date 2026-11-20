@@ -16,14 +16,17 @@ import {
   DotyposUnavailable,
 } from "@deskohub/dotypos";
 import { Effect, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import { loadAccountPasses } from "@/features/account/account-passes.server";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import {
   type StoredWorkspaceReservationDetails,
   type WorkspaceReservationId,
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
+import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { ReviewAccounts, ReviewSandbox } from "@/features/review-accounts";
 import {
   fixtureReservationAuthorId,
@@ -35,6 +38,7 @@ import {
   type CustomerAccountId,
   customerAccountIdSchema,
 } from "../customer-account";
+import { CurrentCustomerAccount } from "./current-customer-account";
 import { CustomerAccountLinkRepository } from "./customer-account-link.repository";
 import {
   CustomerReservationHistoryService,
@@ -340,7 +344,7 @@ describe.skipIf(!testDatabase)(
       }
     });
 
-    test("exposes a workspace ID and Entry pack marker only for an owner-matched local reservation", async () => {
+    test("scopes Entry pack payment to an owner-matched reservation and booking to the pack's validity", async () => {
       const account = customerAccountIdSchema.make(uniqueId());
       const dotyposCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
       const foreignCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
@@ -383,7 +387,7 @@ describe.skipIf(!testDatabase)(
       const passId = uniqueId();
       await testDatabase!.pool.query(
         `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
-         values ($1, 'pass-purchase', $2, 'paid', 'not_started', now())`,
+         values ($1, 'pass-purchase', $2, 'paid', 'not_started', '2000-01-01T00:00:00Z')`,
         [passId, dotyposCustomerId]
       );
       await testDatabase!.pool.query(
@@ -457,6 +461,51 @@ describe.skipIf(!testDatabase)(
         expect("workspaceReservationId" in summary).toBe(false);
       }
       expect(summaries.some((summary) => "party" in summary)).toBe(false);
+
+      const paidAt = Temporal.Instant.from("2000-01-01T00:00:00Z");
+      const [lastDay, expiry] = await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(
+            Temporal.Instant.from("2000-02-29T22:59:59Z").epochMilliseconds
+          );
+          const lastDay = yield* loadAccountPasses("en-US");
+          yield* TestClock.adjust("1 second");
+          const expiry = yield* loadAccountPasses("en-US");
+          return [lastDay, expiry] as const;
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              testDatabaseLayer(),
+              TestClock.layer(),
+              Layer.mock(CurrentCustomerAccount, {
+                peek: Effect.succeed({
+                  kind: "unlinked",
+                  reviewMarker: "absent",
+                  session: {
+                    accountId: account,
+                    email: reservationCustomerEmailSchema.make(
+                      testEmailAddress(`h-${account}`)
+                    ),
+                    deletionRequested: false,
+                    displayName: null,
+                    accountCreatedAt: paidAt,
+                    accountUpdatedAt: paidAt,
+                  },
+                }),
+              })
+            )
+          )
+        )
+      );
+      expect(lastDay).toEqual([
+        expect.objectContaining({
+          status: "active",
+          lastUsableDay: "Feb 29, 2000",
+          bookPath: `/en-US/reservation/cowork?pass=${passId}`,
+        }),
+      ]);
+      expect(expiry).toEqual([expect.objectContaining({ status: "expired" })]);
+      expect(JSON.stringify(expiry)).not.toContain(passId);
     });
 
     const seedParties = async () => {

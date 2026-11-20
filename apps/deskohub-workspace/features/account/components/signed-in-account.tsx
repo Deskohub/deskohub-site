@@ -2,7 +2,7 @@
 
 import Interpolate from "@doist/react-interpolate";
 import Link from "next/link";
-import { type ReactNode, useEffect } from "react";
+import { type ReactElement, type ReactNode, useEffect } from "react";
 import { useAccountLayout } from "@/features/account/components/account-layout-shell";
 import { CustomerAgentConnectionsSection } from "@/features/account/components/customer-agent-connections/customer-agent-connections-section";
 import { DeleteAccountCard } from "@/features/account/components/delete-account-card";
@@ -68,7 +68,7 @@ type SignedInAccountProps = {
    * it streams in apart from the page; none for states without one.
    */
   readonly invoices?: ReactNode;
-  readonly passes?: ReactNode;
+  readonly passes?: ReactElement;
 };
 
 /**
@@ -180,7 +180,9 @@ function SignedInAccountSections({
         />
       )}
 
-      {passes && <div hidden={activeSection !== "passes"}>{passes}</div>}
+      {passes !== undefined && (
+        <div hidden={activeSection !== "passes"}>{passes}</div>
+      )}
 
       {signInSecurity && (
         <SignInSecuritySection
