@@ -11,6 +11,7 @@ import {
 import { CustomerAccountReservationOwnership } from "@/features/account/backend/customer-account-reservation-ownership";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { sealSyntheticPayStateToken } from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
+import { QrPaymentRepository } from "@/features/checkout/backend/repositories/qr-payment.repository";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
 import {
@@ -39,6 +40,8 @@ const runSubmitReservation = async (options?: {
   readonly startReservationPayment?: ReturnType<typeof mock>;
   readonly enableQr?: boolean;
   readonly anotherAccount?: boolean;
+  readonly legacyActivePayment?: boolean;
+  readonly pinnedAccountKey?: string;
   readonly bookerCustomerId?: string;
   readonly hasSettledReferral?: ReturnType<typeof mock>;
 }) => {
@@ -116,7 +119,24 @@ const runSubmitReservation = async (options?: {
                 }
               : undefined,
           getReceivingAccount: () => undefined,
-          getReceivingAccountDisplay: () => undefined,
+          getReceivingAccountDisplay: (accountKey) =>
+            accountKey === options?.pinnedAccountKey
+              ? { accountKey, accountNumber: "456", bankCode: "0600" }
+              : undefined,
+        }),
+        Layer.mock(QrPaymentRepository, {
+          findPaymentWindow: (orderId) =>
+            Effect.succeed(
+              options?.pinnedAccountKey
+                ? {
+                    orderId,
+                    accountKey: options.pinnedAccountKey,
+                    expiresAt: Temporal.Now.instant().add({ minutes: 1 }),
+                    cardAttemptId: null,
+                    qrAttemptId: null,
+                  }
+                : null
+            ),
         }),
         Layer.mock(CustomerAccountReservationOwnership, {
           activeAccountId: Effect.succeed(
@@ -130,6 +150,14 @@ const runSubmitReservation = async (options?: {
             Effect.succeed({
               id,
               authorAccountId: testLinkedAccount.accountId,
+              reservationState: "held",
+              paymentState:
+                options?.legacyActivePayment || options?.pinnedAccountKey
+                  ? "pending"
+                  : "not_started",
+              activePaymentAttemptId: options?.legacyActivePayment
+                ? "legacy-card-attempt"
+                : null,
             } as WorkspaceReservation),
         }),
         TestSealedStateKeys,
@@ -158,6 +186,64 @@ const runSubmitReservation = async (options?: {
 };
 
 describe("submitWorkspaceReservation", () => {
+  test("does not return a hosted card page to a signed QR submission if card started concurrently", async () => {
+    const startReservationPayment = mock(() =>
+      Effect.succeed({
+        status: "redirect" as const,
+        redirectUrl: "https://payments.example.test/legacy-card",
+      })
+    );
+    const { effect } = await runSubmitReservation({
+      enableQr: true,
+      method: "qr",
+      startReservationPayment,
+    });
+    expect(await Effect.runPromise(Effect.result(effect))).toMatchObject({
+      _tag: "Failure",
+    });
+    expect(startReservationPayment).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps an existing signed payment window pinned when the default account changes", async () => {
+    const startReservationPayment = mock(() =>
+      Effect.succeed({ status: "in_progress" as const })
+    );
+    const { effect } = await runSubmitReservation({
+      enableQr: true,
+      method: "qr",
+      pinnedAccountKey: "original-account",
+      startReservationPayment,
+    });
+    await Effect.runPromise(effect);
+    expect(startReservationPayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fio: { accountKey: "original-account" },
+        method: "qr",
+      }),
+      "en-US"
+    );
+  });
+
+  test("refuses explicit QR on a held order with a pre-release active card payment", async () => {
+    const startReservationPayment = mock(() =>
+      Effect.succeed({
+        status: "redirect" as const,
+        redirectUrl: "https://payments.example.test/legacy-card",
+      })
+    );
+    const { effect, createHostedPaymentCheckout } = await runSubmitReservation({
+      enableQr: true,
+      method: "qr",
+      legacyActivePayment: true,
+      startReservationPayment,
+    });
+    expect(await Effect.runPromise(Effect.result(effect))).toMatchObject({
+      _tag: "Failure",
+    });
+    expect(startReservationPayment).not.toHaveBeenCalled();
+    expect(createHostedPaymentCheckout).not.toHaveBeenCalled();
+  });
+
   test.each(["card", "qr"] as const)(
     "denies a gated %s submission from a nonauthor with the signed Pay link",
     async (method) => {

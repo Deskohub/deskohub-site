@@ -1,7 +1,7 @@
 import { Effect, Match, Struct } from "effect";
 import { CheckoutService } from "@/features/checkout/backend/checkout";
 import { CheckoutError } from "@/features/checkout/backend/checkout/checkout-error";
-import { requirePublicPayStateAuthor } from "@/features/checkout/backend/checkout/public-pay-state-author.server";
+import { readPublicPayStatePaymentAccount } from "@/features/checkout/backend/checkout/public-pay-state-author.server";
 import { getPublicReservationPaymentAccount } from "@/features/checkout/backend/checkout/public-reservation-payment-account";
 import { getReservationStatusPath } from "@/features/checkout/backend/checkout/reservation-status-url";
 import { type Locale, m } from "@/features/i18n";
@@ -34,34 +34,42 @@ export const submitWorkspaceReservation = Effect.fn(
       earlyPerformanceConsent: input.earlyPerformanceConsent,
     };
     const method = input.method;
-    const account = method && (yield* getPublicReservationPaymentAccount());
-    if (method === "qr" && !account) {
+    const defaultAccount =
+      method && (yield* getPublicReservationPaymentAccount());
+    const account =
+      defaultAccount &&
+      (yield* readPublicPayStatePaymentAccount(
+        { payStateToken: payment.payStateToken, locale },
+        defaultAccount
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new CheckoutError({
+              code: "checkout_failed",
+              message: "The signed-in reservation author is required.",
+              cause,
+            })
+        )
+      ));
+    if (!account && (defaultAccount || method === "qr")) {
       return yield* new CheckoutError({
         code: "checkout_failed",
-        message: "QR payment is unavailable.",
+        message: "The selected payment method is unavailable.",
       });
     }
     const checkout = yield* method && account
-      ? requirePublicPayStateAuthor({
-          payStateToken: input.payStateToken,
-          locale,
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new CheckoutError({
-                code: "checkout_failed",
-                message: "The signed-in reservation author is required.",
-                cause,
-              })
-          ),
-          Effect.flatMap(() =>
-            service.startReservationPayment(
-              { ...payment, method, fio: { accountKey: account.accountKey } },
-              locale
-            )
-          )
+      ? service.startReservationPayment(
+          { ...payment, method, fio: { accountKey: account.accountKey } },
+          locale
         )
       : service.createHostedPaymentCheckout(payment, locale);
+
+    if (method === "qr" && checkout.status === "redirect" && !checkout.paid) {
+      return yield* new CheckoutError({
+        code: "checkout_failed",
+        message: "The selected payment method is unavailable.",
+      });
+    }
 
     // The signed-in author follows the status page by session, so the
     // checkout sets no access cookie of its own.

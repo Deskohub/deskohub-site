@@ -15,7 +15,7 @@ import {
 import { formatMoney } from "@/shared/money/money";
 import { formatInstantDateTime } from "@/shared/utils/date-time-format";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import { currentInstant } from "@/shared/utils/temporal";
+import { currentPreciseInstant } from "@/shared/utils/temporal";
 import { FioAccounts } from "../fio/fio-accounts.service";
 import { QrPaymentRepository } from "../repositories/qr-payment.repository";
 import { PublicReservationAuthor } from "./public-pay-state-author.server";
@@ -51,7 +51,7 @@ export const readAuthorPaymentWindow = Effect.fn(
 
   const payments = yield* QrPaymentRepository;
   const window = yield* payments.findPaymentWindow(reservationOrderId(orderId));
-  const now = yield* currentInstant;
+  const now = yield* currentPreciseInstant;
   if (!window || Temporal.Instant.compare(window.expiresAt, now) <= 0)
     return undefined;
   const account = yield* getPublicReservationPaymentAccount(window.accountKey);
@@ -90,6 +90,11 @@ export const readAuthorPaymentStatus = Effect.fn(
       width: 352,
     })
   );
+  if (
+    Temporal.Instant.compare(window.expiresAt, yield* currentPreciseInstant) <=
+    0
+  )
+    return undefined;
   const accountNumber = account.accountPrefix
     ? `${account.accountPrefix}-${account.accountNumber}/${account.bankCode}`
     : `${account.accountNumber}/${account.bankCode}`;

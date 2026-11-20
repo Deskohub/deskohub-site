@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Clock, Effect, Layer } from "effect";
 import { CustomerAccountReservationOwnership } from "@/features/account/backend/customer-account-reservation-ownership";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { CheckoutService } from "@/features/checkout/backend/checkout/checkout.service";
@@ -29,6 +29,13 @@ const scenario = ({
   expired = false,
   paid = false,
   qrStarted = false,
+  windowExpiresAt,
+}: {
+  readonly accountId?: typeof author;
+  readonly expired?: boolean;
+  readonly paid?: boolean;
+  readonly qrStarted?: boolean;
+  readonly windowExpiresAt?: Temporal.Instant;
 } = {}) => {
   const resumeReservationPayment = mock(() =>
     Effect.succeed({
@@ -37,7 +44,9 @@ const scenario = ({
       redirectUrl: "https://payments.example.test/same-hosted-session",
     })
   );
-  const expiresAt = Temporal.Now.instant().add({ minutes: expired ? -1 : 1 });
+  const expiresAt =
+    windowExpiresAt ??
+    Temporal.Now.instant().add({ minutes: expired ? -1 : 1 });
   const qrAttemptId = paymentAttemptIdSchema.make("attempt-qr");
   const findPaymentWindow = mock(() =>
     Effect.succeed({
@@ -119,6 +128,37 @@ test("projects the pinned QR amount, reference, account and shared deadline", as
     qrCodeSource: expect.stringMatching(/^data:image\/png;base64,iVBORw0KGgo/),
     variableSymbol: "0000001234",
   });
+});
+
+test("hides QR details and denies continuation after the shared cutoff within the same millisecond", async () => {
+  const windowExpiresAt = Temporal.Instant.from("2026-11-20T13:00:00.123400Z");
+  const now = Temporal.Instant.from("2026-11-20T13:00:00.123900Z");
+  const clock = Effect.runSync(Clock.clockWith(Effect.succeed));
+  const fixedClock = {
+    currentTimeMillis: Effect.succeed(now.epochMilliseconds),
+    currentTimeMillisUnsafe: () => now.epochMilliseconds,
+    currentTimeNanos: Effect.succeed(now.epochNanoseconds),
+    currentTimeNanosUnsafe: () => now.epochNanoseconds,
+    monotonicTimeNanos: clock.monotonicTimeNanos,
+    monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+    sleep: clock.sleep,
+  };
+  const { effect, readStatus, resumeReservationPayment } = scenario({
+    qrStarted: true,
+    windowExpiresAt,
+  });
+
+  expect(
+    await Effect.runPromise(
+      readStatus.pipe(Effect.provideService(Clock.Clock, fixedClock))
+    )
+  ).toBeUndefined();
+  expect(
+    await Effect.runPromise(
+      effect.pipe(Effect.provideService(Clock.Clock, fixedClock))
+    )
+  ).toEqual({ status: "unavailable" });
+  expect(resumeReservationPayment).not.toHaveBeenCalled();
 });
 
 test("uses the original reservation and pinned account when its author resumes card", async () => {

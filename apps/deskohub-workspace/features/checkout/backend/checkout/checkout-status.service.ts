@@ -949,6 +949,12 @@ const implementation = Effect.gen(function* () {
     refreshStatus: Effect.fn("CheckoutStatusService.refreshStatus")(
       function* (input) {
         yield* Effect.logInfo("Checkout status refresh started");
+        const orderId = reservationOrderId(input.orderId);
+        // Shared orders settle through payment notifications and the Fio
+        // worker. A browser refresh reads their stored outcome.
+        if (yield* qrPayments.findPaymentWindow(orderId)) {
+          return yield* lookUpStatus(input, undefined);
+        }
         const verificationStartedAt = yield* Clock.currentTimeMillis;
         const remainingVerificationBudget = Clock.currentTimeMillis.pipe(
           Effect.map((now) =>
@@ -965,7 +971,7 @@ const implementation = Effect.gen(function* () {
         // Finalization resolves the order's handler and active attempt.
         // an order without one returns not_found and renders as stored.
         const result = yield* finalization.finalizePendingProviderPayment({
-          orderId: reservationOrderId(input.orderId),
+          orderId,
           verificationDeadline: refreshVerificationBudget,
         });
         yield* Effect.annotateLogsScoped(
