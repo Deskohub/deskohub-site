@@ -9,6 +9,7 @@ import { testAccountingStorage } from "@/features/accounting/backend/accounting-
 import { quoteCoworkEntryPack } from "@/features/checkout/backend/checkout/cowork-checkout-pricing";
 import { LatePaymentRecoveryRepository } from "@/features/checkout/backend/repositories/late-payment-recovery.repository";
 import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
+import { paymentAbandonedAfterProviderCutoffFailureCode } from "@/features/checkout/backend/repositories/payment-lifecycle-state";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { orderIdSchema } from "@/features/order";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -18,6 +19,10 @@ import {
 } from "@/features/reservation/persistence-contracts";
 import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
+import {
+  holdPostgresTransaction,
+  waitForPostgresLockWaiter,
+} from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
   type WorkspacePostgresSuiteDatabase,
@@ -126,6 +131,49 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       runReservations((repository) =>
         repository.findEntryPackClaim(reservation.id)
       ).then((entry) => entry?.status);
+    const cancelHold = async (reservation) => {
+      const cancellation = await runReservations((repository) =>
+        repository.claimCancellation({
+          id: reservation.id,
+          cause: "hold_expired",
+        })
+      );
+      await runReservations((repository) =>
+        repository.markCancelled({
+          id: reservation.id,
+          claimedAt: cancellation!.updatedAt,
+          cancelledAt: now(),
+        })
+      );
+    };
+    const runRecovery = (f) =>
+      Effect.runPromise(
+        LatePaymentRecoveryRepository.pipe(
+          Effect.flatMap(f),
+          Effect.provide(LatePaymentRecoveryRepository.Default),
+          Effect.provide(database.layer)
+        )
+      );
+    const startVerifiedRecovery = async (reservation, attempt) => {
+      const input = {
+        workspaceReservationId: reservation.id,
+        paymentAttemptId: attempt.id,
+      };
+      await runRecovery((repository) =>
+        repository.start({
+          ...input,
+          verifiedPaidAt: now(),
+          providerStatus: "EXECUTED",
+        })
+      );
+      await runRecovery((repository) =>
+        repository.claim({
+          paymentAttemptId: attempt.id,
+          staleProcessingBefore: now(),
+        })
+      );
+      return input;
+    };
 
     test("rejects a buyer who is not the holder and the exclusive end date", async () => {
       const passId = await seedPack();
@@ -209,23 +257,32 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const reservation = await draft(serviceDate);
       const passId = await seedPack();
       await claim(reservation, passId, serviceDate);
-      const cancellation = await runReservations((repository) =>
-        repository.claimCancellation({
-          id: reservation.id,
-          cause: "hold_expired",
-        })
-      );
-      await runReservations((repository) =>
-        repository.markCancelled({
-          id: reservation.id,
-          claimedAt: cancellation!.updatedAt,
-          cancelledAt: now(),
-        })
-      );
+      await cancelHold(reservation);
       expect(await status(reservation)).toBe("released");
       expect(await claim(await draft(serviceDate), passId, serviceDate)).toBe(
         true
       );
+    });
+
+    test("returns a reserved entry when an operator cancels its unpaid hold", async () => {
+      const serviceDate = "2099-06-18";
+      const reservation = await draft(serviceDate);
+      await claim(reservation, await seedPack(), serviceDate);
+      const cancellation = await runReservations((repository) =>
+        repository.claimAdministrationCancellation({
+          id: reservation.id,
+          staleCancellingBefore: now().subtract({ minutes: 10 }),
+        })
+      );
+      await runReservations((repository) =>
+        repository.markAdministrationCancelled({
+          id: reservation.id,
+          claimedAt: cancellation!.updatedAt,
+          cancelledAt: now(),
+          failureCode: null,
+        })
+      );
+      expect(await status(reservation)).toBe("released");
     });
 
     const exercisePayment = async ({ serviceDate, coffee, outcome }) => {
@@ -283,12 +340,15 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             providerRedirectUrl: "https://payment.example.invalid/",
           });
           if (outcome === "pending") return pending;
-          if (outcome === "failed") {
+          if (outcome === "failed" || outcome === "abandoned") {
             return (yield* lifecycle.markTerminal({
               id: attempt.id,
               orderId,
-              state: "failed",
-              failureCode: "nexi_payment_failed",
+              state: outcome === "failed" ? "failed" : "expired",
+              failureCode:
+                outcome === "failed"
+                  ? "nexi_payment_failed"
+                  : paymentAbandonedAfterProviderCutoffFailureCode,
             })).attempt;
           }
           return (yield* lifecycle.markPaid({
@@ -349,6 +409,19 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await status(reservation)).toBe("released");
     });
 
+    test("keeps the entry after an empty Nexi order expires until Dotypos cancellation", async () => {
+      const { reservation, result } = await exercisePayment({
+        serviceDate: "2099-06-25",
+        coffee: true,
+        outcome: "abandoned",
+      });
+      expect(result).toMatchObject({ provider: "nexi", state: "expired" });
+      expect(await status(reservation)).toBe("reserved");
+
+      await cancelHold(reservation);
+      expect(await status(reservation)).toBe("released");
+    });
+
     test("keeps an unresolved Nexi entry through a date replacement request", async () => {
       const serviceDate = "2099-06-23";
       const { reservation, result } = await exercisePayment({
@@ -388,31 +461,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       });
       const second = await draft(serviceDate);
       expect(await claim(second, await seedPack(), serviceDate)).toBe(true);
-      const runRecovery = (f) =>
-        Effect.runPromise(
-          LatePaymentRecoveryRepository.pipe(
-            Effect.flatMap(f),
-            Effect.provide(LatePaymentRecoveryRepository.Default),
-            Effect.provide(database.layer)
-          )
-        );
-      const input = {
-        workspaceReservationId: reservation.id,
-        paymentAttemptId: result.id,
-      };
-      await runRecovery((repository) =>
-        repository.start({
-          ...input,
-          verifiedPaidAt: now(),
-          providerStatus: "EXECUTED",
-        })
-      );
-      await runRecovery((repository) =>
-        repository.claim({
-          paymentAttemptId: result.id,
-          staleProcessingBefore: now(),
-        })
-      );
+      const input = await startVerifiedRecovery(reservation, result);
       await expect(
         runRecovery((repository) =>
           repository.completeUsingOriginalReservation({
@@ -436,6 +485,109 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       ).toMatchObject({ state: "refund_required" });
       expect(await status(reservation)).toBe("released");
       expect(await status(second)).toBe("reserved");
+    });
+
+    test("settles a late payment without deadlocking a retry in the same checkout session", async () => {
+      const older = await exercisePayment({
+        serviceDate: "2099-06-26",
+        coffee: true,
+        outcome: "failed",
+      });
+      await cancelHold(older.reservation);
+      const newer = await exercisePayment({
+        serviceDate: "2099-06-27",
+        coffee: true,
+        outcome: "failed",
+      });
+      await cancelHold(newer.reservation);
+      await database.pool.query(
+        "update workspace_reservations set checkout_session_key = $1 where id = $2",
+        [older.reservation.checkoutSessionKey, newer.reservation.id]
+      );
+      const input = await startVerifiedRecovery(
+        older.reservation,
+        older.result
+      );
+      const oldClaim = await runReservations((repository) =>
+        repository.findEntryPackClaim(older.reservation.id)
+      );
+      const blocker = await holdPostgresTransaction(
+        database.pool,
+        "select id from pass_purchases where id = $1 for no key update",
+        [oldClaim!.passId]
+      );
+      const recovery = runRecovery((repository) =>
+        repository.completeWithReplacement({
+          ...input,
+          recoveredDotyposReservationId: DotyposReservationIdSchema.make(
+            crypto.randomUUID()
+          ),
+          reservationState: "held",
+          completedAt: now(),
+        })
+      ).then(
+        () => "recovered",
+        (failure) => failure
+      );
+      let retry: Promise<unknown> | undefined;
+      try {
+        const blockedBy = "$1 = any(pg_blocking_pids(pid))";
+        await waitForPostgresLockWaiter(database.pool, {
+          condition: blockedBy,
+          values: [blocker.pid],
+          description: "late settlement to wait on the pass row",
+        });
+        const {
+          rows: [waiting],
+        } = await database.pool.query(
+          `select pid from pg_locks where not granted and ${blockedBy}`,
+          [blocker.pid]
+        );
+        retry = runReservations((repository) =>
+          repository.attachRetryHold({
+            id: newer.reservation.id,
+            retriedAttemptId: newer.result.id,
+            dotyposReservationId: DotyposReservationIdSchema.make(
+              crypto.randomUUID()
+            ),
+            reservationHoldExpiresAt: now().add({ minutes: 30 }),
+          })
+        ).then(
+          (attached) => attached,
+          (failure) => failure
+        );
+        await waitForPostgresLockWaiter(database.pool, {
+          condition: blockedBy,
+          values: [waiting!.pid],
+          description: "the checkout retry to wait on the late settlement",
+        });
+      } finally {
+        await blocker.commit();
+      }
+      expect(await recovery).toBe("recovered");
+      expect(await retry).toMatchObject({
+        _tag: "WorkspaceReservationSessionTakenError",
+      });
+      expect(await status(older.reservation)).toBe("consumed");
+      expect(await status(newer.reservation)).toBe("released");
+
+      const losingRecovery = await startVerifiedRecovery(
+        newer.reservation,
+        newer.result
+      );
+      await expect(
+        runRecovery((repository) =>
+          repository.completeWithReplacement({
+            ...losingRecovery,
+            recoveredDotyposReservationId: DotyposReservationIdSchema.make(
+              crypto.randomUUID()
+            ),
+            reservationState: "confirmed",
+            completedAt: now(),
+          })
+        )
+      ).rejects.toMatchObject({ _tag: "LatePaymentRecoverySessionTakenError" });
+      expect(await status(newer.reservation)).toBe("released");
     });
   }
 );

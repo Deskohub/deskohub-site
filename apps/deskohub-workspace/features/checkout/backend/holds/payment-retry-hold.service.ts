@@ -224,14 +224,22 @@ const bookAgain = Effect.fnUntraced(function* (input: {
       reservationHoldExpiresAt,
     })
     .pipe(
-      Effect.catchTag("EntryPackUnavailableError", () =>
-        Effect.succeed("entry_pack_unavailable" as const)
-      )
+      Effect.catchTags({
+        EntryPackUnavailableError: () =>
+          Effect.succeed("entry_pack_unavailable" as const),
+        WorkspaceReservationSessionTakenError: () =>
+          Effect.succeed("session_taken" as const),
+      })
     );
-  if (!attached || attached === "entry_pack_unavailable") {
-    // Only a reservation this run created is cancelled again; one it resumed
-    // belongs to the run that made it.
-    if (!settled.resumed) {
+  if (
+    !attached ||
+    attached === "entry_pack_unavailable" ||
+    attached === "session_taken"
+  ) {
+    // The order lock gives this run ownership of an earlier NEW hold when
+    // the Entry pack can no longer attach it. Other races retain the
+    // existing behavior for resumed holds.
+    if (!settled.resumed || attached) {
       const dotypos = yield* DotyposService;
       yield* dotypos.cancelReservation(settled.id);
     }

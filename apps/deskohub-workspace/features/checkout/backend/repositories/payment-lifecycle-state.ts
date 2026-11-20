@@ -32,6 +32,8 @@ export class PaymentLifecycleStateError extends Data.TaggedError(
 
 export const publicPaymentWindowExpiredFailureCode =
   "public_payment_window_expired";
+export const paymentAbandonedAfterProviderCutoffFailureCode =
+  "payment_abandoned_after_provider_cutoff";
 
 export interface PaymentLifecycleTransition {
   readonly attempt: PaymentAttempt;

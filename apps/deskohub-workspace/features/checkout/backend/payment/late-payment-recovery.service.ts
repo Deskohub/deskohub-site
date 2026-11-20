@@ -319,6 +319,10 @@ export class LatePaymentRecoveryService extends Context.Service<
         }
 
         const confirmedReplacementId = input.replacementId;
+        const compensateReplacement = (failureCode: string) =>
+          dotypos
+            .cancelReservation(confirmedReplacementId)
+            .pipe(Effect.andThen(refundRecovery(input, failureCode)));
         yield* recoveries
           .completeWithReplacement({
             paymentAttemptId: input.paymentAttemptId,
@@ -335,30 +339,17 @@ export class LatePaymentRecoveryService extends Context.Service<
                   reservation.id
                 );
                 if (!superseded) return yield* cause;
-                yield* dotypos.cancelReservation(confirmedReplacementId);
-                yield* refundRecovery(input, "late_payment_newer_reservation");
+                yield* compensateReplacement("late_payment_newer_reservation");
               })
             ),
-            Effect.catchTag(
-              "DiscountClaimError",
-              Effect.fn(function* () {
-                yield* dotypos.cancelReservation(confirmedReplacementId);
-                yield* refundRecovery(
-                  input,
-                  "late_payment_discount_unavailable"
-                );
-              })
-            ),
-            Effect.catchTag(
-              "EntryPackUnavailableError",
-              Effect.fn(function* () {
-                yield* dotypos.cancelReservation(confirmedReplacementId);
-                yield* refundRecovery(
-                  input,
-                  "late_payment_entry_pack_unavailable"
-                );
-              })
-            )
+            Effect.catchTags({
+              LatePaymentRecoverySessionTakenError: () =>
+                compensateReplacement("late_payment_checkout_session_taken"),
+              DiscountClaimError: () =>
+                compensateReplacement("late_payment_discount_unavailable"),
+              EntryPackUnavailableError: () =>
+                compensateReplacement("late_payment_entry_pack_unavailable"),
+            })
           );
         const settled = yield* recoveries.findByPaymentAttemptId(
           input.paymentAttemptId

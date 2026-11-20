@@ -92,6 +92,9 @@ const reservationStatesRequiringDotyposReservationId = [
   "cancellation_failed",
 ] as const satisfies readonly ReservationState[];
 
+export const activeCheckoutSessionIndex =
+  "workspace_reservations_active_session_unique_idx";
+
 export const workspaceReservations = pgTable(
   "workspace_reservations",
   {
@@ -253,7 +256,7 @@ export const workspaceReservations = pgTable(
     uniqueIndex("workspace_reservations_attempt_key_unique_idx").on(
       t.checkoutAttemptKey
     ),
-    uniqueIndex("workspace_reservations_active_session_unique_idx")
+    uniqueIndex(activeCheckoutSessionIndex)
       .on(t.checkoutSessionKey)
       .where(sql`${t.reservationState} <> 'cancelled'`),
     index("workspace_reservations_author_account_idx").on(t.authorAccountId),

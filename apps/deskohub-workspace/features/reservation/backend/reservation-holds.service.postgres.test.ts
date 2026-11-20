@@ -12,13 +12,21 @@ import {
 import { testEmailAddress } from "@deskohub/test-email";
 import { asc, eq, inArray } from "drizzle-orm";
 import { Effect, Latch, Layer, Ref, Result, Schema } from "effect";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { workspaceReservations } from "@/db/schema";
 import { customerAgentClientIdSchema } from "@/features/account/backend/auth/customer-agent-authorization.service";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { recordCheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service.mock";
 import { payStateDefaultTtlMilliseconds } from "@/features/checkout/backend/checkout";
 import { deriveCheckoutAttemptKeys } from "@/features/checkout/backend/checkout/checkout-lookup-keys.server";
-import { ReservationHoldCleanupScheduleService } from "@/features/checkout/backend/holds";
+import {
+  processReservationHoldCleanupScheduleMessage,
+  ReservationHoldCleanupScheduleService,
+  ReservationHoldCleanupService,
+  UnpaidHoldRelease,
+} from "@/features/checkout/backend/holds";
+import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
+import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { WorkspaceTableAssignmentServiceMock } from "@/features/checkout/backend/reservation/workspace-table-assignment.service.mock";
 import {
   type CheckoutAttemptId,
@@ -29,6 +37,7 @@ import {
 } from "@/features/checkout/checkout-identifiers";
 import { checkoutDetailsSchema } from "@/features/checkout/schemas/checkout-details";
 import { orderIdSchema } from "@/features/order";
+import { EntryPackUnavailableError } from "@/features/passes/backend/entry-pack-redemption";
 import { reservationOrderIssuanceSchema } from "@/features/reservation/reservation-order";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 import {
@@ -54,6 +63,7 @@ import {
   WorkspaceTableUnavailableError,
 } from "./workspace-availability.service";
 import {
+  entryPackAttachCancellationFailureCode,
   type IWorkspaceReservationRepository,
   WorkspaceReservationRepository,
 } from "./workspace-reservation.repository";
@@ -753,6 +763,9 @@ describe.skipIf(!postgresDatabase)(
           expect(await holds.holdFailure(request)).toMatchObject({
             _tag: "EntryPackUnavailableError",
           });
+          expect(await rowsOf(author)).toMatchObject([
+            { reservationState: "draft", dotyposReservationId: null },
+          ]);
           expect(dotypos.createReservation).toHaveBeenCalledTimes(1);
           expect(
             await postgres.pool.query(
@@ -836,6 +849,152 @@ describe.skipIf(!postgresDatabase)(
         });
         expect(rows[0]?.reservationCreatedAt).not.toBeNull();
         expect(dotypos.cancelReservation.mock.calls).toEqual([[dotyposId]]);
+      });
+
+      const failedEntryPackAttachment = async (options: {
+        readonly resumeDraft?: true;
+        readonly queueDown?: true;
+      }) => {
+        const author = await newAuthor();
+        const base = holdRequest({ author });
+        if (base.reservation.kind !== "cowork")
+          throw new Error("Expected cowork");
+        const request = {
+          ...base,
+          entryPack: {
+            passId: orderIdSchema.make(crypto.randomUUID()),
+            holderAccountId: author,
+            tier: "open-space" as const,
+            date: base.reservation.date,
+          },
+        };
+        const dotypos = makeDotypos();
+        const cancelFailed = dotyposUnavailable("cancelReservation");
+        dotypos.cancelReservation.mockImplementationOnce(
+          () => Effect.fail(cancelFailed) as never
+        );
+        const holds = makeHolds({
+          dotypos,
+          observeReservations: (repository) => ({
+            ...repository,
+            checkEntryPackAvailable: () => Effect.void,
+            attachHold: () => Effect.fail(new EntryPackUnavailableError({})),
+          }),
+        });
+        if (options.resumeDraft) {
+          const createFailed = dotyposUnavailable("createReservation");
+          dotypos.createReservation.mockImplementationOnce(
+            () => Effect.fail(createFailed) as never
+          );
+          expect(await holds.holdFailure(request)).toBe(createFailed);
+          const [draft] = await rowsOf(author);
+          const earlierDeadline = draft!.reservationHoldExpiresAt!.subtract({
+            minutes: 3,
+          });
+          await postgres.db
+            .update(workspaceReservations)
+            .set({ reservationHoldExpiresAt: earlierDeadline })
+            .where(eq(workspaceReservations.id, draft!.id))
+            .pipe(Effect.runPromise);
+        }
+        if (options.queueDown) {
+          holds.enqueueCleanup.mockImplementationOnce(
+            () => Effect.fail(new Error("Synthetic queue failure")) as never
+          );
+        }
+        expect(await holds.holdFailure(request)).toBe(cancelFailed);
+        const [failed] = await rowsOf(author);
+        expect(failed).toMatchObject({
+          reservationState: "cancellation_failed",
+          failureCode: entryPackAttachCancellationFailureCode,
+          dotyposReservationId: dotypos.createdHolds[0],
+        });
+        const cleanup = ReservationHoldCleanupService.Default.pipe(
+          Layer.provide(UnpaidHoldRelease.Default),
+          Layer.provide(
+            Layer.mergeAll(
+              WorkspaceReservationRepository.Default.pipe(
+                Layer.provide(postgres.layer)
+              ),
+              WorkspaceDatabaseAdvisoryLock.makeLayer(postgres.databasePool),
+              Layer.mock(PaymentLifecycleRepository, {}),
+              Layer.mock(ProviderPaymentFinalizationService, {}),
+              recordCheckoutAnalytics().layer,
+              Layer.mock(DotyposService, dotypos as never)
+            )
+          )
+        );
+        return {
+          cleanup,
+          dotypos,
+          failed: failed!,
+          enqueueCleanup: holds.enqueueCleanup,
+        };
+      };
+
+      test("cancels a resumed draft through the queue using its stored deadline", async () => {
+        const { cleanup, failed, enqueueCleanup, dotypos } =
+          await failedEntryPackAttachment({ resumeDraft: true });
+        expect(enqueueCleanup).toHaveBeenCalledTimes(1);
+        const [queued] = enqueueCleanup.mock.calls[0]!;
+        expect(queued.orderId).toBe(failed.id);
+        expect(
+          await processReservationHoldCleanupScheduleMessage(
+            {
+              orderId: queued.orderId,
+              reservationHoldExpiresAtIso:
+                queued.reservationHoldExpiresAt.toString(),
+            },
+            failed.reservationHoldExpiresAt!.add({ seconds: 1 })
+          ).pipe(Effect.provide(cleanup), Effect.runPromise)
+        ).toBe("cancelled");
+        expect(await rowOf(failed.id)).toMatchObject({
+          reservationState: "cancelled",
+        });
+        expect(dotypos.cancelReservation).toHaveBeenCalledTimes(2);
+      });
+
+      test("a failed pack attachment remains sweepable after a transient Dotypos failure", async () => {
+        const { cleanup, failed, dotypos } = await failedEntryPackAttachment({
+          queueDown: true,
+        });
+        const sweep = () =>
+          ReservationHoldCleanupService.pipe(
+            Effect.flatMap((service) =>
+              service.sweepExpiredHolds({
+                now: failed.reservationHoldExpiresAt!.add({ seconds: 1 }),
+                limit: 100,
+              })
+            ),
+            Effect.provide(cleanup),
+            Effect.runPromise
+          );
+        let firstRead = true;
+        const readHoldStatus =
+          dotypos.getReservationStatus.getMockImplementation()!;
+        dotypos.getReservationStatus.mockImplementation((id) => {
+          if (id === failed.dotyposReservationId && firstRead) {
+            firstRead = false;
+            return Effect.fail(
+              dotyposUnavailable("getReservationStatus")
+            ) as never;
+          }
+          return readHoldStatus(id);
+        });
+        expect((await sweep()).failed).toBeGreaterThanOrEqual(1);
+        expect(await rowOf(failed.id)).toMatchObject({
+          reservationState: "cancellation_failed",
+          failureCode: entryPackAttachCancellationFailureCode,
+        });
+        expect((await sweep()).cancelled).toBeGreaterThanOrEqual(1);
+        expect(await rowOf(failed.id)).toMatchObject({
+          reservationState: "cancelled",
+        });
+        expect(
+          dotypos.cancelReservation.mock.calls.filter(
+            ([id]) => id === failed.dotyposReservationId
+          )
+        ).toHaveLength(2);
       });
 
       test("refuses an attempt whose hold creation stays in flight", async () => {

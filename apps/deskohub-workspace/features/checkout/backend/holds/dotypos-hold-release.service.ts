@@ -7,7 +7,10 @@ import {
   type DotyposWriteFailure,
 } from "@deskohub/dotypos";
 import { Context, Effect, Layer, Predicate } from "effect";
-import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import {
+  type entryPackAttachCancellationFailureCode,
+  WorkspaceReservationRepository,
+} from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 
 /**
@@ -17,7 +20,8 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
  */
 type DotyposHoldReleaseFailureCode =
   | "dotypos_cancel_failed"
-  | "checkout_supersession_cancel_failed";
+  | "checkout_supersession_cancel_failed"
+  | typeof entryPackAttachCancellationFailureCode;
 
 /**
  * What a release requires of the live Dotypos status before it cancels:
@@ -55,6 +59,7 @@ interface IDotyposHoldRelease {
     readonly dotyposReservationId: DotyposReservationId;
     readonly liveStatus: DotyposHoldLiveStatusRule;
     readonly failureCode: DotyposHoldReleaseFailureCode;
+    readonly retryFailureCode?: DotyposHoldReleaseFailureCode;
   }) => Effect.Effect<DotyposHoldReleaseOutcome, DotyposWriteFailure>;
 }
 
@@ -115,7 +120,17 @@ export class DotyposHoldRelease extends Context.Service<
       return DotyposHoldRelease.of({
         release: Effect.fn("dotyposHoldRelease.release")(function* (input) {
           const outcome = yield* releaseUnderRule(input).pipe(
-            Effect.tapError(() => markReleaseFailed(input))
+            Effect.tapError((cause) => {
+              const transient =
+                cause._tag === "DotyposUnavailable" ||
+                cause._tag === "DotyposUncertain";
+              return markReleaseFailed({
+                ...input,
+                failureCode: transient
+                  ? (input.retryFailureCode ?? input.failureCode)
+                  : input.failureCode,
+              });
+            })
           );
           if (!Predicate.isString(outcome)) {
             yield* markReleaseFailed(input);
