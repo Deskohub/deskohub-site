@@ -428,6 +428,7 @@ export class CampaignBatchDelivery extends Context.Service<
       const renderMessage = (input: {
         readonly send: DeliveredAttempt;
         readonly recipient: ReachableRecipient;
+        readonly showHeaderArtwork?: boolean | undefined;
       }) =>
         Effect.succeed(input).pipe(
           Effect.let("recipientTags", ({ send, recipient }) => ({
@@ -455,7 +456,14 @@ export class CampaignBatchDelivery extends Context.Service<
             campaignContentForRecipient(send.campaign.content, recipient.locale)
           ),
           Effect.flatMap(
-            ({ send, recipient, recipientTags, audience, localized }) =>
+            ({
+              send,
+              recipient,
+              recipientTags,
+              audience,
+              localized,
+              showHeaderArtwork,
+            }) =>
               campaignEmailMessage({
                 templateKey: send.campaign.templateKey,
                 locale: localized.locale,
@@ -464,6 +472,7 @@ export class CampaignBatchDelivery extends Context.Service<
                   to: recipient.to,
                   recipient: recipientTags,
                   audience,
+                  showHeaderArtwork,
                 }),
                 sender: config,
                 deploymentEnvironment: config.deploymentEnvironment,
@@ -475,9 +484,10 @@ export class CampaignBatchDelivery extends Context.Service<
       const renderMessages = (input: {
         readonly send: DeliveredAttempt;
         readonly recipients: readonly ReachableRecipient[];
+        readonly showHeaderArtwork?: boolean | undefined;
       }) =>
         Effect.forEach(input.recipients, (recipient) =>
-          renderMessage({ send: input.send, recipient })
+          renderMessage({ ...input, recipient })
         );
 
       const persist: ICampaignBatchDelivery["persist"] = Effect.fn(
@@ -770,14 +780,26 @@ export class CampaignBatchDelivery extends Context.Service<
               Effect.mapError(payloadChanged)
             )
           ),
-          Effect.flatMap((recipients) =>
-            renderMessages({ send: input.send, recipients })
-          ),
-          Effect.filterOrFail(
-            (messages) =>
-              campaignDeliveryPayloadHash(messages) === input.batch.payloadHash,
-            payloadChanged
-          ),
+          Effect.flatMap((recipients) => {
+            const rendering = { send: input.send, recipients };
+            const matches = (messages: readonly EmailMessage[]) =>
+              campaignDeliveryPayloadHash(messages) === input.batch.payloadHash;
+            return renderMessages(rendering).pipe(
+              Effect.filterOrFail(matches, payloadChanged),
+              Effect.catchTag("UnreplayableBatch", (error) =>
+                Option.match(input.profiles, {
+                  // A batch requested before the header gained artwork may
+                  // still match when rendered with the original plain header.
+                  onNone: () =>
+                    renderMessages({
+                      ...rendering,
+                      showHeaderArtwork: false,
+                    }).pipe(Effect.filterOrFail(matches, payloadChanged)),
+                  onSome: () => Effect.fail(error),
+                })
+              )
+            );
+          }),
           // Rendering fails the same way every time, so the payload can't
           // be reproduced.
           Effect.catchTag("EmailServiceError", () =>

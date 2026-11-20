@@ -12,6 +12,7 @@ export type WorkspaceCampaignEmailProps = {
   readonly preview: string;
   readonly body: ReactNode;
   readonly footer: WorkspaceCampaignFooter;
+  readonly showHeaderArtwork?: boolean | undefined;
 };
 
 export function WorkspaceCampaignEmail({
@@ -19,12 +20,14 @@ export function WorkspaceCampaignEmail({
   preview,
   body,
   footer,
+  showHeaderArtwork,
 }: WorkspaceCampaignEmailProps) {
   return (
     <WorkspaceEmailLayout
       footer={<WorkspaceCampaignFooterText footer={footer} locale={locale} />}
       locale={locale}
       preview={preview}
+      showHeaderArtwork={showHeaderArtwork}
     >
       {body}
     </WorkspaceEmailLayout>
