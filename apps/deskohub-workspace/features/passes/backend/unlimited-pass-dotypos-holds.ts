@@ -97,7 +97,10 @@ export const hasUnlimitedPassDayMarker = (
 
 /** Matches the booking facts required when settling a marked attempt. */
 export const matchesUnlimitedPassDayHold = (
-  record: DotyposReservation,
+  record: Pick<
+    DotyposReservation,
+    "_customerId" | "_tableId" | "note" | "startDate" | "endDate" | "seats"
+  >,
   { passId, customerId, day }: PassDayHold
 ) => {
   if (

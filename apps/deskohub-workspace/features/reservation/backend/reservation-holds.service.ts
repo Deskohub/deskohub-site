@@ -8,6 +8,7 @@ import {
   Data,
   Duration,
   Effect,
+  Exit,
   Layer,
   Match,
   Predicate,
@@ -419,159 +420,170 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
     const interval = yield* getWorkspaceReservationInterval(
       request.checkoutDetails.reservation
     );
-    const claimed = yield* reservations.claimHoldCreation(reservationDraft.id);
-    if (!claimed) {
-      return yield* resumeClaimConflict(reservationDraft, checkoutSessionId);
-    }
-    yield* Effect.logDebug("Workspace reservation hold creation claimed");
-
-    const reservationCreatedAt = yield* withWorkspaceReservationCapacity(
-      interval,
-      Effect.gen(function* () {
-        const { checkoutDetails, entryPack } = request;
-        if (entryPack) {
-          const availability = yield* WorkspaceAvailabilityService;
-          yield* ensureEntryPackWorkstationRequired(availability, request).pipe(
-            Effect.andThen(
-              reservations.checkEntryPackAvailable(
-                reservationDraft.id,
-                entryPack
-              )
-            ),
-            Effect.tapError((cause) =>
-              releaseHoldCreation(
-                reservationDraft.id,
-                cause._tag === "EntryPackUnavailableError"
-                  ? entryPackUnavailableFailureCode
-                  : undefined
-              )
+    const createAndAttachHold = Effect.gen(function* () {
+      const { checkoutDetails, entryPack } = request;
+      if (entryPack) {
+        const availability = yield* WorkspaceAvailabilityService;
+        yield* ensureEntryPackWorkstationRequired(availability, request).pipe(
+          Effect.andThen(
+            reservations.checkEntryPackAvailable(reservationDraft.id, entryPack)
+          ),
+          Effect.tapError((cause) =>
+            releaseHoldCreation(
+              reservationDraft.id,
+              cause._tag === "EntryPackUnavailableError"
+                ? entryPackUnavailableFailureCode
+                : undefined
             )
-          );
-        }
-        yield* Effect.annotateLogsScoped(
-          checkoutDetailsLogFields(checkoutDetails)
+          )
         );
+      }
+      yield* Effect.annotateLogsScoped(
+        checkoutDetailsLogFields(checkoutDetails)
+      );
 
-        const dotyposReservation = yield* createWorkspaceDotyposReservation({
-          paymentOrderId: reservationDraft.id,
-          dotyposCustomerId: booking.customer,
-          checkoutDetails,
-          reservation: checkoutDetails.reservation,
-          status: "NEW",
-        }).pipe(
-          Effect.tapError(
+      const dotyposReservation = yield* createWorkspaceDotyposReservation({
+        paymentOrderId: reservationDraft.id,
+        dotyposCustomerId: booking.customer,
+        checkoutDetails,
+        reservation: checkoutDetails.reservation,
+        status: "NEW",
+      }).pipe(
+        Effect.tapError(
+          Effect.fn(function* (cause) {
+            yield* Effect.logError(
+              "Workspace Dotypos reservation hold creation failed",
+              {
+                cause,
+              }
+            );
+
+            yield* releaseHoldCreation(reservationDraft.id);
+          })
+        )
+      );
+      yield* Effect.annotateLogsScoped(
+        dotyposReservationLogFields(dotyposReservation)
+      );
+
+      const dotyposReservationId = dotyposReservation.id;
+      yield* Effect.logInfo("Workspace Dotypos reservation hold created");
+
+      const reservationCreatedAt = Temporal.Now.instant();
+
+      yield* reservations
+        .attachHold({
+          id: reservationDraft.id,
+          dotyposReservationId,
+          reservationCreatedAt,
+          reservationHoldExpiresAt: holdExpiresAt,
+          ...(entryPack && { entryPack }),
+        })
+        .pipe(
+          Effect.catch(
             Effect.fn(function* (cause) {
               yield* Effect.logError(
-                "Workspace Dotypos reservation hold creation failed",
+                "Workspace reservation hold attach failed; cancelling Dotypos hold",
                 {
                   cause,
                 }
               );
 
-              yield* releaseHoldCreation(reservationDraft.id);
+              yield* dotypos.cancelReservation(dotyposReservationId).pipe(
+                Effect.catch(
+                  Effect.fn(function* (cancelCause) {
+                    yield* Effect.logFatal(
+                      "Workspace reservation hold attach cleanup failed",
+                      {
+                        reservationDraftId: reservationDraft.id,
+                        dotyposReservationId,
+                        cause: cancelCause,
+                      }
+                    );
+
+                    const cleanupDeadline = yield* reservations
+                      .markAttachFailedCancellationRequired({
+                        id: reservationDraft.id,
+                        dotyposReservationId,
+                        reservationCreatedAt: Temporal.Now.instant(),
+                        failureCode: entryPack
+                          ? entryPackAttachCancellationFailureCode
+                          : "attach_failed_cancel_failed",
+                      })
+                      .pipe(
+                        Effect.tapError((markerCause) =>
+                          Effect.logFatal(
+                            "Workspace reservation hold attach cleanup marker failed",
+                            {
+                              reservationDraftId: reservationDraft.id,
+                              dotyposReservationId,
+                              cause: markerCause,
+                            }
+                          )
+                        )
+                      );
+
+                    if (entryPack) {
+                      yield* enqueueReservationHoldCleanup({
+                        orderId: reservationDraft.id,
+                        reservationHoldExpiresAt: cleanupDeadline,
+                      });
+                    }
+
+                    yield* Effect.logWarning(
+                      "Workspace reservation hold cancellation marked for retry",
+                      {
+                        reservationDraftId: reservationDraft.id,
+                        dotyposReservationId,
+                      }
+                    );
+                    return yield* cancelCause;
+                  })
+                )
+              );
+              yield* releaseHoldCreation(
+                reservationDraft.id,
+                cause._tag === "EntryPackUnavailableError"
+                  ? entryPackUnavailableFailureCode
+                  : undefined
+              );
+
+              return yield* cause;
             })
           )
         );
-        yield* Effect.annotateLogsScoped(
-          dotyposReservationLogFields(dotyposReservation)
+      yield* Effect.logInfo("Workspace reservation hold attached");
+      return reservationCreatedAt;
+    });
+
+    const reservationCreatedAt = yield* Effect.uninterruptibleMask(
+      Effect.fnUntraced(function* (restore) {
+        const claimed = yield* reservations.claimHoldCreation(
+          reservationDraft.id
         );
+        if (!claimed) return undefined;
+        yield* Effect.logDebug("Workspace reservation hold creation claimed");
 
-        const dotyposReservationId = dotyposReservation.id;
-        yield* Effect.logInfo("Workspace Dotypos reservation hold created");
-
-        const reservationCreatedAt = Temporal.Now.instant();
-
-        yield* reservations
-          .attachHold({
-            id: reservationDraft.id,
-            dotyposReservationId,
-            reservationCreatedAt,
-            reservationHoldExpiresAt: holdExpiresAt,
-            ...(entryPack && { entryPack }),
-          })
-          .pipe(
-            Effect.catch(
-              Effect.fn(function* (cause) {
-                yield* Effect.logError(
-                  "Workspace reservation hold attach failed; cancelling Dotypos hold",
-                  {
-                    cause,
-                  }
-                );
-
-                yield* dotypos.cancelReservation(dotyposReservationId).pipe(
-                  Effect.catch(
-                    Effect.fn(function* (cancelCause) {
-                      yield* Effect.logFatal(
-                        "Workspace reservation hold attach cleanup failed",
-                        {
-                          reservationDraftId: reservationDraft.id,
-                          dotyposReservationId,
-                          cause: cancelCause,
-                        }
-                      );
-
-                      const cleanupDeadline = yield* reservations
-                        .markAttachFailedCancellationRequired({
-                          id: reservationDraft.id,
-                          dotyposReservationId,
-                          reservationCreatedAt: Temporal.Now.instant(),
-                          failureCode: entryPack
-                            ? entryPackAttachCancellationFailureCode
-                            : "attach_failed_cancel_failed",
-                        })
-                        .pipe(
-                          Effect.tapError((markerCause) =>
-                            Effect.logFatal(
-                              "Workspace reservation hold attach cleanup marker failed",
-                              {
-                                reservationDraftId: reservationDraft.id,
-                                dotyposReservationId,
-                                cause: markerCause,
-                              }
-                            )
-                          )
-                        );
-
-                      if (entryPack) {
-                        yield* enqueueReservationHoldCleanup({
-                          orderId: reservationDraft.id,
-                          reservationHoldExpiresAt: cleanupDeadline,
-                        });
-                      }
-
-                      yield* Effect.logWarning(
-                        "Workspace reservation hold cancellation marked for retry",
-                        {
-                          reservationDraftId: reservationDraft.id,
-                          dotyposReservationId,
-                        }
-                      );
-                      return yield* cancelCause;
-                    })
-                  )
-                );
-                yield* releaseHoldCreation(
-                  reservationDraft.id,
-                  cause._tag === "EntryPackUnavailableError"
-                    ? entryPackUnavailableFailureCode
-                    : undefined
-                );
-
-                return yield* cause;
-              })
-            )
-          );
-        yield* Effect.logInfo("Workspace reservation hold attached");
-        return reservationCreatedAt;
+        // Competing requests must still observe the claim while a request
+        // waits for capacity, but an interrupted waiter has sent no POST.
+        let waitingForCapacity = true;
+        const book = Effect.sync(() => {
+          waitingForCapacity = false;
+        }).pipe(Effect.andThen(createAndAttachHold));
+        return yield* restore(
+          withWorkspaceReservationCapacity(interval, book)
+        ).pipe(
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit) && waitingForCapacity
+              ? releaseHoldCreation(reservationDraft.id)
+              : Effect.void
+          )
+        );
       })
-    ).pipe(
-      Effect.tapError((cause) =>
-        cause._tag === "SqlError"
-          ? releaseHoldCreation(reservationDraft.id)
-          : Effect.void
-      )
     );
+    if (reservationCreatedAt === undefined) {
+      return yield* resumeClaimConflict(reservationDraft, checkoutSessionId);
+    }
 
     yield* enqueueReservationHoldCleanup({
       orderId: reservationDraft.id,

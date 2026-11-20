@@ -15,7 +15,10 @@ import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-util
 import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
 import { workspaceProductMonitorOptionTableTags } from "@/features/checkout/product-catalog";
 import { orderIdSchema } from "@/features/order";
+import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
+import { toReservationRecord } from "@/features/reservation/backend/reservation-record";
+import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import {
   type PendingPassDayCapacity,
   WorkspaceReservationRepository,
@@ -247,6 +250,41 @@ test("ordinary assignment counts a durable intent and deduplicates its visible p
   await expect(
     assigned({ tables: [openTable], providerBookings: [record] })
   ).resolves.toBe(openTable.id);
+
+  // The shared snapshot contains the same occupancy without private fields.
+  // The calendar must still keep the second seat bookable during handover.
+  const advisory = Layer.succeed(AdvisoryAvailabilityInventory, {
+    tables: Effect.succeed([openTable]),
+    listLimitations: () => Effect.succeed([]),
+    listActiveReservationsOverlapping: () =>
+      Effect.succeed([toReservationRecord(record)]),
+  });
+  const { services } = capacityLayer({
+    tables: [openTable],
+    providerBookings: [record],
+    intents: [intent],
+  });
+  const availability = await Effect.flatMap(
+    WorkspaceAvailabilityService,
+    (service) =>
+      service.getAvailability({
+        query: {
+          kind: "cowork",
+          entryTier: "open-space",
+          from: serviceDate,
+          to: serviceDate,
+          date: serviceDate,
+        },
+      })
+  ).pipe(
+    Effect.provide(
+      WorkspaceAvailabilityService.Default.pipe(
+        Layer.provide(Layer.mergeAll(services, advisory))
+      )
+    ),
+    Effect.runPromise
+  );
+  expect(availability.unavailableDates).toEqual([]);
 
   const cancelled = { ...record, status: "CANCELLED" } as const;
   const other = { ...record, note: `${record.note} altered` };

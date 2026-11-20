@@ -76,6 +76,7 @@ const checkAvailability = async (
           listLimitations: mock(() => Effect.succeed([])),
         } as never),
         Layer.succeed(WorkspaceReservationRepository, {
+          selectPendingPassDayCapacity: () => Effect.succeed([]),
           selectExpiredHoldDotyposReservationIds: mock(() =>
             Effect.succeed([])
           ),

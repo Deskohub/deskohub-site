@@ -223,6 +223,7 @@ export const makeAgentToolTestServices = ({
             listLimitations: () => Effect.succeed([]),
           }),
           Layer.succeed(WorkspaceReservationRepository, {
+            selectPendingPassDayCapacity: () => Effect.succeed([]),
             selectExpiredHoldDotyposReservationIds: () => Effect.succeed([]),
           } as never)
         )
