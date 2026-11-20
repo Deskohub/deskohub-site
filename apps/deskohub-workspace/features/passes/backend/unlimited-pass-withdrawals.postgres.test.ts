@@ -533,6 +533,34 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
     expect(rows).toEqual([{ reservation_state: "confirmed" }]);
   });
 
+  test.each([0, 24])(
+    "accepts an in-time full refund %d hours after service ends without early performance consent",
+    async (hours) => {
+      const pass = await seedPass(amount, defaultReservationBillingSelection, {
+        deliveredAt: "2027-04-20T12:00:00Z",
+        earlyPerformanceConsent: false,
+        tier: "open-space",
+      });
+      const close = Temporal.Instant.from("2027-04-25T15:00:00Z");
+      const statement = await statementFor(pass, close.add({ hours }));
+      expect(statement).toMatchObject({
+        refundAmount: amount,
+        refundBasis: { kind: "full" },
+      });
+      expect(await record(statement)).toMatchObject({
+        recorded: true,
+        withdrawal: { refundAmount: amount, refundBasis: { kind: "full" } },
+      });
+      await settleCancellation(statement);
+      expect(await paymentAndCutoff(pass.id)).toMatchObject({
+        status: "withdrawn",
+        access_ends_on: "2027-04-26",
+        refund_state: "required",
+        refund_target_value: amount.value,
+      });
+    }
+  );
+
   test("refuses consumer withdrawal from a business purchase", async () => {
     const pass = await seedPass(amount, {
       purpose: "business",

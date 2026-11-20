@@ -151,7 +151,10 @@ const assessUnlimitedPassWithdrawal = (input: {
     pass.tier === "open-space" ? "open-space" : "reserved-desk",
     finalDay.toString()
   );
-  if (Temporal.Instant.compare(now, interval.endsAt) >= 0) {
+  if (
+    earlyPerformanceConsent &&
+    Temporal.Instant.compare(now, interval.endsAt) >= 0
+  ) {
     return { withdrawable: false, reason: "performance_started" };
   }
   const today = getWorkspaceDate(now);
@@ -165,11 +168,13 @@ const assessUnlimitedPassWithdrawal = (input: {
   ).days;
   const beforeStart = unstarted === unlimitedPassDays;
   const fullRefund = beforeStart || !earlyPerformanceConsent;
+  const retainedThrough =
+    Temporal.PlainDate.compare(today, finalDay) < 0 ? today : finalDay;
   return {
     withdrawable: true,
     accessEndsOn: beforeStart
       ? pass.validFrom
-      : plainDateStringSchema.make(today.add({ days: 1 }).toString()),
+      : plainDateStringSchema.make(retainedThrough.add({ days: 1 }).toString()),
     refundAmount: fullRefund ? paid : refund,
     refundBasis: fullRefund
       ? { kind: "full" }
