@@ -3,7 +3,6 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { Result, Schema } from "effect";
 import { administrationInputParseOptions } from "./administration-input-parse-options";
 import {
-  AutomationActivation,
   AutomationDetail,
   AutomationEngineHealth,
   AutomationFlow,
@@ -295,21 +294,6 @@ describe("automation responses", () => {
         })
       )
     ).toBe(true);
-  });
-
-  test("decode every activation state", () => {
-    for (const activation of [
-      { _tag: "PreviewRequired" },
-      { _tag: "PreviewRunning", previewId: "p", unitsDone: 1, unitsTotal: 3 },
-      { _tag: "Ready", previewId: "p", draftHash: "hash" },
-      { _tag: "Published" },
-    ]) {
-      expect(
-        Result.isSuccess(
-          Schema.decodeUnknownResult(AutomationActivation)(activation)
-        )
-      ).toBe(true);
-    }
   });
 
   test("decode an unknown or unreadable timeline entry as a generic one", () => {

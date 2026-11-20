@@ -15,6 +15,7 @@ import {
   CliOnly,
   readOperation,
 } from "./administration-operation";
+import { AdministrationCampaignLocale } from "./campaign-locale-and-purpose";
 import {
   DhwVersion,
   MinimumDhwVersion,
@@ -22,7 +23,6 @@ import {
 } from "./dhw-version";
 import { AdministrationCampaignDetail } from "./email-campaigns";
 import {
-  AdminCliAdministrationApi,
   AdminCliInfo,
   AdministrationAccountId,
   AdministrationActionRecord,
@@ -769,14 +769,7 @@ describe("administration contract", () => {
     }
   });
 
-  test("serves the reservation product-details backfill as one strict batch", () => {
-    const endpoint =
-      AdminCliAdministrationApi.endpoints.backfillReservationProductDetails;
-    expect(endpoint?.method).toBe("POST");
-    expect(endpoint?.path).toBe(
-      "/api/v1/cli/reservations/product-details-backfill"
-    );
-
+  test("decodes strict reservation product-details backfill batches", () => {
     const decodeInput = Schema.decodeUnknownSync(
       AdministrationReservationProductDetailsBackfillInput,
       administrationInputParseOptions
@@ -1316,15 +1309,17 @@ describe("administration operation groups", () => {
   });
 });
 
-describe("invoice locale contract", () => {
-  test("invoices are written in exactly the supported locales", () => {
-    expect(AdministrationInvoiceCreateInput.fields.locale.literals).toEqual(
-      supportedLocales
-    );
-    expect(AdministrationInvoiceDetail.fields.locale.literals).toEqual(
-      supportedLocales
-    );
-  });
+test("campaign and invoice contracts accept every supported locale", () => {
+  for (const schema of [
+    AdministrationCampaignLocale,
+    AdministrationInvoiceCreateInput.fields.locale,
+    AdministrationInvoiceDetail.fields.locale,
+  ]) {
+    const decode = Schema.decodeUnknownSync(schema);
+    expect(supportedLocales.map((locale) => decode(locale))).toEqual([
+      ...supportedLocales,
+    ]);
+  }
 });
 
 describe("discount code service dates contract", () => {

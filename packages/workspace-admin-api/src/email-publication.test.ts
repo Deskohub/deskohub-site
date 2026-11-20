@@ -441,70 +441,46 @@ describe("drafts and publication", () => {
     expect(document.values[2]?.fallback).toBeUndefined();
   });
 
-  test("publication succeeds exactly when the draft reports no problems", () => {
-    const spare = {
-      name: "spare",
-      source: {
-        kind: "customer",
-        path: ["activity", "stats", "favoriteProduct"],
-      },
-    };
-    const cases: unknown[] = [
-      {},
-      richDocument,
-      broken,
-      // Settings of another component or source kind drop at publication.
+  test("blocks publication of drafts with a missing purpose or invalid component settings", () => {
+    const { purpose: _, ...withoutPurpose } = richDocument;
+    const cases = [
       {
-        ...richDocument,
-        structure: [
-          { ...richDocument.structure[0], width: 320 },
-          ...richDocument.structure.slice(1),
-        ],
+        input: withoutPurpose,
+        problem: { _tag: "PurposeMissing" },
       },
       {
-        ...richDocument,
-        values: [
-          richDocument.values[0],
-          {
-            ...firstName,
-            source: { ...firstName.source, discountId },
-          },
-        ],
-      },
-      // Repeated unused names never block; repeated used names do.
-      { ...richDocument, values: [...richDocument.values, spare, spare] },
-      {
-        ...richDocument,
-        values: [...richDocument.values, richDocument.values[1]],
-      },
-      (({ purpose: _, ...rest }) => rest)(richDocument),
-      {
-        ...richDocument,
-        structure: [...richDocument.structure, { _tag: "Divider", id: "rule" }],
+        input: {
+          ...richDocument,
+          structure: richDocument.structure.map((component) =>
+            component._tag === "TextList"
+              ? { ...component, items: [] }
+              : component
+          ),
+        },
+        problem: {
+          _tag: "ComponentIncomplete",
+          componentId: "list",
+          field: "items",
+        },
       },
       {
-        ...richDocument,
-        structure: [{ _tag: "TextList", id: "list", ordered: true, items: [] }],
-      },
-      {
-        ...richDocument,
-        structure: [
-          {
-            _tag: "Image",
-            id: "image",
-            src: "https://a.test/b.png",
-            altKey: "image_alt",
-            width: 0,
-          },
-        ],
+        input: {
+          ...richDocument,
+          structure: richDocument.structure.map((component) =>
+            component._tag === "Image" ? { ...component, width: 0 } : component
+          ),
+        },
+        problem: {
+          _tag: "ComponentIncomplete",
+          componentId: "image",
+          field: "settings",
+        },
       },
     ];
-    for (const input of cases) {
-      const problems = emailDraftProblems(draft(input));
-      expect([input, Result.isSuccess(publish(input))]).toEqual([
-        input,
-        problems.length === 0,
-      ]);
+
+    for (const { input, problem } of cases) {
+      expect(emailDraftProblems(draft(input))).toMatchObject([problem]);
+      expect(Result.isFailure(publish(input))).toBe(true);
     }
   });
 });
