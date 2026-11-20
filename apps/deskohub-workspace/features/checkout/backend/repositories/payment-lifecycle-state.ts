@@ -30,6 +30,9 @@ export class PaymentLifecycleStateError extends Data.TaggedError(
   readonly message: string;
 }> {}
 
+export const publicPaymentWindowExpiredFailureCode =
+  "public_payment_window_expired";
+
 export interface PaymentLifecycleTransition {
   readonly attempt: PaymentAttempt;
   readonly changed: boolean;

@@ -1011,6 +1011,189 @@ describe.skipIf(!testDatabase)(
       ).toBe(false);
     });
 
+    test.each(["eligible", "superseded"] as const)(
+      "reconciles the first verified expired-card webhook on a QR-first %s booking",
+      async (booking) => {
+        const { NexiWebhookService } = await import(
+          "../payment/nexi-webhook.service"
+        );
+        const { PaymentProviders } = await import(
+          "../payment/payment-provider"
+        );
+        const { PaymentRefundService } = await import(
+          "../payment/payment-refund.service"
+        );
+        const { LatePaymentRecoveryQueueService } = await import(
+          "../payment/late-payment-recovery-queue.service"
+        );
+        const { PaymentAttemptRepository } = await import(
+          "./payment-attempt.repository"
+        );
+        const { WebhookEventRepository } = await import(
+          "./webhook-event.repository"
+        );
+        const { ReservationFulfillment } = await import(
+          "../fulfillment/reservation-fulfillment.service"
+        );
+        const { CheckoutAnalytics } = await import(
+          "../analytics/checkout-analytics.service"
+        );
+        const { withReservationPaymentHandlers } = await import(
+          "../payment/order-payment-handlers.test-utils"
+        );
+
+        const lifecycle = await makeRepository();
+        const recoveries = await makeLateRecoveryRepository();
+        const customer = customerId();
+        const reservation = await createHeldReservation(customer);
+        const orderId = reservationOrderId(reservation.id);
+        const { admission, locale, snapshot } = makeOrdinaryAdmission(
+          reservation,
+          customer
+        );
+        const accountKey = "synthetic-fio-account";
+        const qr = await Effect.runPromise(
+          lifecycle
+            .createPendingQrAttempt({
+              ...admission,
+              orderId,
+              locale,
+              accountingSnapshot: snapshot,
+              publicPayment: { accountKey },
+            })
+            .pipe(
+              Effect.provideService(FioPollWake, { wake: () => Effect.void })
+            )
+        );
+        const providerOrderId = `order-${uniqueId()}`;
+        const card = await Effect.runPromise(
+          lifecycle.createPendingProviderAttempt({
+            orderId,
+            locale,
+            amount: admission.amount,
+            provider: "nexi",
+            providerOrderId,
+            publicPayment: { accountKey, useAcceptedCommitment: true },
+          })
+        );
+        const securityToken = "synthetic-webhook-verification";
+        await Effect.runPromise(
+          lifecycle.attachProviderSession({
+            id: card.id,
+            securityToken,
+            providerRedirectUrl: "https://payments.example/synthetic-page",
+          })
+        );
+        const expiresAt = Temporal.Now.instant().add({ minutes: 31 });
+        await Effect.runPromise(
+          lifecycle.expirePublicPaymentWindow({ orderId, checkedAt: expiresAt })
+        );
+        if (booking === "superseded") {
+          await Effect.runPromise(
+            testDatabase!.db
+              .update(workspaceReservations)
+              .set({
+                reservationState: "cancelled",
+                reservationCancelledAt: expiresAt,
+                cancellationCause: "checkout_superseded",
+              })
+              .where(eq(workspaceReservations.id, reservation.id))
+          );
+        }
+
+        const operationId = "synthetic-verified-card-operation";
+        const enqueue = mock(() => Effect.void);
+        const fulfill = mock(() => Effect.void);
+        const databaseLayer = testDatabase!.layer;
+        const dependencies = Layer.mergeAll(
+          PaymentAttemptRepository.Default.pipe(Layer.provide(databaseLayer)),
+          WebhookEventRepository.Default.pipe(Layer.provide(databaseLayer)),
+          WorkspaceReservationRepository.Default.pipe(
+            Layer.provide(databaseLayer)
+          ),
+          Layer.succeed(PaymentLifecycleRepository, lifecycle),
+          Layer.succeed(LatePaymentRecoveryRepository, recoveries),
+          Layer.mock(LatePaymentRecoveryQueueService, { enqueue }),
+          Layer.mock(ReservationFulfillment, { run: fulfill }),
+          Layer.mock(CheckoutAnalytics, {}),
+          Layer.mock(PaymentRefundService, {}),
+          Layer.mock(PaymentProviders, {
+            activeProviders: ["nexi"],
+            forAttempt: () => ({
+              verify: () =>
+                Effect.succeed({
+                  status: "success" as const,
+                  providerOperationId: operationId,
+                  providerStatus: "EXECUTED",
+                  hasActivity: true,
+                  mismatches: [],
+                }),
+            }),
+          })
+        ).pipe(withReservationPaymentHandlers);
+        const eventId = `evt-${uniqueId()}`;
+        try {
+          const outcome = await Effect.runPromise(
+            Effect.gen(function* () {
+              const webhook = yield* NexiWebhookService;
+              const reservations = yield* WorkspaceReservationRepository;
+              const paymentAttempts = yield* PaymentAttemptRepository;
+              const result = yield* webhook.processNotification({
+                eventId,
+                securityToken,
+                operation: {
+                  orderId: providerOrderId,
+                  operationId,
+                  operationType: "CAPTURE",
+                  operationResult: "EXECUTED",
+                  operationAmount: String(admission.amount.value),
+                  operationCurrency: "CZK",
+                },
+              });
+              return {
+                result,
+                reservation: yield* reservations.findById(reservation.id),
+                attempt: yield* paymentAttempts.findById(card.id),
+                recovery: yield* recoveries.findByPaymentAttemptId(card.id),
+              };
+            }).pipe(
+              Effect.provide(
+                NexiWebhookService.Default.pipe(
+                  Layer.provideMerge(dependencies)
+                )
+              )
+            )
+          );
+          expect(outcome.result.status).toBe("accepted");
+          expect(fulfill).toHaveBeenCalledTimes(0);
+          if (booking === "eligible") {
+            expect(outcome.reservation?.activePaymentAttemptId).toBe(card.id);
+            expect(outcome.recovery).toMatchObject({
+              state: "pending",
+              providerOperationId: operationId,
+            });
+            expect(enqueue).toHaveBeenCalledWith({ paymentAttemptId: card.id });
+          } else {
+            expect(outcome.reservation).toMatchObject({
+              activePaymentAttemptId: qr.id,
+              cancellationCause: "checkout_superseded",
+            });
+            expect(outcome.attempt).toMatchObject({
+              state: "paid",
+              refundState: "required",
+            });
+            expect(outcome.recovery).toBeNull();
+            expect(enqueue).toHaveBeenCalledTimes(0);
+          }
+        } finally {
+          await testDatabase!.pool.query(
+            "delete from webhook_events where payment_attempt_id = $1",
+            [card.id]
+          );
+        }
+      }
+    );
+
     test("returns refund work for a late QR credit to a reservation superseded by another checkout", async () => {
       const repository = await makeRepository();
       const customer = customerId();

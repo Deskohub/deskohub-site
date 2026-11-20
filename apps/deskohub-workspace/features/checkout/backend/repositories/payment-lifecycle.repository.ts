@@ -70,6 +70,7 @@ import {
   type NonTerminalPaymentAttemptState,
   PaymentLifecycleStateError,
   type PaymentLifecycleTransition,
+  publicPaymentWindowExpiredFailureCode,
 } from "./payment-lifecycle-state";
 import { PaymentTerminalTransitions } from "./payment-terminal-transitions";
 
@@ -221,7 +222,7 @@ const releaseWindowClaims = Effect.fnUntraced(function* (
   const claim = {
     paymentAttemptId,
     releasedAt,
-    releaseReason: "public_payment_window_expired",
+    releaseReason: publicPaymentWindowExpiredFailureCode,
   };
   yield* PromotionClaims.release(claim);
   yield* ReferralInvitationLedger.release(claim);
@@ -284,7 +285,7 @@ const admitLatePublicSettlement = Effect.fnUntraced(function* (
     .update(paymentAttempts)
     .set({
       state: "expired",
-      failureCode: "public_payment_window_expired",
+      failureCode: publicPaymentWindowExpiredFailureCode,
       updatedAt: input.paidAt,
     })
     .where(
@@ -1345,7 +1346,6 @@ export class PaymentLifecycleRepository extends Context.Service<
             if (recovery) return false;
             if (reservation.paymentState !== "pending") return true;
 
-            const failureCode = "public_payment_window_expired";
             const exposed = [window.cardAttemptId, window.qrAttemptId].filter(
               (id) => id !== null
             );
@@ -1353,7 +1353,7 @@ export class PaymentLifecycleRepository extends Context.Service<
               .update(paymentAttempts)
               .set({
                 state: "expired",
-                failureCode,
+                failureCode: publicPaymentWindowExpiredFailureCode,
                 updatedAt: checkedAt,
               })
               .where(
@@ -1366,7 +1366,7 @@ export class PaymentLifecycleRepository extends Context.Service<
               .update(workspaceReservations)
               .set({
                 paymentState: "expired",
-                failureCode,
+                failureCode: publicPaymentWindowExpiredFailureCode,
                 updatedAt: checkedAt,
               })
               .where(eq(workspaceReservations.id, workspaceReservationId));
