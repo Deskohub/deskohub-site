@@ -679,23 +679,47 @@ describe("dhw campaigns inspection", () => {
     );
   });
 
-  test("exports each locale's Markdown body to a file named for its language", async () => {
+  test("exports a partially translated campaign without changing its Markdown", async () => {
+    const directory = join(await makeTemporaryDirectory(), "export");
+    const { layer, output } = makeCampaignLayer();
+
+    await run(
+      ["--json", "campaigns", "show", "campaign-1", "--export-dir", directory],
+      layer
+    ).pipe(Effect.runPromise);
+
+    const csPath = join(directory, "cs.md");
+    const enPath = join(directory, "en.md");
+    expect(await readFile(csPath, "utf8")).toBe(
+      "# Ahoj\n\n[[button: Rezervovat](https://example.com)]\n"
+    );
+    expect(await readFile(enPath, "utf8")).toBe("# Hello\n");
+    const result = JSON.parse(output.join(""));
+    expect(result.id).toBe("campaign-1");
+    expect(result.exportedFiles).toEqual({ "cs-CZ": csPath, "en-US": enPath });
+  });
+
+  test("exports Markdown bodies for the remaining supported languages", async () => {
+    const locales = supportedLocales.filter(
+      (locale) => locale !== "cs-CZ" && locale !== "en-US"
+    );
     const fileNames = {
-      "cs-CZ": "cs.md",
       "de-DE": "de.md",
-      "en-US": "en.md",
       "hi-IN": "hi.md",
       "sk-SK": "sk.md",
       "uk-UA": "uk.md",
       "vi-VN": "vi.md",
-    } satisfies Record<AdministrationCampaignLocaleType, string>;
+    } satisfies Record<
+      Exclude<AdministrationCampaignLocaleType, "cs-CZ" | "en-US">,
+      string
+    >;
     const localizedCampaign = Schema.decodeUnknownSync(
       AdministrationCampaignDetail
     )({
       ...campaign,
-      locales: supportedLocales,
+      locales,
       content: Object.fromEntries(
-        supportedLocales.map((locale) => [
+        locales.map((locale) => [
           locale,
           {
             subject: "Autumn news",
@@ -719,13 +743,10 @@ describe("dhw campaigns inspection", () => {
     expect(result.id).toBe(campaign.id);
     expect(result.exportedFiles).toEqual(
       Object.fromEntries(
-        supportedLocales.map((locale) => [
-          locale,
-          join(directory, fileNames[locale]),
-        ])
+        locales.map((locale) => [locale, join(directory, fileNames[locale])])
       )
     );
-    for (const locale of supportedLocales) {
+    for (const locale of locales) {
       expect(await readFile(join(directory, fileNames[locale]), "utf8")).toBe(
         `# Autumn news (${locale})\n`
       );
