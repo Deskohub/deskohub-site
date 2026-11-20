@@ -469,7 +469,7 @@ describe("CheckoutStatusRoute", () => {
     ["sent", true, m.entryPackStatusGiftInvitationSent],
     ["failed", true, m.entryPackStatusGiftInvitationFailed],
   ] as const)(
-    "renders the paid gift details for a %s invitation with claimed=%s",
+    "renders the paid gift details for a %s invitation with claimed=%p",
     async (invitation, claimed, invitationMessage) => {
       const locale = "en-US";
       const holderEmail = testEmailAddress("pack-holder");
