@@ -1,6 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Popover, PopoverContent, PopoverTrigger } from "@ui-sdk/react/popover";
 import { format } from "date-fns";
 import { CalendarIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -20,11 +21,6 @@ import {
   FormMessage,
 } from "@/shared/components/ui/form";
 import { Input } from "@/shared/components/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/shared/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -291,33 +287,38 @@ export function ReservationForm() {
                         open={datePopoverOpen}
                         onOpenChange={setDatePopoverOpen}
                       >
-                        <PopoverTrigger asChild>
-                          <FormControl>
-                            <Button
-                              id="date-button"
-                              variant="outline"
-                              className={cn(
-                                "w-full pl-3 text-left font-normal",
-                                !field.value && "text-muted-foreground"
-                              )}
-                              aria-label="Select date"
-                              aria-describedby="date-error"
-                              aria-required="true"
-                              aria-haspopup="dialog"
-                              aria-expanded={datePopoverOpen}
-                            >
-                              {field.value ? (
-                                format(field.value, "PPP")
-                              ) : (
-                                <span>
-                                  {m["trainingReservation.form.pickDate"]()}
-                                </span>
-                              )}
-                              <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                            </Button>
-                          </FormControl>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <FormControl>
+                          <PopoverTrigger
+                            id="date-button"
+                            aria-label="Select date"
+                            aria-describedby="date-error"
+                            aria-required="true"
+                            render={
+                              <Button
+                                variant="outline"
+                                className={cn(
+                                  "w-full pl-3 text-left font-normal",
+                                  !field.value && "text-muted-foreground"
+                                )}
+                              />
+                            }
+                          >
+                            {field.value ? (
+                              format(field.value, "PPP")
+                            ) : (
+                              <span>
+                                {m["trainingReservation.form.pickDate"]()}
+                              </span>
+                            )}
+                            <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                          </PopoverTrigger>
+                        </FormControl>
+                        <PopoverContent
+                          align="start"
+                          sideOffset={4}
+                          initialFocus="none"
+                          className="z-50 w-auto rounded-md border bg-popover p-0 text-popover-foreground shadow-md outline-none origin-[--transform-origin] transition-[opacity,transform] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:scale-95"
+                        >
                           <Calendar
                             mode="single"
                             selected={field.value}

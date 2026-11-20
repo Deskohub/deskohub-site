@@ -1,19 +1,19 @@
 "use client";
 
-import { Menu } from "lucide-react";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogTitle,
+  DialogTrigger,
+} from "@ui-sdk/react/dialog";
+import { Menu, X } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
 import logoImage from "@/assets/images/logo/for-dark-bg.png";
 import { LanguageSwitcher, LocalizedLink, m, setLocale } from "@/features/i18n";
 import { useLocale } from "@/features/i18n/utils/use-locale";
 import { Button } from "@/shared/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/shared/components/ui/sheet";
 import { siteConstants } from "@/shared/utils/constants";
 import {
   getWeekdayHours,
@@ -41,23 +41,21 @@ export function MobileMenu() {
 
   return (
     <div className="xl:hidden">
-      <Sheet open={isOpen} onOpenChange={setIsOpen}>
-        <SheetTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-white hover:text-white hover:bg-white/10"
-          >
-            <Menu className="h-6 w-6" />
-            <span className="sr-only">{m["nav.openMenu"]()}</span>
-          </Button>
-        </SheetTrigger>
-        <SheetContent
-          side="right"
-          className="w-80 bg-gray-900 border-gray-800 safe-padding-vertical"
-          xClassName="text-white"
+      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <DialogTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-white hover:text-white hover:bg-white/10"
+            />
+          }
         >
-          <SheetHeader className="border-b border-gray-800 pb-4">
+          <Menu className="h-6 w-6" />
+          <span className="sr-only">{m["nav.openMenu"]()}</span>
+        </DialogTrigger>
+        <DialogContent className="fixed inset-y-0 right-0 left-auto m-0 h-full max-h-none w-80 max-w-full gap-4 border-l border-gray-800 bg-gray-900 p-6 text-foreground shadow-lg safe-padding-vertical transition-transform duration-500 ease-in-out data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full data-[ending-style]:duration-300 backdrop:bg-black/80 backdrop:transition-opacity data-[starting-style]:backdrop:opacity-0 data-[ending-style]:backdrop:opacity-0">
+          <div className="flex flex-col space-y-2 border-b border-gray-800 pb-4 text-center sm:text-left">
             <div className="flex items-center gap-3">
               <Image
                 src={logoImage}
@@ -67,11 +65,11 @@ export function MobileMenu() {
                 className="rounded-lg"
                 priority
               />
-              <SheetTitle className="text-white text-lg font-bold">
+              <DialogTitle className="text-white text-lg font-bold">
                 {siteConstants.brand.name}
-              </SheetTitle>
+              </DialogTitle>
             </div>
-          </SheetHeader>
+          </div>
 
           <nav className="flex flex-col gap-2 mt-6">
             {navigationItems.map((item) => (
@@ -136,8 +134,12 @@ export function MobileMenu() {
               <p>{m["footer.tagline"]()}</p>
             </div>
           </div>
-        </SheetContent>
-      </Sheet>
+          <DialogClose className="absolute right-4 top-4 rounded-sm bg-secondary text-white opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close</span>
+          </DialogClose>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

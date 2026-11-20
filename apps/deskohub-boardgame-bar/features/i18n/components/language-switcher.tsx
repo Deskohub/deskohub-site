@@ -1,5 +1,6 @@
 "use client";
 
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@ui-sdk/react/menu";
 import { track } from "@vercel/analytics";
 import { Languages } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
@@ -7,12 +8,7 @@ import { type Locale, locales, m, setLocale } from "@/features/i18n";
 import { setLocaleInPathname } from "@/features/i18n/utils/locale-url";
 import { useLocale } from "@/features/i18n/utils/use-locale";
 import { Button } from "@/shared/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/shared/components/ui/dropdown-menu";
+import { cn } from "@/shared/utils";
 
 export function LanguageSwitcher() {
   const router = useRouter();
@@ -32,28 +28,38 @@ export function LanguageSwitcher() {
   };
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-white hover:text-green-400 hover:bg-white/10"
-        >
-          <Languages className="h-4 w-4 mr-2" />
-          {m.language({})}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+    <Menu modal loop={false}>
+      <MenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-white hover:text-green-400 hover:bg-white/10"
+          />
+        }
+      >
+        <Languages className="h-4 w-4 mr-2" />
+        {m.language({})}
+      </MenuTrigger>
+      <MenuContent
+        align="end"
+        sideOffset={4}
+        className="z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md origin-[--transform-origin] transition-[opacity,transform] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:scale-95"
+      >
         {locales.map((locale) => (
-          <DropdownMenuItem
+          <MenuItem
             key={locale}
-            onClick={() => handleLanguageChange(locale)}
-            className={currentLocale === locale ? "bg-accent" : ""}
+            value={locale}
+            onSelect={() => handleLanguageChange(locale)}
+            className={cn(
+              "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+              currentLocale === locale && "bg-accent"
+            )}
           >
             {m.language({}, { locale })}
-          </DropdownMenuItem>
+          </MenuItem>
         ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </MenuContent>
+    </Menu>
   );
 }
