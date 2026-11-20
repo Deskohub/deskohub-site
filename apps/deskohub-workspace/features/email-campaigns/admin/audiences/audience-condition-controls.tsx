@@ -427,23 +427,6 @@ const absentValue = "absent";
 const thisCampaignValue = "this";
 
 /**
- * The campaign a source names among the listed ones, and whether the list
- * lost it, as it does a deleted campaign.
- */
-const campaignSourceChoice = (
-  value: CampaignEmailSourceType | undefined,
-  campaigns: readonly AudienceCampaignOption[]
-) => {
-  const chosen = value?._tag === "Specific" ? value.campaignId : undefined;
-  const chosenCampaign = campaigns.find(({ id }) => id === chosen);
-  return {
-    chosen,
-    chosenCampaign,
-    lost: chosen !== undefined && chosenCampaign === undefined,
-  };
-};
-
-/**
  * Whose emails count: any campaign, this campaign where `holder` can hold
  * it, or one picked by name, searchable and badged with each campaign's
  * state. A chosen campaign missing from the list, such as a deleted one,
@@ -463,10 +446,9 @@ function CampaignSourceControl({
   readonly holder: AudienceFilterHolder;
 }) {
   const locale = useRouteLocale();
-  const { chosen, chosenCampaign, lost } = campaignSourceChoice(
-    value,
-    campaigns
-  );
+  const chosen = value?._tag === "Specific" ? value.campaignId : undefined;
+  const chosenCampaign = campaigns.find(({ id }) => id === chosen);
+  const lost = chosen !== undefined && chosenCampaign === undefined;
   const thisCampaign = m.emailAutomationFlowCampaignSourceThis({}, { locale });
   return (
     <SearchablePicker
