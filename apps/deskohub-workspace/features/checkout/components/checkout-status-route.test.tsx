@@ -465,10 +465,11 @@ describe("CheckoutStatusRoute", () => {
   test.each([
     ["not_sent", false, m.entryPackStatusGiftInvitationNotSent],
     ["pending", false, m.entryPackStatusGiftInvitationPending],
+    ["sent", false, m.entryPackStatusGiftInvitationSent],
     ["sent", true, m.entryPackStatusGiftInvitationSent],
     ["failed", true, m.entryPackStatusGiftInvitationFailed],
   ] as const)(
-    "renders the paid gift details for a %s invitation",
+    "renders the paid gift details for a %s invitation with claimed=%s",
     async (invitation, claimed, invitationMessage) => {
       const locale = "en-US";
       const holderEmail = testEmailAddress("pack-holder");
