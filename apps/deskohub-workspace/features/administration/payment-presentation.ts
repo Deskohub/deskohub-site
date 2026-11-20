@@ -4,6 +4,12 @@ import { type Money, moneyWithValue } from "@/shared/money/money";
 import type { AdministrationPaymentAttempt } from "./administration.service";
 import { m } from "./i18n";
 
+export const needsNexiRefund = ({
+  provider,
+  refundState,
+}: Pick<AdministrationPaymentAttempt, "provider" | "refundState">) =>
+  provider === "nexi" && refundState === "required";
+
 export const getRefundAmountDue = (
   target: Money,
   refundedValue: number | null

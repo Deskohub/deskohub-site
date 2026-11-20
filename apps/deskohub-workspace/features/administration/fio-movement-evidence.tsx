@@ -1,6 +1,7 @@
+import { formatCurrencyAmount } from "@deskohub/i18n/currency";
 import type { FioPaymentSettlement } from "@/db/schema/fio-payment-settlements";
 import type { Locale } from "@/features/i18n";
-import { formatMoney } from "@/shared/money/money";
+import { moneyToDecimalString } from "@/shared/money/money";
 import { AdministrationLink } from "./admin-link";
 import { administrationHref } from "./administration-href";
 import {
@@ -53,10 +54,16 @@ export function FioMovementEvidence({
           const amount =
             movement.amountValue === null
               ? `${movement.decimalAmount} ${movement.currency}`
-              : formatMoney(
-                  { value: movement.amountValue, currency: "CZK", exponent: 2 },
-                  locale
-                );
+              : formatCurrencyAmount({
+                  amount: moneyToDecimalString({
+                    value: movement.amountValue,
+                    currency: "CZK",
+                    exponent: 2,
+                  }),
+                  currency: "CZK",
+                  fractionDigits: 2,
+                  locale,
+                });
           return (
             <li className="py-4 first:pt-0 last:pb-0" key={movement.id}>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3">

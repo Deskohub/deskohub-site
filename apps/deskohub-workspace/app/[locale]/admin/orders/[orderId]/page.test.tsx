@@ -91,7 +91,16 @@ const loadFioMovements = mock((id: string) =>
           {
             ...fioDiscrepancy,
             orderId: fioPendingRefund.orderId,
+            paymentAttemptId: fioPendingRefund.paymentAttemptId,
             discrepancyReason: "currency_mismatch" as const,
+          },
+          {
+            ...fioPendingRefund,
+            id: "01980000-0000-7000-8000-000000000042",
+            movementId: "9012345003",
+            amountValue: 8_000_000_000_000_001,
+            disposition: "discrepancy" as const,
+            discrepancyReason: "amount_mismatch" as const,
           },
         ]
   )
@@ -262,6 +271,7 @@ describe("OrderAdministrationDetail", () => {
     const view = within(container);
     expect(view.getByText("9012345001")).toBeTruthy();
     expect(view.getByText("100.2500 EUR")).toBeTruthy();
+    expect(view.getByText(/80,000,000,000,000\.01$/)).toBeTruthy();
     expect(view.getByText("Currency differs from the quote")).toBeTruthy();
     expect(view.getByText("Manual refund required")).toBeTruthy();
     expect(

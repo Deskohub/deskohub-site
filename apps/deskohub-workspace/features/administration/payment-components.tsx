@@ -113,7 +113,10 @@ export const getPaymentAttemptStatusLabel = (
   link: NonNullable<AdministrationOrder["link"]>,
   locale: Locale
 ) => {
-  const status = getAdministrationPaymentStatus(link, locale);
+  const status = getAdministrationPaymentStatus(
+    { ...link, provider: "nexi" },
+    locale
+  );
   return status.refunded
     ? status.label
     : getAdministrationPaymentAttemptStateLabel(link.state, locale);
@@ -126,7 +129,10 @@ export function PaymentAttemptStatusBadge({
   readonly link: NonNullable<AdministrationOrder["link"]>;
   readonly locale: Locale;
 }) {
-  const refunded = getAdministrationPaymentStatus(link, locale).refunded;
+  const refunded = getAdministrationPaymentStatus(
+    { ...link, provider: "nexi" },
+    locale
+  ).refunded;
   return (
     <StatusBadge
       tone={refunded ? "attention" : getProviderStatusTone(link.state)}

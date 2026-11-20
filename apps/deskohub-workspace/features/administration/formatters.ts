@@ -15,7 +15,10 @@ import type {
   AdministrationReservationSummary,
 } from "./administration.service";
 import { m } from "./i18n";
-import { getAdministrationPaymentStateLabel } from "./payment-presentation";
+import {
+  getAdministrationPaymentStateLabel,
+  needsNexiRefund,
+} from "./payment-presentation";
 
 // Operators work on Prague time, so every locale shows the 24-hour clock. A
 // day period could also differ between server and browser: depending on its
@@ -147,6 +150,7 @@ export const getAdministrationPaymentStatus = (
     AdministrationPaymentAttempt,
     | "amount"
     | "failureCode"
+    | "provider"
     | "refundState"
     | "refundedAmount"
     | "refundedAt"
@@ -162,7 +166,7 @@ export const getAdministrationPaymentStatus = (
       at: attempt.updatedAt,
       refunded: false,
       retainedAmount: null,
-      needsRefund: attempt.refundState === "required",
+      needsRefund: needsNexiRefund(attempt),
     };
   }
   const partial = refundedAmount.value < attempt.amount.value;
