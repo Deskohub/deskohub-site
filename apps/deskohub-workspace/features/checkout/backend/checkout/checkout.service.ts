@@ -912,6 +912,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           const orderId = reservationOrderId(input.reservationId);
           const window = yield* qrPayments.findPaymentWindow(orderId);
           if (!window) return undefined;
+          if (yield* reservations.findEntryPackClaim(input.reservationId)) {
+            return paymentInProgress;
+          }
           if (
             window.accountKey !== input.fio.accountKey ||
             Temporal.Instant.compare(
@@ -1192,7 +1195,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 if (!lockedReservation) {
                   return { status: "in_progress" as const };
                 }
-                if (input.method) {
+                if (input.method && !entryPackFunded) {
                   const resumed = yield* resumePublicPayment(
                     {
                       reservationId: reservation.id,

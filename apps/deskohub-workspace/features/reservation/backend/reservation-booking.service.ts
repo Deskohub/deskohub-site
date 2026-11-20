@@ -38,7 +38,7 @@ import {
   deriveCheckoutAttemptKeys,
   deriveCheckoutSessionKeys,
 } from "@/features/checkout/backend/checkout/checkout-lookup-keys.server";
-import { quoteCoworkEntryPack } from "@/features/checkout/backend/checkout/cowork-checkout-pricing";
+import { quoteCoworkEntryPackForContinue } from "@/features/checkout/backend/checkout/cowork-checkout-pricing";
 import { splitCustomerName } from "@/features/checkout/backend/reservation";
 import type { CheckoutSessionId } from "@/features/checkout/checkout-identifiers";
 import {
@@ -873,14 +873,15 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
         ) {
           if (checkoutPricing.kind === "entry-pack") {
             const { entryPack } = checkoutPricing;
-            const quoted = yield* quoteCoworkEntryPack({
+            return yield* quoteCoworkEntryPackForContinue({
               reservation: {
                 ...checkoutPricing.reservation,
                 ...accountCustomer?.contact,
               },
               entryPack,
+              advertisedPriceToken: input.advertisedPriceToken,
+              locale: input.locale,
             });
-            return { ...quoted, changedKeys: undefined };
           }
           return yield* quotePreparedReservation({
             advertisement: at.equals(bookedAt)

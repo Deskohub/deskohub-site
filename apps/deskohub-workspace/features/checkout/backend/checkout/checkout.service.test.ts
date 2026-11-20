@@ -748,6 +748,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   // Whether each read of the order happened while the account lock was held.
   const rereadUnderAccountLock: boolean[] = [];
   const reservations = {
+    findEntryPackClaim: () => Effect.undefined,
     findById: mock(() =>
       Effect.sync(() => {
         rereadUnderAccountLock.push(
