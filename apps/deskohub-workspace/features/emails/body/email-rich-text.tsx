@@ -75,19 +75,22 @@ export const EmailBodyImage = ({
   align,
   width,
   href,
+  roundedCorners = true,
 }: {
   readonly src: string;
   readonly alt: string;
   readonly align?: CampaignBodyAttributeValue;
   readonly width?: CampaignBodyAttributeValue;
   readonly href?: string;
+  readonly roundedCorners?: boolean;
 }) => {
+  const radiusClassName = roundedCorners ? "rounded-2xl" : "rounded-none";
   if (!isCampaignImageWidth(width)) {
     return linked(
       href,
       <Img
         alt={alt}
-        className="mt-4 block h-auto w-full max-w-full rounded-2xl"
+        className={`mt-4 block h-auto w-full max-w-full ${radiusClassName}`}
         src={src}
         width={campaignBodyColumnWidth}
       />
@@ -106,7 +109,7 @@ export const EmailBodyImage = ({
           href,
           <Img
             alt={alt}
-            className={`block h-auto max-w-full rounded-2xl ${classNames.image}`}
+            className={`block h-auto max-w-full ${radiusClassName} ${classNames.image}`}
             src={src}
             width={Math.min(width, campaignBodyColumnWidth)}
           />
@@ -181,6 +184,7 @@ export const renderEmailRichText = (
           <EmailBodyImage
             align={node.attrs.align}
             alt={node.attrs.alt ?? ""}
+            roundedCorners={node.attrs.roundedCorners !== false}
             src={node.attrs.src}
             width={node.attrs.width}
           />

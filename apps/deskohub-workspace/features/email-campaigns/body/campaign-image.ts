@@ -55,32 +55,44 @@ export const campaignBodyImageSources = (
   ...(node.content ?? []).flatMap(campaignBodyImageSources),
 ];
 
-// Markdown spells a laid-out image with a Pandoc-style attribute list on its
-// own line: `![Alt](https://…){align=left width=240}`. A plain image line
-// stays a centered image without a width. Alt text and titles may break
+// Markdown spells image settings with a Pandoc-style attribute list on its
+// own line: `![Alt](https://…){align=left width=240 roundedCorners=false}`.
+// A plain image line uses the default settings. Alt text and titles may break
 // lines but not paragraphs; the inline lexer then checks the image itself.
 const attributedImagePattern =
   /^(!\[(?:[^\n]|\n(?!\n))*?\]\((?:[^\n]|\n(?!\n))*?\))\{([^{}\n]*)\}[^\S\n]*(?:\n|$)/;
-const imageAttributePattern = /^(align|width)=(\S+)$/;
+const imageAttributePattern = /^(align|width|roundedCorners)=(\S+)$/;
 
 type ImageLayout = {
   readonly align?: string;
   readonly width?: number | string;
+  readonly roundedCorners?: boolean | string;
+};
+
+const parseRoundedCorners = (value: string) => {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return value;
 };
 
 /**
- * Reads `align=… width=…`. Values stay as written, so the content rules can
- * name a bad one; an unknown or repeated key means it isn't an attribute list.
+ * Reads image settings, leaving invalid values as written for validation.
+ * Unknown or repeated keys mean it isn't an attribute list.
  */
 const parseImageLayout = (list: string): ImageLayout | undefined => {
-  const layout: Record<string, string | number> = {};
+  const layout: Record<string, string | number | boolean> = {};
   for (const entry of list.trim().split(/\s+/)) {
     const [, key, value] = imageAttributePattern.exec(entry) ?? [];
     if (key === undefined || value === undefined || key in layout) {
       return undefined;
     }
-    layout[key] =
-      key === "width" && /^\d+$/.test(value) ? Number(value) : value;
+    if (key === "width" && /^\d+$/.test(value)) {
+      layout[key] = Number(value);
+    } else if (key === "roundedCorners") {
+      layout[key] = parseRoundedCorners(value);
+    } else {
+      layout[key] = value;
+    }
   }
   return layout;
 };
@@ -91,6 +103,7 @@ const imageLayoutMarkdown = (attrs: JSONContent["attrs"]) => {
   const entries = [
     ...(align === defaultCampaignImageAlignment ? [] : [`align=${align}`]),
     ...(width === null ? [] : [`width=${width}`]),
+    ...(attrs?.roundedCorners === false ? ["roundedCorners=false"] : []),
   ];
   return entries.length > 0 ? `{${entries.join(" ")}}` : "";
 };
@@ -114,6 +127,17 @@ export const CampaignImage = Image.extend({
             ? attributes.align
             : defaultCampaignImageAlignment,
         }),
+      },
+      roundedCorners: {
+        default: null,
+        parseHTML: (element) => {
+          const value = element.getAttribute("data-rounded-corners");
+          return value === null ? null : parseRoundedCorners(value);
+        },
+        renderHTML: (attributes) =>
+          attributes.roundedCorners === false
+            ? { "data-rounded-corners": "false" }
+            : {},
       },
     };
   },
@@ -144,6 +168,9 @@ export const CampaignImage = Image.extend({
       alt: token.text,
       ...(token.align !== undefined && { align: token.align }),
       ...(token.width !== undefined && { width: token.width }),
+      ...(token.roundedCorners !== undefined && {
+        roundedCorners: token.roundedCorners,
+      }),
     }),
 
   renderMarkdown(node, helpers, context) {

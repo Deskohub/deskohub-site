@@ -406,6 +406,49 @@ describe("campaign delivery", () => {
 });
 
 describe("campaign body images", () => {
+  test.each([240, undefined])(
+    "respects per-image corners in delivery HTML with width %p",
+    async (width) => {
+      const email = await message(
+        delivery(CampaignDeliveryAudience.Operational()),
+        {
+          localeContent: {
+            ...content,
+            body: {
+              formatVersion: 1,
+              doc: {
+                type: "doc",
+                content: [
+                  { alt: "Default corners" },
+                  { alt: "Square corners", roundedCorners: false },
+                ].map((attrs) => ({
+                  type: "image",
+                  attrs: {
+                    src: cloudinaryImage,
+                    ...(width !== undefined && { width }),
+                    ...attrs,
+                  },
+                })),
+              },
+            },
+          },
+        }
+      );
+
+      const rounded = email.html.match(
+        /<img[^>]*alt="Default corners"[^>]*>/
+      )?.[0];
+      const square = email.html.match(
+        /<img[^>]*alt="Square corners"[^>]*>/
+      )?.[0];
+      expect(rounded).toMatch(/border-radius:[1-9][^;"]*[;"]/);
+      expect(square).toMatch(/border-radius:0(?:px)?[;"]/);
+      for (const image of [rounded, square]) {
+        expect(image).toContain(`width="${width ?? 534}"`);
+      }
+    }
+  );
+
   const renderImage = async (attrs: CampaignBodyNode["attrs"]) => {
     const email = await render("operational", "cs-CZ", {
       ...content,
