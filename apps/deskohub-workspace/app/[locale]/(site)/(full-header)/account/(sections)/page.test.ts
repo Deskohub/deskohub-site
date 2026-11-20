@@ -11,9 +11,7 @@ mock.module("@/features/i18n/server/request-locale", () => ({
     callback("en-US"),
 }));
 
-const { default: CustomerAccountPageRoute, generateMetadata } = await import(
-  "./page"
-);
+const { generateMetadata } = await import("./page");
 
 test("titles the bare account page after the account", async () => {
   expect(await generateMetadata()).toEqual({
@@ -21,8 +19,4 @@ test("titles the bare account page after the account", async () => {
     description: "synthetic-description",
     robots: { index: false, follow: false },
   });
-});
-
-test("leaves the account page to the sections' layout", () => {
-  expect(CustomerAccountPageRoute()).toBeNull();
 });

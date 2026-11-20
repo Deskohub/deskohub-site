@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,19 +9,6 @@ import { buildPosthogIdentityFixtureBundle } from "./posthog-identity-fixture-bu
 // with the shared bundler setup and initializes it without `process`, failing
 // when an import change leaks a module that reads server-only globals at load.
 const outdir = mkdtempSync(join(tmpdir(), "posthog-identity-fixture-"));
-let build: Awaited<ReturnType<typeof buildPosthogIdentityFixtureBundle>>;
-let bundle = "";
-
-beforeAll(async () => {
-  build = await buildPosthogIdentityFixtureBundle(
-    "https://telemetry.posthog.test",
-    outdir
-  );
-  const output = build.outputs.find((candidate) =>
-    candidate.path.endsWith(".js")
-  );
-  bundle = output ? await Bun.file(output.path).text() : "";
-}, 60_000);
 
 afterAll(() => rmSync(outdir, { force: true, recursive: true }));
 
@@ -80,17 +67,26 @@ const browserLikeGlobals = () => {
   });
 };
 
-test("builds the fixture bundle with the browser check's bundler setup", () => {
+test("builds and initializes the browser fixture without process or a DOM", async () => {
+  const build = await buildPosthogIdentityFixtureBundle(
+    "https://telemetry.posthog.test",
+    outdir
+  );
   expect(build.success).toBe(true);
-  expect(bundle.length).toBeGreaterThan(0);
-});
+  const output = build.outputs.find((candidate) =>
+    candidate.path.endsWith(".js")
+  );
+  if (!output) throw new Error("Missing PostHog fixture JavaScript bundle");
 
-test("initializes the fixture bundle without process or a DOM", () => {
   // The bundle ends with an ESM export list; the rest is a classic script.
-  const script = bundle.replace(/\nexport \{[^}]*\};?\s*$/, "\n");
+  const script = (await Bun.file(output.path).text()).replace(
+    /\nexport \{[^}]*\};?\s*$/,
+    "\n"
+  );
+  expect(script.trim()).not.toBe("");
   expect(() =>
     runInNewContext(script, browserLikeGlobals(), {
       filename: "posthog-identity-browser-fixture.js",
     })
   ).not.toThrow();
-});
+}, 60_000);

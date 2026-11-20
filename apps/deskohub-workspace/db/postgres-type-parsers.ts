@@ -1,6 +1,6 @@
 import { type CustomTypesConfig, types } from "pg";
 
-export const drizzleRawTypeOids = [
+const drizzleRawTypeOids = [
   1082, // date
   1114, // timestamp
   1115, // timestamp[]

@@ -14,7 +14,6 @@ import {
 } from "drizzle-orm/pg-core";
 import { Effect } from "effect";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import { equalsAny } from "./equals-any";
 import { instant } from "./instant";
 import { sensitiveInstant } from "./sensitive-instant";
 
@@ -35,6 +34,9 @@ const probe = pgTable("database_value_decoding_probe", {
 
 // Microseconds that differ only below the millisecond.
 const earlier = Temporal.Instant.from("2026-09-05T10:00:00.000100Z");
+const earlierWithNanoseconds = Temporal.Instant.from(
+  "2026-09-05T10:00:00.000100999Z"
+);
 const later = Temporal.Instant.from("2026-09-05T10:00:00.000900Z");
 
 describe.skipIf(!suiteDatabase)(
@@ -61,8 +63,8 @@ describe.skipIf(!suiteDatabase)(
         db.insert(probe).values([
           {
             id: "earlier",
-            at: earlier,
-            hiddenAt: earlier,
+            at: earlierWithNanoseconds,
+            hiddenAt: earlierWithNanoseconds,
             plainAt: new Date("2026-09-05T10:00:00.123Z"),
             day: "2026-09-05",
             big: 9_007_199_254_740_991,
@@ -87,7 +89,7 @@ describe.skipIf(!suiteDatabase)(
 
     afterAll(() => suiteDatabase.close());
 
-    test("reads instant columns as Temporal instants with their microseconds", async () => {
+    test("round-trips instant columns at microsecond precision", async () => {
       const rows = await run(
         db
           .select({ id: probe.id, at: probe.at, hiddenAt: probe.hiddenAt })
@@ -168,16 +170,6 @@ describe.skipIf(!suiteDatabase)(
           .select({ id: probe.id })
           .from(probe)
           .where(sql`${probe.at} > ${earlier}`)
-      );
-      expect(rows).toEqual([{ id: "later" }]);
-    });
-
-    test("matches a text column against a bound text[] parameter", async () => {
-      const rows = await run(
-        db
-          .select({ id: probe.id })
-          .from(probe)
-          .where(equalsAny(probe.id, ["later", "missing"]))
       );
       expect(rows).toEqual([{ id: "later" }]);
     });

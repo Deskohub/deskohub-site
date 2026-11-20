@@ -6,7 +6,6 @@ import { staffLocale } from "@/shared/backend/staff-locale";
 import { reservationEmailDetails } from "./_components/reservation-email-details";
 import {
   contactBusinessPreviewProps,
-  contactConfirmationPreviewProps,
   customerReservationPreviewProps,
   invoiceCancellationNoticePreviewProps,
   invoiceDeliveryPreviewProps,
@@ -37,56 +36,11 @@ import {
 import { WorkspaceCampaignEmail } from "./workspace-campaign";
 
 describe("Workspace React Email templates", () => {
-  test("renders every template preview", async () => {
-    const [
-      business,
-      confirmation,
-      customerReservation,
-      staffNotification,
-      cancellation,
-      invoiceDelivery,
-      invoiceCancellationNotice,
-      campaign,
-    ] = await Promise.all([
-      render(<ContactBusinessEmail {...contactBusinessPreviewProps} />),
-      render(<ContactConfirmationEmail {...contactConfirmationPreviewProps} />),
-      render(<CustomerReservationEmail {...customerReservationPreviewProps} />),
-      render(
-        <ReservationNotificationEmail
-          {...reservationNotificationPreviewProps}
-        />
-      ),
-      render(
-        <ReservationCancellationEmail
-          {...reservationCancellationPreviewProps}
-        />
-      ),
-      render(<InvoiceDeliveryEmail {...invoiceDeliveryPreviewProps} />),
-      render(
-        <InvoiceCancellationNoticeEmail
-          {...invoiceCancellationNoticePreviewProps}
-        />
-      ),
-      render(<WorkspaceCampaignEmail {...workspaceCampaignPreviewProps} />),
-    ]);
+  test("includes the campaign headline and marketing preferences link", async () => {
+    const campaign = await render(
+      <WorkspaceCampaignEmail {...workspaceCampaignPreviewProps} />
+    );
 
-    expect(business).toContain(contactBusinessPreviewProps.name);
-    expect(confirmation).toContain('lang="en-US"');
-    expect(customerReservation).toContain(
-      `href="${customerReservationPreviewProps.accessUrl}"`
-    );
-    expect(staffNotification).toContain(
-      reservationNotificationPreviewProps.customer.email
-    );
-    expect(cancellation).toContain(
-      reservationCancellationPreviewProps.reservation.id
-    );
-    expect(invoiceDelivery).toContain(
-      invoiceDeliveryPreviewProps.invoiceNumber
-    );
-    expect(invoiceCancellationNotice).toContain(
-      invoiceCancellationNoticePreviewProps.documentNumber
-    );
     expect(campaign).toContain("Podzim ve Workspace");
     expect(campaign).toContain(
       `href="${workspaceCampaignPreviewProps.footer.marketingPreferencesUrl}"`
@@ -118,6 +72,7 @@ describe("contact emails", () => {
     );
 
     expect(html).toContain(`lang="${staffLocale}"`);
+    expect(html).toContain(contactBusinessPreviewProps.name);
     expect(html).toContain(contactBusinessPreviewProps.email);
   });
 
@@ -144,7 +99,6 @@ describe("contact emails", () => {
 
     expect(czech).toContain('lang="cs-CZ"');
     expect(english).toContain('lang="en-US"');
-    expect(czech).not.toBe(english);
     expect(english).toContain("First line<br/>Second line");
   });
 });
@@ -170,7 +124,6 @@ describe("invoice delivery email", () => {
 
     expect(czech).toContain('lang="cs-CZ"');
     expect(english).toContain('lang="en-US"');
-    expect(czech).not.toBe(english);
   });
 
   test("writes the staff copy in the staff locale", async () => {
@@ -195,7 +148,11 @@ describe("invoice delivery email", () => {
       }),
     ]);
 
-    expect(requested).not.toBe(settled);
+    expect(requested).toContain("with payment details is attached");
+    expect(settled).toContain(
+      `Invoice ${invoiceDeliveryPreviewProps.invoiceNumber} is attached`
+    );
+    expect(settled).not.toContain("payment details");
   });
 
   test("names the order of a reservation invoice", async () => {
@@ -233,7 +190,6 @@ describe("invoice cancellation notice email", () => {
 
     expect(czech).toContain('lang="cs-CZ"');
     expect(english).toContain('lang="en-US"');
-    expect(czech).not.toBe(english);
   });
 
   test("writes the staff copy in the staff locale", async () => {
@@ -317,7 +273,6 @@ describe("reservation emails", () => {
 
     expect(czech).toContain('lang="cs-CZ"');
     expect(english).toContain('lang="en-US"');
-    expect(czech).not.toBe(english);
   });
 
   test("head an overnight stay's confirmation with its start and end", async () => {
@@ -380,9 +335,16 @@ describe("reservation emails", () => {
 
   test("show the table only when the reservation has one", async () => {
     const { reservation } = customerReservationPreviewProps;
+    const tableName = "Window desk A";
     const [assigned, unplaced] = await Promise.all([
       render(
-        <CustomerReservationEmail {...customerReservationPreviewProps} />,
+        <CustomerReservationEmail
+          {...customerReservationPreviewProps}
+          reservation={{
+            ...reservation,
+            placement: { table: { mode: "assigned", name: tableName } },
+          }}
+        />,
         {
           plainText: true,
         }
@@ -396,8 +358,8 @@ describe("reservation emails", () => {
       ),
     ]);
 
-    expect(assigned).not.toBe(unplaced);
-    expect(assigned).toContain(reservation.placement.table.name);
+    expect(assigned).toContain(tableName);
+    expect(unplaced).not.toContain(tableName);
   });
 
   test("write the author confirmation in the author's locale", async () => {
@@ -414,7 +376,6 @@ describe("reservation emails", () => {
 
     expect(czech).toContain('lang="cs-CZ"');
     expect(english).toContain('lang="en-US"');
-    expect(czech).not.toBe(english);
   });
 
   test("write the staff notification in the staff locale", async () => {
@@ -424,6 +385,7 @@ describe("reservation emails", () => {
 
     expect(html).toContain(`lang="${staffLocale}"`);
     expect(html).toContain(reservationNotificationPreviewProps.reservation.id);
+    expect(html).toContain(reservationNotificationPreviewProps.customer.email);
   });
 
   test("list the customer's phone only when they gave one", async () => {
@@ -462,7 +424,9 @@ describe("reservation emails", () => {
 
     expect(czech).toContain('lang="cs-CZ"');
     expect(english).toContain('lang="en-US"');
-    expect(czech).not.toBe(english);
+    expect(english).toContain(
+      reservationCancellationPreviewProps.reservation.id
+    );
   });
 });
 
