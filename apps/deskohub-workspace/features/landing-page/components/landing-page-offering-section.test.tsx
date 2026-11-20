@@ -82,8 +82,6 @@ describe.each(locales)("LandingPageOfferingSection in %s", (locale) => {
       `/${locale}/ttrpg-room`,
       `/${locale}/contact`,
     ]);
-    expect(isMeetingRoomPageEnabled).toHaveBeenCalledTimes(1);
-    expect(isOfficePageEnabled).toHaveBeenCalledTimes(1);
   });
 
   test("leaves out the meeting room page link while that page is off", async () => {

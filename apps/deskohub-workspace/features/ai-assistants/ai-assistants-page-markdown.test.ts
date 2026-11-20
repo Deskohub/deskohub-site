@@ -51,9 +51,10 @@ describe.each(locales)("aiAssistantsPageMarkdown in %s", (locale) => {
       )
     );
 
-    expect(expected.length).toBeGreaterThan(0);
-    expect(
-      [...body.matchAll(/^(\d+)\. /gm)].map(([, number]) => Number(number))
-    ).toEqual(expected);
+    const stepNumbers = [...body.matchAll(/^(\d+)\. /gm)].map(([, number]) =>
+      Number(number)
+    );
+    expect(stepNumbers.length).toBeGreaterThan(0);
+    expect(stepNumbers).toEqual(expected);
   });
 });

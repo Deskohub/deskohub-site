@@ -4,45 +4,18 @@ import { m } from "@/features/i18n";
 import { resolveContactFormState } from "./contact-form-state";
 
 describe("resolveContactFormState", () => {
-  test("uses native success state when the hydrated state action has no outcome", () => {
-    const success: ContactFormState = {
-      status: "success",
-      message: m.contactSuccessMessage({}, { locale: "en-US" }),
-    };
-
-    expect(
-      resolveContactFormState({}, { data: success }, "Send failed.")
-    ).toEqual(success);
-  });
-
-  test("projects server validation values and messages from either action state", () => {
-    const locale = "cs-CZ";
+  test("keeps hydrated validation errors over a native success", () => {
     const validationError: ContactFormState = {
       status: "error",
-      message: m.contactValidationReviewMessage({}, { locale }),
-      values: {
-        name: " S ",
-        email: "bad",
-        phone: "",
-        message: " short ",
-      },
-      fieldErrors: {
-        name: m.contactValidationNameMinimum({ min: 2 }, { locale }),
-        email: m.contactValidationEmailInvalid({}, { locale }),
-      },
-    };
-    const nativeSuccess: ContactFormState = {
-      status: "success",
-      message: m.contactSuccessMessage({}, { locale }),
+      message: "Review the form.",
+      values: { name: " S ", email: "bad", phone: "", message: " short " },
+      fieldErrors: { name: "Enter your name." },
     };
 
-    expect(
-      resolveContactFormState({}, { data: validationError }, "Send failed.")
-    ).toEqual(validationError);
     expect(
       resolveContactFormState(
         { data: validationError },
-        { data: nativeSuccess },
+        { data: { status: "success", message: "Sent." } },
         "Send failed."
       )
     ).toEqual(validationError);

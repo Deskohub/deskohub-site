@@ -6,7 +6,6 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
-import { formatFileSize } from "@/shared/utils/number";
 import type { AndroidDownload } from "../android-download";
 import { obtainiumImportUrl } from "../obtainium-link";
 
@@ -90,7 +89,7 @@ test("offers the latest release's APK and the Obtainium import", () => {
   );
   const size = page.container.querySelector("data");
   expect(size?.getAttribute("value")).toBe(String(release.apkSizeBytes));
-  expect(size?.textContent).toBe(formatFileSize(release.apkSizeBytes, "cs-CZ"));
+  expect(size?.textContent).toBe("42,1 MB");
   expect(linksTo(page, releasesListUrl)).toHaveLength(0);
   expectCertificateAndSteps(page);
 });
