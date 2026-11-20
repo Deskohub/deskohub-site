@@ -1,6 +1,7 @@
 import { Effect, Match, Struct } from "effect";
 import { CheckoutService } from "@/features/checkout/backend/checkout";
 import { CheckoutError } from "@/features/checkout/backend/checkout/checkout-error";
+import { requirePublicPayStateAuthor } from "@/features/checkout/backend/checkout/public-pay-state-author.server";
 import { getPublicReservationPaymentAccount } from "@/features/checkout/backend/checkout/public-reservation-payment-account";
 import { getReservationStatusPath } from "@/features/checkout/backend/checkout/reservation-status-url";
 import { type Locale, m } from "@/features/i18n";
@@ -41,13 +42,24 @@ export const submitWorkspaceReservation = Effect.fn(
       });
     }
     const checkout = yield* method && account
-      ? service.startReservationPayment(
-          {
-            ...payment,
-            method,
-            fio: { accountKey: account.accountKey },
-          },
-          locale
+      ? requirePublicPayStateAuthor({
+          payStateToken: input.payStateToken,
+          locale,
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CheckoutError({
+                code: "checkout_failed",
+                message: "The signed-in reservation author is required.",
+                cause,
+              })
+          ),
+          Effect.flatMap(() =>
+            service.startReservationPayment(
+              { ...payment, method, fio: { accountKey: account.accountKey } },
+              locale
+            )
+          )
         )
       : service.createHostedPaymentCheckout(payment, locale);
 

@@ -71,6 +71,7 @@ import {
   PaymentAttemptRepository,
 } from "../repositories/payment-attempt.repository";
 import type { PaymentLifecycleRepositoryError } from "../repositories/payment-lifecycle.repository";
+import { QrPaymentRepository } from "../repositories/qr-payment.repository";
 import {
   type CheckoutReservationStatusKind,
   getLatePaymentStatusKind,
@@ -368,6 +369,7 @@ const implementation = Effect.gen(function* () {
   const latePaymentRecoveries = yield* LatePaymentRecoveryRepository;
   const latePaymentVerification = yield* LatePaymentVerificationService;
   const paymentAttempts = yield* PaymentAttemptRepository;
+  const qrPayments = yield* QrPaymentRepository;
   const paymentPageProviderStatus = yield* PaymentPageProviderStatus;
   const dotypos = yield* DotyposService;
   const records = yield* ReservationRecords;
@@ -732,6 +734,13 @@ const implementation = Effect.gen(function* () {
     refreshed: PaymentPageProviderObservation | undefined
   ) {
     if ("closed" in getPaymentPageToReopen(attempt, now)) return false;
+    // The shared continuation authorizes the author and enforces the original
+    // deadline. The attempt's age alone applies only to legacy card orders.
+    if (
+      yield* qrPayments.findPaymentWindow(reservationOrderId(reservation.id))
+    ) {
+      return false;
+    }
     const observation =
       refreshed ??
       (yield* paymentPageProviderStatus.observe({ attempt, reservation }));
@@ -1045,6 +1054,7 @@ export class CheckoutStatusService extends Context.Service<
       Layer.provide(LatePaymentVerificationService.Live),
       Layer.provide(LatePaymentRecoveryRepository.Default),
       Layer.provide(PaymentAttemptRepository.Default),
+      Layer.provide(QrPaymentRepository.Default),
       Layer.provide(WorkspaceReservationRepository.Default),
       Layer.provide(ReviewSandbox.Default),
       Layer.provide(ReservationInvitees.Default),

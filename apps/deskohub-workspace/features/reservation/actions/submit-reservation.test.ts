@@ -8,9 +8,17 @@ import {
   peeking,
   testPeekedStandings,
 } from "@/features/account/backend/current-customer-account.test-utils";
+import { CustomerAccountReservationOwnership } from "@/features/account/backend/customer-account-reservation-ownership";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { sealSyntheticPayStateToken } from "@/features/checkout/backend/checkout/signed-pay-state.test-utils";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
+import {
+  type WorkspaceReservation,
+  WorkspaceReservationRepository,
+} from "@/features/reservation/backend/workspace-reservation.repository";
 import { customerAgentNames } from "@/shared/bot-protection/customer-agents";
+import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
 
 mock.module("server-only", () => ({}));
 
@@ -30,6 +38,7 @@ const runSubmitReservation = async (options?: {
   readonly method?: "card" | "qr";
   readonly startReservationPayment?: ReturnType<typeof mock>;
   readonly enableQr?: boolean;
+  readonly anotherAccount?: boolean;
   readonly bookerCustomerId?: string;
   readonly hasSettledReferral?: ReturnType<typeof mock>;
 }) => {
@@ -77,8 +86,12 @@ const runSubmitReservation = async (options?: {
   const referrals = ReferralServiceMock({
     hasSettledReferral: hasSettledReferral as never,
   });
+  const payStateToken = options?.enableQr
+    ? await sealSyntheticPayStateToken()
+    : input.payStateToken;
   const effect = submitWorkspaceReservation({
     ...input,
+    payStateToken,
     locale: options?.locale ?? input.locale,
     ...(options?.method && { method: options.method }),
   }).pipe(
@@ -105,6 +118,21 @@ const runSubmitReservation = async (options?: {
           getReceivingAccount: () => undefined,
           getReceivingAccountDisplay: () => undefined,
         }),
+        Layer.mock(CustomerAccountReservationOwnership, {
+          activeAccountId: Effect.succeed(
+            options?.anotherAccount
+              ? customerAccountIdSchema.make("other-author")
+              : testLinkedAccount.accountId
+          ),
+        }),
+        Layer.mock(WorkspaceReservationRepository, {
+          findById: (id) =>
+            Effect.succeed({
+              id,
+              authorAccountId: testLinkedAccount.accountId,
+            } as WorkspaceReservation),
+        }),
+        TestSealedStateKeys,
         referrals,
         ReferralReleaseGate.fromDecision(true),
         RememberedReferral.inMemory(cookie).pipe(
@@ -122,6 +150,7 @@ const runSubmitReservation = async (options?: {
 
   return {
     effect,
+    payStateToken,
     cookie,
     verifyHuman,
     createHostedPaymentCheckout,
@@ -129,6 +158,28 @@ const runSubmitReservation = async (options?: {
 };
 
 describe("submitWorkspaceReservation", () => {
+  test.each(["card", "qr"] as const)(
+    "denies a gated %s submission from a nonauthor with the signed Pay link",
+    async (method) => {
+      const startReservationPayment = mock(() =>
+        Effect.succeed({ status: "in_progress" as const })
+      );
+      const { effect, createHostedPaymentCheckout } =
+        await runSubmitReservation({
+          method,
+          enableQr: true,
+          anotherAccount: true,
+          startReservationPayment,
+        });
+
+      expect(await Effect.runPromise(Effect.result(effect))).toMatchObject({
+        _tag: "Failure",
+      });
+      expect(startReservationPayment).not.toHaveBeenCalled();
+      expect(createHostedPaymentCheckout).not.toHaveBeenCalled();
+    }
+  );
+
   test("keeps card checkout on the hosted path when QR is disabled", async () => {
     const startReservationPayment = mock(() =>
       Effect.succeed({ status: "in_progress" as const })
@@ -171,15 +222,16 @@ describe("submitWorkspaceReservation", () => {
         expiresAt: Temporal.Instant.from("2026-11-20T14:30:00Z"),
       } as const)
     );
-    const { effect, createHostedPaymentCheckout } = await runSubmitReservation({
-      enableQr: true,
-      method: "qr",
-      startReservationPayment,
-    });
+    const { effect, payStateToken, createHostedPaymentCheckout } =
+      await runSubmitReservation({
+        enableQr: true,
+        method: "qr",
+        startReservationPayment,
+      });
     const result = await Effect.runPromise(effect);
     expect(startReservationPayment).toHaveBeenCalledWith(
       {
-        payStateToken: input.payStateToken,
+        payStateToken,
         legalConsent: true,
         earlyPerformanceConsent: true,
         method: "qr",

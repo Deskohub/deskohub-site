@@ -4,7 +4,6 @@ import { generateQrCodePngBuffer } from "@deskohub/qr-code";
 import { Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { CustomerAccountReservationOwnership } from "@/features/account/backend/customer-account-reservation-ownership";
-import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
 import type { CheckoutQrPayment } from "@/features/checkout/components/checkout-qr-payment-details";
 import { createReservationPaymentQrPayload } from "@/features/checkout/reservation-payment-qr";
 import type { Locale } from "@/features/i18n";
@@ -19,12 +18,11 @@ import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { currentInstant } from "@/shared/utils/temporal";
 import { FioAccounts } from "../fio/fio-accounts.service";
 import { QrPaymentRepository } from "../repositories/qr-payment.repository";
+import { PublicReservationAuthor } from "./public-pay-state-author.server";
 import { getPublicReservationPaymentAccount } from "./public-reservation-payment-account";
 
 export const publicReservationPaymentStatusServices = Layer.mergeAll(
-  CustomerAccountReservationOwnership.ForProvidedAuthentication.pipe(
-    Layer.provide(CustomerAuthentication.Default)
-  ),
+  PublicReservationAuthor,
   WorkspaceReservationRepository.Live,
   QrPaymentRepository.Default.pipe(Layer.provide(WorkspaceDatabase.Default)),
   FioAccounts.Default

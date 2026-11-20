@@ -15,6 +15,10 @@ import {
   findCheckoutOfficeSelectionForVisitor,
 } from "@/features/checkout/backend/checkout/pay-state-checkout-view";
 import { isOrderBoundPayState } from "@/features/checkout/backend/checkout/pay-state-contract";
+import {
+  publicPayStateAuthorServices,
+  requirePublicPayStateAuthor,
+} from "@/features/checkout/backend/checkout/public-pay-state-author.server";
 import { getPublicReservationPaymentAccount } from "@/features/checkout/backend/checkout/public-reservation-payment-account";
 import { FioAccounts } from "@/features/checkout/backend/fio/fio-accounts.service";
 import {
@@ -218,12 +222,19 @@ async function CheckoutPayContent({
     !reservation.agentClientId &&
     total.currency === "CZK" &&
     total.value > 0 &&
-    Boolean(
-      await getPublicReservationPaymentAccount().pipe(
-        Effect.provide(FioAccounts.Default),
-        runWorkspaceEffect("checkout.pay.payment-methods")
-      )
-    );
+    (await getPublicReservationPaymentAccount().pipe(
+      Effect.flatMap((account) =>
+        account
+          ? requirePublicPayStateAuthor({ payStateToken, locale }).pipe(
+              Effect.provide(publicPayStateAuthorServices),
+              Effect.option,
+              Effect.map(Option.isSome)
+            )
+          : Effect.succeed(false)
+      ),
+      Effect.provide(FioAccounts.Default),
+      runWorkspaceEffect("checkout.pay.payment-methods")
+    ));
 
   return runWithRequestLocale(() =>
     renderCheckoutPay({
