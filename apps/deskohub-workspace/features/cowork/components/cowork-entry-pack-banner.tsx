@@ -145,11 +145,22 @@ export function CoworkEntryPackCardDialog({
   readonly open: boolean;
 }) {
   const keepPack = useRef<HTMLButtonElement>(null);
+  const invokingOption = useRef<HTMLElement>(null);
   return (
     <Dialog onOpenChange={(open) => !open && onCancel()} open={open}>
       <DialogContent
         locale={locale}
+        onCloseAutoFocus={(event) => {
+          if (invokingOption.current) {
+            event.preventDefault();
+            invokingOption.current.focus();
+            invokingOption.current = null;
+          }
+        }}
         onOpenAutoFocus={(event) => {
+          const focused = document.activeElement;
+          invokingOption.current =
+            focused instanceof HTMLElement ? focused : null;
           event.preventDefault();
           keepPack.current?.focus();
         }}

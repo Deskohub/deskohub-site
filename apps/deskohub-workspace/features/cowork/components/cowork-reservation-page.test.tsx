@@ -12,6 +12,7 @@ import { PublicOfferingsStructuredData } from "@/features/checkout/components/pu
 import { getWorkspaceProductByTier } from "@/features/checkout/product-catalog";
 import { discountIdSchema } from "@/features/discounts/contracts";
 import { m } from "@/features/i18n";
+import { orderIdSchema } from "@/features/order";
 import { recordReservationPagePreloads } from "@/features/reservation/backend/reservation-page-preloads.service.mock";
 import {
   type NormalizedCoworkReservationOrder,
@@ -25,6 +26,7 @@ import { getCoworkAvailabilityQueries } from "@/features/reservation/workspace-a
 import { Button } from "@/shared/components/ui/button";
 import { currencyCZK } from "@/shared/money/currencies";
 import { moneyMajorAmount } from "@/shared/money/money";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 
 const janEmail = testEmailAddress("jan");
 
@@ -72,7 +74,11 @@ type CoworkPageRequest = Parameters<
 const loadCoworkReservationContent = ({
   checkoutAccount = { status: "signed-out" },
   initialReservation,
-  pageData = { entryPackOffered: false, overnightStayOffered: false },
+  pageData = {
+    entryPackOffered: false,
+    heldEntryPacks: [],
+    overnightStayOffered: false,
+  },
   replacementToken = "signed-replacement-token",
   ...request
 }: Omit<CoworkPageRequest, "checkoutAccount" | "pageData"> & {
@@ -394,6 +400,76 @@ test("preloads the selection resolved from reservation query values", async () =
   ]);
 });
 
+describe("a linked Entry pack", () => {
+  const pack = {
+    id: orderIdSchema.make("b53b3c15-9799-45d2-95b5-20f3ef69f3d2"),
+    tier: "reserved-desk-workstation" as const,
+    entryCount: 5 as const,
+    entriesLeft: 3,
+    status: "active" as const,
+    paidAt: Temporal.Instant.from("2099-07-09T12:00:00Z"),
+    validFrom: plainDateStringSchema.make("2099-07-09"),
+    validUntil: plainDateStringSchema.make("2099-09-09"),
+    claimedDates: [],
+    reservedEntryDates: {},
+  };
+  const pageData = {
+    entryPackOffered: true,
+    heldEntryPacks: [pack],
+    overnightStayOffered: false,
+  };
+
+  test("preselects the linked holder's tier and a workstation setup", async () =>
+    stubWorkspaceInstant(async () => {
+      const form = await renderCoworkReservationForm({
+        locale: "en-US",
+        pageData,
+        searchParams: { pass: pack.id, tier: "open-space" },
+      });
+      expect(form.initialValues).toMatchObject({
+        entryTier: "reserved-desk",
+        initialEntryPack: { kind: "applied", packId: pack.id },
+        date: "2099-07-30",
+        monitorOption: "2x27-qhd",
+      });
+    }));
+
+  test.each([
+    ["another holder", []],
+    ["depleted", [{ ...pack, entriesLeft: 0 }]],
+    [
+      "expired at Prague midnight",
+      [{ ...pack, validUntil: plainDateStringSchema.make("2099-07-30") }],
+    ],
+  ])(
+    "shows the same invalid-link result when the pack is %s",
+    async (_label, heldEntryPacks) =>
+      stubWorkspaceInstant(async () => {
+        const form = await renderCoworkReservationForm({
+          locale: "en-US",
+          pageData: { ...pageData, heldEntryPacks },
+          searchParams: { pass: pack.id },
+        });
+        expect(form.initialValues.initialEntryPack).toEqual({
+          kind: "invalid-link",
+        });
+        expect(form.initialValues.entryTier).toEqual("open-space");
+        expect(JSON.stringify(form.initialValues)).not.toContain(pack.id);
+      }, "2099-07-29T22:00:00Z")
+  );
+
+  test("preserves an explicit date for the visitor to correct", async () =>
+    stubWorkspaceInstant(async () => {
+      const form = await renderCoworkReservationForm({
+        locale: "en-US",
+        pageData,
+        searchParams: { pass: pack.id, date: "2099-09-09" },
+      });
+      expect(form.initialValues.date).toBe("2099-09-09");
+      expect(form.initialValues.initialEntryPack?.kind).toBe("applied");
+    }));
+});
+
 describe("a linked overnight stay", () => {
   const overnightLink = {
     entryTier: "reserved-desk",
@@ -404,7 +480,11 @@ describe("a linked overnight stay", () => {
   test("opens on the overnight stay and preloads its availability while the release is open", async () => {
     const form = await renderCoworkReservationForm({
       locale: "en-US",
-      pageData: { entryPackOffered: false, overnightStayOffered: true },
+      pageData: {
+        entryPackOffered: false,
+        heldEntryPacks: [],
+        overnightStayOffered: true,
+      },
       searchParams: overnightLink,
     });
 
@@ -422,7 +502,11 @@ describe("a linked overnight stay", () => {
   test("opens on a day stay while the release is closed", async () => {
     const form = await renderCoworkReservationForm({
       locale: "en-US",
-      pageData: { entryPackOffered: false, overnightStayOffered: false },
+      pageData: {
+        entryPackOffered: false,
+        heldEntryPacks: [],
+        overnightStayOffered: false,
+      },
       searchParams: overnightLink,
     });
 

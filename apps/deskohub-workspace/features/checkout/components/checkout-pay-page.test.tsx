@@ -22,6 +22,7 @@ import { getOfficeCheckoutSummary } from "@/features/checkout/checkout-summary-o
 import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
 import { m } from "@/features/i18n";
 import { getOfficeAdvertisedPriceRequest } from "@/features/reservation/office-advertised-price";
+import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
 import {
   workspaceRouterPush,
@@ -312,6 +313,60 @@ describe("CheckoutPayPage payment navigation", () => {
     );
     expect(openPaymentWindow).not.toHaveBeenCalled();
   });
+
+  test.each([false, true])(
+    "shows the Entry pack Pay path with coffee selected: %s",
+    async (coffee) => {
+      const { CheckoutPayPage } = await import("./checkout-pay-page");
+      const execute = mock();
+      workspaceUseAction.mockReturnValue({
+        execute,
+        isExecuting: false,
+        result: {},
+      });
+      const original = buildCoworkCheckoutSummary({
+        entryTier: "open-space",
+        coffee,
+      });
+      const total = currencyCZK(coffee ? 5000 : 0);
+      const summary = {
+        ...original,
+        total,
+        sections: original.sections.map((section) => ({
+          ...section,
+          total,
+          items: section.items.map((item) => ({
+            ...item,
+            amount: "product" in item ? currencyCZK(0) : total,
+          })),
+        })),
+      };
+      const view = render(
+        <CheckoutPayPage
+          locale="en-US"
+          payStateToken="signed-entry-pack"
+          startPaymentAction={mock(async () => ({}))}
+          summary={summary}
+          usesEntryPack
+          variant="pay"
+        />
+      );
+
+      expect(view.queryByRole("group", { name: "Payment method" })).toBeNull();
+      expect(view.getByText("Entry pack · 1 entry")).toBeDefined();
+      const button = view.getByRole("button", {
+        name: coffee ? /Order and pay/ : "Book with 1 entry",
+      });
+      fireEvent.click(view.getByRole("checkbox"));
+      fireEvent.click(button);
+      expect(execute).toHaveBeenCalledWith({
+        earlyPerformanceConsent: true,
+        legalConsent: true,
+        locale: "en-US",
+        payStateToken: "signed-entry-pack",
+      });
+    }
+  );
 
   test("announces a payment start failure as an alert", async () => {
     const { CheckoutPayPage } = await import("./checkout-pay-page");
