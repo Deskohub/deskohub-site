@@ -14,8 +14,18 @@ import ChevronRight from "lucide-react-native/icons/chevron-right";
 import Copy from "lucide-react-native/icons/copy";
 import Hourglass from "lucide-react-native/icons/hourglass";
 import KeyRound from "lucide-react-native/icons/key-round";
-import { type ReactNode, useEffect, useState } from "react";
-import { Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import {
+  createContext,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
+import { Platform, Pressable, StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { orderStatusHref } from "../../booking/booking-routes";
 import { AsyncView } from "../../customer-api/async-view";
 import { accountAtom } from "../../customer-api/customer-data-runtime";
 import type { CustomerRequestFailure } from "../../customer-api/customer-view-error";
@@ -27,15 +37,18 @@ import { Badge } from "../../ui/badge";
 import { Card } from "../../ui/card";
 import { Button } from "../../ui/controls";
 import { EmptyState } from "../../ui/empty-state";
+import { FocusedStatusBar } from "../../ui/focused-status-bar";
 import { Icon } from "../../ui/icon";
 import { ListGroup, SectionHeader } from "../../ui/list";
 import { Masthead } from "../../ui/masthead";
 import { Notice } from "../../ui/notice";
 import { ScrollScreen } from "../../ui/scroll-screen";
 import { Skeleton, SkeletonGroup } from "../../ui/skeleton";
+import { SplitPane } from "../../ui/split-pane";
 import { Text } from "../../ui/text";
 import { useToast } from "../../ui/toast";
 import { brandText, color, radius, space } from "../../ui/tokens";
+import { useContentColumn, useViewport } from "../../ui/viewport";
 import {
   type AccountNotice,
   type ReservationsAccess,
@@ -60,6 +73,10 @@ import {
   invitedReservationsAtom,
   invitedReservationView,
 } from "./invited-reservations";
+import {
+  OrderStatusScreen,
+  ReservationPaneHeading,
+} from "./order-status-screen";
 import {
   type NextAccess,
   nextReservationView,
@@ -102,13 +119,68 @@ const gateNoticeOf = (access: ReservationsAccess): AccountNotice | undefined =>
 const useOpenReservation = () => {
   const router = useRouter();
   return (orderId: CustomerReservationOrderId) =>
-    router.push({ pathname: "/reservations/[orderId]", params: { orderId } });
+    router.push(orderStatusHref(orderId));
 };
 
+interface ReservationListSelection {
+  readonly orderId: CustomerReservationOrderId | undefined;
+  readonly onSelect: (orderId: CustomerReservationOrderId) => void;
+}
+
+const SelectionContext = createContext<ReservationListSelection | undefined>(
+  undefined
+);
+
+const PastReservationsExpansion = createContext<
+  readonly [boolean, Dispatch<SetStateAction<boolean>>] | undefined
+>(undefined);
+
+/** Shares the past list's expansion with every screen in the Reservations stack. */
+export function PastReservationsExpansionProvider({
+  children,
+}: {
+  readonly children: ReactNode;
+}) {
+  const expansion = useState(false);
+  return (
+    <PastReservationsExpansion value={expansion}>
+      {children}
+    </PastReservationsExpansion>
+  );
+}
+
+function ReservationsTabPanes({
+  list,
+  detail,
+}: {
+  readonly list: ReactNode;
+  readonly detail?: ReactNode;
+}) {
+  const { isExpanded } = useViewport();
+  return (
+    <SplitPane list={list} collapsed="list">
+      {detail ?? (isExpanded && <FocusedStatusBar style="dark" />)}
+    </SplitPane>
+  );
+}
+
 /** The tab root's masthead. */
-function ReservationsMasthead() {
+function ReservationsMasthead({ inPane }: { readonly inPane: boolean }) {
   const locale = useAppLocale();
-  return <Masthead title={m.account_section_reservations({}, { locale })} />;
+  const { top } = useSafeAreaInsets();
+  const column = useContentColumn();
+  const title = m.account_section_reservations({}, { locale });
+  return inPane ? (
+    <View style={[styles.paneMasthead, { paddingTop: top + space.md }]}>
+      <View style={column}>
+        <Text variant="display" tone="inverse" role="heading">
+          {title}
+        </Text>
+      </View>
+    </View>
+  ) : (
+    <Masthead title={title} />
+  );
 }
 
 /**
@@ -119,16 +191,18 @@ function ReservationsMasthead() {
 function ReservationsScreen({
   refreshing,
   onRefresh,
+  inPane = false,
   children,
 }: {
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
+  readonly inPane?: boolean;
   readonly children: ReactNode;
 }) {
   const refreshInvited = useAtomRefresh(invitedReservationsAtom);
   return (
     <ScrollScreen
-      masthead={<ReservationsMasthead />}
+      masthead={<ReservationsMasthead inPane={inPane} />}
       refreshing={refreshing}
       onRefresh={() => {
         onRefresh();
@@ -147,7 +221,11 @@ function ReservationsScreen({
  * reservations show at once while the list loads, and stay when it can't;
  * they also show while the account itself can't be read (offline at launch).
  */
-export function ReservationsListScreen() {
+export function ReservationsListScreen({
+  selection,
+}: {
+  readonly selection?: ReservationListSelection;
+} = {}) {
   // Read once for the screen, whichever of the views below shows it.
   useAtomMount(savedReservationsAtom);
   const account = useAtomValue(accountAtom);
@@ -156,12 +234,15 @@ export function ReservationsListScreen() {
       {Option.match(
         Option.map(AsyncResult.value(account), reservationsAccess),
         {
-          onNone: () => <ReservationsBeforeAccount />,
+          onNone: () => <ReservationsBeforeAccount selection={selection} />,
           onSome: (access) =>
             access.kind === "available" ? (
-              <ReservationsHistory />
+              <ReservationsHistory selection={selection} />
             ) : (
-              <ReservationsGate access={access} />
+              <ReservationsGate
+                access={access}
+                inDetailRoute={selection !== undefined}
+              />
             ),
         }
       )}
@@ -170,8 +251,15 @@ export function ReservationsListScreen() {
 }
 
 /** When the account may not see reservations. */
-function ReservationsGate({ access }: { readonly access: ReservationsAccess }) {
+function ReservationsGate({
+  access,
+  inDetailRoute,
+}: {
+  readonly access: ReservationsAccess;
+  readonly inDetailRoute: boolean;
+}) {
   const locale = useAppLocale();
+  const { isExpanded } = useViewport();
   const account = useAtomValue(accountAtom);
   const refresh = useAtomRefresh(accountAtom);
   // A gate card says it all; other states keep their notice.
@@ -179,8 +267,12 @@ function ReservationsGate({ access }: { readonly access: ReservationsAccess }) {
   const shownNotice = gate === undefined ? gateNoticeOf(access) : undefined;
   const notice =
     shownNotice === undefined ? undefined : gateNotice[shownNotice](locale);
-  return (
-    <ReservationsScreen refreshing={account.waiting} onRefresh={refresh}>
+  const list = (
+    <ReservationsScreen
+      refreshing={account.waiting}
+      onRefresh={refresh}
+      inPane={isExpanded}
+    >
       {/* Kept mounted so assistive tech announces each change. */}
       <Notice tone="info" message={notice} />
       <AsyncView
@@ -192,24 +284,36 @@ function ReservationsGate({ access }: { readonly access: ReservationsAccess }) {
       </AsyncView>
     </ReservationsScreen>
   );
+  return inDetailRoute ? list : <ReservationsTabPanes list={list} />;
 }
 
 /** Before the account is read: the saved reservations, if any. */
-function ReservationsBeforeAccount() {
+function ReservationsBeforeAccount({
+  selection,
+}: {
+  readonly selection: ReservationListSelection | undefined;
+}) {
   return (
     <ReservationsListView
       result={useAtomValue(savedReservationsBeforeAccountAtom)}
       onRefresh={useAtomRefresh(accountAtom)}
+      selection={selection}
     />
   );
 }
 
 /** The account may see reservations: the list, saved then fresh. */
-function ReservationsHistory() {
+function ReservationsHistory({
+  selection,
+}: {
+  readonly selection: ReservationListSelection | undefined;
+}) {
   return (
     <ReservationsListView
       result={useAtomValue(reservationsListAtom)}
       onRefresh={useAtomRefresh(reservationHistoryAtom)}
+      selection={selection}
+      showPreferred
     />
   );
 }
@@ -245,18 +349,40 @@ function ReservationsListSkeleton() {
 function ReservationsListView<E extends CustomerRequestFailure>({
   result: list,
   onRefresh: refresh,
+  selection,
+  showPreferred = false,
 }: {
   readonly result: AsyncResult.AsyncResult<ReservationsList, E>;
   readonly onRefresh: () => void;
+  readonly selection: ReservationListSelection | undefined;
+  readonly showPreferred?: boolean;
 }) {
   const locale = useAppLocale();
-  const savedAt = Option.flatMap(
-    AsyncResult.value(list),
-    (shown) => shown.savedAt
-  );
+  const { isExpanded } = useViewport();
+  const open = useOpenReservation();
+  const value = AsyncResult.value(list);
+  // Once shown, retain the featured order through resizing and list refreshes.
+  // null records that the customer returned from a missing preview.
+  const [preview, setPreview] = useState<CustomerReservationOrderId | null>();
+  if (
+    showPreferred &&
+    selection === undefined &&
+    isExpanded &&
+    preview === undefined
+  ) {
+    const featured = Option.flatMap(value, ({ groups }) =>
+      Option.flatMap(groups.featured, reservationStatusTarget)
+    );
+    if (Option.isSome(featured)) setPreview(featured.value);
+  }
+  const previewOrderId = preview ?? undefined;
+  const listSelection =
+    selection ??
+    (isExpanded ? { orderId: previewOrderId, onSelect: open } : undefined);
+  const savedAt = Option.flatMap(value, (shown) => shown.savedAt);
   // The saved list says it is the one on this device; a failed refresh
   // under it needs no second notice.
-  const shown = Option.match(AsyncResult.value(list), {
+  const shown = Option.match(value, {
     onSome: (value) =>
       Option.isSome(value.savedAt) && AsyncResult.isFailure(list)
         ? AsyncResult.success<ReservationsList, E>(value, {
@@ -265,38 +391,61 @@ function ReservationsListView<E extends CustomerRequestFailure>({
         : list,
     onNone: () => list,
   });
-  return (
-    <ReservationsScreen
-      refreshing={list.waiting && !AsyncResult.isInitial(list)}
-      onRefresh={refresh}
-    >
-      <AsyncView
-        result={shown}
-        onRetry={refresh}
-        errorTitle={m.reservations_load_failed_title({}, { locale })}
-        loading={<ReservationsListSkeleton />}
+  const content = (
+    <SelectionContext value={listSelection}>
+      <ReservationsScreen
+        refreshing={list.waiting && !AsyncResult.isInitial(list)}
+        onRefresh={refresh}
+        inPane={listSelection !== undefined}
       >
-        {({ groups }) => (
-          <ReservationGroupsView
-            groups={groups}
-            // The list from the device, with when it was saved.
-            savedNotice={
-              <Notice
-                tone="info"
-                message={Option.getOrUndefined(
-                  Option.map(savedAt, (time) =>
-                    m.reservations_last_updated(
-                      { time: formatInstant(time, locale, "date-time") },
-                      { locale }
+        <AsyncView
+          result={shown}
+          onRetry={refresh}
+          errorTitle={m.reservations_load_failed_title({}, { locale })}
+          loading={<ReservationsListSkeleton />}
+        >
+          {({ groups }) => (
+            <ReservationGroupsView
+              groups={groups}
+              // The list from the device, with when it was saved.
+              savedNotice={
+                <Notice
+                  tone="info"
+                  message={Option.getOrUndefined(
+                    Option.map(savedAt, (time) =>
+                      m.reservations_last_updated(
+                        { time: formatInstant(time, locale, "date-time") },
+                        { locale }
+                      )
                     )
-                  )
-                )}
-              />
-            }
+                  )}
+                />
+              }
+            />
+          )}
+        </AsyncView>
+      </ReservationsScreen>
+    </SelectionContext>
+  );
+  if (selection !== undefined) return content;
+  return (
+    <ReservationsTabPanes
+      list={content}
+      detail={
+        previewOrderId !== undefined ? (
+          <OrderStatusScreen
+            orderId={previewOrderId}
+            visit="normal"
+            active={isExpanded}
+            heading={isExpanded ? <ReservationPaneHeading /> : undefined}
+            onMissingReturn={() => {
+              setPreview(null);
+              refresh();
+            }}
           />
-        )}
-      </AsyncView>
-    </ReservationsScreen>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -320,6 +469,7 @@ function ReservationGroupsView({
   readonly savedNotice: ReactNode;
 }) {
   const locale = useAppLocale();
+  const selection = useContext(SelectionContext);
   if (groups.empty) {
     return (
       <View style={styles.stack}>
@@ -339,7 +489,14 @@ function ReservationGroupsView({
   return (
     <View style={styles.stack}>
       {Option.match(groups.featured, {
-        onSome: (row) => <NextReservation row={row} />,
+        onSome: (row) =>
+          selection === undefined ? (
+            <NextReservation row={row} />
+          ) : (
+            <View style={styles.group}>
+              <ReservationRow row={row} place="later" featured />
+            </View>
+          ),
         onNone: () => <NothingUpcoming />,
       })}
       {savedNotice}
@@ -440,8 +597,20 @@ function PastReservations({
   readonly rows: ReadonlyArray<ReservationListRow>;
 }) {
   const locale = useAppLocale();
-  const [all, setAll] = useState(false);
-  const shown = all ? rows : rows.slice(0, pastPreviewCount);
+  const selection = useContext(SelectionContext);
+  const sharedExpansion = useContext(PastReservationsExpansion);
+  const localExpansion = useState(false);
+  const [all, setAll] = sharedExpansion ?? localExpansion;
+  const shown = all
+    ? rows
+    : rows.filter(
+        (row, index) =>
+          index < pastPreviewCount ||
+          Option.exists(
+            reservationStatusTarget(row),
+            (id) => id === selection?.orderId
+          )
+      );
   return (
     <View>
       <SectionHeader title={m.reservations_section_past({}, { locale })} />
@@ -490,18 +659,26 @@ function ReservationRows({
 function ReservationRow({
   row,
   place,
-  divided,
+  divided = false,
+  featured = false,
 }: {
   readonly row: ReservationListRow;
   readonly place: "later" | "past";
-  readonly divided: boolean;
+  readonly divided?: boolean;
+  readonly featured?: boolean;
 }) {
   const locale = useAppLocale();
   const open = useOpenReservation();
+  const selection = useContext(SelectionContext);
+  const { isExpanded, fontScale } = useViewport();
   const view = reservationRowView(row, place, locale);
   const target = reservationStatusTarget(row);
+  const selected = Option.exists(target, (id) => id === selection?.orderId);
+  const hasChevron = Option.isSome(target) && selection === undefined;
   const past = place === "past";
+  const dateTone = past ? "dim" : "soft";
   const badge = Option.map(view.badge, (kind) => ticketBadge(kind, locale));
+  const stackedBadge = Option.isSome(badge) && isExpanded && fontScale >= 1.3;
   // The badge's height: the chevron centres in the space below it.
   const [badgeHeight, setBadgeHeight] = useState(0);
   const content = (
@@ -509,15 +686,19 @@ function ReservationRow({
       {divided && <View aria-hidden style={styles.divider} />}
       {Option.match(view.date, {
         onSome: (parts) => (
-          <DateTile parts={parts} tone={past ? "dim" : "soft"} compact />
+          <DateTile
+            parts={parts}
+            tone={featured ? "strong" : dateTone}
+            compact
+          />
         ),
         onNone: () => <DateTilePlaceholder />,
       })}
       <View style={styles.rowText}>
-        {/* Title and badge share one row, laid out in one pass: only the
-            title line gives the badge room, the badge reaches over the
-            chevron's column, and the lines below start under both. */}
-        <View style={styles.rowTitleLine}>
+        {/* Give enlarged titles the full width of the fixed list pane. */}
+        <View
+          style={[styles.rowTitleLine, stackedBadge && styles.stackedBadge]}
+        >
           <Text
             variant="bodyStrong"
             style={[styles.rowTitle, past ? styles.pastTitle : undefined]}
@@ -530,7 +711,7 @@ function ReservationRow({
                 onLayout={(event) =>
                   setBadgeHeight(event.nativeEvent.layout.height)
                 }
-                style={Option.isSome(target) && styles.rowBadge}
+                style={hasChevron && styles.rowBadge}
               >
                 <Badge
                   label={badge.label}
@@ -554,7 +735,7 @@ function ReservationRow({
           />
         )}
       </View>
-      {Option.isSome(target) && (
+      {hasChevron && (
         <View
           style={[
             styles.rowChevron,
@@ -575,8 +756,14 @@ function ReservationRow({
     onSome: (orderId) => (
       <Pressable
         role="link"
-        onPress={() => open(orderId)}
-        style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+        aria-current={selected ? "page" : undefined}
+        aria-selected={selected && Platform.OS !== "web" ? true : undefined}
+        onPress={() => (selection?.onSelect ?? open)(orderId)}
+        style={({ pressed }) => [
+          styles.row,
+          selected && styles.selectedRow,
+          pressed && styles.pressed,
+        ]}
       >
         {content}
       </Pressable>
@@ -641,7 +828,7 @@ function AccessTile({ waiting = false }: { readonly waiting?: boolean }) {
  * the text rather than squeezing it.
  */
 const useStubTextWidth = () => {
-  const { fontScale } = useWindowDimensions();
+  const { fontScale } = useViewport();
   return { minWidth: 140 * fontScale };
 };
 
@@ -769,8 +956,10 @@ const rowChevronColumn = 20 + space.md;
 const styles = StyleSheet.create({
   invited: { marginTop: space.xl },
   invitedBadge: { marginTop: space.xs },
+  paneMasthead: { backgroundColor: color.navy, paddingBottom: space.md },
   stack: { gap: space.lg },
   rowDetail: { marginTop: 2 },
+  selectedRow: { backgroundColor: color.actionTint },
   // A row's chevron, centred in the row or in the space below its badge.
   rowChevron: { alignSelf: "stretch", justifyContent: "center" },
   // Line 1: the title, then the status badge reaching over the chevron.
@@ -780,6 +969,7 @@ const styles = StyleSheet.create({
     gap: space.sm,
     justifyContent: "space-between",
   },
+  stackedBadge: { flexDirection: "column", gap: space.xxs },
   rowTitle: { flexShrink: 1 },
   rowBadge: { marginRight: -rowChevronColumn },
   rowWithdrawal: { alignSelf: "flex-start", marginTop: 2 },
