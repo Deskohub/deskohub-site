@@ -47,6 +47,7 @@ import {
   minimumEntryPackPricePerDay,
 } from "@/features/passes/entry-pack-discovery";
 import { getEntryPackLastUsableDate } from "@/features/passes/pass-offer";
+import { getUnlimitedPassPurchasePath } from "@/features/passes/unlimited-pass-discovery";
 import { ReservationAdvertisedPrice } from "@/features/reservation/components/reservation-advertised-price";
 import { ReservationCheckoutForm } from "@/features/reservation/components/reservation-checkout-form";
 import { ReservationFormDateInput } from "@/features/reservation/components/reservation-date-input";
@@ -142,6 +143,11 @@ type CoworkReservationFormProps = {
   today: string;
 };
 
+const passDiscoveryLinkClassName = cn(
+  textLink({ tone: "inherit" }),
+  "font-semibold text-navy-blue hover:text-burned-orange"
+);
+
 type CoworkReservationFormFallbackProps = Pick<
   CoworkReservationFormProps,
   "locale"
@@ -229,6 +235,10 @@ export function CoworkReservationForm({
   const offersStayChoice =
     overnightStayOffered && selectedTier === overnightCoworkStayTier;
   const isOvernightStay = offersStayChoice && selectedStay === "overnight";
+  const selectedPassTier =
+    selectedTier === "reserved-desk" && selectedMonitorOption
+      ? "reserved-desk-workstation"
+      : selectedTier;
   useReservationSelectionUrl(coworkSelectionLink, selection);
   const allowedMonitorOptions =
     getAllowedMonitorOptionsForCoworkTier(selectedTier);
@@ -529,7 +539,8 @@ export function CoworkReservationForm({
               !pack &&
               packSelection?.kind !== "unavailable" &&
               !isOvernightStay &&
-              isWorkspaceCoworkCurrentProductTier(selectedTier) && (
+              (selectedPassTier === "reserved-desk-workstation" ||
+                isWorkspaceCoworkCurrentProductTier(selectedPassTier)) && (
                 <p className="pt-1 text-sm leading-6 text-navy-blue/60">
                   <Interpolate
                     string={m.entryPackDiscoveryCoworkLink(
@@ -541,16 +552,10 @@ export function CoworkReservationForm({
                     mapping={{
                       packLink: (label) => (
                         <Link
-                          className={cn(
-                            textLink({ tone: "inherit" }),
-                            "font-semibold text-navy-blue hover:text-burned-orange"
-                          )}
+                          className={passDiscoveryLinkClassName}
                           href={getEntryPackPurchasePath(
                             locale,
-                            selectedTier === "reserved-desk" &&
-                              selectedMonitorOption
-                              ? "reserved-desk-workstation"
-                              : selectedTier
+                            selectedPassTier
                           )}
                         >
                           {label}
@@ -558,6 +563,17 @@ export function CoworkReservationForm({
                       ),
                     }}
                   />
+                  {" · "}
+                  <Link
+                    className={passDiscoveryLinkClassName}
+                    href={getUnlimitedPassPurchasePath(
+                      locale,
+                      selectedPassTier,
+                      selection.date
+                    )}
+                  >
+                    {m.passUnlimited({}, { locale })}
+                  </Link>
                 </p>
               )}
           </FormItem>

@@ -6,7 +6,9 @@ import {
   getPublicOfferingSelection,
   type PublicPriceListOffering,
 } from "@/features/checkout/public-offerings";
+import { GlobalReleaseGate } from "@/features/feature-flags/components/global-release-gate";
 import { type Locale, m } from "@/features/i18n";
+import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { getMeetingRoomReservationDurationKey } from "@/features/reservation/meeting-room-reservation-duration";
 import { getSelectionPath } from "@/features/reservation/selection-path";
 import { Container } from "@/shared/components/container";
@@ -21,6 +23,7 @@ import {
 import { getOfferingSale } from "../offering-sale";
 import { getPriceFamilies } from "../price-family";
 import { EntryPackPrices } from "./entry-pack-prices";
+import { UnlimitedPassPrices } from "./unlimited-pass-prices";
 
 type PricingPageProps = {
   readonly locale: Locale;
@@ -192,7 +195,15 @@ function PriceList({
       return (
         <Fragment key={kind}>
           {section}
-          {kind === "cowork" && <EntryPackPrices locale={locale} />}
+          {kind === "cowork" && (
+            <GlobalReleaseGate
+              flag="cowork_passes"
+              isEnabled={isCoworkPassesPageOpenAfterConnection}
+            >
+              <EntryPackPrices locale={locale} />
+              <UnlimitedPassPrices locale={locale} />
+            </GlobalReleaseGate>
+          )}
         </Fragment>
       );
     }
