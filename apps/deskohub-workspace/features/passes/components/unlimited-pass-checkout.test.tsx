@@ -11,15 +11,30 @@ import { plainDateStringSchema } from "@/shared/utils/temporal";
 mock.module("next/image", () => ({ default: () => null }));
 
 registerWorkspaceComponentTestEnv();
-const { cleanup, fireEvent, render, waitFor } = await import(
+const { act, cleanup, fireEvent, render, waitFor } = await import(
   "@testing-library/react"
 );
 const { QueryProvider } = await import("@/shared/components/query-provider");
 const { m } = await import("@/features/i18n");
 const { UnlimitedPassCheckout } = await import("./unlimited-pass-checkout");
 
-afterEach(cleanup);
-afterAll(unregisterWorkspaceComponentTestEnv);
+const replaceState = spyOn(window.history, "replaceState").mockImplementation(
+  () => {}
+);
+afterEach(() => {
+  cleanup();
+  replaceState.mockClear();
+});
+afterAll(() => {
+  replaceState.mockRestore();
+  return unregisterWorkspaceComponentTestEnv();
+});
+
+const checkoutUrl = () => {
+  const path = replaceState.mock.calls.at(-1)?.[2];
+  if (!path) throw new Error("Checkout did not update its URL");
+  return new URL(path, "https://deskohub.example");
+};
 
 const locale = "en-US";
 const today = plainDateStringSchema.make("2026-10-25");
@@ -90,9 +105,7 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
   expect(continueButton.disabled).toBe(false);
   expect(view.getAllByText("Not free on all 30 days")).toHaveLength(3);
   fireEvent.click(view.getByRole("radio", { name: /32.*qhd/i }));
-  expect(new URL(window.location.href).searchParams.has("startDate")).toBe(
-    false
-  );
+  expect(checkoutUrl().searchParams.has("startDate")).toBe(false);
   expect(continueButton.disabled).toBe(true);
   const unavailableStart = view.getByRole<HTMLButtonElement>("button", {
     name: /November 1st, 2026/i,
@@ -317,6 +330,11 @@ test("editing an owned draft sends a new order and reports the capacity refusal"
   expect(
     view.getByRole<HTMLButtonElement>("button", { name: /continue/i }).disabled
   ).toBe(true);
+  const reopenedUrl = checkoutUrl();
+  expect(reopenedUrl.searchParams.get("supersedeOrder")).toBeNull();
+  expect(reopenedUrl.searchParams.get("order")).toBeNull();
+  expect(reopenedUrl.searchParams.get("step")).toBeNull();
+  expect(reopenedUrl.pathname).toBe("/en-US/passes/unlimited");
 });
 
 test("Details cannot hand off another selection while Begin is creating holds", async () => {
@@ -457,5 +475,78 @@ test("an expired status-originated payment retry returns to that same order", as
     );
   } finally {
     replace.mockRestore();
+  }
+});
+
+test("desktop final-month view loads the preceding visible month and lets the buyer choose it", async () => {
+  const aprilStart = plainDateStringSchema.make("2027-04-15");
+  const marchStart = plainDateStringSchema.make("2027-03-15");
+  let isWide = false;
+  const media = window.matchMedia("(min-width: 64rem)");
+  Object.defineProperty(media, "matches", { get: () => isWide });
+  const matchMedia = spyOn(window, "matchMedia").mockReturnValue(media);
+  const getAvailability = mock(async ({ startsOn }: { startsOn?: string }) => ({
+    data: {
+      ...availability,
+      starts: {
+        ...availability.starts,
+        "open-space":
+          startsOn === "2027-03-01" ? [marchStart, aprilStart] : [aprilStart],
+      },
+    },
+  }));
+  try {
+    const view = render(
+      <QueryProvider>
+        <UnlimitedPassCheckout
+          {...base}
+          initialStartDate={aprilStart}
+          initialBounds={{
+            today,
+            lastStartDate: plainDateStringSchema.make("2027-04-25"),
+          }}
+          getAvailability={getAvailability}
+        />
+      </QueryProvider>
+    );
+    await waitFor(() =>
+      expect(
+        view.getByRole<HTMLButtonElement>("button", { name: /continue/i })
+          .disabled
+      ).toBe(false)
+    );
+    expect(getAvailability).toHaveBeenCalledWith({
+      locale,
+      startsOn: "2027-04-01",
+    });
+
+    act(() => {
+      isWide = true;
+      media.dispatchEvent(new Event("change"));
+    });
+    await waitFor(() =>
+      expect(getAvailability).toHaveBeenCalledWith({
+        locale,
+        startsOn: "2027-03-01",
+      })
+    );
+    const marchDay = () =>
+      view.getByRole<HTMLButtonElement>("button", {
+        name: /March 15th, 2027/i,
+      });
+    await waitFor(() => {
+      expect(marchDay().disabled).toBe(false);
+      expect(marchDay().getAttribute("aria-disabled")).not.toBe("true");
+    });
+    fireEvent.click(marchDay());
+    await waitFor(() =>
+      expect(checkoutUrl().searchParams.get("startDate")).toBe(marchStart)
+    );
+    fireEvent.click(view.getByRole("button", { name: /continue/i }));
+    const detailsUrl = checkoutUrl();
+    expect(detailsUrl.searchParams.get("startDate")).toBe(marchStart);
+    expect(detailsUrl.searchParams.get("step")).toBe("details");
+  } finally {
+    matchMedia.mockRestore();
   }
 });

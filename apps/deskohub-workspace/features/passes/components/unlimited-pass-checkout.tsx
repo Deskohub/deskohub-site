@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { getAccountSignInPath } from "@/features/account/routes";
 import {
   CheckoutFlowLayout,
@@ -99,6 +99,15 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
   }>;
 };
 
+const wideCalendarQuery = "(min-width: 64rem)";
+const subscribeCalendarWidth = (onChange: () => void) => {
+  const media = window.matchMedia(wideCalendarQuery);
+  media.addEventListener("change", onChange);
+  return () => media.removeEventListener("change", onChange);
+};
+const wideCalendar = () => window.matchMedia(wideCalendarQuery).matches;
+const singleMonth = () => false;
+
 export function UnlimitedPassCheckout({
   locale,
   buyer,
@@ -162,9 +171,28 @@ export function UnlimitedPassCheckout({
       }
     | undefined
   >(draft?.kind === "resume" ? draft : undefined);
+  const isWide = useSyncExternalStore(
+    subscribeCalendarWidth,
+    wideCalendar,
+    singleMonth
+  );
+  const firstMonth = Temporal.PlainDate.from(initialBounds.today).with({
+    day: 1,
+  });
+  const lastMonth = Temporal.PlainDate.from(initialBounds.lastStartDate).with({
+    day: 1,
+  });
+  const numberOfMonths = isWide && !firstMonth.equals(lastMonth) ? 2 : 1;
+  const latestFirstVisibleMonth = lastMonth.subtract({
+    months: numberOfMonths - 1,
+  });
+  const displayedMonth =
+    Temporal.PlainDate.compare(calendarMonth, latestFirstVisibleMonth) > 0
+      ? plainDateStringSchema.make(latestFirstVisibleMonth.toString())
+      : calendarMonth;
   const startsOn =
-    Temporal.PlainDate.compare(calendarMonth, initialBounds.today) > 0
-      ? calendarMonth
+    Temporal.PlainDate.compare(displayedMonth, initialBounds.today) > 0
+      ? displayedMonth
       : undefined;
   const availability = useQuery({
     queryKey: [
@@ -350,18 +378,14 @@ export function UnlimitedPassCheckout({
       } else if (result.data?.status === "capacity_unavailable") {
         attempt.current = undefined;
         setSavedOrderId(undefined);
+        setActiveDraftOrderId(undefined);
         setStartDate(undefined);
         window.history.replaceState(
           null,
           "",
-          getUnlimitedPassChoosePath(
-            locale,
-            options,
-            undefined,
-            getOrderLink(undefined, activeDraftOrderId)
-          )
+          getUnlimitedPassChoosePath(locale, options)
         );
-        void availability.refetch();
+        if (activeDraftOrderId === undefined) void availability.refetch();
         const dates = new Intl.ListFormat(locale).format(
           result.data.blockingDates.map((date) => formatPassDate(date, locale))
         );
@@ -439,7 +463,8 @@ export function UnlimitedPassCheckout({
             locale={locale}
             today={availability.data?.today ?? initialBounds.today}
             lastStartDate={initialBounds.lastStartDate}
-            calendarMonth={calendarMonth}
+            calendarMonth={displayedMonth}
+            numberOfMonths={numberOfMonths}
             options={options}
             startDate={startDate}
             availability={calendarAvailability}

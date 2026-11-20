@@ -1,5 +1,5 @@
 import { Coffee } from "lucide-react";
-import { useId, useSyncExternalStore } from "react";
+import { useId } from "react";
 import { cs, de, enUS, hi, sk, uk, vi } from "react-day-picker/locale";
 import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
 import {
@@ -50,21 +50,13 @@ const calendarLocales = {
   "vi-VN": vi,
 } satisfies Record<Locale, typeof enUS>;
 
-const wideCalendarQuery = "(min-width: 64rem)";
-const subscribeCalendarWidth = (onChange: () => void) => {
-  const media = window.matchMedia(wideCalendarQuery);
-  media.addEventListener("change", onChange);
-  return () => media.removeEventListener("change", onChange);
-};
-const wideCalendar = () => window.matchMedia(wideCalendarQuery).matches;
-const singleMonth = () => false;
-
 export function UnlimitedPassChoose({
   locale,
   today,
   lastStartDate,
   options,
   calendarMonth,
+  numberOfMonths,
   startDate,
   availability,
   onOptionsChange,
@@ -78,6 +70,7 @@ export function UnlimitedPassChoose({
   readonly lastStartDate: PlainDate;
   readonly options: UnlimitedPassOptions;
   readonly calendarMonth: PlainDate;
+  readonly numberOfMonths: 1 | 2;
   readonly startDate?: PlainDate;
   readonly availability: UnlimitedPassAvailability;
   readonly onOptionsChange: (
@@ -92,16 +85,8 @@ export function UnlimitedPassChoose({
   const days = formatCount(unlimitedPassDays, locale);
   const calendarId = useId();
   const coffeeId = useId();
-  const canShowTwoMonths = useSyncExternalStore(
-    subscribeCalendarWidth,
-    wideCalendar,
-    singleMonth
-  );
   const firstDay = Temporal.PlainDate.from(today);
   const lastDay = Temporal.PlainDate.from(lastStartDate);
-  const twoMonths =
-    canShowTwoMonths &&
-    !firstDay.toPlainYearMonth().equals(lastDay.toPlainYearMonth());
   const starts =
     availability.status === "ready" ? availability.starts : undefined;
   const enabled = new Set(
@@ -178,7 +163,7 @@ export function UnlimitedPassChoose({
               }}
               locale={calendarLocales[locale]}
               mode="single"
-              numberOfMonths={twoMonths ? 2 : 1}
+              numberOfMonths={numberOfMonths}
               showOutsideDays={false}
               today={toCalendarDate(firstDay)}
               weekStartsOn={1}
