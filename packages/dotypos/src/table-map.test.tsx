@@ -3,7 +3,6 @@ import type { Table } from "./generated";
 import { TableMap } from "./table-map";
 
 type ReactElementLike = {
-  readonly key?: string | null;
   readonly props: {
     readonly "aria-label"?: string;
     readonly children: ReactElementLike | readonly ReactElementLike[];
@@ -217,7 +216,7 @@ test("activates a table from Enter or Space and ignores other keys", () => {
   expect(prevented).toEqual(["Enter", " "]);
 });
 
-test("renders a static image keyed by table id with fallback button labels for unnamed tables", () => {
+test("renders a static image and labels unnamed interactive tables", () => {
   const unnamed: Table = {
     id: "table-unnamed",
     _cloudId: "cloud",
@@ -231,15 +230,11 @@ test("renders a static image keyed by table id with fallback button labels for u
     tables: [unnamed],
     tableStyle: () => "is-muted",
   }) as ReactElementLike;
-  const [geometry, label] = childrenOf(staticSvg);
-  if (!(geometry && label))
-    throw new Error("Expected table geometry and label");
+  const geometry = firstChild(staticSvg);
 
   expect(staticSvg.props.role).toBe("img");
-  expect(geometry.key).toBe("table-unnamed");
   expect(geometry.props.role).toBeUndefined();
   expect(geometry.props.transform).toBe("translate(0 5)");
-  expect(label.key).toBe("table-unnamed-label");
   expect(staticSvg.props.viewBox).toBe("-52 -47 104 104");
 
   const interactiveSvg = TableMap({

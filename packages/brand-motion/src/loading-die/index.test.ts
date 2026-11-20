@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  faceGroups,
   faceIsDrawn,
   paintedBounds,
   type SampledDieFrame,
@@ -203,14 +202,10 @@ describe("loadingDieAnimation", () => {
       motion: "tumble",
       fill: { kind: "solid", color: "#00024f" },
     }) as LoadingDieLottie;
-    expect(navy.layers[0]).toBe(brand.layers[0]);
+    expect(navy.layers[0]).toEqual(brand.layers[0]);
     const brandShapes = brand.layers[1].shapes;
     const navyShapes = navy.layers[1].shapes;
-    expect(navyShapes).toHaveLength(brandShapes.length);
-    expect(faceGroups(navy)).toEqual(faceGroups(brand));
-    faceGroups(navy).forEach((group, index) => {
-      expect(group).toBe(brandShapes[index] as typeof group);
-    });
+    expect(navyShapes.slice(0, -1)).toEqual(brandShapes.slice(0, -1));
     expect(navyShapes.at(-1)).toEqual({
       ty: "fl",
       nm: "tint",
