@@ -97,7 +97,7 @@ export const publicPageDefinitions: Readonly<
   "/pricing": {
     title: m.pricingMetadataTitle,
     description: m.pricingMetadataDescription,
-    contentDate: "2026-10-19",
+    contentDate: "2026-11-20",
   },
   "/meeting-room": {
     title: m.meetingRoomMetadataTitle,
