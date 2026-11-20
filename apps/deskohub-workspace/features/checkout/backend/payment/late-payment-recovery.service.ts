@@ -31,6 +31,7 @@ import {
   LatePaymentRecoveryRepository,
 } from "../repositories/late-payment-recovery.repository";
 import { administrationForcedPaymentCancellationFailureCode } from "../repositories/payment-lifecycle.repository";
+import { withWorkspaceReservationCapacity } from "../reservation/dotypos-reservation.adapter";
 import {
   findOrderCoworkStay,
   findOrderDotyposReservations,
@@ -405,17 +406,22 @@ export class LatePaymentRecoveryService extends Context.Service<
           return yield* refundNewerReservation({ ...input, replacements });
         }
 
-        const replacement = yield* resumeOrCreateReplacement({
-          reservation: input.reservation,
-          recreated,
-          replacements,
-        });
+        const replacement = yield* withWorkspaceReservationCapacity(
+          interval,
+          resumeOrCreateReplacement({
+            reservation: input.reservation,
+            recreated,
+            replacements,
+          })
+        );
         if (!replacement) {
           return yield* refundRecovery(
             input,
             "late_payment_reservation_unavailable"
           );
         }
+        // The confirmed provider hold now occupies capacity. Settlement can
+        // take the lower-ranked referral locks after releasing the date keys.
         return yield* settleWithReplacement({ ...input, ...replacement });
       });
 

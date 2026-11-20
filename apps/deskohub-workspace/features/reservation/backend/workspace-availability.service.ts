@@ -54,6 +54,7 @@ import {
 } from "@/shared/utils/temporal";
 import {
   getReservationDate,
+  getReservationDateBounds,
   normalizeReservationInterval,
   type ReservationInterval,
   type ReservationIntervalError,
@@ -79,6 +80,7 @@ import {
   AdvisoryAvailabilityInventory,
   type AvailabilityInventory,
   type AvailabilityInventoryError,
+  getFullyOccupiedCalendarDates,
   makeProviderInventory,
 } from "./availability-inventory";
 import { SharedAvailabilityInventoryLive } from "./availability-inventory-cache.server";
@@ -688,18 +690,6 @@ const availabilityLogFields = (availability: WorkspaceAvailability) => ({
   noticeCount: availability.notices.length,
 });
 
-const getFullyOccupiedCalendarDates = (
-  limitations: readonly WorkspaceCalendarLimitationType[]
-) =>
-  new Set(
-    limitations.flatMap((limitation) =>
-      Match.value(limitation).pipe(
-        Match.tag("FullyOccupied", ({ date }) => [date]),
-        Match.orElse(() => [])
-      )
-    )
-  );
-
 /** A free start, and whether the room is also free for its setup time. */
 type FreeMeetingRoomStartTime = MeetingRoomStartTime & {
   readonly earlySetupAvailable: boolean;
@@ -950,18 +940,8 @@ const normalizeCoworkAvailabilityInterval = (
   );
 
 const getAvailabilityTouchedDateRange = (input: ReservationInterval) => {
-  const from = getReservationDate({
-    interval: input,
-    timeZone: workspaceSiteConstants.location.timeZone,
-  });
-  const to = Temporal.Instant.fromEpochMilliseconds(
-    Temporal.Instant.from(input.endsAt).epochMilliseconds - 1
-  )
-    .toZonedDateTimeISO(workspaceSiteConstants.location.timeZone)
-    .toPlainDate()
-    .toString();
-
-  return { from, to };
+  const { first, last } = getReservationDateBounds(input);
+  return { from: first.toString(), to: last.toString() };
 };
 
 const toAvailabilityIntervalError = (

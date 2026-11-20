@@ -15,6 +15,7 @@ import {
   makeWholeHourInstantStringSchema,
   temporalInstantToPlainDate,
 } from "@/shared/utils/temporal";
+import { getTouchedWorkspaceDateBounds } from "./reservation-date";
 
 export type {
   ReservationInterval,
@@ -108,6 +109,13 @@ export const getReservationDate = ({
     instant: Temporal.Instant.from(interval.startsAt),
     timeZone,
   }).toString();
+
+/** The first and last Prague dates touched by a nonempty half-open interval. */
+export const getReservationDateBounds = (interval: ReservationInterval) =>
+  getTouchedWorkspaceDateBounds({
+    startsAt: Temporal.Instant.from(interval.startsAt),
+    endsAt: Temporal.Instant.from(interval.endsAt),
+  });
 
 const toSchemaIssue = (
   input: ReservationIntervalInput,

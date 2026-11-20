@@ -1,6 +1,7 @@
 import type {
   DotyposCustomerId,
   DotyposReservationId,
+  DotyposTableId,
 } from "@deskohub/dotypos";
 import {
   and,
@@ -9,6 +10,7 @@ import {
   eq,
   exists,
   gt,
+  gte,
   inArray,
   isNotNull,
   isNull,
@@ -34,6 +36,7 @@ import {
   latePaymentRecoveries,
   type PaymentAttemptRow,
   passEntryClaims,
+  passPurchases,
   paymentAttempts,
   type ReservationCancellationCause,
   reservationAccessGrants,
@@ -56,7 +59,7 @@ import type {
 import type { PaymentReturnTarget } from "@/features/checkout/payment-return-target";
 import type { DiscountClaimError } from "@/features/discounts/errors";
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
-import { endedUnpaidPaymentStates } from "@/features/order";
+import { endedUnpaidPaymentStates, type OrderId } from "@/features/order";
 import {
   checkEntryPackClaim,
   type EntryPackRedemption,
@@ -67,6 +70,7 @@ import {
   reserveEntryPackClaim,
   reserveReleasedEntryPackClaim,
 } from "@/features/passes/backend/entry-pack-redemption";
+import type { PassTier } from "@/features/passes/pass-offer";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import type { AgentSelectionKey } from "@/features/reservation/backend/booking-agent";
 import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
@@ -88,6 +92,7 @@ import {
   readLimitSentinel,
   requireWithinReadLimit,
 } from "@/shared/backend/read-limit";
+import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
 import { supersedableReservationPaymentStates } from "./reservation-supersession";
 import {
   StoredReservationDetails,
@@ -242,6 +247,14 @@ export interface ExpectedReservationHold {
   readonly dotyposReservationId: DotyposReservationId;
   readonly reservationHoldExpiresAt: Temporal.Instant;
 }
+
+export type PendingPassDayCapacity = {
+  readonly passId: OrderId;
+  readonly serviceDate: PlainDate;
+  readonly tableId: DotyposTableId;
+  readonly customerId: DotyposCustomerId;
+  readonly tier: PassTier;
+};
 
 export interface IWorkspaceReservationRepository {
   /**
@@ -628,6 +641,13 @@ export interface IWorkspaceReservationRepository {
   readonly selectExpiredHoldDotyposReservationIds: (input: {
     readonly now: Temporal.Instant;
   }) => Effect.Effect<readonly DotyposReservationId[], EffectDrizzleQueryError>;
+  readonly selectPendingPassDayCapacity: (input: {
+    readonly first: Temporal.PlainDate;
+    readonly last: Temporal.PlainDate;
+  }) => Effect.Effect<
+    readonly PendingPassDayCapacity[],
+    EffectDrizzleQueryError
+  >;
   /**
    * The Workspace reservations made for one Dotypos customer, oldest first,
    * as the customer may read them. Only rows whose reservation customer is
@@ -2263,6 +2283,40 @@ export class WorkspaceReservationRepository extends Context.Service<
 
           return rows.flatMap(({ dotyposReservationId }) =>
             dotyposReservationId ? [dotyposReservationId] : []
+          );
+        }),
+        selectPendingPassDayCapacity: Effect.fn(
+          "workspaceReservations.selectPendingPassDayCapacity"
+        )(function* ({ first, last }) {
+          const rows = yield* db
+            .select({
+              passId: passPurchases.id,
+              serviceDate: workspaceReservations.serviceDate,
+              tableId: workspaceReservations.passDayTableId,
+              customerId: workspaceReservations.dotyposCustomerId,
+              tier: passPurchases.tier,
+            })
+            .from(workspaceReservations)
+            .innerJoin(
+              passPurchases,
+              eq(passPurchases.id, workspaceReservations.passId)
+            )
+            .where(
+              and(
+                eq(workspaceReservations.reservationState, "creating_hold"),
+                gte(
+                  workspaceReservations.serviceDate,
+                  plainDateStringSchema.make(first.toString())
+                ),
+                lte(
+                  workspaceReservations.serviceDate,
+                  plainDateStringSchema.make(last.toString())
+                )
+              )
+            );
+
+          return rows.flatMap(({ serviceDate, tableId, ...row }) =>
+            serviceDate && tableId ? [{ ...row, serviceDate, tableId }] : []
           );
         }),
         listForCustomer: Effect.fn("workspaceReservations.listForCustomer")(

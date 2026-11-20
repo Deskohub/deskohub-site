@@ -1,6 +1,7 @@
 import { DotyposService } from "@deskohub/dotypos";
 import { Context, Effect, Layer, Option, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { isDatabaseQueryError } from "@/db/sql-constraint";
 import { CustomerEmailLocaleService } from "@/features/account";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
@@ -665,6 +666,7 @@ export class ReservationAdministrationService extends Context.Service<
       | ReservationInvoiceService
       | ReservationAccessService
       | WorkspaceDatabase
+      | WorkspaceDatabaseAdvisoryLock
       | WorkspaceFeatureFlagService
       | WorkspaceReservationEmailService
       | WorkspaceReservationRepository
@@ -685,6 +687,7 @@ export class ReservationAdministrationService extends Context.Service<
 
   static Live = this.perOperationOver(
     Layer.mergeAll(
+      WorkspaceDatabaseAdvisoryLock.Default,
       WorkspaceReservationEmailService.Default.pipe(
         Layer.provide(
           Layer.provideMerge(

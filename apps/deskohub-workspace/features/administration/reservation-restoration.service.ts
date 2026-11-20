@@ -16,6 +16,8 @@ import {
   Result,
 } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { WorkspaceReservationEmailService } from "@/features/checkout/backend/fulfillment/workspace-reservation-email.service";
 import { PaymentRefundService } from "@/features/checkout/backend/payment/payment-refund.service";
@@ -37,6 +39,7 @@ import {
   WorkspaceReservationService,
 } from "@/features/reservation/backend/workspace-reservation.service";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { getTouchedWorkspaceDateBounds } from "@/features/reservation/reservation-date";
 import { ReservationAccessService } from "@/features/reservation-access";
 import {
   getRestoredReservationAccess,
@@ -44,6 +47,7 @@ import {
 } from "@/features/reservation-access/reservation-access";
 import { retractCancellationEvent } from "@/shared/backend/customer-events/customer-event-retraction";
 import { formatMoney } from "@/shared/money/money";
+import { getPlainDatesBetween } from "@/shared/utils/temporal";
 import {
   ReservationAdministrationError,
   type ReservationRestorationFailureReason,
@@ -154,6 +158,7 @@ export class ReservationRestorationService extends Context.Service<
       const access = yield* ReservationAccessService;
       const accountingSnapshots = yield* AccountingDocumentSnapshots;
       const { transaction } = yield* WorkspaceDatabase;
+      const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
       const dotypos = yield* DotyposService;
       const emails = yield* WorkspaceReservationEmailService;
       const refunds = yield* PaymentRefundService;
@@ -832,9 +837,31 @@ export class ReservationRestorationService extends Context.Service<
           Effect.bind("span", getHeldSpan),
           Effect.bind("accessPlan", planRestoredAccess),
           Effect.tap(checkRefunds),
-          Effect.tap(requireTableAvailable),
-          Effect.bind("dotyposRestore", restoreInDotypos),
-          Effect.bind("recording", finalizeRestoration),
+          Effect.flatMap((restoration) => {
+            const restore = Effect.succeed(restoration).pipe(
+              Effect.tap(requireTableAvailable),
+              Effect.bind("dotyposRestore", restoreInDotypos),
+              Effect.bind("recording", finalizeRestoration)
+            );
+            if (restoration.accessPlan === "not_needed") return restore;
+
+            const { first, last } = getTouchedWorkspaceDateBounds({
+              startsAt: restoration.span.reservedFrom,
+              endsAt: restoration.span.reservedUntil,
+            });
+            return restore.pipe(
+              WorkspaceLockSections.reservationCapacity(
+                getPlainDatesBetween(first, last)
+              ),
+              Effect.provideService(
+                WorkspaceDatabaseAdvisoryLock,
+                advisoryLock
+              ),
+              Effect.catchTag("SqlError", (cause) =>
+                restorationError("dotypos_failed", cause)
+              )
+            );
+          }),
           Effect.flatMap((restoration) =>
             Match.valueTags(restoration.recording, {
               Recorded: ({ accessPlan }) =>

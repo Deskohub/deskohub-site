@@ -216,6 +216,7 @@ describe.skipIf(!postgresDatabase)(
       const layer = ReservationHolds.Default.pipe(
         Layer.provide(
           Layer.mergeAll(
+            WorkspaceDatabaseAdvisoryLock.makeLayer(postgres.databasePool),
             observeReservations
               ? Layer.effect(
                   WorkspaceReservationRepository,

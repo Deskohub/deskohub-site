@@ -9,6 +9,7 @@ import {
   RestoreCancelledReservationResult,
 } from "@deskohub/dotypos";
 import { Effect, Layer, Logger, References } from "effect";
+import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { WorkspaceReservationEmailService } from "@/features/checkout/backend/fulfillment/workspace-reservation-email.service";
 import { PaymentRefundService } from "@/features/checkout/backend/payment/payment-refund.service";
@@ -273,6 +274,7 @@ const restoreWith = async (overrides: Partial<Fakes> = {}) => {
         Layer.provide(
           Layer.mergeAll(
             database.layer,
+            makeRecordingAdvisoryLock().layer,
             Layer.mock(AccountingDocumentSnapshots, {}),
             Layer.mock(DotyposService, {
               getReservationWithoutCustomer:
