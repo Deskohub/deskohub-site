@@ -1,3 +1,5 @@
+import "next/dist/server/node-environment-baseline";
+
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { context } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
@@ -5,6 +7,10 @@ import { isTracingSuppressed } from "@opentelemetry/core";
 import { Effect, Fiber, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
+import { workAsyncStorage } from "next/dist/server/app-render/work-async-storage.external";
+import { workUnitAsyncStorage } from "next/dist/server/app-render/work-unit-async-storage.external";
+import { createWorkStore } from "next/dist/server/async-storage/work-store";
+import { createPatchedFetcher } from "next/dist/server/lib/patch-fetch";
 import {
   recordEffectTrace,
   startEffectTrace,
@@ -325,6 +331,37 @@ test("keeps large IDs and exact amounts while discarding invalid variable symbol
   }
 });
 
+test("preserves reference wire type and treats padded quoted IDs as the same movement", async () => {
+  const quoted = {
+    ...movement,
+    column22: { value: "08412000001" },
+    column5: { value: 123 },
+  };
+  const reply = (rows: readonly (typeof movement | typeof quoted)[]) =>
+    Promise.resolve(
+      Response.json({
+        accountStatement: {
+          ...statement.accountStatement,
+          transactionList: { transaction: rows },
+        },
+      })
+    );
+
+  expect(
+    await Effect.runPromise(readPeriod(() => reply([quoted])))
+  ).toMatchObject([
+    { movementId: "8412000001", reference: { _tag: "Invalid" } },
+  ]);
+  expect(
+    await Effect.runPromise(
+      Effect.flip(readPeriod(() => reply([movement, quoted])))
+    )
+  ).toMatchObject({
+    _tag: "FioRejected",
+    reason: "invalid-response",
+  });
+});
+
 test("the request deadline aborts a stalled body without starting another read", async () => {
   const bodyStarted = Promise.withResolvers<void>();
   const requestSignals: (AbortSignal | null | undefined)[] = [];
@@ -401,6 +438,77 @@ test("caps streamed response bytes even without a content length", async () => {
       Effect.flip(readPeriod(() => Promise.resolve(response)))
     )
   ).toMatchObject({ _tag: "FioRejected", reason: "period-too-large" });
+});
+
+test("live reads keep the token-bearing URL out of Next fetch metrics and transport tracing", async () => {
+  const path =
+    "/v1/rest/periods/synthetic-fio-read-token/2026-07-12/2026-07-13/transactions.json";
+  const workStore = createWorkStore({
+    page: "/api/fio-fixture/route",
+    buildId: "fixture",
+    deploymentId: "",
+    previouslyRevalidatedTags: [],
+    renderOpts: {
+      assetPrefix: "",
+      cacheComponents: false,
+      cacheLifeProfiles: {},
+      staticPageGenerationTimeout: 60,
+      isBuildTimePrerendering: false,
+      isDebugDynamicAccesses: false,
+      isDraftMode: false,
+      onAfterTaskError: undefined,
+      onClose: () => {},
+      waitUntil: undefined,
+      validationLevel: "warning",
+      experimental: {
+        authInterrupts: false,
+        durableUseCacheEntries: false,
+        isRoutePPREnabled: false,
+        useCacheTimeout: 60,
+      },
+    },
+  });
+  workStore.shouldTrackFetchMetrics = true;
+
+  // Even if the adapter falls back to Next's patched global fetch, that
+  // wrapper's origin is a fixture and cannot reach the network.
+  const tracingSuppressed: boolean[] = [];
+  const nextOrigin = mock(() => {
+    tracingSuppressed.push(isTracingSuppressed(context.active()));
+    return Promise.resolve(
+      new Response("Synthetic private bank response", { status: 422 })
+    );
+  });
+  const patched = createPatchedFetcher(
+    Object.assign(nextOrigin, { preconnect: globalThis.fetch.preconnect }),
+    { workAsyncStorage, workUnitAsyncStorage }
+  );
+
+  const fetchBackstop = spyOn(globalThis, "fetch").mockImplementation(patched);
+  Object.assign(fetchBackstop, patched);
+  const manager = new AsyncLocalStorageContextManager().enable();
+  context.setGlobalContextManager(manager);
+
+  try {
+    const result = await workAsyncStorage.run(workStore, () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const service = yield* FioMovements;
+          return yield* Effect.flip(service.readPeriod(period));
+        }).pipe(Effect.provide(FioMovements.Live))
+      )
+    );
+    expect(result).toMatchObject({ _tag: "FioHistoryAccessRequired" });
+    expect(JSON.stringify(workStore.fetchMetrics ?? [])).not.toContain(path);
+    expect(JSON.stringify(workStore.fetchMetrics ?? [])).not.toContain(
+      "synthetic-fio-read-token"
+    );
+    expect(nextOrigin).toHaveBeenCalledTimes(1);
+    expect(tracingSuppressed).toEqual([true]);
+  } finally {
+    context.disable();
+    manager.disable();
+  }
 });
 
 test("keeps token-bearing URLs, transport causes, and malformed response bodies out of diagnostics", async () => {

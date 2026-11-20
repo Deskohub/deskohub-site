@@ -18,6 +18,7 @@ import {
   HttpClient,
   type HttpClientResponse,
 } from "effect/http";
+import type { createPatchedFetcher } from "next/dist/server/lib/patch-fetch";
 import { parsePlainDate } from "@/shared/utils/temporal";
 
 export interface FioReceivingAccount {
@@ -175,18 +176,28 @@ function isIsoDate(value: string): boolean {
 function withoutFetchTracing(
   fetch: typeof globalThis.fetch
 ): typeof globalThis.fetch {
-  // Next.js and Vercel also instrument fetch outside Effect's HTTP spans.
+  // The Next.js wrapper collects fetch metrics independently of tracing.
+  const originFetch = isNextPatchedFetch(fetch)
+    ? fetch._nextOriginalFetch
+    : fetch;
+  // The origin can still include Vercel or other OpenTelemetry instrumentation.
   return Object.assign(
     (input: RequestInfo | URL, init?: RequestInit) =>
       context.with(
         suppressTracing(context.active()),
-        fetch,
+        originFetch,
         undefined,
         input,
         init
       ),
-    { preconnect: fetch.preconnect }
+    { preconnect: originFetch.preconnect }
   );
+}
+
+function isNextPatchedFetch(
+  fetch: typeof globalThis.fetch
+): fetch is ReturnType<typeof createPatchedFetcher> {
+  return "__nextPatched" in fetch && fetch.__nextPatched === true;
 }
 
 function periodStatusFailure(httpStatus: number): FioReadFailure {
@@ -232,15 +243,27 @@ const readStatementBody = Effect.fnUntraced(function* (
   return text + decoder.decode();
 });
 
-const textColumn = Schema.Struct({ value: Schema.String });
+class JsonNumberLexeme {
+  readonly source: string;
+
+  constructor(source: string) {
+    this.source = source;
+  }
+}
+
+const numericText = Schema.Union([
+  Schema.String,
+  Schema.instanceOf(JsonNumberLexeme),
+]);
+const numericColumn = Schema.Struct({ value: numericText });
 const referenceColumn = Schema.decodeUnknownOption(
   Schema.Struct({ value: Schema.NullOr(Schema.String) })
 );
 const movement = Schema.Struct({
-  column22: textColumn,
-  column0: textColumn,
-  column1: textColumn,
-  column14: textColumn,
+  column22: numericColumn,
+  column0: numericColumn,
+  column1: numericColumn,
+  column14: Schema.Struct({ value: Schema.String }),
   column5: Schema.optionalKey(Schema.Unknown),
 });
 const statement = Schema.Struct({
@@ -249,10 +272,10 @@ const statement = Schema.Struct({
       accountId: Schema.String,
       bankId: Schema.String,
       iban: Schema.String,
-      dateStart: Schema.String,
-      dateEnd: Schema.String,
-      idFrom: Schema.optionalKey(Schema.NullOr(Schema.String)),
-      idTo: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      dateStart: numericText,
+      dateEnd: numericText,
+      idFrom: Schema.optionalKey(Schema.NullOr(numericText)),
+      idTo: Schema.optionalKey(Schema.NullOr(numericText)),
     }),
     transactionList: Schema.Struct({ rows: Schema.Array(movement) }).pipe(
       Schema.encodeKeys({ rows: "transaction" })
@@ -265,9 +288,15 @@ const parseJson = Option.liftThrowable((body: string): unknown =>
   // Preserve numeric literals before binary floating-point rounding can change them.
   JSON.parse(body, (_key, value, context) => {
     const source = context?.source;
-    return source && /^-?\d/.test(source) ? source : value;
+    return source && /^-?\d/.test(source)
+      ? new JsonNumberLexeme(source)
+      : value;
   })
 );
+
+function originalNumericText(value: typeof numericText.Type): string {
+  return value instanceof JsonNumberLexeme ? value.source : value;
+}
 
 const decodePeriod = Effect.fnUntraced(function* (
   body: string,
@@ -286,8 +315,8 @@ const decodePeriod = Effect.fnUntraced(function* (
     return yield* new FioRejected({ reason: "account-mismatch" });
   }
   if (
-    fioBookingDate(info.dateStart) !== period.from ||
-    fioBookingDate(info.dateEnd) !== period.to
+    fioBookingDate(originalNumericText(info.dateStart)) !== period.from ||
+    fioBookingDate(originalNumericText(info.dateEnd)) !== period.to
   ) {
     return yield* new FioRejected({ reason: "incomplete-period" });
   }
@@ -308,8 +337,10 @@ const decodePeriod = Effect.fnUntraced(function* (
     movements.push(evidence);
   }
   if (
-    (info.idFrom != null && info.idFrom !== movements[0]?.movementId) ||
-    (info.idTo != null && info.idTo !== movements.at(-1)?.movementId)
+    (info.idFrom != null &&
+      !matchesMovementId(info.idFrom, movements[0]?.movementId)) ||
+    (info.idTo != null &&
+      !matchesMovementId(info.idTo, movements.at(-1)?.movementId))
   ) {
     return yield* new FioRejected({ reason: "incomplete-period" });
   }
@@ -355,10 +386,13 @@ function matchesReceivingAccount(
 }
 
 function decodeMovement(row: typeof movement.Type): FioMovement | undefined {
-  const movementId = row.column22.value;
-  const date = fioBookingDate(row.column0.value);
-  const amount = decodeAmount(row.column1.value, row.column14.value);
-  if (!/^\d+$/.test(movementId) || !date || !amount) {
+  const movementId = canonicalMovementId(row.column22.value);
+  const date = fioBookingDate(originalNumericText(row.column0.value));
+  const amount = decodeAmount(
+    originalNumericText(row.column1.value),
+    row.column14.value
+  );
+  if (!movementId || !date || !amount) {
     return undefined;
   }
   return {
@@ -367,6 +401,20 @@ function decodeMovement(row: typeof movement.Type): FioMovement | undefined {
     amount,
     reference: decodeReference(row),
   };
+}
+
+function canonicalMovementId(
+  value: typeof numericText.Type
+): string | undefined {
+  const digits = originalNumericText(value);
+  return /^\d+$/.test(digits) ? digits.replace(/^0+(?=\d)/, "") : undefined;
+}
+
+function matchesMovementId(
+  value: typeof numericText.Type,
+  movementId: string | undefined
+): boolean {
+  return movementId !== undefined && canonicalMovementId(value) === movementId;
 }
 
 function decodeAmount(
