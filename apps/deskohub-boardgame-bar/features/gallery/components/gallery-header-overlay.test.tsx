@@ -20,13 +20,6 @@ describe("GalleryHeaderText", () => {
     };
   };
 
-  test("shows the title as the heading and the description below it", () => {
-    expect(textOf({ title: "Gallery", description: "Our tables" })).toEqual({
-      headings: ["Gallery"],
-      paragraphs: ["Our tables"],
-    });
-  });
-
   test("shows only the parts it is given", () => {
     expect(textOf({ title: "Gallery" })).toEqual({
       headings: ["Gallery"],

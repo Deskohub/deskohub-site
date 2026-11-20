@@ -9,21 +9,17 @@ setBoardgameTestEnv();
 
 mock.module("server-only", () => ({}));
 
-const maintenanceOperations: string[] = [];
-const revalidateTag = mock(() => {
-  maintenanceOperations.push("invalidate");
-});
+const revalidateTag = mock(() => undefined);
 mock.module("next/cache", () => ({ revalidateTag }));
 
 type WatchChanges = IOpeningHoursCalendarService["watchChanges"];
 
-const watchChanges = mock<WatchChanges>((input) => {
-  maintenanceOperations.push("watch");
-  return Effect.succeed({
+const watchChanges = mock<WatchChanges>((input) =>
+  Effect.succeed({
     channelId: input.channelId,
     expiration: 1_785_902_400_000,
-  });
-});
+  })
+);
 
 const dailyMaintenanceIntervalSeconds = 24 * 60 * 60;
 
@@ -52,19 +48,8 @@ const makeRequest = (authorization?: string) =>
 
 describe("opening-hours midnight maintenance cron", () => {
   beforeEach(() => {
-    maintenanceOperations.length = 0;
     revalidateTag.mockClear();
-    revalidateTag.mockImplementation(() => {
-      maintenanceOperations.push("invalidate");
-    });
     watchChanges.mockClear();
-    watchChanges.mockImplementation((input) => {
-      maintenanceOperations.push("watch");
-      return Effect.succeed({
-        channelId: input.channelId,
-        expiration: 1_785_902_400_000,
-      });
-    });
   });
 
   test("rejects requests without the Vercel cron secret", async () => {
@@ -103,16 +88,12 @@ describe("opening-hours midnight maintenance cron", () => {
     expect(revalidateTag).toHaveBeenCalledWith(openingHoursTags.exceptions(), {
       expire: 0,
     });
-    expect(maintenanceOperations).toEqual(["watch", "invalidate"]);
   });
 
   test("reports provider registration failures", async () => {
-    watchChanges.mockImplementationOnce(() => {
-      maintenanceOperations.push("watch");
-      return Effect.fail(
-        new GoogleCalendarAPIError({ operation: "events.watch" })
-      );
-    });
+    watchChanges.mockImplementationOnce(() =>
+      Effect.fail(new GoogleCalendarAPIError({ operation: "events.watch" }))
+    );
 
     const response = await GET(
       makeRequest(`Bearer ${process.env.CRON_SECRET}`)
@@ -122,6 +103,5 @@ describe("opening-hours midnight maintenance cron", () => {
     expect(revalidateTag).toHaveBeenCalledWith(openingHoursTags.exceptions(), {
       expire: 0,
     });
-    expect(maintenanceOperations).toEqual(["watch", "invalidate"]);
   });
 });

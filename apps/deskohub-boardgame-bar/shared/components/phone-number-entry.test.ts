@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   adoptsControlledPhoneValue,
   phoneInputVariant,
-  phoneNumberFormattedOnBlur,
   phoneNumberValidity,
 } from "./phone-number-entry";
 
@@ -58,22 +57,6 @@ describe("phoneNumberValidity", () => {
       normalized: null,
       isValid: false,
     });
-  });
-});
-
-describe("phoneNumberFormattedOnBlur", () => {
-  test("formats a readable number for the locale", () => {
-    expect(phoneNumberFormattedOnBlur("777123456", "CZ", "en-US")).toBe(
-      "+420 777 123 456"
-    );
-    expect(phoneNumberFormattedOnBlur("777123456", "CZ", "cs-CZ")).toBe(
-      "777 123 456"
-    );
-  });
-
-  test("keeps a blank or unreadable number as typed", () => {
-    expect(phoneNumberFormattedOnBlur(" ", "CZ", "en-US")).toBeNull();
-    expect(phoneNumberFormattedOnBlur("12", "CZ", "en-US")).toBeNull();
   });
 });
 

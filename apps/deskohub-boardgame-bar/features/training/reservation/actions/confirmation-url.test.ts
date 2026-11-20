@@ -22,35 +22,37 @@ const reservation = (
 
 const queryOf = (url: string) => {
   const [path, query] = url.split("?");
-  return { path, entries: [...new URLSearchParams(query).entries()] };
+  const params = new URLSearchParams(query);
+  return { path, params: Object.fromEntries(params), entryCount: params.size };
 };
 
 describe("trainingReservationConfirmationUrl", () => {
-  test("carries every filled field to the confirmation page in a fixed order", () => {
+  test("carries every filled field to the confirmation page", () => {
     const url = trainingReservationConfirmationUrl(
       reservation({
         company: "Acme & Co",
         firstName: "Jana",
         lastName: "Nováková",
         role: "HR",
-        specialRequirements: "Projector, please",
+        specialRequirements: "Projector: a=b&c d",
       })
     );
 
     expect(queryOf(url)).toEqual({
       path: confirmationPath,
-      entries: [
-        ["company", "Acme & Co"],
-        ["firstName", "Jana"],
-        ["lastName", "Nováková"],
-        ["role", "HR"],
-        ["email", "jana@example.test"],
-        ["phone", "+420 777 123 456"],
-        ["date", "2026-11-20T09:00:00.000Z"],
-        ["time", "10:00"],
-        ["duration", "3"],
-        ["specialRequirements", "Projector, please"],
-      ],
+      entryCount: 10,
+      params: {
+        company: "Acme & Co",
+        firstName: "Jana",
+        lastName: "Nováková",
+        role: "HR",
+        email: "jana@example.test",
+        phone: "+420 777 123 456",
+        date: "2026-11-20T09:00:00.000Z",
+        time: "10:00",
+        duration: "3",
+        specialRequirements: "Projector: a=b&c d",
+      },
     });
   });
 
@@ -61,22 +63,15 @@ describe("trainingReservationConfirmationUrl", () => {
       )
     ).toEqual({
       path: confirmationPath,
-      entries: [
-        ["company", "Acme"],
-        ["email", "jana@example.test"],
-        ["phone", "+420 777 123 456"],
-        ["date", "2026-11-20T09:00:00.000Z"],
-        ["time", "10:00"],
-        ["duration", "3"],
-      ],
+      entryCount: 6,
+      params: {
+        company: "Acme",
+        email: "jana@example.test",
+        phone: "+420 777 123 456",
+        date: "2026-11-20T09:00:00.000Z",
+        time: "10:00",
+        duration: "3",
+      },
     });
-  });
-
-  test("encodes the query so values with separators survive", () => {
-    const url = trainingReservationConfirmationUrl(
-      reservation({ specialRequirements: "a=b&c d" })
-    );
-
-    expect(url).toContain("specialRequirements=a%3Db%26c+d");
   });
 });

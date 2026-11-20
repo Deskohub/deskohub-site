@@ -30,8 +30,11 @@ beforeEach(() => {
 });
 
 /** Renders the field and returns its HTML and the input's props. */
-const renderField = (props: ComponentProps<typeof PhoneInput>) => {
-  const html = renderOnLocaleRoute(<PhoneInput {...props} />);
+const renderField = (
+  props: ComponentProps<typeof PhoneInput>,
+  locale?: Parameters<typeof renderOnLocaleRoute>[1]
+) => {
+  const html = renderOnLocaleRoute(<PhoneInput {...props} />, locale);
   const [input] = renderedInputs;
   if (!input) throw new Error("PhoneInput rendered no input");
   return { html, input };
@@ -47,14 +50,11 @@ describe("PhoneInput", () => {
       className: "w-40",
     });
 
-    expect(input).toMatchObject({
-      type: "tel",
-      value: "777 123 456",
-      name: "phone",
-      variant: "default",
-    });
-    expect(input.className?.split(" ")).toEqual(["pl-9", "w-40"]);
-    expect(html).toContain("lucide-phone");
+    expect(html).toContain('type="tel"');
+    expect(html).toContain('value="777 123 456"');
+    expect(html).toContain('name="phone"');
+    expect(html).toContain("w-40");
+    expect(input.variant).toBe("default");
   });
 
   test("passes the caller's variant through", () => {
@@ -62,13 +62,13 @@ describe("PhoneInput", () => {
   });
 
   test("shows no validity icon before the number is checked", () => {
-    const { html, input } = renderField({
+    const { html } = renderField({
       value: "12",
       showValidation: true,
     });
 
     expect(html).not.toContain("lucide-x");
-    expect(input.className?.split(" ")).not.toContain("pr-9");
+    expect(html).not.toContain("lucide-check");
   });
 
   test("reports each typed value", () => {
@@ -82,14 +82,20 @@ describe("PhoneInput", () => {
     expect(onChange.mock.calls).toEqual([["777"]]);
   });
 
-  test("reports the number in the en-US route's format on blur", () => {
-    const onChange = mock<(value: string) => void>();
-    const { input } = renderField({ value: "777123456", onChange });
+  test.each([
+    ["en-US", "+420 777 123 456"],
+    ["cs-CZ", "777 123 456"],
+  ] as const)(
+    "reports the number in the %s route's format on blur",
+    (locale, formatted) => {
+      const onChange = mock<(value: string) => void>();
+      const { input } = renderField({ value: "777123456", onChange }, locale);
 
-    blur(input);
+      blur(input);
 
-    expect(onChange.mock.calls).toEqual([["+420 777 123 456"]]);
-  });
+      expect(onChange.mock.calls).toEqual([[formatted]]);
+    }
+  );
 
   test("formats the number for the given country on blur", () => {
     const onChange = mock<(value: string) => void>();

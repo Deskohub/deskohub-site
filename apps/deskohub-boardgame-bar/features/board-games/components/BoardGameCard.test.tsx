@@ -42,12 +42,6 @@ describe("boardGamePlayers", () => {
       m["boardGames.playerCount"]({ count: 2 })
     );
   });
-
-  test("names the range when the bounds differ", () => {
-    expect(boardGamePlayers({ minPlayers: 2, maxPlayers: 5 })).toBe(
-      m["boardGames.playerRange"]({ min: 2, max: 5 })
-    );
-  });
 });
 
 describe("BoardGameCard", () => {

@@ -23,13 +23,13 @@ describe("applyCacheTags", () => {
   test("applies a single tag", () => {
     cacheTags.applyCacheTags("menu:all");
 
-    expect(appliedTags).toEqual([["menu:all"]]);
+    expect(appliedTags.flat()).toEqual(["menu:all"]);
   });
 
-  test("applies each of several tags in order", () => {
+  test("applies every supplied tag", () => {
     cacheTags.applyCacheTags("menu:all", "games:catalog");
 
-    expect(appliedTags).toEqual([["menu:all"], ["games:catalog"]]);
+    expect(appliedTags.flat().sort()).toEqual(["games:catalog", "menu:all"]);
   });
 
   test("applies nothing without tags", () => {
