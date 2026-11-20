@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import type { CheckoutSummaryChangedKeys } from "@/features/checkout/checkout-summary";
 import { getCoworkCheckoutSummary } from "@/features/checkout/checkout-summary-cowork";
 import { getWorkspaceProductByTier } from "@/features/checkout/product-catalog";
 import {
@@ -13,6 +14,7 @@ import type {
 } from "@/features/discounts";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { PromotionCodeUnavailableError } from "@/features/discounts/errors";
+import type { Locale } from "@/features/i18n";
 import {
   type CoworkAdvertisedPriceDetails,
   type CoworkAdvertisedPriceReservation,
@@ -21,7 +23,12 @@ import {
   getCoworkAdvertisedPriceReservation,
   type NormalizedCoworkReservationOrder,
 } from "@/features/reservation/cowork-reservation";
-import type { MoneyUnitMismatch } from "@/shared/money/money";
+import { type MoneyUnitMismatch, moneyEquals } from "@/shared/money/money";
+import {
+  AdvertisedPriceMismatchError,
+  requireAdvertisedPriceStateKind,
+} from "./advertised-price-mismatch";
+import { openSubmittedAdvertisedPriceState } from "./advertised-price-state";
 import {
   getPaymentPriceVerdict,
   type ReservationAdvertisementAffirmation,
@@ -170,12 +177,16 @@ const coworkPricingWithDiscounts = reservationCheckoutPricing<
     getCoworkCheckoutSummary(reservation, quote),
 });
 
+type CoworkEntryPackQuoteInput = {
+  readonly reservation: NormalizedCoworkReservationOrder;
+  readonly entryPack: CoworkEntryPackFunding;
+};
+
 /** Quotes a cowork reservation whose Entry pack funding was validated by booking. */
 export const quoteCoworkEntryPack = Effect.fn("quoteCoworkEntryPack")(
-  function* (input: {
-    readonly reservation: NormalizedCoworkReservationOrder;
-    readonly entryPack: CoworkEntryPackFunding;
-  }): Effect.fn.Return<CoworkCustomerQuote, MoneyUnitMismatch> {
+  function* (
+    input: CoworkEntryPackQuoteInput
+  ): Effect.fn.Return<CoworkCustomerQuote, MoneyUnitMismatch> {
     const { reservation, entryPack } = input;
     const quote = yield* buildCoworkReservationQuote(reservation, {
       entryPack,
@@ -184,24 +195,66 @@ export const quoteCoworkEntryPack = Effect.fn("quoteCoworkEntryPack")(
   }
 );
 
-const repriceCoworkEntryPack = Effect.fn("repriceCoworkEntryPack")(
-  function* (input: {
-    readonly reservation: NormalizedCoworkReservationOrder;
-    readonly entryPack: CoworkEntryPackFunding;
-  }): Effect.fn.Return<CoworkPaymentPriceAffirmation, MoneyUnitMismatch> {
-    const priced = yield* quoteCoworkEntryPack(input);
-    const { reservation, quote } = priced;
-    return {
-      ...priced,
-      commitment: makeDiscountCommitment({
-        product: { kind: reservation.kind, tier: reservation.entryTier },
-        firstServiceDate: reservation.date,
-        applications: [],
-      }),
-      summary: getCoworkCheckoutSummary(reservation, quote),
-    };
+/** Compares only the add-on that the Entry pack leaves payable to the customer. */
+export const quoteCoworkEntryPackForContinue = Effect.fn(
+  "quoteCoworkEntryPackForContinue"
+)(function* (
+  input: CoworkEntryPackQuoteInput & {
+    readonly advertisedPriceToken?: string;
+    readonly locale: Locale;
   }
-);
+) {
+  const priced = yield* quoteCoworkEntryPack(input);
+  const addon = priced.quote.items[1];
+  if (
+    addon === undefined ||
+    input.entryPack.tier === "reserved-desk-workstation" ||
+    input.advertisedPriceToken === undefined
+  ) {
+    return { ...priced, changedKeys: undefined };
+  }
+
+  const advertisement = yield* openSubmittedAdvertisedPriceState(
+    input.advertisedPriceToken
+  ).pipe(
+    Effect.flatMap(requireAdvertisedPriceStateKind("cowork")),
+    Effect.filterOrFail(
+      (state) =>
+        state.locale === input.locale &&
+        coworkAdvertisedPriceReservationEquals(
+          state.reservation,
+          getCoworkAdvertisedPriceReservation(priced.reservation)
+        ),
+      AdvertisedPriceMismatchError.inputMismatch
+    )
+  );
+  const previousAddon = advertisement.quote.items[1];
+  const changedKeys: CheckoutSummaryChangedKeys | undefined =
+    previousAddon?.type === addon.type &&
+    moneyEquals(previousAddon.amount, addon.amount)
+      ? undefined
+      : {
+          sectionKeys: ["order", "total"],
+          itemKeys: [`addon:${addon.type}`, "total:final"],
+        };
+  return { ...priced, changedKeys };
+});
+
+const repriceCoworkEntryPack = Effect.fn("repriceCoworkEntryPack")(function* (
+  input: CoworkEntryPackQuoteInput
+): Effect.fn.Return<CoworkPaymentPriceAffirmation, MoneyUnitMismatch> {
+  const priced = yield* quoteCoworkEntryPack(input);
+  const { reservation, quote } = priced;
+  return {
+    ...priced,
+    commitment: makeDiscountCommitment({
+      product: { kind: reservation.kind, tier: reservation.entryTier },
+      firstServiceDate: reservation.date,
+      applications: [],
+    }),
+    summary: getCoworkCheckoutSummary(reservation, quote),
+  };
+});
 
 const entryPackCodeUnavailable = () =>
   new PromotionCodeUnavailableError({

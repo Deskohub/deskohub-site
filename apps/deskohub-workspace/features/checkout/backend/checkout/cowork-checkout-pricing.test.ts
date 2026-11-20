@@ -28,9 +28,15 @@ import { getCoworkAdvertisedPriceReservation } from "@/features/reservation/cowo
 import { dotyposCustomerIdSchema } from "@/features/reservation/dotypos-customer";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import type { Money } from "@/shared/money/money";
+import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
+import {
+  buildAdvertisedPriceState,
+  sealAdvertisedPriceState,
+} from "./advertised-price-state";
 import {
   coworkCheckoutPricing,
   quoteCoworkEntryPack,
+  quoteCoworkEntryPackForContinue,
 } from "./cowork-checkout-pricing";
 
 const testEmailAddressForAda = testEmailAddress("ada");
@@ -173,6 +179,66 @@ describe("Entry pack checkout pricing", () => {
         getDiscountCommitmentPayload(pay.priced.commitment).applications
       ).toEqual([]);
       expect(affirmDisplayedDiscounts).not.toHaveBeenCalled();
+    }
+  );
+
+  const openSpaceWithCoffee = { ...openSpace, coffee: true };
+  test.each([
+    ["open-space", openSpaceWithCoffee, 4_000, 5_000, "addon:coffee"],
+    ["open-space", openSpaceWithCoffee, 5_000, 5_000, undefined],
+    ["reserved-desk", workstation, 11_000, 12_000, "addon:workstation"],
+    ["reserved-desk-workstation", workstation, 11_000, 0, undefined],
+  ] as const)(
+    "reviews a changed advertised add-on at Continue for %s only when the pack leaves it payable",
+    async (tier, order, oldAddonAmount, payable, changedAddon) => {
+      const prepared = await Effect.gen(function* () {
+        const cashQuote = yield* buildCoworkReservationQuote(order);
+        const [product, addon] = cashQuote.items;
+        const oldAmount = money(oldAddonAmount);
+        const oldTotal = money(product.amount.value + oldAddonAmount);
+        const previousQuote = {
+          items:
+            addon?.type === "workstation"
+              ? ([product, { type: "workstation", amount: oldAmount }] as const)
+              : ([product, { type: "coffee", amount: oldAmount }] as const),
+          payment: {
+            expectedPrice: oldTotal,
+            undiscountedPrice: oldTotal,
+            discounts: [],
+          },
+        };
+        const advertisement = yield* buildAdvertisedPriceState({
+          kind: order.kind,
+          locale: "en-US",
+          reservation: getCoworkAdvertisedPriceReservation(order),
+          requestedDiscountCode: submittedCode,
+          quote: {
+            ...previousQuote,
+            fingerprint: getReservationQuoteFingerprint(order, previousQuote),
+          },
+        });
+        const advertisedPriceToken =
+          yield* sealAdvertisedPriceState(advertisement);
+
+        return yield* quoteCoworkEntryPackForContinue({
+          reservation: order,
+          entryPack: { passId, tier },
+          advertisedPriceToken,
+          locale: "en-US",
+        });
+      }).pipe(Effect.provide(TestSealedStateKeys), Effect.runPromise);
+
+      expect(prepared.changedKeys).toEqual(
+        changedAddon
+          ? {
+              sectionKeys: ["order", "total"],
+              itemKeys: [changedAddon, "total:final"],
+            }
+          : undefined
+      );
+      expect(prepared.quote.payment.expectedPrice).toEqual(money(payable));
+      expect(prepared.quote.payment.discounts).toEqual([]);
+      expect(prepared).not.toHaveProperty("requestedDiscountCode");
     }
   );
 
