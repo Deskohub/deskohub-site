@@ -35,6 +35,7 @@ import {
   type BookingEndpointName,
   fakeBooking,
 } from "../testing/fake-booking-api";
+import { sampleOfferings } from "../testing/sample-booking-catalog";
 import {
   bookingAvailabilityAtom,
   bookingOfferingsAtom,
@@ -157,7 +158,24 @@ const catalogReads: CatalogRead[] = [
 ];
 
 describe("booking catalog queries", () => {
-  test.each(catalogReads)(
+  test("returns the advertised offerings without spending the account read budget", async () => {
+    const { registry, workspace } = makeFakeCustomerData("linked");
+    const booking = fakeBooking(workspace);
+    const advertisedOn = booking.today();
+
+    const result = await settle(registry, bookingOfferingsAtom("en-US"));
+
+    expect(result).toMatchObject({
+      _tag: "Success",
+      success: { offerings: sampleOfferings("en-US", advertisedOn).offerings },
+    });
+    expect(booking.endpoints).toEqual(["listOfferings"]);
+    expect(await remainingReads(registry)).toBe(accountReadAllowance.reads);
+  });
+
+  test.each(
+    catalogReads.filter(({ endpoint }) => endpoint !== "listOfferings")
+  )(
     "reads the $name as a catalog read, without spending the account read budget",
     async ({ endpoint, atom }) => {
       const { registry, workspace } = makeFakeCustomerData("linked");
@@ -243,6 +261,13 @@ describe("booking catalog queries", () => {
       expect(starts.mock.calls[0]?.[0]?.headers).toEqual({
         [customerAvailabilityReplacementHeader]: replacingPayStateToken,
       });
+      expect(booking.calls).toMatchObject([
+        { endpoint: "getAvailability", input: { kind: "meeting-room", date } },
+        {
+          endpoint: "getMeetingRoomStartTimes",
+          input: { date, duration: "hour:4" },
+        },
+      ]);
     } finally {
       availability.mockRestore();
       starts.mockRestore();
@@ -271,7 +296,14 @@ describe("booking catalog queries", () => {
     );
 
     expect(hour).toMatchObject({ success: { date, duration: "hour:1" } });
-    expect(day).toMatchObject({ success: { date, duration: "day:1" } });
+    expect(hour._tag === "Success" && hour.success.startTimes).toHaveLength(10);
+    expect(day).toMatchObject({
+      success: {
+        date,
+        duration: "day:1",
+        startTimes: [{ startDateTime: `${date}T00:00` }],
+      },
+    });
     expect(nextHour).toMatchObject({
       success: { date: nextDate, duration: "hour:1" },
     });

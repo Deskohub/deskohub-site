@@ -219,14 +219,25 @@ describe("DetailsStep fields", () => {
   });
 
   test("shows the company country in a picker button", () => {
-    const scroll = scrollOf(screenOf({ draft: business() }));
+    const draft = business();
+    const scroll = scrollOf(
+      screenOf({
+        draft: {
+          ...draft,
+          company: {
+            ...draft.company,
+            address: { ...draft.company.address, country: "DE" },
+          },
+        },
+      })
+    );
     const label = m.booking_details_country({}, { locale });
     const picker = findAll(hostTree(scroll), "Pressable").find(
       ({ props }) => props["aria-label"] === label
     );
     expect(picker?.props).toMatchObject({
       role: "button",
-      accessibilityValue: { text: expect.any(String) },
+      accessibilityValue: { text: "Germany" },
       onPress: expect.any(Function),
     });
     expect(inputNames(scroll)).not.toContain(label);
