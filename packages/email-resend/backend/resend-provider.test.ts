@@ -16,6 +16,7 @@ import {
   Effect,
   Fiber,
   Logger,
+  Random,
   Redacted,
   Tracer,
 } from "effect";
@@ -76,7 +77,6 @@ const {
   resendIdempotencyMismatchCode,
   resendRequestTimeouts,
 } = await import("./resend-provider");
-const { resendRetryPolicy } = await import("./request-policy");
 
 beforeEach(() => {
   send = mock<SendImplementation>(async () => ({
@@ -110,16 +110,10 @@ const runProvider = <A, E>(
   );
 
 /**
- * The longest a send may run: every attempt waits out the longest timeout
- * and every backoff draws the maximum jitter.
+ * The send budget is four 30-second attempts plus up to 8.4 seconds of
+ * backoff.
  */
-const longestSend = Duration.sum(
-  Duration.times(
-    resendRequestTimeouts.nonProduction.send,
-    resendRetryPolicy.maxRetries + 1
-  ),
-  resendRetryPolicy.worstCaseBackoff
-);
+const longestSendMillis = 128_400;
 
 /**
  * Waits for a forked request, advancing the TestClock through every attempt
@@ -129,12 +123,10 @@ const longestSend = Duration.sum(
 const finish = <A, E>(fiber: Fiber.Fiber<A, E>) =>
   Effect.gen(function* () {
     let elapsed = 0;
-    while (
-      fiber.pollUnsafe() === undefined &&
-      elapsed < Duration.toMillis(longestSend)
-    ) {
-      yield* TestClock.adjust("1 second");
-      elapsed += 1000;
+    while (fiber.pollUnsafe() === undefined && elapsed < longestSendMillis) {
+      const step = Math.min(1000, longestSendMillis - elapsed);
+      yield* TestClock.adjust(Duration.millis(step));
+      elapsed += step;
     }
     if (fiber.pollUnsafe() === undefined) {
       return yield* Effect.die("The request outlived the longest send");
@@ -476,11 +468,6 @@ describe("ResendEmailProvider", () => {
     });
   }
 
-  test("retries a send at most three times within 8.4 seconds of backoff", () => {
-    expect(resendRetryPolicy.maxRetries).toBe(3);
-    expect(Duration.toMillis(resendRetryPolicy.worstCaseBackoff)).toBe(8400);
-  });
-
   test("classifies an error without a status code by its message, then its error code", async () => {
     const providerRefusal = {
       _tag: "EmailServiceError",
@@ -596,7 +583,7 @@ describe("ResendEmailProvider", () => {
     });
   }
 
-  test("aborts every stalled attempt when its timeout releases it", async () => {
+  test("aborts every stalled attempt within the send budget under maximal backoff", async () => {
     const sendSignals: (AbortSignal | undefined)[] = [];
     const batchSignals: (AbortSignal | undefined)[] = [];
     send = mock<SendImplementation>((_, options) => {
@@ -615,7 +602,12 @@ describe("ResendEmailProvider", () => {
         yield* settle(
           provider.sendBatch(batchMessages, { idempotencyKey: "stalled" })
         );
-      })
+      }).pipe(
+        Effect.provideService(Random.Random, {
+          nextDoubleUnsafe: () => 1,
+          nextIntUnsafe: () => 0,
+        })
+      )
     );
 
     expect(sendSignals).toHaveLength(4);

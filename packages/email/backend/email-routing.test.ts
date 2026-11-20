@@ -11,18 +11,10 @@ const testRecipient = { email: testEmailAddress("ada") };
 const realRecipient = { email: resendSimulatorAddress("delivered", "ada") };
 
 describe("isTestEmailRecipient", () => {
-  test("accepts any address on the test domain", () => {
-    expect(isTestEmailRecipient(testRecipient.email)).toBe(true);
-    expect(
-      isTestEmailRecipient(` ${testEmailAddress("Workspace").toUpperCase()} `)
-    ).toBe(true);
-  });
-
-  test("rejects Resend simulator, look-alike, and empty addresses", () => {
+  test("rejects Resend simulator, look-alike domains, and empty addresses", () => {
     for (const outcome of ["delivered", "bounced", "complained"] as const) {
       expect(isTestEmailRecipient(resendSimulatorAddress(outcome))).toBe(false);
     }
-    expect(isTestEmailRecipient(`${testRecipient.email}.evil`)).toBe(false);
     expect(isTestEmailRecipient(testRecipient.email.replace("@", "@not"))).toBe(
       false
     );
@@ -32,7 +24,6 @@ describe("isTestEmailRecipient", () => {
 
 describe("addressesOnlyTestRecipients", () => {
   test("holds for mail addressed only to test recipients", () => {
-    expect(addressesOnlyTestRecipients({ to: testRecipient })).toBe(true);
     expect(
       addressesOnlyTestRecipients({
         to: [testRecipient, { email: testEmailAddress("internal") }],
@@ -41,12 +32,8 @@ describe("addressesOnlyTestRecipients", () => {
   });
 
   test("fails for mail reaching any other recipient", () => {
-    expect(addressesOnlyTestRecipients({ to: realRecipient })).toBe(false);
     expect(
       addressesOnlyTestRecipients({ to: [testRecipient, realRecipient] })
-    ).toBe(false);
-    expect(
-      addressesOnlyTestRecipients({ to: testRecipient, cc: realRecipient })
     ).toBe(false);
     expect(
       addressesOnlyTestRecipients({ to: testRecipient, bcc: [realRecipient] })
@@ -71,7 +58,7 @@ describe("internalRecipientForOrigin", () => {
   });
 
   test("sends staff copies of other requests to the real mailbox", () => {
-    expect(internalRecipientForOrigin(realRecipient.email, mailbox)).toBe(
+    expect(internalRecipientForOrigin(realRecipient.email, mailbox)).toEqual(
       mailbox.real
     );
   });

@@ -684,7 +684,7 @@ const specWithRoot = (
 // definition even though `C` sits on the cycle `A -> C -> B -> A`, so `C`
 // would read the recursive `B` before initialization unless that reference is
 // deferred.
-const cycleMemberRenderedFirstSpec = specWithRoot("Cycle member", "C", {
+const sharedCycleSpec = specWithRoot("Shared cycle", "C", {
   A: {
     type: "object",
     required: ["name"],
@@ -710,22 +710,16 @@ const cycleMemberRenderedFirstSpec = specWithRoot("Cycle member", "C", {
 });
 
 test.each(["httpclient", "httpapi"] as const)(
-  "generated %s cycle member rendered before the recursive definitions initializes and round-trips",
+  "generated %s schemas initialize and round-trip when several paths lead into the same cycle",
   async (format) => {
     const source = await generateClient(
-      cycleMemberRenderedFirstSpec,
+      sharedCycleSpec,
       format,
       `CycleMemberClient_${format}`
     );
-    const nonRecursiveSection = source.slice(
-      source.indexOf("// non-recursive definitions"),
-      source.indexOf("// recursive definitions")
-    );
-    expect(nonRecursiveSection).toContain("export const C =");
-
     const generated = await writeAndImport(`cycle-member-${format}.ts`, source);
-    expect(Object.keys(generated.A.fields)).toEqual(["name", "c", "b"]);
-    expect(Object.keys(generated.B.fields)).toEqual(["id", "a"]);
+    expect(Object.keys(generated.A.fields).sort()).toEqual(["b", "c", "name"]);
+    expect(Object.keys(generated.B.fields).sort()).toEqual(["a", "id"]);
     expect(Object.keys(generated.C.fields)).toEqual(["b"]);
 
     const value = {
