@@ -210,6 +210,20 @@ export class PayableCheckout extends Context.Service<
         if (!dotyposReservationId) {
           return yield* refuse("missing_dotypos_reservation");
         }
+        if (
+          state.reservation.kind === "cowork" &&
+          "entryPack" in state.quote &&
+          state.quote.entryPack
+        ) {
+          const claim = yield* reservations.findEntryPackClaim(reservation.id);
+          if (
+            claim?.status !== "reserved" ||
+            claim.passId !== state.quote.entryPack.passId ||
+            claim.date !== state.reservation.date
+          ) {
+            return yield* refuse("not_held");
+          }
+        }
 
         const status =
           yield* dotypos.getReservationStatus(dotyposReservationId);

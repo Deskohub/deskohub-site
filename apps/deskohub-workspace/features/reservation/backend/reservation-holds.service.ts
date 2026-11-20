@@ -44,6 +44,10 @@ import {
 } from "@/features/checkout/schemas/checkout-details";
 import type { Locale } from "@/features/i18n";
 import type { ValidOfficePeople } from "@/features/office/office-people";
+import {
+  type EntryPackRedemption,
+  EntryPackUnavailableError,
+} from "@/features/passes/backend/entry-pack-redemption";
 import type { PreparePayStateInput } from "@/features/reservation/actions/prepare-pay-state.schema";
 import {
   AgentBookingPaymentInProgressError,
@@ -82,6 +86,7 @@ type ReservationHoldRequest = {
   };
   /** The normalized reservation the advertisement priced; attempt keys bind it. */
   readonly reservation: PreparePayStateInput["reservation"];
+  readonly entryPack?: EntryPackRedemption;
   /** Who books, for whom, and how the stored draft is attributed. */
   readonly booking: {
     readonly author: CustomerAccountId;
@@ -263,6 +268,7 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
     checkoutSessionId: checkout.checkoutSessionId,
     checkoutAttemptId: checkout.checkoutAttemptId,
     reservation,
+    ...(request.entryPack && { entryPack: request.entryPack }),
     ...(request.officePeople && { people: request.officePeople.valid }),
     draft: {
       ...(request.officePeople && {
@@ -399,7 +405,10 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
       } satisfies ReservationHold;
     }
 
-    const claimed = yield* reservations.claimHoldCreation(reservationDraft.id);
+    const claimed = yield* reservations.claimHoldCreation(
+      reservationDraft.id,
+      request.entryPack
+    );
     if (!claimed) {
       return yield* resumeClaimConflict(reservationDraft, checkoutSessionId);
     }
@@ -753,6 +762,7 @@ type ReservationDraftRequest = {
   readonly checkoutSessionId: CheckoutSessionId;
   readonly checkoutAttemptId: CheckoutAttemptId;
   readonly reservation: PreparePayStateInput["reservation"];
+  readonly entryPack?: EntryPackRedemption;
   readonly people?: ValidOfficePeople;
   readonly draft: Omit<
     CreateWorkspaceReservationInput,
@@ -764,6 +774,29 @@ type ReservationDraftServices = {
   readonly reservations: IWorkspaceReservationRepository;
   readonly availability: typeof WorkspaceAvailabilityService.Service;
 };
+
+const ensureBookingAvailable = Effect.fnUntraced(function* (
+  availability: ReservationDraftServices["availability"],
+  request: ReservationDraftRequest
+) {
+  const { entryPack, reservation } = request;
+  if (
+    entryPack?.tier === "reserved-desk" &&
+    reservation.kind === "cowork" &&
+    reservation.monitorOption
+  ) {
+    const bareDeskAvailable = yield* availability
+      .ensureAvailable({ ...reservation, monitorOption: undefined })
+      .pipe(
+        Effect.as(true),
+        Effect.catchTag("WorkspaceTableUnavailableError", () =>
+          Effect.succeed(false)
+        )
+      );
+    if (bareDeskAvailable) return yield* new EntryPackUnavailableError({});
+  }
+  yield* availability.ensureAvailable(reservation);
+});
 
 type CheckoutSessionKeys = Effect.Success<
   ReturnType<typeof deriveCheckoutSessionKeys>
@@ -924,7 +957,7 @@ const supersedeSessionReservation = Effect.fnUntraced(function* (input: {
   }
 
   const cancelledAt = Temporal.Now.instant();
-  return yield* availability.ensureAvailable(request.reservation).pipe(
+  return yield* ensureBookingAvailable(availability, request).pipe(
     Effect.andThen(
       reservations.completeSupersessionAndCreateDraft({
         cancelledReservationId: claimed.id,
@@ -1013,7 +1046,7 @@ const createSessionDraft = Effect.fnUntraced(function* (input: {
 }) {
   const { reservations, availability } = input.services;
   const { checkoutSessionId, checkoutAttemptKeys, request } = input;
-  yield* availability.ensureAvailable(request.reservation);
+  yield* ensureBookingAvailable(availability, request);
   const reservationDraft = yield* reservations.createDraft({
     ...request.draft,
     checkoutSessionKey: input.checkoutSessionKey,
@@ -1055,6 +1088,7 @@ const prepareDraftInSession = Effect.fnUntraced(function* (
     checkoutAttemptId: request.checkoutAttemptId,
     reservation: request.reservation,
     people: request.people,
+    ...(request.entryPack && { entryPackId: request.entryPack.passId }),
   });
 
   const existingAttempt = yield* findSettledAttemptReservation(

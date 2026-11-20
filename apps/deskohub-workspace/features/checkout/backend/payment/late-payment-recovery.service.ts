@@ -348,6 +348,16 @@ export class LatePaymentRecoveryService extends Context.Service<
                   "late_payment_discount_unavailable"
                 );
               })
+            ),
+            Effect.catchTag(
+              "EntryPackUnavailableError",
+              Effect.fn(function* () {
+                yield* dotypos.cancelReservation(confirmedReplacementId);
+                yield* refundRecovery(
+                  input,
+                  "late_payment_entry_pack_unavailable"
+                );
+              })
             )
           );
         const settled = yield* recoveries.findByPaymentAttemptId(
@@ -467,6 +477,8 @@ export class LatePaymentRecoveryService extends Context.Service<
             Effect.catchTags({
               DiscountClaimError: () =>
                 Effect.succeed("discount_unavailable" as const),
+              EntryPackUnavailableError: () =>
+                Effect.succeed("entry_pack_unavailable" as const),
               // The deadline reached the margin between the first check and
               // the locked settlement: recreate in this same run instead of
               // waiting for the claim timeout.
@@ -478,15 +490,19 @@ export class LatePaymentRecoveryService extends Context.Service<
           yield* fulfillment.run(reservation.id);
           return "recovered" as const;
         }
-        if (reuse === "discount_unavailable") {
-          // The accepted discounted price can no longer be honoured: free the
-          // slot before the refund marks the reservation paid.
+        if (
+          reuse === "discount_unavailable" ||
+          reuse === "entry_pack_unavailable"
+        ) {
+          // Release the seat before refund settlement marks payment paid.
           if ((yield* input.release()) === "review_required") {
             return "review_required" as const;
           }
           return yield* refundRecovery(
             { paymentAttemptId: claimed.paymentAttemptId, reservation },
-            "late_payment_discount_unavailable"
+            reuse === "entry_pack_unavailable"
+              ? "late_payment_entry_pack_unavailable"
+              : "late_payment_discount_unavailable"
           );
         }
         return {

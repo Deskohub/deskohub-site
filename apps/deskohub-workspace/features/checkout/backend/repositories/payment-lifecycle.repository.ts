@@ -42,6 +42,7 @@ import {
 import type { DiscountClaimInstruction } from "@/features/discounts/provider";
 import type { Locale } from "@/features/i18n";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
+import { consumeEntryPackClaim } from "@/features/passes/backend/entry-pack-redemption";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import {
   reservationIdForOrder,
@@ -1016,6 +1017,18 @@ export class PaymentLifecycleRepository extends Context.Service<
                 "Internal payment could not atomically complete the held reservation."
               );
             }
+            yield* consumeEntryPackClaim(workspaceReservationId).pipe(
+              Effect.catchTag("EntryPackUnavailableError", () =>
+                lifecycleStateError(
+                  "completeInternalPayment",
+                  {
+                    type: "workspaceReservationId",
+                    id: workspaceReservationId,
+                  },
+                  "The held Entry pack claim could not be consumed."
+                )
+              )
+            );
 
             const applicationRows = yield* persistDiscountApplications({
               commitment,
@@ -1268,6 +1281,18 @@ export class PaymentLifecycleRepository extends Context.Service<
                 .returning({ paidAt: workspaceReservations.paidAt });
 
               if (reservation) {
+                yield* consumeEntryPackClaim(workspaceReservationId).pipe(
+                  Effect.catchTag("EntryPackUnavailableError", () =>
+                    lifecycleStateError(
+                      "markPaid",
+                      {
+                        type: "workspaceReservationId",
+                        id: workspaceReservationId,
+                      },
+                      "The held Entry pack claim could not be consumed."
+                    )
+                  )
+                );
                 yield* PromotionClaims.redeem({
                   paymentAttemptId: input.id,
                   redeemedAt: input.paidAt,

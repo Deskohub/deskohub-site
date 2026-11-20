@@ -140,11 +140,19 @@ const keepLiveHold = Effect.fnUntraced(function* (input: {
   );
   if (status !== "NEW") return undefined;
   const reservations = yield* WorkspaceReservationRepository;
-  const kept = yield* reservations.releaseRetriedAttempt({
-    id: order.id,
-    retriedAttemptId: input.retriedAttemptId,
-    heldUntilAfter,
-  });
+  const kept = yield* reservations
+    .releaseRetriedAttempt({
+      id: order.id,
+      retriedAttemptId: input.retriedAttemptId,
+      heldUntilAfter,
+    })
+    .pipe(
+      Effect.catchTag("EntryPackUnavailableError", () =>
+        Effect.succeed("entry_pack_unavailable" as const)
+      )
+    );
+  if (kept === "entry_pack_unavailable")
+    return { kind: "spot_unavailable" } as const;
   return kept
     ? ({ kind: "kept", reservation: kept } satisfies PaymentRetryHold)
     : refused("changed");
@@ -208,20 +216,28 @@ const bookAgain = Effect.fnUntraced(function* (input: {
 
   const reservations = yield* WorkspaceReservationRepository;
   const reservationHoldExpiresAt = getReservationHoldExpiresAt(input.now);
-  const attached = yield* reservations.attachRetryHold({
-    id: order.id,
-    retriedAttemptId: request.retriedAttemptId,
-    dotyposReservationId: settled.id,
-    reservationHoldExpiresAt,
-  });
-  if (!attached) {
+  const attached = yield* reservations
+    .attachRetryHold({
+      id: order.id,
+      retriedAttemptId: request.retriedAttemptId,
+      dotyposReservationId: settled.id,
+      reservationHoldExpiresAt,
+    })
+    .pipe(
+      Effect.catchTag("EntryPackUnavailableError", () =>
+        Effect.succeed("entry_pack_unavailable" as const)
+      )
+    );
+  if (!attached || attached === "entry_pack_unavailable") {
     // Only a reservation this run created is cancelled again; one it resumed
     // belongs to the run that made it.
     if (!settled.resumed) {
       const dotypos = yield* DotyposService;
       yield* dotypos.cancelReservation(settled.id);
     }
-    return refused("changed");
+    return attached === "entry_pack_unavailable"
+      ? ({ kind: "spot_unavailable" } as const)
+      : refused("changed");
   }
   // Hold cleanup's periodic recovery also finds an expired hold whose job
   // could not be scheduled.

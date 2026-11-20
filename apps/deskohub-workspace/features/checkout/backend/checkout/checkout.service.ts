@@ -1265,6 +1265,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 const eligibleFio =
                   input.method &&
                   input.fio &&
+                  !(
+                    "entryPack" in prepared.quote && prepared.quote.entryPack
+                  ) &&
                   !lockedReservation.agentClientId &&
                   !checkout.retriedAttempt &&
                   expectedPrice.currency === "CZK" &&

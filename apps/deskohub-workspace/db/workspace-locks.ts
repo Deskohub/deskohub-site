@@ -82,6 +82,12 @@ export const WorkspaceLocks = {
     }),
   checkoutSession: (lockKey: bigint): TransactionLock =>
     take({ name: "checkoutSession", rank: 40, bigint: lockKey }),
+  entryPackHolder: (accountId: CustomerAccountId): TransactionLock =>
+    take({
+      name: "entryPackHolder",
+      rank: 41,
+      pair: ["entry-pack-holder", accountId],
+    }),
   manualInvoiceCreation: (invoiceId: string): TransactionLock =>
     take({
       name: "manualInvoiceCreation",
