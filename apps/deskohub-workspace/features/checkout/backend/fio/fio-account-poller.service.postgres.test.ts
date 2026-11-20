@@ -61,6 +61,7 @@ const createHarness = () => {
   let readPeriod: FioMovements["Service"]["readPeriod"] = () =>
     Effect.succeed([]);
   let stopAtMovementId: string | undefined;
+  let beforeReplay: (() => Promise<void>) | undefined;
   let configured = true;
   const accounts = Layer.mock(FioAccounts, {
     getReceivingAccount: (key) =>
@@ -94,6 +95,11 @@ const createHarness = () => {
     FioPaymentSettlementService,
     Effect.map(FioPaymentSettlementService, (service) => ({
       ...service,
+      retryPendingDispatch: (key) =>
+        Effect.gen(function* () {
+          if (beforeReplay) yield* Effect.promise(beforeReplay);
+          yield* service.retryPendingDispatch(key);
+        }),
       recordMovement: (movement) =>
         movement.movementId === stopAtMovementId
           ? Effect.fail(
@@ -193,6 +199,9 @@ const createHarness = () => {
     failIngestionAt: (id: string | undefined) => {
       stopAtMovementId = id;
     },
+    beforeReplay: (hook: () => Promise<void>) => {
+      beforeReplay = hook;
+    },
     unconfigure: () => {
       configured = false;
     },
@@ -239,6 +248,31 @@ const credit = (
 });
 
 describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
+  test("retains new demand arriving while an idle delivery is preparing to deactivate", async () => {
+    const h = createHarness();
+    const old = await h.start();
+    await h.expire(old.orderId);
+    const job = h.take();
+    const rechecking = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    h.beforeReplay(() => {
+      rechecking.resolve();
+      return release.promise;
+    });
+    const delivery = h.consume(job);
+    await rechecking.promise;
+    try {
+      await h.start();
+      expect(h.queue.published()).toHaveLength(1);
+    } finally {
+      release.resolve();
+      await delivery;
+    }
+    expect(h.reads).toHaveLength(1);
+    expect(h.queue.pending()).toHaveLength(1);
+    expect(h.queue.pending()[0]?.options.delaySeconds).toBe(35);
+  });
+
   test("redelivery replays the last QR winner's failed dispatch with no payable demand or bank read", async () => {
     const h = createHarness();
     const order = await h.start();

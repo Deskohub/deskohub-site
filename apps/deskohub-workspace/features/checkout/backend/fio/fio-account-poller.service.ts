@@ -203,73 +203,76 @@ export class FioAccountPoller extends Context.Service<
       });
 
       return {
-        consume: Effect.fn("FioAccountPoller.consume")(function* (job) {
-          const candidate = yield* claim(job);
-          if (candidate === "replayDispatch") {
-            // A previous delivery can settle the last attempt before its
-            // fulfillment/recovery publish fails. Replay that durable work
-            // without reading Fio and keep this delivery if replay fails.
-            yield* settlements.retryPendingDispatch(job.accountKey);
-          }
-          const read =
-            candidate === "replayDispatch"
-              ? yield* claim(job, true)
-              : candidate;
-          if (!read || read === "replayDispatch") return;
-
-          const { account, readToken } = read.receivingAccount;
-          const response = yield* provider
-            .readPeriod({ account, readToken, from: read.from, to: read.to })
-            .pipe(Effect.result);
-          if (Result.isFailure(response)) {
-            const error = response.failure;
-            if (
-              error._tag === "FioRejected" &&
-              error.reason === "period-too-large"
-            ) {
-              yield* finish(job, read, "oversized");
-              return;
+        consume: Effect.fn("FioAccountPoller.consume")(
+          function* (job) {
+            const candidate = yield* claim(job);
+            if (candidate === "replayDispatch") {
+              // A previous delivery can settle the last attempt before its
+              // fulfillment/recovery publish fails. Replay that durable work
+              // without reading Fio and keep this delivery if replay fails.
+              yield* settlements.retryPendingDispatch(job.accountKey);
             }
-            return yield* new FioPollUnavailable({
-              reason: providerFailureReasons[error._tag],
-            });
-          }
-          const movements = response.success;
-          const observedAt = yield* currentInstant;
-          if (
-            movements.some(
-              ({ bookingDate }) =>
-                bookingDate < read.from || bookingDate > read.to
-            )
-          ) {
-            return yield* new FioPollUnavailable({ reason: "invalid_period" });
-          }
+            const read =
+              candidate === "replayDispatch"
+                ? yield* claim(job, true)
+                : candidate;
+            if (!read || read === "replayDispatch") return;
 
-          // Settlement owns deduplication by account and movement ID. Commit
-          // coverage only after all movement effects have succeeded.
-          yield* Effect.forEach(
-            movements,
-            (movement) =>
-              settlements.recordMovement({
-                accountKey: job.accountKey,
-                movementId: movement.movementId,
-                bookingDate: Temporal.PlainDate.from(movement.bookingDate),
-                observedAt,
-                amount: movement.amount,
-                ...(movement.reference._tag === "VariableSymbol"
-                  ? { variableSymbol: movement.reference.value }
-                  : {
-                      variableSymbol: null,
-                      referenceStatus:
-                        movement.reference._tag === "Absent"
-                          ? ("absent" as const)
-                          : ("invalid" as const),
-                    }),
-              }),
-            { discard: true }
-          );
-          yield* finish(job, read, "ingested");
-        }).pipe(
+            const { account, readToken } = read.receivingAccount;
+            const response = yield* provider
+              .readPeriod({ account, readToken, from: read.from, to: read.to })
+              .pipe(Effect.result);
+            if (Result.isFailure(response)) {
+              const error = response.failure;
+              if (
+                error._tag === "FioRejected" &&
+                error.reason === "period-too-large"
+              ) {
+                yield* finish(job, read, "oversized");
+                return;
+              }
+              return yield* new FioPollUnavailable({
+                reason: providerFailureReasons[error._tag],
+              });
+            }
+            const movements = response.success;
+            const observedAt = yield* currentInstant;
+            if (
+              movements.some(
+                ({ bookingDate }) =>
+                  bookingDate < read.from || bookingDate > read.to
+              )
+            ) {
+              return yield* new FioPollUnavailable({
+                reason: "invalid_period",
+              });
+            }
+
+            // Settlement owns deduplication by account and movement ID. Commit
+            // coverage only after all movement effects have succeeded.
+            yield* Effect.forEach(
+              movements,
+              (movement) =>
+                settlements.recordMovement({
+                  accountKey: job.accountKey,
+                  movementId: movement.movementId,
+                  bookingDate: Temporal.PlainDate.from(movement.bookingDate),
+                  observedAt,
+                  amount: movement.amount,
+                  ...(movement.reference._tag === "VariableSymbol"
+                    ? { variableSymbol: movement.reference.value }
+                    : {
+                        variableSymbol: null,
+                        referenceStatus:
+                          movement.reference._tag === "Absent"
+                            ? ("absent" as const)
+                            : ("invalid" as const),
+                      }),
+                }),
+              { discard: true }
+            );
+            yield* finish(job, read, "ingested");
+          },
           Effect.tapError((error) =>
             error._tag === "FioPollUnavailable"
               ? Effect.logWarning(pollFailureMessages[error.reason])
