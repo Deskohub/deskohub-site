@@ -9,9 +9,19 @@ import {
 import { defineQueueTopic } from "@/shared/backend/queue/queue-topic";
 import { FioAccountPollRepository } from "./fio-account-poll.repository";
 
+export const fioPollMaxWindowDays = 31;
+
 const pollJobSchema = Schema.Struct({
   accountKey: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
   deliveryId: Schema.String.check(Schema.isUUID(4)),
+  windowDays: Schema.optionalKey(
+    Schema.Int.check(
+      Schema.isBetween({ minimum: 1, maximum: fioPollMaxWindowDays })
+    )
+  ),
+  advanceAfter: Schema.optionalKey(
+    Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/))
+  ),
 });
 
 export type FioPollJob = typeof pollJobSchema.Type;

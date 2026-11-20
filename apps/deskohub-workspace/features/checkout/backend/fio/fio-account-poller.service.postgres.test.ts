@@ -24,10 +24,10 @@ import { FioAccountPollRepository } from "./fio-account-poll.repository";
 import { FioAccountPoller } from "./fio-account-poller.service";
 import { FioAccounts } from "./fio-accounts.service";
 import {
-  FioHistoryAccessRequired,
   type FioMovement,
   FioMovements,
   type FioPeriod,
+  type FioReadFailure,
 } from "./fio-movements.service";
 import { type FioPollJob, FioPollWake } from "./fio-poll-wake.service";
 
@@ -266,7 +266,7 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     await h.start();
     const job = h.take();
     h.setRead(() =>
-      Effect.fail(new FioHistoryAccessRequired({ httpStatus: 422 }))
+      Effect.fail({ _tag: "FioHistoryAccessRequired" } as FioReadFailure)
     );
     await expect(h.consume(job)).rejects.toMatchObject({
       reason: "inaccessible_history",
@@ -364,6 +364,44 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     });
     expect((await h.state())?.covered_through).toBeNull();
     expect(h.reads).toEqual([]);
+    expect(h.queue.pending()).toEqual([]);
+  });
+
+  test("shrinks oversized windows without advancing, then covers contiguous single Prague days", async () => {
+    const h = createHarness();
+    await h.start();
+    await h.oldCheckpoint();
+
+    const tooLarge = {
+      _tag: "FioRejected",
+      reason: "period-too-large",
+    } as FioReadFailure;
+    h.setRead(({ from, to }) =>
+      from === to ? Effect.succeed([]) : Effect.fail(tooLarge)
+    );
+    for (const expectedDays of [15, 7, 3, 1]) {
+      await h.due();
+      await h.consume(h.take());
+      expect((await h.state())?.covered_through).toBe(oldDate);
+      expect(h.queue.pending()[0]?.message).toMatchObject({
+        windowDays: expectedDays,
+      });
+    }
+
+    await h.due();
+    await h.consume(h.take());
+    expect(h.reads.at(-1)).toEqual({ from: oldDate, to: oldDate });
+    await h.due();
+    await h.consume(h.take());
+    expect(h.reads.at(-1)).toEqual({ from: "2025-01-02", to: "2025-01-02" });
+    expect((await h.state())?.covered_through).toBe("2025-01-02");
+
+    await h.due();
+    h.setRead(() => Effect.fail(tooLarge));
+    await h.consume(h.take());
+    expect(h.reads.at(-1)).toEqual({ from: "2025-01-03", to: "2025-01-03" });
+    expect((await h.state())?.covered_through).toBe("2025-01-02");
+    expect((await h.state())?.delivery_id).toBeNull();
     expect(h.queue.pending()).toEqual([]);
   });
 });

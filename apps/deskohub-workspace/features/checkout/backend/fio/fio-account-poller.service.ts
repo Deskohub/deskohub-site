@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Context, Data, Duration, Effect, Layer } from "effect";
+import { Context, Data, Duration, Effect, Layer, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
 import { FioPaymentSettlementService } from "@/features/checkout/backend/payment/fio-payment-settlement.service";
@@ -16,6 +16,7 @@ import { FioMovements } from "./fio-movements.service";
 import {
   type FioPollJob,
   fioPollDeliveryExpiry,
+  fioPollMaxWindowDays,
   publishFioPollJob,
 } from "./fio-poll-wake.service";
 
@@ -55,6 +56,7 @@ interface PollRead {
   readonly receivingAccount: FioReceivingAccount;
   readonly from: string;
   readonly to: string;
+  readonly today: string;
 }
 
 export class FioAccountPoller extends Context.Service<
@@ -105,17 +107,26 @@ export class FioAccountPoller extends Context.Service<
               });
             }
 
-            const to = now
+            const today = now
               .toZonedDateTimeISO("Europe/Prague")
               .toPlainDate()
               .toString();
             // An inclusive start on the last successful date replays the boundary
             // day. On the first read, retain the initial demand date across retries.
-            const from = poll.coveredThrough ?? poll.firstDemandDate;
-            if (from > to)
+            const previous = poll.coveredThrough ?? poll.firstDemandDate;
+            const from =
+              poll.coveredThrough && job.advanceAfter === poll.coveredThrough
+                ? addDays(previous, 1)
+                : previous;
+            if (from > today)
               return yield* new FioPollUnavailable({
                 reason: "invalid_period",
               });
+            const windowEnd = addDays(
+              from,
+              (job.windowDays ?? fioPollMaxWindowDays) - 1
+            );
+            const to = windowEnd < today ? windowEnd : today;
 
             const readId = randomUUID();
             yield* polls.update(accountKey, {
@@ -126,14 +137,21 @@ export class FioAccountPoller extends Context.Service<
               ),
               deliveryExpiresAt: fioPollDeliveryExpiry(now),
             });
-            return { readId, receivingAccount, from, to } satisfies PollRead;
+            return {
+              readId,
+              receivingAccount,
+              from,
+              to,
+              today,
+            } satisfies PollRead;
           })
         );
       });
 
       const finish = Effect.fn("FioAccountPoller.finish")(function* (
         job: FioPollJob,
-        read: PollRead
+        read: PollRead,
+        outcome: "ingested" | "oversized"
       ) {
         yield* transaction(
           Effect.gen(function* () {
@@ -145,15 +163,24 @@ export class FioAccountPoller extends Context.Service<
             )
               return;
 
-            const payable = yield* attempts.hasPayableAttempts(accountKey);
             const now = yield* polls.currentTime(accountKey);
+            const nextWindow = continuation(job, read, outcome);
             const coverage = {
-              coveredThrough: read.to,
+              coveredThrough:
+                outcome === "ingested" ? read.to : poll.coveredThrough,
               readNotBefore: new Date(
                 now.add({ seconds: pollSpacingSeconds }).epochMilliseconds
               ),
             };
-            if (!payable) {
+            if (!nextWindow) {
+              yield* Effect.logError(
+                "Fio polling stopped because a one-day statement exceeds the read limit. Resolve the oversized statement before polling can cover this date."
+              );
+            }
+            if (
+              !nextWindow ||
+              !(yield* attempts.hasPayableAttempts(accountKey))
+            ) {
               yield* polls.update(accountKey, { ...coverage, ...idleDelivery });
               return;
             }
@@ -166,7 +193,7 @@ export class FioAccountPoller extends Context.Service<
               readId: null,
             });
             yield* publishFioPollJob(
-              { accountKey, deliveryId },
+              { accountKey, deliveryId, ...nextWindow },
               Duration.seconds(pollSpacingSeconds)
             ).pipe(Effect.provideService(QueuePublisher, publisher));
           })
@@ -179,16 +206,23 @@ export class FioAccountPoller extends Context.Service<
           if (!read) return;
 
           const { account, readToken } = read.receivingAccount;
-          const movements = yield* provider
+          const response = yield* provider
             .readPeriod({ account, readToken, from: read.from, to: read.to })
-            .pipe(
-              Effect.mapError(
-                (error) =>
-                  new FioPollUnavailable({
-                    reason: providerFailureReasons[error._tag],
-                  })
-              )
-            );
+            .pipe(Effect.result);
+          if (Result.isFailure(response)) {
+            const error = response.failure;
+            if (
+              error._tag === "FioRejected" &&
+              error.reason === "period-too-large"
+            ) {
+              yield* finish(job, read, "oversized");
+              return;
+            }
+            return yield* new FioPollUnavailable({
+              reason: providerFailureReasons[error._tag],
+            });
+          }
+          const movements = response.success;
           const observedAt = yield* currentInstant;
           if (
             movements.some(
@@ -222,7 +256,7 @@ export class FioAccountPoller extends Context.Service<
               }),
             { discard: true }
           );
-          yield* finish(job, read);
+          yield* finish(job, read, "ingested");
         }).pipe(
           Effect.tapError((error) =>
             error._tag === "FioPollUnavailable"
@@ -239,6 +273,25 @@ const idleDelivery = {
   deliveryId: null,
   deliveryExpiresAt: null,
   readId: null,
+};
+
+const addDays = (date: string, days: number) =>
+  Temporal.PlainDate.from(date).add({ days }).toString();
+
+const continuation = (
+  job: FioPollJob,
+  { from, to, today }: PollRead,
+  outcome: "ingested" | "oversized"
+): Pick<FioPollJob, "windowDays" | "advanceAfter"> | undefined => {
+  if (outcome === "oversized") {
+    const days = Temporal.PlainDate.from(from).until(to).days + 1;
+    return days > 1 ? { windowDays: Math.floor(days / 2) } : undefined;
+  }
+  if (to === today) return {};
+  // With a one-day limit, first replay the boundary day. Once it has been
+  // fully ingested, the successor reads the contiguous next day to make progress.
+  if (job.windowDays === 1) return { windowDays: 1, advanceAfter: to };
+  return job.windowDays ? { windowDays: job.windowDays } : {};
 };
 
 const providerFailureReasons = {
