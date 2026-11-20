@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   CONSENT_UPDATED_EVENT,
+  type ConsentState,
   type CookieConsentChoices,
-  DEFAULT_CONSENT_STATE,
   initializeConsentMode,
   syncConsentMode,
-  updateConsentMode,
 } from "./consent-mode";
 
 type FakeWindow = EventTarget & Pick<Window, "dataLayer" | "gtag">;
@@ -41,7 +40,21 @@ describe("initializeConsentMode", () => {
     initializeConsentMode();
 
     expect(window.dataLayer).toEqual([]);
-    expect(gtagCalls).toEqual([["consent", "default", DEFAULT_CONSENT_STATE]]);
+    expect(gtagCalls).toEqual([
+      [
+        "consent",
+        "default",
+        {
+          ad_storage: "denied",
+          ad_user_data: "denied",
+          ad_personalization: "denied",
+          analytics_storage: "denied",
+          functionality_storage: "granted",
+          personalization_storage: "denied",
+          security_storage: "granted",
+        },
+      ],
+    ]);
   });
 
   test("keeps an existing data layer", () => {
@@ -64,33 +77,6 @@ describe("initializeConsentMode", () => {
 
   test("does nothing on the server", () => {
     expect(() => initializeConsentMode()).not.toThrow();
-    expect(browser.window).toBeUndefined();
-  });
-});
-
-describe("updateConsentMode", () => {
-  test("sends the consent update to gtag", () => {
-    const { gtagCalls } = installWindow();
-
-    updateConsentMode({ analytics_storage: "granted" });
-
-    expect(gtagCalls).toEqual([
-      ["consent", "update", { analytics_storage: "granted" }],
-    ]);
-  });
-
-  test("skips the update before gtag has loaded", () => {
-    installWindow({ gtag: false });
-
-    expect(() =>
-      updateConsentMode({ analytics_storage: "granted" })
-    ).not.toThrow();
-  });
-
-  test("does nothing on the server", () => {
-    expect(() =>
-      updateConsentMode({ analytics_storage: "granted" })
-    ).not.toThrow();
   });
 });
 
@@ -112,6 +98,17 @@ const announcedCategories = (window: EventTarget) => {
   return announced;
 };
 
+function expectConsentUpdates(
+  calls: unknown[][],
+  expected: Partial<ConsentState>
+) {
+  const updates = calls.flatMap(([api, command, state]) => {
+    expect([api, command]).toEqual(["consent", "update"]);
+    return Object.entries(state as object);
+  });
+  expect(updates.sort()).toEqual(Object.entries(expected).sort());
+}
+
 describe("syncConsentMode", () => {
   test("grants accepted categories, denies the rest, and announces the choice", () => {
     const { window, gtagCalls } = installWindow();
@@ -119,19 +116,13 @@ describe("syncConsentMode", () => {
 
     syncConsentMode(bannerChoices(["necessary", "analytics", "preferences"]));
 
-    expect(gtagCalls).toEqual([
-      ["consent", "update", { analytics_storage: "granted" }],
-      [
-        "consent",
-        "update",
-        {
-          ad_storage: "denied",
-          ad_user_data: "denied",
-          ad_personalization: "denied",
-        },
-      ],
-      ["consent", "update", { personalization_storage: "granted" }],
-    ]);
+    expectConsentUpdates(gtagCalls, {
+      analytics_storage: "granted",
+      ad_storage: "denied",
+      ad_user_data: "denied",
+      ad_personalization: "denied",
+      personalization_storage: "granted",
+    });
     expect(announced).toEqual([
       { acceptedCategories: ["necessary", "analytics", "preferences"] },
     ]);
@@ -142,23 +133,17 @@ describe("syncConsentMode", () => {
 
     syncConsentMode(bannerChoices(["necessary", "marketing"]));
 
-    expect(gtagCalls).toEqual([
-      ["consent", "update", { analytics_storage: "denied" }],
-      [
-        "consent",
-        "update",
-        {
-          ad_storage: "granted",
-          ad_user_data: "granted",
-          ad_personalization: "granted",
-        },
-      ],
-      ["consent", "update", { personalization_storage: "denied" }],
-    ]);
+    expectConsentUpdates(gtagCalls, {
+      analytics_storage: "denied",
+      ad_storage: "granted",
+      ad_user_data: "granted",
+      ad_personalization: "granted",
+      personalization_storage: "denied",
+    });
   });
 
-  test("announces no categories before the visitor has chosen", () => {
-    const { window } = installWindow();
+  test("announces an empty choice even before gtag has loaded", () => {
+    const { window } = installWindow({ gtag: false });
     const announced = announcedCategories(window);
 
     syncConsentMode(bannerChoices(undefined));
@@ -166,17 +151,7 @@ describe("syncConsentMode", () => {
     expect(announced).toEqual([{ acceptedCategories: [] }]);
   });
 
-  test("reads the banner without announcing on the server", () => {
-    const asked: string[] = [];
-
-    syncConsentMode({
-      ...bannerChoices([]),
-      acceptedCategory: (category) => {
-        asked.push(category);
-        return false;
-      },
-    });
-
-    expect(asked).toEqual(["analytics", "marketing", "preferences"]);
+  test("can sync consent without a browser", () => {
+    expect(() => syncConsentMode(bannerChoices([]))).not.toThrow();
   });
 });

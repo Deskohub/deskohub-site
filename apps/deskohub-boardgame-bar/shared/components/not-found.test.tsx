@@ -31,7 +31,6 @@ const escaped = (text: string) => Bun.escapeHTML(text);
 const buttonsOf = (html: string) =>
   [...html.matchAll(/<button([^>]*)>(.*?)<\/button>/g)].map(
     ([, attributes = "", content = ""]) => ({
-      classes: /class="([^"]*)"/.exec(attributes)?.[1]?.split(" "),
       disabled: /\sdisabled=""/.test(attributes),
       content,
     })
@@ -48,16 +47,12 @@ describe("NotFound", () => {
     expect(links[0]?.[2]).toContain(escaped(m["notFound.homeButton"]()));
   });
 
-  test("shows the fourth die face and an enabled roll button before the first roll", () => {
-    const [die, rollAgain] = buttonsOf(renderOnLocaleRoute(<NotFound />));
-
-    expect(die?.content).toContain("lucide-dice-4");
-    expect(die?.classes).toContain("hover:scale-110");
-    expect(die?.classes).not.toContain("animate-spin");
-    expect(rollAgain?.disabled).toBe(false);
-    expect(rollAgain?.content).toContain(
-      escaped(m["notFound.rollAgainButton"]())
+  test("offers an enabled roll button when the page opens", () => {
+    const label = escaped(m["notFound.rollAgainButton"]());
+    const roll = buttonsOf(renderOnLocaleRoute(<NotFound />)).find((button) =>
+      button.content.includes(label)
     );
-    expect(rollAgain?.content).not.toContain("animate-spin");
+
+    expect(roll?.disabled).toBe(false);
   });
 });

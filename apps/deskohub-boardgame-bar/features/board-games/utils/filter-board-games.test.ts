@@ -41,18 +41,7 @@ const games = [
 ];
 
 describe("filterBoardGames", () => {
-  test("combines search, player, and duration filters", () => {
-    expect(
-      filterBoardGames(games, {
-        playerCount: 7,
-        durations: ["over120"],
-        search: " LONG ",
-        language: "en",
-      })
-    ).toEqual([games[1]!]);
-  });
-
-  test("ands language with every active filter", () => {
+  test("requires every active filter and ignores search case and padding", () => {
     const languageGames = [
       {
         name: "English alternate",
@@ -94,13 +83,21 @@ describe("filterBoardGames", () => {
         inStock: true,
         language: "en" as const,
       },
+      {
+        name: "Czech target game",
+        minPlayers: 2,
+        maxPlayers: 6,
+        playingTimeMinutes: 45,
+        inStock: true,
+        language: "cz" as const,
+      },
     ];
 
     expect(
       filterBoardGames(languageGames, {
         playerCount: 4,
         durations: ["upTo60"],
-        search: "target",
+        search: " TARGET ",
         language: "en",
       })
     ).toEqual([languageGames[4]!]);

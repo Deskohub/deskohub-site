@@ -78,27 +78,15 @@ describe("products webhook route", () => {
     const { POST } = await import("./route");
 
     const response = await POST(request([productPayload()]));
-    const body = await response.json();
-
     expect(response.status).toBe(200);
-    expect(body).toMatchObject({
-      success: true,
-      data: {
-        invalidatedTags: [
-          dotyposTags.menu.all(),
-          dotyposTags.menu.byCategory("456"),
-          dotyposTags.menu.byProduct("123"),
-        ],
-      },
-    });
-    expect(revalidateTag).toHaveBeenCalledWith(dotyposTags.menu.all(), "max");
-    expect(revalidateTag).toHaveBeenCalledWith(
-      dotyposTags.menu.byCategory("456"),
-      "max"
-    );
-    expect(revalidateTag).toHaveBeenCalledWith(
-      dotyposTags.menu.byProduct("123"),
-      "max"
+    expect(await response.json()).toMatchObject({ success: true });
+    expect(revalidateTag.mock.calls).toHaveLength(3);
+    expect(revalidateTag.mock.calls).toEqual(
+      expect.arrayContaining([
+        [dotyposTags.menu.all(), "max"],
+        [dotyposTags.menu.byCategory("456"), "max"],
+        [dotyposTags.menu.byProduct("123"), "max"],
+      ])
     );
   });
 

@@ -61,16 +61,3 @@ export function trackFormSubmit(formName: string, success: boolean): void {
     form_success: success,
   });
 }
-
-/**
- * Track custom event
- */
-export function trackCustomEvent(
-  eventName: string,
-  properties?: Record<string, unknown>
-): void {
-  sendGTMEvent({
-    event: eventName,
-    ...properties,
-  });
-}

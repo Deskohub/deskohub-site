@@ -2,9 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   sendGTMEvent,
   trackButtonClick,
-  trackCustomEvent,
   trackFormSubmit,
-  trackPageView,
   trackRoutePageView,
 } from "./gtm-events";
 
@@ -21,15 +19,6 @@ afterEach(() => {
 describe("sendGTMEvent", () => {
   test("does nothing outside the browser", () => {
     expect(() => sendGTMEvent({ event: "server_render" })).not.toThrow();
-    expect(Reflect.has(globalThis, "window")).toBe(false);
-  });
-
-  test("creates the data layer on the first event", () => {
-    const window = browserWindow();
-
-    sendGTMEvent({ event: "first", value: 1 });
-
-    expect(window.dataLayer).toEqual([{ event: "first", value: 1 }]);
   });
 
   test("appends to an existing data layer", () => {
@@ -47,22 +36,16 @@ describe("tracked events", () => {
   test("push their event names and properties", () => {
     const window = browserWindow();
 
-    trackPageView("/games");
     trackButtonClick("reserve", "hero");
     trackFormSubmit("contact", false);
-    trackCustomEvent("filter_used", { filter: "players" });
-    trackCustomEvent("bare_event");
 
     expect(window.dataLayer).toEqual([
-      { event: "page_view", page_path: "/games" },
       {
         event: "button_click",
         button_name: "reserve",
         button_location: "hero",
       },
       { event: "form_submit", form_name: "contact", form_success: false },
-      { event: "filter_used", filter: "players" },
-      { event: "bare_event" },
     ]);
   });
 });

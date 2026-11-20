@@ -68,8 +68,9 @@ describe("ClientGallery", () => {
       "mt-8",
     ]);
     expect(renderedImageAlts(html)).toEqual(alts);
-    expect(html.match(/<p class="text-sm text-gray-600">/g)).toHaveLength(1);
-    expect(html).toContain(">Window table</p>");
+    expect(html.match(/<p\b[^>]*>[^<]*<\/p>/g)).toEqual([
+      expect.stringContaining(">Window table</p>"),
+    ]);
   });
 
   test("uses the configured column counts", () => {

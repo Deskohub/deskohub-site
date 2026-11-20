@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { formatCurrencyAmount } from "@deskohub/i18n/currency";
 import { m } from "@/features/i18n";
 import { formatPrice } from "./currency";
 
@@ -8,20 +7,12 @@ const onRequest = m.priceOnRequest({}, { locale });
 
 describe("formatPrice", () => {
   test("formats numeric and numeric-string prices in the menu currency", () => {
-    const expected = formatCurrencyAmount({
-      amount: 150,
-      currency: "CZK",
-      locale,
-    });
-
-    expect(formatPrice(150, locale)).toBe(expected);
-    expect(formatPrice("150", locale)).toBe(expected);
+    expect(formatPrice(150, locale)).toBe("150\u00a0Kč");
+    expect(formatPrice("150", locale)).toBe("150\u00a0Kč");
   });
 
   test("formats in a given currency and locale", () => {
-    expect(formatPrice(12.5, "en-US", "EUR")).toBe(
-      formatCurrencyAmount({ amount: 12.5, currency: "EUR", locale: "en-US" })
-    );
+    expect(formatPrice(12.5, "en-US", "EUR")).toBe("€12.50");
   });
 
   test.each([
