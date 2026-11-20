@@ -183,12 +183,14 @@ const payLabelNamesAmount = (locale: Locale) =>
 export function CheckoutPaySubmitButton({
   disabled,
   locale,
+  onClick,
   pending,
   total,
   variant,
 }: {
   readonly disabled?: boolean;
   readonly locale: Locale;
+  readonly onClick?: () => void;
   readonly pending?: boolean;
   /** The amount the provider charges; a free order omits it. */
   readonly total?: Money;
@@ -222,6 +224,7 @@ export function CheckoutPaySubmitButton({
         disabled={disabled}
         label={orderLabel}
         locale={locale}
+        onClick={onClick}
         pending={pending}
         payment={variant === "retry" ? "retry" : payMethod}
       />
@@ -279,6 +282,7 @@ function CheckoutPayButton({
   disabled,
   label,
   locale,
+  onClick,
   payment,
   pending,
 }: {
@@ -286,6 +290,7 @@ function CheckoutPayButton({
   readonly disabled?: boolean;
   readonly label: string;
   readonly locale: Locale;
+  readonly onClick?: () => void;
   readonly payment: CheckoutPaymentMethod | "free" | "retry";
   readonly pending?: boolean;
 }) {
@@ -297,10 +302,11 @@ function CheckoutPayButton({
       disabled={disabled}
       fullWidth
       name="method"
+      onClick={onClick}
       pending={pending}
       size="xl"
       tone={payment === "card" ? "nexi" : undefined}
-      type="submit"
+      type={onClick ? "button" : "submit"}
       value={payment}
       wrap
     >
