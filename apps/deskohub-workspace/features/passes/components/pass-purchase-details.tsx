@@ -44,6 +44,8 @@ export function PassPurchaseDetails({
   error,
   signInPath,
   signInNote,
+  buyerNote,
+  holderLabel,
   summaryTitle,
   summary,
   onChangeSelection,
@@ -51,6 +53,8 @@ export function PassPurchaseDetails({
 }: PassPurchaseDetailsProps & {
   readonly signInPath: string;
   readonly signInNote: string;
+  readonly buyerNote: string;
+  readonly holderLabel: string;
   readonly summaryTitle: string;
   readonly summary: ReactNode;
 }) {
@@ -150,13 +154,11 @@ export function PassPurchaseDetails({
                   </div>
                 )}
                 <p className="text-sm leading-6 text-navy-blue/75">
-                  {m.entryPackCheckoutBuyerNote({}, { locale })}
+                  {buyerNote}
                 </p>
               </fieldset>
               <fieldset disabled={pending} className="space-y-3">
-                <legend className="sr-only">
-                  {m.entryPackCheckoutHolder({}, { locale })}
-                </legend>
+                <legend className="sr-only">{holderLabel}</legend>
                 <label className="flex cursor-pointer items-center gap-2 font-semibold text-sm">
                   <input
                     type="checkbox"

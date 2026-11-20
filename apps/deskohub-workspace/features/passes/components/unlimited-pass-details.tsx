@@ -35,6 +35,8 @@ export function UnlimitedPassDetails({
   return (
     <PassPurchaseDetails
       {...props}
+      buyerNote={m.unlimitedPassCheckoutBuyerNote({}, { locale })}
+      holderLabel={m.unlimitedPassCheckoutHolder({}, { locale })}
       signInNote={m.unlimitedPassCheckoutSignInNote({}, { locale })}
       signInPath={getAccountSignInPath(
         locale,

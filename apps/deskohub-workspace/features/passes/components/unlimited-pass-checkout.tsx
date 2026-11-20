@@ -294,10 +294,10 @@ export function UnlimitedPassCheckout({
       steps={
         <CheckoutSteps
           activeStepKey={stage}
-          label={m.entryPackCheckoutSteps({}, { locale })}
+          label={m.unlimitedPassCheckoutSteps({}, { locale })}
           labels={{
             chooseSpace: m.unlimitedPassCheckoutChoose({ days }, { locale }),
-            contact: m.entryPackCheckoutDetails({}, { locale }),
+            contact: m.unlimitedPassCheckoutHolder({}, { locale }),
           }}
           locale={locale}
           stepLinks={{
@@ -383,8 +383,8 @@ export function UnlimitedPassCheckout({
           onExpire={() => {
             attempt.current = undefined;
             setSavedOrderId(undefined);
-            void availability.refetch();
-            goToChoose();
+            setDetails({ ...details, billing: step.state.billing });
+            goToDetails(step.selection);
           }}
         />
       )}

@@ -25,6 +25,8 @@ export function EntryPackDetails({
   return (
     <PassPurchaseDetails
       {...props}
+      buyerNote={m.entryPackCheckoutBuyerNote({}, { locale })}
+      holderLabel={m.entryPackCheckoutHolder({}, { locale })}
       signInNote={m.entryPackCheckoutSignInNote({}, { locale })}
       signInPath={getAccountSignInPath(
         locale,
