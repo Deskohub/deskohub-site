@@ -10,7 +10,15 @@ import {
 import { getReservationQuoteFingerprint } from "@/features/checkout/reservation-quote-fingerprint";
 import { makeReservationQuoteSchema } from "@/features/checkout/reservation-quote-schema";
 import type { DiscountQuote } from "@/features/discounts";
-import { moneyCodec, sumMoney } from "@/shared/money/money";
+import { orderIdSchema } from "@/features/order/order";
+import { passTiers } from "@/features/passes/pass-offer";
+import {
+  type MoneyUnitMismatch,
+  moneyCodec,
+  moneyWithValue,
+  nonNegativeMoneyCodec,
+  sumMoney,
+} from "@/shared/money/money";
 
 const coworkProductQuoteItemSchema = Schema.Struct({
   type: Schema.Literal("cowork"),
@@ -38,7 +46,7 @@ type CoworkProductQuoteItem = typeof coworkProductQuoteItemSchema.Type;
 type CoworkCoffeeQuoteItem = typeof coworkCoffeeQuoteItemSchema.Type;
 type CoworkWorkstationQuoteItem = typeof coworkWorkstationQuoteItemSchema.Type;
 
-export const coworkReservationQuoteSchema = makeReservationQuoteSchema(
+const coworkQuoteSchema = makeReservationQuoteSchema(
   Schema.Union([
     Schema.Tuple([coworkProductQuoteItemSchema]),
     Schema.Tuple([coworkProductQuoteItemSchema, coworkCoffeeQuoteItemSchema]),
@@ -47,12 +55,35 @@ export const coworkReservationQuoteSchema = makeReservationQuoteSchema(
       coworkWorkstationQuoteItemSchema,
     ]),
   ])
-).annotate({
+);
+
+const coworkEntryPackCoverageSchema = Schema.Struct({
+  passId: orderIdSchema,
+  tier: Schema.Literals(passTiers),
+  coveredAmount: nonNegativeMoneyCodec,
+});
+
+export const coworkReservationQuoteSchema = Schema.Struct({
+  ...coworkQuoteSchema.fields,
+  entryPack: Schema.optionalKey(coworkEntryPackCoverageSchema),
+}).annotate({
   identifier: "CoworkReservationQuote",
   description: "Authoritative cowork reservation price quote.",
 });
 
 export type CoworkReservationQuote = typeof coworkReservationQuoteSchema.Type;
+
+export type CoworkEntryPackFunding = Pick<
+  typeof coworkEntryPackCoverageSchema.Type,
+  "passId" | "tier"
+>;
+
+type CoworkQuoteOptions =
+  | { readonly discountQuote?: DiscountQuote; readonly entryPack?: never }
+  | {
+      readonly discountQuote?: never;
+      readonly entryPack: CoworkEntryPackFunding;
+    };
 
 export type CanonicalCoworkReservation = {
   readonly kind: "cowork";
@@ -135,41 +166,78 @@ const getCoworkQuoteItems = (
     : [productItem, addonItem];
 };
 
-export const getCoworkReservationQuote = Effect.fn("getCoworkReservationQuote")(
-  function* (
-    reservation: CoworkReservationQuoteInput,
-    options: {
-      readonly discountQuote?: DiscountQuote;
-    } = {}
-  ) {
-    const productPrice = getWorkspaceProductByTier(reservation.entryTier).price;
-    const productItem: CoworkProductQuoteItem = {
-      type: "cowork",
-      tier: reservation.entryTier,
-      amount: productPrice,
-    };
-    const addonItem =
-      coworkAddonQuoteItemByTier[reservation.entryTier](reservation);
-    const items = getCoworkQuoteItems(productItem, addonItem);
-    const addonAmounts = addonItem ? [addonItem.amount] : [];
-    const undiscountedPrice = yield* Effect.fromResult(
-      sumMoney([productItem.amount, ...addonAmounts])
-    );
-    const discounts = options.discountQuote?.discounts ?? [];
-    const discountedProductPrice =
-      options.discountQuote?.discountedSubtotal ?? productPrice;
-    const expectedPrice = yield* Effect.fromResult(
-      sumMoney([discountedProductPrice, ...addonAmounts])
-    );
+const priceCoworkQuoteItems = Effect.fn("priceCoworkQuoteItems")(function* (
+  items: CoworkQuoteItems,
+  discountQuote?: DiscountQuote
+) {
+  const [productItem, addonItem] = items;
+  const addonAmounts = addonItem ? [addonItem.amount] : [];
+  const undiscountedPrice = yield* Effect.fromResult(
+    sumMoney([productItem.amount, ...addonAmounts])
+  );
+  const expectedPrice = discountQuote
+    ? yield* Effect.fromResult(
+        sumMoney([discountQuote.discountedSubtotal, ...addonAmounts])
+      )
+    : undiscountedPrice;
 
-    return {
-      items,
-      payment: {
-        expectedPrice,
-        undiscountedPrice,
-        discounts,
+  return {
+    items,
+    payment: {
+      expectedPrice,
+      undiscountedPrice,
+      discounts: discountQuote?.discounts ?? [],
+    },
+  };
+});
+
+const priceCoworkEntryPack = Effect.fn("priceCoworkEntryPack")(function* (
+  items: CoworkQuoteItems,
+  entryPack: CoworkEntryPackFunding
+) {
+  const [productItem, addonItem] = items;
+  const zero = moneyWithValue(0, productItem.amount);
+  const includedWorkstation =
+    entryPack.tier === "reserved-desk-workstation" &&
+    addonItem?.type === "workstation";
+  const coveredAmount = includedWorkstation
+    ? yield* Effect.fromResult(sumMoney([productItem.amount, addonItem.amount]))
+    : productItem.amount;
+  const priced = yield* priceCoworkQuoteItems(
+    getCoworkQuoteItems(
+      { ...productItem, amount: zero },
+      includedWorkstation ? { ...addonItem, amount: zero } : addonItem
+    )
+  );
+  return {
+    ...priced,
+    entryPack: {
+      passId: entryPack.passId,
+      tier: entryPack.tier,
+      coveredAmount,
+    },
+  };
+});
+
+export const getCoworkReservationQuote = Effect.fn("getCoworkReservationQuote")(
+  (
+    reservation: CoworkReservationQuoteInput,
+    options: CoworkQuoteOptions = {}
+  ): Effect.Effect<
+    Omit<CoworkReservationQuote, "fingerprint">,
+    MoneyUnitMismatch
+  > => {
+    const items = getCoworkQuoteItems(
+      {
+        type: "cowork",
+        tier: reservation.entryTier,
+        amount: getWorkspaceProductByTier(reservation.entryTier).price,
       },
-    };
+      coworkAddonQuoteItemByTier[reservation.entryTier](reservation)
+    );
+    return options.entryPack
+      ? priceCoworkEntryPack(items, options.entryPack)
+      : priceCoworkQuoteItems(items, options.discountQuote);
   }
 );
 
@@ -177,9 +245,7 @@ export const buildCoworkReservationQuote = Effect.fn(
   "buildCoworkReservationQuote"
 )(function* (
   reservation: CoworkReservationQuoteInput,
-  options: {
-    readonly discountQuote?: DiscountQuote;
-  } = {}
+  options: CoworkQuoteOptions = {}
 ) {
   // The cross-family fingerprint dispatcher would silently accept another
   // family's kind while this builder still prices cowork items, so reject

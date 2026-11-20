@@ -84,6 +84,18 @@ export const signedPayStateSchema = Schema.Union([
         }
     ),
     Schema.makeFilter(
+      ({ quote, submittedCode, requestedDiscountCode, referralCode }) =>
+        !("entryPack" in quote) ||
+        (quote.payment.discounts.length === 0 &&
+          submittedCode === undefined &&
+          requestedDiscountCode === undefined &&
+          referralCode === undefined) || {
+          path: ["quote", "entryPack"],
+          issue:
+            "an Entry pack booking carries no discounts or promotion codes",
+        }
+    ),
+    Schema.makeFilter(
       ({ binding, checkoutSessionId }) =>
         binding === undefined ||
         checkoutSessionId === undefined || {

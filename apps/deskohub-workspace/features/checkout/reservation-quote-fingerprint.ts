@@ -2,6 +2,7 @@ import { Match } from "effect";
 import type { ReservationQuote } from "@/features/checkout/reservation-quote";
 import type {
   CanonicalCoworkReservation,
+  CoworkReservationQuote,
   CoworkReservationQuoteInput,
 } from "@/features/checkout/reservation-quote-cowork";
 import {
@@ -96,7 +97,8 @@ const hashCanonicalPayload = (canonicalPayload: string): string =>
 
 export const getReservationQuoteFingerprint = (
   reservation: ReservationQuoteFingerprintReservation,
-  quote: Omit<ReservationQuote, "fingerprint">
+  quote: Omit<ReservationQuote, "fingerprint"> &
+    Pick<CoworkReservationQuote, "entryPack">
 ): string =>
   hashCanonicalPayload(
     JSON.stringify({
@@ -107,5 +109,12 @@ export const getReservationQuoteFingerprint = (
         undiscountedPrice: quote.payment.undiscountedPrice,
         discounts: quote.payment.discounts.map(getCanonicalAppliedDiscount),
       },
+      ...(quote.entryPack && {
+        entryPack: {
+          passId: quote.entryPack.passId,
+          tier: quote.entryPack.tier,
+          coveredAmount: quote.entryPack.coveredAmount,
+        },
+      }),
     })
   );
