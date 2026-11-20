@@ -5,11 +5,11 @@ describe("parseCsv", () => {
   test("keeps quoted separators, line breaks and empty cells in their original rows", () => {
     expect(
       parseCsv(
-        'Name,Details\r\n"Žluťoučký, kůň","line\nbreak"\r\n"say ""hi""",\r\n'
+        'Name,Details\r\n"Žluťoučký, kůň","line\nbreak\r\nend"\r\n"say ""hi""",\r\n'
       )
     ).toEqual([
       ["Name", "Details"],
-      ["Žluťoučký, kůň", "line\nbreak"],
+      ["Žluťoučký, kůň", "line\nbreak\r\nend"],
       ['say "hi"', ""],
     ]);
   });

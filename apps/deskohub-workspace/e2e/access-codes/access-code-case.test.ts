@@ -1,7 +1,27 @@
 import { describe, expect, test } from "bun:test";
+import {
+  workspaceE2EAccessCodeCleanupTimeout,
+  workspaceE2EAccessCodePlaywrightTimeout,
+  workspaceE2ETimeouts,
+} from "../timeouts";
 import { selectActionReplayHeaders } from "./access-code-case";
 
 describe("access code creation case planning", () => {
+  test("allows both action barriers and the remaining cleanup after the case deadline", () => {
+    const minimumCleanupTime =
+      workspaceE2ETimeouts.accessCodeActionBarrier * 2 +
+      workspaceE2ETimeouts.accessCodeStaleBarrier +
+      workspaceE2ETimeouts.cleanupAction +
+      workspaceE2ETimeouts.datasource;
+
+    expect(workspaceE2EAccessCodeCleanupTimeout).toBeGreaterThanOrEqual(
+      minimumCleanupTime
+    );
+    expect(workspaceE2EAccessCodePlaywrightTimeout).toBeGreaterThanOrEqual(
+      workspaceE2ETimeouts.accessCodeCase + workspaceE2EAccessCodeCleanupTimeout
+    );
+  });
+
   test("keeps only action-relevant headers when replaying a captured request", () => {
     const replayHeaders = selectActionReplayHeaders({
       accept: "*/*",

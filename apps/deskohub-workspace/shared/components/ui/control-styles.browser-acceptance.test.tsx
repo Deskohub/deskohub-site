@@ -167,6 +167,11 @@ test.skipIf(!chromiumAvailable)(
         );
         await expectInBrowser(muted).toHaveCSS("box-shadow", "none");
         await expectInBrowser(outline).toHaveCSS("border-top-width", "1px");
+        await expectColor(
+          outline,
+          "border-top-color",
+          "color-mix(in oklab, var(--brand-navy-blue) 14%, transparent)"
+        );
         await expectInBrowser(outline).toHaveCSS("height", "28px");
         await expectInBrowser(outline).toHaveCSS("box-shadow", "none");
         await expectColor(
@@ -214,7 +219,7 @@ test.skipIf(!chromiumAvailable)(
         expect(
           await wrapped.evaluate((node) => node.clientHeight)
         ).toBeGreaterThan(52);
-        expect(await radiusOf(wrapped)).toBeLessThan(26);
+        await expectInBrowser(wrapped).toHaveCSS("border-radius", "12px");
         const book = page.getByRole("button", { name: "Book", exact: true });
         const spacing = (node: HTMLElement | SVGElement) => {
           const style = getComputedStyle(node);
@@ -238,6 +243,7 @@ test.skipIf(!chromiumAvailable)(
         }
         const tile = page.getByRole("button", { name: "Add payment card" });
         await expectInBrowser(tile).toHaveCSS("border-top-style", "dashed");
+        await expectInBrowser(tile).toHaveCSS("border-radius", "16px");
         await expectInBrowser(tile).toHaveCSS("flex-direction", "column");
         await expectInBrowser(tile).toHaveCSS("min-height", "144px");
         await expectInBrowser(tile).toHaveCSS("white-space", "normal");

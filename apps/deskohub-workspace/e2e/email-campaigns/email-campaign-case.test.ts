@@ -9,11 +9,32 @@ import {
 } from "../admin-case";
 import { pollUntil } from "../polling";
 import {
+  workspaceE2EEmailCampaignCleanupTimeout,
+  workspaceE2EEmailCampaignPlaywrightTimeout,
+  workspaceE2ETimeouts,
+} from "../timeouts";
+import {
   planEmailCampaignPreview,
   releaseEmailCampaignFixture,
 } from "./email-campaign-case";
 
 describe("email campaign preview case planning", () => {
+  test("allows both campaign action barriers and the remaining cleanup after the case deadline", () => {
+    const minimumCleanupTime =
+      workspaceE2ETimeouts.browserAction +
+      (workspaceE2ETimeouts.uiTransition + workspaceE2ETimeouts.datasource) *
+        2 +
+      workspaceE2ETimeouts.cleanupAction * 2;
+
+    expect(workspaceE2EEmailCampaignCleanupTimeout).toBeGreaterThanOrEqual(
+      minimumCleanupTime
+    );
+    expect(workspaceE2EEmailCampaignPlaywrightTimeout).toBeGreaterThanOrEqual(
+      workspaceE2ETimeouts.emailCampaignCase +
+        workspaceE2EEmailCampaignCleanupTimeout
+    );
+  });
+
   test("scopes every synthetic identifier to the run", () => {
     const first = planEmailCampaignPreview();
     const second = planEmailCampaignPreview();
