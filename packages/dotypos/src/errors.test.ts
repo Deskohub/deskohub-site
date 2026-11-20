@@ -1,16 +1,20 @@
 import { expect, test } from "bun:test";
-import type { Effect } from "effect";
-import type { dotyposRequestProfiles } from "./backend/request-profiles";
+import { type Effect, Schema } from "effect";
 import type { IDotyposService } from "./backend/service";
 import {
   type DotyposFailure,
-  DotyposFailureCode,
   type DotyposOperation,
   type DotyposReadFailure,
-  type DotyposUncertain,
-  type DotyposVersionConflict,
+  DotyposRejected,
+  DotyposReservationCancelledError,
+  DotyposReservationNotRestorable,
+  DotyposUnavailable,
+  DotyposUncertain,
+  DotyposVersionConflict,
   type DotyposWriteFailure,
+  dotyposFailureCode,
 } from "./errors";
+import { DotyposReservationIdSchema } from "./types";
 
 type Expect<T extends true> = T;
 type Equal<X, Y> =
@@ -60,14 +64,47 @@ export type ReadChannels = Expect<
     never
   >
 >;
-// No read request has a write ceiling. The profile union already forbids it.
-type ReadRequestRetry = Extract<
-  (typeof dotyposRequestProfiles)[keyof typeof dotyposRequestProfiles],
-  { effect: "read" }
->["retry"];
-export type ReadRetry = Expect<Equal<ReadRequestRetry, "transient" | "none">>;
-
 test("each tag has its own stable failure code", () => {
-  const codes = Object.values(DotyposFailureCode);
-  expect(new Set(codes).size).toBe(codes.length);
+  const reservationId = Schema.decodeSync(DotyposReservationIdSchema)(
+    "reservation-id"
+  );
+  const cases = [
+    [
+      new DotyposUnavailable({ operation: "getCustomer", reason: "timeout" }),
+      "dotypos-unavailable",
+    ],
+    [
+      new DotyposRejected({ operation: "getCustomer", reason: "not-found" }),
+      "dotypos-rejected",
+    ],
+    [
+      new DotyposUncertain({ operation: "createCustomer", reason: "timeout" }),
+      "dotypos-uncertain",
+    ],
+    [
+      new DotyposVersionConflict({ operation: "confirmReservation" }),
+      "dotypos-version-conflict",
+    ],
+    [
+      new DotyposReservationCancelledError({
+        reservationId,
+        message: "Reservation is cancelled.",
+      }),
+      "dotypos-reservation-cancelled",
+    ],
+    [
+      new DotyposReservationNotRestorable({
+        reservationId,
+        reason: "not-cancelled",
+        status: "NEW",
+        changedFields: [],
+        message: "Reservation is new.",
+      }),
+      "dotypos-reservation-not-restorable",
+    ],
+  ] as const;
+
+  for (const [failure, expectedCode] of cases) {
+    expect(dotyposFailureCode(failure)).toBe(expectedCode);
+  }
 });

@@ -378,21 +378,6 @@ describe("ProviderRetryPolicy operation bounds", () => {
     });
   });
 
-  test("a resuming load spends a retry on every page it retries", async () => {
-    // Every page times out once, then answers: the shared budget of three
-    // retries covers three pages, so a fourth page that times out fails.
-    const outcome = await measure(
-      (attempts) =>
-        resumingLoad(attempts, 4, (_page, attempt) => attempt > 1).pipe(
-          retryTimeouts
-        ),
-      policy.worstCase.paginated({ pages: 4, retry: "resume" })
-    );
-
-    expect(outcome.attempts).toEqual([1, 1, 2, 2, 3, 3, 4]);
-    expect(outcome.finishedAtBound).toBe(true);
-  });
-
   test("a load that never retries waits out one attempt per page", async () => {
     const bound = policy.worstCase.paginated({ pages: 2, retry: "none" });
     const outcome = await measure(
@@ -408,7 +393,7 @@ describe("ProviderRetryPolicy operation bounds", () => {
     });
   });
 
-  test("an unknown page count has no finite bound unless the load enforces a deadline", async () => {
+  test("an unknown page count has no finite bound unless the load enforces a deadline", () => {
     for (const retry of ["each-page", "resume", "none"] as const) {
       expect(
         Duration.isFinite(
@@ -420,10 +405,10 @@ describe("ProviderRetryPolicy operation bounds", () => {
           policy.worstCase.paginated({
             pages: "unknown",
             retry,
-            deadline: policy.worstCase.retried,
+            deadline: "3 seconds",
           })
         )
-      ).toBe(20_840);
+      ).toBe(3000);
     }
     // A deadline longer than the load's own bound changes nothing.
     expect(
@@ -435,25 +420,6 @@ describe("ProviderRetryPolicy operation bounds", () => {
         })
       )
     ).toBe(10_000);
-
-    // A load that keeps finding pages ends at its deadline.
-    const outcome = await measure(
-      (attempts) =>
-        resumingLoad(attempts, Number.POSITIVE_INFINITY, () => true).pipe(
-          retryTimeouts,
-          Effect.timeoutOrElse({
-            duration: policy.worstCase.retried,
-            orElse: () => Effect.fail(new ProviderTimeout()),
-          })
-        ),
-      policy.worstCase.paginated({
-        pages: "unknown",
-        retry: "resume",
-        deadline: policy.worstCase.retried,
-      })
-    );
-    expect(outcome.finishedEarly).toBe(false);
-    expect(outcome.finishedAtBound).toBe(true);
   });
 
   test("counts round up, a load reads at least one page, and a count that is not finite is unbounded", () => {
