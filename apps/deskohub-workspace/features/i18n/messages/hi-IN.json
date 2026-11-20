@@ -987,6 +987,7 @@
   "withdrawalNoticeActionRefund": "Nexi के ज़रिए {amount} वापस करें",
   "withdrawalNoticeActionNoRefund": "कुछ वापस नहीं करना है, भुगतान शून्य था",
   "withdrawalNoticeActionHint": "अनुबंध से हटने के 14 दिनों के भीतर। बुकिंग रद्द होने के बाद एडमिनिस्ट्रेशन में भुगतान पर “धनवापसी ज़रूरी” का निशान लगेगा।",
+  "withdrawalNoticeCheckPassRefund": "धनवापसी जारी करने से पहले Workspace में देय राशि और Nexi के ज़रिए पहले से लौटाई गई राशि देखें।",
   "withdrawalNoticeOpenAdmin": "एडमिनिस्ट्रेशन में बुकिंग खोलें",
   "withdrawalNoticeCustomerLabel": "ग्राहक",
   "withdrawalNoticeNameMissing": "प्रोफ़ाइल में नाम नहीं है",

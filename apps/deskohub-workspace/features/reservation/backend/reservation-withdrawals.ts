@@ -84,7 +84,11 @@ export class ReservationWithdrawals extends Context.Service<
           const reservation = yield* reservations
             .findById(id.value)
             .pipe(Effect.mapError(unavailable));
-          if (!reservation || reservation.authorAccountId !== input.accountId) {
+          if (
+            !reservation ||
+            reservation.passId !== null ||
+            reservation.authorAccountId !== input.accountId
+          ) {
             return Option.none();
           }
           const details = yield* reservationDetails

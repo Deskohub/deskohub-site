@@ -982,6 +982,7 @@
   "withdrawalNoticeActionRefund": "Hoàn {amount} qua Nexi",
   "withdrawalNoticeActionNoRefund": "Không hoàn tiền, khoản thanh toán bằng 0",
   "withdrawalNoticeActionHint": "Trong vòng 14 ngày kể từ khi rút khỏi hợp đồng. Sau khi đặt chỗ bị hủy, khoản thanh toán sẽ được đánh dấu “Cần hoàn tiền” trong trang quản trị.",
+  "withdrawalNoticeCheckPassRefund": "Vui lòng kiểm tra số tiền cần hoàn trong Workspace và số tiền đã hoàn qua Nexi trước khi hoàn tiền.",
   "withdrawalNoticeOpenAdmin": "Mở đặt chỗ trong trang quản trị",
   "withdrawalNoticeCustomerLabel": "Khách hàng",
   "withdrawalNoticeNameMissing": "Hồ sơ chưa có tên",

@@ -2,6 +2,7 @@ import { Link, Section, Text } from "react-email";
 import { m } from "@/features/i18n";
 import { formatReservationDisplayDateTime } from "@/features/reservation/reservation-date";
 import type { WithdrawalRefundBasis } from "@/features/withdrawal/withdrawal-assessment";
+import type { WithdrawableContractKind } from "@/features/withdrawal/withdrawal-identifiers";
 import { staffLocale } from "@/shared/backend/staff-locale";
 import { formatMoney, type Money } from "@/shared/money/money";
 import { emailWithBreak } from "@/shared/utils/email-with-break";
@@ -16,6 +17,7 @@ import { contractWithdrawalNoticePreviewProps } from "./_fixtures/preview-props"
 import type { WorkspaceEmailDetail } from "./workspace-email-detail";
 
 export type ContractWithdrawalNoticeEmailProps = {
+  readonly contractKind?: WithdrawableContractKind;
   readonly contractLabel: string;
   /** The family's contract id, such as the reservation id. */
   readonly contractId: string;
@@ -28,7 +30,7 @@ export type ContractWithdrawalNoticeEmailProps = {
   readonly refundAmount: Money;
   readonly refundBasis: WithdrawalRefundBasis;
   /** The reservation in administration, where its payment is refunded. */
-  readonly adminUrl: string;
+  readonly adminUrl?: string;
   /**
    * When the reservation was cancelled, if it already was when this notice
    * went out; cancelling runs after the emails, so usually not yet.
@@ -36,26 +38,32 @@ export type ContractWithdrawalNoticeEmailProps = {
   readonly cancelledAt: Temporal.Instant | null;
 };
 
-/** The subject before the staff marker: what to do, then which contract. */
+/** The subject before the staff marker. */
 export const contractWithdrawalNoticeEmailSubject = ({
+  contractKind,
   contractLabel,
   refundAmount,
 }: Pick<
   ContractWithdrawalNoticeEmailProps,
-  "contractLabel" | "refundAmount"
->) =>
-  refundAmount.value > 0
+  "contractKind" | "contractLabel" | "refundAmount"
+>) => {
+  const messageOptions = { locale: staffLocale };
+  if (contractKind === "unlimited-pass") {
+    return `${m.withdrawalNoticeEmailHeading({}, messageOptions)} · ${contractLabel}`;
+  }
+  return refundAmount.value > 0
     ? m.withdrawalNoticeEmailSubject(
         {
           amount: formatMoney(refundAmount, staffLocale),
           contract: contractLabel,
         },
-        { locale: staffLocale }
+        messageOptions
       )
     : m.withdrawalNoticeEmailSubjectNoRefund(
         { contract: contractLabel },
-        { locale: staffLocale }
+        messageOptions
       );
+};
 
 const pragueTime = (instant: Temporal.Instant) =>
   m.withdrawalEmailPragueTime(
@@ -64,14 +72,21 @@ const pragueTime = (instant: Temporal.Instant) =>
   );
 
 /**
- * Tells staff a customer withdrew online: the refund to send through Nexi
- * first, the way into administration, then the statement's details.
+ * Tells staff a customer withdrew online and carries the submitted details.
  */
 export function ContractWithdrawalNoticeEmail(
   props: ContractWithdrawalNoticeEmailProps
 ) {
   const messageOptions = { locale: staffLocale };
   const refunds = props.refundAmount.value > 0;
+  const reservation = props.contractKind !== "unlimited-pass";
+  const formattedRefund = formatMoney(props.refundAmount, staffLocale);
+  const reservationRefundInstruction = refunds
+    ? m.withdrawalNoticeActionRefund(
+        { amount: formattedRefund },
+        messageOptions
+      )
+    : m.withdrawalNoticeActionNoRefund({}, messageOptions);
   const details: readonly WorkspaceEmailDetail[] = [
     {
       label: m.withdrawalNoticeCustomerLabel({}, messageOptions),
@@ -83,11 +98,15 @@ export function ContractWithdrawalNoticeEmail(
       value: emailWithBreak(props.customerEmail),
     },
     {
-      label: m.withdrawalReservationReference({}, messageOptions),
+      label: reservation
+        ? m.withdrawalReservationReference({}, messageOptions)
+        : m.checkoutStatusOrderIdLabel({}, messageOptions),
       value: props.contractId,
     },
     {
-      label: m.withdrawalReservationLabel({}, messageOptions),
+      label: reservation
+        ? m.withdrawalReservationLabel({}, messageOptions)
+        : m.withdrawalEmailContractLabel({}, messageOptions),
       value: props.contractLabel,
     },
     {
@@ -102,19 +121,23 @@ export function ContractWithdrawalNoticeEmail(
           },
           {
             label: m.withdrawalNoticeRefundLabel({}, messageOptions),
-            value: formatMoney(props.refundAmount, staffLocale),
+            value: formattedRefund,
           },
         ]
       : []),
-    {
-      label: m.withdrawalNoticeCancellationLabel({}, messageOptions),
-      value: props.cancelledAt
-        ? m.withdrawalNoticeCancelledAt(
-            { time: pragueTime(props.cancelledAt) },
-            messageOptions
-          )
-        : m.withdrawalNoticeCancellationPending({}, messageOptions),
-    },
+    ...(reservation
+      ? [
+          {
+            label: m.withdrawalNoticeCancellationLabel({}, messageOptions),
+            value: props.cancelledAt
+              ? m.withdrawalNoticeCancelledAt(
+                  { time: pragueTime(props.cancelledAt) },
+                  messageOptions
+                )
+              : m.withdrawalNoticeCancellationPending({}, messageOptions),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -130,25 +153,24 @@ export function ContractWithdrawalNoticeEmail(
           {m.withdrawalNoticeActionLabel({}, messageOptions)}
         </WorkspaceEmailLabel>
         <Text className="m-0 mt-2 text-[22px] font-bold leading-[28px] text-navy">
-          {refunds
-            ? m.withdrawalNoticeActionRefund(
-                { amount: formatMoney(props.refundAmount, staffLocale) },
-                messageOptions
-              )
-            : m.withdrawalNoticeActionNoRefund({}, messageOptions)}
+          {reservation
+            ? reservationRefundInstruction
+            : m.withdrawalNoticeCheckPassRefund({}, messageOptions)}
         </Text>
-        {refunds && (
+        {refunds && reservation && (
           <Text className="m-0 mt-2 text-[14px] leading-[22px] text-[#565975]">
             {m.withdrawalNoticeActionHint({}, messageOptions)}
           </Text>
         )}
-        <Link
-          className="mt-4 inline-block rounded-full bg-navy px-6 py-3 text-[14px] font-bold leading-[20px] text-white no-underline"
-          href={props.adminUrl}
-          style={{ backgroundColor: "#00024f", color: "#ffffff" }}
-        >
-          {m.withdrawalNoticeOpenAdmin({}, messageOptions)}
-        </Link>
+        {props.adminUrl && (
+          <Link
+            className="mt-4 inline-block rounded-full bg-navy px-6 py-3 text-[14px] font-bold leading-[20px] text-white no-underline"
+            href={props.adminUrl}
+            style={{ backgroundColor: "#00024f", color: "#ffffff" }}
+          >
+            {m.withdrawalNoticeOpenAdmin({}, messageOptions)}
+          </Link>
+        )}
       </Section>
       <WorkspaceEmailDetails details={details} wrapWords />
       <WithdrawalRefundBreakdown

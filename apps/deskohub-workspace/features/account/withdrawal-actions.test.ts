@@ -56,6 +56,7 @@ mock.module(
 );
 
 const calls: string[] = [];
+const contractKinds: string[] = [];
 // Whether the mocked profile has a name for the statement.
 let profileNamed = true;
 const paid = { value: 300_000, exponent: 2, currency: "CZK" };
@@ -74,11 +75,13 @@ Object.assign(WithdrawalService, {
   Live: Layer.mock(WithdrawalService, {
     quote: (input) =>
       Effect.sync(() => {
+        contractKinds.push(input.contract.kind);
         calls.push(`quote ${input.accountId} ${input.contract.id}`);
         return makeQuote(input.contract.id);
       }),
     withdraw: (input) =>
       Effect.suspend(() => {
+        contractKinds.push(input.contract.kind);
         calls.push(
           `withdraw ${input.accountId} ${input.contract.id}${input.customerName === undefined ? "" : ` as ${input.customerName}`}`
         );
@@ -104,11 +107,12 @@ Object.assign(WithdrawalService, {
 
 const importActions = () => import("./withdrawal-actions");
 
-describe("reservation withdrawal actions", () => {
+describe("withdrawal actions", () => {
   beforeEach(() => {
     released = true;
     profileNamed = true;
     calls.length = 0;
+    contractKinds.length = 0;
     currentUser = Effect.succeed({
       accountId: "@test/account-id",
       email: testEmailAddress("customer"),
@@ -164,6 +168,32 @@ describe("reservation withdrawal actions", () => {
     expect(calls).toEqual([
       "quote @test/account-id reservation-1",
       "withdraw @test/account-id reservation-1",
+    ]);
+  });
+
+  test("quote and submit an Unlimited pass through the same release and session checks", async () => {
+    const { quoteUnlimitedPassWithdrawal, withdrawFromUnlimitedPass } =
+      await importActions();
+    const orderId = crypto.randomUUID();
+    released = false;
+    const withheld = await quoteUnlimitedPassWithdrawal({ orderId });
+    expect(withheld.serverError).toBe(
+      m.accountUnavailableDescription({}, { locale: "en-US" })
+    );
+    expect(contractKinds).toEqual([]);
+
+    released = true;
+    const quote = await quoteUnlimitedPassWithdrawal({ orderId });
+    expect(quote.data).toMatchObject({ status: "available" });
+    const result = await withdrawFromUnlimitedPass({
+      orderId,
+      refundTermsKey: "full",
+    });
+    expect(result.data).toMatchObject({ status: "withdrawn" });
+    expect(contractKinds).toEqual(["unlimited-pass", "unlimited-pass"]);
+    expect(calls).toEqual([
+      `quote @test/account-id ${orderId}`,
+      `withdraw @test/account-id ${orderId}`,
     ]);
   });
 
