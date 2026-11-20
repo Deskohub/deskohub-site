@@ -69,6 +69,7 @@ const fullOrder: Order = {
     stateLabel: "Paid",
     failureCode: null,
     amount: { value: 12_000, exponent: 2, currency: "CZK" },
+    refundTarget: null,
     refundedAmount: null,
     refundedAt: null,
     attemptCreatedAt: "2026-08-12T08:00:00.000Z",
@@ -87,7 +88,13 @@ const loadFioMovements = mock((id: string) =>
     id !== fioPendingRefund.orderId
       ? []
       : [
-          fioPendingRefund,
+          { ...fioPendingRefund, refundTargetValue: 4_567 },
+          {
+            ...fioPendingRefund,
+            id: "01980000-0000-7000-8000-000000000045",
+            movementId: "9012345004",
+            refundTargetValue: null,
+          },
           {
             ...fioDiscrepancy,
             orderId: fioPendingRefund.orderId,
@@ -147,7 +154,7 @@ const facts = (container: HTMLElement) =>
     value: fact.querySelector("dd")?.textContent,
   }));
 
-const unreported = new Set([
+const unreported = new Set<string>([
   m.administrationOrderNotReported({}, { locale }),
   m.administrationPaymentNotReported({}, { locale }),
 ]);
@@ -267,16 +274,28 @@ describe("OrderAdministrationDetail", () => {
   });
 
   test("shows Fio evidence and a manual refund control on a local order without looking it up in Nexi", async () => {
-    const container = await prerenderOrderDetail(fioPendingRefund.orderId!);
+    const fioOrderId = fioPendingRefund.orderId!;
+    const container = await prerenderOrderDetail(fioOrderId);
     const view = within(container);
     expect(view.getByText("9012345001")).toBeTruthy();
     expect(view.getByText("100.2500 EUR")).toBeTruthy();
     expect(view.getByText(/80,000,000,000,000\.01$/)).toBeTruthy();
     expect(view.getByText("Currency differs from the quote")).toBeTruthy();
-    expect(view.getByText("Manual refund required")).toBeTruthy();
+    expect(view.getAllByText("Manual refund required")).toHaveLength(2);
+    const partial = within(view.getByText("9012345001").closest("li")!);
+    const duplicate = within(view.getByText("9012345004").closest("li")!);
+    expect(
+      partial.getByText("Amount to refund").nextElementSibling?.textContent
+    ).toMatch(/45\.67$/);
+    expect(
+      duplicate.getByText("Amount to refund").nextElementSibling?.textContent
+    ).toMatch(/123\.45$/);
+    expect(
+      view.getByRole("heading", { level: 1 }).parentElement?.textContent
+    ).toBe(fioOrderId);
     expect(
       view.getAllByRole("button", { name: "Record manual refund" })
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(loadNexiOrder).not.toHaveBeenCalled();
   });
 });

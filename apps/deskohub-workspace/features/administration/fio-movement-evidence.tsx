@@ -1,5 +1,5 @@
 import { formatCurrencyAmount } from "@deskohub/i18n/currency";
-import type { FioPaymentSettlement } from "@/db/schema/fio-payment-settlements";
+import type { FioStaffSettlement } from "@/features/checkout/backend/repositories/fio-payment-settlement.repository";
 import type { Locale } from "@/features/i18n";
 import { moneyToDecimalString } from "@/shared/money/money";
 import { AdministrationLink } from "./admin-link";
@@ -34,13 +34,21 @@ const discrepancyLabels = {
 
 type EvidenceSource = "order" | "reservation" | "queue";
 
+const formatFioCzkAmount = (value: number, locale: Locale) =>
+  formatCurrencyAmount({
+    amount: moneyToDecimalString({ value, currency: "CZK", exponent: 2 }),
+    currency: "CZK",
+    fractionDigits: 2,
+    locale,
+  });
+
 export function FioMovementEvidence({
   locale,
   movements,
   source,
 }: {
   readonly locale: Locale;
-  readonly movements: readonly FioPaymentSettlement[];
+  readonly movements: readonly FioStaffSettlement[];
   readonly source: EvidenceSource;
 }) {
   if (!movements.length) return null;
@@ -54,16 +62,7 @@ export function FioMovementEvidence({
           const amount =
             movement.amountValue === null
               ? `${movement.decimalAmount} ${movement.currency}`
-              : formatCurrencyAmount({
-                  amount: moneyToDecimalString({
-                    value: movement.amountValue,
-                    currency: "CZK",
-                    exponent: 2,
-                  }),
-                  currency: "CZK",
-                  fractionDigits: 2,
-                  locale,
-                });
+              : formatFioCzkAmount(movement.amountValue, locale);
           return (
             <li className="py-4 first:pt-0 last:pb-0" key={movement.id}>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3">
@@ -80,6 +79,16 @@ export function FioMovementEvidence({
                   label={m.administrationOrderFactAmount({}, { locale })}
                   value={amount}
                 />
+                {movement.disposition === "refund_required" && (
+                  <AdministrationFact
+                    label={m.administrationFioRefundAmount({}, { locale })}
+                    value={
+                      movement.refundTargetValue === null
+                        ? amount
+                        : formatFioCzkAmount(movement.refundTargetValue, locale)
+                    }
+                  />
+                )}
                 {movement.variableSymbol && (
                   <AdministrationFact
                     label={m.administrationFioVariableSymbol({}, { locale })}

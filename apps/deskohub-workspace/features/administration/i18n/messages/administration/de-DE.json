@@ -88,6 +88,7 @@
   "administrationFioReferenceAbsent": "Zahlungsreferenz fehlt",
   "administrationFioReferenceInvalid": "Ungültige Zahlungsreferenz",
   "administrationFioReferenceUnmatched": "Zahlungsreferenz ohne Zuordnung",
+  "administrationFioRefundAmount": "Zu erstattender Betrag",
   "administrationFioRefundFailed": "Die Erstattung konnte nicht erfasst werden.",
   "administrationFioRefundInstruction": "Erfassen Sie die Erstattung, nachdem Sie die Zahlung in Fio erstattet haben.",
   "administrationFioRefundQueue": "Offene Fio-Erstattungen",

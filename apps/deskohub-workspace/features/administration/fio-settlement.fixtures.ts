@@ -1,8 +1,8 @@
-import type { FioPaymentSettlement } from "@/db/schema/fio-payment-settlements";
+import type { FioStaffSettlement } from "@/features/checkout/backend/repositories/fio-payment-settlement.repository";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { orderIdSchema } from "@/features/order/order";
 
-export const fioPendingRefund: FioPaymentSettlement = {
+export const fioPendingRefund: FioStaffSettlement = {
   id: "01980000-0000-7000-8000-000000000044",
   orderId: orderIdSchema.make("01980000-0000-7000-8000-000000000040"),
   paymentAttemptId: paymentAttemptIdSchema.make(
@@ -19,9 +19,10 @@ export const fioPendingRefund: FioPaymentSettlement = {
   disposition: "refund_required",
   discrepancyReason: null,
   refundedAt: null,
+  refundTargetValue: null,
 };
 
-export const fioDiscrepancy: FioPaymentSettlement = {
+export const fioDiscrepancy: FioStaffSettlement = {
   ...fioPendingRefund,
   id: "01980000-0000-7000-8000-000000000043",
   movementId: "9012345002",

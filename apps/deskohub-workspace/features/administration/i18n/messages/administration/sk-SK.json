@@ -92,6 +92,7 @@
   "administrationFioReferenceAbsent": "Chýba variabilný symbol",
   "administrationFioReferenceInvalid": "Neplatný variabilný symbol",
   "administrationFioReferenceUnmatched": "Variabilný symbol bez zhody",
+  "administrationFioRefundAmount": "Suma na vrátenie",
   "administrationFioRefundFailed": "Vrátenie platby sa nepodarilo zaznamenať.",
   "administrationFioRefundInstruction": "Zaznamenajte vrátenie platby až po jej vrátení vo Fio.",
   "administrationFioRefundQueue": "Platby na vrátenie vo Fio",

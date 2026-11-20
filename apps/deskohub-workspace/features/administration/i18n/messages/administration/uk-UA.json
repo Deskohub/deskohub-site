@@ -92,6 +92,7 @@
   "administrationFioReferenceAbsent": "Платіжне посилання відсутнє",
   "administrationFioReferenceInvalid": "Недійсне платіжне посилання",
   "administrationFioReferenceUnmatched": "Для платіжного посилання немає збігу",
+  "administrationFioRefundAmount": "Сума до повернення",
   "administrationFioRefundFailed": "Не вдалося записати повернення коштів.",
   "administrationFioRefundInstruction": "Запишіть повернення після того, як повернете платіж у Fio.",
   "administrationFioRefundQueue": "Платежі до повернення у Fio",

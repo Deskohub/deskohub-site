@@ -1124,6 +1124,8 @@ describe.skipIf(!testDatabase)(
                 // Late recovery records this flag on the attempt as well as
                 // opening the movement-specific Fio refund work.
                 refundState: "required",
+                lastProviderOperationId: reservationId,
+                refundTargetValue: reservationId === fioOnly ? 12_500 : null,
                 amountValue: 29_000,
                 amountExponent: 2,
                 currency: "CZK",
@@ -1142,13 +1144,45 @@ describe.skipIf(!testDatabase)(
                 disposition: "refund_required",
               });
             }
+
+            const fioOrderId = reservationOrderId(fioOnly);
+            const duplicateMovementId = `duplicate-${fioOnly}`;
+            yield* db.insert(fioPaymentSettlements).values({
+              orderId: fioOrderId,
+              paymentAttemptId: paymentAttemptIdSchema.make(`fio-${fioOnly}`),
+              accountKey: "synthetic-fio-refund-account",
+              movementId: duplicateMovementId,
+              variableSymbol: "984201",
+              amountValue: 29_000,
+              currency: "CZK",
+              bookingDate: "2026-10-05",
+              observedAt: submittedAt,
+              disposition: "refund_required",
+            });
+
             const settlements = yield* FioPaymentSettlementRepository;
             const pending = yield* settlements.listForStaff({
               kind: "refund_required",
             });
             expect(pending.map(({ orderId }) => orderId).sort()).toEqual(
-              [fioOnly, mixed].sort()
+              [fioOrderId, fioOrderId, reservationOrderId(mixed)].sort()
             );
+            for (const rows of [
+              pending,
+              yield* settlements.listForOrder(fioOrderId),
+            ]) {
+              expect(
+                rows.find(({ movementId }) => movementId === fioOnly)
+              ).toMatchObject({
+                amountValue: 29_000,
+                refundTargetValue: 12_500,
+              });
+              expect(
+                rows.find(
+                  ({ movementId }) => movementId === duplicateMovementId
+                )
+              ).toMatchObject({ amountValue: 29_000, refundTargetValue: null });
+            }
             for (const row of pending) {
               const completion = yield* settlements.markManualRefunded(
                 row.id,

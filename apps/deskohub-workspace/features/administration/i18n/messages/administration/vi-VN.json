@@ -86,6 +86,7 @@
   "administrationFioReferenceAbsent": "Thiếu mã tham chiếu thanh toán",
   "administrationFioReferenceInvalid": "Mã tham chiếu thanh toán không hợp lệ",
   "administrationFioReferenceUnmatched": "Không tìm thấy giao dịch khớp mã tham chiếu",
+  "administrationFioRefundAmount": "Số tiền cần hoàn",
   "administrationFioRefundFailed": "Không thể ghi nhận khoản hoàn tiền.",
   "administrationFioRefundInstruction": "Vui lòng ghi nhận khoản hoàn tiền sau khi hoàn tiền trong Fio.",
   "administrationFioRefundQueue": "Khoản cần hoàn trong Fio",

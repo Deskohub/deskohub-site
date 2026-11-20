@@ -1,4 +1,14 @@
-import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  getColumns,
+  inArray,
+  isNull,
+  lt,
+  or,
+  sql,
+} from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
@@ -25,6 +35,10 @@ export type FioAccountSettlementPage = {
   readonly accountKey: string;
   readonly beforeId?: string;
   readonly unlinkedOnly?: boolean;
+};
+
+export type FioStaffSettlement = FioPaymentSettlement & {
+  readonly refundTargetValue: number | null;
 };
 
 interface IFioPaymentSettlementRepository {
@@ -63,10 +77,10 @@ interface IFioPaymentSettlementRepository {
   readonly listForStaff: (input: {
     readonly kind: "unmatched" | "refund_required";
     readonly beforeId?: string;
-  }) => Effect.Effect<readonly FioPaymentSettlement[], DatabaseQueryError>;
+  }) => Effect.Effect<readonly FioStaffSettlement[], DatabaseQueryError>;
   readonly listForOrder: (
     orderId: OrderId
-  ) => Effect.Effect<readonly FioPaymentSettlement[], DatabaseQueryError>;
+  ) => Effect.Effect<readonly FioStaffSettlement[], DatabaseQueryError>;
   readonly markManualRefunded: (
     settlementId: string,
     refundedAt: Temporal.Instant
@@ -81,6 +95,30 @@ export class FioPaymentSettlementRepository extends Context.Service<
     this,
     Effect.gen(function* () {
       const { db, transaction } = yield* WorkspaceDatabase;
+      // A partial target belongs to the receipt that paid the attempt.
+      // Other movements on the same attempt still owe their full amount.
+      const selectStaffSettlements = () =>
+        db
+          .select({
+            ...getColumns(fioPaymentSettlements),
+            refundTargetValue: paymentAttempts.refundTargetValue,
+          })
+          .from(fioPaymentSettlements)
+          .leftJoin(
+            paymentAttempts,
+            and(
+              eq(fioPaymentSettlements.disposition, "refund_required"),
+              eq(paymentAttempts.id, fioPaymentSettlements.paymentAttemptId),
+              eq(paymentAttempts.provider, "fio"),
+              eq(paymentAttempts.state, "paid"),
+              eq(paymentAttempts.refundState, "required"),
+              eq(
+                paymentAttempts.lastProviderOperationId,
+                fioPaymentSettlements.movementId
+              )
+            )
+          );
+
       return FioPaymentSettlementRepository.of({
         claimMovement: Effect.fn("fioPaymentSettlements.claimMovement")(
           function* (input) {
@@ -224,9 +262,7 @@ export class FioPaymentSettlementRepository extends Context.Service<
               Effect.map((rows) => rows.map(({ settlement }) => settlement))
             ),
         listForStaff: ({ kind, beforeId }) =>
-          db
-            .select()
-            .from(fioPaymentSettlements)
+          selectStaffSettlements()
             .where(
               and(
                 kind === "unmatched"
@@ -243,9 +279,7 @@ export class FioPaymentSettlementRepository extends Context.Service<
             .orderBy(desc(fioPaymentSettlements.id))
             .limit(100),
         listForOrder: (orderId) =>
-          db
-            .select()
-            .from(fioPaymentSettlements)
+          selectStaffSettlements()
             .where(eq(fioPaymentSettlements.orderId, orderId))
             .orderBy(desc(fioPaymentSettlements.id)),
         markManualRefunded: Effect.fn(

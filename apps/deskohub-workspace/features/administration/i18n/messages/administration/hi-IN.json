@@ -88,6 +88,7 @@
   "administrationFioReferenceAbsent": "भुगतान संदर्भ मौजूद नहीं है",
   "administrationFioReferenceInvalid": "भुगतान संदर्भ अमान्य है",
   "administrationFioReferenceUnmatched": "भुगतान संदर्भ का मिलान नहीं मिला",
+  "administrationFioRefundAmount": "रिफ़ंड की जाने वाली राशि",
   "administrationFioRefundFailed": "रिफ़ंड दर्ज नहीं हो सका।",
   "administrationFioRefundInstruction": "Fio में रिफ़ंड जारी करने के बाद उसे यहाँ दर्ज करें।",
   "administrationFioRefundQueue": "Fio में जारी करने वाले रिफ़ंड",

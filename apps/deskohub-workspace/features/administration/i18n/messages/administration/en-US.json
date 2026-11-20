@@ -88,6 +88,7 @@
   "administrationFioReferenceAbsent": "Missing payment reference",
   "administrationFioReferenceInvalid": "Invalid payment reference",
   "administrationFioReferenceUnmatched": "Unmatched payment reference",
+  "administrationFioRefundAmount": "Amount to refund",
   "administrationFioRefundFailed": "The refund could not be recorded.",
   "administrationFioRefundInstruction": "Record the refund after issuing it in Fio.",
   "administrationFioRefundQueue": "Fio refunds to issue",
