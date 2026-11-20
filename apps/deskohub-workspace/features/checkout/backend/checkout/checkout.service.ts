@@ -43,7 +43,7 @@ import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { type Money, moneyEquals } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
-  currentInstant,
+  currentPreciseInstant,
   localDateTimeToInstant,
 } from "@/shared/utils/temporal";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
@@ -396,7 +396,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           }
           const page = getPaymentPageToReopen(
             attempt,
-            yield* currentInstant,
+            yield* currentPreciseInstant,
             expiresAt
           );
           if ("closed" in page) return paymentInProgress;
@@ -425,7 +425,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           if (!currentCard || currentCard.id !== attempt.id)
             return paymentInProgress;
 
-          const now = yield* currentInstant;
+          const now = yield* currentPreciseInstant;
           const currentPage = getPaymentPageToReopen(
             currentCard,
             now,
@@ -700,6 +700,16 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
       ) {
         const paidResult = yield* findPaidOrderResult(input);
         if (paidResult) return paidResult;
+        // Shared-window attempts are only reopened through the method-aware
+        // path, including when a stale Pay form omits the payment method.
+        if (
+          qrPayments &&
+          (yield* qrPayments.findPaymentWindow(
+            reservationOrderId(input.reservation.id)
+          ))
+        ) {
+          return paymentInProgress;
+        }
         return yield* findActiveAttemptResult(input);
       });
 
@@ -899,8 +909,10 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           if (!window) return undefined;
           if (
             window.accountKey !== input.fio.accountKey ||
-            Temporal.Instant.compare(window.expiresAt, yield* currentInstant) <=
-              0
+            Temporal.Instant.compare(
+              window.expiresAt,
+              yield* currentPreciseInstant
+            ) <= 0
           ) {
             return paymentInProgress;
           }
@@ -957,11 +969,13 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             (yield* accountingSnapshots.find(accepted.id));
           if (!snapshot || !providers.activeProviders.includes("nexi"))
             return paymentInProgress;
-          const customer = getPaymentCustomer({
+          const customerDetails = {
             id: reservation.dotyposCustomerId,
             name: snapshot.buyer.legalName,
-            email: snapshot.delivery?.email,
-          });
+          };
+          const customer: PaymentCustomer = snapshot.delivery
+            ? { ...customerDetails, email: snapshot.delivery.email }
+            : customerDetails;
           if ((yield* providers.selectForCustomer(customer)) !== "nexi")
             return paymentInProgress;
           const session = yield* startPaymentSession({
@@ -991,8 +1005,10 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             });
           }
           if (
-            Temporal.Instant.compare(yield* currentInstant, window.expiresAt) >=
-            0
+            Temporal.Instant.compare(
+              yield* currentPreciseInstant,
+              window.expiresAt
+            ) >= 0
           ) {
             return paymentInProgress;
           }
@@ -1004,6 +1020,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
         },
         (effect) =>
           effect.pipe(
+            Effect.scoped,
             Effect.catchTag("PaymentLifecycleStateError", () =>
               Effect.succeed(paymentInProgress)
             ),
