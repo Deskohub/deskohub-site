@@ -248,9 +248,10 @@ export class FioAccountPoller extends Context.Service<
               });
             }
 
-            // Settlement owns deduplication by account and movement ID. Commit
-            // coverage only after all movement effects have succeeded.
-            yield* Effect.forEach(
+            // A dispatch failure for one movement must not delay recording
+            // the rest of this response with their original observation time.
+            // Retain coverage until every movement effect has succeeded.
+            const [, [ingestionFailure]] = yield* Effect.partition(
               movements,
               (movement) =>
                 settlements.recordMovement({
@@ -268,9 +269,9 @@ export class FioAccountPoller extends Context.Service<
                             ? ("absent" as const)
                             : ("invalid" as const),
                       }),
-                }),
-              { discard: true }
+                })
             );
+            if (ingestionFailure) return yield* Effect.fail(ingestionFailure);
             yield* finish(job, read, "ingested");
           },
           Effect.tapError((error) =>

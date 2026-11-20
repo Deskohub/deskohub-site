@@ -273,12 +273,16 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     expect(h.queue.pending()[0]?.options.delaySeconds).toBe(35);
   });
 
-  test("redelivery replays the last QR winner's failed dispatch with no payable demand or bank read", async () => {
+  test("records a whole response despite failed dispatch, then replays dispatch without bank reads when idle", async () => {
     const h = createHarness();
-    const order = await h.start();
+    const first = await h.start();
+    const last = await h.start();
     const job = h.take();
     h.setRead(({ to }) =>
-      Effect.succeed([credit("last-winner", to, order.variableSymbol)])
+      Effect.succeed([
+        credit("first-winner", to, first.variableSymbol),
+        credit("last-winner", to, last.variableSymbol),
+      ])
     );
     h.failDispatch(true);
     await expect(h.consume(job)).rejects.toMatchObject({
@@ -287,9 +291,14 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     expect((await h.state())?.delivery_id).toBe(job.deliveryId);
     expect((await h.state())?.covered_through).toBeNull();
     expect(h.reads).toHaveLength(1);
-    expect(await h.evidence()).toMatchObject([
+    const recorded = await h.evidence();
+    expect(
+      recorded.toSorted((a, b) => a.movementId.localeCompare(b.movementId))
+    ).toMatchObject([
+      { movementId: "first-winner", disposition: "winner" },
       { movementId: "last-winner", disposition: "winner" },
     ]);
+    expect(recorded[0]?.observedAt).toEqual(recorded[1]?.observedAt);
 
     await expect(h.consume(job)).rejects.toMatchObject({
       _tag: "PaidFulfillmentQueueError",
@@ -301,7 +310,8 @@ describe.skipIf(!database)("Fio polling against disposable Postgres", () => {
     await h.consume(job);
     expect(h.reads).toHaveLength(1);
     expect(h.queue.pending()).toEqual([]);
-    expect(h.dispatchQueue.pending()).toHaveLength(1);
+    expect(h.dispatchQueue.pending()).toHaveLength(2);
+    expect(await h.evidence()).toEqual(recorded);
     expect((await h.state())?.delivery_id).toBeNull();
   });
 
