@@ -583,6 +583,8 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly accountAuthority?: CustomerAccountSectionsFixture;
   readonly returnTarget?: PaymentReturnTarget;
   readonly resumePayment?: "card" | "qr";
+  readonly concurrentCardAdmission?: boolean;
+  readonly sharedWindow?: "visible" | "under_account_lock";
   readonly resumeNow?: Temporal.Instant;
   readonly publicPaymentExpiresAt?: Temporal.Instant;
   readonly observePaymentPage?: () => Effect.Effect<PaymentPageProviderObservation>;
@@ -631,7 +633,12 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   };
   const createPendingProviderAttempt =
     options.createPendingProviderAttempt ??
-    mock(() => Effect.succeed(createdAttempt));
+    mock(() =>
+      Effect.succeed(
+        options.concurrentCardAdmission ? attachedAttempt : createdAttempt
+      )
+    );
+  let concurrentCardAdmitted = false;
   const internalAttempt = {
     ...createdAttempt,
     provider: "internal" as const,
@@ -675,10 +682,13 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     createPendingQrAttempt,
     createPendingProviderAttempt: (input) =>
       createPendingProviderAttempt(input).pipe(
-        Effect.map((attempt) => ({
-          ...attempt,
-          providerOrderId: input.providerOrderId,
-        }))
+        Effect.map((attempt) => {
+          if (options.concurrentCardAdmission) {
+            concurrentCardAdmitted = true;
+            return attempt;
+          }
+          return { ...attempt, providerOrderId: input.providerOrderId };
+        })
       ),
     completeInternalPayment,
     attachProviderSession: attachHostedPaymentPage,
@@ -774,6 +784,9 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     options.accountAuthority ?? { session: null }
   );
 
+  const { AccountingDocumentSnapshots } = await import(
+    "@/features/accounting/backend/accounting-document-snapshots"
+  );
   const { PaymentPageProviderStatus } = await import(
     "./payment-page-provider-status"
   );
@@ -785,6 +798,8 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   );
   const { FioPollWake } = await import("../fio/fio-poll-wake.service");
   const effect = Effect.gen(function* () {
+    if (options.resumeNow)
+      yield* TestClock.setTime(options.resumeNow.epochMilliseconds);
     const service = yield* CheckoutService;
     const input = {
       payStateToken:
@@ -803,8 +818,6 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
       ...(options.returnTarget && { returnTarget: options.returnTarget }),
     };
     if (options.resumePayment) {
-      if (options.resumeNow)
-        yield* TestClock.setTime(options.resumeNow.epochMilliseconds);
       return yield* service.resumeReservationPayment(
         {
           reservationId: options.orderId,
@@ -839,8 +852,12 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
             Layer.mock(PaymentAttemptRepository, paymentAttempts),
             Layer.mock(QrPaymentRepository, {
               findPaymentWindow: () =>
-                Effect.succeed(
-                  options.resumePayment
+                Effect.sync(() =>
+                  options.resumePayment ||
+                  concurrentCardAdmitted ||
+                  options.sharedWindow === "visible" ||
+                  (options.sharedWindow === "under_account_lock" &&
+                    options.accountAuthority?.lockProbe?.held)
                     ? {
                         accountKey: "receiving-account",
                         expiresAt:
@@ -849,7 +866,12 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
                       }
                     : null
                 ),
-              findCardAttempt: () => Effect.succeed(attachedAttempt),
+              findCardAttempt: () =>
+                Effect.succeed(
+                  options.concurrentCardAdmission && !concurrentCardAdmitted
+                    ? null
+                    : attachedAttempt
+                ),
               findForReservation: () =>
                 Effect.succeed({
                   orderId: options.orderId,
@@ -859,6 +881,10 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
                   amount: createdAttempt.amount,
                   expiresAt: testInstant(storedHoldExpiresAt),
                 }),
+            }),
+            Layer.mock(AccountingDocumentSnapshots, {
+              find: () =>
+                Effect.succeed({ locale, buyer: { legalName: "Ada Example" } }),
             }),
             Layer.mock(PaymentPageProviderStatus, {
               observe: observePaymentPage,
@@ -921,13 +947,15 @@ describe("CheckoutService", () => {
 
   const createSharedCardResume = (input: {
     readonly now: Temporal.Instant;
+    readonly expiresAt?: Temporal.Instant;
     readonly observe: () => Effect.Effect<PaymentPageProviderObservation>;
   }) =>
     createCheckoutHarness({
       orderId: "public-card-reservation",
       resumePayment: "card",
       resumeNow: input.now,
-      publicPaymentExpiresAt: testInstant("2026-06-01T10:30:00Z"),
+      publicPaymentExpiresAt:
+        input.expiresAt ?? testInstant("2026-06-01T10:30:00Z"),
       observePaymentPage: input.observe,
       reservationOverrides: {
         paymentState: "pending",
@@ -998,6 +1026,56 @@ describe("CheckoutService", () => {
     expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
   });
 
+  test("closes the card page when the cutoff passes within the same millisecond", async () => {
+    const harness = await createSharedCardResume({
+      now: testInstant("2026-06-01T10:30:00.000Z"),
+      expiresAt: testInstant("2026-06-01T10:30:00.000500Z"),
+      observe: () =>
+        TestClock.adjust(Duration.nanos(900_000n)).pipe(
+          Effect.as("no_activity" as const)
+        ),
+    });
+
+    expect(await Effect.runPromise(harness.effect)).toEqual({
+      status: "in_progress",
+    });
+    expect(harness.observePaymentPage).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(["signed checkout", "status"] as const)(
+    "checks the activity of a concurrently attached card during %s",
+    async (entry) => {
+      const orderId = "concurrent-public-card";
+      const accepted = makeAttempt({ orderId, id: "existing-attempt" });
+      const harness = await createCheckoutHarness({
+        orderId,
+        concurrentCardAdmission: true,
+        startPayment:
+          entry === "signed checkout"
+            ? { method: "card", fio: { accountKey: "receiving-account" } }
+            : undefined,
+        resumePayment: entry === "status" ? "card" : undefined,
+        resumeNow: testInstant("2026-06-01T10:03:00Z"),
+        publicPaymentExpiresAt: testInstant("2026-06-01T10:30:00Z"),
+        activeAttempt: accepted,
+        reservationOverrides:
+          entry === "status"
+            ? {
+                paymentState: "pending",
+                activePaymentAttemptId: accepted.id,
+              }
+            : undefined,
+        observePaymentPage: () => Effect.succeed("activity"),
+      });
+
+      expect(await Effect.runPromise(harness.effect)).toEqual({
+        status: "in_progress",
+      });
+      expect(harness.observePaymentPage).toHaveBeenCalledTimes(1);
+      expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+    }
+  );
+
   test("does not observe or replace the card page at the shared cutoff", async () => {
     const harness = await createSharedCardResume({
       now: testInstant("2026-06-01T10:30:00Z"),
@@ -1009,6 +1087,95 @@ describe("CheckoutService", () => {
     });
     expect(harness.observePaymentPage).toHaveBeenCalledTimes(0);
     expect(harness.createPendingProviderAttempt).toHaveBeenCalledTimes(0);
+    expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+  });
+
+  test.each([
+    ["an open window", undefined],
+    ["an expired window", testInstant("2026-06-01T10:30:00Z")],
+  ] as const)(
+    "a legacy signed submission does not reopen a card page with %s",
+    async (_, expiresAt) => {
+      const orderId = "legacy-shared-window";
+      const attempt = makeAttempt({
+        orderId,
+        id: "legacy-shared-card",
+        state: "pending",
+        securityToken: "stored-card-token",
+        providerRedirectUrl: "https://payments.example/shared-card",
+      });
+      const harness = await createCheckoutHarness({
+        orderId,
+        sharedWindow: "visible",
+        publicPaymentExpiresAt: expiresAt,
+        activeAttempt: attempt,
+        reservationOverrides: {
+          paymentState: "pending",
+          activePaymentAttemptId: attempt.id,
+        },
+      });
+
+      expect(await Effect.runPromise(harness.effect)).toEqual({
+        status: "in_progress",
+      });
+      expect(harness.findAttempt).toHaveBeenCalledTimes(0);
+      expect(harness.observePaymentPage).toHaveBeenCalledTimes(0);
+      expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+    }
+  );
+
+  test("a legacy signed submission sees a shared window opened under the account lock", async () => {
+    const orderId = "legacy-new-shared-window";
+    const attempt = makeAttempt({
+      orderId,
+      id: "new-shared-card",
+      state: "pending",
+      securityToken: "stored-card-token",
+      providerRedirectUrl: "https://payments.example/new-shared-card",
+    });
+    const harness = await createCheckoutHarness({
+      orderId,
+      sharedWindow: "under_account_lock",
+      activeAttempt: attempt,
+      accountAuthority: { session: {}, lockProbe: { held: false } },
+      lockedReservationOverrides: {
+        paymentState: "pending",
+        activePaymentAttemptId: attempt.id,
+      },
+    });
+
+    expect(await Effect.runPromise(harness.effect)).toEqual({
+      status: "in_progress",
+    });
+    expect(harness.rereadUnderAccountLock).toEqual([true]);
+    expect(harness.findAttempt).toHaveBeenCalledTimes(0);
+    expect(harness.observePaymentPage).toHaveBeenCalledTimes(0);
+    expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+  });
+
+  test("a legacy signed submission can still reuse its windowless card session", async () => {
+    const orderId = "legacy-windowless-card";
+    const attempt = makeAttempt({
+      orderId,
+      id: "windowless-card",
+      state: "pending",
+      securityToken: "stored-card-token",
+      providerRedirectUrl: "https://payments.example/windowless-card",
+    });
+    const harness = await createCheckoutHarness({
+      orderId,
+      activeAttempt: attempt,
+      reservationOverrides: {
+        paymentState: "pending",
+        activePaymentAttemptId: attempt.id,
+      },
+    });
+
+    expect(await Effect.runPromise(harness.effect)).toMatchObject({
+      status: "redirect",
+      redirectUrl: "https://payments.example/windowless-card",
+    });
+    expect(harness.observePaymentPage).toHaveBeenCalledTimes(0);
     expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
   });
 
