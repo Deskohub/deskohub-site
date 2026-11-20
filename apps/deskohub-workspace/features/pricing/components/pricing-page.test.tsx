@@ -13,6 +13,7 @@ import {
   getPublicCatalogOfferings,
   type PublicPriceListOffering,
 } from "@/features/checkout/public-offerings";
+import type { GlobalRelease } from "@/features/feature-flags/backend/global-release";
 import { type Locale, locales, m } from "@/features/i18n";
 import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney } from "@/shared/money/money";
@@ -43,6 +44,18 @@ mock.module("@/shared/components/guarded-link", () => ({
     </a>
   ),
 }));
+
+let passesRelease: GlobalRelease = "off";
+const isCoworkPassesPageOpenAfterConnection = mock(async () => false);
+mock.module("@/features/feature-flags/backend/global-release.server", () => ({
+  loadGlobalRelease: async () => passesRelease,
+}));
+mock.module(
+  "@/features/passes/backend/cowork-passes-release-gate.server",
+  () => ({
+    isCoworkPassesPageOpenAfterConnection,
+  })
+);
 
 type PriceListLoad = (
   locale: Locale
@@ -118,6 +131,9 @@ beforeAll(registerWorkspaceComponentTestEnv);
 afterAll(unregisterWorkspaceComponentTestEnv);
 
 beforeEach(() => {
+  passesRelease = "off";
+  isCoworkPassesPageOpenAfterConnection.mockReset();
+  isCoworkPassesPageOpenAfterConnection.mockResolvedValue(false);
   sharedPriceList = saleOnOpenSpace;
   variesByVisitor = false;
   visitorPriceList = saleOnOpenSpace;
@@ -125,6 +141,64 @@ beforeEach(() => {
 });
 
 describe("PricingPage", () => {
+  test("keeps Entry pack offers out of the price page while the release is off", async () => {
+    const html = await renderPage("en-US");
+    expect(
+      visibleDocument(html).getElementById("pricing-entry-packs")
+    ).toBeNull();
+    expect(
+      visibleLinks(html).some((href) => href?.includes("/passes/entry-pack"))
+    ).toBe(false);
+    expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();
+  });
+
+  test("shows all Entry pack tiers and their catalog prices in the static price page", async () => {
+    passesRelease = "on";
+    const locale = "cs-CZ";
+    const document = visibleDocument(await renderPage(locale));
+    const packs = document.getElementById("pricing-entry-packs");
+    if (!packs) throw new Error("Expected the Entry packs price section");
+
+    expect(packs.previousElementSibling?.getAttribute("aria-labelledby")).toBe(
+      "pricing-cowork-title"
+    );
+    expect(packs.querySelector("h2")?.textContent).toBe("Balíčky vstupů");
+    const price = (value: number) => formatMoney(currencyCZK(value), locale);
+    for (const expected of [
+      115_000, 219_000, 159_000, 309_000, 205_000, 399_000, 23_000, 21_900,
+      31_800, 30_900, 41_000, 39_900,
+    ]) {
+      expect(packs.textContent).toContain(price(expected));
+    }
+    expect(packs.textContent).toContain("5 vstupů s platností 2 měsíce");
+    expect(packs.textContent).toContain("10 vstupů s platností 3 měsíce");
+    expect(
+      Array.from(packs.querySelectorAll("a"), (link) =>
+        link.getAttribute("href")
+      )
+    ).toEqual([
+      "/cs-CZ/passes/entry-pack?tier=open-space",
+      "/cs-CZ/passes/entry-pack?tier=reserved-desk",
+      "/cs-CZ/passes/entry-pack?tier=reserved-desk-workstation",
+    ]);
+    expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])(
+    "asks for the visitor's flag when the global release is undecided (visitor open: %s)",
+    async (visitorOpen) => {
+      passesRelease = "undecided";
+      isCoworkPassesPageOpenAfterConnection.mockResolvedValue(visitorOpen);
+
+      const html = await renderPage("en-US");
+
+      expect(html.includes("/en-US/passes/entry-pack?tier=open-space")).toBe(
+        visitorOpen
+      );
+      expect(isCoworkPassesPageOpenAfterConnection).toHaveBeenCalledTimes(1);
+    }
+  );
+
   for (const locale of locales) {
     test(`shows every price, the office, the sale, and the opening hours in the visible server HTML in ${locale}`, async () => {
       const html = await renderPage(locale);

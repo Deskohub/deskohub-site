@@ -16,6 +16,7 @@ import {
 } from "./verifiable-provider-payment-attempt";
 
 type LatePaymentVerificationResult =
+  | "confirmed_unpaid"
   | "not_applicable"
   | "not_verifiable"
   | "not_settled"
@@ -42,6 +43,7 @@ export interface ILatePaymentVerificationService {
    */
   readonly startRecoveryIfSettled: (input: {
     readonly orderId: OrderId;
+    readonly expectedPaymentAttemptId?: PaymentAttemptId;
     /** Bounds payment verification, retries included. */
     readonly verificationDeadline?: Duration.Input;
   }) => Effect.Effect<LatePaymentVerificationResult>;
@@ -100,6 +102,9 @@ export class LatePaymentVerificationService extends Context.Service<
           return "verification_mismatch" as const;
         }
         if (verification.status !== "success") {
+          if (verification.closedWithoutPayment) {
+            return "confirmed_unpaid" as const;
+          }
           return "not_settled" as const;
         }
 
@@ -131,7 +136,9 @@ export class LatePaymentVerificationService extends Context.Service<
           const paymentAttemptId = order?.activePaymentAttemptId;
           if (
             !(order && paymentAttemptId) ||
-            !isTerminalPaymentState(order.paymentState)
+            !isTerminalPaymentState(order.paymentState) ||
+            (input.expectedPaymentAttemptId !== undefined &&
+              input.expectedPaymentAttemptId !== paymentAttemptId)
           ) {
             return "not_applicable" as const;
           }

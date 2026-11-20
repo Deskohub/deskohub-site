@@ -3,7 +3,7 @@
 import Interpolate from "@doist/react-interpolate";
 import { CreditCard, QrCode, RotateCcw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
-import { type ReactNode, useId } from "react";
+import { type ReactNode, type Ref, useId } from "react";
 import { type Locale, m } from "@/features/i18n";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -25,11 +25,13 @@ type CheckoutPayActionVariant = "pay" | "retry";
 
 export function CheckoutPayCard({
   children,
+  headingRef,
   lead,
   title,
   ...props
 }: Omit<CardProps, "className"> & {
   readonly lead?: string | null;
+  readonly headingRef?: Ref<HTMLHeadingElement>;
   readonly title: string;
 }) {
   return (
@@ -39,7 +41,12 @@ export function CheckoutPayCard({
     >
       <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-linear-to-r from-transparent via-sunset-yellow/80 to-transparent" />
       <CardHeader className="space-y-3 pb-6">
-        <CardTitle as="h1" className="text-3xl sm:text-[2.35rem]">
+        <CardTitle
+          as="h1"
+          className="text-3xl sm:text-[2.35rem]"
+          ref={headingRef}
+          tabIndex={headingRef ? -1 : undefined}
+        >
           {title}
         </CardTitle>
         {!!lead && (
@@ -57,6 +64,7 @@ export function CheckoutPayCard({
 export function CheckoutPayConsent({
   checked,
   disabled,
+  earlyStartRequest,
   id,
   locale,
   onCheckedChange,
@@ -65,6 +73,7 @@ export function CheckoutPayConsent({
 }: {
   readonly checked?: boolean;
   readonly disabled?: boolean;
+  readonly earlyStartRequest?: string;
   readonly id: string;
   readonly locale: Locale;
   readonly onCheckedChange?: (checked: boolean) => void;
@@ -106,6 +115,7 @@ export function CheckoutPayConsent({
               showEarlyPerformanceRequest ? text : null,
           }}
         />
+        {earlyStartRequest && <> {earlyStartRequest}</>}
       </span>
     </ChoiceCard>
   );

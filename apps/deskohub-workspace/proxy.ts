@@ -3,6 +3,7 @@ import {
   getLocalizedRedirectPathname,
   setLocaleCookie,
 } from "@deskohub/i18n/next";
+import { stripLocaleFromPathname } from "@deskohub/i18n/pathname";
 import { getSessionCookie } from "better-auth/cookies";
 import { Result } from "effect";
 import {
@@ -28,6 +29,7 @@ import {
   findLegalDocumentOfPathname,
   getInAppLegalDocumentPath,
 } from "@/features/legal/legal-document-path";
+import { entryPackCheckoutPath } from "@/features/passes/routes";
 import {
   findLocalizedPublicPage,
   getPageMarkdownRoutePath,
@@ -98,6 +100,10 @@ const isPrivateAccountPath = (pathname: string) =>
 
 const isPrivatePagePath = (pathname: string) =>
   isPrivateReservationPath(pathname) || isPrivateAccountPath(pathname);
+
+const isEntryPackOrderRequest = ({ nextUrl }: NextRequest) =>
+  nextUrl.searchParams.has("order") &&
+  stripLocaleFromPathname(nextUrl.pathname, locales) === entryPackCheckoutPath;
 
 // Outside the account and the administration, a dotted path reaches the proxy
 // only for the exact-locale redirect.
@@ -232,8 +238,8 @@ async function localizedPageResponse(
     return exchangeReservationCapability(request, localeFromUrl);
   }
 
-  // A verified continuation (a Pay state or an invoice link) keeps the locale
-  // it was issued in; the saved preference applies everywhere else.
+  // A verified checkout continuation keeps its issued locale. The saved
+  // preference applies everywhere else.
   const savedPreference = await pageLocalePreference(request);
   const resolvedLocale = resolveWorkspaceLocale(
     {
@@ -289,6 +295,9 @@ const resolvedLocalePageResponse = (
   if (publicPage) response.headers.append("Vary", "Accept");
   if (isPrivatePagePath(request.nextUrl.pathname)) {
     markPrivateResponse(response);
+  } else if (isEntryPackOrderRequest(request)) {
+    // The action needs the referring checkout URL to verify the issued locale.
+    markPrivateResponse(response, "same-origin");
   }
   setLocaleCookie(response, localeCookieName, locale);
   return response;
@@ -351,7 +360,8 @@ const localeRedirectResponse = (
   response.headers.set("Vary", "Accept-Language");
   if (
     savedPreference !== undefined ||
-    isPrivateReservationPath(request.nextUrl.pathname)
+    isPrivateReservationPath(request.nextUrl.pathname) ||
+    isEntryPackOrderRequest(request)
   ) {
     markPrivateResponse(response);
   }
@@ -500,7 +510,9 @@ const markRedirectPrivacy = (request: NextRequest, response: NextResponse) => {
   if (isAdministrationPath(pathname)) {
     return markAdministrationResponse(response);
   }
-  return isPrivatePagePath(pathname) ? markPrivateResponse(response) : response;
+  return isPrivatePagePath(pathname) || isEntryPackOrderRequest(request)
+    ? markPrivateResponse(response)
+    : response;
 };
 
 export async function proxy(request: NextRequest) {

@@ -2,10 +2,12 @@ import {
   getLocaleFromPathname,
   stripLocaleFromPathname,
 } from "@deskohub/i18n/pathname";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { payStateTokenQueryParam } from "@/features/checkout/pay-state-token-query";
 import type { Locale } from "@/features/i18n";
 import { locales } from "@/features/i18n/routing";
+import { type OrderId, orderIdSchema } from "@/features/order";
+import { entryPackCheckoutPath } from "@/features/passes/routes";
 import { reservationAccessTokenQueryParam } from "@/features/reservation/reservation-access-token";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
 import {
@@ -25,14 +27,16 @@ const restorationPages: Readonly<Record<string, ReservationOrderData["kind"]>> =
   };
 
 /**
- * A URL that may continue a flow bound to the locale its signed value was
- * issued in. Only a verified candidate keeps that locale:
+ * A URL that may continue a flow bound to its issued locale. Only a
+ * verified candidate keeps that locale:
  * - The Pay page, and the reservation pages that restore an edited
  *   reservation, take a Pay state. It fixes the language of the terms and
  *   operating rules the customer accepts and of the frozen accounting
  *   snapshot (the invoice language).
  * - The invoice page takes a reservation access token and issues the invoice
  *   in the reservation's locale.
+ * - The Entry pack checkout takes an order ID and continues in its locale
+ *   for the verified buyer.
  * Status and access links are exchanged for a locale-free cookie before any
  * locale decision, so their token never reaches this check.
  */
@@ -49,6 +53,11 @@ export type LocaleBoundContinuation =
       readonly locale: Locale;
       readonly orderId: string;
       readonly token: string;
+    }
+  | {
+      readonly kind: "entry-pack-order";
+      readonly locale: Locale;
+      readonly orderId: OrderId;
     };
 
 /**
@@ -62,7 +71,7 @@ const pageParam = (searchParams: Pick<URLSearchParams, "get">, param: string) =>
 type ContinuationCandidate = {
   readonly locale: Locale;
   readonly route: string;
-  readonly searchParams: Pick<URLSearchParams, "get">;
+  readonly searchParams: Pick<URLSearchParams, "get" | "getAll">;
 };
 
 /**
@@ -102,17 +111,30 @@ const findInvoiceContinuation = ({
     : undefined;
 };
 
+const findEntryPackContinuation = ({
+  locale,
+  route,
+  searchParams,
+}: ContinuationCandidate): LocaleBoundContinuation | undefined => {
+  if (route !== entryPackCheckoutPath) return undefined;
+  const [orderId, ...duplicates] = searchParams.getAll("order");
+  // Next passes duplicated parameters to the page as an array, which it rejects.
+  return duplicates.length === 0 && Schema.is(orderIdSchema)(orderId)
+    ? { kind: "entry-pack-order", locale, orderId }
+    : undefined;
+};
+
 /**
  * The continuation a URL claims to carry: a supported route with a non-empty
- * first value of its signed parameter, as the page reads it. This only matches the URL's shape and reads
- * no secret, so callers must verify the candidate before keeping its locale.
+ * parameter, as the page reads it. This only matches the URL's shape, so
+ * callers must verify the candidate before keeping its locale.
  */
 export const findLocaleBoundContinuation = ({
   pathname,
   searchParams,
 }: {
   readonly pathname: string;
-  readonly searchParams: Pick<URLSearchParams, "get">;
+  readonly searchParams: ContinuationCandidate["searchParams"];
 }): LocaleBoundContinuation | undefined => {
   const locale = getLocaleFromPathname(pathname, locales);
   if (!locale) return undefined;
@@ -122,7 +144,9 @@ export const findLocaleBoundContinuation = ({
     searchParams,
   };
   return (
-    findPayStateContinuation(candidate) ?? findInvoiceContinuation(candidate)
+    findPayStateContinuation(candidate) ??
+    findInvoiceContinuation(candidate) ??
+    findEntryPackContinuation(candidate)
   );
 };
 

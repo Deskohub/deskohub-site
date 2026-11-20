@@ -72,7 +72,7 @@ type CoworkPageRequest = Parameters<
 const loadCoworkReservationContent = ({
   checkoutAccount = { status: "signed-out" },
   initialReservation,
-  pageData = { overnightStayOffered: false },
+  pageData = { entryPackOffered: false, overnightStayOffered: false },
   replacementToken = "signed-replacement-token",
   ...request
 }: Omit<CoworkPageRequest, "checkoutAccount" | "pageData"> & {
@@ -404,7 +404,7 @@ describe("a linked overnight stay", () => {
   test("opens on the overnight stay and preloads its availability while the release is open", async () => {
     const form = await renderCoworkReservationForm({
       locale: "en-US",
-      pageData: { overnightStayOffered: true },
+      pageData: { entryPackOffered: false, overnightStayOffered: true },
       searchParams: overnightLink,
     });
 
@@ -422,7 +422,7 @@ describe("a linked overnight stay", () => {
   test("opens on a day stay while the release is closed", async () => {
     const form = await renderCoworkReservationForm({
       locale: "en-US",
-      pageData: { overnightStayOffered: false },
+      pageData: { entryPackOffered: false, overnightStayOffered: false },
       searchParams: overnightLink,
     });
 
