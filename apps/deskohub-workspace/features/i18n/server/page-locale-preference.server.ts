@@ -13,7 +13,7 @@ type Page = Parameters<typeof preferenceApplyingTo>[0];
 
 /**
  * The verifier loads only when the preference would move a candidate page,
- * so most requests never import the Pay state or access token code.
+ * so most requests never import the checkout continuation checks.
  */
 const continuesInIssuedLocale = (continuation: LocaleBoundContinuation) =>
   Effect.tryPromise(

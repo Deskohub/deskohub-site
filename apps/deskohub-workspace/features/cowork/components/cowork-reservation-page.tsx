@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { isWorkspaceCoworkCurrentProductTier } from "@/features/checkout/product-catalog";
 import { type Locale, m } from "@/features/i18n";
+import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { isOvernightStayOfferedAfterConnection } from "@/features/reservation/backend/overnight-stay-release-gate.server";
 import { isRememberedCoworkOfferAvailable } from "@/features/reservation/backend/reservation-existing-customer.server";
 import { createReservationPage } from "@/features/reservation/components/create-reservation-page.server";
@@ -32,6 +33,7 @@ const withWorkspaceDate = (values: CoworkReservationInput, today: string) =>
   values.date ? values : { ...values, date: today };
 
 type CoworkReservationPageData = {
+  readonly entryPackOffered: boolean;
   /** Whether a Reserved Desk can be booked as an overnight stay. */
   readonly overnightStayOffered: boolean;
 };
@@ -53,9 +55,13 @@ export const coworkReservationPage = createReservationPage({
   ],
   fallback: (locale) => <CoworkReservationFormFallback locale={locale} />,
   kind: "cowork",
-  loadPageData: async (): Promise<CoworkReservationPageData> => ({
-    overnightStayOffered: await isOvernightStayOfferedAfterConnection(),
-  }),
+  loadPageData: async (): Promise<CoworkReservationPageData> => {
+    const [entryPackOffered, overnightStayOffered] = await Promise.all([
+      isCoworkPassesPageOpenAfterConnection(),
+      isOvernightStayOfferedAfterConnection(),
+    ]);
+    return { entryPackOffered, overnightStayOffered };
+  },
   pathname: coworkReservationPath,
   prefillsContact: true,
   // A historical tier can't be booked again, so its customer starts over.
@@ -136,6 +142,7 @@ export const coworkReservationPage = createReservationPage({
     <CoworkReservationForm
       checkoutCustomer={form.checkoutCustomer}
       checkoutSessionId={form.checkoutSessionId}
+      entryPackOffered={form.pageData.entryPackOffered}
       initialAdvertisedPrices={form.initialAdvertisedPrices}
       initialAvailability={form.initialAvailability}
       initialValues={form.initialValues}
