@@ -1,6 +1,5 @@
 "use client";
 
-import { bindLayer } from "@ui-sdk/core";
 import { Option } from "effect";
 import { CalendarIcon } from "lucide-react";
 import {
@@ -150,8 +149,7 @@ function useCalendarPopover(onBlur: (() => void) | undefined) {
   const openPending = openRequested && calendar === undefined;
 
   useEffect(() => {
-    const trigger = triggerRef.current;
-    if (!openPending || !trigger) return;
+    if (!openPending) return;
 
     // Leaving the button dismisses the pending open as it would dismiss the
     // open popover, including the blur that runs onBlur validation.
@@ -159,16 +157,26 @@ function useCalendarPopover(onBlur: (() => void) | undefined) {
       setOpenRequested(false);
       onBlur?.();
     };
-    const focusOutside = (event: FocusEvent) => {
-      if (event.target instanceof Node && !trigger.contains(event.target)) {
-        dismiss();
+    const dismissOutside = (event: Event) => {
+      if (
+        event.target instanceof Node &&
+        triggerRef.current?.contains(event.target)
+      ) {
+        return;
       }
+      dismiss();
     };
-    const unbind = bindLayer(trigger, { onDismiss: dismiss });
-    document.addEventListener("focusin", focusOutside);
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismiss();
+    };
+
+    document.addEventListener("pointerdown", dismissOutside, true);
+    document.addEventListener("focusin", dismissOutside);
+    document.addEventListener("keydown", dismissOnEscape);
     return () => {
-      unbind();
-      document.removeEventListener("focusin", focusOutside);
+      document.removeEventListener("pointerdown", dismissOutside, true);
+      document.removeEventListener("focusin", dismissOutside);
+      document.removeEventListener("keydown", dismissOnEscape);
     };
   }, [onBlur, openPending]);
 

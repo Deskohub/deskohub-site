@@ -113,19 +113,24 @@ describe("DateInput deferred calendar load", () => {
     expect(onBlur).toHaveBeenCalledTimes(1);
   });
 
-  test("stays closed when the user presses outside the picker", async () => {
-    const { finishCalendarLoad, onBlur, trigger, view } =
-      await renderPickerWithPendingCalendar("pending-open-press-outside");
+  test.each(["mouse", "touch"])(
+    "stays closed when an outside %s press starts before the calendar loads",
+    async (pointerType) => {
+      const { finishCalendarLoad, onBlur, trigger, view } =
+        await renderPickerWithPendingCalendar(`pending-open-${pointerType}-outside`);
 
-    act(() => {
-      fireEvent.pointerDown(view.getByText("Outside text"));
-    });
-    await finishCalendarLoad();
+      act(() => {
+        fireEvent.pointerDown(view.getByText("Outside text"), { pointerType });
+      });
+      // The calendar can finish loading before a click, and a scroll may
+      // never click at all.
+      await finishCalendarLoad();
 
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(openDialog()).toBeNull();
-    expect(onBlur).toHaveBeenCalledTimes(1);
-  });
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(openDialog()).toBeNull();
+      expect(onBlur).toHaveBeenCalledTimes(1);
+    }
+  );
 
   test("stays closed and keeps focus on the trigger after Escape", async () => {
     const { finishCalendarLoad, onBlur, trigger } =
