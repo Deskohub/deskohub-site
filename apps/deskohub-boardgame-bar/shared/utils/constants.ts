@@ -189,5 +189,8 @@ export const siteConstants = {
     tableReservations: true,
     gallery: true,
     menuPdfDownload: true,
+    // Customer accounts: sign-in, membership, events calendar, trophies.
+    // Off until the release agreed with the owner.
+    accounts: false,
   },
 };

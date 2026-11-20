@@ -37,6 +37,7 @@ const emailConfig = Config.all({
   ),
   apiKey: Config.option(Config.String("EMAIL_API_KEY")),
   testMode: Config.withDefault(Config.Boolean("EMAIL_TEST_MODE"), false),
+  vercelEnv: Config.option(Config.String("VERCEL_ENV")),
 });
 
 /**
@@ -58,7 +59,9 @@ export const EmailConfigLayer = Layer.effect(
           name: config.defaultFromName,
         },
         apiKey,
-        testMode: config.testMode,
+        // Test mode sends mail to the console, so the live site ignores it.
+        testMode:
+          config.testMode && !Option.contains(config.vercelEnv, "production"),
       };
       return providerConfig;
     })
