@@ -10,12 +10,17 @@ import {
 import { NexiOperationIdSchema, NexiOrderIdSchema } from "@deskohub/nexi";
 import { within } from "@testing-library/react";
 import { prerender } from "react-dom/static";
+import {
+  fioDiscrepancy,
+  fioPendingRefund,
+} from "@/features/administration/fio-settlement.fixtures";
 import { m } from "@/features/administration/i18n";
 import type { loadAdministrationOrder } from "@/features/administration/page-data.server";
 import { getProviderValueLabel } from "@/features/administration/payment-presentation";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
+import { workspaceUseAction } from "@/shared/testing/workspace-component-module-mocks";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -77,18 +82,42 @@ let order: Order = fullOrder;
 const administrationPageData = await import(
   "@/features/administration/page-data.server"
 );
+const loadFioMovements = mock((id: string) =>
+  Promise.resolve(
+    id !== fioPendingRefund.orderId
+      ? []
+      : [
+          fioPendingRefund,
+          {
+            ...fioDiscrepancy,
+            orderId: fioPendingRefund.orderId,
+            discrepancyReason: "currency_mismatch" as const,
+          },
+        ]
+  )
+);
+mock.module(
+  "@/features/administration/fio-settlement-page-data.server",
+  () => ({
+    loadAdministrationFioMovements: loadFioMovements,
+  })
+);
+mock.module("@/features/administration/fio-refund-action", () => ({
+  recordFioManualRefund: mock(),
+}));
+const loadNexiOrder = mock(() => Promise.resolve(order));
 mock.module("@/features/administration/page-data.server", () => ({
   ...administrationPageData,
-  loadAdministrationOrder: () => Promise.resolve(order),
+  loadAdministrationOrder: loadNexiOrder,
 }));
 
-async function prerenderOrderDetail() {
+async function prerenderOrderDetail(routeOrderId: string = orderId) {
   const { OrderAdministrationDetail } = await import("./page");
   const { prelude } = await prerender(
     <RouteLocaleProvider locale={locale}>
       <OrderAdministrationDetail
         locale={locale}
-        params={Promise.resolve({ orderId })}
+        params={Promise.resolve({ orderId: routeOrderId })}
       />
     </RouteLocaleProvider>,
     { progressiveChunkSize: Number.POSITIVE_INFINITY }
@@ -115,9 +144,17 @@ const unreported = new Set([
 ]);
 
 describe("OrderAdministrationDetail", () => {
-  beforeAll(() => registerWorkspaceComponentTestEnv());
+  beforeAll(() => {
+    registerWorkspaceComponentTestEnv();
+    workspaceUseAction.mockReturnValue({
+      execute: mock(),
+      isExecuting: false,
+    } as never);
+  });
   afterEach(() => {
     order = fullOrder;
+    loadNexiOrder.mockClear();
+    loadFioMovements.mockClear();
   });
   afterAll(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -218,5 +255,18 @@ describe("OrderAdministrationDetail", () => {
     ).toBeDefined();
     expect(container.querySelectorAll("aside section")).toHaveLength(2);
     expect(view.getByText(paymentAttemptId)).toBeDefined();
+  });
+
+  test("shows Fio evidence and a manual refund control on a local order without looking it up in Nexi", async () => {
+    const container = await prerenderOrderDetail(fioPendingRefund.orderId!);
+    const view = within(container);
+    expect(view.getByText("9012345001")).toBeTruthy();
+    expect(view.getByText("100.2500 EUR")).toBeTruthy();
+    expect(view.getByText("Currency differs from the quote")).toBeTruthy();
+    expect(view.getByText("Manual refund required")).toBeTruthy();
+    expect(
+      view.getAllByRole("button", { name: "Record manual refund" })
+    ).toHaveLength(1);
+    expect(loadNexiOrder).not.toHaveBeenCalled();
   });
 });

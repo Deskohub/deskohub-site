@@ -1322,6 +1322,13 @@ const buildTimeline = (row: SafeReservationRow) => {
   );
 };
 
+// These timeline and operator notices refer to Nexi refunds. Fio
+// reconciliation is projected from the movement evidence instead.
+const nexiLatePaymentAttempt = and(
+  eq(latePaymentRecoveries.paymentAttemptId, paymentAttempts.id),
+  eq(paymentAttempts.provider, "nexi")
+);
+
 const latePaymentRecoverySelection = {
   paymentAttemptId: latePaymentRecoveries.paymentAttemptId,
   reservationId: latePaymentRecoveries.workspaceReservationId,
@@ -1792,6 +1799,7 @@ export class AdministrationService extends Context.Service<
               recoveryRows: db
                 .select(latePaymentRecoverySelection)
                 .from(latePaymentRecoveries)
+                .innerJoin(paymentAttempts, nexiLatePaymentAttempt)
                 .where(
                   equalsAny(
                     latePaymentRecoveries.workspaceReservationId,
@@ -2387,6 +2395,7 @@ export class AdministrationService extends Context.Service<
             recoveryRows: db
               .select(latePaymentRecoverySelection)
               .from(latePaymentRecoveries)
+              .innerJoin(paymentAttempts, nexiLatePaymentAttempt)
               .where(eq(latePaymentRecoveries.workspaceReservationId, row.id))
               .orderBy(latePaymentRecoveries.createdAt),
             live: loadLiveReservation(row),

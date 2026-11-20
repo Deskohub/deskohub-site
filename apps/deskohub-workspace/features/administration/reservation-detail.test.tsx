@@ -12,6 +12,7 @@ import {
 } from "@/shared/testing/workspace-component-test-env";
 import type { AdministrationReservationDetail as ReservationDetailData } from "./administration.service";
 import { inactiveCustomerDisplayNames } from "./customer-name";
+import { fioPendingRefund } from "./fio-settlement.fixtures";
 import { loadFixtureReservation } from "./fixtures";
 import { formatAdministrationDateTime } from "./formatters";
 import { m } from "./i18n";
@@ -24,6 +25,15 @@ mock.module("@/features/i18n/server/request-locale", () => ({
   getRequestLocale: () => Promise.resolve(locale),
 }));
 
+const loadFioMovements = mock(() =>
+  Promise.resolve<readonly (typeof fioPendingRefund)[]>([])
+);
+mock.module("./fio-settlement-page-data.server", () => ({
+  loadAdministrationFioMovements: loadFioMovements,
+}));
+mock.module("./fio-refund-action", () => ({
+  recordFioManualRefund: mock(),
+}));
 mock.module("./actions", () => ({
   settleAdministrationReservationWithdrawal: mock(),
   cancelAdministrationReservation: mock(),
@@ -297,4 +307,26 @@ describe("AdministrationReservationDetail", () => {
       expect(within(withoutEmail).queryByRole("link")).toBeNull();
     }
   );
+
+  test("shows the recorded Fio refund and keeps its evidence on the reservation", async () => {
+    locale = "en-US";
+    detail = loadFixtureReservation("0198-admin-fixture-attention");
+    const refundedAt = Temporal.Instant.from("2026-11-20T10:42:00Z");
+    loadFioMovements.mockResolvedValueOnce([
+      { ...fioPendingRefund, disposition: "refunded", refundedAt },
+    ]);
+
+    const view = await prerenderReservationDetail();
+
+    expect(view.getByText("Manual refund recorded")).toBeTruthy();
+    expect(view.getByText(fioPendingRefund.movementId)).toBeTruthy();
+    expect(
+      view.getByText(
+        formatAdministrationDateTime(refundedAt.toString(), locale)
+      )
+    ).toBeTruthy();
+    expect(
+      view.queryByRole("button", { name: "Record manual refund" })
+    ).toBeNull();
+  });
 });
