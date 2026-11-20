@@ -496,31 +496,32 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 paymentReturnTarget: input.returnTarget,
               });
             }),
-            details: {
-              commitment: input.commitment,
-              accountingSnapshot: input.accountingSnapshot,
-            },
-            ...(fio &&
-              lifecycle &&
-              !retriedAttempt && {
-                admitProvider: ({
-                  provider,
-                  providerOrderId,
-                }: {
-                  readonly provider: "nexi" | "mock";
-                  readonly providerOrderId: string;
-                }) =>
-                  lifecycle.createPendingProviderAttempt({
-                    orderId,
-                    amount: input.total,
-                    locale: input.locale,
-                    commitment: input.commitment,
-                    accountingSnapshot: input.accountingSnapshot,
+            ...(fio && lifecycle && !retriedAttempt
+              ? {
+                  admitProvider: ({
                     provider,
                     providerOrderId,
-                    publicPayment: fio,
-                  }),
-              }),
+                  }: {
+                    readonly provider: "nexi" | "mock";
+                    readonly providerOrderId: string;
+                  }) =>
+                    lifecycle.createPendingProviderAttempt({
+                      orderId,
+                      amount: input.total,
+                      locale: input.locale,
+                      commitment: input.commitment,
+                      accountingSnapshot: input.accountingSnapshot,
+                      provider,
+                      providerOrderId,
+                      publicPayment: fio,
+                    }),
+                }
+              : {
+                  details: {
+                    commitment: input.commitment,
+                    accountingSnapshot: input.accountingSnapshot,
+                  },
+                }),
           }).pipe(providePaymentSession);
           const { attachedAttempt, hostedPaymentPage } = session;
           if ("reused" in session) {

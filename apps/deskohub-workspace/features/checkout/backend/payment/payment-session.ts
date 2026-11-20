@@ -112,7 +112,7 @@ export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
     (
       | {
           readonly details: PaymentAdmissionDetailsFor<Kind>;
-          readonly admitProvider?: AdmitHostedAttempt;
+          readonly admitProvider?: never;
         }
       | { readonly details?: never; readonly admitProvider: AdmitHostedAttempt }
     ) & {
@@ -174,7 +174,7 @@ export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
   // attempt; the Nexi request timeout still bounds this section.
   return yield* Effect.uninterruptible(
     Effect.gen(function* () {
-      const attempt = yield* input.admitProvider
+      const attempt = yield* input.admitProvider !== undefined
         ? input.admitProvider({
             provider,
             providerOrderId: prepared.providerOrderId,
