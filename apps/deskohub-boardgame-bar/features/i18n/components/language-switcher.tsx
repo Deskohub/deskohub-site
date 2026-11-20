@@ -12,8 +12,10 @@ import { cn } from "@/shared/utils";
 
 export function LanguageSwitcher({
   onOpenChange,
+  triggerClassName,
 }: {
   onOpenChange?: (open: boolean) => void;
+  triggerClassName?: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -38,7 +40,10 @@ export function LanguageSwitcher({
           <Button
             variant="ghost"
             size="sm"
-            className="text-white hover:text-green-400 hover:bg-white/10"
+            className={cn(
+              "text-white hover:text-green-400 hover:bg-white/10",
+              triggerClassName
+            )}
           />
         }
       >
@@ -49,6 +54,9 @@ export function LanguageSwitcher({
         align="end"
         sideOffset={4}
         collisionPadding={0}
+        onKeyDown={(event) => {
+          if (event.key === "Tab") event.preventDefault();
+        }}
         className="z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md origin-[--transform-origin] transition-[opacity,transform] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[ending-style]:scale-95"
       >
         {locales.map((locale) => (

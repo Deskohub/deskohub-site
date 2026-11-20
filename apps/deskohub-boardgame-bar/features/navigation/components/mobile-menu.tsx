@@ -42,111 +42,109 @@ export function MobileMenu() {
   setLocale(locale, { reload: false });
 
   return (
-    <div className="xl:hidden">
-      <Dialog
-        open={isOpen}
-        onOpenChange={setIsOpen}
-        closeOnOutsidePress={!isLanguageMenuOpen}
+    <Dialog
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      closeOnOutsidePress={!isLanguageMenuOpen}
+    >
+      <DialogTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-white hover:text-white hover:bg-white/10 xl:hidden"
+          />
+        }
       >
-        <DialogTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-white hover:text-white hover:bg-white/10"
+        <Menu className="h-6 w-6" />
+        <span className="sr-only">{m["nav.openMenu"]()}</span>
+      </DialogTrigger>
+      <DialogBackdrop className="fixed inset-0 bg-black/80 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+      <DialogContent className="fixed inset-y-0 right-0 left-auto m-0 h-full max-h-none w-80 max-w-full gap-4 border-l border-gray-800 bg-gray-900 p-6 text-foreground shadow-lg safe-padding-vertical transition-transform duration-500 ease-in-out data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full data-[ending-style]:duration-300">
+        <div className="flex flex-col space-y-2 border-b border-gray-800 pb-4 text-center sm:text-left">
+          <div className="flex items-center gap-3">
+            <Image
+              src={logoImage}
+              alt={m["altText.deskohub"]()}
+              width={40}
+              height={40}
+              className="rounded-lg"
+              priority
             />
-          }
-        >
-          <Menu className="h-6 w-6" />
-          <span className="sr-only">{m["nav.openMenu"]()}</span>
-        </DialogTrigger>
-        <DialogBackdrop className="fixed inset-0 bg-black/80 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <DialogContent className="fixed inset-y-0 right-0 left-auto m-0 h-full max-h-none w-80 max-w-full gap-4 border-l border-gray-800 bg-gray-900 p-6 text-foreground shadow-lg safe-padding-vertical transition-transform duration-500 ease-in-out data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full data-[ending-style]:duration-300">
-          <div className="flex flex-col space-y-2 border-b border-gray-800 pb-4 text-center sm:text-left">
-            <div className="flex items-center gap-3">
-              <Image
-                src={logoImage}
-                alt={m["altText.deskohub"]()}
-                width={40}
-                height={40}
-                className="rounded-lg"
-                priority
-              />
-              <DialogTitle className="text-white text-lg font-bold">
-                {siteConstants.brand.name}
-              </DialogTitle>
-            </div>
+            <DialogTitle className="text-white text-lg font-bold">
+              {siteConstants.brand.name}
+            </DialogTitle>
           </div>
+        </div>
 
-          <nav className="flex flex-col gap-2 mt-6">
-            {navigationItems.map((item) => (
-              <LocalizedLink
-                key={item.label}
-                href={item.href}
-                className="flex items-center px-4 py-3 text-gray-300 hover:text-white hover:bg-gray-800 rounded-lg transition-colors duration-200 font-medium"
-                onClick={() => setIsOpen(false)}
-              >
-                {item.text()}
-              </LocalizedLink>
-            ))}
-            <a
-              href={ttrpgRoomHref}
+        <nav className="flex flex-col gap-2 mt-6">
+          {navigationItems.map((item) => (
+            <LocalizedLink
+              key={item.label}
+              href={item.href}
               className="flex items-center px-4 py-3 text-gray-300 hover:text-white hover:bg-gray-800 rounded-lg transition-colors duration-200 font-medium"
               onClick={() => setIsOpen(false)}
             >
-              {m["nav.trainingRoom"]()}
-            </a>
-          </nav>
+              {item.text()}
+            </LocalizedLink>
+          ))}
+          <a
+            href={ttrpgRoomHref}
+            className="flex items-center px-4 py-3 text-gray-300 hover:text-white hover:bg-gray-800 rounded-lg transition-colors duration-200 font-medium"
+            onClick={() => setIsOpen(false)}
+          >
+            {m["nav.trainingRoom"]()}
+          </a>
+        </nav>
 
-          <div className="mt-8 space-y-4">
-            <div className="px-4 py-3 bg-gray-800 rounded-lg">
-              <h3 className="text-white font-semibold mb-2">
-                {m["menu.openingHours.title"]()}
-              </h3>
-              <div className="text-sm text-gray-300 space-y-1">
-                <div className="flex justify-between">
-                  <span>{m["menu.openingHours.weekdays"]()}</span>
-                  <span className="text-green-400">
-                    {m["menu.openingHours.weekdaysTime"]({
-                      hours: getWeekdayHours().formatted,
-                    })}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span>{m["menu.openingHours.weekend"]()}</span>
-                  <span className="text-green-400">
-                    {m["menu.openingHours.weekendTime"]({
-                      hours: getWeekendHours().formatted,
-                    })}
-                  </span>
-                </div>
+        <div className="mt-8 space-y-4">
+          <div className="px-4 py-3 bg-gray-800 rounded-lg">
+            <h3 className="text-white font-semibold mb-2">
+              {m["menu.openingHours.title"]()}
+            </h3>
+            <div className="text-sm text-gray-300 space-y-1">
+              <div className="flex justify-between">
+                <span>{m["menu.openingHours.weekdays"]()}</span>
+                <span className="text-green-400">
+                  {m["menu.openingHours.weekdaysTime"]({
+                    hours: getWeekdayHours().formatted,
+                  })}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>{m["menu.openingHours.weekend"]()}</span>
+                <span className="text-green-400">
+                  {m["menu.openingHours.weekendTime"]({
+                    hours: getWeekendHours().formatted,
+                  })}
+                </span>
               </div>
             </div>
-
-            <div className="px-4">
-              <LanguageSwitcher onOpenChange={setIsLanguageMenuOpen} />
-            </div>
-
-            <div className="px-4">
-              <ReservationButton
-                variant="full"
-                showIcon={true}
-                onClick={() => setIsOpen(false)}
-              />
-            </div>
           </div>
 
-          <div className="absolute bottom-6 left-6 right-6">
-            <div className="text-center text-xs text-gray-500">
-              <p>{m["footer.tagline"]()}</p>
-            </div>
+          <div className="px-4">
+            <LanguageSwitcher onOpenChange={setIsLanguageMenuOpen} />
           </div>
-          <DialogClose className="absolute right-4 top-4 rounded-sm bg-secondary text-white opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
-            <X className="h-4 w-4" />
-            <span className="sr-only">Close</span>
-          </DialogClose>
-        </DialogContent>
-      </Dialog>
-    </div>
+
+          <div className="px-4">
+            <ReservationButton
+              variant="full"
+              showIcon={true}
+              onClick={() => setIsOpen(false)}
+            />
+          </div>
+        </div>
+
+        <div className="absolute bottom-6 left-6 right-6">
+          <div className="text-center text-xs text-gray-500">
+            <p>{m["footer.tagline"]()}</p>
+          </div>
+        </div>
+        <DialogClose className="absolute right-4 top-4 rounded-sm bg-secondary text-white opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+          <X className="h-4 w-4" />
+          <span className="sr-only">Close</span>
+        </DialogClose>
+      </DialogContent>
+    </Dialog>
   );
 }
