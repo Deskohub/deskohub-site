@@ -6,12 +6,8 @@ import {
 
 describe("getLocalizedCountryName", () => {
   test("names a region in the given locale", () => {
-    expect(getLocalizedCountryName("CZ", "en-US")).toBe(
-      new Intl.DisplayNames(["en-US"], { type: "region" }).of("CZ") ?? ""
-    );
-    expect(getLocalizedCountryName("CZ", "cs-CZ")).toBe(
-      new Intl.DisplayNames(["cs-CZ"], { type: "region" }).of("CZ") ?? ""
-    );
+    expect(getLocalizedCountryName("CZ", "en-US")).toBe("Czechia");
+    expect(getLocalizedCountryName("CZ", "cs-CZ")).toBe("Česko");
   });
 
   test("returns the code when the locale or code is invalid", () => {

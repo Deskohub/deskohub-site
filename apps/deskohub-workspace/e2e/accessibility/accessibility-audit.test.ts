@@ -2,46 +2,28 @@ import { expect, test } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
-import {
-  ariaSnapshotLocales,
-  auditedLocales,
-  hasAriaSnapshots,
-} from "./accessibility-audit";
+import { auditedLocales, hasAriaSnapshots } from "./accessibility-audit";
 
 const snapshotDirectories = [
   "checkout-pay-accessibility.pw.ts-snapshots",
   "workspace-aria-snapshots.pw.ts-snapshots",
 ];
 
-test("audits every supported locale", () => {
-  expect([...auditedLocales]).toEqual([...supportedLocales]);
+test("runs axe audits for every supported locale", () => {
+  expect(new Set(auditedLocales)).toEqual(new Set(supportedLocales));
 });
 
-test("matches ARIA snapshots only for the curated locales", () => {
-  for (const locale of auditedLocales) {
-    expect(hasAriaSnapshots(locale)).toBe(
-      (ariaSnapshotLocales as readonly string[]).includes(locale)
-    );
-  }
-});
+test("each ARIA audit has snapshot files for the selected locales", async () => {
+  const selectedLocales = new Set(auditedLocales.filter(hasAriaSnapshots));
+  expect(selectedLocales.size).toBeGreaterThan(0);
 
-test("commits ARIA snapshot files only for the curated locales", async () => {
-  const files = (
-    await Promise.all(
-      snapshotDirectories.map((directory) =>
-        readdir(join(import.meta.dir, directory))
+  for (const directory of snapshotDirectories) {
+    const files = await readdir(join(import.meta.dir, directory));
+    const recordedLocales = new Set(
+      files.map((file) =>
+        auditedLocales.find((locale) => file.startsWith(`${locale}-`))
       )
-    )
-  ).flat();
-  const snapshotLocale = (file: string) =>
-    auditedLocales.find((locale) => file.startsWith(`${locale}-`));
-
-  expect(files.length).toBeGreaterThan(0);
-  for (const file of files) {
-    const locale = snapshotLocale(file);
-    expect([file, locale !== undefined && hasAriaSnapshots(locale)]).toEqual([
-      file,
-      true,
-    ]);
+    );
+    expect(recordedLocales).toEqual(selectedLocales);
   }
 });

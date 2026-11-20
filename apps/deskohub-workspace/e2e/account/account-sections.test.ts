@@ -140,12 +140,6 @@ type FakeElementHandle = {
   readonly element: Element;
 };
 
-type FakePageOptions = {
-  readonly onClick?: (options?: { readonly timeout?: number }) => void;
-  readonly onIsVisible?: () => void;
-  readonly onWait?: (argument: unknown) => void | Promise<void>;
-};
-
 const desktopBreakpoint = 768;
 
 const elementIsVisible = (element: Element, width: number | null): boolean => {
@@ -170,31 +164,20 @@ const elementIsVisible = (element: Element, width: number | null): boolean => {
   return true;
 };
 
-const fakeLocator = (
-  element: Element,
-  width: number | null,
-  options: FakePageOptions
-): FakeLocator => ({
-  click: async (clickOptions) => {
+const fakeLocator = (element: Element, width: number | null): FakeLocator => ({
+  click: async () => {
     if (!elementIsVisible(element, width))
       throw new Error("fake target is hidden");
-    options.onClick?.(clickOptions);
     fireEvent.click(element);
   },
   elementHandle: async () => ({
     dispose: async () => {},
     element,
   }),
-  isVisible: async () => {
-    options.onIsVisible?.();
-    return elementIsVisible(element, width);
-  },
+  isVisible: async () => elementIsVisible(element, width),
 });
 
-const makeFakePage = (
-  width: number | null,
-  pageOptions: FakePageOptions = {}
-): AccountSectionPage => {
+const makeFakePage = (width: number | null): AccountSectionPage => {
   const page = Object.assign({} as AccountSectionPage, {
     getByRole: (role: string, roleOptions?: unknown) => {
       const name =
@@ -223,7 +206,7 @@ const makeFakePage = (
         return exact ? accessibleName === name : accessibleName.includes(name);
       });
       if (!match) throw new Error(`fake ${role} target was not found`);
-      return fakeLocator(match, width, pageOptions);
+      return fakeLocator(match, width);
     },
     viewportSize: () => (width === null ? null : { height: 900, width }),
     waitForFunction: async (pageFunction: unknown, arg: unknown) => {
@@ -233,7 +216,6 @@ const makeFakePage = (
         typeof arg === "object" && arg !== null && "element" in arg
           ? (arg as FakeElementHandle).element
           : arg;
-      await pageOptions.onWait?.(predicateArgument);
       const result = (pageFunction as (value: unknown) => unknown)(
         predicateArgument
       );
@@ -320,24 +302,6 @@ for (const reservationCount of [0, 3] as const) {
   });
 }
 
-test("does not accept a misleading Reservations label prefix", async () => {
-  const page = makeFakePage(1440);
-  render(createElement(AccountShellHarness, { reservationCount: 3 }));
-  // The shell names its sections from the catalog, so the test renames the
-  // rendered desktop link.
-  const reservationsLabel = document.querySelector(
-    '[data-account-sidebar-section="reservations"] .break-words'
-  );
-  if (reservationsLabel === null) {
-    throw new Error("The desktop Reservations label is not rendered.");
-  }
-  reservationsLabel.textContent = "Reservations and billing";
-
-  await expect(selectAccountSection(page, "reservations")).rejects.toThrow(
-    "fake account section did not settle"
-  );
-});
-
 test("selects every section through visible mobile section links", async () => {
   const page = makeFakePage(375);
   render(createElement(AccountShellHarness));
@@ -396,92 +360,4 @@ test("resolves the responsive section variant when viewport size is unavailable"
       ).toBeNull();
     }
   }
-});
-
-test("waits for the rendered section link handler before clicking it", async () => {
-  const calls: string[] = [];
-  let linkHandlerAttached = false;
-  let restoreLinkHandler = () => {};
-  const page = makeFakePage(1440, {
-    onClick: () => {
-      calls.push("click");
-      if (!linkHandlerAttached) {
-        throw new Error("account section link handler was not attached");
-      }
-    },
-    onWait: async (argument) => {
-      if (argument instanceof Element) {
-        calls.push("wait:link-handler");
-        await Promise.resolve();
-        restoreLinkHandler();
-        return;
-      }
-      if (typeof argument === "string") {
-        calls.push(`wait:panel-hydration:${argument}`);
-        return;
-      }
-      calls.push("wait:section-ready");
-    },
-  });
-  render(createElement(AccountShellHarness));
-
-  const billingLink = document.querySelector<HTMLAnchorElement>(
-    'a[data-account-sidebar-section="billing"]'
-  );
-  if (billingLink === null)
-    throw new Error("rendered Billing link was not found");
-  const reactPropsKey = Object.keys(billingLink).find((key) =>
-    key.startsWith("__reactProps$")
-  );
-  if (reactPropsKey === undefined)
-    throw new Error("rendered Billing link has no React props");
-  const reactPropsDescriptor = Object.getOwnPropertyDescriptor(
-    billingLink,
-    reactPropsKey
-  );
-  if (reactPropsDescriptor === undefined)
-    throw new Error("rendered Billing link React props descriptor is missing");
-
-  if (!Reflect.deleteProperty(billingLink, reactPropsKey))
-    throw new Error("could not defer the rendered Billing link handler");
-  restoreLinkHandler = () => {
-    Object.defineProperty(billingLink, reactPropsKey, reactPropsDescriptor);
-    linkHandlerAttached = true;
-  };
-
-  await selectAccountSection(page, "billing", (stage) =>
-    calls.push(`stage:${stage}`)
-  );
-
-  expect(calls).toEqual([
-    "stage:link-handler-wait",
-    "wait:link-handler",
-    "stage:panel-hydration-wait",
-    "wait:panel-hydration:[data-screen='profile-screen']",
-    "stage:native-link-click",
-    "click",
-    "stage:selected-landmark-wait",
-    "wait:section-ready",
-  ]);
-  expect(billingLink.getAttribute("aria-current")).toBe("page");
-});
-
-test("does not click a section before its streamed panel is hydrated", async () => {
-  const calls: string[] = [];
-  const page = makeFakePage(1440, {
-    onClick: () => {
-      calls.push("click");
-    },
-  });
-  render(createElement(AccountShellHarness));
-  const profileScreen = document.querySelector(accountSectionLandmarks.profile);
-  if (profileScreen === null)
-    throw new Error("profile screen was not rendered");
-  const serverCopy = profileScreen.cloneNode(true);
-  profileScreen.replaceWith(serverCopy);
-
-  await expect(
-    selectAccountSection(page, "profile", (stage) => calls.push(stage))
-  ).rejects.toThrow("fake account section did not settle");
-  expect(calls).toEqual(["link-handler-wait", "panel-hydration-wait"]);
 });

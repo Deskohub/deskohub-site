@@ -47,8 +47,6 @@ describe("getLocalBusinessStructuredData", () => {
       ],
     });
     expect(business["@id"]).toBe(workspaceBusinessId);
-    // There is no business phone number to publish.
-    expect(business).not.toHaveProperty("telephone");
   });
 
   test("identifies the company and links its logo, prices and map", () => {

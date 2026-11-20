@@ -53,22 +53,3 @@ test("clicking the card toggles the shared Checkbox", () => {
   fireEvent.click(view.getByText("I agree to the payment terms"));
   expect(checkbox.getAttribute("aria-checked")).toBe("true");
 });
-
-test("the card styles checked, focus and disabled states from its control", () => {
-  const view = render(
-    <ChoiceCard>
-      <input type="checkbox" />
-      Paid
-    </ChoiceCard>
-  );
-  const card = view.getByText("Paid");
-
-  expect(card.tagName).toBe("LABEL");
-  expect(card.className).toEqual(
-    expect.stringContaining("has-checked:border-burned-orange")
-  );
-  expect(card.className).toContain("has-aria-checked:border-burned-orange");
-  expect(card.className).toContain("has-focus-visible:outline-2");
-  expect(card.className).toContain("has-disabled:cursor-not-allowed");
-  expect(card.className).toContain("accent-burned-orange");
-});

@@ -127,8 +127,6 @@
   "marketingPreferencesFormSavingStatus": "Saving your marketing preference…",
   "marketingPreferencesFormAccountContext": "Managing the customer preference for this signed-in account.",
   "marketingPreferencesFormLinkContext": "Managing the customer preference with this dedicated marketing-preference link, not your signed-in account.",
-  "marketingPreferencesFormStatusActive": "Marketing communications are currently enabled.",
-  "marketingPreferencesFormStatusWithdrawn": "Marketing communications are currently withdrawn.",
   "marketingPreferencesFormSaved": "Your marketing preference was saved.",
   "marketingPreferencesFormSaveError": "We could not save your marketing preference. Please try again.",
   "marketingPreferencesFormPendingDescription": "Continue to verify this dedicated marketing-preference link before viewing or changing the customer preference.",

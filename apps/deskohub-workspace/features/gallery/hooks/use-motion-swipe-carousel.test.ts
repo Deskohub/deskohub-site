@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   getClosestVirtualIndex,
   getSwipeTargetVirtualIndex,
-  truncateTowardZero,
   wrapIndex,
 } from "./use-motion-swipe-carousel";
 
@@ -17,11 +16,6 @@ describe("carousel index helpers", () => {
     expect(getClosestVirtualIndex(0, 4, 5)).toBe(5);
     expect(getClosestVirtualIndex(4, 0, 5)).toBe(-1);
     expect(getClosestVirtualIndex(2, 7, 0)).toBe(7);
-  });
-
-  test("truncates toward zero", () => {
-    expect(truncateTowardZero(1.8)).toBe(1);
-    expect(truncateTowardZero(-1.8)).toBe(-1);
   });
 });
 

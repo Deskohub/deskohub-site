@@ -43,18 +43,28 @@ describe("createOutbox", () => {
     expect(newer).toEqual([1]);
   });
 
-  test("drops items over capacity and discarded items", () => {
+  test("keeps the earliest pending items up to capacity", () => {
     const outbox = createOutbox<number>({ capacity: 2 });
     const delivered: number[] = [];
 
     outbox.post(1);
     outbox.post(2);
     outbox.post(3);
-    outbox.discard();
-    outbox.post(4);
     outbox.attach((item) => delivered.push(item));
 
-    expect(delivered).toEqual([4]);
+    expect(delivered).toEqual([1, 2]);
+  });
+
+  test("drops pending items when they are discarded", () => {
+    const outbox = createOutbox<number>({ capacity: 2 });
+    const delivered: number[] = [];
+
+    outbox.post(1);
+    outbox.discard();
+    outbox.post(2);
+    outbox.attach((item) => delivered.push(item));
+
+    expect(delivered).toEqual([2]);
   });
 
   test("loses only the item a sink throws on", () => {

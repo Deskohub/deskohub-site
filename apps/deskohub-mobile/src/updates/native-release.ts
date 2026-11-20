@@ -30,7 +30,7 @@ const readVersionCode = (buildVersion: string | null): number | undefined =>
  * (`expo-application`'s `nativeBuildVersion`), which an over-the-air update
  * doesn't change.
  */
-export const nativeUpdateOffer = (
+const nativeUpdateOffer = (
   installedBuildVersion: string | null,
   release: NativeUpdateOffer
 ): NativeUpdateOffer | undefined => {

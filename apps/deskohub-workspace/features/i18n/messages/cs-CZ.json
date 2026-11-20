@@ -128,8 +128,6 @@
   "marketingPreferencesFormSavingStatus": "Ukládáme tvou marketingovou preferenci…",
   "marketingPreferencesFormAccountContext": "Spravuješ zákaznickou preferenci pro tento přihlášený účet.",
   "marketingPreferencesFormLinkContext": "Spravuješ zákaznickou preferenci pomocí tohoto vyhrazeného odkazu pro marketingová sdělení, nikoli z přihlášeného účtu.",
-  "marketingPreferencesFormStatusActive": "Marketingová sdělení jsou nyní povolená.",
-  "marketingPreferencesFormStatusWithdrawn": "Zasílání marketingových sdělení je nyní odvolané.",
   "marketingPreferencesFormSaved": "Tvoje marketingová preference byla uložena.",
   "marketingPreferencesFormSaveError": "Marketingovou preferenci se nepodařilo uložit. Zkus to prosím znovu.",
   "marketingPreferencesFormPendingDescription": "Pokračuj ověřením tohoto vyhrazeného odkazu pro marketingová sdělení, teprve potom bude možné zobrazit nebo změnit zákaznickou preferenci.",

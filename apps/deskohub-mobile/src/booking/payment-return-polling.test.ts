@@ -1,10 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CustomerOrderStatus } from "@deskohub/workspace-customer-api";
 import { Duration, Option } from "effect";
-import {
-  nextPaymentReturnPoll,
-  paymentReturnPollingStatuses,
-} from "./payment-return-polling";
+import { nextPaymentReturnPoll } from "./payment-return-polling";
 
 const enoughBudget = 20;
 
@@ -19,20 +16,22 @@ const delaysUntilStop = (status: CustomerOrderStatus) => {
 };
 
 describe("nextPaymentReturnPoll", () => {
-  test("polls a waiting order at most nine times over about three minutes", () => {
-    const delays = delaysUntilStop("paid_waiting_fulfillment");
-
-    expect(delays).toEqual([3, 3, 5, 5, 10, 15, 20, 30, 60]);
-    expect(delays.reduce((total, delay) => total + delay, 0)).toBe(151);
+  test("polls a waiting order nine times before stopping", () => {
+    expect(delaysUntilStop("paid_waiting_fulfillment")).toEqual([
+      3, 3, 5, 5, 10, 15, 20, 30, 60,
+    ]);
   });
 
-  test("polls only the statuses the site refreshes automatically", () => {
-    expect([...paymentReturnPollingStatuses].sort()).toEqual([
+  test("also schedules a read while payment or delivery is pending", () => {
+    for (const status of [
       "late_payment_checking",
       "paid_awaiting_delivery",
-      "paid_waiting_fulfillment",
       "pending",
-    ]);
+    ] as const) {
+      expect(nextPaymentReturnPoll(0, enoughBudget, status)).toEqual(
+        Option.some(Duration.seconds(3))
+      );
+    }
   });
 
   test.each([

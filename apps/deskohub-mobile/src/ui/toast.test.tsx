@@ -25,8 +25,7 @@ const { Text } = await import("./text");
 const { Toast, ToastProvider, useToast, useToastObstruction } = await import(
   "./toast"
 );
-const { toastDurationMs } = await import("./toast-presentation");
-const { color, radius, space } = await import("./tokens");
+const { color, radius, shadow, space } = await import("./tokens");
 
 type ToastProps = Parameters<typeof Toast>[0];
 
@@ -74,6 +73,7 @@ describe("Toast", () => {
     expect(flatStyle(box(shown).props.style)).toMatchObject({
       backgroundColor: color.positiveInk,
       borderRadius: radius.field,
+      ...shadow.toastConfirmation,
     });
     expect(find(shown, Icon)?.props.color).toBe(color.positive);
     expect(region(shown)?.children).toBe("saved");
@@ -83,6 +83,7 @@ describe("Toast", () => {
     const shown = toast({ toast: { id: 1, message: "off", tone: "neutral" } });
     expect(flatStyle(box(shown).props.style)).toMatchObject({
       backgroundColor: color.navy,
+      ...shadow.toast,
     });
     expect(find(shown, Icon)).toBeUndefined();
   });
@@ -151,7 +152,11 @@ describe("ToastProvider", () => {
     expect(shownToast()?.toast).toBeUndefined();
 
     await act(async () => show({ message: "first" }));
-    await act(async () => jest.advanceTimersByTime(toastDurationMs - 1000));
+    expect(shownToast()?.toast).toMatchObject({
+      message: "first",
+      tone: "confirmation",
+    });
+    await act(async () => jest.advanceTimersByTime(3000));
     await act(async () => show({ message: "second", tone: "neutral" }));
     expect(shownToast()?.toast).toMatchObject({
       message: "second",
@@ -161,7 +166,9 @@ describe("ToastProvider", () => {
     // The first toast's timer would have ended now; the second stays.
     await act(async () => jest.advanceTimersByTime(1000));
     expect(shownToast()?.toast?.message).toBe("second");
-    await act(async () => jest.advanceTimersByTime(toastDurationMs));
+    await act(async () => jest.advanceTimersByTime(2999));
+    expect(shownToast()?.toast?.message).toBe("second");
+    await act(async () => jest.advanceTimersByTime(1));
     expect(shownToast()?.toast).toBeUndefined();
   });
 

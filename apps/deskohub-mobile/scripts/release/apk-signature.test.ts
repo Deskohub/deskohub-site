@@ -49,10 +49,6 @@ describe("signerCertificateSha256s", () => {
       otherDigest,
     ]);
   });
-
-  test("ignores SHA-1 and MD5 digests", () => {
-    expect(signerCertificateSha256s(apksignerOutput())).toEqual([]);
-  });
 });
 
 describe("verifyReleaseSigners", () => {

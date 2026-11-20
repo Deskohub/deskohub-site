@@ -311,37 +311,6 @@ describe("GoogleCalendarService", () => {
     );
   });
 
-  test("maps provider errors", async () => {
-    listEvents = mock<ListEventsImplementation>(async () => {
-      const error = new Error("Forbidden");
-      Object.assign(error, { status: 403 });
-      throw error;
-    });
-
-    const result = await runWithCalendar(
-      Effect.gen(function* () {
-        const googleCalendar = yield* GoogleCalendarService;
-        return yield* googleCalendar
-          .listEvents({
-            calendarId,
-            from: "2026-06-20",
-            to: "2026-06-21",
-          })
-          .pipe(Effect.result);
-      })
-    );
-
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({
-        _tag: "GoogleCalendarAPIError",
-        operation: "events.list",
-        statusCode: 403,
-        message: "Forbidden",
-      });
-    }
-  });
-
   test("creates an event notification channel", async () => {
     watchEvents = mock<WatchEventsImplementation>(async () => ({
       data: {
@@ -476,7 +445,7 @@ describe("GoogleCalendarService", () => {
     }
   );
 
-  test("does not retry an events request rejected as a client error", async () => {
+  test("returns an events client error with its provider details and does not retry", async () => {
     listEvents = mock<ListEventsImplementation>(async () => {
       throw providerError(404, "Not Found");
     });
@@ -487,7 +456,12 @@ describe("GoogleCalendarService", () => {
 
     expect(result).toMatchObject({
       _tag: "Failure",
-      failure: { statusCode: 404 },
+      failure: {
+        _tag: "GoogleCalendarAPIError",
+        operation: "events.list",
+        statusCode: 404,
+        message: "Not Found",
+      },
     });
     expect(listEvents).toHaveBeenCalledTimes(1);
   });

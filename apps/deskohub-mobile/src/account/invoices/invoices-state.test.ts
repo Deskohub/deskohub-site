@@ -13,7 +13,7 @@ import {
   sampleInvoiceIds,
   sampleInvoices,
 } from "../../customer-api/testing/sample-fixtures";
-import { InvoiceDownload, invoicePdfName } from "./invoice-list-model";
+import { InvoiceDownload, invoiceRowText } from "./invoice-list-model";
 import {
   invoiceDownloadAtom,
   invoiceDownloadState,
@@ -52,12 +52,20 @@ describe("invoiceListAtom", () => {
 
     const result = await settle(registry, invoiceListAtom("en-US"));
 
-    expect(result._tag).toBe("Success");
-    const list = result._tag === "Success" ? result.success : undefined;
-    expect(list?.kind).toBe("list");
-    expect(list?.kind === "list" ? list.rows.map((row) => row.id) : []).toEqual(
-      sampleInvoices().map(({ invoice }) => invoice.id)
-    );
+    if (result._tag !== "Success" || result.success.kind !== "list") {
+      throw new Error("Expected a list of invoices");
+    }
+    expect(
+      result.success.rows.map((row) => [
+        row.id,
+        invoiceRowText(row, "en-US").title,
+      ])
+    ).toEqual([
+      [sampleInvoiceIds.desk, "Open Space desk"],
+      [sampleInvoiceIds.meetingRoom, "Meeting room"],
+      [sampleInvoiceIds.cancelled, "Open Space desk"],
+      [sampleInvoiceIds.office, "2026-0341"],
+    ]);
   });
 
   test("an account without invoices gets the empty list", async () => {
@@ -104,15 +112,21 @@ describe("invoiceDownloadAtom", () => {
     correctiveDocumentNumber,
   });
 
-  test("hands the PDF to the share sheet under the invoice's number, then rests", async () => {
+  test("shares the PDF under the invoice's number with a safe filename, then rests", async () => {
     const data = withDownloads();
 
-    const state = await download(data, deskInvoice);
+    const state = await download(
+      data,
+      InvoiceDownload.Invoice({
+        id: desk.invoice.id,
+        invoiceNumber: "FV 2026/0412",
+      })
+    );
 
     expect(state).toEqual({ kind: "idle" });
     expect(data.device.sharedFiles).toEqual([
       expect.objectContaining({
-        name: invoicePdfName(desk.invoice.invoiceNumber),
+        name: "FV-2026-0412.pdf",
         mimeType: "application/pdf",
       }),
     ]);
@@ -150,7 +164,7 @@ describe("invoiceDownloadAtom", () => {
     expect(state).toEqual({ kind: "idle" });
     expect(data.device.sharedFiles).toEqual([
       expect.objectContaining({
-        name: invoicePdfName(correctiveDocumentNumber),
+        name: "WS-OD-2026-000004.pdf",
         mimeType: "application/pdf",
       }),
     ]);
@@ -199,12 +213,5 @@ describe("invoiceDownloadAtom", () => {
     expect(invoiceDownloadState(AsyncResult.initial())).toEqual({
       kind: "idle",
     });
-  });
-});
-
-describe("invoicePdfName", () => {
-  test("keeps the number and replaces what a file name can't hold", () => {
-    expect(invoicePdfName("2026-0412")).toBe("2026-0412.pdf");
-    expect(invoicePdfName("FV 2026/0412")).toBe("FV-2026-0412.pdf");
   });
 });

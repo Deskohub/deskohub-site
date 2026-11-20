@@ -2,14 +2,18 @@ import type { CloudinaryAsset } from "@deskohub/cloudinary";
 import { PathParamsContext } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { Locale } from "@/features/i18n";
 
 /** The locale the rendered gallery components read from the route. */
 export const routeLocale = "en-US";
 
-/** Renders a client component on the route of {@link routeLocale}. */
-export const renderOnLocaleRoute = (node: ReactNode) =>
+/** Renders a client component under the given route locale. */
+export const renderOnLocaleRoute = (
+  node: ReactNode,
+  locale: Locale = routeLocale
+) =>
   renderToStaticMarkup(
-    <PathParamsContext.Provider value={{ locale: routeLocale }}>
+    <PathParamsContext.Provider value={{ locale }}>
       {node}
     </PathParamsContext.Provider>
   );

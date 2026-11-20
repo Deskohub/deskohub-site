@@ -33,7 +33,7 @@ import { effectSchemaResolver } from "./index";
 
 // The DOM must exist before React DOM loads so its event system binds to it.
 GlobalRegistrator.register();
-const { act, cleanup, fireEvent, render, renderHook, screen } = await import(
+const { act, cleanup, fireEvent, render, screen } = await import(
   "@testing-library/react"
 );
 
@@ -41,12 +41,6 @@ afterAll(() => {
   cleanup();
   GlobalRegistrator.unregister();
 });
-
-type Expect<T extends true> = T;
-type Equal<X, Y> =
-  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
-    ? true
-    : false;
 
 const USERNAME_REQUIRED_MESSAGE = "username field is required";
 const AGE_MESSAGE = "age must be a number";
@@ -146,22 +140,5 @@ describe("effectSchemaResolver with useForm", () => {
     expect(username().validationMessage).toBe("");
     expect(onSubmit).toHaveBeenCalledTimes(1);
     unmount();
-  });
-
-  test("infers encoded field values and decoded submit values", () => {
-    const { result } = renderHook(() =>
-      useForm({ resolver: effectSchemaResolver(schema) })
-    );
-
-    const age = result.current.getValues("age");
-
-    type _FieldValue = Expect<Equal<typeof age, string>>;
-    type _Submitted = Expect<
-      Equal<
-        Parameters<typeof result.current.handleSubmit>[0],
-        SubmitHandler<FormOutput>
-      >
-    >;
-    expect(age).toBeUndefined();
   });
 });

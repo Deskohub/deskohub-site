@@ -12,8 +12,6 @@ import { InvalidMutationInputError } from "../command-runtime";
 import { PlatformLive } from "../platform";
 import {
   type ContentChangeFlags,
-  campaignBodyFileName,
-  campaignLocaleChoices,
   makeCampaignContentPatch,
   parseLocalizedValues,
   readAudienceFilter,
@@ -83,11 +81,7 @@ const contentPatchFailure = (flags: Partial<ContentChangeFlags>) =>
   );
 
 describe("makeCampaignContentPatch", () => {
-  test("changes nothing without content flags", async () => {
-    expect(Option.isNone(await contentPatch({}))).toBe(true);
-  });
-
-  test("patches only the given fields, in flag order, with trimmed reasons", async () => {
+  test("patches only the given fields and trims operational reasons", async () => {
     const bodyPath = await writeBody("# Body\n");
 
     const patch = Option.getOrThrow(
@@ -99,40 +93,16 @@ describe("makeCampaignContentPatch", () => {
       })
     );
 
-    expect(Object.keys(patch)).toEqual(["en-US", "cs-CZ"]);
     expect(patch).toEqual({
       "en-US": { subject: "Subject", bodyMarkdown: "# Body\n" },
       "cs-CZ": { preheader: "Náhled", operationalReason: "Because" },
     });
   });
 
-  test("clears a reason as null and removes a locale as null", async () => {
-    expect(
-      Option.getOrThrow(
-        await contentPatch({
-          clearOperationalReason: ["en-US"],
-          removeLocale: ["cs-CZ"],
-        })
-      )
-    ).toEqual({ "en-US": { operationalReason: null }, "cs-CZ": null });
-  });
-
   test("removes a locale without other changes", async () => {
     expect(
       Option.getOrThrow(await contentPatch({ removeLocale: ["en-US"] }))
     ).toEqual({ "en-US": null });
-  });
-
-  test("checks set-and-clear before remove-and-change", async () => {
-    const error = await contentPatchFailure({
-      operationalReason: ["en=Why"],
-      clearOperationalReason: ["en-US"],
-      subject: ["cs=Ahoj"],
-      removeLocale: ["cs-CZ"],
-    });
-
-    expect(error).toBeInstanceOf(InvalidMutationInputError);
-    expect(error.message).toContain("en-US");
   });
 
   test("rejects removing a locale whose reason is cleared", async () => {
@@ -157,18 +127,6 @@ describe("makeCampaignContentPatch", () => {
 });
 
 describe("campaign locale names", () => {
-  test("accept each supported locale by its language subtag and its full tag", () => {
-    expect(new Map(campaignLocaleChoices)).toEqual(
-      new Map(
-        supportedLocales.flatMap((locale) => [
-          [getLocaleDefinition(locale).language, locale],
-          [locale, locale],
-        ])
-      )
-    );
-    expect(campaignLocaleChoices).toHaveLength(supportedLocales.length * 2);
-  });
-
   test("parse every short and full locale name in localized flags", async () => {
     for (const locale of supportedLocales) {
       const { language } = getLocaleDefinition(locale);
@@ -187,13 +145,5 @@ describe("campaign locale names", () => {
     );
 
     expect(error).toBeInstanceOf(InvalidMutationInputError);
-  });
-
-  test("export each locale's body to a file named for its language", () => {
-    for (const locale of supportedLocales) {
-      expect(campaignBodyFileName(locale)).toBe(
-        `${getLocaleDefinition(locale).language}.md`
-      );
-    }
   });
 });

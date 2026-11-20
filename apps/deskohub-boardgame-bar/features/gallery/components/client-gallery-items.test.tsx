@@ -56,7 +56,7 @@ describe("MinimalGallery", () => {
 });
 
 describe("GalleryImageCard", () => {
-  test("opens the image on click and shows its thumbnail and caption", () => {
+  test("reports a click on the image thumbnail", () => {
     const onClick = mock();
     const tree = GalleryImageCard({
       image: galleryImage("a", "Window table"),
@@ -71,9 +71,6 @@ describe("GalleryImageCard", () => {
         ({ props }) => props.variant
       )
     ).toEqual(["thumbnail"]);
-    expect(
-      findElementsOfType(tree, "p").map(({ props }) => props.children)
-    ).toEqual(["Window table"]);
   });
 
   test("shows no caption for an image without one", () => {

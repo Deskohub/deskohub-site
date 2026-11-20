@@ -2,24 +2,26 @@ import { describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import type { ReactElement, ReactNode } from "react";
 import { Button, TextField } from "../ui/controls";
-import { elementTree, find } from "../ui/testing/element-tree";
+import { elementTree, find, findAll, textOf } from "../ui/testing/element-tree";
+import { Text } from "../ui/text";
 import { AppSignInEmailStep } from "./app-sign-in-email-step";
 import { AppSignInLayout } from "./app-sign-in-layout";
-import { inEnglish } from "./testing/sign-in-step-tree";
+import { inEnglish, shownTree } from "./testing/sign-in-step-tree";
 
 type Props = Parameters<typeof AppSignInEmailStep>[0];
+
+const defaults: Props = {
+  title: "title",
+  email: { value: "", locked: false, onChange: () => undefined },
+  submitLabel: "submit",
+  onSubmit: () => undefined,
+  busy: false,
+};
 
 const step = (props: Partial<Props> = {}) => {
   const layout = elementTree(
     AppSignInEmailStep,
-    {
-      title: "title",
-      email: { value: "", locked: false, onChange: () => undefined },
-      submitLabel: "submit",
-      onSubmit: () => undefined,
-      busy: false,
-      ...props,
-    },
+    { ...defaults, ...props },
     inEnglish
   ) as ReactElement<Parameters<typeof AppSignInLayout>[0]>;
   expect(layout.type).toBe(AppSignInLayout);
@@ -81,8 +83,14 @@ describe("AppSignInEmailStep", () => {
     expect(field?.autoFocus).toBe(false);
   });
 
-  test("the body and illustration are optional", () => {
-    const { layout } = step({ body: "body", illustration: <></> });
-    expect(layout.instructions).toBe("body");
+  test("shows the reauthentication instructions and illustration when provided", () => {
+    const tree = shownTree(AppSignInEmailStep, {
+      ...defaults,
+      body: "Confirm this account",
+      illustration: <Text>Account shield</Text>,
+    });
+    const text = findAll(tree, "Text").map(textOf);
+    expect(text).toContain("Confirm this account");
+    expect(text).toContain("Account shield");
   });
 });

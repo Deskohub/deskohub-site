@@ -1,10 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { workspaceE2EAccessCodeMutationBarrierCount } from "../timeouts";
+import {
+  workspaceE2EAccessCodeCleanupTimeout,
+  workspaceE2EAccessCodePlaywrightTimeout,
+  workspaceE2ETimeouts,
+} from "../timeouts";
 import { selectActionReplayHeaders } from "./access-code-case";
 
 describe("access code creation case planning", () => {
+  test("allows both action barriers and the remaining cleanup after the case deadline", () => {
+    const minimumCleanupTime =
+      workspaceE2ETimeouts.accessCodeActionBarrier * 2 +
+      workspaceE2ETimeouts.accessCodeStaleBarrier +
+      workspaceE2ETimeouts.cleanupAction +
+      workspaceE2ETimeouts.datasource;
+
+    expect(workspaceE2EAccessCodeCleanupTimeout).toBeGreaterThanOrEqual(
+      minimumCleanupTime
+    );
+    expect(workspaceE2EAccessCodePlaywrightTimeout).toBeGreaterThanOrEqual(
+      workspaceE2ETimeouts.accessCodeCase + workspaceE2EAccessCodeCleanupTimeout
+    );
+  });
+
   test("keeps only action-relevant headers when replaying a captured request", () => {
     const replayHeaders = selectActionReplayHeaders({
       accept: "*/*",
@@ -29,26 +46,5 @@ describe("access code creation case planning", () => {
       "next-router-state-tree": "%5B%22%22%5D",
       origin: "https://deskohub-workspace-site-abc12345-deskohub.vercel.app",
     });
-  });
-});
-
-describe("access code cleanup budget", () => {
-  test("budgets every mutation barrier the case waits on", () => {
-    const caseSource = readFileSync(
-      resolve(import.meta.dir, "create-access-code.pw.ts"),
-      "utf8"
-    );
-    // Comment-aware: a commented-out barrier call must not count as a wait.
-    const activeCaseSource = caseSource
-      .split("\n")
-      .map((line) => {
-        const commentAt = line.indexOf("//");
-        return commentAt === -1 ? line : line.slice(0, commentAt);
-      })
-      .join("\n");
-    const barrierWaits =
-      activeCaseSource.split("awaitActionQuiescence(").length - 1;
-
-    expect(barrierWaits).toBe(workspaceE2EAccessCodeMutationBarrierCount);
   });
 });

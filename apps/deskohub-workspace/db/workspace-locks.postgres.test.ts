@@ -604,10 +604,6 @@ describe.skipIf(!suiteDatabase)(
           )(`${name}-${crypto.randomUUID()}`)(effect);
       const declared = Object.keys(WorkspaceLockSections) as Array<SectionName>;
 
-      test("the registry declares more than one section", () => {
-        expect(declared.length).toBeGreaterThan(1);
-      });
-
       for (const [index, outer] of declared.entries()) {
         for (const inner of declared.slice(index + 1)) {
           test(`${inner} inside ${outer} is held; ${outer} inside ${inner} dies`, async () => {

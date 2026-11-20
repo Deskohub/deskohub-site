@@ -198,8 +198,11 @@ describe("mapNexiClientError", () => {
         mapNexiClientError(failure, "List orders")
       );
 
-      expect(error.operation).toBe("List orders");
-      expect(error.statusCode).toBeUndefined();
+      expect(error).toMatchObject({
+        service: "Nexi",
+        operation: "List orders",
+      });
+      expect(error).not.toHaveProperty("statusCode");
       expect(error.cause).toBe(failure);
     }
   });

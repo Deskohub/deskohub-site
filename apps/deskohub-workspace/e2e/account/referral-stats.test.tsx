@@ -1,11 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
-import { m } from "@/features/i18n";
-import {
-  formatReferralDiscount,
-  formatReferralDiscountReduction,
-  parseReferralCode,
-} from "@/features/referrals/client";
+import { parseReferralCode } from "@/features/referrals/client";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -38,23 +33,14 @@ const renderReferrals = (input: {
   readonly total: number;
   readonly discount: string;
   readonly saved: boolean;
+  readonly referralBadge?: { readonly text: string; readonly label: string };
 }) =>
   render(
     <AccountShell
       activeSection="referrals"
       locale={locale}
       onSectionChange={() => {}}
-      referralBadge={
-        input.discount === "0"
-          ? undefined
-          : {
-              text: formatReferralDiscountReduction(input.discount, locale),
-              label: m.accountReferralsNavigationBadgeLabel(
-                { discount: formatReferralDiscount(input.discount, locale) },
-                { locale }
-              ),
-            }
-      }
+      referralBadge={input.referralBadge}
       signOut={null}
     >
       <ReferralScreen
@@ -80,7 +66,13 @@ const holds = (condition: string): unknown =>
   globalThis.eval(condition);
 
 test("matches the rendered referral stats, savings state, and navigation badge", () => {
-  renderReferrals({ eligible: 1, total: 1, discount: "5", saved: false });
+  renderReferrals({
+    eligible: 1,
+    total: 1,
+    discount: "5",
+    saved: false,
+    referralBadge: { text: "-5%", label: "5% referral discount" },
+  });
 
   expect(
     holds(

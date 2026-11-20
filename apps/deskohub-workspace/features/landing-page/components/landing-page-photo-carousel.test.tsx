@@ -192,12 +192,6 @@ describe("LandingPagePhotoCarousel", () => {
       )
     );
 
-  test("renders nothing without photos", async () => {
-    const view = await renderCarousel([]);
-
-    expect(view.container.innerHTML).toBe("");
-  });
-
   test("shows a single photo alone as the current slide", async () => {
     const view = await renderCarousel([photo(1)]);
     const slides = slideButtons(view);

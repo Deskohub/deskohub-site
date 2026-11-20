@@ -12,7 +12,7 @@ test.each([
   ["apps/deskohub-workspace/types/globals.d.ts", false],
   ["apps/deskohub-workspace/messages/cs-CZ.json", false],
   ["packages/test-coverage/src/coverage-report.ts", false],
-  ["lint/no-useless-alias.grit", false],
+  ["tooling/local-build.ts", false],
 ])("isCoverageSource(%p) is %p", (path, expected) => {
   expect(isCoverageSource(path)).toBe(expected);
 });

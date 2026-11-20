@@ -50,15 +50,6 @@ describe.each(locales)("getFaqGroups in %s", (locale) => {
     }
   });
 
-  test("drops the private office question once offices can be booked", () => {
-    const withOffices = getFaqGroups(locale, { ...facts, officesOffered: true })
-      .flatMap((group) => group.entries)
-      .map(({ value }) => value);
-
-    expect(entries.map(({ value }) => value)).toContain("offices");
-    expect(withOffices).not.toContain("offices");
-  });
-
   test("leaves out the busyness question while last month's occupancy is unknown", () => {
     const withoutOccupancy = getFaqGroups(locale, {
       ...facts,

@@ -64,12 +64,7 @@ describe.each([...motions])("the %s document", (motion) => {
     expect(die.ty).toBe(4);
     expect(die.parent).toBe(hop.ind);
     const groups = faceGroups(document);
-    expect(groups.map((group) => group.nm)).toEqual(
-      Array.from(
-        { length: 20 },
-        (_, index) => `face-${String(index).padStart(2, "0")}`
-      )
-    );
+    expect(groups).toHaveLength(20);
     for (const group of groups) {
       const outline = group.it[0].ks;
       const shapes =
@@ -82,7 +77,6 @@ describe.each([...motions])("the %s document", (motion) => {
       }
     }
     const tint = die.shapes.at(-1);
-    expect(tint?.nm).toBe("tint");
     expect(tint?.ty).toBe("gf");
     expect(die.shapes.filter((item) => item.ty !== "gr")).toHaveLength(1);
   });

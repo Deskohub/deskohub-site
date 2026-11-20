@@ -11,7 +11,6 @@ import { LoadingIndicator } from "./loading-indicator.web";
 import {
   type LoadingIndicatorProps,
   loadingIndicatorLayout,
-  loadingIndicatorSemantics,
 } from "./loading-indicator-presentation";
 import {
   find,
@@ -185,16 +184,24 @@ describe("the web LoadingIndicator", () => {
     expect(indicator.group().fill).toBe(`url(#${gradient.id})`);
   });
 
-  test.each([["label"], [undefined]] as const)(
-    "carries the native semantics for label %p",
-    async (label) => {
-      const indicator = await draw(
-        { size: "section", tone: "white", label },
-        { reduced: true }
-      );
-      expect(find(indicator.tree(), "View")?.props).toMatchObject(
-        loadingIndicatorSemantics(label)
-      );
-    }
-  );
+  test("exposes a named progress bar and hides its SVG from assistive tech", async () => {
+    const indicator = await draw(
+      { size: "section", tone: "white", label: "Loading" },
+      { reduced: true }
+    );
+    expect(find(indicator.tree(), "View")?.props).toMatchObject({
+      role: "progressbar",
+      "aria-label": "Loading",
+      "aria-busy": true,
+    });
+    expect(find(indicator.tree(), "svg")?.props["aria-hidden"]).toBe(true);
+  });
+
+  test("hides the whole indicator when it has no label", async () => {
+    const indicator = await draw(
+      { size: "section", tone: "white" },
+      { reduced: true }
+    );
+    expect(find(indicator.tree(), "View")?.props["aria-hidden"]).toBe(true);
+  });
 });

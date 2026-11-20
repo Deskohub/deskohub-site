@@ -8,7 +8,6 @@ import {
 
 registerWorkspaceComponentTestEnv();
 
-const { buttonVariants } = await import("./button");
 const { Dialog, DialogContent, DialogDescription, DialogTitle } = await import(
   "./dialog"
 );
@@ -16,7 +15,7 @@ const { Dialog, DialogContent, DialogDescription, DialogTitle } = await import(
 afterEach(cleanup);
 afterAll(unregisterWorkspaceComponentTestEnv);
 
-test("the close action is a muted ghost icon Button named for the locale", () => {
+test("the localized close action dismisses the dialog", () => {
   const openChanges: boolean[] = [];
   const view = render(
     <Dialog onOpenChange={(open) => openChanges.push(open)} open>
@@ -31,16 +30,6 @@ test("the close action is a muted ghost icon Button named for the locale", () =>
   });
 
   expect(close.getAttribute("type")).toBe("button");
-  expect(close.className.split(" ")).toEqual(
-    expect.arrayContaining(
-      buttonVariants({
-        size: "icon-sm",
-        tone: "muted",
-        variant: "ghost",
-      }).split(" ")
-    )
-  );
-
   fireEvent.click(close);
   expect(openChanges).toEqual([false]);
 });

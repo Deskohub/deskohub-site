@@ -672,9 +672,9 @@ describe("overnight stay", () => {
   });
 
   test("falls back to a day once the catalog stops advertising it", () => {
-    expect(fitCoworkStay(overnight, overnightOfferings)).toBe(overnight);
+    expect(fitCoworkStay(overnight, overnightOfferings)).toEqual(overnight);
     expect(fitCoworkStay(overnight, offerings).stay).toBe("day");
-    expect(fitCoworkStay(reservedDesk, offerings)).toBe(reservedDesk);
+    expect(fitCoworkStay(reservedDesk, offerings)).toEqual(reservedDesk);
   });
 
   test("reopens a booked overnight stay while it is still offered", () => {

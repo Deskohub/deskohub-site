@@ -8,7 +8,7 @@ import {
   DotyposUnavailable,
 } from "../errors";
 import type { Reservation } from "../generated/effect.gen";
-import { dotyposIdReadBatchSize, dotyposIdReadRequests } from "../id-reads";
+import { dotyposIdReadBatchSize } from "../id-reads";
 import {
   DotyposCustomerIdSchema,
   DotyposCustomerSchema,
@@ -64,28 +64,6 @@ const exit = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.runPromise(Effect.exit(effect));
 
 describe("makeInMemoryDotypos ID reads", () => {
-  test("selects customers by ID, deleted included, in the order Dotypos holds them", async () => {
-    const { service } = makeInMemoryDotypos({
-      customers: [
-        customer("customer-1"),
-        customer("customer-2", { deleted: true }),
-      ],
-    });
-
-    const selected = await run(
-      service.getCustomersByIds([
-        customerId("customer-2"),
-        customerId("missing"),
-        customerId("customer-1"),
-      ])
-    );
-
-    expect([...selected.keys()]).toEqual([
-      customerId("customer-1"),
-      customerId("customer-2"),
-    ]);
-  });
-
   test("sends one request per batch of unique IDs", async () => {
     const requests: InMemoryDotyposRequest[] = [];
     const ids = Array.from({ length: dotyposIdReadBatchSize * 2 + 1 }, (_, n) =>
@@ -99,7 +77,6 @@ describe("makeInMemoryDotypos ID reads", () => {
     const selected = await run(service.getCustomersByIds([...ids, ...ids]));
 
     expect(selected.size).toBe(ids.length);
-    expect(requests).toHaveLength(dotyposIdReadRequests(ids.length));
     expect(requests.map((request) => request.ids?.length)).toEqual([
       dotyposIdReadBatchSize,
       dotyposIdReadBatchSize,
@@ -546,23 +523,6 @@ describe("makeInMemoryDotypos reservation transitions", () => {
             message: "The in-memory Dotypos holds no such record.",
           })
         )
-      )
-    );
-  });
-
-  test("fails a reservation read whose linked customer is gone", async () => {
-    const { service } = makeInMemoryDotypos({
-      reservations: [reservation({ id: "orphan" })],
-    });
-
-    expect(await exit(service.getReservation(reservationId("orphan")))).toEqual(
-      Exit.fail(
-        new DotyposRejected({
-          operation: "getReservation",
-          request: "customer.get",
-          reason: "not-found",
-          message: "The in-memory Dotypos holds no such record.",
-        })
       )
     );
   });

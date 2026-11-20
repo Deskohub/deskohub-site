@@ -4,7 +4,6 @@ import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { PostHogDistinctId, PostHogProjectId } from "../identifiers";
 import type { PostHogPersonsWriteFailure } from "./errors";
-import { postHogPersonsRequestCeilings } from "./request-policy";
 import {
   getPostHogPersonDeletionWorstCase,
   type PostHogPersonDeletion,
@@ -428,12 +427,6 @@ describe("PostHogPersonsService.deletePersonKeepingEvents", () => {
 });
 
 describe("PostHog persons retry ceilings", () => {
-  test("pins the bulk delete ceiling", () => {
-    expect(postHogPersonsRequestCeilings).toEqual({
-      "persons.bulkDelete": { baseDelay: "1 second", maxRetries: 2 },
-    });
-  });
-
   test("bounds one deletion by three timed-out attempts and maximal backoff", () => {
     // Three 5-second attempts plus 1.2 s + 2.4 s of maximally jittered backoff.
     expect(

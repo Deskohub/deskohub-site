@@ -4,7 +4,7 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/http";
-import { DotyposWireFailure, toDotyposWireFailure } from "./api";
+import { toDotyposWireFailure } from "./api";
 
 const request = HttpClientRequest.get("https://api.dotykacka.test/v2/x");
 const response = (status: number) =>
@@ -14,15 +14,6 @@ const fromAddressedRequest = (error: unknown) =>
   toDotyposWireFailure(error, { fromAccessToken: false });
 
 describe("toDotyposWireFailure", () => {
-  test("keeps an existing wire failure as it is", () => {
-    const failure = new DotyposWireFailure({
-      outcome: { kind: "transport" },
-      fromAccessToken: true,
-    });
-
-    expect(fromAddressedRequest(failure)).toBe(failure);
-  });
-
   test.each([
     ["TransportError", new HttpClientError.TransportError({ request })],
     ["InvalidUrlError", new HttpClientError.InvalidUrlError({ request })],

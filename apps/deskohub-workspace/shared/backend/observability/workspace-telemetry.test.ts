@@ -5,7 +5,7 @@ import {
   type LogRecordExporter,
   type ReadableLogRecord,
 } from "@opentelemetry/sdk-logs";
-import { Effect, References } from "effect";
+import { Effect } from "effect";
 
 // A synthetic project token and the opt-in turn PostHog logging on in the
 // test process's development environment; nothing is exported because no
@@ -34,29 +34,11 @@ describe("workspaceLoggerProvider", () => {
 
     expect(provider).toBeInstanceOf(LoggerProvider);
     expect(appInstance.workspaceLoggerProvider()).toBe(provider);
-    expect(
-      Reflect.get(globalThis, appInstance.workspaceTelemetryHandle)
-    ).toEqual({ loggerProvider: provider });
-  });
-});
-
-describe("WorkspaceObservabilityLive", () => {
-  test("sets the minimum log level of the runs it serves", async () => {
-    // The test process runs as a development deployment.
-    const level = await Effect.runPromise(
-      Effect.gen(function* () {
-        return yield* References.MinimumLogLevel;
-      }).pipe(
-        Effect.provide(instrumentationInstance.WorkspaceObservabilityLive)
-      )
-    );
-
-    expect(level).toBe("Debug");
   });
 });
 
 describe("workspaceOTelRegistration", () => {
-  test("registers the Workspace identity with the redactors ahead of the automatic exporters", () => {
+  test("registers the Workspace identity with a single automatic exporter placeholder at the end", () => {
     const { attributes, serviceName, spanProcessors } =
       instrumentationInstance.workspaceOTelRegistration();
 

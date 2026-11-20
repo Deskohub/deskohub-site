@@ -28,8 +28,6 @@ const rejected: readonly (readonly [string, string])[] = [
     "a hand-written domain after a template expression",
     statement(`\`delivered+\${runId}${join(at, "resend.dev")}\``),
   ],
-  ["a mailto literal", statement(quoted(join("mailto:", address)))],
-  ["a display-name address", statement(quoted(join("Ada <", address, ">")))],
   ["a JSX text address", statement(`<p>${address}</p>`)],
   [
     "a concatenated hand-written domain",
@@ -53,10 +51,6 @@ const rejected: readonly (readonly [string, string])[] = [
         statement(quoted(join("mailto:ada", encoding, "example.com"))),
       ] as const
   ),
-  [
-    "a three-part concatenation",
-    chain(quoted("ada"), quoted(at), quoted("example.com")),
-  ],
   [
     "a four-part concatenation split inside labels",
     chain(

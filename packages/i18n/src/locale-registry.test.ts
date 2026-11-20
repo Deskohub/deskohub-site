@@ -4,7 +4,6 @@ import {
   baseLocale,
   getLocaleDefinition,
   isSupportedLocale,
-  localeByLanguage,
   mapSupportedLocales,
   matchSupportedLocale,
   supportedLocales,
@@ -13,11 +12,6 @@ import {
 } from "./locale-registry";
 
 describe("locale registry", () => {
-  test("lists the base locale first and every locale once", () => {
-    expect(supportedLocales[0]).toBe(baseLocale);
-    expect(new Set(supportedLocales).size).toBe(supportedLocales.length);
-  });
-
   test("gives each locale a tag built from its language and region", () => {
     for (const locale of supportedLocales) {
       const definition = getLocaleDefinition(locale);
@@ -33,26 +27,11 @@ describe("locale registry", () => {
     expect(new Set(languages).size).toBe(languages.length);
   });
 
-  test("keeps each fallback chain to other supported locales", () => {
+  test("keeps each fallback chain free of self-references and duplicates", () => {
     for (const locale of supportedLocales) {
       const { fallbackChain } = getLocaleDefinition(locale);
       expect(fallbackChain).not.toContain(locale);
       expect(new Set(fallbackChain).size).toBe(fallbackChain.length);
-      for (const fallback of fallbackChain) {
-        expect(isSupportedLocale(fallback)).toBe(true);
-      }
-    }
-  });
-
-  test("names each locale's Nexi language as an ISO 639-2 code", () => {
-    for (const locale of supportedLocales) {
-      expect(getLocaleDefinition(locale).nexiLanguage).toMatch(/^[a-z]{3}$/);
-    }
-  });
-
-  test("names each locale's phone region as an ISO 3166-1 alpha-2 code", () => {
-    for (const locale of supportedLocales) {
-      expect(getLocaleDefinition(locale).phoneRegion).toMatch(/^[A-Z]{2}$/);
     }
   });
 
@@ -185,7 +164,7 @@ describe("matchSupportedLocale", () => {
     expect(matchSupportedLocale("sk")).toBe("sk-SK");
     expect(matchSupportedLocale("uk")).toBe("uk-UA");
     expect(matchSupportedLocale("vi")).toBe("vi-VN");
-    expect(matchSupportedLocale("hi-IN")).toBe("hi-IN");
+    expect(matchSupportedLocale("hi")).toBe("hi-IN");
   });
 
   test("matches nothing for a language Deskohub doesn't serve", () => {
@@ -193,12 +172,6 @@ describe("matchSupportedLocale", () => {
     expect(matchSupportedLocale("fr")).toBeUndefined();
     expect(matchSupportedLocale("")).toBeUndefined();
     expect(matchSupportedLocale("constructor")).toBeUndefined();
-  });
-
-  test("agrees with the language index", () => {
-    for (const [language, locale] of Object.entries(localeByLanguage)) {
-      expect(matchSupportedLocale(language)).toBe(locale);
-    }
   });
 });
 

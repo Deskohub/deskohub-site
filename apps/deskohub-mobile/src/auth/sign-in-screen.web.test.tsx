@@ -5,6 +5,7 @@ import { Effect, Option } from "effect";
 import { act, type ReactElement, type ReactNode } from "react";
 import { View } from "react-native";
 import { AppLocaleProvider } from "../i18n/locale-context";
+import { m } from "../i18n/messages";
 import { clientRoot } from "../testing/client-root";
 import { eventually } from "../testing/eventually";
 import { expoRouterStandIn } from "../testing/expo-router-stand-in";
@@ -12,7 +13,6 @@ import { Button, Screen, TextField } from "../ui/controls";
 import { find, findAll } from "../ui/testing/element-tree";
 import { AppSignInCodeStep } from "./app-sign-in-code-step.web";
 import { AppSignInContinueStep } from "./app-sign-in-continue-step";
-import { appSignInEmailHeading } from "./app-sign-in-email-heading";
 import { AppSignInEmailStep } from "./app-sign-in-email-step";
 import { AppSignInFinishedInAppStep } from "./app-sign-in-finished-in-app-step";
 import { AppSignInLinkStep } from "./app-sign-in-link-step";
@@ -209,9 +209,12 @@ describe("the web SignInScreen", () => {
     };
     await show();
     const step = shownStep(AppSignInEmailStep);
-    const heading = appSignInEmailHeading(appReauthentication, "en-US");
-    expect(step.title).toBe(heading.title);
-    expect(step.body).toBe(heading.body);
+    expect(step.title).toBe(
+      m.signin_reauthenticate_title({}, { locale: "en-US" })
+    );
+    expect(step.body).toBe(
+      m.signin_reauthenticate_delete_account_body({}, { locale: "en-US" })
+    );
     expect((step.illustration as ReactElement).type).toBe(
       ReauthenticationShield
     );
@@ -241,11 +244,14 @@ describe("the web SignInScreen", () => {
     });
   });
 
-  test("an ordinary sign-in from the app shows no shield", async () => {
+  test("an ordinary sign-in from the app asks for an email without reauthentication copy", async () => {
     openedByApp();
     await show();
-    expect(shownStep(AppSignInEmailStep).illustration).toBeUndefined();
-    expect(shownStep(AppSignInEmailStep).email.locked).toBe(false);
+    const step = shownStep(AppSignInEmailStep);
+    expect(step.title).toBe(m.signin_create_title({}, { locale: "en-US" }));
+    expect(step.body).toBeUndefined();
+    expect(step.illustration).toBeUndefined();
+    expect(step.email.locked).toBe(false);
   });
 
   test("an invalid address shows at the field and sends nothing", async () => {

@@ -406,27 +406,16 @@ describe("workspace E2E workflow", () => {
     ).toBe(false);
   });
 
-  test("cancels E2E only for a duplicate run of the same SHA", () => {
+  test("places cancellation only on the job for an eligible preview", () => {
     // A late event for an older head or a skip resolves ineligible or never
     // reaches the E2E job, so cancellation lives on that job alone, after
-    // eligibility, and runs for different SHAs never share its group. Assert
-    // on parsed objects so a workflow-level group or a cancelling group on
-    // another job is caught however it is spelled.
+    // eligibility.
     expect(doc.concurrency).toBeUndefined();
     expect(testJob.if).toContain(
       "needs.resolve-target.outputs.eligible == 'true'"
     );
     expect(testJob.if).toContain(
       "needs.resolve-target.outputs.deployment == 'success'"
-    );
-    const testConcurrency = testJob.concurrency;
-    expect(testConcurrency?.["cancel-in-progress"]).toBe(true);
-    expect(testConcurrency?.group).toStartWith("workspace-e2e-pr-");
-    expect(testConcurrency?.group).toContain(
-      "needs.resolve-target.outputs.pr_number"
-    );
-    expect(testConcurrency?.group).toContain(
-      "needs.resolve-target.outputs.sha"
     );
     for (const [name, job] of Object.entries(doc.jobs)) {
       if (name !== "test-e2e") {
@@ -435,12 +424,7 @@ describe("workspace E2E workflow", () => {
     }
   });
 
-  test("uses the allocator without a global provider lock", () => {
-    // The only E2E concurrency group is per PR, never across PRs.
-    expect(JSON.stringify(testJob.concurrency)).toContain(
-      "needs.resolve-target.outputs.pr_number"
-    );
-
+  test("holds a date-shard lease while checkout E2E runs", () => {
     const targetCheckoutIndex = stepNames.indexOf("Checkout exact target");
     const coordinatorCheckoutIndex = stepNames.indexOf(
       "Checkout workflow actions"

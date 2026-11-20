@@ -16,7 +16,7 @@ import {
  * letters of the first two parts of the address before the @
  * (`jana.novakova@…` is JN), else its first letter.
  */
-export const emailInitials = (email: string): string =>
+const emailInitials = (email: string): string =>
   (email.split("@")[0] ?? "")
     .split(/[._+-]+/)
     .filter((part) => part !== "")

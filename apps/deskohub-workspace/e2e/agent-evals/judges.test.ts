@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   type AgentEvalReservationRecord,
-  agentEvalFacts,
   classifyAgentEvalFailure,
   judgeAgentEvalFacts,
   judgeAgentEvalReservation,
@@ -9,11 +8,6 @@ import {
 } from "./judges";
 
 describe("judgeAgentEvalFacts", () => {
-  test("the facts come from the catalog and site constants", () => {
-    expect(agentEvalFacts.reservedDeskDailyPriceCzk).toBe(410);
-    expect(agentEvalFacts.address.street).toBe("Turnovská 430/10");
-  });
-
   test.each([
     [
       "an English answer",

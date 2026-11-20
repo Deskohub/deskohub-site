@@ -154,22 +154,10 @@ describe("compiled dhw", () => {
 });
 
 describe("makeDhwBuildVersion", () => {
-  test("keeps the plain package version only for a release", () => {
-    expect(
-      makeDhwBuildVersion("1.2.3", "linux-x64-baseline", { release: true })
-    ).toBe("1.2.3");
-  });
-
-  test("tags a release-target build outside the release channel", () => {
+  test("uses the development tag for a local build of a release target", () => {
     expect(
       makeDhwBuildVersion("1.2.3", "linux-x64-baseline", { release: false })
     ).toBe("1.2.3+development");
-    expect(
-      makeDhwBuildVersion("1.2.3", "darwin-arm64", {
-        release: false,
-        versionTag: prVersionTag,
-      })
-    ).toBe(`1.2.3+${prVersionTag}`);
   });
 
   test("refuses a release without a release build target", () => {

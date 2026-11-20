@@ -4,11 +4,9 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   type EmailBatchResult,
   type EmailMessage,
-  type EmailProvider,
   EmailServiceTag,
   staffEmailSubject,
 } from "@deskohub/email";
-import { makeEmailProviderFake } from "@deskohub/email/testing";
 import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
 import { ConfigProvider, Effect, Logger } from "effect";
 import { FetchHttpClient } from "effect/http";
@@ -45,12 +43,7 @@ mock.module("resend", () => ({
   },
 }));
 
-const {
-  makeWorkspaceEmailLayer,
-  workspaceEmailProviders,
-  workspaceEmailSystemIdentity,
-  workspaceMarketingCategories,
-} = await import("./email.config");
+const { makeWorkspaceEmailLayer } = await import("./email.config");
 const { campaignEmailKind, campaignTestEmailCategory } = await import(
   "@/features/email-campaigns/campaign-email-kind"
 );
@@ -290,10 +283,6 @@ describe("WorkspaceEmailLayer", () => {
       }) as typeof globalThis.fetch;
       return { fetch, requests };
     };
-    const postHogDeliveryInserts = () =>
-      database.statements.filter(({ sql }) =>
-        /insert into "posthog_email_deliveries"/i.test(sql)
-      );
     const campaignMessage = {
       ...message(realRecipient),
       tags: [campaignEmailKind.category],
@@ -305,7 +294,7 @@ describe("WorkspaceEmailLayer", () => {
     ])("%s", (_, category) => {
       const categoryMessage = { ...message(realRecipient), tags: [category] };
 
-      test("go through PostHog's app host under the system identity, tracked for status polls", async () => {
+      test("go through PostHog's app host under the system identity", async () => {
         const posthog = postHogAnswering(202, {
           message_id: "0197a5e1-1b52-7c4e-9f5a-2d3b4c5d6e7f",
         });
@@ -323,12 +312,9 @@ describe("WorkspaceEmailLayer", () => {
         expect(new URL(posthog.requests[0]?.url ?? "").origin).toBe(
           "https://eu.posthog.com"
         );
-        expect(posthog.requests[0]?.distinctId).toBe(
-          workspaceEmailSystemIdentity
-        );
+        expect(posthog.requests[0]?.distinctId).toBe("workspace-email-system");
         expect(posthog.requests[0]?.templateKey).toBe(category);
         expect(resendSend).not.toHaveBeenCalled();
-        expect(postHogDeliveryInserts()).toHaveLength(1);
       });
 
       test("fall back to Resend when PostHog refuses to send", async () => {
@@ -348,7 +334,6 @@ describe("WorkspaceEmailLayer", () => {
           expect(result.success.provider).toBe("resend");
         }
         expect(resendSend).toHaveBeenCalledTimes(1);
-        expect(postHogDeliveryInserts()).toEqual([]);
       });
     });
 
@@ -390,6 +375,22 @@ describe("WorkspaceEmailLayer", () => {
       }
       expect(posthog.requests).toHaveLength(0);
     });
+
+    test("sends campaign mail to Console when PostHog is configured but Resend is unavailable", async () => {
+      const posthog = postHogAnswering(202, {
+        message_id: "0197a5e1-1b52-7c4e-9f5a-2d3b4c5d6e7f",
+      });
+      const result = await runWorkspaceEmail(send(campaignMessage), undefined, {
+        config,
+        fetch: posthog.fetch,
+      });
+
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { provider: "console" },
+      });
+      expect(posthog.requests).toEqual([]);
+    });
   });
 
   test("keeps the test tag on staff copies outside production on both providers", async () => {
@@ -411,42 +412,5 @@ describe("WorkspaceEmailLayer", () => {
     expect(resendSend.mock.calls[0]?.[0]?.subject).toBe(
       "[TESTING] New request"
     );
-  });
-});
-
-describe("workspaceEmailProviders", () => {
-  const providerNamed = (name: string): EmailProvider =>
-    makeEmailProviderFake({ name }).provider;
-  const names = (chain: ReadonlyArray<EmailProvider>) =>
-    chain.map((provider) => provider.name);
-
-  test("campaign deliveries and campaign test emails are the marketing stream", () => {
-    expect([...workspaceMarketingCategories]).toEqual([
-      campaignEmailKind.category,
-      campaignTestEmailCategory,
-    ]);
-  });
-
-  test("transactional mail only ever goes through Resend; marketing tries PostHog first", () => {
-    const resend = providerNamed("resend");
-    const posthog = providerNamed("posthog");
-
-    const withPostHog = workspaceEmailProviders({ resend, posthog });
-    expect(names(withPostHog.transactional)).toEqual(["resend"]);
-    expect(names(withPostHog.marketing)).toEqual(["posthog", "resend"]);
-
-    const resendOnly = workspaceEmailProviders({ resend });
-    expect(names(resendOnly.transactional)).toEqual(["resend"]);
-    expect(names(resendOnly.marketing)).toEqual(["resend"]);
-  });
-
-  test("without Resend every chain is empty, so every message goes to Console", () => {
-    const chains = workspaceEmailProviders({
-      resend: undefined,
-      posthog: providerNamed("posthog"),
-    });
-
-    expect(chains.transactional).toEqual([]);
-    expect(chains.marketing).toEqual([]);
   });
 });

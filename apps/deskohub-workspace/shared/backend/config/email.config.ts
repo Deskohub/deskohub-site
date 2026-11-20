@@ -44,7 +44,7 @@ const workspaceMarketingEmailKinds = [campaignEmailKind];
  * campaign test emails, so a test goes the way the real send will. Every
  * other message is transactional.
  */
-export const workspaceMarketingCategories: ReadonlySet<string> = new Set([
+const workspaceMarketingCategories: ReadonlySet<string> = new Set([
   ...workspaceMarketingEmailKinds.map(({ category }) => category),
   campaignTestEmailCategory,
 ]);
@@ -55,7 +55,7 @@ export const workspaceMarketingCategories: ReadonlySet<string> = new Set([
  * Resend. Without Resend every chain is empty, so every message goes to
  * Console and an environment without credentials never sends real mail.
  */
-export const workspaceEmailProviders = (providers: {
+const workspaceEmailProviders = (providers: {
   readonly resend: EmailProvider | undefined;
   readonly posthog?: EmailProvider;
 }): EmailProviderChains => {
@@ -81,7 +81,7 @@ export const workspaceEmailProviders = (providers: {
  * person by the recipient's address. Engagement events of all such
  * recipients share this one person.
  */
-export const workspaceEmailSystemIdentity = "workspace-email-system";
+const workspaceEmailSystemIdentity = "workspace-email-system";
 
 /**
  * The PostHog email provider of the configured connection. Campaign messages

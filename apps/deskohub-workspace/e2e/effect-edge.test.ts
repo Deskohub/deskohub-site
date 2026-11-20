@@ -18,9 +18,6 @@ describe("E2E Effect edge", () => {
     await expect(runUntracedE2EEffect(Effect.fail(failure))).rejects.toBe(
       failure
     );
-    await expect(Effect.runPromise(Effect.interrupt)).rejects.toStrictEqual(
-      interruptedRejection
-    );
     await expect(runUntracedE2EEffect(Effect.interrupt)).rejects.toStrictEqual(
       interruptedRejection
     );

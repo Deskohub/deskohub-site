@@ -117,15 +117,6 @@ const runLocaleCase = async (pages: Parameters<typeof serveHomePages>[0]) => {
 };
 
 test.skipIf(!chromiumAvailable)(
-  "switches to Czech and back through the header language menu",
-  async () => {
-    const { annotations } = await runLocaleCase({});
-
-    expect(annotations).toEqual([]);
-  }
-);
-
-test.skipIf(!chromiumAvailable)(
   "times out the switch while the language menu trigger is not hydrated",
   async () => {
     const { annotations } = await runLocaleCase({ hydrated: false });

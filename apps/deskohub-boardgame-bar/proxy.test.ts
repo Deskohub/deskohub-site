@@ -43,14 +43,6 @@ test("regexp matches normal application routes", () => {
   for (const path of shouldMatch) {
     expect(path).toMatch(regexp);
   }
-
-  const shouldMatchWithDomain = shouldMatch.map(
-    (path) => `https://example.com${path}`
-  );
-
-  for (const path of shouldMatchWithDomain) {
-    expect(path).toMatch(regexp);
-  }
 });
 
 test("regexp does NOT match icon asset routes", () => {

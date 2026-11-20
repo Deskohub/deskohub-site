@@ -9,7 +9,6 @@ import { LoadingIndicator } from "./loading-indicator";
 import {
   type LoadingIndicatorProps,
   loadingIndicatorLayout,
-  loadingIndicatorSemantics,
 } from "./loading-indicator-presentation";
 import { elementTree, find, type HostProps } from "./testing/element-tree";
 
@@ -49,16 +48,23 @@ describe("LoadingIndicator", () => {
     );
   });
 
-  test.each([
-    ["label", "a labelled"],
-    [undefined, "an unlabelled"],
-  ] as const)(
-    "carries the semantics of %s indicator on its outer view",
-    (label) => {
-      const { view } = drawn({ size: "screen", tone: "brand", label });
-      expect(view).toMatchObject(loadingIndicatorSemantics(label));
-    }
-  );
+  test("exposes a labelled indicator as a busy progress bar", () => {
+    const { view } = drawn({ size: "screen", tone: "brand", label: "Loading" });
+    expect(view).toMatchObject({
+      accessible: true,
+      role: "progressbar",
+      "aria-label": "Loading",
+      "aria-busy": true,
+    });
+  });
+
+  test("hides decorative progress and its descendants from assistive tech", () => {
+    const { view } = drawn({ size: "screen", tone: "brand" });
+    expect(view).toMatchObject({
+      "aria-hidden": true,
+      importantForAccessibility: "no-hide-descendants",
+    });
+  });
 
   test("shows the still logo until the motion preference is known", () => {
     expect(drawn({ size: "screen", tone: "brand" }).player.autoPlay).toBe(

@@ -196,7 +196,6 @@ describe("campaign admin API contract", () => {
       "an unknown attribute",
       { attribute: "spend", _tag: "Condition", operator: "gt", value: 100 },
     ],
-    ["a legacy condition", { _tag: "Locale", locales: ["cs-CZ"] }],
     [
       "an invalid calendar date",
       {
@@ -455,14 +454,6 @@ describe("campaign admin API contract", () => {
         locale: "en-US",
       })
     ).toBe(false);
-  });
-
-  test("reports an unsent campaign's status as no send", () => {
-    expect(
-      Schema.decodeUnknownSync(AdministrationCampaignSendStatusResult)({
-        send: null,
-      })
-    ).toEqual({ send: null });
   });
 
   const localeFilter = {

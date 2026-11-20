@@ -13,7 +13,6 @@ test("locale redirect keeps campaign query parameters", () => {
   );
 
   const location = response.headers.get("location");
-  expect(location).not.toBeNull();
   expect(new URL(location ?? "").search).toBe(search);
 });
 
@@ -45,11 +44,11 @@ describe("resolveRequestLocale", () => {
   test("uses the browser language without a locale cookie", () => {
     expect(
       resolveRequestLocale(
-        requestWith({ cookie: "theme=dark", "accept-language": "en-US" })
+        requestWith({
+          cookie: "theme=dark",
+          "accept-language": "en-US,cs;q=0.5",
+        })
       )
-    ).toBe("en-US");
-    expect(
-      resolveRequestLocale(requestWith({ "accept-language": "en-US,cs;q=0.5" }))
     ).toBe("en-US");
   });
 

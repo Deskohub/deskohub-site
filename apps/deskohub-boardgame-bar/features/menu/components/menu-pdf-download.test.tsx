@@ -106,17 +106,11 @@ const captureConsoleErrors = () => {
 };
 
 describe("MenuPDFDownload", () => {
-  test("starts idle with an enabled download button", () => {
-    const { html } = renderDownloadButton();
-
-    expect(html).toContain("<button");
-    expect(html).not.toContain("disabled=");
-    expect(html).not.toContain("animate-spin");
-  });
-
   test("tracks the click and saves the generated menu PDF", async () => {
     servePdf(async () => new Response(pdf));
-    const { click } = renderDownloadButton();
+    const { click, html } = renderDownloadButton();
+
+    expect(html).not.toContain("disabled=");
 
     await click();
 

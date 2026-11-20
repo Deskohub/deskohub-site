@@ -127,8 +127,6 @@
   "marketingPreferencesFormSavingStatus": "Deine Marketingpräferenz wird gespeichert …",
   "marketingPreferencesFormAccountContext": "Du verwaltest die Kundenpräferenz für dieses angemeldete Konto.",
   "marketingPreferencesFormLinkContext": "Du verwaltest die Kundenpräferenz über diesen persönlichen Link für Marketingnachrichten, nicht über das angemeldete Konto.",
-  "marketingPreferencesFormStatusActive": "Marketingnachrichten sind jetzt erlaubt.",
-  "marketingPreferencesFormStatusWithdrawn": "Die Einwilligung in Marketingnachrichten ist jetzt widerrufen.",
   "marketingPreferencesFormSaved": "Deine Marketingpräferenz wurde gespeichert.",
   "marketingPreferencesFormSaveError": "Die Marketingpräferenz konnte nicht gespeichert werden. Versuch es bitte noch einmal.",
   "marketingPreferencesFormPendingDescription": "Fahre fort, um diesen persönlichen Link für Marketingnachrichten zu verifizieren. Erst danach kannst du die Kundenpräferenz ansehen oder ändern.",

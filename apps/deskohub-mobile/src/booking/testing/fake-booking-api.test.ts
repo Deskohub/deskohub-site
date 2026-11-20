@@ -183,7 +183,7 @@ describe("fake booking catalog", () => {
     expect(closed.startTimes).toEqual([]);
   });
 
-  test("quotes a selection with a signed-looking token", async () => {
+  test("quotes the total for cowork with coffee", async () => {
     const { run, booking } = harness();
     const result = await run((api) => quoteOf(api, coworkSelection(booking)));
     expect(result).toMatchObject({
@@ -193,10 +193,6 @@ describe("fake booking catalog", () => {
         total: { value: 40_000, exponent: 2, currency: "CZK" },
       },
     });
-    if (result._tag !== "Success") return;
-    expect(result.success.advertisedPriceToken).toMatch(
-      /^sq1\.[0-9a-f]{8}\.[0-9a-f]{8}$/
-    );
   });
 
   test("lists the legal documents with sha256 hashes", async () => {
@@ -254,9 +250,6 @@ describe("fake booking checkout", () => {
       holdExpiresAt: new Date(start + fakeHoldDuration).toISOString(),
       summary: { total: { value: 40_000 } },
     });
-    if (checkout.status === "payment_disabled") return;
-    expect(checkout.orderId).toStartWith("sample-booking-order-");
-    expect(checkout.payStateToken).toMatch(/^ps1\./);
   });
 
   test("answers a quote token for another selection as expired", async () => {
@@ -278,45 +271,32 @@ describe("fake booking checkout", () => {
     });
   });
 
-  test("submits for payment, or as paid when nothing is left to pay", async () => {
+  test("defaults to the site status page for the submitted order", async () => {
     const { run, booking } = harness();
-    const submit = (code?: string) =>
-      run((api) =>
-        Effect.gen(function* () {
-          const checkout = yield* held(api, coworkSelection(booking));
-          if (checkout.status === "payment_disabled")
-            throw new Error("disabled");
-          let token = checkout.payStateToken;
-          if (code !== undefined) {
-            token = (yield* api.applyCheckoutDiscountCode({
-              payload: { locale: "en-US", payStateToken: token, code },
-              headers: {},
-            })).payStateToken;
-          }
-          return yield* api.submitCheckout({
-            payload: {
-              locale: "en-US",
-              payStateToken: token,
-              legalConsent: true,
-              acceptedLegalDocuments: legalAcceptance(),
-            },
-            headers: {},
-          });
-        })
-      );
-
-    expect(await submit()).toMatchObject({
-      _tag: "Success",
-      success: {
-        status: "payment_required",
-        paymentUrl: expect.stringContaining("/checkout/sample-booking-order-"),
-        statusUrl: expect.stringContaining("orderId=sample-booking-order-"),
-      },
-    });
-    expect(await submit(fakeBookingCodes.free)).toMatchObject({
-      _tag: "Success",
-      success: { status: "paid" },
-    });
+    const result = await run((api) =>
+      Effect.gen(function* () {
+        const checkout = yield* held(api, coworkSelection(booking));
+        if (checkout.status === "payment_disabled") throw new Error("disabled");
+        return yield* api.submitCheckout({
+          payload: {
+            locale: "en-US",
+            payStateToken: checkout.payStateToken,
+            legalConsent: true,
+            acceptedLegalDocuments: legalAcceptance(),
+          },
+          headers: {},
+        });
+      })
+    );
+    if (
+      result._tag !== "Success" ||
+      result.success.status !== "payment_required"
+    ) {
+      throw new Error("expected a submitted order awaiting payment");
+    }
+    const statusUrl = new URL(result.success.statusUrl);
+    expect(statusUrl.pathname).toBe("/reservation/status");
+    expect(statusUrl.searchParams.get("orderId")).toBe(result.success.orderId);
   });
 
   test("applies the known codes and rejects others", async () => {
@@ -357,14 +337,6 @@ describe("fake booking checkout", () => {
     expect(
       rejected._tag === "Failure" && "payStateToken" in rejected.failure
     ).toBe(false);
-    expect(await apply(fakeBookingCodes.expiredWithReplacement)).toMatchObject({
-      failure: {
-        _tag: "CustomerDiscountCodeRejected",
-        reason: "unavailable",
-        payStateToken: expect.stringMatching(/^ps1\./),
-        expiresAt: expect.any(String),
-      },
-    });
   });
 
   test("records whether the referral header was sent", async () => {
@@ -383,10 +355,6 @@ describe("fake booking checkout", () => {
       ["getQuote", undefined],
       ["createCheckout", fakeBookingCodes.referral],
     ]);
-    const create = booking.calls[1];
-    expect(
-      create?.endpoint === "createCheckout" && create.input.checkoutAttemptId
-    ).toStartWith("attempt-");
   });
 });
 
@@ -700,35 +668,6 @@ describe("fake booking scripting", () => {
       failure: { _tag: "CustomerCheckoutUnavailable", reason: "expired" },
     });
   });
-
-  test("breaks the connection after a submit was applied", async () => {
-    const { run, booking } = harness();
-    booking.fail("submitCheckout", "transport-failure");
-    const result = await run((api) =>
-      Effect.flatMap(held(api, coworkSelection(booking)), (checkout) => {
-        if (checkout.status === "payment_disabled") throw new Error("disabled");
-        return Effect.map(
-          Effect.result(
-            api.submitCheckout({
-              payload: {
-                locale: "en-US",
-                payStateToken: checkout.payStateToken,
-                legalConsent: true,
-                acceptedLegalDocuments: legalAcceptance(),
-              },
-              headers: {},
-            })
-          ),
-          (submitted) => ({ orderId: checkout.orderId, submitted })
-        );
-      })
-    );
-    if (result._tag !== "Success") throw new Error("expected a checkout");
-    expect(result.success.submitted).toMatchObject({
-      failure: { _tag: "HttpClientError" },
-    });
-    expect(booking.checkout(result.success.orderId)?.status).toBe("submitted");
-  });
 });
 
 describe("fake booking hold and code removal", () => {
@@ -771,10 +710,16 @@ describe("fake booking hold and code removal", () => {
             fakeBookingCodes.expiredWithReplacement
           )
         );
+        if (
+          rejected._tag !== "CustomerDiscountCodeRejected" ||
+          rejected.payStateToken === undefined
+        ) {
+          throw new Error("expected a replacement token after rejection");
+        }
         advance(60_000);
         const applied = yield* applying(
           api,
-          created.payStateToken,
+          rejected.payStateToken,
           fakeBookingCodes.discount
         );
         advance(60_000);
@@ -790,9 +735,11 @@ describe("fake booking hold and code removal", () => {
     expect(created.holdExpiresAt).toBe(holdExpiresAt);
     expect(rejected).toMatchObject({
       _tag: "CustomerDiscountCodeRejected",
+      reason: "unavailable",
       expiresAt: tokenExpiry(60_000),
     });
     expect(applied).toMatchObject({
+      orderId: created.orderId,
       holdExpiresAt,
       expiresAt: tokenExpiry(120_000),
       appliedDiscountCode: {

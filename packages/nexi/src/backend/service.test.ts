@@ -13,7 +13,7 @@ import {
   type PaymentOutcomeStatus,
   type PaymentVerificationResult,
 } from "../types";
-import { mapNexiClientError, NexiGeneratedClient } from "./api";
+import { NexiGeneratedClient } from "./api";
 import { getNexiRequestWorstCaseDuration } from "./request-policy";
 import { NexiService } from "./service";
 
@@ -76,38 +76,6 @@ const readJsonBody = async ([input, init]: FetchCall) => {
 };
 
 describe("NexiService hosted payment pages", () => {
-  test("unwraps generated provider errors", () => {
-    const error = mapNexiClientError(
-      {
-        response: { status: 402 },
-        cause: {
-          status: 402,
-          errors: [{ description: "Payment declined" }],
-        },
-      } as never,
-      "Get order"
-    );
-
-    if (!Predicate.isTagged(error, "ExternalAPIError")) {
-      throw new Error("Expected ExternalAPIError");
-    }
-    expect(error.statusCode).toBe(402);
-    expect(error.message).toBe("Payment declined");
-  });
-
-  test("keeps an unclassified client failure as the error cause", () => {
-    const failure = new Error("unexpected client failure");
-    const error = mapNexiClientError(failure, "Get order");
-
-    expect(error).toMatchObject({
-      _tag: "ExternalAPIError",
-      service: "Nexi",
-      operation: "Get order",
-    });
-    expect(error).not.toHaveProperty("statusCode");
-    expect(error.cause).toBe(failure);
-  });
-
   test("builds and sends the hosted-page request", async () => {
     const fetchMock = mockNexiFetch(
       Response.json({

@@ -73,7 +73,7 @@ export type AgentEvalJudgement = {
  * mirrors the published copy ("open 24/7"); read it from the site constants
  * once they carry opening hours.
  */
-export const agentEvalFacts = {
+const agentEvalFacts = {
   reservedDeskDailyPriceCzk: moneyMajorAmount(
     getWorkspaceProductByTier("reserved-desk").price
   ),

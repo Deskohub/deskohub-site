@@ -127,8 +127,6 @@
   "marketingPreferencesFormSavingStatus": "आपकी मार्केटिंग सेटिंग सहेजी जा रही है…",
   "marketingPreferencesFormAccountContext": "इस साइन-इन किए गए खाते के लिए ग्राहक की सेटिंग मैनेज की जा रही है।",
   "marketingPreferencesFormLinkContext": "ग्राहक की सेटिंग साइन-इन किए गए खाते से नहीं, बल्कि मार्केटिंग संदेशों के इस विशेष लिंक से मैनेज की जा रही है।",
-  "marketingPreferencesFormStatusActive": "मार्केटिंग संदेश अभी चालू हैं।",
-  "marketingPreferencesFormStatusWithdrawn": "मार्केटिंग संदेश भेजने की सहमति अभी वापस ली हुई है।",
   "marketingPreferencesFormSaved": "आपकी मार्केटिंग सेटिंग सहेज ली गई।",
   "marketingPreferencesFormSaveError": "मार्केटिंग सेटिंग सहेजी नहीं जा सकी। कृपया फिर से कोशिश करें।",
   "marketingPreferencesFormPendingDescription": "जारी रखें और मार्केटिंग संदेशों के इस विशेष लिंक की पुष्टि करें; उसके बाद ही ग्राहक की सेटिंग देखी या बदली जा सकेगी।",

@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
-import { unitOf, workspaceCurrencyDefinitions } from "./currencies";
+import { unitOf } from "./currencies";
 
 describe("workspace currency catalog", () => {
-  test("gives each catalog currency its code and exponent as the unit", () => {
-    for (const { code, exponent } of workspaceCurrencyDefinitions) {
-      expect(unitOf(code)).toEqual(Option.some({ currency: code, exponent }));
-    }
+  test.each(["CZK", "EUR"])("uses two minor-unit decimals for %s", (code) => {
+    expect(unitOf(code)).toEqual(Option.some({ currency: code, exponent: 2 }));
   });
 
   test("gives no unit for a code outside the catalog", () => {

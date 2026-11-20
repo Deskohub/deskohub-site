@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
-import { Cause, Effect, Exit, Layer, Option, Schema } from "effect";
-import { FetchHttpClient } from "effect/http";
+import { Cause, Effect, Exit, Fiber, Layer, Option, Schema } from "effect";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { TestClock } from "effect/testing";
 import { IgloohomeRuntimeConfig } from "../config";
 import { IgloohomeRequestError } from "../errors";
 import type { IssueHourlyAlgoPinInput } from "../types";
@@ -58,13 +59,10 @@ describe("IgloohomeService", () => {
     }) as unknown as typeof globalThis.fetch;
 
   const buildServiceLayer = (
-    fetchMock: typeof globalThis.fetch,
+    httpClientLayer: Layer.Layer<HttpClient.HttpClient>,
     apiTimeout = 1_000
-  ) => {
-    const httpClientLayer = FetchHttpClient.layer.pipe(
-      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
-    );
-    return IgloohomeService.Default.pipe(
+  ) =>
+    IgloohomeService.Default.pipe(
       Layer.provide(IgloohomeAccessToken.Default),
       Layer.provide(
         Layer.merge(
@@ -79,7 +77,17 @@ describe("IgloohomeService", () => {
         )
       )
     );
-  };
+
+  const buildFetchServiceLayer = (
+    fetchMock: typeof globalThis.fetch,
+    apiTimeout?: number
+  ) =>
+    buildServiceLayer(
+      FetchHttpClient.layer.pipe(
+        Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
+      ),
+      apiTimeout
+    );
 
   const deviceId = Schema.decodeUnknownSync(IgloohomeDeviceIdSchema)(
     "EK1X16f8898a"
@@ -97,7 +105,7 @@ describe("IgloohomeService", () => {
         accessName: "Deskohub reservation-id",
       });
     }).pipe(
-      Effect.provide(buildServiceLayer(recordRequests(requests))),
+      Effect.provide(buildFetchServiceLayer(recordRequests(requests))),
       Effect.runPromise
     );
 
@@ -162,7 +170,10 @@ describe("IgloohomeService", () => {
         .pipe(Effect.flip);
       const renewed = yield* service.issueHourlyAlgoPin(input);
       return [revoked, renewed] as const;
-    }).pipe(Effect.provide(buildServiceLayer(fetchMock)), Effect.runPromise);
+    }).pipe(
+      Effect.provide(buildFetchServiceLayer(fetchMock)),
+      Effect.runPromise
+    );
 
     expect(revoked).toMatchObject({
       operation: "issue_hourly_algopin",
@@ -201,7 +212,7 @@ describe("IgloohomeService", () => {
           endsAt: "2026-08-13T17:00:00+02:00",
           accessName: "Deskohub reservation-id",
         });
-      }).pipe(Effect.provide(buildServiceLayer(fetchMock, 40)))
+      }).pipe(Effect.provide(buildFetchServiceLayer(fetchMock, 40)))
     );
 
     const failure = Exit.isFailure(exit)
@@ -262,7 +273,7 @@ describe("IgloohomeService", () => {
           endsAt: "2026-08-13T17:00:00+02:00",
           accessName: "Deskohub reservation-id",
         });
-      }).pipe(Effect.provide(buildServiceLayer(fetchMock, 40)))
+      }).pipe(Effect.provide(buildFetchServiceLayer(fetchMock, 40)))
     );
 
     const failure = Exit.isFailure(exit)
@@ -281,53 +292,51 @@ describe("IgloohomeService", () => {
     expect(requests).toHaveLength(1);
   });
 
-  test("bounds delayed authentication and delayed creation below twice the per-request timeout", async () => {
-    const requests: Request[] = [];
-    const apiTimeout = 200;
-    const phaseDelayMilliseconds = 150;
-    const fetchMock = mock(
-      async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = getRequest(input, init);
-        requests.push(request.clone());
-        await new Promise((resolve) =>
-          setTimeout(resolve, phaseDelayMilliseconds)
-        );
-        if (request.url === "https://auth.example.test/oauth2/token") {
-          return Response.json({
-            access_token: "access-token",
-            expires_in: 3600,
-          });
-        }
-        if (
-          request.url ===
-          "https://api.example.test/igloohome/devices/EK1X16f8898a/algopin/hourly"
-        ) {
-          return Response.json({ pin: "7654321", pinId: "pin-id" });
-        }
-        return new Response(null, { status: 404 });
-      }
-    ) as unknown as typeof globalThis.fetch;
-
-    const startedAt = Date.now();
+  test("gives authentication and creation separate request timeouts", async () => {
+    const httpClient = HttpClient.make((request, url) =>
+      Effect.sleep("150 millis").pipe(
+        Effect.map(() =>
+          HttpClientResponse.fromWeb(
+            request,
+            url.pathname === "/oauth2/token"
+              ? Response.json({
+                  access_token: "access-token",
+                  expires_in: 3600,
+                })
+              : Response.json({ pin: "7654321", pinId: "pin-id" })
+          )
+        )
+      )
+    );
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* IgloohomeService;
-        return yield* service.issueHourlyAlgoPin({
-          deviceId,
-          variance: 1,
-          startsAt: "2026-08-13T09:00:00+02:00",
-          endsAt: "2026-08-13T17:00:00+02:00",
-          accessName: "Deskohub reservation-id",
-        });
-      }).pipe(Effect.provide(buildServiceLayer(fetchMock, apiTimeout)))
+        const issuePin = yield* service
+          .issueHourlyAlgoPin({
+            deviceId,
+            variance: 1,
+            startsAt: "2026-08-13T09:00:00+02:00",
+            endsAt: "2026-08-13T17:00:00+02:00",
+            accessName: "Deskohub reservation-id",
+          })
+          .pipe(Effect.forkChild);
+        // Both requests fit within 200 ms each and take longer together.
+        yield* TestClock.adjust("400 millis");
+        expect(issuePin.pollUnsafe()).toBeDefined();
+        return yield* Fiber.join(issuePin);
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            buildServiceLayer(
+              Layer.succeed(HttpClient.HttpClient, httpClient),
+              200
+            ),
+            TestClock.layer()
+          )
+        )
+      )
     );
 
     expect(String(result.pin)).toBe("7654321");
-    expect(requests).toHaveLength(2);
-    const elapsedMilliseconds = Date.now() - startedAt;
-    expect(elapsedMilliseconds).toBeGreaterThanOrEqual(
-      2 * phaseDelayMilliseconds
-    );
-    expect(elapsedMilliseconds).toBeLessThan(2 * apiTimeout + 100);
   });
 });
