@@ -280,11 +280,6 @@ export class FakeBookingApi {
     this.legalVersion += 1;
   }
 
-  /** The held order, for assertions. */
-  checkout(orderId: string) {
-    return this.checkouts.get(orderId);
-  }
-
   /** The endpoint names requested, in order. */
   get endpoints(): ReadonlyArray<BookingEndpointName> {
     return this.calls.map((call) => call.endpoint);

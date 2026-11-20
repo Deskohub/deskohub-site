@@ -36,9 +36,8 @@ const { clientRoot } = await import("../../testing/client-root");
 const { AppBar } = await import("../../ui/app-bar");
 const { StackHeader } = await import("../../ui/navigation");
 const { ScrollScreen } = await import("../../ui/scroll-screen");
-const { elementTree, find, findAll, flatStyle } = await import(
-  "../../ui/testing/element-tree"
-);
+const { elementTree, find, findAll, flatStyle, hostTree, textOf } =
+  await import("../../ui/testing/element-tree");
 const { AvailableWidthContext } = await import("../../ui/viewport");
 const { ChooseHeaderFact, useChooseHeaderFact } = await import(
   "./choose-header"
@@ -174,11 +173,16 @@ function RoomCatalog({
 
 test("a catalog refresh removes its header fact while the Choose route stays open", async () => {
   setOptions.mockClear();
-  await render(<RoomCatalog offering={{ capacity: "Up to 10 seats" }} />);
-  expect(setOptions.mock.calls.at(-1)?.[0].headerRight).toEqual(
-    expect.any(Function)
-  );
+  const capacity = "Up to 10 seats";
+  await render(<RoomCatalog offering={{ capacity }} />);
+  const headerRight = setOptions.mock.lastCall?.[0].headerRight;
+  expect(
+    findAll(hostTree(headerRight?.({ canGoBack: true })), "Text").map(textOf)
+  ).toContain(capacity);
 
   await render(<RoomCatalog />);
-  expect(setOptions.mock.calls.at(-1)?.[0]).toEqual({ headerRight: undefined });
+  expect(setOptions.mock.lastCall?.[0]).toHaveProperty(
+    "headerRight",
+    undefined
+  );
 });

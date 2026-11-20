@@ -3,7 +3,16 @@ import type {
   CustomerOrderStatus,
   CustomerReservationOrderId,
 } from "@deskohub/workspace-customer-api";
-import { Effect, Exit, Fiber, Layer, Option, Queue, Stream } from "effect";
+import {
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import {
   AccountReadBudget,
@@ -111,48 +120,40 @@ const spendAllButReserve = (budget: AccountReadBudget["Service"]) =>
   });
 
 describe("statusRefreshes", () => {
-  test("a normal visit reads again after 10, 20 and 40 seconds, then stops", async () => {
-    const h = harness();
+  test.each([
+    ["normal", "pending", [10, 20, 40]],
+    [
+      "after-payment",
+      "paid_waiting_fulfillment",
+      [3, 3, 5, 5, 10, 15, 20, 30, 60],
+    ],
+  ] as const)(
+    "%s visit reads a %s order on schedule, then stops",
+    async (visit, status, delays) => {
+      const h = harness({ visit });
+      h.workspace.setOrderStatus(h.orderId, status);
 
-    await h.run(() =>
-      Effect.gen(function* () {
-        yield* h.readsSettled(1);
-        yield* TestClock.adjust("9 seconds");
-        yield* quietly;
-        expect(h.reads()).toBe(1);
-        yield* TestClock.adjust("1 second");
-        yield* h.readsSettled(2);
-        yield* TestClock.adjust("20 seconds");
-        yield* h.readsSettled(3);
-        yield* TestClock.adjust("40 seconds");
-        yield* h.readsSettled(4);
-        yield* TestClock.adjust("30 minutes");
-        yield* quietly;
-      })
-    );
+      await h.run(() =>
+        Effect.gen(function* () {
+          let reads = 1;
+          yield* h.readsSettled(reads);
+          for (const delay of delays) {
+            yield* TestClock.adjust(Duration.millis(delay * 1_000 - 1));
+            yield* quietly;
+            expect(h.reads()).toBe(reads);
+            yield* TestClock.adjust(Duration.millis(1));
+            reads += 1;
+            yield* h.readsSettled(reads);
+          }
+          yield* TestClock.adjust("30 minutes");
+          yield* quietly;
+        })
+      );
 
-    expect(h.reads()).toBe(4);
-    expect(stopped(h.last())).toBe("exhausted");
-  });
-
-  test("a visit after payment reads on the payment-return schedule", async () => {
-    const h = harness({ visit: "after-payment" });
-
-    await h.run(() =>
-      Effect.gen(function* () {
-        yield* h.readsSettled(1);
-        yield* TestClock.adjust("3 seconds");
-        yield* h.readsSettled(2);
-        yield* TestClock.adjust("3 seconds");
-        yield* h.readsSettled(3);
-        yield* TestClock.adjust("4 seconds");
-        yield* quietly;
-        expect(h.reads()).toBe(3);
-        yield* TestClock.adjust("1 second");
-        yield* h.readsSettled(4);
-      })
-    );
-  });
+      expect(h.reads()).toBe(1 + delays.length);
+      expect(stopped(h.last())).toBe("exhausted");
+    }
+  );
 
   test("stops once the order settles", async () => {
     const h = harness();
@@ -415,7 +416,7 @@ describe("statusRefreshes", () => {
 });
 
 describe("statusRefreshes when the order settles", () => {
-  test("an automatic read that settles the order runs onSettled once", async () => {
+  test("after payment, polls while the order is pending and reports settlement once", async () => {
     const h = harness({ visit: "after-payment" });
 
     await h.run(() =>
@@ -423,10 +424,14 @@ describe("statusRefreshes when the order settles", () => {
         yield* h.readsSettled(1);
         yield* TestClock.adjust("3 seconds");
         yield* h.readsSettled(2);
-        expect(h.settled()).toBe(0);
-        h.workspace.setOrderStatus(h.orderId, "fulfilled");
         yield* TestClock.adjust("3 seconds");
         yield* h.readsSettled(3);
+        yield* TestClock.adjust("5 seconds");
+        yield* h.readsSettled(4);
+        expect(h.settled()).toBe(0);
+        h.workspace.setOrderStatus(h.orderId, "fulfilled");
+        yield* TestClock.adjust("5 seconds");
+        yield* h.readsSettled(5);
         expect(h.settled()).toBe(1);
         yield* TestClock.adjust("30 minutes");
         yield* quietly;

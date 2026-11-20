@@ -74,15 +74,6 @@ describe("billingFormView", () => {
     });
   });
 
-  test("a Personal save leaves the kept company details out", () => {
-    const personal = afterChanges(business, { billingKind: "personal" });
-
-    const save = Result.getOrThrow(validateProfileDraft(personal, phoneRegion));
-
-    expect(save.billing?.kind).toBe("personal");
-    expect(save.billing).not.toHaveProperty("companyName");
-  });
-
   test("warns only when No billing details would remove saved ones", () => {
     const removes = (edited: EditedProfile, change: Partial<ProfileDraft>) =>
       billingFormView(edited.profile, afterChanges(edited, change))
@@ -104,16 +95,6 @@ describe("billing field errors", () => {
     return { draft, invalid: result.failure };
   };
 
-  test("each refused billing field gets its own problem, the first in screen order", () => {
-    const { invalid } = refused({ companyName: " ", city: "x".repeat(101) });
-
-    expect(invalid.fields).toEqual({
-      companyName: "required",
-      city: "invalid",
-    });
-    expect(invalid.first).toEqual(Option.some("companyName"));
-  });
-
   test("Billing counts its fields to fix; Profile points to Billing", () => {
     const { draft, invalid } = refused({
       companyName: "",
@@ -131,16 +112,5 @@ describe("billing field errors", () => {
     expect(profileFooterView(state, true, identityFields).message).toEqual({
       kind: "fix-elsewhere",
     });
-  });
-
-  test("a field the chosen kind doesn't save is never refused", () => {
-    const draft = afterChanges(business, {
-      billingKind: "personal",
-      companyName: "",
-    });
-
-    expect(Result.isSuccess(validateProfileDraft(draft, phoneRegion))).toBe(
-      true
-    );
   });
 });

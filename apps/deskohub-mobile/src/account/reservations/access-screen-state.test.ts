@@ -36,7 +36,6 @@ import {
   accessWindowKey,
   copyAccessCodeAtom,
   copyAddressAtom,
-  copyFeedbackDuration,
   copyPinWithFeedbackAtom,
   reservationAccessAtom,
   shownAccess,
@@ -490,10 +489,7 @@ describe("copy feedback", () => {
     expect(device.copied).toEqual([{ text: pin, sensitive: true }]);
     expect(copiedNow(registry, copy)).toBe(true);
 
-    await advance(
-      registry,
-      Duration.subtract(copyFeedbackDuration, Duration.millis(1))
-    );
+    await advance(registry, Duration.millis(1_999));
     expect(copiedNow(registry, copy)).toBe(true);
     await advance(registry, Duration.millis(1));
     expect(copiedNow(registry, copy)).toBe(false);
@@ -509,7 +505,7 @@ describe("copy feedback", () => {
       { text: "Sample address", sensitive: false },
     ]);
     expect(copiedNow(registry, copyAddressAtom)).toBe(true);
-    await advance(registry, copyFeedbackDuration);
+    await advance(registry, "2 seconds");
     expect(copiedNow(registry, copyAddressAtom)).toBe(false);
     unmount();
   });

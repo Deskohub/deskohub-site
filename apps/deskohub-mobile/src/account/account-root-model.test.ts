@@ -4,7 +4,6 @@ import {
   type SampleAccountKind,
   sampleWorkspaceData,
 } from "../customer-api/testing/sample-fixtures";
-import { accountIndexModel } from "./account-gating";
 import { type AccountRootModel, accountRootModel } from "./account-root-model";
 
 const accountOf = (kind: SampleAccountKind): CustomerAccountState =>
@@ -30,10 +29,7 @@ const subtitleOf = (model: AccountRootModel, section: string) =>
 
 describe("accountRootModel", () => {
   test("a linked account: its sections on the masthead, then Rewards, Privacy and the Danger zone", () => {
-    const model = accountRootModel(linked());
-
-    expect(model.completionCard).toBe(false);
-    expect(layout(model)).toEqual([
+    const sections: ReturnType<typeof layout> = [
       [
         "first",
         [
@@ -48,14 +44,18 @@ describe("accountRootModel", () => {
       ["rewards", ["referrals"]],
       ["privacy", ["legal"]],
       ["danger", ["danger"]],
-    ]);
+    ];
+    for (const release of [undefined, { paymentMethods: false }]) {
+      const model = accountRootModel(linked(), release);
+      expect(model.completionCard).toBe(false);
+      expect(layout(model)).toEqual(sections);
+    }
   });
 
   test("payment methods sits between billing and invoices only while released", () => {
-    const firstRows = (paymentMethods: boolean) =>
-      layout(accountRootModel(linked(), { paymentMethods }))[0]?.[1];
+    const model = accountRootModel(linked(), { paymentMethods: true });
 
-    expect(firstRows(true)).toEqual([
+    expect(layout(model)[0]?.[1]).toEqual([
       "profile",
       "security",
       "assistants",
@@ -64,12 +64,7 @@ describe("accountRootModel", () => {
       "invoices",
       "language",
     ]);
-    expect(firstRows(false)).toEqual(
-      layout(accountRootModel(linked()))[0]?.[1]
-    );
-    expect(firstRows(false)).not.toContain("payment-methods");
     // Neither row says anything about its section yet.
-    const model = accountRootModel(linked(), { paymentMethods: true });
     expect(subtitleOf(model, "payment-methods")).toBeUndefined();
     expect(subtitleOf(model, "invoices")).toBeUndefined();
   });
@@ -87,19 +82,27 @@ describe("accountRootModel", () => {
   });
 
   test.each([
-    "support-required",
-    "authenticated-unavailable",
-    "review-account",
-    "deletion-pending",
-  ] as const)("a %s account shows exactly the gated sections", (kind) => {
-    const account = accountOf(kind);
-    const model = accountRootModel(account);
+    [
+      "support-required",
+      ["security", "assistants", "language", "legal", "danger"],
+    ],
+    [
+      "authenticated-unavailable",
+      ["security", "assistants", "language", "legal", "danger"],
+    ],
+    ["review-account", ["security", "assistants", "language", "legal"]],
+    ["deletion-pending", ["security", "legal", "danger"]],
+  ] as const)(
+    "%s shows its reachable rows without a completion card",
+    (kind, sections) => {
+      const model = accountRootModel(accountOf(kind));
 
-    expect(model.completionCard).toBe(false);
-    expect<ReadonlyArray<string>>(
-      model.groups.flatMap((group) => group.rows.map((row) => row.section))
-    ).toEqual(accountIndexModel(account).sections);
-  });
+      expect(model.completionCard).toBe(false);
+      expect<ReadonlyArray<string>>(
+        model.groups.flatMap((group) => group.rows.map((row) => row.section))
+      ).toEqual(sections);
+    }
+  );
 
   test("rows say the section's current state", () => {
     const account = linked();

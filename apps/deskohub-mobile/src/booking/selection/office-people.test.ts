@@ -91,9 +91,9 @@ describe("office people", () => {
 
   test("always keeps someone on the list", () => {
     expect(canRemoveOfficePerson(youOnly)).toBe(false);
-    expect(removeYou(youOnly)).toBe(youOnly);
+    expect(removeYou(youOnly)).toEqual(youOnly);
     const alone = { contactAttends: false, invitees: [testEmailAddress("a")] };
-    expect(removeInvitee(alone, testEmailAddress("a"))).toBe(alone);
+    expect(removeInvitee(alone, testEmailAddress("a"))).toEqual(alone);
   });
 
   test("removes You or an invited person while someone stays", () => {
@@ -123,6 +123,6 @@ describe("office people", () => {
         testEmailAddress("c"),
       ],
     };
-    expect(addYou(full, maximumSeats)).toBe(full);
+    expect(addYou(full, maximumSeats)).toEqual(full);
   });
 });

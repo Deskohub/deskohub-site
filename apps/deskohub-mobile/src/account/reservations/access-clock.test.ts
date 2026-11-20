@@ -14,33 +14,23 @@ const runWithTestClock = <A>(effect: Effect.Effect<A>) =>
 
 describe("secondClock", () => {
   test("reads the time at once, then once a second", async () => {
-    const ticks = await runWithTestClock(
+    await runWithTestClock(
       Effect.gen(function* () {
+        const ticks: Array<number> = [];
         const fiber = yield* Effect.forkChild(
-          Stream.runCollect(Stream.take(secondClock, 3))
+          Stream.runForEach(Stream.take(secondClock, 3), (tick) =>
+            Effect.sync(() => void ticks.push(DateTime.toEpochMillis(tick)))
+          )
         );
-        yield* TestClock.adjust("2 seconds");
-        return yield* Fiber.join(fiber);
-      })
-    );
-
-    expect(ticks.map(DateTime.toEpochMillis)).toEqual([0, 1_000, 2_000]);
-  });
-
-  test("ticks only as time passes", async () => {
-    const finished = await runWithTestClock(
-      Effect.gen(function* () {
-        const fiber = yield* Effect.forkChild(
-          Stream.runCollect(Stream.take(secondClock, 3))
-        );
+        yield* TestClock.adjust("0 seconds");
+        expect(ticks).toEqual([0]);
         yield* TestClock.adjust("1 second");
-        const exit = fiber.pollUnsafe();
-        yield* Fiber.interrupt(fiber);
-        return exit !== undefined;
+        expect(ticks).toEqual([0, 1_000]);
+        yield* TestClock.adjust("1 second");
+        yield* Fiber.join(fiber);
+        expect(ticks).toEqual([0, 1_000, 2_000]);
       })
     );
-
-    expect(finished).toBe(false);
   });
 });
 

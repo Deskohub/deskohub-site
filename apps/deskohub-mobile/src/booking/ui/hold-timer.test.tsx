@@ -1,18 +1,17 @@
-import { describe, expect, test } from "bun:test";
-import {
-  act,
-  Children,
-  isValidElement,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { describe, expect, mock, test } from "bun:test";
+import { act, type ReactElement, type ReactNode } from "react";
 import { AppLocaleProvider } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
 import { clientRoot } from "../../testing/client-root";
-import { Button } from "../../ui/controls";
-import { Dialog } from "../../ui/dialog";
 import { Icon } from "../../ui/icon";
-import { elementTree, find, flatStyle } from "../../ui/testing/element-tree";
+import {
+  elementTree,
+  find,
+  findAll,
+  flatStyle,
+  hostTree,
+  textOf,
+} from "../../ui/testing/element-tree";
 import { Text } from "../../ui/text";
 import { color } from "../../ui/tokens";
 import {
@@ -20,7 +19,6 @@ import {
   HoldEndedDialog,
   type HoldStatus,
   HoldStatusChip,
-  holdClockText,
   holdCountdown,
   useHoldCountdown,
 } from "./hold-timer";
@@ -59,19 +57,6 @@ describe("holdCountdown", () => {
   });
 });
 
-describe("holdClockText", () => {
-  test.each([
-    [597, "9:57"],
-    [60, "1:00"],
-    [58, "0:58"],
-    [5, "0:05"],
-    [0, "0:00"],
-    [600, "10:00"],
-  ] as const)("shows %i seconds as %s", (seconds, text) => {
-    expect(holdClockText(seconds)).toBe(text);
-  });
-});
-
 const chip = (status: HoldStatus) =>
   elementTree(HoldStatusChip, { status, locale: "en-US" }) as ReactElement<{
     role?: string;
@@ -84,19 +69,27 @@ const chipIcon = (status: HoldStatus) =>
   find<Parameters<typeof Icon>[0]>(chip(status), Icon)?.props;
 
 describe("HoldStatusChip", () => {
-  test("is a timer named by the time left", () => {
-    const props = chip({ secondsLeft: 597, phase: "held" }).props;
-    expect(props.role).toBe("timer");
-    expect(props["aria-label"]).toBe(
-      m.booking_hold_chip_label({ time: "9:57" }, { locale: "en-US" })
-    );
-    expect(
-      find<{ children?: ReactNode; numeric?: boolean }>(
-        chip({ secondsLeft: 597, phase: "held" }),
-        Text
-      )?.props
-    ).toMatchObject({ children: "9:57", numeric: true });
-  });
+  test.each([
+    [597, "held", "9:57"],
+    [60, "ending", "1:00"],
+    [58, "ending", "0:58"],
+    [5, "ending", "0:05"],
+    [0, "ended", "0:00"],
+    [600, "held", "10:00"],
+  ] as const)(
+    "shows and announces %i seconds as a %s timer at %s",
+    (secondsLeft, phase, time) => {
+      const tree = chip({ secondsLeft, phase });
+      const { props } = tree;
+      expect(props.role).toBe("timer");
+      expect(props["aria-label"]).toBe(
+        m.booking_hold_chip_label({ time }, { locale: "en-US" })
+      );
+      expect(
+        find<{ children?: ReactNode; numeric?: boolean }>(tree, Text)?.props
+      ).toMatchObject({ children: time, numeric: true });
+    }
+  );
 
   test("a held chip is sunken navy with a timer icon", () => {
     const status = { secondsLeft: 597, phase: "held" } as const;
@@ -130,44 +123,68 @@ const dialogFor = (handlers: {
   onCheckDate: () => void;
   onLeave: () => void;
 }) =>
-  elementTree(HoldEndedDialog, {
-    visible: true,
-    locale: "en-US",
-    ...handlers,
-  }) as ReactElement<Parameters<typeof Dialog>[0]>;
-
-const actions = (dialog: ReactElement<Parameters<typeof Dialog>[0]>) =>
-  Children.toArray(
-    (dialog.props.actions as ReactElement<{ children?: ReactNode }>).props
-      .children
-  )
-    .filter(
-      (action): action is ReactElement<Parameters<typeof Button>[0]> =>
-        isValidElement(action) && action.type === Button
-    )
-    .map((button) => button.props);
+  hostTree(
+    elementTree(HoldEndedDialog, {
+      visible: true,
+      locale: "en-US",
+      ...handlers,
+    })
+  );
 
 describe("HoldEndedDialog", () => {
-  const onCheckDate = () => undefined;
-  const onLeave = () => undefined;
-
   test("is an alert dialog that dismisses to checking the date again", () => {
+    const onCheckDate = mock(() => undefined);
+    const onLeave = mock(() => undefined);
     const dialog = dialogFor({ onCheckDate, onLeave });
-    expect(dialog.type).toBe(Dialog);
-    expect(dialog.props.role).toBe("alertdialog");
-    expect(dialog.props.visible).toBe(true);
-    expect(dialog.props.onDismiss).toBe(onCheckDate);
+    const modal = find(dialog, "Modal");
+    expect(modal?.props.visible).toBe(true);
+    expect(
+      findAll(modal, "View").some((view) => view.props.role === "alertdialog")
+    ).toBe(true);
+    const dismiss = modal?.props.onRequestClose;
+    if (typeof dismiss !== "function")
+      throw new Error("The alert cannot be dismissed");
+    dismiss();
+    expect(onCheckDate).toHaveBeenCalledTimes(1);
+    expect(onLeave).not.toHaveBeenCalled();
   });
 
   test("leads with the primary check-the-date action, then a quiet leave", () => {
+    const onCheckDate = mock(() => undefined);
+    const onLeave = mock(() => undefined);
+    const buttons = findAll(
+      dialogFor({ onCheckDate, onLeave }),
+      "Pressable"
+    ).filter((button) => button.props.role === "button");
+    const locale = "en-US";
     expect(
-      actions(dialogFor({ onCheckDate, onLeave })).map(
-        ({ onPress, variant }) => [onPress, variant ?? "primary"]
-      )
+      buttons.map((button) => findAll(button, "Text").map(textOf).join(""))
     ).toEqual([
-      [onCheckDate, "primary"],
-      [onLeave, "quiet"],
+      m.booking_hold_ended_check_date({}, { locale }),
+      m.booking_hold_ended_leave({}, { locale }),
     ]);
+    const [checkDate, leave] = buttons;
+    const pressCheckDate = checkDate?.props.onPress;
+    const pressLeave = leave?.props.onPress;
+    if (
+      typeof pressCheckDate !== "function" ||
+      typeof pressLeave !== "function"
+    ) {
+      throw new Error("The alert is missing an action");
+    }
+    const backgrounds = buttons.map(
+      ({ props: { style } }) =>
+        flatStyle(
+          typeof style === "function" ? style({ pressed: false }) : style
+        ).backgroundColor
+    );
+    expect(backgrounds).toEqual([color.action, "transparent"]);
+    pressCheckDate();
+    expect(onCheckDate).toHaveBeenCalledTimes(1);
+    expect(onLeave).not.toHaveBeenCalled();
+    pressLeave();
+    expect(onCheckDate).toHaveBeenCalledTimes(1);
+    expect(onLeave).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -247,19 +264,26 @@ describe("useHoldCountdown", () => {
     await render(null);
   });
 
-  test("HoldChip draws the live countdown of its expiry", async () => {
-    let drawn: ReactElement<Parameters<typeof HoldStatusChip>[0]> | undefined;
+  test("HoldChip shows and warns about the remaining time in the last minute", async () => {
+    let drawn: ReactNode = null;
     const expiresAt = new Date(Date.now() + 30_000).toISOString();
     function Probe() {
-      // The chip runs here, with its clock hook; the chip it draws is read.
-      drawn = HoldChip({ expiresAt, locale: "en-US" }) as typeof drawn;
+      drawn = HoldChip({ expiresAt, locale: "en-US" });
       return null;
     }
     await render(<Probe />);
-    expect(drawn?.type).toBe(HoldStatusChip);
-    expect(drawn?.props.status.phase).toBe("ending");
-    expect(drawn?.props.status.secondsLeft).toBeOneOf([30, 29]);
-    expect(drawn?.props.locale).toBe("en-US");
+    const timer = find(hostTree(drawn), "View");
+    const time = find(timer, "Text");
+    if (time === undefined)
+      throw new Error("The hold timer has no visible time");
+    expect(timer?.props.role).toBe("timer");
+    expect(textOf(time)).toBeOneOf(["0:30", "0:29"]);
+    expect(timer?.props["aria-label"]).toBe(
+      m.booking_hold_chip_label({ time: textOf(time) }, { locale: "en-US" })
+    );
+    const look = flatStyle(timer?.props.style);
+    expect(look.backgroundColor).toBe(color.warningTint);
+    expect(String(look.boxShadow)).toContain(color.warning);
     await render(null);
   });
 });
