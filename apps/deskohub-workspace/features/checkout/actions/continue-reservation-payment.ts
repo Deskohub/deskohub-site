@@ -22,12 +22,12 @@ const continueReservationPaymentAction = defineWorkspaceAction(
   (input) =>
     continueReservationPaymentForAuthor(input).pipe(
       Effect.provide(
-        Layer.mergeAll(
+        Layer.merge(
           CheckoutService.Live,
-          publicReservationPaymentStatusServices,
-          ReferralReleaseGateRequest
+          publicReservationPaymentStatusServices
         )
-      )
+      ),
+      Effect.provide(ReferralReleaseGateRequest)
     )
 );
 
