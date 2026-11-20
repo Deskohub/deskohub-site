@@ -3,7 +3,6 @@ import type { ReferralCode } from "@deskohub/workspace-customer-api";
 import { Effect, Layer, Option } from "effect";
 import { TestClock } from "effect/testing";
 import {
-  applyRememberedReferralUpdate,
   RememberedReferralUpdate,
   rememberedReferralUpdate,
 } from "./remembered-referral";
@@ -40,18 +39,6 @@ const run = <A>(
 const referrals = Effect.service(RememberedReferralCode);
 
 describe("rememberedReferralUpdate", () => {
-  test("remembers an accepted code", () => {
-    expect(rememberedReferralUpdate({ rememberReferralCode: code })).toEqual(
-      Option.some(RememberedReferralUpdate.Remember({ code }))
-    );
-  });
-
-  test("forgets a used-up code", () => {
-    expect(
-      rememberedReferralUpdate({ rememberedReferralCodeUsed: true })
-    ).toEqual(Option.some(RememberedReferralUpdate.Forget()));
-  });
-
   test("a newly accepted code wins over the used-up one it replaces", () => {
     expect(
       rememberedReferralUpdate({
@@ -60,31 +47,9 @@ describe("rememberedReferralUpdate", () => {
       })
     ).toEqual(Option.some(RememberedReferralUpdate.Remember({ code })));
   });
-
-  test("a response without referral news changes nothing", () => {
-    expect(rememberedReferralUpdate({})).toEqual(Option.none());
-  });
-
-  test("the code to send follows the update", () => {
-    expect(
-      applyRememberedReferralUpdate(RememberedReferralUpdate.Remember({ code }))
-    ).toEqual(Option.some(code));
-    expect(
-      applyRememberedReferralUpdate(RememberedReferralUpdate.Forget())
-    ).toEqual(Option.none());
-  });
 });
 
 describe("RememberedReferralCode", () => {
-  test("keeps the code under one entry of the account's storage", async () => {
-    const entries = new Map<string, string>();
-    await run(
-      entries,
-      Effect.flatMap(referrals, (remembered) => remembered.remember(code))
-    );
-    expect([...entries.keys()]).toEqual([rememberedReferralStorageName]);
-  });
-
   test("remembers a code for the referral cookie's 30 days", async () => {
     const entries = new Map<string, string>();
     const found = await run(

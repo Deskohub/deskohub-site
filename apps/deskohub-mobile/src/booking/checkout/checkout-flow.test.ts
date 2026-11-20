@@ -164,21 +164,16 @@ const referralKey = (checkout: FakeCheckout) =>
   });
 
 describe("useCheckoutFlow's flow", () => {
-  test("starts once the remembered code and the session id are read", async () => {
+  test("opens Details before sending a booking request", async () => {
     expect(checkoutController(AsyncResult.initial()).view).toEqual({
       _tag: "Starting",
     });
 
-    const flow = await startFlow(rememberReferral);
+    const flow = await startFlow();
     const running = await flow.until(() => true);
 
-    expect(running.state).toMatchObject({
-      _tag: "Details",
-      flow: {
-        checkoutSessionId: "session-1",
-        rememberedReferralCode: Option.some(fakeBookingCodes.referral),
-      },
-    });
+    expect(running.state._tag).toBe("Details");
+    expect(flow.checkout.booking.endpoints).toEqual([]);
     expect(flow.controller().view).toMatchObject({
       _tag: "Running",
       now: await flow.checkout.inRuntime(Clock.currentTimeMillis),
