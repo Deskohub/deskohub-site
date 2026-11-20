@@ -129,8 +129,6 @@
   "marketingPreferencesFormSavingStatus": "Зберігаємо ваше налаштування маркетингових повідомлень…",
   "marketingPreferencesFormAccountContext": "Ви керуєте налаштуванням клієнта для облікового запису, у який ви ввійшли.",
   "marketingPreferencesFormLinkContext": "Ви керуєте налаштуванням клієнта через це персональне посилання для маркетингових повідомлень, а не з облікового запису, у який ви ввійшли.",
-  "marketingPreferencesFormStatusActive": "Маркетингові повідомлення зараз дозволено.",
-  "marketingPreferencesFormStatusWithdrawn": "Згоду на маркетингові повідомлення зараз відкликано.",
   "marketingPreferencesFormSaved": "Ваше налаштування маркетингових повідомлень збережено.",
   "marketingPreferencesFormSaveError": "Не вдалося зберегти налаштування маркетингових повідомлень. Спробуйте ще раз.",
   "marketingPreferencesFormPendingDescription": "Щоб переглянути або змінити налаштування клієнта, спершу підтвердьте це персональне посилання для маркетингових повідомлень.",

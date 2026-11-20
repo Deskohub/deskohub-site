@@ -126,8 +126,6 @@
   "marketingPreferencesFormSavingStatus": "Đang lưu tùy chọn tiếp thị của bạn…",
   "marketingPreferencesFormAccountContext": "Bạn đang quản lý tùy chọn của khách hàng cho tài khoản đang đăng nhập này.",
   "marketingPreferencesFormLinkContext": "Bạn đang quản lý tùy chọn của khách hàng qua liên kết riêng cho thông tin tiếp thị này, không phải từ tài khoản đang đăng nhập.",
-  "marketingPreferencesFormStatusActive": "Hiện đang cho phép nhận thông tin tiếp thị.",
-  "marketingPreferencesFormStatusWithdrawn": "Hiện đã rút lại sự đồng ý nhận thông tin tiếp thị.",
   "marketingPreferencesFormSaved": "Đã lưu tùy chọn tiếp thị của bạn.",
   "marketingPreferencesFormSaveError": "Không thể lưu tùy chọn tiếp thị. Hãy thử lại.",
   "marketingPreferencesFormPendingDescription": "Hãy tiếp tục để xác minh liên kết riêng cho thông tin tiếp thị này, sau đó mới có thể xem hoặc thay đổi tùy chọn của khách hàng.",
