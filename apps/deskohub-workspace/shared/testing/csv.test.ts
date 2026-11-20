@@ -1,35 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { serializeCsv } from "@/shared/utils/csv";
 import { parseCsv } from "./csv.test-utils";
 
-const cells = [
-  "a,b",
-  'say "hi"',
-  "line\nbreak",
-  "both\r\nends",
-  "",
-  "Žluťoučký",
-];
-const columns = cells.map((_, index) => ({
-  header: `Column ${index}`,
-  value: (row: readonly string[]) => row[index],
-}));
-
 describe("parseCsv", () => {
-  test("reads back every cell the serializer writes", () => {
-    expect(parseCsv(serializeCsv(columns, [cells, cells]))).toEqual([
-      columns.map(({ header }) => header),
-      cells,
-      cells,
+  test("keeps quoted separators, line breaks and empty cells in their original rows", () => {
+    expect(
+      parseCsv(
+        'Name,Details\r\n"Žluťoučký, kůň","line\nbreak"\r\n"say ""hi""",\r\n'
+      )
+    ).toEqual([
+      ["Name", "Details"],
+      ["Žluťoučký, kůň", "line\nbreak"],
+      ['say "hi"', ""],
     ]);
   });
 
   test("drops a leading byte order mark", () => {
     const byteOrderMark = String.fromCodePoint(0xfe_ff);
 
-    expect(
-      parseCsv(`${byteOrderMark}${serializeCsv(columns, [cells])}`)
-    ).toEqual([columns.map(({ header }) => header), cells]);
+    expect(parseCsv(`${byteOrderMark}Name\r\nPraha\r\n`)).toEqual([
+      ["Name"],
+      ["Praha"],
+    ]);
   });
 
   test("refuses text that ends inside a quoted cell", () => {

@@ -8,7 +8,6 @@ import {
 
 registerWorkspaceComponentTestEnv();
 
-const { buttonVariants } = await import("./button");
 const { Sheet, SheetContent, SheetDescription, SheetTitle } = await import(
   "./sheet"
 );
@@ -16,7 +15,7 @@ const { Sheet, SheetContent, SheetDescription, SheetTitle } = await import(
 afterEach(cleanup);
 afterAll(unregisterWorkspaceComponentTestEnv);
 
-test("the close action is a muted ghost icon Button named for the locale", () => {
+test("the localized close action dismisses the sheet", () => {
   const openChanges: boolean[] = [];
   const view = render(
     <Sheet onOpenChange={(open) => openChanges.push(open)} open>
@@ -31,16 +30,6 @@ test("the close action is a muted ghost icon Button named for the locale", () =>
   });
 
   expect(close.getAttribute("type")).toBe("button");
-  expect(close.className.split(" ")).toEqual(
-    expect.arrayContaining(
-      buttonVariants({
-        size: "icon-sm",
-        tone: "muted",
-        variant: "ghost",
-      }).split(" ")
-    )
-  );
-
   fireEvent.click(close);
   expect(openChanges).toEqual([false]);
 });

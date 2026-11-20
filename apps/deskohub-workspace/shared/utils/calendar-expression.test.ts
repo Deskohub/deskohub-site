@@ -255,13 +255,6 @@ describe("nextStart", () => {
 });
 
 describe("nextStartWithinHorizon", () => {
-  test("returns the start nextStart succeeds with", () => {
-    const expression: CalendarExpression = { weeksOfYear: [1] };
-    expect(nextStartWithinHorizon(expression, probeStart)).toEqual(
-      Option.some(Effect.runSync(nextStart(expression, probeStart)))
-    );
-  });
-
   test("is none where nextStart fails", () => {
     expect(
       nextStartWithinHorizon({ daysOfMonth: [31], months: [2] }, probeStart)

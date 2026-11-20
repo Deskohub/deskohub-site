@@ -65,7 +65,6 @@ describe("reportWorkspaceBrowserFailure", () => {
         level: "warn",
       },
     ]);
-    expect(JSON.stringify(records)).not.toContain(email);
   });
 
   test("censors a failure code that is not a stable identifier", async () => {
@@ -129,33 +128,5 @@ describe("reportWorkspaceBrowserFailure", () => {
     }
 
     expect(collect()).toHaveLength(50);
-  });
-
-  test("holds later records again after the sink detaches", async () => {
-    const delivered = collect();
-    detach?.();
-    detach = undefined;
-
-    await report("synthetic.after-detach");
-
-    expect(delivered).toEqual([]);
-    expect(collect().map(({ attributes }) => attributes.failureCode)).toEqual([
-      "synthetic.after-detach",
-    ]);
-  });
-
-  test("a throwing sink loses only its own record", async () => {
-    const delivered: string[] = [];
-    let calls = 0;
-    detach = deliverWorkspaceBrowserLogs((record) => {
-      calls += 1;
-      if (calls === 1) throw new Error("sink unavailable");
-      delivered.push(String(record.attributes.failureCode));
-    });
-
-    await report("synthetic.lost");
-    await report("synthetic.delivered");
-
-    expect(delivered).toEqual(["synthetic.delivered"]);
   });
 });

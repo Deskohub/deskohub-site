@@ -41,10 +41,17 @@ const temporalRuntimeModules = new Set(
 );
 const clientEntry = "instrumentation-client.ts";
 /** Whether the module starts with the directive, after any comments. */
-const hasDirective = (directive: string, sourceText: string) =>
-  new RegExp(
-    String.raw`^(?:\s|//[^\n]*|/\*[\s\S]*?\*/)*["']${directive}["']`
-  ).test(sourceText);
+const hasDirective = (directive: string, sourceText: string) => {
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    true,
+    ts.LanguageVariant.JSX,
+    sourceText
+  );
+  if (scanner.scan() !== ts.SyntaxKind.StringLiteral) return false;
+  const token = scanner.getTokenText();
+  return token === `"${directive}"` || token === `'${directive}'`;
+};
 
 const scannedModule = /(?<!\.d)\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const testModule = /\.test\.[cm]?[jt]sx?$/;
