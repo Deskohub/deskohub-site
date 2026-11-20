@@ -22,7 +22,10 @@ import type {
   ProviderPaymentFinalizationService as ProviderPaymentFinalizationServiceType,
 } from "../payment/provider-payment-finalization.service";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
-import { observePaymentPagesAs } from "./payment-page-provider-status.test-utils";
+import {
+  observePaymentPagesAs,
+  testReservationPaymentWindow,
+} from "./payment-page-provider-status.test-utils";
 
 const reviewSandboxLayer = ReviewSandboxMock({
   status: () => Effect.succeed(Option.none()),
@@ -175,6 +178,7 @@ describe("CheckoutStatusService", () => {
     }).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
+          Layer.provide(testReservationPaymentWindow()),
           Layer.provide(NoReservationInvitees),
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
@@ -232,6 +236,7 @@ describe("CheckoutStatusService", () => {
     }).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
+          Layer.provide(testReservationPaymentWindow()),
           Layer.provide(NoReservationInvitees),
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
@@ -305,6 +310,7 @@ describe("CheckoutStatusService", () => {
     }).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
+          Layer.provide(testReservationPaymentWindow()),
           Layer.provide(NoReservationInvitees),
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
@@ -434,6 +440,7 @@ describe("CheckoutStatusService", () => {
       }).pipe(
         Effect.provide(
           CheckoutStatusService.Default.pipe(
+            Layer.provide(testReservationPaymentWindow()),
             Layer.provide(NoReservationInvitees),
             Layer.provide(observePaymentPagesAs("unknown").layer),
             Layer.provide(
@@ -648,6 +655,7 @@ describe("CheckoutStatusService", () => {
     }).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
+          Layer.provide(testReservationPaymentWindow()),
           Layer.provide(NoReservationInvitees),
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
@@ -759,6 +767,7 @@ describe("CheckoutStatusService", () => {
     }).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
+          Layer.provide(testReservationPaymentWindow()),
           Layer.provide(NoReservationInvitees),
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
@@ -897,6 +906,7 @@ describe("CheckoutStatusService", () => {
       }).pipe(
         Effect.provide(
           CheckoutStatusService.Default.pipe(
+            Layer.provide(testReservationPaymentWindow()),
             Layer.provide(NoReservationInvitees),
             Layer.provide(observePaymentPagesAs("unknown").layer),
             Layer.provide(
@@ -971,9 +981,13 @@ describe("CheckoutStatusService", () => {
         refreshedAs,
         invitees = NoReservationInvitees,
         webAuthorized,
+        sharedWindowExpiresAt,
+        onProviderRefresh,
       }: {
         readonly dotypos?: ReturnType<typeof makeDotypos>;
         readonly includeSupportContact?: boolean;
+        readonly sharedWindowExpiresAt?: Temporal.Instant;
+        readonly onProviderRefresh?: () => void;
         /** What the provider's order shows when the status asks. */
         readonly provider?: ReturnType<typeof observePaymentPagesAs>;
         /** Refreshes first, with this finalization result, instead of a plain lookup. */
@@ -1031,16 +1045,18 @@ describe("CheckoutStatusService", () => {
       }).pipe(
         Effect.provide(
           CheckoutStatusService.Default.pipe(
+            Layer.provide(testReservationPaymentWindow(sharedWindowExpiresAt)),
             Layer.provide(invitees),
             Layer.provide(provider.layer),
             Layer.provide(
               Layer.mergeAll(
                 Layer.mock(ProviderPaymentFinalizationService, {
-                  finalizePendingProviderPayment: mock(() =>
-                    refreshedAs
+                  finalizePendingProviderPayment: mock(() => {
+                    onProviderRefresh?.();
+                    return refreshedAs
                       ? Effect.succeed(refreshedAs)
-                      : Effect.die("not used")
-                  ),
+                      : Effect.die("not used");
+                  }),
                 }),
                 Layer.mock(WorkspaceReservationRepository, {
                   findById: mock(() =>
@@ -1268,6 +1284,35 @@ describe("CheckoutStatusService", () => {
       expect(status).toMatchObject({ status: "pending" });
     });
 
+    test("refreshes shared-window status from Workspace without invoking provider finalization", async () => {
+      const onProviderRefresh = mock();
+      const status = await getPaidStatus(
+        paidAt.add({ minutes: 1 }),
+        pendingPayment,
+        {
+          sharedWindowExpiresAt: paidAt.add({ minutes: 30 }),
+          refreshedAs: "awaiting_payment",
+          webAuthorized: true,
+          onProviderRefresh,
+        }
+      );
+      expect(status).toMatchObject({ status: "pending" });
+      expect(onProviderRefresh).not.toHaveBeenCalled();
+    });
+
+    test("never offers legacy card reopening at the shared cutoff even when the card page has no activity", async () => {
+      const provider = observePaymentPagesAs("no_activity");
+      const cutoff = paidAt.add({ minutes: 4 });
+      const status = await getPaidStatus(cutoff, pendingPayment, {
+        provider,
+        sharedWindowExpiresAt: cutoff,
+      });
+
+      expect(status).toMatchObject({ status: "pending" });
+      expect(status).not.toHaveProperty("paymentPageReopenable");
+      expect(provider.observe).not.toHaveBeenCalled();
+    });
+
     test("offers the stored payment page again just inside its reopening window while the provider can't be asked", async () => {
       const status = await getPaidStatus(
         paidAt.add({ minutes: 5, seconds: 59 }),
@@ -1455,6 +1500,7 @@ describe("CheckoutStatusService", () => {
     }).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
+          Layer.provide(testReservationPaymentWindow()),
           Layer.provide(NoReservationInvitees),
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
@@ -1527,6 +1573,7 @@ describe("CheckoutStatusService", () => {
     }).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
+          Layer.provide(testReservationPaymentWindow()),
           Layer.provide(NoReservationInvitees),
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
@@ -1582,6 +1629,7 @@ describe("CheckoutStatusService summary reconstruction", () => {
     }).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
+          Layer.provide(testReservationPaymentWindow()),
           Layer.provide(NoReservationInvitees),
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
@@ -1741,6 +1789,7 @@ describe("CheckoutStatusService retry selection", () => {
     ).pipe(
       Effect.provide(
         CheckoutStatusService.Default.pipe(
+          Layer.provide(testReservationPaymentWindow()),
           Layer.provide(NoReservationInvitees),
           Layer.provide(observePaymentPagesAs("unknown").layer),
           Layer.provide(
