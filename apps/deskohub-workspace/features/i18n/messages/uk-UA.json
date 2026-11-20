@@ -997,6 +997,7 @@
   "withdrawalNoticeActionRefund": "Повернути {amount} через Nexi",
   "withdrawalNoticeActionNoRefund": "Нічого не повертати, платіж був нульовим",
   "withdrawalNoticeActionHint": "Протягом 14 днів від відмови. Після скасування бронювання платіж в адмініструванні буде позначено «Потребує повернення коштів».",
+  "withdrawalNoticeCheckPassRefund": "Перш ніж повертати кошти, перевірте суму до повернення у Workspace і суму, яку вже повернуто через Nexi.",
   "withdrawalNoticeOpenAdmin": "Відкрити бронювання в адмініструванні",
   "withdrawalNoticeCustomerLabel": "Клієнт",
   "withdrawalNoticeNameMissing": "У профілі немає імені",

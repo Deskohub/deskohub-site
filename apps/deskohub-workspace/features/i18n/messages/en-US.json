@@ -987,6 +987,7 @@
   "withdrawalNoticeActionRefund": "Refund {amount} through Nexi",
   "withdrawalNoticeActionNoRefund": "Nothing to refund, the payment was zero",
   "withdrawalNoticeActionHint": "Within 14 days of the withdrawal. Once the reservation is cancelled, administration marks the payment “Needs refund”.",
+  "withdrawalNoticeCheckPassRefund": "Before issuing a refund, check the refund due in Workspace and any amount already refunded in Nexi.",
   "withdrawalNoticeOpenAdmin": "Open the reservation in administration",
   "withdrawalNoticeCustomerLabel": "Customer",
   "withdrawalNoticeNameMissing": "No name in the profile",

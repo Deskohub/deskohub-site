@@ -987,6 +987,7 @@
   "withdrawalNoticeActionRefund": "{amount} über Nexi erstatten",
   "withdrawalNoticeActionNoRefund": "Nichts erstatten, die Zahlung betrug null",
   "withdrawalNoticeActionHint": "Innerhalb von 14 Tagen nach dem Widerruf. Nach der Stornierung der Reservierung ist die Zahlung in der Administration als „Erstattung erforderlich“ markiert.",
+  "withdrawalNoticeCheckPassRefund": "Prüfen Sie vor der Erstattung den in Workspace fälligen Betrag und den bereits über Nexi erstatteten Betrag.",
   "withdrawalNoticeOpenAdmin": "Reservierung in der Administration öffnen",
   "withdrawalNoticeCustomerLabel": "Kunde",
   "withdrawalNoticeNameMissing": "Kein Name im Profil",

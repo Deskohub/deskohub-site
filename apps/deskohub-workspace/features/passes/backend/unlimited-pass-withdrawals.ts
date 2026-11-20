@@ -27,6 +27,8 @@ import { paymentSubmitLegalEvidenceSource } from "@/features/checkout/legal-evid
 import { m } from "@/features/i18n";
 import { getConsumerWithdrawalPeriodCutoff } from "@/features/legal/early-performance";
 import { type OrderId, orderIdSchema } from "@/features/order";
+import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
+import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import {
   ContractCancellationError,
   type WithdrawableContract,
@@ -37,9 +39,8 @@ import type { WithdrawalAssessment } from "@/features/withdrawal/withdrawal-asse
 import { currencyCZK } from "@/shared/money/currencies";
 import { type Money, sameMoneyUnit } from "@/shared/money/money";
 import { formatPlainDateRange } from "@/shared/utils/date-time-format";
-import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
-import { unlimitedPassDays } from "../pass-offer";
+import { type PassTier, unlimitedPassDays } from "../pass-offer";
 import { getPassTierName } from "../pass-offer.i18n";
 import {
   getUnlimitedPassEndDate,
@@ -59,6 +60,7 @@ const readPaidUnlimitedPass = (
       status: passPurchases.status,
       tier: passPurchases.tier,
       validFrom: passPurchases.validFrom,
+      validUntil: passPurchases.validUntil,
       buyerConfirmationDeliveredAt: passPurchases.buyerConfirmationDeliveredAt,
       attemptId: paymentAttempts.id,
       paidValue: paymentAttempts.amountValue,
@@ -95,54 +97,83 @@ const paidAmountOf = (pass: {
   currency: pass.currency,
 });
 
-const serviceDateAt = (instant: Temporal.Instant): PlainDate =>
-  plainDateStringSchema.make(
-    instant
-      .toZonedDateTimeISO(workspaceSiteConstants.location.timeZone)
-      .toPlainDate()
-      .toString()
+const readEarlyPerformanceConsent = Effect.fnUntraced(function* (
+  db: WorkspaceDatabaseClient,
+  orderId: OrderId
+) {
+  const [terms] = yield* db
+    .select({ acknowledgements: legalEvidenceEvents.acknowledgements })
+    .from(legalEvidenceEvents)
+    .where(
+      and(
+        eq(legalEvidenceEvents.orderId, orderId),
+        eq(legalEvidenceEvents.documentKey, "termsAndConditions"),
+        eq(legalEvidenceEvents.source, paymentSubmitLegalEvidenceSource),
+        eq(legalEvidenceEvents.accepted, true)
+      )
+    )
+    .orderBy(desc(legalEvidenceEvents.acceptedAt))
+    .limit(1);
+  if (!terms) return undefined;
+  return (
+    terms.acknowledgements?.earlyPerformanceConsent === true &&
+    terms.acknowledgements.unlimitedPassEarlyStartRequested === true
   );
+});
 
-const getWithdrawalPeriodEnd = (
-  deliveredAt: Temporal.Instant | null,
-  at: Temporal.Instant
-) =>
-  deliveredAt && Temporal.Instant.compare(deliveredAt, at) <= 0
-    ? getConsumerWithdrawalPeriodCutoff(deliveredAt)
-    : undefined;
+type UnlimitedWithdrawalTerms = WithdrawalAssessment &
+  ({ readonly withdrawable: false } | { readonly accessEndsOn: PlainDate });
 
 const assessUnlimitedPassWithdrawal = (input: {
-  readonly startDate: PlainDate;
+  readonly pass: {
+    readonly validFrom: PlainDate;
+    readonly validUntil: PlainDate;
+    readonly tier: PassTier;
+    readonly buyerConfirmationDeliveredAt: Temporal.Instant | null;
+  };
   readonly paid: Money;
-  readonly periodEndsAt: Temporal.Instant;
   readonly now: Temporal.Instant;
   readonly earlyPerformanceConsent: boolean;
-}): WithdrawalAssessment => {
-  const { startDate, paid, periodEndsAt, now } = input;
+}): UnlimitedWithdrawalTerms => {
+  const { pass, paid, now, earlyPerformanceConsent } = input;
+  const delivery = pass.buyerConfirmationDeliveredAt;
+  if (!delivery || Temporal.Instant.compare(delivery, now) > 0) {
+    return { withdrawable: false, reason: "not_withdrawable" };
+  }
+  const periodEndsAt = getConsumerWithdrawalPeriodCutoff(delivery);
   if (Temporal.Instant.compare(now, periodEndsAt) >= 0) {
     return { withdrawable: false, reason: "period_ended" };
   }
-  const { accessEndsOn, refund } = getUnlimitedPassWithdrawal({
-    startDate,
-    withdrawalDate: serviceDateAt(now),
-    paid,
+  const finalDay = Temporal.PlainDate.from(pass.validUntil).subtract({
+    days: 1,
   });
-  const unstarted = Temporal.PlainDate.from(accessEndsOn).until(
-    getUnlimitedPassEndDate(startDate)
-  ).days;
-  if (unstarted === 0) {
+  const interval = getCoworkReservationInterval(
+    pass.tier === "open-space" ? "open-space" : "reserved-desk",
+    finalDay.toString()
+  );
+  if (Temporal.Instant.compare(now, interval.endsAt) >= 0) {
     return { withdrawable: false, reason: "performance_started" };
   }
-  if (unstarted < unlimitedPassDays && !input.earlyPerformanceConsent) {
-    return { withdrawable: false, reason: "not_withdrawable" };
-  }
+  const today = getWorkspaceDate(now);
+  const { accessEndsOn: paidDaysEnd, refund } = getUnlimitedPassWithdrawal({
+    startDate: pass.validFrom,
+    withdrawalDate: plainDateStringSchema.make(today.toString()),
+    paid,
+  });
+  const unstarted = Temporal.PlainDate.from(paidDaysEnd).until(
+    getUnlimitedPassEndDate(pass.validFrom)
+  ).days;
+  const beforeStart = unstarted === unlimitedPassDays;
+  const fullRefund = beforeStart || !earlyPerformanceConsent;
   return {
     withdrawable: true,
-    refundAmount: refund,
-    refundBasis:
-      unstarted === unlimitedPassDays
-        ? { kind: "full" }
-        : { kind: "partial", unit: "day", unstarted, total: unlimitedPassDays },
+    accessEndsOn: beforeStart
+      ? pass.validFrom
+      : plainDateStringSchema.make(today.add({ days: 1 }).toString()),
+    refundAmount: fullRefund ? paid : refund,
+    refundBasis: fullRefund
+      ? { kind: "full" }
+      : { kind: "partial", unit: "day", unstarted, total: unlimitedPassDays },
     periodEndsAt,
   };
 };
@@ -178,16 +209,6 @@ export const recordUnlimitedPassWithdrawal = Effect.fn(
     input.accountId
   ).for("no key update", { of: passPurchases });
   if (pass?.status !== "active") return;
-  const periodEndsAt = getWithdrawalPeriodEnd(
-    pass.buyerConfirmationDeliveredAt,
-    input.submittedAt
-  );
-  if (
-    !periodEndsAt ||
-    Temporal.Instant.compare(input.submittedAt, periodEndsAt) >= 0
-  ) {
-    return;
-  }
   const paid = paidAmountOf(pass);
   if (
     !sameMoneyUnit(paid, currencyCZK(0)) ||
@@ -196,13 +217,20 @@ export const recordUnlimitedPassWithdrawal = Effect.fn(
   ) {
     return;
   }
-  const { accessEndsOn, refund } = getUnlimitedPassWithdrawal({
-    startDate: pass.validFrom,
-    withdrawalDate: serviceDateAt(input.submittedAt),
+  const earlyPerformanceConsent = yield* readEarlyPerformanceConsent(
+    db,
+    input.orderId
+  );
+  if (earlyPerformanceConsent === undefined) return;
+  const terms = assessUnlimitedPassWithdrawal({
+    pass,
     paid,
+    now: input.submittedAt,
+    earlyPerformanceConsent,
   });
+  if (!terms.withdrawable) return;
+  const { accessEndsOn, refundAmount: refund, periodEndsAt } = terms;
   if (
-    accessEndsOn === getUnlimitedPassEndDate(pass.validFrom) ||
     !sameMoneyUnit(refund, input.refundAmount) ||
     refund.value !== input.refundAmount.value
   ) {
@@ -267,28 +295,11 @@ export class UnlimitedPassWithdrawals extends Context.Service<
               return Option.none();
             }
             const business = snapshot.billing.purpose === "business";
-            const [terms] = yield* db
-              .select({
-                acknowledgements: legalEvidenceEvents.acknowledgements,
-              })
-              .from(legalEvidenceEvents)
-              .where(
-                and(
-                  eq(legalEvidenceEvents.orderId, id.value),
-                  eq(legalEvidenceEvents.documentKey, "termsAndConditions"),
-                  eq(
-                    legalEvidenceEvents.source,
-                    paymentSubmitLegalEvidenceSource
-                  ),
-                  eq(legalEvidenceEvents.accepted, true)
-                )
-              )
-              .orderBy(desc(legalEvidenceEvents.acceptedAt))
-              .limit(1);
-            if (!terms) return Option.none();
-            const earlyPerformanceConsent =
-              terms.acknowledgements?.earlyPerformanceConsent === true &&
-              terms.acknowledgements.unlimitedPassEarlyStartRequested === true;
+            const earlyPerformanceConsent = yield* readEarlyPerformanceConsent(
+              db,
+              id.value
+            );
+            if (earlyPerformanceConsent === undefined) return Option.none();
             const start = Temporal.PlainDate.from(pass.validFrom);
             const dates = formatPlainDateRange({
               locale,
@@ -310,17 +321,9 @@ export class UnlimitedPassWithdrawals extends Context.Service<
                 if (business) {
                   return { withdrawable: false, reason: "business_purpose" };
                 }
-                const periodEndsAt = getWithdrawalPeriodEnd(
-                  pass.buyerConfirmationDeliveredAt,
-                  now
-                );
-                if (!periodEndsAt) {
-                  return { withdrawable: false, reason: "not_withdrawable" };
-                }
                 return assessUnlimitedPassWithdrawal({
-                  startDate: pass.validFrom,
+                  pass,
                   paid,
-                  periodEndsAt,
                   now,
                   earlyPerformanceConsent,
                 });

@@ -38,26 +38,32 @@ export type ContractWithdrawalNoticeEmailProps = {
   readonly cancelledAt: Temporal.Instant | null;
 };
 
-/** The subject before the staff marker: what to do, then which contract. */
+/** The subject before the staff marker. */
 export const contractWithdrawalNoticeEmailSubject = ({
+  contractKind,
   contractLabel,
   refundAmount,
 }: Pick<
   ContractWithdrawalNoticeEmailProps,
-  "contractLabel" | "refundAmount"
->) =>
-  refundAmount.value > 0
+  "contractKind" | "contractLabel" | "refundAmount"
+>) => {
+  const messageOptions = { locale: staffLocale };
+  if (contractKind === "unlimited-pass") {
+    return `${m.withdrawalNoticeEmailHeading({}, messageOptions)} · ${contractLabel}`;
+  }
+  return refundAmount.value > 0
     ? m.withdrawalNoticeEmailSubject(
         {
           amount: formatMoney(refundAmount, staffLocale),
           contract: contractLabel,
         },
-        { locale: staffLocale }
+        messageOptions
       )
     : m.withdrawalNoticeEmailSubjectNoRefund(
         { contract: contractLabel },
-        { locale: staffLocale }
+        messageOptions
       );
+};
 
 const pragueTime = (instant: Temporal.Instant) =>
   m.withdrawalEmailPragueTime(
@@ -66,8 +72,7 @@ const pragueTime = (instant: Temporal.Instant) =>
   );
 
 /**
- * Tells staff a customer withdrew online: the refund to send through Nexi
- * first, the way into administration, then the statement's details.
+ * Tells staff a customer withdrew online and carries the submitted details.
  */
 export function ContractWithdrawalNoticeEmail(
   props: ContractWithdrawalNoticeEmailProps
@@ -76,15 +81,12 @@ export function ContractWithdrawalNoticeEmail(
   const refunds = props.refundAmount.value > 0;
   const reservation = props.contractKind !== "unlimited-pass";
   const formattedRefund = formatMoney(props.refundAmount, staffLocale);
-  const noRefundInstruction = reservation
-    ? m.withdrawalNoticeActionNoRefund({}, messageOptions)
-    : formattedRefund;
-  const refundInstruction = refunds
+  const reservationRefundInstruction = refunds
     ? m.withdrawalNoticeActionRefund(
         { amount: formattedRefund },
         messageOptions
       )
-    : noRefundInstruction;
+    : m.withdrawalNoticeActionNoRefund({}, messageOptions);
   const details: readonly WorkspaceEmailDetail[] = [
     {
       label: m.withdrawalNoticeCustomerLabel({}, messageOptions),
@@ -148,12 +150,12 @@ export function ContractWithdrawalNoticeEmail(
       </WorkspaceEmailHeading>
       <Section className="mt-5 rounded-2xl bg-cream px-5 py-5">
         <WorkspaceEmailLabel>
-          {refunds || reservation
-            ? m.withdrawalNoticeActionLabel({}, messageOptions)
-            : m.withdrawalNoticeRefundLabel({}, messageOptions)}
+          {m.withdrawalNoticeActionLabel({}, messageOptions)}
         </WorkspaceEmailLabel>
         <Text className="m-0 mt-2 text-[22px] font-bold leading-[28px] text-navy">
-          {refundInstruction}
+          {reservation
+            ? reservationRefundInstruction
+            : m.withdrawalNoticeCheckPassRefund({}, messageOptions)}
         </Text>
         {refunds && reservation && (
           <Text className="m-0 mt-2 text-[14px] leading-[22px] text-[#565975]">

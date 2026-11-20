@@ -992,6 +992,7 @@
   "withdrawalNoticeActionRefund": "Vrátit {amount} přes Nexi",
   "withdrawalNoticeActionNoRefund": "Nic nevracet, platba byla nulová",
   "withdrawalNoticeActionHint": "Do 14 dnů od odstoupení. Po zrušení rezervace bude platba v administraci označená „Vyžaduje vrácení peněz“.",
+  "withdrawalNoticeCheckPassRefund": "Před vrácením peněz zkontrolujte částku k vrácení ve Workspace a částku, která už byla vrácena přes Nexi.",
   "withdrawalNoticeOpenAdmin": "Otevřít rezervaci v administraci",
   "withdrawalNoticeCustomerLabel": "Zákazník",
   "withdrawalNoticeNameMissing": "Jméno v profilu chybí",

@@ -23,6 +23,8 @@ import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.r
 import { currencyCZK } from "@/shared/money/currencies";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
+import type { PassTier } from "../pass-offer";
+import { getUnlimitedPassEndDate } from "../unlimited-pass";
 import { UnlimitedPassWithdrawals } from "./unlimited-pass-withdrawals";
 
 const testDatabase = await createWorkspacePostgresSuiteDatabase(
@@ -74,13 +76,21 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
       readonly acceptedAt?: string;
       readonly earlyPerformanceConsent?: boolean;
       readonly deliveredAt?: string | null;
+      readonly purchasedAt?: string;
+      readonly startDate?: string;
+      readonly tier?: PassTier;
     } = {}
   ) => {
     const {
-      acceptedAt = paidAt,
+      purchasedAt = paidAt,
+      acceptedAt = purchasedAt,
       earlyPerformanceConsent = true,
       deliveredAt = "2027-03-26T20:00:00Z",
+      startDate = "2027-03-27",
+      tier = "reserved-desk",
     } = evidence;
+    const validFrom = plainDateStringSchema.make(startDate);
+    const validUntil = getUnlimitedPassEndDate(validFrom);
     const buyer = crypto.randomUUID() as CustomerAccountId;
     const holder = crypto.randomUUID() as CustomerAccountId;
     const id = orderIdSchema.make(crypto.randomUUID());
@@ -94,7 +104,7 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
       `insert into orders (id, kind, dotypos_customer_id, payment_state,
          fulfillment_state, active_payment_attempt_id, paid_at, fulfilled_at)
        values ($1, 'pass-purchase', '1', 'paid', 'fulfilled', $2, $3, $3)`,
-      [id, attempt, paidAt]
+      [id, attempt, purchasedAt]
     );
     await pool.query(
       `insert into payment_attempts (id, order_id, provider, provider_order_id,
@@ -111,10 +121,20 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
     await pool.query(
       `insert into pass_purchases (id, buyer_account_id, holder_account_id, product,
          tier, status, valid_from, valid_until, quote, locale, created_at,
-         buyer_confirmation_delivered_at)
-       values ($1, $2, $3, 'unlimited', 'reserved-desk', 'active',
-         '2027-03-27', '2027-04-26', '{}', 'en-US', $4, $5)`,
-      [id, buyer, holder, paidAt, deliveredAt]
+         buyer_confirmation_delivered_at, unlimited_coffee)
+       values ($1, $2, $3, 'unlimited', $4, 'active',
+         $5, $6, '{}', 'en-US', $7, $8, $9)`,
+      [
+        id,
+        buyer,
+        holder,
+        tier,
+        validFrom,
+        validUntil,
+        purchasedAt,
+        deliveredAt,
+        tier === "open-space" ? false : null,
+      ]
     );
     await pool.query(
       `insert into workspace_reservations (
@@ -124,9 +144,9 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
          paid_at, fulfilled_at)
        select uuid_generate_v7(), '1', uuid_generate_v7()::text, $2,
          'confirmed', 'paid', 'fulfilled', '{}', 'en-US', $1,
-         date '2027-03-27' + day, '9', $3, $3
+         $4::date + day, '9', $3, $3
        from generate_series(0, 29) day`,
-      [id, buyer, paidAt]
+      [id, buyer, purchasedAt, validFrom]
     );
     await pool.query(
       `insert into legal_evidence_events (
@@ -145,7 +165,7 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
           : {},
       ]
     );
-    const product = { kind: "unlimited", tier: "reserved-desk" } as const;
+    const product = { kind: "unlimited", tier } as const;
     await run(
       Effect.gen(function* () {
         const { transaction } = yield* WorkspaceDatabase;
@@ -169,7 +189,7 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
               billing,
               delivery: { email: testEmailAddress("unlimited-buyer") },
               product,
-              serviceDate: plainDateStringSchema.make("2027-03-27"),
+              serviceDate: validFrom,
               quote: {
                 product,
                 discountableSubtotal: paid,
@@ -286,13 +306,19 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
     );
     await pool.query(
       `update workspace_reservations set reservation_state = 'cancelled'
-       where pass_id = $1 and service_date >= '2027-03-29'`,
+       where pass_id = $1 and service_date > '2027-03-29'`,
+      [pass.id]
+    );
+    await pool.query(
+      `update workspace_reservations
+       set reservation_state = 'hold_expired', dotypos_reservation_id = null
+       where pass_id = $1 and service_date = '2027-03-29'`,
       [pass.id]
     );
     await settleCancellation(statement);
     const remaining = await pool.query(
       `select service_date::text from workspace_reservations
-       where pass_id = $1 and reservation_state <> 'cancelled'
+       where pass_id = $1 and reservation_state = 'confirmed'
        order by service_date`,
       [pass.id]
     );
@@ -441,20 +467,70 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
     });
   });
 
-  test("only quotes a reduced refund when checkout recorded early performance consent", async () => {
+  test("accepts withdrawal with a full refund when delayed delivery moves service inside the period", async () => {
     const pass = await seedPass(amount, defaultReservationBillingSelection, {
-      acceptedAt: paidAt,
+      purchasedAt: "2027-03-01T10:00:00Z",
+      deliveredAt: "2027-03-03T10:00:00Z",
+      startDate: "2027-03-16",
       earlyPerformanceConsent: false,
     });
-    const contract = Option.getOrThrow(await find(pass.id, pass.buyer));
-    expect(contract.assess(beforeStart)).toMatchObject({
-      withdrawable: true,
+    const statement = await statementFor(
+      pass,
+      Temporal.Instant.from("2027-03-16T10:00:00Z")
+    );
+    expect(statement).toMatchObject({
       refundAmount: amount,
+      refundBasis: { kind: "full" },
     });
-    expect(contract.assess(secondDay)).toEqual({
+    expect(await record(statement)).toMatchObject({ recorded: true });
+    expect(await paymentAndCutoff(pass.id)).toMatchObject({
+      status: "withdrawn",
+      access_ends_on: "2027-03-17",
+      refund_state: "required",
+      refund_target_value: amount.value,
+    });
+  });
+
+  test("accepts a zero-refund statement on the final day before the tier closes", async () => {
+    const pass = await seedPass(amount, defaultReservationBillingSelection, {
+      deliveredAt: "2027-04-20T12:00:00Z",
+      tier: "open-space",
+    });
+    const close = Temporal.Instant.from("2027-04-25T15:00:00Z");
+    const contract = Option.getOrThrow(await find(pass.id, pass.buyer));
+    expect(contract.assess(close)).toEqual({
       withdrawable: false,
-      reason: "not_withdrawable",
+      reason: "performance_started",
     });
+    const statement = await statementFor(pass, close.subtract({ minutes: 1 }));
+    const refundBasis = {
+      kind: "partial",
+      unit: "day",
+      unstarted: 0,
+      total: 30,
+    };
+    expect(statement).toMatchObject({
+      refundAmount: currencyCZK(0),
+      refundBasis,
+    });
+    await expectRefused({ ...statement, submittedAt: close });
+    expect(await record(statement)).toMatchObject({
+      recorded: true,
+      withdrawal: { refundBasis },
+    });
+    await settleCancellation(statement);
+    expect(await paymentAndCutoff(pass.id)).toMatchObject({
+      status: "withdrawn",
+      access_ends_on: "2027-04-26",
+      refund_state: "not_required",
+      refund_target_value: null,
+    });
+    const { rows } = await pool.query(
+      `select reservation_state from workspace_reservations
+       where pass_id = $1 and service_date = '2027-04-25'`,
+      [pass.id]
+    );
+    expect(rows).toEqual([{ reservation_state: "confirmed" }]);
   });
 
   test("refuses consumer withdrawal from a business purchase", async () => {
