@@ -15,6 +15,7 @@ import {
   sampleCompanies,
   sampleUnreachableCompanyId,
 } from "../customer-api/testing/sample-fixtures";
+import { m } from "../i18n/messages";
 import { clientRoot } from "../testing/client-root";
 import { eventually } from "../testing/eventually";
 import { Button } from "../ui/controls";
@@ -164,7 +165,10 @@ describe("CompanyLookup over the customer API", () => {
       const lookup = await mountLookup({ companyId });
       await lookup.press();
       expect(lookup.workspace.calls).not.toContain("lookupCompany");
-      expect(lookup.status()?.tone).toBe("danger");
+      expect(lookup.status()).toEqual({
+        tone: "danger",
+        message: m.company_lookup_invalid_id({}, { locale }),
+      });
     }
   });
 

@@ -42,8 +42,16 @@ describe("Notice", () => {
       expect(find(tree, Icon)).toBeUndefined();
       expect(find(tree, "Pressable")).toBeUndefined();
       const live = region({ tone: "error", message });
-      expect(live?.role).toBe("alert");
-      expect(live?.accessibilityLiveRegion).toBe("assertive");
+      expect(live).toMatchObject({
+        role: "alert",
+        "aria-live": "assertive",
+        accessibilityLiveRegion: "assertive",
+      });
+      expect(region({ tone: "info", message })).toMatchObject({
+        role: "status",
+        "aria-live": "polite",
+        accessibilityLiveRegion: "polite",
+      });
     }
   });
 
