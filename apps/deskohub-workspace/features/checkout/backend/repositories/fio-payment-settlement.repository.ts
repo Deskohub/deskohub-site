@@ -1,6 +1,11 @@
-import { and, desc, eq, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
+import {
+  latePaymentRecoveries,
+  orders,
+  workspaceReservations,
+} from "@/db/schema";
 import {
   type FioPaymentSettlement,
   type FioSettlementDisposition,
@@ -50,6 +55,14 @@ interface IFioPaymentSettlementRepository {
   readonly listForAccount: (
     input: FioAccountSettlementPage
   ) => Effect.Effect<readonly FioPaymentSettlement[], DatabaseQueryError>;
+  readonly listPendingDispatch: (input: {
+    readonly accountKey: string;
+    readonly beforeId?: string;
+  }) => Effect.Effect<readonly FioPaymentSettlement[], DatabaseQueryError>;
+  readonly listForStaff: (input: {
+    readonly kind: "unmatched" | "refund_required";
+    readonly beforeId?: string;
+  }) => Effect.Effect<readonly FioPaymentSettlement[], DatabaseQueryError>;
   readonly listForOrder: (
     orderId: OrderId
   ) => Effect.Effect<readonly FioPaymentSettlement[], DatabaseQueryError>;
@@ -150,6 +163,80 @@ export class FioPaymentSettlementRepository extends Context.Service<
                       eq(fioPaymentSettlements.disposition, "discrepancy")
                     )
                   : undefined
+              )
+            )
+            .orderBy(desc(fioPaymentSettlements.id))
+            .limit(100),
+        listPendingDispatch: ({ accountKey, beforeId }) =>
+          db
+            .select({ settlement: fioPaymentSettlements })
+            .from(fioPaymentSettlements)
+            .innerJoin(orders, eq(orders.id, fioPaymentSettlements.orderId))
+            .innerJoin(
+              workspaceReservations,
+              eq(workspaceReservations.id, orders.id)
+            )
+            .leftJoin(
+              latePaymentRecoveries,
+              eq(
+                latePaymentRecoveries.paymentAttemptId,
+                fioPaymentSettlements.paymentAttemptId
+              )
+            )
+            .where(
+              and(
+                eq(fioPaymentSettlements.accountKey, accountKey),
+                beforeId === undefined
+                  ? undefined
+                  : lt(fioPaymentSettlements.id, beforeId),
+                or(
+                  and(
+                    eq(fioPaymentSettlements.disposition, "winner"),
+                    eq(
+                      orders.activePaymentAttemptId,
+                      fioPaymentSettlements.paymentAttemptId
+                    ),
+                    eq(orders.paymentState, "paid"),
+                    inArray(orders.fulfillmentState, [
+                      "not_started",
+                      "processing",
+                    ]),
+                    inArray(workspaceReservations.reservationState, [
+                      "held",
+                      "confirmed",
+                    ])
+                  ),
+                  and(
+                    eq(fioPaymentSettlements.disposition, "recovery_pending"),
+                    eq(latePaymentRecoveries.state, "pending"),
+                    eq(
+                      latePaymentRecoveries.providerOperationId,
+                      fioPaymentSettlements.movementId
+                    )
+                  )
+                )
+              )
+            )
+            .orderBy(desc(fioPaymentSettlements.id))
+            .limit(100)
+            .pipe(
+              Effect.map((rows) => rows.map(({ settlement }) => settlement))
+            ),
+        listForStaff: ({ kind, beforeId }) =>
+          db
+            .select()
+            .from(fioPaymentSettlements)
+            .where(
+              and(
+                kind === "unmatched"
+                  ? and(
+                      isNull(fioPaymentSettlements.orderId),
+                      eq(fioPaymentSettlements.disposition, "discrepancy")
+                    )
+                  : eq(fioPaymentSettlements.disposition, "refund_required"),
+                beforeId === undefined
+                  ? undefined
+                  : lt(fioPaymentSettlements.id, beforeId)
               )
             )
             .orderBy(desc(fioPaymentSettlements.id))

@@ -55,6 +55,9 @@ interface IFioPaymentSettlementService {
   readonly recordMovement: (
     movement: VerifiedFioMovement
   ) => Effect.Effect<void, RecordMovementError>;
+  readonly retryPendingDispatch: (
+    accountKey: string
+  ) => Effect.Effect<void, RecordMovementError>;
   readonly listForAccount: (
     input: FioAccountSettlementPage
   ) => Effect.Effect<readonly FioPaymentSettlement[], DatabaseQueryError>;
@@ -81,6 +84,42 @@ export class FioPaymentSettlementService extends Context.Service<
       const lifecycle = yield* PaymentLifecycleRepository;
       const fulfillmentQueue = yield* PaidFulfillmentQueueService;
       const recoveryQueue = yield* LatePaymentRecoveryQueueService;
+
+      const dispatchSettlement = Effect.fn("fioPaymentSettlement.dispatch")(
+        function* (settlement: FioPaymentSettlement) {
+          if (settlement.disposition === "winner" && settlement.orderId) {
+            yield* fulfillmentQueue.enqueue({
+              orderId: reservationIdForOrder(settlement.orderId),
+            });
+          }
+          if (
+            settlement.disposition === "recovery_pending" &&
+            settlement.paymentAttemptId
+          ) {
+            yield* recoveryQueue.enqueue({
+              paymentAttemptId: settlement.paymentAttemptId,
+            });
+          }
+        }
+      );
+
+      const retryPendingDispatch = Effect.fn(
+        "fioPaymentSettlement.retryPendingDispatch"
+      )(function* (accountKey: string) {
+        let beforeId: string | undefined;
+        // A receipt can close the last payable attempt before its queue
+        // publication succeeds. Redelivery can finish that local work.
+        while (true) {
+          const page = yield* settlements.listPendingDispatch({
+            accountKey,
+            ...(beforeId === undefined ? {} : { beforeId }),
+          });
+          const oldest = page.at(-1);
+          if (!oldest) return;
+          yield* Effect.forEach(page, dispatchSettlement, { discard: true });
+          beforeId = oldest.id;
+        }
+      });
 
       const recordMovement = Effect.fn("fioPaymentSettlement.recordMovement")(
         function* (movement: VerifiedFioMovement) {
@@ -156,26 +195,13 @@ export class FioPaymentSettlementService extends Context.Service<
             })
           );
 
-          // The persisted decision survives enqueue failure and is reused by
-          // the next overlapping read. The queue keys make dispatch replayable.
-          if (settlement.disposition === "winner" && settlement.orderId) {
-            yield* fulfillmentQueue.enqueue({
-              orderId: reservationIdForOrder(settlement.orderId),
-            });
-          }
-          if (
-            settlement.disposition === "recovery_pending" &&
-            settlement.paymentAttemptId
-          ) {
-            yield* recoveryQueue.enqueue({
-              paymentAttemptId: settlement.paymentAttemptId,
-            });
-          }
+          yield* dispatchSettlement(settlement);
         }
       );
 
       return FioPaymentSettlementService.of({
         recordMovement,
+        retryPendingDispatch,
         listForAccount: settlements.listForAccount,
         listForOrder: settlements.listForOrder,
         markManualRefunded: settlements.markManualRefunded,

@@ -39,7 +39,13 @@ const movement = {
 } satisfies VerifiedFioMovement;
 
 const runSettlement = <A, E>(
-  effect: Effect.Effect<A, E, FioPaymentSettlementService>,
+  effect: Effect.Effect<
+    A,
+    E,
+    | FioPaymentSettlementService
+    | QrPaymentRepository
+    | FioPaymentSettlementRepository
+  >,
   fulfillmentQueue: Partial<PaidFulfillmentQueueService["Service"]> = {}
 ) => {
   const databaseLayer = database!.layer;
@@ -47,7 +53,7 @@ const runSettlement = <A, E>(
     effect.pipe(
       Effect.provide(
         FioPaymentSettlementService.Default.pipe(
-          Layer.provide(
+          Layer.provideMerge(
             Layer.mergeAll(
               databaseLayer,
               FioPaymentSettlementRepository.Default.pipe(
@@ -160,7 +166,7 @@ describe.skipIf(!database)("verified Fio movement ingress", () => {
     ]);
   });
 
-  test("commits an exact credit before publishing and repairs the publication on replay", async () => {
+  test("retries a failed fulfillment publication after the final payable attempt settles", async () => {
     const { orderId, variableSymbol } = await createQrReservation();
     const credit = {
       accountKey,
@@ -204,7 +210,18 @@ describe.skipIf(!database)("verified Fio movement ingress", () => {
       },
     ]);
 
-    await runSettlement(publishCredit, fulfillmentQueue);
+    const hasPayable = await runSettlement(
+      Effect.flatMap(QrPaymentRepository, (qr) =>
+        qr.hasPayableAttempts(accountKey)
+      )
+    );
+    expect(hasPayable).toBe(false);
+    await runSettlement(
+      Effect.flatMap(FioPaymentSettlementService, (settlements) =>
+        settlements.retryPendingDispatch(accountKey)
+      ),
+      fulfillmentQueue
+    );
     expect(publications).toEqual([orderId, orderId]);
 
     await runSettlement(
@@ -234,6 +251,26 @@ describe.skipIf(!database)("verified Fio movement ingress", () => {
           { movementId: "duplicate-credit", disposition: "refund_required" },
           { movementId: "winner-credit", disposition: "winner" },
         ]);
+        const staffRepository = yield* FioPaymentSettlementRepository;
+        const staffRefunds = yield* staffRepository.listForStaff({
+          kind: "refund_required",
+        });
+        expect(
+          staffRefunds.some(
+            (row) =>
+              row.orderId === orderId && row.movementId === "duplicate-credit"
+          )
+        ).toBe(true);
+        const staffUnmatched = yield* staffRepository.listForStaff({
+          kind: "unmatched",
+        });
+        expect(staffUnmatched.length).toBeGreaterThan(0);
+        expect(
+          staffUnmatched.every(
+            (row) => row.orderId === null && row.disposition === "discrepancy"
+          )
+        ).toBe(true);
+
         const unlinked = yield* settlements.listForAccount({
           accountKey,
           unlinkedOnly: true,
