@@ -337,14 +337,6 @@ describe("fake booking checkout", () => {
     expect(
       rejected._tag === "Failure" && "payStateToken" in rejected.failure
     ).toBe(false);
-    expect(await apply(fakeBookingCodes.expiredWithReplacement)).toMatchObject({
-      failure: {
-        _tag: "CustomerDiscountCodeRejected",
-        reason: "unavailable",
-        payStateToken: expect.stringMatching(/^ps1\./),
-        expiresAt: expect.any(String),
-      },
-    });
   });
 
   test("records whether the referral header was sent", async () => {
@@ -718,10 +710,16 @@ describe("fake booking hold and code removal", () => {
             fakeBookingCodes.expiredWithReplacement
           )
         );
+        if (
+          rejected._tag !== "CustomerDiscountCodeRejected" ||
+          rejected.payStateToken === undefined
+        ) {
+          throw new Error("expected a replacement token after rejection");
+        }
         advance(60_000);
         const applied = yield* applying(
           api,
-          created.payStateToken,
+          rejected.payStateToken,
           fakeBookingCodes.discount
         );
         advance(60_000);
@@ -737,9 +735,11 @@ describe("fake booking hold and code removal", () => {
     expect(created.holdExpiresAt).toBe(holdExpiresAt);
     expect(rejected).toMatchObject({
       _tag: "CustomerDiscountCodeRejected",
+      reason: "unavailable",
       expiresAt: tokenExpiry(60_000),
     });
     expect(applied).toMatchObject({
+      orderId: created.orderId,
       holdExpiresAt,
       expiresAt: tokenExpiry(120_000),
       appliedDiscountCode: {

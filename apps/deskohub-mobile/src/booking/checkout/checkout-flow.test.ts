@@ -3,12 +3,14 @@ import { testEmailAddress } from "@deskohub/test-email";
 import {
   CustomerCheckoutDetailsInvalid,
   type CustomerOffering,
+  CustomerReservationOrderId,
 } from "@deskohub/workspace-customer-api";
 import { Clock, Deferred, Effect, Exit, Option } from "effect";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { reservationHistoryAtom } from "../../account/reservations/reservations-list-state";
 import { analytics } from "../../analytics/analytics";
 import { accountStorageKey } from "../../customer-api/account-scoped-storage";
+import { CustomerApi } from "../../customer-api/customer-api.service";
 import { fakeWorkspaceOrigin } from "../../customer-api/testing/fake-workspace";
 import { bookingOverviewOf } from "../checkout-screen/booking-overview";
 import {
@@ -30,6 +32,7 @@ import {
   sampleCheckoutDetails,
   waitForValue,
 } from "../testing/fake-checkout";
+import { completeFakePayment } from "../testing/fake-payment-gateway";
 import {
   pricedLines,
   sampleOfferings,
@@ -214,12 +217,21 @@ describe("useCheckoutFlow's flow", () => {
         checkoutAttemptId: "attempt-1",
       },
     });
-    expect(flow.checkout.browser.opened).toEqual([
-      {
-        paymentUrl: expect.stringContaining(orderId),
-        returnUrl: `deskohub://reservations/${orderId}?after=payment`,
-      },
-    ]);
+    expect(flow.checkout.browser.opened).toHaveLength(1);
+    const [opened] = flow.checkout.browser.opened;
+    if (opened === undefined) throw new Error("expected a payment page");
+    expect(opened.returnUrl).toBe(
+      `deskohub://reservations/${orderId}?after=payment`
+    );
+    expect(completeFakePayment(opened.paymentUrl)).toBe(true);
+    const status = await flow.checkout.inRuntime(
+      Effect.flatMap(Effect.service(CustomerApi), (api) =>
+        api.reservations.getReservationStatus({
+          params: { orderId: CustomerReservationOrderId.make(orderId) },
+        })
+      )
+    );
+    expect(status).toMatchObject({ orderId, paymentStatus: "paid" });
     expect(capture).toHaveBeenCalledWith({
       name: "booking submitted",
       properties: { reservation_kind: "cowork" },
