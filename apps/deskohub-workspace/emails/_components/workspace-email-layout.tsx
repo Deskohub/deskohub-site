@@ -11,10 +11,14 @@ import {
   Text,
 } from "react-email";
 import type { Locale } from "@/features/i18n";
-import { workspaceSiteConstants } from "@/shared/utils";
+import {
+  getWorkspaceCanonicalUrl,
+  workspaceSiteConstants,
+} from "@/shared/utils";
 
 const { brand } = workspaceSiteConstants;
 const { address } = workspaceSiteConstants.location;
+const headerDieMarkUrl = getWorkspaceCanonicalUrl("/email/header-die-mark.png");
 
 type WorkspaceEmailLayoutProps = {
   readonly children: ReactNode;
@@ -60,7 +64,16 @@ export function WorkspaceEmailLayout({
           style={{ fontFamily: "Arial, Helvetica, sans-serif" }}
         >
           <Container className="mx-auto w-full max-w-[600px]">
-            <Section className="rounded-t-[24px] bg-navy px-5 py-6 sm:px-8 sm:py-7">
+            <Section
+              bgcolor="#00024f"
+              className="rounded-t-[24px] bg-navy px-5 py-6 sm:px-8 sm:py-7"
+              style={{
+                backgroundImage: `url('${headerDieMarkUrl}')`,
+                backgroundPosition: "right center",
+                backgroundRepeat: "no-repeat",
+                backgroundSize: "43% auto",
+              }}
+            >
               <Text className="m-0 text-[12px] font-bold leading-[16px] tracking-[2.6px] text-aquamarine uppercase">
                 Deskohub
               </Text>
