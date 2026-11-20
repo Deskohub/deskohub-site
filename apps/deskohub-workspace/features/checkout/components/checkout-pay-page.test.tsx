@@ -190,6 +190,7 @@ describe("CheckoutPayPage payment navigation", () => {
     );
 
     expect(view.getByRole("button", { name: "Apply discount" })).toBeDefined();
+    expect(view.queryByRole("button", { name: "Pay by QR" })).toBeNull();
     expect(view.getAllByRole("checkbox")).toHaveLength(1);
     expect(
       view.getByRole("checkbox", { name: includesEarlyPerformanceRequest })
@@ -275,11 +276,30 @@ describe("CheckoutPayPage payment navigation", () => {
       />
     );
 
-    expect(view.getByRole("group", { name: "Payment method" })).toBeTruthy();
-    fireEvent.click(view.getByRole("radio", { name: "QR bank transfer" }));
+    const heading = view.getByRole("heading", { name: /Order and pay.*CZK/ });
+    const card = view.getByRole<HTMLButtonElement>("button", {
+      name: "Pay by card",
+    });
+    const qr = view.getByRole<HTMLButtonElement>("button", {
+      name: "Pay by QR",
+    });
+    expect(view.queryByRole("radio")).toBeNull();
+    expect(card.disabled).toBe(true);
+    expect(qr.disabled).toBe(true);
+    expect(qr.getAttribute("aria-describedby")).toBe(heading.id);
+    expect(
+      view
+        .getAllByRole("button", { name: /^Pay by / })
+        .map((button) => button.textContent)
+    ).toEqual(["Pay by QR", "Pay by card"]);
+    const disclaimer = view.getByText(/Card payment opens in a new tab/);
+    expect(disclaimer.closest("section")).toBe(card.closest("section"));
+    expect(card.compareDocumentPosition(disclaimer)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
     expect(execute).not.toHaveBeenCalled();
     fireEvent.click(view.getByRole("checkbox"));
-    fireEvent.click(view.getByRole("button", { name: /Order and pay/ }));
+    fireEvent.click(qr);
 
     expect(execute).toHaveBeenCalledWith({
       locale: "en-US",
@@ -341,8 +361,12 @@ describe("CheckoutPayPage payment navigation", () => {
           })),
         })),
       };
-      const view = render(
+      const checkout = (earlyPerformanceRequestRequired: boolean) => (
         <CheckoutPayPage
+          earlyPerformanceRequestRequired={earlyPerformanceRequestRequired}
+          key={
+            earlyPerformanceRequestRequired ? "early-performance" : "standard"
+          }
           locale="en-US"
           payStateToken="signed-entry-pack"
           startPaymentAction={mock(async () => ({}))}
@@ -351,22 +375,105 @@ describe("CheckoutPayPage payment navigation", () => {
           variant="pay"
         />
       );
+      const view = render(checkout(true));
 
-      expect(view.queryByRole("group", { name: "Payment method" })).toBeNull();
+      expect(view.queryByRole("button", { name: "Pay by QR" })).toBeNull();
+      expect(view.queryByRole("button", { name: "Pay by card" })).toBeNull();
       expect(view.getByText("Entry pack · 1 entry")).toBeDefined();
-      const button = view.getByRole("button", {
-        name: coffee ? /Order and pay/ : "Book with 1 entry",
-      });
+      expect(
+        view.queryAllByText(/Card payment opens in a new tab/)
+      ).toHaveLength(coffee ? 1 : 0);
+      const button = () =>
+        view.getByRole<HTMLButtonElement>("button", {
+          name: coffee ? /^Order and pay CZK\s50$/ : "Book with 1 entry",
+        });
+      expect(button().disabled).toBe(true);
+      fireEvent.click(button());
+      expect(execute).not.toHaveBeenCalled();
       fireEvent.click(view.getByRole("checkbox"));
-      fireEvent.click(button);
+      fireEvent.click(button());
+      expect(execute).toHaveBeenCalledTimes(1);
       expect(execute).toHaveBeenCalledWith({
         earlyPerformanceConsent: true,
         legalConsent: true,
         locale: "en-US",
         payStateToken: "signed-entry-pack",
       });
+
+      view.rerender(checkout(false));
+      expect(button().disabled).toBe(true);
+      expect(execute).toHaveBeenCalledTimes(1);
     }
   );
+
+  test("shows the German order and pay heading with the signed total", async () => {
+    const { CheckoutPayPage } = await import("./checkout-pay-page");
+    const view = render(
+      <CheckoutPayPage
+        locale="de-DE"
+        payStateToken="signed-summary"
+        startPaymentAction={mock(async () => ({}))}
+        summary={buildDiscountedCoworkCheckoutSummary({ basisPoints: 5000 })}
+        variant="pay"
+      />
+    );
+
+    expect(
+      view.getByRole("heading", {
+        name: /^Bestellen und bezahlen\s175\sCZK$/,
+      })
+    ).toBeDefined();
+  });
+
+  test("starts card directly and blocks both methods while card checkout starts", async () => {
+    const { CheckoutPayPage } = await import("./checkout-pay-page");
+    const execute = mock();
+    workspaceUseAction.mockReturnValue({
+      execute,
+      isExecuting: false,
+      result: {},
+    });
+    const checkout = () => (
+      <CheckoutPayPage
+        locale="en-US"
+        payStateToken="signed-summary"
+        startPaymentAction={mock(async () => ({}))}
+        summary={buildCoworkCheckoutSummary({
+          entryTier: "basic",
+          coffee: false,
+        })}
+        variant="pay"
+      />
+    );
+    const view = render(checkout());
+    fireEvent.click(view.getByRole("checkbox"));
+    fireEvent.click(view.getByRole("button", { name: "Pay by card" }));
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith({
+      locale: "en-US",
+      payStateToken: "signed-summary",
+      legalConsent: true,
+      earlyPerformanceConsent: true,
+      method: "card",
+    });
+
+    workspaceUseAction.mockReturnValue({
+      execute,
+      isExecuting: true,
+      result: {},
+    });
+    view.rerender(checkout());
+    const pending = view.getByRole<HTMLButtonElement>("button", {
+      name: m.checkoutPaymentRetryPending({}, { locale: "en-US" }),
+    });
+    const qr = view.getByRole<HTMLButtonElement>("button", {
+      name: "Pay by QR",
+    });
+    expect(pending.disabled).toBe(true);
+    expect(pending.getAttribute("aria-busy")).toBe("true");
+    expect(qr.disabled).toBe(true);
+    expect(qr.getAttribute("aria-busy")).toBeNull();
+  });
 
   test("announces a payment start failure as an alert", async () => {
     const { CheckoutPayPage } = await import("./checkout-pay-page");

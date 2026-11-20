@@ -66,18 +66,18 @@ const continueSubmittedReservation = (
 export function useCheckoutPaySubmission({
   earlyPerformanceRequestRequired,
   locale,
-  method,
   payStateToken,
   startPaymentAction,
 }: {
   readonly earlyPerformanceRequestRequired: boolean;
   readonly locale: Locale;
-  readonly method: CheckoutPaymentMethod;
   readonly payStateToken: string | undefined;
   readonly startPaymentAction?: StartCheckoutPaymentAction;
 }) {
   const router = useRouter();
   const [legalConsent, setLegalConsent] = useState(false);
+  const [submittedMethod, setSubmittedMethod] =
+    useState<CheckoutPaymentMethod>("card");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const showSubmitError = () =>
     setErrorMessage(m.checkoutPaySubmitError({}, { locale }));
@@ -114,8 +114,8 @@ export function useCheckoutPaySubmission({
     result.data?.status === "redirect";
   const isSubmitPending = isExecuting || hasCheckoutRedirect;
 
-  const submit = () => {
-    if (isSubmitPending) return;
+  const submit = (method: CheckoutPaymentMethod) => {
+    if (!legalConsent || isSubmitPending) return;
 
     setErrorMessage(null);
     if (!payStateToken) {
@@ -123,6 +123,7 @@ export function useCheckoutPaySubmission({
       return;
     }
 
+    setSubmittedMethod(method);
     const input = {
       locale,
       payStateToken,
@@ -140,6 +141,7 @@ export function useCheckoutPaySubmission({
     errorMessage,
     isSubmitPending,
     legalConsent,
+    pendingMethod: isSubmitPending ? submittedMethod : undefined,
     setLegalConsent,
     submit,
   };
