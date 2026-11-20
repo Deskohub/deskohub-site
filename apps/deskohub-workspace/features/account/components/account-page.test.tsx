@@ -124,6 +124,10 @@ mock.module("@/features/account/actions", () => ({
   deleteCustomerAccount: () => Promise.resolve({ data: { status: "deleted" } }),
 }));
 
+mock.module("@/features/passes/entry-pack-gift-actions", () => ({
+  resendEntryPackInvitation: () => Promise.resolve("unavailable"),
+}));
+
 mock.module(
   "@/features/withdrawal/components/reservation-withdrawal-link",
   () => ({ ReservationWithdrawalLink: () => null })

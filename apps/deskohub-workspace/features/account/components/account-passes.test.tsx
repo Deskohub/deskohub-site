@@ -55,6 +55,7 @@ test("shows the purchase date and balance, and links only the bookable pack", as
 
 test("presents the buyer's order separately from passes they can use", async () => {
   const orderId = orderIdSchema.make(crypto.randomUUID());
+  const unavailableOrderId = orderIdSchema.make(crypto.randomUUID());
   const statusPath = `/en-US/reservation/status/${orderId}`;
   const gift: AccountBoughtEntryPack = {
     orderId,
@@ -71,7 +72,19 @@ test("presents the buyer's order separately from passes they can use", async () 
       <UnsavedChangesProvider>
         <AccountPassesPanel
           locale="en-US"
-          packs={Promise.resolve({ held: [], boughtForOthers: [gift] })}
+          packs={Promise.resolve({
+            held: [],
+            boughtForOthers: [
+              gift,
+              {
+                ...gift,
+                orderId: unavailableOrderId,
+                statusPath: `/en-US/reservation/status/${unavailableOrderId}`,
+                maskedHolderEmail: undefined,
+                canResend: false,
+              },
+            ],
+          })}
         />
       </UnsavedChangesProvider>
     )
@@ -82,8 +95,39 @@ test("presents the buyer's order separately from passes they can use", async () 
   expect(markup).toContain(`href="${statusPath}"`);
   expect(markup).toContain("Invitation sent");
   expect(markup).toContain("Not claimed yet");
-  expect(markup).toContain("Resend invitation");
+  expect(markup.match(/Resend invitation/g)).toHaveLength(1);
   expect(markup).not.toContain("entries left");
   expect(markup).not.toContain("Book a date");
   expect(markup).not.toContain("You don’t have any Entry packs yet.");
+});
+
+test("shows generic gift attribution when there is no buyer name", async () => {
+  const markup = await new Response(
+    await renderToReadableStream(
+      <UnsavedChangesProvider>
+        <AccountPassesPanel
+          locale="en-US"
+          packs={Promise.resolve({
+            boughtForOthers: [],
+            held: [
+              {
+                position: 0,
+                tier: "Reserved Desk",
+                entryCount: 5,
+                entriesLeft: 5,
+                boughtOn: "Oct 31, 2026",
+                lastUsableDay: "Dec 30, 2026",
+                status: "active",
+                gift: { orderId: orderIdSchema.make(crypto.randomUUID()) },
+              },
+            ],
+          })}
+        />
+      </UnsavedChangesProvider>
+    )
+  ).text();
+
+  expect(markup).toContain("Bought for you");
+  expect(markup).not.toContain("Bought for you by");
+  expect(markup).not.toContain("Book a date");
 });
