@@ -286,7 +286,7 @@ const statement = Schema.Struct({
 const decodeStatement = Schema.decodeUnknownOption(statement);
 const parseJson = Option.liftThrowable((body: string): unknown =>
   // Preserve numeric literals before binary floating-point rounding can change them.
-  JSON.parse(body, (_key, value, context) => {
+  JSON.parse(body, (_key, value, context?: { readonly source?: string }) => {
     const source = context?.source;
     return source && /^-?\d/.test(source)
       ? new JsonNumberLexeme(source)
