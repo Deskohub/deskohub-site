@@ -1,4 +1,4 @@
-import { eq, type SQL, sql } from "drizzle-orm";
+import { eq, isNull, type SQL, sql } from "drizzle-orm";
 import { workspaceReservations } from "@/db/schema/workspace-reservations";
 import { isWithdrawnInFull } from "@/features/withdrawal/backend/withdrawn-contracts";
 
@@ -8,4 +8,4 @@ import { isWithdrawnInFull } from "@/features/withdrawal/backend/withdrawn-contr
  * from in full, once cancelled, gives the eligibility back: the service never
  * started, so it was never their first visit.
  */
-export const isPaidBooking: SQL = sql`(${eq(workspaceReservations.paymentState, "paid")} and not (${eq(workspaceReservations.reservationState, "cancelled")} and ${isWithdrawnInFull("reservation", workspaceReservations.id)}))`;
+export const isPaidBooking: SQL = sql`(${isNull(workspaceReservations.passId)} and ${eq(workspaceReservations.paymentState, "paid")} and not (${eq(workspaceReservations.reservationState, "cancelled")} and ${isWithdrawnInFull("reservation", workspaceReservations.id)}))`;

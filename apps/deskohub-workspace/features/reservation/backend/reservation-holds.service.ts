@@ -19,7 +19,6 @@ import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import type { CustomerAgentClientId } from "@/features/account";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics";
-import { payStateDefaultTtlMilliseconds } from "@/features/checkout/backend/checkout";
 import {
   deriveCheckoutAttemptKeys,
   deriveCheckoutSessionKeys,
@@ -78,6 +77,10 @@ import {
   getStoredWorkspaceReservationDetails,
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
+import {
+  getReservationHoldExpiresAt,
+  reservationHoldTtlMilliseconds,
+} from "@/features/reservation/reservation-hold-deadline";
 import type { ReservationPurpose } from "@/features/reservation/reservation-purpose";
 import type { SealedOfficePeople } from "@/features/reservation-invitees/backend/reservation-invitees.service";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
@@ -606,9 +609,6 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
 
   return yield* holdReservationDraft(preparedDraft);
 });
-
-export const getReservationHoldExpiresAt = (now: Temporal.Instant) =>
-  now.add({ milliseconds: payStateDefaultTtlMilliseconds });
 
 const decodeDotyposCustomerId = Schema.decodeUnknownEffect(
   dotyposCustomerIdSchema
@@ -1246,7 +1246,7 @@ const prepareReservationDraft = Effect.fn(
  */
 export const getAgentHoldBookedAt = (reservation: WorkspaceReservation) =>
   reservation.reservationHoldExpiresAt?.subtract({
-    milliseconds: payStateDefaultTtlMilliseconds,
+    milliseconds: reservationHoldTtlMilliseconds,
   }) ?? null;
 
 /**
@@ -1370,7 +1370,7 @@ const keepPendingAgentPayment = (
   if (
     !holdBookedAt ||
     Math.floor(
-      (holdBookedAt.epochMilliseconds + payStateDefaultTtlMilliseconds) / 1000
+      (holdBookedAt.epochMilliseconds + reservationHoldTtlMilliseconds) / 1000
     ) *
       1000 <=
       Temporal.Now.instant().epochMilliseconds

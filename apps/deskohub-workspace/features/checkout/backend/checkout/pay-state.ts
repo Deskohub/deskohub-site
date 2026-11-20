@@ -19,6 +19,7 @@ import { defaultPhoneRegion } from "@/features/i18n";
 import { normalizedCoworkReservationOrderSchema } from "@/features/reservation/cowork-reservation";
 import { normalizedMeetingRoomReservationOrderSchema } from "@/features/reservation/meeting-room-reservation";
 import { normalizedOfficeReservationOrderSchema } from "@/features/reservation/office-reservation";
+import { reservationHoldTtlMilliseconds } from "@/features/reservation/reservation-hold-deadline";
 import {
   makeLegacySealedState,
   type SealedStateIssueOptions,
@@ -42,8 +43,8 @@ import {
 } from "./pay-state-contract";
 import { getPriceVerdictChangedKeys, type PriceVerdict } from "./price-verdict";
 
+export { reservationHoldTtlMilliseconds as payStateDefaultTtlMilliseconds } from "@/features/reservation/reservation-hold-deadline";
 export { payStateTokenQueryParam };
-export const payStateDefaultTtlMilliseconds = 10 * 60 * 1000;
 
 /** A reservation family's Pay state: the signed envelope with its order. */
 const familyPayStateSchema = <
@@ -150,7 +151,7 @@ const preserveSignedPayStateMetadataInvariant = (
  */
 const payStateCodec = makeLegacySealedState({
   schema: signedPayStateSchema,
-  ttlMilliseconds: payStateDefaultTtlMilliseconds,
+  ttlMilliseconds: reservationHoldTtlMilliseconds,
 });
 
 /** One family's reservation with its quote, as a Pay state carries them. */

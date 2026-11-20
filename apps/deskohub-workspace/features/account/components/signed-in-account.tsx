@@ -44,7 +44,9 @@ type WithRenderedReservations<State> = State extends {
   ? Omit<State, "history"> & { readonly reservations: RenderedReservations }
   : State extends { readonly history?: CustomerReservationHistory }
     ? Omit<State, "history"> & { readonly reservations?: RenderedReservations }
-    : State;
+    : State extends { readonly kind: "authenticated-unavailable" }
+      ? State & { readonly reservations?: RenderedReservations }
+      : State;
 
 /**
  * A signed-in account page state as the client receives it. The page renders

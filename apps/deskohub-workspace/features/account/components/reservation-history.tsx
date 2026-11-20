@@ -1,5 +1,10 @@
 import { CalendarDays, UserRound, Users } from "lucide-react";
 import type { ReactNode } from "react";
+import type {
+  AccountUnlimitedPass,
+  AccountUnlimitedPasses,
+} from "@/features/account/account-unlimited-passes.server";
+import { UnlimitedReservationItem } from "@/features/account/components/account-unlimited-pass";
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import type {
   CustomerReservationHistory,
@@ -186,31 +191,54 @@ function ReservationRowWithdrawal({
 export function ReservationHistory({
   history,
   locale,
+  unlimitedPasses = [],
 }: {
-  readonly history: CustomerReservationHistory;
+  readonly history?: CustomerReservationHistory;
   readonly locale: Locale;
+  readonly unlimitedPasses?: AccountUnlimitedPasses;
 }) {
-  if (history.kind === "unavailable") {
+  const periods = unlimitedPasses === "unavailable" ? [] : unlimitedPasses;
+  if (history?.kind === "unavailable" && periods.length === 0) {
     return <ProviderUnavailableNotice locale={locale} />;
   }
 
-  const { groups } = history;
-  const hasUndatedReservations = groups.unavailable.length > 0;
+  const groups = history?.kind === "available" ? history.groups : undefined;
+  const currentPasses = periods.filter(
+    (pass) => pass.status === "active" || pass.status === "upcoming"
+  );
+  const pastPasses = periods.filter(
+    (pass) => pass.status === "expired" || pass.status === "ended"
+  );
 
   return (
     <div className="min-w-0 space-y-8">
-      {groups.current.length > 0 && (
+      {((groups?.current.length ?? 0) > 0 || currentPasses.length > 0) && (
         <CurrentReservationGroup
           locale={locale}
-          reservations={groups.current}
+          passes={currentPasses}
+          reservations={groups?.current ?? []}
         />
       )}
-      <PastReservationGroup locale={locale} reservations={groups.past} />
-      {hasUndatedReservations && (
+      {(groups || pastPasses.length > 0) && (
+        <PastReservationGroup
+          locale={locale}
+          passes={pastPasses}
+          reservations={groups?.past ?? []}
+        />
+      )}
+      {groups && groups.unavailable.length > 0 && (
         <UndatedReservationGroup
           locale={locale}
           reservations={groups.unavailable}
         />
+      )}
+      {history?.kind === "unavailable" && (
+        <ProviderUnavailableNotice locale={locale} />
+      )}
+      {unlimitedPasses === "unavailable" && (
+        <p className="text-sm text-slate-600">
+          {m.accountUnlimitedPassesUnavailable({}, { locale })}
+        </p>
       )}
     </div>
   );
@@ -218,13 +246,14 @@ export function ReservationHistory({
 
 function CurrentReservationGroup({
   locale,
+  passes,
   reservations,
 }: {
   readonly locale: Locale;
+  readonly passes: readonly AccountUnlimitedPass[];
   readonly reservations: readonly CustomerReservationSummary[];
 }) {
   const [featuredReservation, ...additionalReservations] = reservations;
-  if (!featuredReservation) return null;
 
   return (
     <AccountSectionPanel
@@ -236,10 +265,19 @@ function CurrentReservationGroup({
       titleId="account-reservations-current-title"
     >
       <ul className="m-0 min-w-0 list-none space-y-3 p-0">
-        <FeaturedReservationItem
-          locale={locale}
-          reservation={featuredReservation}
-        />
+        {passes.map((pass) => (
+          <UnlimitedReservationItem
+            key={pass.orderId}
+            locale={locale}
+            pass={pass}
+          />
+        ))}
+        {featuredReservation && (
+          <FeaturedReservationItem
+            locale={locale}
+            reservation={featuredReservation}
+          />
+        )}
       </ul>
 
       {additionalReservations.length > 0 && (
@@ -594,16 +632,18 @@ function CompactReservationItem({
 
 function PastReservationGroup({
   locale,
+  passes,
   reservations,
 }: {
   readonly locale: Locale;
+  readonly passes: readonly AccountUnlimitedPass[];
   readonly reservations: readonly CustomerReservationSummary[];
 }) {
   return (
     <AccountSectionPanel
       actions={
         <span className="rounded-full bg-[#f3f5f8] px-2.5 py-1 text-xs font-semibold text-[#64748b]">
-          {reservations.length}
+          {reservations.length + passes.length}
         </span>
       }
       aria-labelledby="account-reservations-past-title"
@@ -613,11 +653,23 @@ function PastReservationGroup({
       title={m.accountReservationsPastTitle({}, { locale })}
       titleId="account-reservations-past-title"
     >
-      {reservations.length === 0 ? (
+      {passes.length > 0 && (
+        <ul className="mb-3 list-none space-y-3 p-0">
+          {passes.map((pass) => (
+            <UnlimitedReservationItem
+              key={pass.orderId}
+              locale={locale}
+              pass={pass}
+            />
+          ))}
+        </ul>
+      )}
+      {reservations.length === 0 && passes.length === 0 && (
         <GroupEmptyNotice
           empty={m.accountReservationsPastEmpty({}, { locale })}
         />
-      ) : (
+      )}
+      {reservations.length > 0 && (
         <PastReservationTable locale={locale} reservations={reservations} />
       )}
     </AccountSectionPanel>

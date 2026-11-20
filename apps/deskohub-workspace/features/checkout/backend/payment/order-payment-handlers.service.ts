@@ -12,6 +12,7 @@ import {
   type EntryPackPaymentAdmissionDetails,
   makeEntryPackOrderPaymentHandler,
 } from "@/features/passes/backend/entry-pack-order-payment-handler";
+import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
@@ -89,6 +90,7 @@ export class OrderPaymentHandlers extends Context.Service<
         WorkspaceReservationRepository.Default,
         WorkspaceEmailLayer,
         WorkspaceDotyposLayer,
+        GoogleCalendarWorkspaceLimitationsService.Live,
         WorkspaceDatabaseAdvisoryLock.Default,
         CustomerAccountSections.Live,
         AccountingStorage.Live,

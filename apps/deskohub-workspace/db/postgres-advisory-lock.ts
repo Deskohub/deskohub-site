@@ -44,6 +44,8 @@ const makeLockFrame = (
 
 type LockFrame = ReturnType<typeof makeLockFrame>;
 
+const checkLockFrame = ({ health }: LockFrame) => health.failure ?? Effect.void;
+
 const CurrentLockFrame = Context.Reference<LockFrame | undefined>(
   "@deskohub-workspace/db/CurrentAdvisoryLockFrame",
   { defaultValue: () => undefined }
@@ -72,7 +74,7 @@ const withNestedLocks = <A, E, R>(
             new Error("The enclosing advisory lock section has closed")
           );
         }
-        if (parent.health.failure) return yield* parent.health.failure;
+        yield* checkLockFrame(parent);
 
         const { run } = parent;
         const markFailed = (failure: SqlError.SqlError) =>
@@ -98,7 +100,10 @@ const withNestedLocks = <A, E, R>(
               Effect.provideService(effect, CurrentLockFrame, frame)
             )
           )
-        ).pipe(Effect.ensuring(cleanup));
+        ).pipe(
+          Effect.ensuring(cleanup),
+          Effect.tap(() => checkLockFrame(frame))
+        );
       })
     )
   );
@@ -165,14 +170,15 @@ export const withPostgresAdvisoryLocks = <A, E, R>(
         Effect.flatMap((frame) =>
           restore(effect).pipe(
             Effect.provideService(CurrentLockFrame, frame),
-            Effect.tap(() =>
-              frame.health.failure
-                ? Effect.fail(frame.health.failure)
-                : Effect.void
-            )
+            Effect.map((value) => ({ frame, value }))
           )
         ),
-        Effect.onExit((exit) => Scope.close(scope, exit))
+        Effect.onExit((exit) => Scope.close(scope, exit)),
+        // Closing drains child savepoints. A child can report a cleanup
+        // failure during that drain, after the guarded effect has returned.
+        Effect.flatMap(({ frame, value }) =>
+          checkLockFrame(frame).pipe(Effect.as(value))
+        )
       )
     )
   );

@@ -51,6 +51,7 @@ import {
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
+import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { moneyEquals } from "@/shared/money/money";
@@ -159,6 +160,9 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   const { db, transaction } = yield* WorkspaceDatabase;
   const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
   const dotypos = yield* Effect.serviceOption(DotyposService);
+  const calendarLimitations = yield* Effect.serviceOption(
+    GoogleCalendarWorkspaceLimitationsService
+  );
   const reservations = yield* Effect.serviceOption(
     WorkspaceReservationRepository
   );
@@ -417,6 +421,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
             : false;
           yield* sendEntryPackPurchaseEmail({
             purchase,
+            paymentAttemptId: activePaymentAttemptId,
             buyer: { email: buyer },
             holderEmail,
             gift,
@@ -551,7 +556,11 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         .select()
         .from(passPurchases)
         .where(eq(passPurchases.id, orderId));
-      if (purchase?.product !== "unlimited" || purchase.status === "active")
+      if (
+        purchase?.product !== "unlimited" ||
+        purchase.status === "active" ||
+        purchase.status === "withdrawn"
+      )
         return true;
       if (purchase.status !== "pending_payment") return false;
       const [order] = yield* readOrder(orderId);
@@ -878,12 +887,17 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           ? yield* Effect.gen(function* () {
               const ready =
                 Option.isSome(dotypos) &&
+                Option.isSome(calendarLimitations) &&
                 Option.isSome(reservations) &&
                 (yield* prepareUnlimitedPassRecovery(
                   input.orderId,
                   paymentAttemptId
                 ).pipe(
                   Effect.provideService(DotyposService, dotypos.value),
+                  Effect.provideService(
+                    GoogleCalendarWorkspaceLimitationsService,
+                    calendarLimitations.value
+                  ),
                   Effect.provideService(
                     WorkspaceReservationRepository,
                     reservations.value

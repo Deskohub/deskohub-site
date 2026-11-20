@@ -6,10 +6,7 @@ import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
-import {
-  enqueueReservationHoldCleanup,
-  getReservationHoldExpiresAt,
-} from "@/features/reservation/backend/reservation-holds.service";
+import { enqueueReservationHoldCleanup } from "@/features/reservation/backend/reservation-holds.service";
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import {
   retryReacquirableCancellationCauses,
@@ -17,6 +14,7 @@ import {
   WorkspaceReservationRepository,
 } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { getReservationHoldExpiresAt } from "@/features/reservation/reservation-hold-deadline";
 import { hasReservationIntervalEnded } from "@/features/reservation/reservation-interval";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { currentInstant } from "@/shared/utils/temporal";
@@ -202,6 +200,9 @@ const bookAgain = Effect.fnUntraced(function* (input: {
   const result = yield* withWorkspaceReservationCapacity(
     interval,
     Effect.gen(function* () {
+      if (hasReservationIntervalEnded(interval, yield* currentInstant)) {
+        return refused("not_retryable");
+      }
       // Only a NEW reservation an interrupted earlier retry of this order created
       // is taken over; a confirmed one, or more than one, is left alone.
       const found = yield* findOrderDotyposReservations({

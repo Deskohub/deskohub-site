@@ -25,6 +25,7 @@ import {
   eq,
   inArray,
   isNotNull,
+  isNull,
   max,
   notInArray,
   or,
@@ -2042,7 +2043,7 @@ export class AdministrationService extends Context.Service<
           dateRange,
           policy
         );
-        const conditions: SQL[] = [];
+        const conditions: SQL[] = [isNull(workspaceReservations.passId)];
         if (input.customerId) {
           conditions.push(
             eq(workspaceReservations.dotyposCustomerId, input.customerId)

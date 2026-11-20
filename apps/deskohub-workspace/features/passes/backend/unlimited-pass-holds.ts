@@ -2,7 +2,7 @@ import "server-only";
 
 import { type DotyposReservation, DotyposService } from "@deskohub/dotypos";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
-import { Array as EffectArray, Data, Effect, Result } from "effect";
+import { Data, Effect, Array as EffectArray, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   type passPurchases,
@@ -242,6 +242,12 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
 /** Keeps uncertain POST claims allocated until a matching provider record is observed. */
 export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
   function* (purchase: Purchase) {
+    if (
+      (purchase.status === "withdrawn" || purchase.status === "cancelled") &&
+      !purchase.accessEndsOn
+    ) {
+      return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+    }
     const { db } = yield* WorkspaceDatabase;
     const dotypos = yield* DotyposService;
     const rows = (yield* readUnlimitedPassDays(purchase.id)).filter(

@@ -21,6 +21,7 @@ import {
   hasReservationIntervalEnded,
   type ReservationInterval,
 } from "@/features/reservation/reservation-interval";
+import { currentInstant } from "@/shared/utils/temporal";
 import { ReservationFulfillment } from "../fulfillment/reservation-fulfillment.service";
 import {
   HoldCancellationInProgress,
@@ -387,7 +388,7 @@ export class LatePaymentRecoveryService extends Context.Service<
         const interval = yield* getWorkspaceReservationInterval(
           recreated.reservation
         );
-        if (hasReservationIntervalEnded(interval)) {
+        if (hasReservationIntervalEnded(interval, yield* currentInstant)) {
           return yield* refundRecovery(input, "late_payment_reservation_ended");
         }
 
@@ -408,12 +409,23 @@ export class LatePaymentRecoveryService extends Context.Service<
 
         const replacement = yield* withWorkspaceReservationCapacity(
           interval,
-          resumeOrCreateReplacement({
-            reservation: input.reservation,
-            recreated,
-            replacements,
+          Effect.gen(function* () {
+            if (
+              replacements.length === 0 &&
+              hasReservationIntervalEnded(interval, yield* currentInstant)
+            ) {
+              return "ended" as const;
+            }
+            return yield* resumeOrCreateReplacement({
+              reservation: input.reservation,
+              recreated,
+              replacements,
+            });
           })
         );
+        if (replacement === "ended") {
+          return yield* refundRecovery(input, "late_payment_reservation_ended");
+        }
         if (!replacement) {
           return yield* refundRecovery(
             input,

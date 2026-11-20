@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { loadCustomerAccountPasses } from "@/features/account/account-passes.server";
+import { loadCustomerAccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
 import { AccountContentLoading } from "@/features/account/components/account-loading";
 import { AccountPage } from "@/features/account/components/account-page";
 import { loadCustomerInvoiceHistory } from "@/features/account/invoice-history.server";
@@ -61,7 +62,10 @@ async function AccountSectionsContent({ locale }: { readonly locale: Locale }) {
       ? undefined
       : findAccountSectionOfPathname(locale, pathname)
   );
-  const state = await loadCustomerAccountPage(passesEnabled);
+  const [state, unlimitedPasses] = await Promise.all([
+    loadCustomerAccountPage(passesEnabled),
+    passesEnabled ? loadCustomerAccountUnlimitedPasses(locale) : [],
+  ]);
 
   return (
     <AccountPage
@@ -71,6 +75,7 @@ async function AccountSectionsContent({ locale }: { readonly locale: Locale }) {
       }
       locale={locale}
       state={state}
+      unlimitedPasses={unlimitedPasses}
     />
   );
 }
