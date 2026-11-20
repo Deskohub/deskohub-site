@@ -223,6 +223,13 @@ describe("PricingPage", () => {
     expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();
   });
 
+  test("links to the Unlimited pass purchase in the visitor's locale", async () => {
+    passesRelease = "on";
+    expect(visibleLinks(await renderPage("cs-CZ"))).toContain(
+      "/cs-CZ/passes/unlimited?tier=open-space"
+    );
+  });
+
   test.each([false, true])(
     "asks for the visitor's flag when the global release is undecided (visitor open: %s)",
     async (visitorOpen) => {

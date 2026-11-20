@@ -1866,7 +1866,7 @@
   "entryPackDiscoveryBuyTier": "प्रवेश पैक खरीदें ({tier})",
   "entryPackDiscoveryCoworkLink": "अक्सर आते हैं? <packLink>प्रवेश पैक {price} प्रति दिन से</packLink>",
   "unlimitedPassDiscoveryIntro": "आपकी चुनी हुई तारीख़ से लगातार 30 दिन। बुकिंग किए बिना हर दिन आपका प्रवेश कोड तैयार रहेगा।",
-  "unlimitedPassDiscoveryOpenSpaceDescription": "Open Space में रोज़ 00:00 से {until} बजे तक एक डेस्क।",
+  "unlimitedPassDiscoveryOpenSpaceDescription": "ओपन स्पेस में रोज़ 00:00 से {until} बजे तक एक सीट।",
   "unlimitedPassDiscoveryReservedDeskDescription": "पूरे 30 दिन, चौबीसों घंटे आपके लिए वही डेस्क।",
   "unlimitedPassDiscoveryWorkstationDescription": "पूरे 30 दिन, चौबीसों घंटे आपके लिए दो मॉनिटर वाली वही डेस्क।",
   "unlimitedPassDiscoveryCoffee": "30 दिनों की कॉफ़ी +{price}",
