@@ -410,7 +410,10 @@ export class LatePaymentRecoveryService extends Context.Service<
         const replacement = yield* withWorkspaceReservationCapacity(
           interval,
           Effect.gen(function* () {
-            if (hasReservationIntervalEnded(interval, yield* currentInstant)) {
+            if (
+              replacements.length === 0 &&
+              hasReservationIntervalEnded(interval, yield* currentInstant)
+            ) {
               return "ended" as const;
             }
             return yield* resumeOrCreateReplacement({
