@@ -63,9 +63,9 @@ export const findReservationEntryClaim = Effect.fn("findReservationEntryClaim")(
 );
 
 /**
- * Reserves alongside the caller's reservation write. The holder lock
- * serializes a date across packs. Lock the pack row before counting entries,
- * so an update to the pass cannot change its terms during admission.
+ * Checks availability under the locks used to admit a claim. The holder
+ * lock serializes a date across packs. The pack row lock keeps its terms
+ * stable while the ledger is counted.
  */
 export const checkEntryPackClaim = Effect.fn("checkEntryPackClaim")(function* (
   reservationId: WorkspaceReservationId,

@@ -417,18 +417,20 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
 
     const { checkoutDetails, entryPack } = request;
     if (entryPack) {
-      yield* reservations
-        .checkEntryPackAvailable(reservationDraft.id, entryPack)
-        .pipe(
-          Effect.tapError((cause) =>
-            releaseHoldCreation(
-              reservationDraft.id,
-              cause._tag === "EntryPackUnavailableError"
-                ? entryPackUnavailableFailureCode
-                : undefined
-            )
+      const availability = yield* WorkspaceAvailabilityService;
+      yield* ensureEntryPackWorkstationRequired(availability, request).pipe(
+        Effect.andThen(
+          reservations.checkEntryPackAvailable(reservationDraft.id, entryPack)
+        ),
+        Effect.tapError((cause) =>
+          releaseHoldCreation(
+            reservationDraft.id,
+            cause._tag === "EntryPackUnavailableError"
+              ? entryPackUnavailableFailureCode
+              : undefined
           )
-        );
+        )
+      );
     }
     yield* Effect.annotateLogsScoped(checkoutDetailsLogFields(checkoutDetails));
 
@@ -796,9 +798,9 @@ type ReservationDraftServices = {
   readonly availability: typeof WorkspaceAvailabilityService.Service;
 };
 
-const ensureBookingAvailable = Effect.fnUntraced(function* (
+const ensureEntryPackWorkstationRequired = Effect.fnUntraced(function* (
   availability: ReservationDraftServices["availability"],
-  request: ReservationDraftRequest
+  request: Pick<ReservationHoldRequest, "entryPack" | "reservation">
 ) {
   const { entryPack, reservation } = request;
   if (
@@ -816,7 +818,6 @@ const ensureBookingAvailable = Effect.fnUntraced(function* (
       );
     if (bareDeskAvailable) return yield* new EntryPackUnavailableError({});
   }
-  yield* availability.ensureAvailable(reservation);
 });
 
 type CheckoutSessionKeys = Effect.Success<
@@ -978,7 +979,7 @@ const supersedeSessionReservation = Effect.fnUntraced(function* (input: {
   }
 
   const cancelledAt = Temporal.Now.instant();
-  return yield* ensureBookingAvailable(availability, request).pipe(
+  return yield* availability.ensureAvailable(request.reservation).pipe(
     Effect.andThen(
       reservations.completeSupersessionAndCreateDraft({
         cancelledReservationId: claimed.id,
@@ -1077,7 +1078,7 @@ const createSessionDraft = Effect.fnUntraced(function* (input: {
 }) {
   const { reservations, availability } = input.services;
   const { checkoutSessionId, checkoutAttemptKeys, request } = input;
-  yield* ensureBookingAvailable(availability, request);
+  yield* availability.ensureAvailable(request.reservation);
   const reservationDraft = yield* reservations.createDraft({
     ...request.draft,
     checkoutSessionKey: input.checkoutSessionKey,
