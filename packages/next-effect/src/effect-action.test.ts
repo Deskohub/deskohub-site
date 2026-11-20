@@ -39,9 +39,11 @@ const SeatsSchema = Schema.toStandardSchemaV1(
 describe("EffectAction", () => {
   test("uses a real next-safe-action client schema and utils", async () => {
     const successData: (string | undefined)[] = [];
+    let validationCalls = 0;
     const action = EffectAction.fromClient(makeActionClient())
       .inputSchema(Schema.toStandardSchemaV1(Schema.NonEmptyString), {
         async handleValidationErrorsShape() {
+          validationCalls += 1;
           return { formErrors: ["Invalid input"], fieldErrors: {} };
         },
       })
@@ -52,9 +54,11 @@ describe("EffectAction", () => {
       });
 
     await expect(action("value")).resolves.toEqual({ data: "value" });
+    expect(validationCalls).toBe(0);
     await expect(action("")).resolves.toEqual({
       validationErrors: { formErrors: ["Invalid input"], fieldErrors: {} },
     });
+    expect(validationCalls).toBe(1);
     expect(successData).toEqual(["value"]);
   });
 

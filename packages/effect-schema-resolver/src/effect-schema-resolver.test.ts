@@ -167,6 +167,7 @@ describe("effectSchemaResolver", () => {
 
     expect(Object.keys(result.errors)).toEqual(["paidOn"]);
     expect(result.errors.paidOn?.message).toBe("Enter a date.");
+    expect(result.errors.paidOn?.type).toBe("Filter");
   });
 
   test("renders the same messages as Effect's Standard Schema adapter", async () => {
