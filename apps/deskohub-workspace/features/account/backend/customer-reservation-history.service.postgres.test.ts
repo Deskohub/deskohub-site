@@ -41,6 +41,7 @@ import {
 } from "../customer-account";
 import { CurrentCustomerAccount } from "./current-customer-account";
 import { CustomerAccountLinkRepository } from "./customer-account-link.repository";
+import { CustomerProfileService } from "./customer-profile.service";
 import {
   CustomerReservationHistoryService,
   type ReservationHistoryAccount,
@@ -539,11 +540,12 @@ describe.skipIf(!testDatabase)(
       const holder = customerAccountIdSchema.make(uniqueId());
       const other = customerAccountIdSchema.make(uniqueId());
       const holderEmail = testEmailAddress(`recipient-${holder}`);
-      await insertAuthUser(buyer, testEmailAddress(`buyer-${buyer}`));
+      const buyerEmail = testEmailAddress(`buyer-${buyer}`);
+      await insertAuthUser(buyer, buyerEmail);
       await insertAuthUser(holder, holderEmail);
       await insertAuthUser(other, testEmailAddress(`other-${other}`));
       await testDatabase!.pool.query(
-        `update auth."user" set name = 'Pat Example' where id = $1`,
+        `update auth."user" set name = 'Old Auth Name' where id = $1`,
         [buyer]
       );
       const giftId = uniqueId();
@@ -563,9 +565,19 @@ describe.skipIf(!testDatabase)(
       );
 
       const createdAt = Temporal.Instant.from("2026-01-01T00:00:00Z");
+      let profileLastName = "Example";
+      const profileLayer = Layer.mock(CustomerProfileService, {
+        load: () =>
+          Effect.succeed({
+            firstName: "Pat",
+            lastName: profileLastName,
+            phone: null,
+            billing: null,
+          }),
+      });
       const loadFor = (accountId: CustomerAccountId) =>
         Effect.runPromise(
-          loadAccountPasses("en-US").pipe(
+          loadAccountPasses("en-US", profileLayer).pipe(
             Effect.provide(
               Layer.mergeAll(
                 testDatabaseLayer(),
@@ -607,6 +619,37 @@ describe.skipIf(!testDatabase)(
         ],
       });
       expect(JSON.stringify(buyerView)).not.toContain(holderEmail);
+      await testDatabase!.pool.query(
+        `update auth."user" set deletion_requested_at = now() where id = $1`,
+        [holder]
+      );
+      expect(await loadFor(buyer)).toEqual({
+        held: [],
+        boughtForOthers: [
+          expect.objectContaining({
+            orderId: giftId,
+            canResend: false,
+            maskedHolderEmail: undefined,
+          }),
+        ],
+      });
+      await testDatabase!.pool.query(
+        `update auth."user" set deletion_requested_at = null where id = $1`,
+        [holder]
+      );
+      expect(await loadFor(holder)).toEqual({
+        boughtForOthers: [],
+        held: [
+          expect.objectContaining({
+            gift: { orderId: giftId, buyerName: undefined },
+            bookPath: `/en-US/reservation/cowork?pass=${giftId}`,
+          }),
+        ],
+      });
+      await testDatabase!.pool.query(
+        `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
+        [buyer, uniqueDotyposId()]
+      );
       expect(await loadFor(holder)).toEqual({
         boughtForOthers: [],
         held: [
@@ -618,6 +661,41 @@ describe.skipIf(!testDatabase)(
       });
       expect(await loadFor(other)).toEqual({ boughtForOthers: [], held: [] });
 
+      profileLastName = buyerEmail;
+      await testDatabase!.pool.query(
+        `update pass_purchases set gift_issued_at = now() where id = $1`,
+        [giftId]
+      );
+      const beforeClaim = await loadFor(holder);
+      expect(beforeClaim).toEqual({
+        boughtForOthers: [],
+        held: [
+          expect.objectContaining({
+            gift: { orderId: giftId, buyerName: undefined },
+          }),
+        ],
+      });
+      expect(JSON.stringify(beforeClaim)).not.toContain(buyerEmail);
+      expect(JSON.stringify(beforeClaim)).not.toContain("bookPath");
+
+      await testDatabase!.pool.query(
+        `update pass_purchases set gift_claimed_at = now() where id = $1`,
+        [giftId]
+      );
+      expect(await loadFor(holder)).toEqual({
+        boughtForOthers: [],
+        held: [
+          expect.objectContaining({
+            gift: { orderId: giftId, buyerName: undefined },
+            bookPath: `/en-US/reservation/cowork?pass=${giftId}`,
+          }),
+        ],
+      });
+
+      profileLastName = "Example";
+      expect(await loadFor(holder)).toMatchObject({
+        held: [{ gift: { buyerName: "Pat Example" } }],
+      });
       await testDatabase!.pool.query(
         `update auth."user" set deletion_requested_at = now() where id = $1`,
         [buyer]

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { getCustomerDisplayName } from "@deskohub/dotypos";
 import { and, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { cache } from "react";
@@ -70,7 +71,11 @@ export type AccountPasses =
 const timeZone = workspaceSiteConstants.location.timeZone;
 
 export const loadAccountPasses = Effect.fn("loadAccountPasses")(function* (
-  locale: Locale
+  locale: Locale,
+  profileLayer: Layer.Layer<
+    CustomerProfileService,
+    unknown
+  > = CustomerProfileService.Live
 ) {
   const account = yield* CurrentCustomerAccount;
   const standing = yield* account.peek;
@@ -94,7 +99,8 @@ export const loadAccountPasses = Effect.fn("loadAccountPasses")(function* (
   );
   const giftBuyers = yield* readHeldGiftBuyers(
     accountId,
-    packs.map(({ id }) => id)
+    packs.map(({ id }) => id),
+    profileLayer
   );
   return {
     held: packs.map((pack, position) => ({
@@ -147,13 +153,16 @@ const listBoughtGifts = Effect.fn("listBoughtEntryPackGifts")(function* (
     // A refund can end payment eligibility between the two reads.
     if (!state) continue;
     const email = recipients.get(holderAccountId)?.email;
+    const masked = email ? maskEmailAddress(email) : undefined;
+    const maskedHolderEmail = masked === email ? undefined : masked;
     result.push({
       ...state,
+      canResend: state.canResend && maskedHolderEmail !== undefined,
       orderId,
       statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
       tier: getPassTierName(tier, locale),
       entryCount,
-      maskedHolderEmail: email ? maskEmailAddress(email) : undefined,
+      maskedHolderEmail,
     });
   }
   return result;
@@ -161,7 +170,8 @@ const listBoughtGifts = Effect.fn("listBoughtEntryPackGifts")(function* (
 
 const readHeldGiftBuyers = Effect.fn("readHeldEntryPackGiftBuyers")(function* (
   holderAccountId: CustomerAccountId,
-  heldIds: readonly OrderId[]
+  heldIds: readonly OrderId[],
+  profileLayer: Layer.Layer<CustomerProfileService, unknown>
 ) {
   if (heldIds.length === 0) return new Map<OrderId, string | undefined>();
   const { db } = yield* WorkspaceDatabase;
@@ -181,36 +191,37 @@ const readHeldGiftBuyers = Effect.fn("readHeldEntryPackGiftBuyers")(function* (
   const buyers = yield* findEntryPackPurchasePartyContacts(
     gifts.map((gift) => gift.accountId)
   );
-  const missingNames = [...buyers].flatMap(
-    ([accountId, { dotyposCustomerId, name }]) =>
-      !name && dotyposCustomerId ? [{ accountId, dotyposCustomerId }] : []
+  const linkedBuyers = [...buyers].flatMap(
+    ([accountId, { dotyposCustomerId }]) =>
+      dotyposCustomerId ? [{ accountId, dotyposCustomerId }] : []
   );
   const profileNames = new Map(
-    missingNames.length === 0
+    linkedBuyers.length === 0
       ? []
       : yield* Effect.gen(function* () {
           const profiles = yield* CustomerProfileService;
           return yield* Effect.forEach(
-            missingNames,
+            linkedBuyers,
             (buyer) =>
               profiles.load(buyer).pipe(
-                Effect.map(({ firstName, lastName }) =>
-                  [firstName, lastName].join(" ").trim()
-                ),
-                catchRecoverableCause(() => Effect.succeed("")),
+                Effect.map(({ firstName, lastName }) => {
+                  const name = getCustomerDisplayName({ firstName, lastName });
+                  return name?.includes("@") ? undefined : name;
+                }),
+                catchRecoverableCause(() => Effect.succeed(undefined)),
                 Effect.map((name) => [buyer.accountId, name] as const)
               ),
             { concurrency: 4 }
           );
         }).pipe(
-          Effect.provide(CustomerProfileService.Live),
+          Effect.provide(profileLayer),
           catchRecoverableCause(() => Effect.succeed([]))
         )
   );
   return new Map(
     gifts.map(({ orderId, accountId }) => [
       orderId,
-      (buyers.get(accountId)?.name ?? profileNames.get(accountId)) || undefined,
+      profileNames.get(accountId),
     ])
   );
 });
@@ -269,7 +280,8 @@ function toAccountEntryPack(
     }),
     status,
     ...(status === "active" &&
-      pack.entriesLeft > 0 && {
+      pack.entriesLeft > 0 &&
+      (pack.giftIssuedAt === null || pack.giftClaimedAt !== null) && {
         bookPath: `${getCoworkReservationPath(locale)}?${new URLSearchParams({ pass: pack.id })}`,
       }),
   };
