@@ -71,7 +71,7 @@ describe("MeetingRoomStartTimes", () => {
 
   test("a taken start is disabled, named as taken and skipped by keyboard navigation", () => {
     const onSelect = mock((_startTime: string) => undefined);
-    const { chips } = render("09:00", onSelect);
+    const { chips, tree } = render("09:00", onSelect);
     const taken = chips[1];
 
     expect(taken?.disabled).toBe(true);
@@ -80,6 +80,11 @@ describe("MeetingRoomStartTimes", () => {
     expect(taken?.["aria-label"]).toBe(
       m.booking_meeting_room_taken_start({ time: "09:00" }, { locale: "en-US" })
     );
+    expect(
+      chips[0]?.["aria-label"] ??
+        chips[0]?.accessibilityLabel ??
+        timesOf(tree)[0]
+    ).toBe("08:00");
 
     const onKeyDown = chips[0]?.onKeyDown;
     if (typeof onKeyDown !== "function") {
