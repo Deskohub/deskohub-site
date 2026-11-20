@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { findAll, textOf } from "../ui/testing/element-tree";
 import { AppSignInLinkStep } from "./app-sign-in-link-step";
-import { inOrder, shownTree } from "./testing/sign-in-step-tree";
+import {
+  bottomSpacerIndex,
+  inOrder,
+  shownTree,
+} from "./testing/sign-in-step-tree";
 
 const email = testEmailAddress("link");
 const step = (props: Partial<Parameters<typeof AppSignInLinkStep>[0]> = {}) =>
@@ -24,19 +28,31 @@ describe("AppSignInLinkStep", () => {
       `We sent a sign-in link to ${email}. Open it on this device to sign in.`
     );
     expect(text.some((line) => line.startsWith("Resend link in "))).toBe(true);
-    expect(inOrder(waiting).some(({ props }) => props.role === "link")).toBe(
+    const waitingElements = inOrder(waiting);
+    expect(waitingElements.some(({ props }) => props.role === "link")).toBe(
       true
     );
-    expect(inOrder(waiting).some(({ props }) => props.role === "button")).toBe(
+    expect(waitingElements.some(({ props }) => props.role === "button")).toBe(
       false
     );
+    const timer = waitingElements.findIndex(
+      ({ props }) => props.role === "timer"
+    );
+    expect(timer).toBeGreaterThanOrEqual(0);
+    expect(timer).toBeLessThan(bottomSpacerIndex(waitingElements));
 
     const available = step({ resendAvailableAt: Date.now() - 1 });
-    const actions = inOrder(available).filter(
+    const availableElements = inOrder(available);
+    const actions = availableElements.filter(
       ({ props }) => props.role === "button"
     );
     expect(actions).toHaveLength(1);
     expect(findAll(actions[0], "Text").map(textOf)).toContain("Resend link");
+    const resend = availableElements.findIndex(
+      ({ props }) => props.role === "button"
+    );
+    expect(resend).toBeGreaterThanOrEqual(0);
+    expect(resend).toBeLessThan(bottomSpacerIndex(availableElements));
   });
 
   test("announces when a new link has been sent", () => {
