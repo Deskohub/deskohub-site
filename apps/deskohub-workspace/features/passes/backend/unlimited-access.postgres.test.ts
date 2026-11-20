@@ -1,0 +1,315 @@
+import "@/shared/testing/workspace-test-env";
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { DotyposService } from "@deskohub/dotypos";
+import {
+  AlgoPinSchema,
+  IgloohomePinIdSchema,
+  IgloohomeService,
+} from "@deskohub/igloohome";
+import { NodeCrypto } from "@effect/platform-node";
+import { Effect, Layer, Option } from "effect";
+import { TestClock } from "effect/testing";
+import {
+  CurrentCustomerAccount,
+  requireVerifiedIdentity,
+} from "@/features/account/backend/current-customer-account";
+import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
+import {
+  type CustomerAccountId,
+  customerAccountIdSchema,
+} from "@/features/account/customer-account";
+import { type OrderId, orderIdSchema } from "@/features/order";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
+import { ReservationAccessService } from "@/features/reservation-access";
+import { ReservationAccessRepository } from "@/features/reservation-access/backend/reservation-access.repository";
+import {
+  createWorkspacePostgresSuiteDatabase,
+  type WorkspacePostgresSuiteDatabase,
+} from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
+import type { PassTier } from "../pass-offer";
+import { loadUnlimitedAccess } from "./unlimited-access";
+
+const firstDay = "2030-03-31"; // Prague moves to summer time on this date.
+const nextDay = "2030-04-01";
+const during = Temporal.Instant.from("2030-03-31T11:00Z");
+const openSpaceClosing = Temporal.Instant.from("2030-03-31T15:00Z");
+const nextMidnight = Temporal.Instant.from("2030-03-31T22:00Z");
+const syntheticPin = AlgoPinSchema.make("246813579");
+
+describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
+  "Unlimited access on disposable Postgres",
+  () => {
+    const buyer = customerAccountIdSchema.make(crypto.randomUUID());
+    const holder = customerAccountIdSchema.make(crypto.randomUUID());
+    let database: WorkspacePostgresSuiteDatabase;
+
+    beforeAll(async () => {
+      database = (await createWorkspacePostgresSuiteDatabase(
+        "unlimited_access"
+      ))!;
+      await database.pool.query(
+        "insert into customer_accounts (id) values ($1), ($2)",
+        [buyer, holder]
+      );
+    });
+
+    afterAll(async () => {
+      await database?.close();
+    });
+
+    const seedPass = async (tier: PassTier, gifted = false) => {
+      const orderId = orderIdSchema.make(crypto.randomUUID());
+      await database.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
+         values ($1, 'pass-purchase', '1', 'paid', 'processing', now())`,
+        [orderId]
+      );
+      await database.pool.query(
+        `insert into pass_purchases (id, buyer_account_id, holder_account_id, product, tier, unlimited_coffee,
+           status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $3, 'unlimited', $4, $5, 'active', $6, '2030-04-30', '{}', 'en-US', now())`,
+        [
+          orderId,
+          buyer,
+          gifted ? holder : buyer,
+          tier,
+          tier === "open-space" ? false : null,
+          firstDay,
+        ]
+      );
+      const { rows } = await database.pool.query<{ id: string }>(
+        `insert into workspace_reservations (checkout_attempt_key, pass_id, service_date, pass_day_table_id, dotypos_customer_id,
+           author_account_id, dotypos_reservation_id, reservation_state, payment_state, fulfillment_state,
+           paid_at, fulfilled_at, reservation_details, locale)
+         values (uuid_generate_v7(), $1, $3::date, '14', '1', $2, concat($1::text, ':', $3::text), 'confirmed', 'paid', 'fulfilled', now(), now(), '{}', 'en-US'),
+                (uuid_generate_v7(), $1, $4::date, '14', '1', $2, concat($1::text, ':', $4::text), 'confirmed', 'paid', 'fulfilled', now(), now(), '{}', 'en-US')
+         returning id`,
+        [orderId, buyer, firstDay, nextDay]
+      );
+      return { orderId, dayIds: rows.map(({ id }) => id) };
+    };
+
+    type Provider = {
+      readonly issue: () => Effect.Effect<{
+        pin: typeof syntheticPin;
+        pinId: ReturnType<typeof IgloohomePinIdSchema.make>;
+      }>;
+      readonly reads?: string[];
+    };
+
+    const load = (
+      orderId: OrderId,
+      tier: PassTier,
+      viewer: CustomerAccountId | null,
+      now: Temporal.Instant,
+      provider: Provider
+    ) => {
+      const accessCodes = ReservationAccessService.Default.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ReservationAccessRepository.Default,
+            Layer.mock(IgloohomeService, { issueHourlyAlgoPin: provider.issue })
+          )
+        ),
+        Layer.provide(Layer.mergeAll(database.layer, NodeCrypto.layer))
+      );
+
+      return Effect.runPromise(
+        loadUnlimitedAccess(orderId).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              database.layer,
+              accessCodes,
+              Layer.mock(CurrentCustomerAccount, {
+                requireActive: requireVerifiedIdentity(
+                  viewer === null
+                    ? null
+                    : {
+                        ...testSessionProfile,
+                        accountId: viewer,
+                        deletionRequested: false,
+                        email: "test-holder@example.invalid",
+                      }
+                ),
+              }),
+              Layer.mock(DotyposService, {
+                getReservation: (id) =>
+                  Effect.sync(() => {
+                    const date = id.slice(-10);
+                    provider.reads?.push(date);
+                    const { startsAt, endsAt } = getCoworkReservationInterval(
+                      tier === "open-space" ? "open-space" : "reserved-desk",
+                      date
+                    );
+                    return Option.some({
+                      reservation: {
+                        id,
+                        _tableId: "14",
+                        status: "CONFIRMED",
+                        startDate: startsAt,
+                        endDate: endsAt,
+                        seats: 1,
+                      },
+                    });
+                  }),
+                getTables: () =>
+                  Effect.succeed([{ id: "14", name: "Desk 14" }]),
+              })
+            )
+          ),
+          atInstant(now)
+        )
+      );
+    };
+
+    const issue = () =>
+      Effect.succeed({
+        pin: syntheticPin,
+        pinId: IgloohomePinIdSchema.make("synthetic-unlimited-pin"),
+      });
+
+    test("gates a gift to the claimed holder and never exposes a pass day as a reservation order", async () => {
+      const {
+        orderId,
+        dayIds: [firstDayId],
+      } = await seedPass("reserved-desk", true);
+      const reads: string[] = [];
+      const provider = { issue, reads };
+      expect(
+        await load(orderId, "reserved-desk", null, during, provider)
+      ).toEqual({ state: "sign-in" });
+      expect(
+        await load(orderId, "reserved-desk", holder, during, provider)
+      ).toEqual({ state: "not-found" });
+      await database.pool.query(
+        "update pass_purchases set gift_claimed_at = now() where id = $1",
+        [orderId]
+      );
+      expect(
+        await load(orderId, "reserved-desk", buyer, during, provider)
+      ).toEqual({ state: "not-found" });
+      expect(reads).toEqual([]);
+
+      const ordinaryOrder = await Effect.runPromise(
+        WorkspaceReservationRepository.pipe(
+          Effect.flatMap((reservations) => reservations.findById(firstDayId)),
+          Effect.provide(WorkspaceReservationRepository.Default),
+          Effect.provide(database.layer)
+        )
+      );
+      expect(ordinaryOrder).toBeNull();
+
+      const lastMinute = nextMidnight.subtract({ minutes: 1 });
+      expect(
+        await load(orderId, "reserved-desk", holder, lastMinute, provider)
+      ).toMatchObject({
+        state: "available",
+        day: 1,
+        code: syntheticPin,
+        endsAt: nextMidnight,
+        deskLabel: "Desk 14",
+      });
+      expect(reads).toEqual([firstDay]);
+
+      await database.pool.query(
+        "update pass_purchases set status = 'withdrawn', access_ends_on = $2 where id = $1",
+        [orderId, nextDay]
+      );
+      expect(
+        await load(orderId, "reserved-desk", holder, lastMinute, provider)
+      ).toMatchObject({ state: "available", continuesTomorrow: false });
+      expect(
+        await load(orderId, "reserved-desk", holder, nextMidnight, provider)
+      ).toMatchObject({ state: "ended" });
+    });
+
+    test("only one request issues today's code and the next Prague date has a different grant", async () => {
+      const { orderId, dayIds } = await seedPass("open-space");
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let issued = 0;
+      const provider = {
+        issue: () =>
+          Effect.promise(async () => {
+            issued++;
+            started.resolve();
+            await release.promise;
+          }).pipe(Effect.andThen(issue())),
+      };
+      expect(
+        await load(
+          orderId,
+          "open-space",
+          buyer,
+          during.subtract({ hours: 24 }),
+          provider
+        )
+      ).toMatchObject({ state: "before-start" });
+
+      const issuing = load(orderId, "open-space", buyer, during, provider);
+      await Promise.race([
+        started.promise,
+        issuing.then(() => {
+          throw new Error("Request finished before issuance");
+        }),
+      ]);
+      try {
+        expect(
+          await load(orderId, "open-space", buyer, during, provider)
+        ).toMatchObject({ state: "retry" });
+        expect(issued).toBe(1);
+      } finally {
+        release.resolve();
+      }
+      expect(await issuing).toMatchObject({
+        state: "available",
+        day: 1,
+        code: syntheticPin,
+        endsAt: openSpaceClosing,
+      });
+      expect(
+        await load(
+          orderId,
+          "open-space",
+          buyer,
+          during.add({ hours: 1 }),
+          provider
+        )
+      ).toMatchObject({ state: "available", code: syntheticPin });
+      expect(
+        await load(orderId, "open-space", buyer, openSpaceClosing, provider)
+      ).toMatchObject({ state: "closed", continuesTomorrow: true });
+      expect(issued).toBe(1);
+      expect(
+        await load(orderId, "open-space", buyer, nextMidnight, provider)
+      ).toMatchObject({ state: "available", day: 2 });
+      expect(issued).toBe(2);
+      const { rows } = await database.pool.query(
+        "select workspace_reservation_id from reservation_access_grants where workspace_reservation_id = any($1)",
+        [dayIds]
+      );
+      expect(rows).toHaveLength(2);
+    });
+
+    test("withholds a code when issuance completes across the closing boundary", async () => {
+      const { orderId } = await seedPass("open-space");
+      const access = await load(
+        orderId,
+        "open-space",
+        buyer,
+        openSpaceClosing.subtract({ seconds: 1 }),
+        {
+          issue: () =>
+            TestClock.setTime(openSpaceClosing.epochMilliseconds).pipe(
+              Effect.andThen(issue())
+            ),
+        }
+      );
+      expect(access).toMatchObject({ state: "closed" });
+      expect(access).not.toHaveProperty("code");
+    });
+  }
+);
