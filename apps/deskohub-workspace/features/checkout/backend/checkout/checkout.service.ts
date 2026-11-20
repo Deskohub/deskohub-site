@@ -1,12 +1,14 @@
 import { DotyposService } from "@deskohub/dotypos";
 import { parsePhoneNumber } from "@deskohub/phone-number";
-import { Context, Effect, Layer, Match } from "effect";
+import { Context, Effect, Layer, Match, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { CustomerAccountSections } from "@/features/account";
 import {
   type AccountingDocumentSnapshot,
   makeAccountingDocumentSnapshot,
 } from "@/features/accounting/accounting-document-snapshot";
+import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
+import { AccountingStorage } from "@/features/accounting/backend/accounting-storage";
 import {
   type CheckoutSummary,
   type CheckoutSummaryChangedKeys,
@@ -42,6 +44,7 @@ import { type Money, moneyEquals } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { localDateTimeToInstant } from "@/shared/utils/temporal";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
+import { FioPollWake } from "../fio/fio-poll-wake.service";
 import { OrderPaymentHandlers } from "../payment/order-payment-handlers.service";
 import { getPaymentCustomer } from "../payment/payment-customer";
 import {
@@ -55,6 +58,8 @@ import {
   PaymentAttemptRepository,
   paymentAttemptLogFields,
 } from "../repositories/payment-attempt.repository";
+import { PaymentLifecycleRepository } from "../repositories/payment-lifecycle.repository";
+import { QrPaymentRepository } from "../repositories/qr-payment.repository";
 import { formatWorkspaceReservationNote } from "../reservation/dotypos-reservation.adapter";
 import { CheckoutError } from "./checkout-error";
 import {
@@ -177,29 +182,56 @@ const ensureReservationHasNotEnded = Effect.fn(
   return yield* error;
 });
 
+interface CheckoutSubmitInput {
+  readonly payStateToken: string;
+  readonly legalConsent?: boolean;
+  readonly earlyPerformanceConsent?: boolean;
+  /** The app the hosted payment returns to. Omit for the Workspace site. */
+  readonly returnTarget?: PaymentReturnTarget;
+}
+
+interface PublicPaymentChoice {
+  readonly method: "card" | "qr";
+  readonly fio?: { readonly accountKey: string } | undefined;
+}
+
+type CheckoutResult =
+  | CheckoutRedirectResult
+  | ({
+      readonly status: "pricing_changed";
+      readonly changedKeys: ReturnType<typeof getCheckoutSummaryChangedKeys>;
+      readonly freshSummary: CheckoutSummary;
+    } & FreshPayState)
+  | { readonly status: "in_progress" };
+
+type PublicCheckoutResult =
+  | CheckoutResult
+  | {
+      readonly status: "qr_pending";
+      readonly orderId: WorkspaceReservationId;
+      readonly variableSymbol: string;
+      readonly accountKey: string;
+      readonly amount: Money;
+      readonly expiresAt: Temporal.Instant;
+    };
+
 export interface ICheckoutService {
   readonly createHostedPaymentCheckout: (
-    input: {
-      readonly payStateToken: string;
-      readonly legalConsent?: boolean;
-      readonly earlyPerformanceConsent?: boolean;
-      /**
-       * The app the hosted payment returns to; none returns to the site's
-       * status page.
-       */
-      readonly returnTarget?: PaymentReturnTarget;
+    input: CheckoutSubmitInput,
+    locale: Locale
+  ) => Effect.Effect<CheckoutResult, CheckoutError>;
+  readonly startReservationPayment: (
+    input: Omit<CheckoutSubmitInput, "returnTarget"> & PublicPaymentChoice,
+    locale: Locale
+  ) => Effect.Effect<PublicCheckoutResult, CheckoutError>;
+  /** The caller authorizes the reservation author before invoking this operation. */
+  readonly resumeReservationPayment: (
+    input: PublicPaymentChoice & {
+      readonly reservationId: WorkspaceReservationId;
+      readonly fio: { readonly accountKey: string };
     },
     locale: Locale
-  ) => Effect.Effect<
-    | CheckoutRedirectResult
-    | ({
-        readonly status: "pricing_changed";
-        readonly changedKeys: ReturnType<typeof getCheckoutSummaryChangedKeys>;
-        readonly freshSummary: CheckoutSummary;
-      } & FreshPayState)
-    | { readonly status: "in_progress" },
-    CheckoutError
-  >;
+  ) => Effect.Effect<PublicCheckoutResult, CheckoutError>;
 }
 
 export class CheckoutService extends Context.Service<
@@ -215,6 +247,10 @@ export class CheckoutService extends Context.Service<
     Layer.provide(CheckoutAnalytics.Live),
     Layer.provide(OrderPaymentHandlers.Live),
     Layer.provide(PaymentAttemptRepository.Default),
+    Layer.provide(PaymentLifecycleRepository.Live),
+    Layer.provide(QrPaymentRepository.Default),
+    Layer.provide(AccountingStorage.Live),
+    Layer.provide(FioPollWake.Live),
     Layer.provide(WorkspaceReservationRepository.Default),
     Layer.provide(WorkspaceDatabase.Default),
     Layer.provide(WorkspaceDotyposLayer),
@@ -297,6 +333,19 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
       const pricing = yield* CheckoutPricingService;
       const payableCheckout = yield* PayableCheckout;
       const accountSections = yield* CustomerAccountSections;
+      const lifecycle = Option.getOrUndefined(
+        yield* Effect.serviceOption(PaymentLifecycleRepository)
+      );
+      const qrPayments = Option.getOrUndefined(
+        yield* Effect.serviceOption(QrPaymentRepository)
+      );
+      const accountingSnapshots = Option.getOrUndefined(
+        yield* Effect.serviceOption(AccountingDocumentSnapshots)
+      );
+      const fioWake = Option.getOrUndefined(
+        yield* Effect.serviceOption(FioPollWake)
+      );
+
       const provideSealedStateKeys = Effect.provideService(
         SealedStateKeys,
         yield* SealedStateKeys
@@ -330,6 +379,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           readonly reservation: SignedPayState["reservation"];
           readonly returnTarget: PaymentReturnTarget | undefined;
           readonly checkout: OpenCheckout;
+          readonly fio?: { readonly accountKey: string } | undefined;
         }) {
           yield* Effect.annotateLogsScoped({
             reservationId: input.workspaceReservationId,
@@ -347,6 +397,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           );
 
           const orderId = reservationOrderId(input.workspaceReservationId);
+          const fio = input.fio;
           const { attachedAttempt, hostedPaymentPage } =
             yield* startPaymentSession({
               kind: input.checkout.kind,
@@ -367,6 +418,27 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 commitment: input.commitment,
                 accountingSnapshot: input.accountingSnapshot,
               },
+              ...(fio &&
+                lifecycle &&
+                !retriedAttempt && {
+                  admitProvider: ({
+                    provider,
+                    providerOrderId,
+                  }: {
+                    readonly provider: "nexi" | "mock";
+                    readonly providerOrderId: string;
+                  }) =>
+                    lifecycle.createPendingProviderAttempt({
+                      orderId,
+                      amount: input.total,
+                      locale: input.locale,
+                      commitment: input.commitment,
+                      accountingSnapshot: input.accountingSnapshot,
+                      provider,
+                      providerOrderId,
+                      publicPayment: fio,
+                    }),
+                }),
             }).pipe(providePaymentSession);
           yield* checkoutAnalytics.paymentStarted({
             attempt: attachedAttempt,
@@ -584,6 +656,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
 
         if (
           attempt.provider === "internal" ||
+          attempt.provider === "fio" ||
           !providers.activeProviders.includes(attempt.provider)
         ) {
           return { status: "in_progress" as const };
@@ -700,212 +773,401 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
         };
       });
 
-      return CheckoutService.of({
-        createHostedPaymentCheckout: Effect.fn(
-          "checkout.createHostedPaymentCheckout"
-        )(
-          function* (input, locale) {
-            yield* Effect.annotateLogsScoped({
-              locale,
-              hasPayStateToken: input.payStateToken.length > 0,
-              legalConsent: input.legalConsent === true,
-              earlyPerformanceConsent: input.earlyPerformanceConsent === true,
-              returnTarget: input.returnTarget,
-            });
-            yield* Effect.logInfo("Hosted payment checkout creation started");
-
-            if (input.legalConsent !== true) {
-              yield* Effect.logInfo(
-                "Hosted payment checkout rejected: missing legal consent"
-              );
-
-              return yield* new CheckoutError({
-                code: "legal_consent_required",
-                message: "Legal consent is required before checkout.",
-              });
+      const paymentInProgress = { status: "in_progress" } as const;
+      const readQrPayment = Effect.fnUntraced(function* (
+        reservationId: WorkspaceReservationId
+      ) {
+        const attempt =
+          qrPayments && (yield* qrPayments.findForReservation(reservationId));
+        return attempt
+          ? {
+              status: "qr_pending" as const,
+              orderId: reservationId,
+              variableSymbol: attempt.variableSymbol,
+              accountKey: attempt.accountKey,
+              amount: attempt.amount,
+              expiresAt: attempt.expiresAt,
             }
+          : paymentInProgress;
+      });
 
-            const checkout = yield* payableCheckout
-              .open({ payStateToken: input.payStateToken, page: { locale } })
-              .pipe(
-                Effect.catchTags({
-                  PayStateTokenError: (cause) =>
-                    Effect.fail(toInvalidPayStateError(cause)),
-                  CheckoutUnavailableError: (unavailable) =>
-                    Effect.succeed(unavailable),
-                })
-              );
-            if (checkout instanceof CheckoutUnavailableError) {
-              return yield* recoverUnpayableOrder({
-                unavailable: checkout,
+      const resumePublicPayment = Effect.fn(
+        "checkout.resumeReservationPayment"
+      )(
+        function* (
+          input: PublicPaymentChoice & {
+            readonly reservationId: WorkspaceReservationId;
+          },
+          locale: Locale
+        ) {
+          if (!qrPayments || !lifecycle || !input.fio) return undefined;
+          const orderId = reservationOrderId(input.reservationId);
+          const window = yield* qrPayments.findPaymentWindow(orderId);
+          if (!window) return undefined;
+          if (
+            window.accountKey !== input.fio.accountKey ||
+            Temporal.Instant.compare(
+              window.expiresAt,
+              Temporal.Now.instant()
+            ) <= 0
+          ) {
+            return paymentInProgress;
+          }
+
+          const reservation = yield* reservations.findById(input.reservationId);
+          if (
+            !reservation ||
+            reservation.agentClientId ||
+            reservation.reservationState !== "held" ||
+            reservation.paymentState !== "pending" ||
+            !reservation.activePaymentAttemptId
+          )
+            return paymentInProgress;
+
+          if (input.method === "card") {
+            const card = yield* qrPayments.findCardAttempt(orderId);
+            if (card) {
+              const providerRedirectUrl = getReusableProviderRedirectUrl(card);
+              return providerRedirectUrl
+                ? getHostedPaymentCheckoutResult({
+                    locale,
+                    providerRedirectUrl,
+                    workspaceReservationId: input.reservationId,
+                  })
+                : paymentInProgress;
+            }
+          } else {
+            const existing = yield* readQrPayment(input.reservationId);
+            if (existing.status === "qr_pending") return existing;
+          }
+
+          const accepted = yield* paymentAttempts.findById(
+            reservation.activePaymentAttemptId
+          );
+          if (!accepted) return paymentInProgress;
+          const publicPayment = {
+            accountKey: window.accountKey,
+            useAcceptedCommitment: true as const,
+          };
+
+          if (input.method === "qr") {
+            if (!fioWake) return paymentInProgress;
+            yield* lifecycle
+              .createPendingQrAttempt({
+                orderId,
+                amount: accepted.amount,
                 locale,
-              });
-            }
-            const { state, reservation } = checkout;
-            yield* Effect.annotateLogsScoped({
-              orderId: state.orderId,
-              checkoutSessionId: state.checkoutSessionId,
-              reservationKind: state.reservation.kind,
-              ...reservationLogFields(reservation),
-            });
-            yield* Effect.logInfo("Hosted payment checkout pay state opened");
+                publicPayment,
+              })
+              .pipe(Effect.provideService(FioPollWake, fioWake));
+            return yield* readQrPayment(input.reservationId);
+          }
 
-            const data = state.reservation;
+          const snapshot =
+            accountingSnapshots &&
+            (yield* accountingSnapshots.find(accepted.id));
+          if (!snapshot || !providers.activeProviders.includes("nexi"))
+            return paymentInProgress;
+          const customer = getPaymentCustomer({
+            id: reservation.dotyposCustomerId,
+            name: snapshot.buyer.legalName,
+            email: snapshot.delivery?.email,
+          });
+          if ((yield* providers.selectForCustomer(customer)) !== "nexi")
+            return paymentInProgress;
+          const { hostedPaymentPage } = yield* startPaymentSession({
+            kind: "reservation",
+            orderId,
+            locale: snapshot.locale,
+            amount: accepted.amount,
+            correlationId: reservation.correlationId,
+            customer,
+            beforeAttempt: Effect.void,
+            admitProvider: ({ provider, providerOrderId }) =>
+              lifecycle.createPendingProviderAttempt({
+                orderId,
+                amount: accepted.amount,
+                locale: snapshot.locale,
+                publicPayment,
+                provider,
+                providerOrderId,
+              }),
+          }).pipe(providePaymentSession);
+          return getHostedPaymentCheckoutResult({
+            locale,
+            providerRedirectUrl: hostedPaymentPage.hostedPage,
+            workspaceReservationId: input.reservationId,
+          });
+        },
+        (effect) =>
+          effect.pipe(
+            Effect.catchTag("PaymentLifecycleStateError", () =>
+              Effect.succeed(paymentInProgress)
+            ),
+            Effect.mapError(mapCheckoutFailure)
+          )
+      );
 
-            const progressResult = yield* findReservationProgressResult({
-              reservation,
-              state,
-              locale,
-              returnTarget: input.returnTarget,
-            });
-            if (progressResult) return progressResult;
+      const submitCheckout = Effect.fn("checkout.createHostedPaymentCheckout")(
+        function* (
+          input: CheckoutSubmitInput & Partial<PublicPaymentChoice>,
+          locale: Locale
+        ) {
+          yield* Effect.annotateLogsScoped({
+            locale,
+            hasPayStateToken: input.payStateToken.length > 0,
+            legalConsent: input.legalConsent === true,
+            earlyPerformanceConsent: input.earlyPerformanceConsent === true,
+            returnTarget: input.returnTarget,
+          });
+          yield* Effect.logInfo("Hosted payment checkout creation started");
 
-            yield* ensureReservationHasNotEnded(state.reservation);
-
-            if (state.changedKeys) {
-              return yield* getPendingPricingReviewResult({
-                checkout,
-                changedKeys: state.changedKeys,
-              });
-            }
-
-            const { dotyposCustomerId, verdict } = yield* affirmSignedPricing({
-              checkout,
-              locale,
-            });
-
-            const repricedResult = yield* findRepricedResult({
-              checkout,
-              verdict,
-            });
-            if (repricedResult) return repricedResult;
-            const prepared = verdict.priced;
-            yield* Effect.logDebug(
-              "Hosted payment checkout quote comparison passed"
+          if (input.legalConsent !== true) {
+            yield* Effect.logInfo(
+              "Hosted payment checkout rejected: missing legal consent"
             );
 
-            const contractAt = Temporal.Now.instant();
-            const earlyPerformanceRequired = isEarlyPerformanceRequestRequired({
-              reservation: state.reservation,
-              contractAt,
+            return yield* new CheckoutError({
+              code: "legal_consent_required",
+              message: "Legal consent is required before checkout.",
             });
+          }
 
-            if (
-              earlyPerformanceRequired &&
-              input.earlyPerformanceConsent !== true
-            ) {
-              yield* Effect.logInfo(
-                "Hosted payment checkout rejected: missing early performance consent"
-              );
+          const checkout = yield* payableCheckout
+            .open({ payStateToken: input.payStateToken, page: { locale } })
+            .pipe(
+              Effect.catchTags({
+                PayStateTokenError: (cause) =>
+                  Effect.fail(toInvalidPayStateError(cause)),
+                CheckoutUnavailableError: (unavailable) =>
+                  Effect.succeed(unavailable),
+              })
+            );
+          if (checkout instanceof CheckoutUnavailableError) {
+            return yield* recoverUnpayableOrder({
+              unavailable: checkout,
+              locale,
+            });
+          }
+          const { state, reservation } = checkout;
+          yield* Effect.annotateLogsScoped({
+            orderId: state.orderId,
+            checkoutSessionId: state.checkoutSessionId,
+            reservationKind: state.reservation.kind,
+            ...reservationLogFields(reservation),
+          });
+          yield* Effect.logInfo("Hosted payment checkout pay state opened");
 
-              return yield* new CheckoutError({
-                code: "early_performance_consent_required",
-                message:
-                  "Early performance consent is required before checkout.",
-              });
-            }
+          const data = state.reservation;
 
-            // The full state-creating section runs inside the account
-            // advisory lock: authority is re-checked under the lock and the
-            // same lock is held until the section completes, so deletion
-            // cannot interleave with the reservation update, legal evidence,
-            // or payment start, and the account's submissions of one order
-            // record its evidence and start its payment once. Attempt
-            // admission locks the order's row, so no submission starts a
-            // second attempt. Idempotent recovery paths above stay reachable
-            // without the lock.
-            return yield* accountSections
-              .withOptionalAccount(
-                Effect.fn(function* () {
-                  // Another submission of this order may have started its
-                  // payment, or the hold may have changed, since the check
-                  // above: decide again under the account lock, before any
-                  // evidence or provider work.
-                  const lockedReservation = yield* reservations.findById(
-                    reservation.id
+          if (input.method) {
+            const resumed = yield* resumePublicPayment(
+              {
+                reservationId: reservation.id,
+                method: input.method,
+                fio: input.fio,
+              },
+              locale
+            );
+            if (resumed) return resumed;
+          }
+
+          const progressResult = yield* findReservationProgressResult({
+            reservation,
+            state,
+            locale,
+            returnTarget: input.returnTarget,
+          });
+          if (progressResult) return progressResult;
+
+          yield* ensureReservationHasNotEnded(state.reservation);
+
+          if (state.changedKeys) {
+            return yield* getPendingPricingReviewResult({
+              checkout,
+              changedKeys: state.changedKeys,
+            });
+          }
+
+          const { dotyposCustomerId, verdict } = yield* affirmSignedPricing({
+            checkout,
+            locale,
+          });
+
+          const repricedResult = yield* findRepricedResult({
+            checkout,
+            verdict,
+          });
+          if (repricedResult) return repricedResult;
+          const prepared = verdict.priced;
+          yield* Effect.logDebug(
+            "Hosted payment checkout quote comparison passed"
+          );
+
+          const contractAt = Temporal.Now.instant();
+          const earlyPerformanceRequired = isEarlyPerformanceRequestRequired({
+            reservation: state.reservation,
+            contractAt,
+          });
+
+          if (
+            earlyPerformanceRequired &&
+            input.earlyPerformanceConsent !== true
+          ) {
+            yield* Effect.logInfo(
+              "Hosted payment checkout rejected: missing early performance consent"
+            );
+
+            return yield* new CheckoutError({
+              code: "early_performance_consent_required",
+              message: "Early performance consent is required before checkout.",
+            });
+          }
+
+          // The full state-creating section runs inside the account
+          // advisory lock: authority is re-checked under the lock and the
+          // same lock is held until the section completes, so deletion
+          // cannot interleave with the reservation update, legal evidence,
+          // or payment start, and the account's submissions of one order
+          // record its evidence and start its payment once. Attempt
+          // admission locks the order's row, so no submission starts a
+          // second attempt. Idempotent recovery paths above stay reachable
+          // without the lock.
+          return yield* accountSections
+            .withOptionalAccount(
+              Effect.fn(function* () {
+                // Another submission of this order may have started its
+                // payment, or the hold may have changed, since the check
+                // above: decide again under the account lock, before any
+                // evidence or provider work.
+                const lockedReservation = yield* reservations.findById(
+                  reservation.id
+                );
+                // An order gone meanwhile can't be paid; the status page
+                // tells the customer what happened to it.
+                if (!lockedReservation) {
+                  return { status: "in_progress" as const };
+                }
+                if (input.method) {
+                  const resumed = yield* resumePublicPayment(
+                    {
+                      reservationId: reservation.id,
+                      method: input.method,
+                      fio: input.fio,
+                    },
+                    locale
                   );
-                  // An order gone meanwhile can't be paid; the status page
-                  // tells the customer what happened to it.
-                  if (!lockedReservation) {
-                    return { status: "in_progress" as const };
-                  }
-                  const lockedProgressResult =
-                    yield* findReservationProgressResult({
-                      reservation: lockedReservation,
-                      state,
-                      locale,
-                      returnTarget: input.returnTarget,
-                    });
-                  if (lockedProgressResult) return lockedProgressResult;
-
-                  yield* reservations.updateReservationDetails({
-                    id: reservation.id,
-                    reservationDetails:
-                      getStoredWorkspaceReservationDetails(data),
+                  if (resumed) return resumed;
+                }
+                const lockedProgressResult =
+                  yield* findReservationProgressResult({
+                    reservation: lockedReservation,
+                    state,
                     locale,
+                    returnTarget: input.returnTarget,
                   });
+                if (lockedProgressResult) return lockedProgressResult;
 
-                  const legalEvidence = getPaymentSubmitLegalEvidence({
-                    locale,
-                    acceptedAt: contractAt.toString(),
-                    earlyPerformanceConsent: earlyPerformanceRequired,
-                  });
-                  const checkoutDetails = getCheckoutDetails({
-                    locale,
-                    priced: prepared,
-                    legalEvidence,
-                  });
-                  yield* Effect.annotateLogsScoped({
-                    acceptedDocumentCount: Object.keys(legalEvidence).length,
-                    earlyPerformanceRequested: earlyPerformanceRequired,
-                  });
-                  yield* Effect.logInfo(
-                    "Hosted payment checkout legal evidence recording started"
-                  );
-                  yield* legalEvidenceEvents.recordMany(
-                    Object.values(checkoutDetails.legal).map((evidence) => ({
-                      workspaceReservationId: reservation.id,
-                      evidence,
-                    }))
-                  );
-                  yield* Effect.logInfo(
-                    "Hosted payment checkout legal evidence recorded"
-                  );
+                yield* reservations.updateReservationDetails({
+                  id: reservation.id,
+                  reservationDetails:
+                    getStoredWorkspaceReservationDetails(data),
+                  locale,
+                });
 
-                  const { dotyposReservationId } = reservation;
-
-                  yield* dotypos.updateReservation({
-                    reservationId: dotyposReservationId,
-                    note: formatWorkspaceReservationNote({
-                      paymentOrderId: reservation.id,
-                      checkoutDetails,
-                      reservation: checkoutDetails.reservation,
-                    }),
-                  });
-                  yield* Effect.logInfo(
-                    "Hosted payment checkout Dotypos reservation note updated"
-                  );
-
-                  yield* ensureReservationHasNotEnded(state.reservation);
-                  const accountingSnapshot = makeAccountingDocumentSnapshot({
+                const legalEvidence = getPaymentSubmitLegalEvidence({
+                  locale,
+                  acceptedAt: contractAt.toString(),
+                  earlyPerformanceConsent: earlyPerformanceRequired,
+                });
+                const checkoutDetails = getCheckoutDetails({
+                  locale,
+                  priced: prepared,
+                  legalEvidence,
+                });
+                yield* Effect.annotateLogsScoped({
+                  acceptedDocumentCount: Object.keys(legalEvidence).length,
+                  earlyPerformanceRequested: earlyPerformanceRequired,
+                });
+                yield* Effect.logInfo(
+                  "Hosted payment checkout legal evidence recording started"
+                );
+                yield* legalEvidenceEvents.recordMany(
+                  Object.values(checkoutDetails.legal).map((evidence) => ({
                     workspaceReservationId: reservation.id,
-                    dotyposReservationId,
-                    dotyposCustomerId,
-                    locale,
-                    prepared,
-                  });
-                  const expectedPrice = prepared.quote.payment.expectedPrice;
-                  const startPayment =
-                    expectedPrice.value === 0
-                      ? completeInternalPayment({
-                          workspaceReservationId: reservation.id,
-                          locale,
-                          total: expectedPrice,
-                          commitment: prepared.commitment,
-                          accountingSnapshot,
-                          reservation: state.reservation,
-                          checkout,
-                        })
+                    evidence,
+                  }))
+                );
+                yield* Effect.logInfo(
+                  "Hosted payment checkout legal evidence recorded"
+                );
+
+                const { dotyposReservationId } = reservation;
+
+                yield* dotypos.updateReservation({
+                  reservationId: dotyposReservationId,
+                  note: formatWorkspaceReservationNote({
+                    paymentOrderId: reservation.id,
+                    checkoutDetails,
+                    reservation: checkoutDetails.reservation,
+                  }),
+                });
+                yield* Effect.logInfo(
+                  "Hosted payment checkout Dotypos reservation note updated"
+                );
+
+                yield* ensureReservationHasNotEnded(state.reservation);
+                const accountingSnapshot = makeAccountingDocumentSnapshot({
+                  workspaceReservationId: reservation.id,
+                  dotyposReservationId,
+                  dotyposCustomerId,
+                  locale,
+                  prepared,
+                });
+                const expectedPrice = prepared.quote.payment.expectedPrice;
+                const eligibleFio =
+                  input.method &&
+                  input.fio &&
+                  !lockedReservation.agentClientId &&
+                  !checkout.retriedAttempt &&
+                  expectedPrice.currency === "CZK" &&
+                  providers.activeProviders.includes("nexi")
+                    ? input.fio
+                    : undefined;
+                const startQrPayment = Effect.gen(function* () {
+                  if (!eligibleFio || !lifecycle || !qrPayments || !fioWake) {
+                    return yield* new CheckoutError({
+                      code: "checkout_failed",
+                      message:
+                        "QR transfer is unavailable for this reservation.",
+                    });
+                  }
+                  yield* reconfirmPayableCheckout(checkout);
+                  yield* lifecycle
+                    .createPendingQrAttempt({
+                      orderId: reservationOrderId(reservation.id),
+                      amount: expectedPrice,
+                      commitment: prepared.commitment,
+                      locale,
+                      accountingSnapshot,
+                      publicPayment: eligibleFio,
+                    })
+                    .pipe(Effect.provideService(FioPollWake, fioWake));
+                  return yield* readQrPayment(reservation.id);
+                });
+                const startPayment =
+                  expectedPrice.value === 0
+                    ? completeInternalPayment({
+                        workspaceReservationId: reservation.id,
+                        locale,
+                        total: expectedPrice,
+                        commitment: prepared.commitment,
+                        accountingSnapshot,
+                        reservation: state.reservation,
+                        checkout,
+                      })
+                    : input.method === "qr"
+                      ? startQrPayment
                       : startProviderSession({
                           workspaceReservationId: reservation.id,
                           correlationId: reservation.correlationId,
@@ -927,90 +1189,104 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                           reservation: state.reservation,
                           returnTarget: input.returnTarget,
                           checkout,
+                          fio: eligibleFio,
                         });
 
-                  return yield* startPayment.pipe(
-                    Effect.catchTag(
-                      "DiscountClaimError",
-                      Effect.fn(function* (cause) {
-                        yield* Effect.logError(
-                          "Accepted discount claim admission changed the payable price",
-                          {
-                            discountBoundary: "claim_admission",
-                            discountOperation: cause.operation,
-                            discountErrorReason: cause.reason,
-                          }
-                        );
-                        // The claim moved the price after it was affirmed, so
-                        // the customer reviews the re-priced order whatever
-                        // it compares to: no verdict, only the changed keys.
-                        const refreshed = yield* pricing.repriceForPayment({
-                          ...state,
-                          bookedAt: PayState.bookedAt(state),
-                          dotyposCustomerId,
-                          locale,
-                        });
-                        const refreshedSummary = refreshed.summary;
-                        const changedKeys = getCheckoutSummaryChangedKeys(
-                          PayState.summary(state),
-                          refreshedSummary
-                        );
-                        const refreshedCheckoutDetails = getCheckoutDetails({
-                          locale,
-                          priced: refreshed,
-                          legalEvidence,
-                        });
-                        yield* dotypos.updateReservation({
-                          reservationId: dotyposReservationId,
-                          note: formatWorkspaceReservationNote({
-                            paymentOrderId: reservation.id,
-                            checkoutDetails: refreshedCheckoutDetails,
-                            reservation: refreshedCheckoutDetails.reservation,
-                          }),
-                        });
-                        const priceReviewPayState =
-                          yield* reissuePriceReviewPayState(checkout.state, {
-                            kind: "repriced",
-                            verdict: {
-                              status: "pricing_changed",
-                              priced: refreshed,
-                              changedKeys,
-                            },
-                          }).pipe(provideSealedStateKeys);
+                return yield* startPayment.pipe(
+                  Effect.catchTag(
+                    "DiscountClaimError",
+                    Effect.fn(function* (cause) {
+                      yield* Effect.logError(
+                        "Accepted discount claim admission changed the payable price",
+                        {
+                          discountBoundary: "claim_admission",
+                          discountOperation: cause.operation,
+                          discountErrorReason: cause.reason,
+                        }
+                      );
+                      // The claim moved the price after it was affirmed, so
+                      // the customer reviews the re-priced order whatever
+                      // it compares to: no verdict, only the changed keys.
+                      const refreshed = yield* pricing.repriceForPayment({
+                        ...state,
+                        bookedAt: PayState.bookedAt(state),
+                        dotyposCustomerId,
+                        locale,
+                      });
+                      const refreshedSummary = refreshed.summary;
+                      const changedKeys = getCheckoutSummaryChangedKeys(
+                        PayState.summary(state),
+                        refreshedSummary
+                      );
+                      const refreshedCheckoutDetails = getCheckoutDetails({
+                        locale,
+                        priced: refreshed,
+                        legalEvidence,
+                      });
+                      yield* dotypos.updateReservation({
+                        reservationId: dotyposReservationId,
+                        note: formatWorkspaceReservationNote({
+                          paymentOrderId: reservation.id,
+                          checkoutDetails: refreshedCheckoutDetails,
+                          reservation: refreshedCheckoutDetails.reservation,
+                        }),
+                      });
+                      const priceReviewPayState =
+                        yield* reissuePriceReviewPayState(checkout.state, {
+                          kind: "repriced",
+                          verdict: {
+                            status: "pricing_changed",
+                            priced: refreshed,
+                            changedKeys,
+                          },
+                        }).pipe(provideSealedStateKeys);
 
-                        return {
-                          status: "pricing_changed" as const,
-                          changedKeys,
-                          freshSummary: refreshedSummary,
-                          ...priceReviewPayState,
-                        };
-                      })
-                    )
-                  );
-                })
-              )
-              .pipe(
-                Effect.catchTag(
-                  "CustomerAccountAccessError",
-                  () =>
-                    new CheckoutError({
-                      code: "checkout_failed",
-                      message:
-                        "Reservation checkout is unavailable for this account.",
+                      return {
+                        status: "pricing_changed" as const,
+                        changedKeys,
+                        freshSummary: refreshedSummary,
+                        ...priceReviewPayState,
+                      };
                     })
-                )
-              );
-          },
-          (effect, input, locale) =>
-            effect.pipe(
-              Effect.scoped,
-              Effect.annotateLogs({
-                locale,
-                hasPayStateToken: input.payStateToken.length > 0,
-              }),
-              Effect.mapError(mapCheckoutFailure)
+                  )
+                );
+              })
             )
-        ),
+            .pipe(
+              Effect.catchTag(
+                "CustomerAccountAccessError",
+                () =>
+                  new CheckoutError({
+                    code: "checkout_failed",
+                    message:
+                      "Reservation checkout is unavailable for this account.",
+                  })
+              )
+            );
+        },
+        (effect, input, locale) =>
+          effect.pipe(
+            Effect.scoped,
+            Effect.annotateLogs({
+              locale,
+              hasPayStateToken: input.payStateToken.length > 0,
+            }),
+            Effect.mapError(mapCheckoutFailure)
+          )
+      );
+
+      return CheckoutService.of({
+        createHostedPaymentCheckout: (input, locale) =>
+          submitCheckout(input, locale).pipe(
+            Effect.map((result) =>
+              result.status === "qr_pending" ? paymentInProgress : result
+            )
+          ),
+        startReservationPayment: submitCheckout,
+        resumeReservationPayment: (input, locale) =>
+          resumePublicPayment(input, locale).pipe(
+            Effect.map((result) => result ?? paymentInProgress)
+          ),
       });
     })
   );

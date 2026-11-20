@@ -1,7 +1,5 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import { and, eq, inArray, notExists, sql } from "drizzle-orm";
-import { FioPollWake } from "../fio/fio-poll-wake.service";
-import type { QueueMessageSendError } from "@/shared/backend/queue/queue-publisher";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer } from "effect";
 import type { SqlError } from "effect/sql/SqlError";
@@ -9,11 +7,11 @@ import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
   discountApplications,
   discountCodeRedemptions,
+  latePaymentRecoveries,
+  paymentAttempts,
   referralInvitationClaims,
   reservationPaymentWindows,
   voucherRedemptions,
-  latePaymentRecoveries,
-  paymentAttempts,
   type WorkspaceReservationRow,
   workspaceReservations,
 } from "@/db/schema";
@@ -48,7 +46,9 @@ import {
   reservationIdForOrder,
   type WorkspaceReservationId,
 } from "@/features/reservation/persistence-contracts";
+import type { QueueMessageSendError } from "@/shared/backend/queue/queue-publisher";
 import { type Money, moneyEquals, moneyWithValue } from "@/shared/money/money";
+import { FioPollWake } from "../fio/fio-poll-wake.service";
 import type {
   PaymentProvider,
   RetriedPaymentAttempt,
@@ -653,7 +653,7 @@ export class PaymentLifecycleRepository extends Context.Service<
               snapshot,
               orderId: input.orderId,
               amount: input.amount,
-              locale: input.locale,
+              locale: snapshot.locale,
               reference: { type: "providerOrderId", id: providerOrderId },
             });
             const attempt = yield* insertPaymentAttempt({
@@ -688,11 +688,26 @@ export class PaymentLifecycleRepository extends Context.Service<
           input.provider === "nexi" &&
           !input.retriedAttempt
         ) {
-          return admitPublicAttempt({
-            ...input,
-            provider: "nexi",
-            publicPayment: input.publicPayment,
-          });
+          const { publicPayment, orderId, amount, locale, providerOrderId } =
+            input;
+          const payment = {
+            orderId,
+            amount,
+            locale,
+            providerOrderId,
+            provider: "nexi" as const,
+          };
+          if (publicPayment.useAcceptedCommitment) {
+            return admitPublicAttempt({ ...payment, publicPayment });
+          }
+          if (input.commitment && input.accountingSnapshot) {
+            return admitPublicAttempt({
+              ...payment,
+              publicPayment,
+              commitment: input.commitment,
+              accountingSnapshot: input.accountingSnapshot,
+            });
+          }
         }
         if (input.commitment && input.accountingSnapshot) {
           const { publicPayment: _publicPayment, ...legacy } = input;
