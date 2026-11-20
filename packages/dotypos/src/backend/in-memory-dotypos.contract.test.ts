@@ -215,7 +215,14 @@ describe("in-memory Dotypos agrees with Live on recorded response shapes", () =>
     const result = await agree(
       withService((service) => service.getReservation(reservationId("orphan")))
     );
-    expect(result).toHaveProperty("failure.request", "customer.get");
+    expect(result).toMatchObject({
+      failure: {
+        _tag: "DotyposRejected",
+        operation: "getReservation",
+        reason: "not-found",
+        request: "customer.get",
+      },
+    });
   });
 
   test("fails a missing reservation's status read as not found", async () => {
@@ -236,7 +243,7 @@ describe("in-memory Dotypos agrees with Live on recorded response shapes", () =>
           customerId("missing"),
         ])
       ),
-      (read) => [...read.keys()]
+      (read) => [...read.keys()].sort()
     );
     expect(result).toEqual({ value: ["customer-id", "deleted-customer"] });
   });
