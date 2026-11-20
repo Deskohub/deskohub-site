@@ -57,7 +57,7 @@ interface IFioPaymentSettlementRepository {
   ) => Effect.Effect<readonly FioPaymentSettlement[], DatabaseQueryError>;
   readonly listPendingDispatch: (input: {
     readonly accountKey: string;
-    readonly beforeId?: string;
+    readonly beforeId?: string | undefined;
   }) => Effect.Effect<readonly FioPaymentSettlement[], DatabaseQueryError>;
   readonly listForStaff: (input: {
     readonly kind: "unmatched" | "refund_required";

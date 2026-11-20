@@ -112,7 +112,7 @@ export class FioPaymentSettlementService extends Context.Service<
         while (true) {
           const page = yield* settlements.listPendingDispatch({
             accountKey,
-            ...(beforeId === undefined ? {} : { beforeId }),
+            beforeId,
           });
           const oldest = page.at(-1);
           if (!oldest) return;
