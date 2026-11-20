@@ -496,31 +496,32 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 paymentReturnTarget: input.returnTarget,
               });
             }),
-            details: {
-              commitment: input.commitment,
-              accountingSnapshot: input.accountingSnapshot,
-            },
-            ...(fio &&
-              lifecycle &&
-              !retriedAttempt && {
-                admitProvider: ({
-                  provider,
-                  providerOrderId,
-                }: {
-                  readonly provider: "nexi" | "mock";
-                  readonly providerOrderId: string;
-                }) =>
-                  lifecycle.createPendingProviderAttempt({
-                    orderId,
-                    amount: input.total,
-                    locale: input.locale,
-                    commitment: input.commitment,
-                    accountingSnapshot: input.accountingSnapshot,
+            ...(fio && lifecycle && !retriedAttempt
+              ? {
+                  admitProvider: ({
                     provider,
                     providerOrderId,
-                    publicPayment: fio,
-                  }),
-              }),
+                  }: {
+                    readonly provider: "nexi" | "mock";
+                    readonly providerOrderId: string;
+                  }) =>
+                    lifecycle.createPendingProviderAttempt({
+                      orderId,
+                      amount: input.total,
+                      locale: input.locale,
+                      commitment: input.commitment,
+                      accountingSnapshot: input.accountingSnapshot,
+                      provider,
+                      providerOrderId,
+                      publicPayment: fio,
+                    }),
+                }
+              : {
+                  details: {
+                    commitment: input.commitment,
+                    accountingSnapshot: input.accountingSnapshot,
+                  },
+                }),
           }).pipe(providePaymentSession);
           const { attachedAttempt, hostedPaymentPage } = session;
           if ("reused" in session) {
@@ -688,6 +689,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
         readonly reservation: WorkspaceReservation;
         readonly state: SignedPayState;
         readonly locale: Locale;
+        readonly method?: PublicPaymentChoice["method"];
         readonly returnTarget: PaymentReturnTarget | undefined;
       };
 
@@ -700,6 +702,9 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
       ) {
         const paidResult = yield* findPaidOrderResult(input);
         if (paidResult) return paidResult;
+        if (input.method === "qr" && input.reservation.activePaymentAttemptId) {
+          return paymentInProgress;
+        }
         // Shared-window attempts are only reopened through the method-aware
         // path, including when a stale Pay form omits the payment method.
         if (
@@ -1054,7 +1059,17 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           }
 
           const checkout = yield* payableCheckout
-            .open({ payStateToken: input.payStateToken, page: { locale } })
+            .open({
+              payStateToken: input.payStateToken,
+              page: { locale },
+              blockPaymentRetry:
+                !input.method && qrPayments
+                  ? (reservationId) =>
+                      qrPayments
+                        .findPaymentWindow(reservationOrderId(reservationId))
+                        .pipe(Effect.map((window) => window !== null))
+                  : undefined,
+            })
             .pipe(
               Effect.catchTags({
                 PayStateTokenError: (cause) =>
@@ -1093,6 +1108,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
           }
 
           const progressResult = yield* findReservationProgressResult({
+            method: input.method,
             reservation,
             state,
             locale,
@@ -1181,6 +1197,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
                 }
                 const lockedProgressResult =
                   yield* findReservationProgressResult({
+                    method: input.method,
                     reservation: lockedReservation,
                     state,
                     locale,

@@ -31,6 +31,7 @@ import {
   type CustomerAccountId,
   customerAccountIdSchema,
 } from "@/features/account/customer-account";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { buildCoworkReservationQuote } from "@/features/checkout/checkout-quote.test-utils";
 import type { CheckoutSummaryChangedKeys } from "@/features/checkout/checkout-summary";
 import type { PaymentReturnTarget } from "@/features/checkout/payment-return-target";
@@ -277,6 +278,7 @@ const buildPayStateToken = (input: {
   readonly issuedAt?: Temporal.Instant;
   /** Seals it as a token issued before Pay states signed the hold deadline. */
   readonly withoutHoldExpiry?: true;
+  readonly retriedAttemptId?: string;
 }) =>
   Effect.runSync(
     Effect.gen(function* () {
@@ -300,8 +302,20 @@ const buildPayStateToken = (input: {
         },
         { issuedAt: input.issuedAt }
       );
+      const boundState = input.retriedAttemptId
+        ? {
+            ...state,
+            binding: "order" as const,
+            checkoutSessionId: undefined,
+            retriedAttemptId: paymentAttemptIdSchema.make(
+              input.retriedAttemptId
+            ),
+          }
+        : state;
       return yield* sealPayState(
-        input.withoutHoldExpiry ? withoutPayStateHoldExpiry(state) : state
+        input.withoutHoldExpiry
+          ? withoutPayStateHoldExpiry(boundState)
+          : boundState
       );
     }).pipe(Effect.provide(TestSealedStateKeys))
   );
@@ -585,6 +599,7 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly resumePayment?: "card" | "qr";
   readonly concurrentCardAdmission?: boolean;
   readonly sharedWindow?: "visible" | "under_account_lock";
+  readonly useRealPayableCheckout?: boolean;
   readonly resumeNow?: Temporal.Instant;
   readonly publicPaymentExpiresAt?: Temporal.Instant;
   readonly observePaymentPage?: () => Effect.Effect<PaymentPageProviderObservation>;
@@ -599,6 +614,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
 ) => {
   const locale = options.locale ?? "en-US";
   const { CheckoutService } = await import("./checkout.service");
+  const { PayableCheckout } = await import("./payable-checkout.service");
   const { PayableCheckoutMock } = await import(
     "./payable-checkout.service.mock"
   );
@@ -658,6 +674,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   const fulfillPaidOrder = options.run ?? mock(() => Effect.void);
   const analytics = recordCheckoutAnalytics();
   const recordLegalEvidence = mock((_input: readonly unknown[]) => Effect.void);
+  const findNewestAttempt = mock(() => Effect.succeed(null));
   const findAttempt = mock(() => Effect.succeed(options.activeAttempt ?? null));
   const attachHostedPaymentPage = mock(() => Effect.succeed(attachedAttempt));
   const markTerminalForReservation = mock(() =>
@@ -674,6 +691,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
   );
   const paymentAttempts = {
     findById: findAttempt,
+    findNewestForReservation: findNewestAttempt,
     findByProviderOrderId: mock(() => Effect.succeed(null)),
     findDisplayableForReservation: mock(() => Effect.succeed(null)),
   } satisfies PaymentAttemptRepositoryType;
@@ -846,9 +864,6 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
               Layer.provide(Layer.mock(NexiService, nexi))
             ),
             Layer.mock(WorkspaceReservationRepository, reservations),
-            PayableCheckoutMock(confirm).pipe(
-              Layer.provide(TestSealedStateKeys)
-            ),
             Layer.mock(PaymentAttemptRepository, paymentAttempts),
             Layer.mock(QrPaymentRepository, {
               findPaymentWindow: () =>
@@ -899,7 +914,12 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
               recordMany: recordLegalEvidence,
             }),
             TestSealedStateKeys
-          ).pipe(withReservationPaymentHandlers)
+          ).pipe(withReservationPaymentHandlers, (services) =>
+            (options.useRealPayableCheckout
+              ? PayableCheckout.Default
+              : PayableCheckoutMock(confirm)
+            ).pipe(Layer.provideMerge(services))
+          )
         )
       )
     )
@@ -915,6 +935,7 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
     affirm,
     createPendingProviderAttempt,
     completeInternalPayment,
+    findNewestAttempt,
     findAttempt,
     attachHostedPaymentPage,
     markTerminalForReservation,
@@ -1150,6 +1171,64 @@ describe("CheckoutService", () => {
     expect(harness.rereadUnderAccountLock).toEqual([true]);
     expect(harness.findAttempt).toHaveBeenCalledTimes(0);
     expect(harness.observePaymentPage).toHaveBeenCalledTimes(0);
+    expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+  });
+
+  test.each(["at entry", "under the account lock"] as const)(
+    "a QR selection never opens a pre-release card attempt found %s",
+    async (discovery) => {
+      const orderId = "qr-on-existing-legacy-card";
+      const attempt = makeAttempt({
+        orderId,
+        id: "existing-legacy-card",
+        state: "pending",
+        securityToken: "stored-card-token",
+        providerRedirectUrl: "https://payments.example/pre-release-card",
+      });
+      const pending = {
+        paymentState: "pending",
+        activePaymentAttemptId: attempt.id,
+      };
+      const harness = await createCheckoutHarness({
+        orderId,
+        startPayment: {
+          method: "qr",
+          fio: { accountKey: "receiving-account" },
+        },
+        activeAttempt: attempt,
+        reservationOverrides: discovery === "at entry" ? pending : undefined,
+        lockedReservationOverrides:
+          discovery === "under the account lock" ? pending : undefined,
+      });
+
+      expect(await Effect.runPromise(harness.effect)).toEqual({
+        status: "in_progress",
+      });
+      expect(harness.observePaymentPage).toHaveBeenCalledTimes(0);
+      expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
+    }
+  );
+
+  test("a real order-bound retry token with a shared window reads no payment attempt", async () => {
+    const orderId = "shared-signed-retry";
+    const harness = await createCheckoutHarness({
+      orderId,
+      sharedWindow: "visible",
+      useRealPayableCheckout: true,
+      payStateToken: buildPayStateToken({
+        orderId,
+        retriedAttemptId: "synthetic-retried-attempt",
+      }),
+      reservationOverrides: { paymentState: "expired" },
+    });
+
+    expect(await Effect.runPromise(harness.effect)).toEqual({
+      status: "in_progress",
+    });
+    expect(harness.findNewestAttempt).toHaveBeenCalledTimes(0);
+    expect(harness.findAttempt).toHaveBeenCalledTimes(0);
+    expect(harness.observePaymentPage).toHaveBeenCalledTimes(0);
+    expect(harness.createPendingProviderAttempt).toHaveBeenCalledTimes(0);
     expect(harness.createHostedPaymentPage).toHaveBeenCalledTimes(0);
   });
 
