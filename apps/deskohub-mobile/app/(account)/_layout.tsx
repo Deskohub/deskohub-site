@@ -43,6 +43,7 @@ export default function AccountLayout() {
     <CustomerDataProvider
       accountId={accountId}
       sessionStartedAt={sessionStartedAt}
+      sessionId={session.status === "signed-in" ? session.sessionId : undefined}
     >
       <AccountConsentSyncRoot accountId={accountId} />
       <ReservationsRefreshRoot />

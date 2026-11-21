@@ -16,6 +16,7 @@ import type { CustomerDataServices } from "../customer-data-runtime";
 import {
   Clipboard,
   type DeviceCapabilities,
+  DeviceOnboardingDraft,
   DeviceStorage,
   ImageLibrary,
   type PickedImage,
@@ -32,6 +33,7 @@ import {
 /** What the fake device capabilities recorded, for assertions. */
 export interface FakeDevice {
   readonly storage: Map<string, string>;
+  onboardingDraft: Effect.Success<DeviceOnboardingDraft["Service"]["read"]>;
   readonly files: Map<string, Uint8Array>;
   readonly sharedFiles: Array<{
     readonly uri: string;
@@ -54,6 +56,7 @@ export interface FakeDevice {
 
 export const makeFakeDevice = (): FakeDevice => ({
   storage: new Map(),
+  onboardingDraft: Option.none(),
   files: new Map(),
   sharedFiles: [],
   sharedLinks: [],
@@ -72,6 +75,16 @@ export const fakeDeviceCapabilities = (
   device: FakeDevice
 ): Layer.Layer<DeviceCapabilities> =>
   Layer.mergeAll(
+    Layer.succeed(DeviceOnboardingDraft, {
+      read: Effect.sync(() => device.onboardingDraft),
+      write: (entry) =>
+        Effect.sync(() => {
+          device.onboardingDraft = Option.some(entry);
+        }),
+      clear: Effect.sync(() => {
+        device.onboardingDraft = Option.none();
+      }),
+    }),
     Layer.succeed(DeviceStorage, {
       getItem: (key) =>
         Effect.sync(() => Option.fromNullishOr(device.storage.get(key))),
@@ -157,6 +170,9 @@ export const fakeCustomerDataLayer = ({
   device,
   fence = Layer.sync(AccountExitFence, makeAccountExitFence),
   session = {},
+  onboardingSession,
+  confirmOnboardingSession,
+  capabilities = fakeDeviceCapabilities(device),
 }: {
   readonly workspace: FakeWorkspace;
   readonly device: FakeDevice;
@@ -164,6 +180,9 @@ export const fakeCustomerDataLayer = ({
   readonly fence?: Layer.Layer<AccountExitFence>;
   /** Another account or sign-in than the workspace's own, started at 0. */
   readonly session?: Partial<AccountSession>;
+  readonly onboardingSession?: CustomerAccountScope["Service"]["onboardingSession"];
+  readonly confirmOnboardingSession?: CustomerAccountScope["Service"]["confirmOnboardingSession"];
+  readonly capabilities?: Layer.Layer<DeviceCapabilities>;
 }): Layer.Layer<CustomerDataServices> =>
   Layer.mergeAll(
     fakeCustomerApiLayer(workspace),
@@ -173,13 +192,17 @@ export const fakeCustomerDataLayer = ({
         device.sessionChecks += 1;
       }),
     }),
-    accountDeviceLayer(fakeDeviceCapabilities(device), fence).pipe(
+    accountDeviceLayer(capabilities, fence).pipe(
       Layer.provideMerge(
         Layer.succeed(CustomerAccountScope, {
           accountId: workspace.data.accountId,
           apiOrigin: fakeWorkspaceOrigin,
           sessionStartedAt: 0,
           ...session,
+          ...(onboardingSession === undefined ? {} : { onboardingSession }),
+          ...(confirmOnboardingSession === undefined
+            ? {}
+            : { confirmOnboardingSession }),
         })
       )
     )
