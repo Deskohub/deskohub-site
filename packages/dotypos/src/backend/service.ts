@@ -720,7 +720,7 @@ const decodeReservationInstant = Schema.decodeOption(
 const sameReservationInstant = (read: string, expected: Date) =>
   Option.exists(
     decodeReservationInstant(read),
-    (microseconds) => microseconds === BigInt(expected.getTime()) * 1000n
+    (microseconds) => microseconds === BigInt(expected.getTime()) * BigInt(1000)
   );
 
 /** A conditional status change may act only on its booking and marker. */
