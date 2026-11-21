@@ -16,12 +16,13 @@ import { withWorkspaceRequestContext } from "@/shared/backend/workspace-request-
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import type { UnlimitedAccessView } from "../unlimited-access";
 import { getUnlimitedPassAccessDay } from "../unlimited-pass-period";
+import { openUnlimitedAccessCookie } from "./unlimited-access-capability";
 
 const noPass = { state: "not-found" } as const;
 
 const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   orderId: OrderId,
-  accountId: CustomerAccountId
+  isHolder: (accountId: CustomerAccountId) => boolean
 ) {
   const { db } = yield* WorkspaceDatabase;
   const requestedDate = getCurrentWorkspaceDate(yield* currentInstant);
@@ -32,6 +33,7 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
       validFrom: passPurchases.validFrom,
       validUntil: passPurchases.validUntil,
       accessEndsOn: passPurchases.accessEndsOn,
+      holderAccountId: passPurchases.holderAccountId,
       reservation: {
         id: workspaceReservations.id,
         dotyposId: workspaceReservations.dotyposReservationId,
@@ -55,9 +57,8 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
       and(
         eq(passPurchases.id, orderId),
         eq(passPurchases.product, "unlimited"),
-        eq(passPurchases.holderAccountId, accountId),
         or(
-          eq(passPurchases.buyerAccountId, accountId),
+          eq(passPurchases.buyerAccountId, passPurchases.holderAccountId),
           isNotNull(passPurchases.giftClaimedAt)
         )
       )
@@ -66,6 +67,7 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
 
   if (
     !access ||
+    !isHolder(access.holderAccountId) ||
     access.status === "pending_payment" ||
     access.status === "void"
   )
@@ -116,6 +118,7 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
     reservationId: reservation.id,
     dotyposId: reservation.dotyposId,
     tableId: reservation.tableId,
+    holderAccountId: access.holderAccountId,
   } as const;
 });
 
@@ -133,7 +136,8 @@ const isSamePassDay = (expected: OpenAccessDay, actual: OpenAccessDay) =>
 
 export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
   function* (
-    orderId: OrderId
+    orderId: OrderId,
+    accessCookie?: string
   ): Effect.fn.Return<
     UnlimitedAccessView | typeof noPass | { readonly state: "sign-in" },
     Effect.Error<ReturnType<typeof readPassAccess>>,
@@ -144,7 +148,11 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
   > {
     const account = yield* CurrentCustomerAccount;
     const session = yield* Effect.result(account.requireActive);
-    if (Result.isFailure(session)) {
+    const capability = accessCookie
+      ? yield* Effect.option(openUnlimitedAccessCookie(orderId, accessCookie))
+      : Option.none();
+    const allowsHolder = Option.getOrUndefined(capability);
+    if (Result.isFailure(session) && !allowsHolder) {
       if (session.failure.reason !== "unauthenticated") return noPass;
       const { db } = yield* WorkspaceDatabase;
       const [candidate] = yield* db
@@ -160,9 +168,17 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
       return candidate ? { state: "sign-in" } : noPass;
     }
 
-    const { accountId } = session.success;
-    const access = yield* readPassAccess(orderId, accountId);
+    const accountId = Result.isSuccess(session)
+      ? session.success.accountId
+      : undefined;
+    const access = yield* readPassAccess(
+      orderId,
+      (holderId) => holderId === accountId || allowsHolder?.(holderId) === true
+    );
     if (access.state !== "open") return access;
+    const stillHolder = (holderId: CustomerAccountId) =>
+      holderId === access.holderAccountId &&
+      (holderId === accountId || allowsHolder?.(holderId) === true);
 
     const dotypos = yield* DotyposService;
     const record = yield* dotypos
@@ -192,7 +208,7 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
           );
 
     // Time and entitlement can change while the venue reads are in flight.
-    const latest = yield* readPassAccess(orderId, accountId);
+    const latest = yield* readPassAccess(orderId, stillHolder);
     if (latest.state !== "open") return latest;
     if (!matchesBooking || !isSamePassDay(access, latest)) {
       return { ...latest.view, state: "retry" };
@@ -212,11 +228,17 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
         Effect.option
       );
 
-    const settledAccount = yield* Effect.option(account.requireActive);
-    if (Option.getOrUndefined(settledAccount)?.accountId !== accountId) {
-      return noPass;
-    }
-    const settled = yield* readPassAccess(orderId, accountId);
+    const settledAccount =
+      accountId === access.holderAccountId
+        ? yield* Effect.option(account.requireActive)
+        : Option.none();
+    const settledAccountId = Option.getOrUndefined(settledAccount)?.accountId;
+    const settled = yield* readPassAccess(
+      orderId,
+      (holderId) =>
+        holderId === access.holderAccountId &&
+        (holderId === settledAccountId || allowsHolder?.(holderId) === true)
+    );
     if (settled.state !== "open") return settled;
     if (!isSamePassDay(access, settled) || Option.isNone(issued)) {
       return { ...settled.view, state: "retry" };
@@ -234,9 +256,10 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
 
 export const loadUnlimitedAccessPage = (
   orderId: OrderId,
-  requestHeaders: Headers
+  requestHeaders: Headers,
+  accessCookie: string | undefined
 ) =>
-  loadUnlimitedAccess(orderId).pipe(
+  loadUnlimitedAccess(orderId, accessCookie).pipe(
     Effect.provide(
       Layer.mergeAll(
         WorkspaceDatabase.Default,
