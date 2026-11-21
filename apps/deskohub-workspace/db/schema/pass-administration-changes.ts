@@ -42,6 +42,7 @@ export const passAdministrationChanges = pgTable(
     change: jsonb("change").notNull().$type<PassChange>(),
     requestedAt: instant("requested_at").notNull(),
     lastAttemptAt: instant("last_attempt_at"),
+    holdRollbackAt: instant("hold_rollback_at"),
     transferProgress: jsonb("transfer_progress").$type<PassTransferProgress>(),
     completedAt: instant("completed_at"),
     failedAt: instant("failed_at"),
@@ -51,7 +52,9 @@ export const passAdministrationChanges = pgTable(
       "pass_administration_changes_result_check",
       sql`num_nonnulls(${t.completedAt}, ${t.failedAt}) <= 1
         and (${t.completedAt} is null or ${t.completedAt} >= ${t.requestedAt})
-        and (${t.failedAt} is null or ${t.failedAt} >= ${t.requestedAt})`
+        and (${t.failedAt} is null or ${t.failedAt} >= ${t.requestedAt})
+        and (${t.holdRollbackAt} is null or
+          (${t.completedAt} is null and ${t.holdRollbackAt} >= ${t.requestedAt}))`
     ),
     index("pass_administration_changes_pass_requested_idx").on(
       t.passId,

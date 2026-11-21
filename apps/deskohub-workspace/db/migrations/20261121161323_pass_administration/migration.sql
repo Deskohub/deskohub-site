@@ -7,12 +7,15 @@ CREATE TABLE "pass_administration_changes" (
 	"change" jsonb NOT NULL,
 	"requested_at" timestamp with time zone NOT NULL,
 	"last_attempt_at" timestamp with time zone,
+	"hold_rollback_at" timestamp with time zone,
 	"transfer_progress" jsonb,
 	"completed_at" timestamp with time zone,
 	"failed_at" timestamp with time zone,
 	CONSTRAINT "pass_administration_changes_result_check" CHECK (num_nonnulls("completed_at", "failed_at") <= 1
         and ("completed_at" is null or "completed_at" >= "requested_at")
-        and ("failed_at" is null or "failed_at" >= "requested_at"))
+        and ("failed_at" is null or "failed_at" >= "requested_at")
+        and ("hold_rollback_at" is null or
+          ("completed_at" is null and "hold_rollback_at" >= "requested_at")))
 );
 --> statement-breakpoint
 ALTER TABLE "entry_pack_gift_invitations" ADD COLUMN "first_generation" integer DEFAULT 0 NOT NULL;--> statement-breakpoint

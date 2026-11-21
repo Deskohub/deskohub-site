@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   DotyposService,
   DotyposTableSchema,
@@ -9,13 +9,20 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Result, Schema } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { ReservationAdministrationService } from "@/features/administration/reservation-administration.service";
+import { ReservationRestorationService } from "@/features/administration/reservation-restoration.service";
 import { CurrentAdministrator } from "@/features/administrators/backend/current-administrator";
+import { WorkspaceReservationEmailService } from "@/features/checkout/backend/fulfillment/workspace-reservation-email.service";
+import { PaymentRefundService } from "@/features/checkout/backend/payment/payment-refund.service";
+import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
 import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
+import { ReservationAccessService } from "@/features/reservation-access";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
@@ -39,7 +46,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     const recipient = customerAccountIdSchema.make(crypto.randomUUID());
     const date = plainDateStringSchema.make;
 
-    beforeAll(async () => {
+    beforeEach(async () => {
       database = (await createWorkspacePostgresSuiteDatabase(
         "pass_administration"
       ))!;
@@ -59,7 +66,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
     });
 
-    afterAll(async () => database?.close());
+    afterEach(async () => database?.close());
 
     const run = (effect, provider = makeInMemoryDotypos({})) =>
       Effect.runPromise(
@@ -247,6 +254,110 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(kept.completedAt).not.toBeNull();
     });
 
+    test("cancels a future pack-funded booking exactly once and refuses ordinary restoration", async () => {
+      const { passId, attemptId } = await seedPack();
+      const reservation = await Effect.runPromise(
+        workspaceFixtures(database.db).reservation({
+          stage: {
+            reservation: "confirmed",
+            payment: "paid",
+            fulfillment: "fulfilled",
+          },
+          author: holder,
+        })
+      );
+      await database.pool.query(
+        "insert into pass_entry_claims (reservation_id, pass_id, date, status) values ($1,$2,'2099-07-30','consumed')",
+        [reservation.id, passId]
+      );
+      const cancel = mock(({ reservationId }) =>
+        Effect.promise(async () => {
+          await database.pool.query(
+            "update workspace_reservations set reservation_state='cancelled', reservation_cancelled_at=now() where id=$1",
+            [reservationId]
+          );
+          return {
+            outcome: "cancelled" as const,
+            email: "not_requested" as const,
+            invoice: null,
+          };
+        })
+      );
+      const request = {
+        passId,
+        requestId: crypto.randomUUID(),
+        reason: "Fixture cancel whole pass",
+        change: {
+          _tag: "cancel" as const,
+          expectedValidUntil: date("2099-08-01"),
+          refundValue: 25_000,
+          sendCancellationEmail: false,
+        },
+      };
+      const complete = () =>
+        run(
+          applyPackAdjustment(request).pipe(
+            Effect.flatMap(completePassChange),
+            Effect.provide(
+              Layer.mock(ReservationAdministrationService, { cancel })
+            )
+          )
+        );
+      const completed = await complete();
+      expect(completed.completedAt).not.toBeNull();
+      expect((await complete()).completedAt).toEqual(completed.completedAt);
+      expect(cancel).toHaveBeenCalledTimes(1);
+
+      const restore = await run(
+        ReservationRestorationService.use((service) =>
+          Effect.result(
+            service.restore({
+              reservationId: reservation.id,
+              acknowledgeRefundedPayment: false,
+              sendRestorationEmail: false,
+            })
+          )
+        ).pipe(
+          Effect.provide(
+            ReservationRestorationService.Default.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.mock(ReservationAccessService, {}),
+                  Layer.mock(AccountingDocumentSnapshots, {}),
+                  Layer.mock(DotyposService, {}),
+                  Layer.mock(WorkspaceReservationEmailService, {}),
+                  Layer.mock(PaymentRefundService, {}),
+                  Layer.mock(WorkspaceReservationService, {}),
+                  Layer.mock(WorkspaceTableAssignmentService, {})
+                )
+              )
+            )
+          )
+        )
+      );
+      if (!Result.isFailure(restore))
+        throw new Error("Restoration was accepted");
+      expect(restore.failure.reason).toBe("invalid_state");
+      const recorded = await database.pool.query(
+        `select workspace_reservations.reservation_state,
+                pass_entry_claims.status as claim_status,
+                payment_attempts.refund_state, payment_attempts.refund_target_value
+         from workspace_reservations
+         join pass_entry_claims on pass_entry_claims.reservation_id=workspace_reservations.id
+         join payment_attempts on payment_attempts.id=$2
+         where workspace_reservations.id=$1`,
+        [reservation.id, attemptId]
+      );
+      expect(recorded.rows).toEqual([
+        {
+          reservation_state: "cancelled",
+          claim_status: "released",
+          refund_state: "required",
+          refund_target_value: 25_000,
+        },
+      ]);
+    });
+
     test("reassignment rotates invitation identity and holder capability versions", async () => {
       const { passId } = await seedPack();
       const reassign = (previous, next, version) =>
@@ -329,6 +440,150 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         },
       ]);
     });
+
+    test.each(["grant", "extension"] as const)(
+      "releases only newly confirmed Unlimited days after the holder disappears during %s",
+      async (operation) => {
+        const extending = operation === "extension";
+        const table = Schema.decodeUnknownSync(DotyposTableSchema)({
+          id: extending ? "4151" : "4152",
+          _cloudId: "1",
+          display: true,
+          enabled: true,
+          name: "Synthetic rollback desk",
+          seats: "1",
+          tags: ["cowork:reserved-desk"],
+        });
+        const provider = makeInMemoryDotypos({ tables: [table] });
+        const passId = orderIdSchema.make(crypto.randomUUID());
+        const holderAccountId = customerAccountIdSchema.make(
+          crypto.randomUUID()
+        );
+        const customerId = extending ? "4153" : "4154";
+        await database.pool.query(
+          "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
+          [holderAccountId, customerId]
+        );
+        await database.pool.query(
+          `insert into auth."user" (id, email, name, email_verified, created_at, updated_at)
+            values ($1, $2, 'Synthetic rollback holder', true, now(), now())`,
+          [holderAccountId, testEmailAddress(`pass-rollback-${operation}`)]
+        );
+        const start = getWorkspaceDate(Temporal.Now.instant()).add({
+          days: extending ? 75 : 40,
+        });
+        const originalEnd = date(start.add({ days: 30 }).toString());
+        const grant = await run(
+          grantPass(
+            {
+              passId,
+              requestId: passId,
+              reason: "Fixture grant before rollback",
+              change: {
+                _tag: "grant",
+                holderAccountId,
+                selection: {
+                  tier: "reserved-desk",
+                  startDate: date(start.toString()),
+                },
+              },
+            },
+            "en-US"
+          ),
+          provider
+        );
+        const change = extending
+          ? await run(
+              completePassChange(grant).pipe(
+                Effect.andThen(
+                  beginUnlimitedPassChange({
+                    passId,
+                    requestId: crypto.randomUUID(),
+                    reason: "Fixture extension before rollback",
+                    change: {
+                      _tag: "validity",
+                      lastDay: date(start.add({ days: 31 }).toString()),
+                      expectedValidUntil: originalEnd,
+                      refundValue: 0,
+                    },
+                  })
+                )
+              ),
+              provider
+            )
+          : grant;
+        const service = await run(DotyposService, provider);
+        let cancelAvailable = false;
+        const confirmAttempts: string[] = [];
+        const interrupted = {
+          layer: Layer.succeed(DotyposService, {
+            ...service,
+            setReservationStatusIfMatches: (input) => {
+              if (input.status === "CANCELLED") {
+                return cancelAvailable
+                  ? service.setReservationStatusIfMatches(input)
+                  : Effect.fail(
+                      new DotyposVersionConflict({
+                        operation: "setReservationStatusIfMatches",
+                        message: "Fixture rollback was interrupted",
+                      })
+                    );
+              }
+              return service.setReservationStatusIfMatches(input).pipe(
+                Effect.tap(() =>
+                  Effect.promise(async () => {
+                    confirmAttempts.push(input.reservationId);
+                    if (confirmAttempts.length === 1) {
+                      await database.pool.query(
+                        "update customer_accounts set deleted_at=now(), dotypos_customer_id=null where id=$1",
+                        [holderAccountId]
+                      );
+                    }
+                  })
+                )
+              );
+            },
+          }),
+        };
+        const pending = await run(completePassChange(change), interrupted);
+        expect(pending.failedAt).toBeNull();
+        const staged = await database.pool.query(
+          "select hold_rollback_at from pass_administration_changes where request_id=$1",
+          [change.requestId]
+        );
+        expect(staged.rows[0]?.hold_rollback_at).not.toBeNull();
+        const expectedRemoved = extending ? 2 : 30;
+        expect(confirmAttempts).toHaveLength(expectedRemoved);
+
+        cancelAvailable = true;
+        const rolledBack = await run(completePassChange(change), interrupted);
+        expect(rolledBack.failedAt).not.toBeNull();
+        expect(
+          (await run(completePassChange(change), interrupted)).failedAt
+        ).toEqual(rolledBack.failedAt);
+        expect(confirmAttempts).toHaveLength(expectedRemoved);
+        const pass = await database.pool.query(
+          `select pass_purchases.status, valid_until::text, fulfillment_state
+            from pass_purchases join orders using (id) where id=$1`,
+          [passId]
+        );
+        expect(pass.rows[0]).toEqual({
+          status: extending ? "active" : "void",
+          valid_until: originalEnd,
+          fulfillment_state: extending ? "fulfilled" : "failed",
+        });
+        const holds = await database.pool.query(
+          "select reservation_state from workspace_reservations where pass_id=$1 order by service_date",
+          [passId]
+        );
+        expect(
+          holds.rows.map(({ reservation_state }) => reservation_state)
+        ).toEqual([
+          ...Array.from({ length: extending ? 30 : 0 }, () => "confirmed"),
+          ...Array.from({ length: expectedRemoved }, () => "cancelled"),
+        ]);
+      }
+    );
 
     test("Unlimited grant, shortening and re-extension settle marked days without duplicating provider holds", async () => {
       const table = Schema.decodeUnknownSync(DotyposTableSchema)({

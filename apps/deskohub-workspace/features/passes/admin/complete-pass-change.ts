@@ -311,6 +311,45 @@ const transferPassDays = Effect.fn("transferPassDays")(function* (
   );
 });
 
+const rollbackPassChangeHolds = Effect.fn("rollbackPassChangeHolds")(function* (
+  record: ChangeRecord,
+  purchase: Purchase,
+  range: DayRange,
+  grant: boolean
+) {
+  const { db, transaction } = yield* WorkspaceDatabase;
+  const now = yield* currentInstant;
+  // Persist the decision before cancelling a provider booking. A retry must
+  // keep releasing the selected days even if the original refusal clears.
+  if (!record.holdRollbackAt) {
+    yield* db
+      .update(passAdministrationChanges)
+      .set({ holdRollbackAt: now })
+      .where(eq(passAdministrationChanges.requestId, record.requestId));
+  }
+  if (!(yield* releasePassChangeDays(purchase, range))) return record;
+  return yield* transaction(
+    Effect.gen(function* () {
+      if (grant) {
+        yield* db
+          .update(passPurchases)
+          .set({ status: "void" })
+          .where(eq(passPurchases.id, record.passId));
+        yield* db
+          .update(orders)
+          .set({
+            fulfillmentState: "failed",
+            fulfillmentFailedAt: now,
+            fulfillmentFailureCode: "admin_pass_days_unavailable",
+            updatedAt: now,
+          })
+          .where(eq(orders.id, record.passId));
+      }
+      return yield* finishPassChange(record, "failed");
+    })
+  );
+});
+
 const confirmPassChangeDays = Effect.fn("confirmPassChangeDays")(function* (
   record: ChangeRecord,
   purchase: Purchase,
@@ -319,6 +358,9 @@ const confirmPassChangeDays = Effect.fn("confirmPassChangeDays")(function* (
   grant: boolean
 ) {
   const { db, transaction } = yield* WorkspaceDatabase;
+  if (record.holdRollbackAt) {
+    return yield* rollbackPassChangeHolds(record, purchase, range, grant);
+  }
   const failure = yield* attemptUnlimitedPassHolds(purchase, range);
   const confirmed = failure
     ? false
@@ -355,28 +397,9 @@ const confirmPassChangeDays = Effect.fn("confirmPassChangeDays")(function* (
         (day.reservationHoldExpiresAt &&
           Temporal.Instant.compare(now, day.reservationHoldExpiresAt) >= 0)
     );
-    if (!shouldRelease || !(yield* releasePassChangeDays(purchase, range)))
-      return record;
-    return yield* transaction(
-      Effect.gen(function* () {
-        if (grant) {
-          yield* db
-            .update(passPurchases)
-            .set({ status: "void" })
-            .where(eq(passPurchases.id, record.passId));
-          yield* db
-            .update(orders)
-            .set({
-              fulfillmentState: "failed",
-              fulfillmentFailedAt: now,
-              fulfillmentFailureCode: "admin_pass_days_unavailable",
-              updatedAt: now,
-            })
-            .where(eq(orders.id, record.passId));
-        }
-        return yield* finishPassChange(record, "failed");
-      })
-    );
+    return shouldRelease
+      ? yield* rollbackPassChangeHolds(record, purchase, range, grant)
+      : record;
   }
   return yield* transaction(
     Effect.gen(function* () {
@@ -418,6 +441,10 @@ const confirmPassChangeDays = Effect.fn("confirmPassChangeDays")(function* (
       }
       return yield* finishPassChange(record, "completed");
     })
+  ).pipe(
+    Effect.catchTag("UnlimitedPassAdmissionError", () =>
+      rollbackPassChangeHolds(record, purchase, range, grant)
+    )
   );
 });
 

@@ -202,8 +202,8 @@ export function AdministrationCustomerDetail({
 }
 
 /**
- * The customer detail when Dotypos can't show the customer or the discount
- * sections can't load: the Workspace reservation history alone.
+ * Workspace activity remains available when the customer profile or discount
+ * sections cannot load.
  */
 function UnavailableCustomerDetail({
   activity,

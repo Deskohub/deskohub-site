@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "6e9da0c4-9e86-49a5-acfc-c1d804289f3c",
+  "id": "efbacdb1-fc6a-4bf0-b49d-9e122e603aaa",
   "prevIds": [
     "41c61144-ace4-43f4-8995-053cadc08306"
   ],
@@ -8007,6 +8007,19 @@
       "generated": null,
       "identity": null,
       "name": "last_attempt_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "hold_rollback_at",
       "entityType": "columns",
       "schema": "public",
       "table": "pass_administration_changes"
@@ -22552,7 +22565,7 @@
       "table": "orders"
     },
     {
-      "value": "num_nonnulls(\"completed_at\", \"failed_at\") <= 1\n        and (\"completed_at\" is null or \"completed_at\" >= \"requested_at\")\n        and (\"failed_at\" is null or \"failed_at\" >= \"requested_at\")",
+      "value": "num_nonnulls(\"completed_at\", \"failed_at\") <= 1\n        and (\"completed_at\" is null or \"completed_at\" >= \"requested_at\")\n        and (\"failed_at\" is null or \"failed_at\" >= \"requested_at\")\n        and (\"hold_rollback_at\" is null or\n          (\"completed_at\" is null and \"hold_rollback_at\" >= \"requested_at\"))",
       "name": "pass_administration_changes_result_check",
       "entityType": "checks",
       "schema": "public",
