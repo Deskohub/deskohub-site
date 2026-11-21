@@ -4,6 +4,7 @@ import { Effect, Layer, Option, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { passPurchases, workspaceReservations } from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import { hasVerifiedActiveLogin } from "@/features/account/backend/customer-account-by-email";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { OrderId } from "@/features/order";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
@@ -57,6 +58,7 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
       and(
         eq(passPurchases.id, orderId),
         eq(passPurchases.product, "unlimited"),
+        hasVerifiedActiveLogin(db, passPurchases.holderAccountId),
         or(
           eq(passPurchases.buyerAccountId, passPurchases.holderAccountId),
           isNotNull(passPurchases.giftClaimedAt)

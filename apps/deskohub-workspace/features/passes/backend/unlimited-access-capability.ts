@@ -107,7 +107,7 @@ export const exchangeUnlimitedAccessToken = Effect.fn(
   },
   options: ReservationAccessTokenOptions = {}
 ) {
-  const token = yield* Schema.decodeUnknownEffect(capabilityValue)(input.token);
+  const token = yield* Schema.decodeEffect(capabilityValue)(input.token);
   const secret = yield* getReservationAccessTokenSecret(options);
   const claims = yield* linkClaims.open(token, keys(secret));
   if (claims.orderId !== input.orderId || claims.locale !== input.locale) {
@@ -140,7 +140,7 @@ export const openUnlimitedAccessCookie = Effect.fn("passes.access.openCookie")(
     cookie: string,
     options: ReservationAccessTokenOptions = {}
   ) {
-    const value = yield* Schema.decodeUnknownEffect(capabilityValue)(cookie);
+    const value = yield* Schema.decodeEffect(capabilityValue)(cookie);
     const secret = yield* getReservationAccessTokenSecret(options);
     const claims = yield* cookieClaims.open(value, keys(secret));
     if (claims.orderId !== orderId || claims.expiresAt <= now(options)) {

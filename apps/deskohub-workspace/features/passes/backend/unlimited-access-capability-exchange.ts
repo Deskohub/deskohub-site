@@ -45,7 +45,7 @@ export const exchangeUnlimitedAccessCapability = (
     setLocaleCookie(response, localeCookieName, locale);
     return markPrivateResponse(response);
   }).pipe(
-    Effect.catch(() => Effect.succeed(reject())),
+    Effect.orElseSucceed(reject),
     runWorkspaceEffect("passes.access.exchange", { boundary: "route" })
   );
 };

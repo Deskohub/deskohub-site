@@ -7,6 +7,7 @@ import {
   IgloohomePinIdSchema,
   IgloohomeService,
 } from "@deskohub/igloohome";
+import { testEmailAddress } from "@deskohub/test-email";
 import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
@@ -58,6 +59,16 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       await database.pool.query(
         "insert into customer_accounts (id) values ($1), ($2)",
         [buyer, holder]
+      );
+      await database.pool.query(
+        `insert into auth."user" (id, name, email, email_verified)
+         values ($1, 'Synthetic buyer', $3, true), ($2, 'Synthetic holder', $4, true)`,
+        [
+          buyer,
+          holder,
+          testEmailAddress("pass-buyer"),
+          testEmailAddress("pass-holder"),
+        ]
       );
     });
 
@@ -141,7 +152,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
                           ...testSessionProfile,
                           accountId: viewer,
                           deletionRequested: false,
-                          email: "test-holder@example.invalid",
+                          email: testEmailAddress("pass-viewer"),
                         }
                   )
                 ),
@@ -320,6 +331,42 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           ),
       });
       expect(access).toEqual({ state: "not-found" });
+    });
+
+    test("withholds bearer access while the holder's login is unverified or awaiting deletion", async () => {
+      const { orderId } = await seedPass("open-space");
+      const accessCookie = await holderCookie(orderId, buyer);
+      const reads: string[] = [];
+      try {
+        await database.pool.query(
+          `update auth."user" set email_verified = false where id = $1`,
+          [buyer]
+        );
+        expect(
+          await load(orderId, "open-space", null, during, {
+            issue,
+            reads,
+            accessCookie,
+          })
+        ).toEqual({ state: "not-found" });
+        await database.pool.query(
+          `update auth."user" set email_verified = true, deletion_requested_at = now() where id = $1`,
+          [buyer]
+        );
+        expect(
+          await load(orderId, "open-space", null, during, {
+            issue,
+            reads,
+            accessCookie,
+          })
+        ).toEqual({ state: "not-found" });
+        expect(reads).toEqual([]);
+      } finally {
+        await database.pool.query(
+          `update auth."user" set email_verified = true, deletion_requested_at = null where id = $1`,
+          [buyer]
+        );
+      }
     });
 
     test("only one request issues today's code and the next Prague date has a different grant", async () => {

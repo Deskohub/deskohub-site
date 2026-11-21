@@ -5,6 +5,7 @@ import {
   type EmailMessage,
   EmailServiceTag,
 } from "@deskohub/email";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
 import type { passPurchases } from "@/db/schema";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
@@ -71,8 +72,8 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
         paymentAttemptId: paymentAttemptIdSchema.make(
           "synthetic-payment-attempt"
         ),
-        buyer: { email: "buyer@example.invalid" },
-        holderEmail: gift ? "gift-holder@example.invalid" : null,
+        buyer: { email: testEmailAddress("pass-buyer") },
+        holderEmail: gift ? testEmailAddress("pass-gift-holder") : null,
         gift,
         invitationSent: gift,
         invoiceRequested: false,
@@ -80,7 +81,7 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
         Effect.provide(
           Layer.mergeAll(
             Layer.succeed(EmailConfigTag, {
-              defaultFrom: { email: "sender@example.invalid" },
+              defaultFrom: { email: testEmailAddress("pass-sender") },
             }),
             Layer.mock(EmailServiceTag, {
               send: (message) =>
@@ -113,18 +114,23 @@ test("emails the holder capability for a self-purchase and buyer status for a gi
   expect(url.pathname).toBe(accessPath);
   const token = url.searchParams.get(unlimitedAccessTokenQueryParam);
   expect(token).toBeTruthy();
+  let now = paidAt.epochMilliseconds;
+  const clock = { now: () => now };
   const cookie = await Effect.runPromise(
-    exchangeUnlimitedAccessToken({
-      token: token!,
-      orderId: id,
-      locale: purchase.locale,
-    })
+    exchangeUnlimitedAccessToken(
+      { token: token!, orderId: id, locale: purchase.locale },
+      clock
+    )
   );
   const allowsHolder = await Effect.runPromise(
-    openUnlimitedAccessCookie(id, cookie.value)
+    openUnlimitedAccessCookie(id, cookie.value, clock)
   );
   expect(allowsHolder(buyerAccountId)).toBe(true);
   expect(allowsHolder(giftHolder)).toBe(false);
+  now += cookie.maxAge * 1000 - 1;
+  expect(allowsHolder(buyerAccountId)).toBe(true);
+  now += 1;
+  expect(allowsHolder(buyerAccountId)).toBe(false);
   expect(self.sensitiveContent).toBe(true);
 
   const retry = await renderConfirmation(buyerAccountId);

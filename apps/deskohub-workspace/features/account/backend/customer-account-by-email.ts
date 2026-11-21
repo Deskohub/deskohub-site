@@ -1,4 +1,4 @@
-import { and, eq, exists, inArray, isNull } from "drizzle-orm";
+import { and, eq, exists, inArray, isNull, type SQLWrapper } from "drizzle-orm";
 import { Data, Effect, Option } from "effect";
 import {
   WorkspaceDatabase,
@@ -50,10 +50,10 @@ export const findActiveCustomerAccountByEmail = Effect.fn(
   );
 });
 
-/** Keeps a verified active login check inside a caller's guarded write. */
+/** Keeps a verified active login check in the statement that uses it. */
 export const hasVerifiedActiveLogin = (
   db: WorkspaceDatabaseClient,
-  accountId: CustomerAccountId
+  accountId: CustomerAccountId | SQLWrapper
 ) =>
   exists(
     db
