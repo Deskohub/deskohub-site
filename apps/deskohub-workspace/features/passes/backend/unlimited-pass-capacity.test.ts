@@ -202,6 +202,45 @@ test("Reserved Desk excludes a window with free seats every day but no common de
   });
 });
 
+test.each([
+  [
+    "keeps the prior Reserved Desk for all 30 renewal days when it is free",
+    [],
+    otherDesk,
+  ],
+  [
+    "uses one fallback Reserved Desk for all 30 renewal days when the prior desk is busy on the last day",
+    [providerBooking("14", otherDesk, startDate.add({ days: 29 }))],
+    firstDesk,
+  ],
+] as const)("%s", async (_name, providerBookings, expectedDesk) => {
+  const { services } = capacityLayer({
+    tables: [firstDesk, otherDesk],
+    providerBookings,
+  });
+  const plan = await withUnlimitedPassCapacity(
+    {
+      startDate,
+      selection: { tier: "reserved-desk" },
+      preferredDeskId: otherDesk.id,
+    },
+    Effect.succeed
+  ).pipe(Effect.provide(services), Effect.runPromise);
+
+  expect(plan.pinnedDesk).toEqual({
+    id: expectedDesk.id,
+    name: expectedDesk.name,
+  });
+  expect(
+    plan.days.map(({ serviceDate, tableId }) => [String(serviceDate), tableId])
+  ).toEqual(
+    Array.from({ length: 30 }, (_, index) => [
+      String(startDate.add({ days: index })),
+      expectedDesk.id,
+    ])
+  );
+});
+
 test("the workstation pins an exact monitor setup", async () => {
   const monitorOption = "2x27-qhd";
   const tags = workspaceProductMonitorOptionTableTags[monitorOption];

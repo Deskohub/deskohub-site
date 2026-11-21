@@ -6,6 +6,7 @@ import { getUnlimitedPassPrice, unlimitedPassCoffeePrice } from "./pass-offer";
 import {
   getUnlimitedPassEndDate,
   getUnlimitedPassWithdrawal,
+  isUnlimitedPassRenewalEligible,
   unlimitedPassRequiresEarlyStart,
   unlimitedPassSelectionSchema,
 } from "./unlimited-pass";
@@ -41,6 +42,44 @@ describe("Unlimited pass terms", () => {
   test("uses 30 consecutive calendar dates across Prague daylight saving changes", () => {
     expect(getUnlimitedPassEndDate(date("2027-03-16"))).toBe("2027-04-15");
     expect(getUnlimitedPassEndDate(date("2027-10-16"))).toBe("2027-11-15");
+  });
+
+  test("admits a renewal on its Prague start date only during the tier's service window", () => {
+    const pass = {
+      tier: "open-space",
+      status: "withdrawn",
+      validUntil: date("2027-03-28"),
+    } as const;
+    expect(
+      isUnlimitedPassRenewalEligible(
+        pass,
+        Temporal.Instant.from("2027-03-28T14:59:59Z")
+      )
+    ).toBe(true);
+    expect(
+      isUnlimitedPassRenewalEligible(
+        pass,
+        Temporal.Instant.from("2027-03-28T15:00:00Z")
+      )
+    ).toBe(false);
+    expect(
+      isUnlimitedPassRenewalEligible(
+        { ...pass, tier: "reserved-desk" },
+        Temporal.Instant.from("2027-03-28T21:59:59Z")
+      )
+    ).toBe(true);
+    expect(
+      isUnlimitedPassRenewalEligible(
+        { ...pass, tier: "reserved-desk" },
+        Temporal.Instant.from("2027-03-28T22:00:00Z")
+      )
+    ).toBe(false);
+    expect(
+      isUnlimitedPassRenewalEligible(
+        { ...pass, status: "void" },
+        Temporal.Instant.from("2027-03-28T10:00:00Z")
+      )
+    ).toBe(false);
   });
 
   test("requires a monitor setup for workstation and accepts coffee on Open Space", () => {

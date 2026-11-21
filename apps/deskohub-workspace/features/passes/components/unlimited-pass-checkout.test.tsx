@@ -144,6 +144,67 @@ test("Continue uses the selected tier's full-window starts and discards irreleva
   expect(view.getByText("Reserved Desk with workstation")).toBeDefined();
 });
 
+test("renewal fixes the start date and carries the source through self-purchase", async () => {
+  const renewsPassId = orderIdSchema.make(crypto.randomUUID());
+  const requests: unknown[] = [];
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        renewsPassId={renewsPassId}
+        initialOptions={{ tier: "open-space", coffee: true }}
+        getAvailability={async () => ({
+          data: {
+            ...availability,
+            starts: {
+              ...availability.starts,
+              "open-space": [openSpaceStart, monitorStart],
+            },
+          },
+        })}
+        beginCheckout={async (input) => {
+          requests.push(input);
+          return { data: readyCheckout };
+        }}
+      />
+    </QueryProvider>
+  );
+  const continueButton = view.getByRole<HTMLButtonElement>("button", {
+    name: /continue/i,
+  });
+  await waitFor(() => expect(continueButton.disabled).toBe(false));
+  expect(
+    view
+      .getByRole("switch", { name: /coffee for 30 days/i })
+      .getAttribute("aria-checked")
+  ).toBe("true");
+  const otherDate = view.getByRole<HTMLButtonElement>("button", {
+    name: /November 2nd, 2026/i,
+  });
+  expect(
+    otherDate.disabled || otherDate.getAttribute("aria-disabled") === "true"
+  ).toBe(true);
+  fireEvent.click(continueButton);
+  expect(checkoutUrl().searchParams.get("renew")).toBe(renewsPassId);
+  expect(
+    view.queryByRole("checkbox", {
+      name: m.entryPackCheckoutGift({}, { locale }),
+    })
+  ).toBeNull();
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(requests[0]).toMatchObject({
+    renewsPassId,
+    buyerEmail,
+    selection: {
+      tier: "open-space",
+      coffee: true,
+      startDate: openSpaceStart,
+    },
+  });
+  expect(requests[0]).not.toHaveProperty("holderEmail");
+});
+
 test("gift Details preserves the buyer and billing, and Pay renders one combined consent", async () => {
   const requests: unknown[] = [];
   const payments: unknown[] = [];
