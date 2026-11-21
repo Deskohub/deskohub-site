@@ -248,8 +248,8 @@ const observePassDayHolds = (purchase: Purchase, rows: readonly PassDay[]) =>
   );
 
 /** Runs inside the pass-order section after the local intent transaction commits. */
-export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
-  function* (purchase: Purchase, options?: { reportBlockingDates: true }) {
+export const attemptUnlimitedPassHolds = Effect.fn("attemptUnlimitedPassHolds")(
+  function* (purchase: Purchase) {
     const { db } = yield* WorkspaceDatabase;
     const rows = yield* readUnlimitedPassDays(purchase.id);
     if (
@@ -380,27 +380,30 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
       );
       const failure = outcomes.find(Result.isFailure);
       if (!failure) continue;
-      if (options?.reportBlockingDates) {
-        const blockers = outcomes.flatMap((outcome) =>
+      return {
+        failure: failure.failure,
+        blockingDates: outcomes.flatMap((outcome) =>
           Result.isFailure(outcome) &&
-          outcome.failure._tag === "UnlimitedPassHoldsUnavailable" &&
-          outcome.failure.blockingDates?.length
-            ? [outcome.failure]
+          outcome.failure._tag === "UnlimitedPassHoldsUnavailable"
+            ? (outcome.failure.blockingDates ?? [])
             : []
-        );
-        const [first] = blockers;
-        if (first) {
-          return yield* new UnlimitedPassHoldsUnavailable({
-            reason: first.reason,
-            blockingDates: blockers.flatMap(
-              (blocker) => blocker.blockingDates ?? []
-            ),
-          });
-        }
-      }
-      return yield* failure.failure;
+        ),
+      };
     }
     yield* readPayableUnlimitedHolds(purchase);
+  },
+  Effect.result,
+  Effect.map((result) =>
+    Result.isSuccess(result)
+      ? result.success
+      : { failure: result.failure, blockingDates: [] }
+  )
+);
+
+export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
+  function* (purchase: Purchase) {
+    const attempt = yield* attemptUnlimitedPassHolds(purchase);
+    if (attempt) return yield* attempt.failure;
   }
 );
 

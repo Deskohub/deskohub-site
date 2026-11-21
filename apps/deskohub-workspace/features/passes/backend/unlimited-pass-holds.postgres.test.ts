@@ -931,6 +931,142 @@ it("replays expiry and change dates without replacing an ambiguous generation", 
   );
 });
 
+it("records every elapsed service date after the shared draft deadline", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const accountId = newAccountId();
+  const provider = makeInMemoryDotypos({});
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(start, accountId, accountId);
+      yield* createUnlimitedPassHolds(purchase);
+      const { db, transaction } = yield* WorkspaceDatabase;
+      const deadline = Temporal.Now.instant().subtract({ seconds: 1 });
+      yield* transaction(
+        Effect.gen(function* () {
+          yield* db
+            .update(passPurchases)
+            .set({ holdsExpireAt: deadline })
+            .where(eq(passPurchases.id, purchase.id));
+          yield* db
+            .update(workspaceReservations)
+            .set({ reservationHoldExpiresAt: deadline })
+            .where(eq(workspaceReservations.passId, purchase.id));
+        })
+      );
+      const days = yield* readUnlimitedPassDays(purchase.id);
+      const blockingDates = days.map((day) => day.serviceDate);
+      expect(blockingDates).toHaveLength(unlimitedPassDays);
+      const begin = beginUnlimitedPassPurchase({
+        orderId: purchase.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      });
+      const expected = Result.fail(
+        expect.objectContaining({
+          _tag: "UnlimitedPassDraftVoided",
+          blockingDates,
+        })
+      );
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      const [voided] = yield* db
+        .select({ status: passPurchases.status, quote: passPurchases.quote })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, purchase.id));
+      expect(voided).toMatchObject({
+        status: "void",
+        quote: { voidBlockingDates: blockingDates },
+      });
+      expect(yield* Effect.result(begin)).toEqual(expected);
+    }).pipe(Effect.provide(unlimitedDraftLayer(accountId, provider.service)))
+  );
+});
+
+it("keeps the first uncertain hold retryable when its sibling has expired", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const accountId = newAccountId();
+  const provider = makeInMemoryDotypos({});
+  const uncertain = new DotyposUncertain({
+    operation: "createReservation",
+    reason: "timeout",
+  });
+  const layer = unlimitedDraftLayer(accountId, {
+    ...provider.service,
+    createReservation: (input) =>
+      provider.service
+        .createReservation(input)
+        .pipe(Effect.andThen(Effect.fail(uncertain))),
+  });
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(start, accountId, accountId);
+      const [first, expired, rejected] = yield* readUnlimitedPassDays(
+        purchase.id
+      );
+      const { db } = yield* WorkspaceDatabase;
+      const deadline = Temporal.Now.instant().subtract({ seconds: 1 });
+      yield* db
+        .update(workspaceReservations)
+        .set({ reservationHoldExpiresAt: deadline })
+        .where(eq(workspaceReservations.id, expired!.id));
+      const begin = beginUnlimitedPassPurchase({
+        orderId: purchase.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      });
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(expect.objectContaining({ _tag: "DotyposUncertain" }))
+      );
+      const status = db
+        .select({ status: passPurchases.status })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, purchase.id));
+      expect(yield* status).toEqual([{ status: "pending_payment" }]);
+
+      // Capacity can record ambiguity independently of Continue.
+      yield* db
+        .update(workspaceReservations)
+        .set({
+          failureCode: ambiguousPassDayHoldCode,
+          reservationHoldExpiresAt: deadline,
+        })
+        .where(eq(workspaceReservations.id, first!.id));
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(expect.objectContaining({ reason: "unfinished" }))
+      );
+      expect(yield* status).toEqual([{ status: "pending_payment" }]);
+
+      yield* db
+        .update(workspaceReservations)
+        .set({
+          failureCode: rejectedPassDayHoldCode,
+          reservationState: "hold_expired",
+        })
+        .where(eq(workspaceReservations.id, rejected!.id));
+      const expected = Result.fail(
+        expect.objectContaining({
+          _tag: "UnlimitedPassDraftVoided",
+          blockingDates: [
+            first!.serviceDate,
+            expired!.serviceDate,
+            rejected!.serviceDate,
+          ],
+        })
+      );
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      const [ambiguous] = yield* readUnlimitedPassDays(purchase.id);
+      expect(ambiguous).toMatchObject({
+        failureCode: ambiguousPassDayHoldCode,
+        reservationState: "creating_hold",
+        dotyposReservationId: null,
+      });
+      expect(
+        [...provider.reservations.values()].map((day) => day.status)
+      ).toEqual(["NEW"]);
+    }).pipe(Effect.provide(layer))
+  );
+});
+
 it("replays reconciled void drafts expired before payment and fences expired attempts", async () => {
   const start = getCurrentWorkspaceDate().add({ days: 100 });
   const accountId = newAccountId();
@@ -983,6 +1119,27 @@ it("replays reconciled void drafts expired before payment and fences expired att
             blockingDates: [date(start), date(start.add({ days: 1 }))],
           })
         )
+      );
+      const empty = { ...purchase.quote, voidBlockingDates: [] };
+      yield* db
+        .update(passPurchases)
+        .set({ quote: empty })
+        .where(eq(passPurchases.id, purchase.id));
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "UnlimitedPassDraftVoided",
+            blockingDates: [],
+          })
+        )
+      );
+      const malformed = { ...purchase.quote, voidBlockingDates: "invalid" };
+      yield* db
+        .update(passPurchases)
+        .set({ quote: malformed })
+        .where(eq(passPurchases.id, purchase.id));
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(expect.objectContaining({ _tag: "SchemaError" }))
       );
       yield* expirePass(purchase.id);
       expect(yield* Effect.result(begin)).toEqual(
