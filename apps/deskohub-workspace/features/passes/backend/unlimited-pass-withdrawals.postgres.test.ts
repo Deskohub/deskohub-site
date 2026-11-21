@@ -25,6 +25,7 @@ import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import type { PassTier } from "../pass-offer";
 import { getUnlimitedPassEndDate } from "../unlimited-pass";
+import { requireUnlimitedPassWindow } from "./unlimited-pass-orders";
 import { UnlimitedPassWithdrawals } from "./unlimited-pass-withdrawals";
 
 const testDatabase = await createWorkspacePostgresSuiteDatabase(
@@ -279,6 +280,22 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
       refund_target_value: amount.value,
       refunded_amount_value: null,
     });
+    // This period is empty even if the new 30-day window starts earlier
+    // and covers the withdrawn pass's original start.
+    const validFrom = plainDateStringSchema.make("2027-03-26");
+    await run(
+      Effect.gen(function* () {
+        const { transaction } = yield* WorkspaceDatabase;
+        yield* transaction(
+          requireUnlimitedPassWindow({
+            orderId: orderIdSchema.make(crypto.randomUUID()),
+            holderAccountId: pass.holder,
+            validFrom,
+            validUntil: getUnlimitedPassEndDate(validFrom),
+          })
+        );
+      })
+    );
   });
 
   test("records one rounded-down refund across concurrent statements and keeps the current service day", async () => {

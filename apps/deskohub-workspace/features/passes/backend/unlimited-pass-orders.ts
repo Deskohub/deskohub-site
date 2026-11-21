@@ -181,7 +181,7 @@ export const requireUnlimitedPassWindow = Effect.fn(
         lt(passPurchases.validFrom, input.validUntil),
         sql`coalesce(${passPurchases.accessEndsOn}, ${passPurchases.validUntil}) > ${input.validFrom}`,
         sql`(${passPurchases.status} in ('pending_payment', 'active') or
-          (${passPurchases.status} in ('withdrawn', 'cancelled') and ${passPurchases.accessEndsOn} is not null))`
+          (${passPurchases.status} in ('withdrawn', 'cancelled') and ${passPurchases.accessEndsOn} > ${passPurchases.validFrom}))`
       )
     )
     .limit(1);
