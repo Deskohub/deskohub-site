@@ -19,7 +19,7 @@ export interface IssueTracker {
   list(): Promise<readonly Issue[]>;
   file(title: string, body: string): Promise<Issue>;
   hasOwner(number: number): Promise<boolean>;
-  hasRecordedWorker(number: number): Promise<boolean>;
+  hasClosedWork(number: number): Promise<boolean>;
   recordWorker(number: number, threadId: string): Promise<void>;
   legacyFeedbackClaimed(commentId: string): boolean;
   suppressesRecurrence(number: number): Promise<boolean>;
@@ -420,7 +420,7 @@ async function coveredIssues(
       if (
         pool.claim(issue.number)?.threadId ||
         issue.assignees.length > 0 ||
-        (await tracker.hasRecordedWorker(issue.number))
+        (await tracker.hasClosedWork(issue.number))
       ) {
         for (const sibling of siblings) covered.set(sibling.number, issue);
       }

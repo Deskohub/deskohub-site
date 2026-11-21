@@ -24,12 +24,17 @@ const restIssue = {
   labels: [{ name: "issue-pool" }],
 };
 
-const ownership = (author: number, state = "MERGED", body = report) =>
+const ownership = (
+  author: number,
+  state = "MERGED",
+  body = report,
+  issueState = "OPEN"
+) =>
   JSON.stringify({
     data: {
       repository: {
         issue: {
-          state: "OPEN",
+          state: issueState,
           body,
           author: { databaseId: author },
           assignees: { totalCount: 0 },
@@ -101,6 +106,26 @@ test("checks the authenticated author of a newly filed issue", async () => {
   expect(failure).toEqual(
     new Error("Created issue did not have the authenticated author")
   );
+});
+
+test("treats a trusted closed issue with a merged closing PR as completed work", async () => {
+  let issueState = "OPEN";
+  let pullState = "OPEN";
+  const tracker = githubIssueTracker({
+    ...defaults,
+    async run(_executable, args) {
+      return args.includes("graphql")
+        ? ownership(maintainer.id, pullState, report, issueState)
+        : "[[]]";
+    },
+  });
+  expect(await tracker.hasOwner(32)).toBe(true);
+  expect(await tracker.hasClosedWork(32)).toBe(false);
+  issueState = "CLOSED";
+  pullState = "MERGED";
+  expect(await tracker.hasClosedWork(32)).toBe(true);
+  pullState = "CLOSED";
+  expect(await tracker.hasClosedWork(32)).toBe(false);
 });
 
 test("routes the first later reply from the maintainer and respects trusted dispositions", async () => {

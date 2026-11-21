@@ -188,7 +188,17 @@ export function githubIssueTracker({
       );
     },
     legacyFeedbackClaimed,
-    hasRecordedWorker: workerRecorded,
+    async hasClosedWork(number) {
+      const issue = await readOwnership(number);
+      return (
+        issue?.state === "CLOSED" &&
+        trustedAuthor(issue.author?.databaseId) &&
+        (issue.closedByPullRequestsReferences.nodes.some(
+          (pr) => pr.state === "MERGED"
+        ) ||
+          (await workerRecorded(number)))
+      );
+    },
     async recordNightlyRuns(issue, runUrls) {
       const known = [
         issue.body,

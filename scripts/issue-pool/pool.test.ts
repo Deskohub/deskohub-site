@@ -54,7 +54,7 @@ function fixture() {
       return created;
     },
     hasOwner: async (number) => reported.has(number),
-    hasRecordedWorker: async (number) => reported.has(number),
+    hasClosedWork: async (number) => reported.has(number),
     legacyFeedbackClaimed: () => false,
     suppressesRecurrence: async () => false,
     pendingReply: async () => null,
@@ -305,6 +305,37 @@ test("closing the owned issue covers its old siblings while newer evidence can o
     ]);
     expect(recurrence.filed).toEqual([3]);
     expect(launches).toEqual([1, 3]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("a closing PR preserves a fix group's ownership after merge", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  const fix = "<!-- issue-pool-fix:checkout-pricing -->";
+  const primary = { ...issue(1, fix), labels: ["issue-pool"] };
+  const sibling = { ...issue(2, fix), labels: ["issue-pool"] };
+  let merged = false;
+  const linkedPRTracker: IssueTracker = {
+    ...tracker,
+    hasOwner: async (number) => number === 1 && !merged,
+    hasClosedWork: async (number) => number === 1 && merged,
+  };
+  try {
+    issues.push(primary, sibling);
+    await run(pool, linkedPRTracker, runner, []);
+    expect(launches).toEqual([]);
+    merged = true;
+    issues[0] = {
+      ...primary,
+      state: "closed",
+      closedAt: "2026-11-21T14:00:00Z",
+    };
+    const later = await run(pool, linkedPRTracker, runner, []);
+    expect(later.duplicateGroups).toEqual([[1, 2]]);
+    expect(later.plannedAssignment).toEqual([]);
+    expect(launches).toEqual([]);
   } finally {
     pool.close();
   }

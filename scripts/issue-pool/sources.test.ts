@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { testEmailAddress } from "../../packages/test-email/src/test-email-address";
 import {
   collectPostHog,
   collectVercelFeedback,
@@ -79,7 +80,7 @@ function vercelFixture(
 test("groups recurrent logs by template and operation while keeping occurrence aliases", async () => {
   const first = log(1, {
     uuid: uuid(1).toUpperCase(),
-    body: `Checkout rejected for first@example.test at https://example.test/secret. access_code=${privateText}`,
+    body: `Checkout rejected for ${testEmailAddress("first")} at https://example.test/secret. access_code=${privateText}`,
     attributes: {
       operation: "checkout.reserve",
       fiberId: "#1",
@@ -90,7 +91,7 @@ test("groups recurrent logs by template and operation while keeping occurrence a
     timestamp: "2026-11-20T16:30:02+02:00",
     severity_text: "fatal",
     body: JSON.stringify([
-      "Checkout rejected for second@example.test at https://other.test/other. access_code=rotated",
+      `Checkout rejected for ${testEmailAddress("second")} at https://other.test/other. access_code=rotated`,
       { authorization: privateText },
     ]),
     attributes: { operation: "checkout.reserve", fiberId: "#2" },
