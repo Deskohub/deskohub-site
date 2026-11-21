@@ -107,6 +107,7 @@ function PassActionDialog({
   });
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (isExecuting) return;
     const data = new FormData(event.currentTarget);
     const change = adjustment(data);
     if (!change) {
@@ -153,8 +154,13 @@ function PassActionDialog({
           ) : (
             <>
               {beforeForm}
-              <form className="grid gap-4" onSubmit={submit}>
-                <fieldset className="grid min-w-0 gap-4" disabled={isExecuting}>
+              <form
+                aria-busy={isExecuting}
+                className="grid gap-4"
+                onSubmit={submit}
+              >
+                {/* Chromium can drop a date field's size container inside a fieldset. */}
+                <div className="grid min-w-0 gap-4" inert={isExecuting}>
                   {children}
                   <label className={field} htmlFor={reasonId}>
                     {m.passActionsReason({}, { locale })}
@@ -166,7 +172,7 @@ function PassActionDialog({
                       rows={2}
                     />
                   </label>
-                </fieldset>
+                </div>
                 <div role="alert">
                   {error && (
                     <AdministrationAlert status="error">
