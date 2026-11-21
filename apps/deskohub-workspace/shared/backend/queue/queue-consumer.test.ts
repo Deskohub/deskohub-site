@@ -1,8 +1,9 @@
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Cause, Data, Duration, Effect, Schema } from "effect";
+import { Cause, Data, Duration, Effect, Logger, Schema } from "effect";
 import { SqlError } from "effect/sql";
 import { reservationHoldCleanupTopic } from "@/features/checkout/backend/holds/reservation-hold-cleanup-topic";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
@@ -247,6 +248,50 @@ describe("queue delivery", () => {
       reason: "database_unavailable",
       action: { _tag: "RetryAfter", delay: Duration.seconds(120) },
     });
+  });
+
+  test("censors the original cause before using the worker's logger", async () => {
+    const email = testEmailAddress("private-queue-cause");
+    const failure = Object.assign(new TransientTestFailure(), { email });
+    const log = spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const outcome = await consumer(() => Effect.fail(failure))(
+        { ...metadata(2), payload: {} },
+        "durable"
+      ).pipe(
+        Effect.provide(Logger.layer([Logger.consoleJson])),
+        Effect.runPromise
+      );
+
+      expect(outcome).toEqual({
+        _tag: "Failed",
+        reason: "transient_failure",
+        action: { _tag: "RetryAfter", delay: Duration.seconds(120) },
+      });
+      const entries = log.mock.calls.flat().join("\n");
+      expect(entries).toContain("transient_failure");
+      expect(entries).not.toContain(email);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test("loads feature handlers without the Vercel SDK", async () => {
+    mock.module("@vercel/queue", () => {
+      throw new Error("Attempted to load the Vercel queue SDK");
+    });
+
+    const [hold, automation] = await Promise.all([
+      import(
+        "@/features/checkout/backend/holds/reservation-hold-cleanup-queue.service"
+      ),
+      import(
+        "@/features/email-campaigns/automation/backend/automation-unit-queue-consumer"
+      ),
+    ]);
+    expect(hold.processReservationHoldCleanupScheduleMessage).toBeFunction();
+    expect(automation.processAutomationUnitMessage).toBeFunction();
   });
 
   test("keeps an interruption unclassified", async () => {

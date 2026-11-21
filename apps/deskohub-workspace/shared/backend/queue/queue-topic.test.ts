@@ -1,9 +1,19 @@
 import "@/shared/testing/workspace-test-env";
 
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterEach,
+  describe,
+  expect,
+  mock,
+  setSystemTime,
+  spyOn,
+  test,
+} from "bun:test";
 import * as vercelQueue from "@vercel/queue";
 import { Data, Duration, Effect, Schema } from "effect";
 import type { QueueRedelivery as Redelivery } from "./queue-consumer";
+
+afterEach(() => setSystemTime());
 
 type QueueRoute = {
   readonly handler: vercelQueue.MessageHandler;
@@ -181,16 +191,19 @@ describe("defineQueueTopic", () => {
   });
 
   test.each([
-    { hoursFromNow: -3, afterSeconds: 1 },
-    { hoursFromNow: 3, afterSeconds: 3600 },
+    { millisecondsFromNow: -10_800_000, afterSeconds: 1 },
+    { millisecondsFromNow: 420_001, afterSeconds: 421 },
+    { millisecondsFromNow: 10_800_000, afterSeconds: 3600 },
   ])(
     "bounds scheduled Vercel redelivery to $afterSeconds seconds",
-    async ({ hoursFromNow, afterSeconds }) => {
+    async ({ millisecondsFromNow, afterSeconds }) => {
+      const now = Temporal.Instant.from("2026-10-20T12:00:00Z");
+      setSystemTime(new Date(now.epochMilliseconds));
       const route = routeFor(
         () => Effect.fail(new ParcelNotReadyError()),
         () =>
           QueueRedelivery.At({
-            instant: Temporal.Now.instant().add({ hours: hoursFromNow }),
+            instant: now.add({ milliseconds: millisecondsFromNow }),
           })
       );
 

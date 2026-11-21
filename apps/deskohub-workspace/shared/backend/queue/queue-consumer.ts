@@ -2,6 +2,7 @@ import { decodeStandardSchema } from "@deskohub/standard-schema";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { Cause, Data, Duration, Effect, Match } from "effect";
 import { isDatabaseUnavailable } from "@/db/database-unavailable";
+import { censorLogValue } from "@/shared/backend/logging/censorship";
 
 /** How a consumer wants the queue to treat one of its failures. */
 export type QueueRedelivery = Data.TaggedEnum<{
@@ -214,7 +215,7 @@ export const defineQueueConsumer =
         const log = redeliveryLogs[decision.reason];
         return Effect.logWithLevel(log.level)(log.message, {
           ...decision,
-          cause,
+          cause: censorLogValue(cause),
         }).pipe(Effect.as(QueueDeliveryOutcome.Failed(decision)));
       }),
       Effect.annotateLogs({

@@ -34,7 +34,7 @@ Define each Workspace queue topic once with `defineQueueTopic({ topic, label, me
 
 ## Queue consumers
 
-`topic.consume(handle, redelivery)` returns the Effect-based delivery function. Run it with a payload, the topic, message ID and delivery count as metadata, and the delivery mode. It logs `<label> queue message ignored: invalid payload` for an invalid message. Its result distinguishes handled, invalid, and failed messages. A failure returns a reason and an action after logging its cause through the Workspace logger.
+`topic.consume(handle, redelivery)` returns the Effect-based delivery function. Run it with a payload, the topic, message ID and delivery count as metadata, and the delivery mode. It logs `<label> queue message ignored: invalid payload` for an invalid message. Its result distinguishes handled, invalid, and failed messages. A failure returns a reason and an action after censoring and logging its cause.
 
 - The consumer's `redelivery` classifies only its own lone typed failure. `QueueRedelivery.Never` acknowledges, `WithBackoff` redelivers after 60 s doubling to 15 min, `At` gives the instant when work becomes due, and `Default` uses the transport's default retry.
 - The `preview` mode acknowledges a message whose database is gone (SQLSTATE class 28, 3D000, Neon endpoint not found) or that reached `previewQueueDeliveryLimit` deliveries. In `durable` mode a database outage backs off and takes precedence over the consumer's classification.
