@@ -34,16 +34,17 @@ export const resolveEntryPackBooking = Effect.fn("resolveEntryPackBooking")(
     readonly passId: OrderId;
     readonly holderAccountId: CustomerAccountId;
     readonly db: WorkspaceDatabase["Service"]["db"];
+    readonly forNewQuote?: true;
   }) {
-    const { reservation, passId, holderAccountId, db } = input;
+    const { reservation, passId, holderAccountId, db, forNewQuote } = input;
     const date = yield* Schema.decodeEffect(plainDateStringSchema)(
       reservation.date
     ).pipe(Effect.mapError(() => new EntryPackUnavailableError({})));
-    const entryPack = yield* loadEntryPackRedemption(db, {
-      passId,
-      holderAccountId,
-      date,
-    });
+    const entryPack = yield* loadEntryPackRedemption(
+      db,
+      { passId, holderAccountId, date },
+      forNewQuote
+    );
     const coveredTier =
       entryPack.tier === "reserved-desk-workstation"
         ? reservation.entryTier === "reserved-desk" &&
@@ -84,6 +85,7 @@ export const buildEntryPackBookingQuote = Effect.fn(
               passId,
               holderAccountId: holder.accountId,
               db,
+              forNewQuote: true,
             })
           )
         )

@@ -54,7 +54,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       await database?.close();
     });
 
-    const seedPack = async () => {
+    const seedPassOrder = async () => {
       const passId = orderIdSchema.make(crypto.randomUUID());
       await database.pool.query(
         `insert into orders
@@ -62,11 +62,52 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           values ($1, 'pass-purchase', 'fixture-buyer', 'paid', 'fulfilled', now(), now())`,
         [passId]
       );
+      return passId;
+    };
+
+    const seedPack = async () => {
+      const passId = await seedPassOrder();
       await database.pool.query(
         `insert into pass_purchases
           (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
           values ($1, $2, $3, 'entry-pack', 'open-space', 5, 'active', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
         [passId, buyer, holder]
+      );
+      return passId;
+    };
+
+    const seedUnlimited = async ({
+      validFrom,
+      validUntil,
+      accessEndsOn = null,
+      status = "active",
+      tier = "open-space",
+    }: {
+      readonly validFrom: string;
+      readonly validUntil: string;
+      readonly accessEndsOn?: string | null;
+      readonly status?:
+        | "active"
+        | "pending_payment"
+        | "cancelled"
+        | "withdrawn";
+      readonly tier?: "open-space" | "reserved-desk";
+    }) => {
+      const passId = await seedPassOrder();
+      await database.pool.query(
+        `insert into pass_purchases
+          (id, buyer_account_id, holder_account_id, product, tier, status, valid_from, valid_until, access_ends_on, unlimited_coffee, quote, locale, created_at)
+          values ($1, $2, $3, 'unlimited', $4, $5, $6, $7, $8, case when $4 = 'open-space' then false end, '{}', 'en-US', now())`,
+        [
+          passId,
+          buyer,
+          holder,
+          tier,
+          status,
+          validFrom,
+          validUntil,
+          accessEndsOn,
+        ]
       );
       return passId;
     };
@@ -191,6 +232,101 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       });
       expect(await status(buyerDraft)).toBeUndefined();
       expect(await status(endDateDraft)).toBeUndefined();
+    });
+
+    test.each([
+      { status: "cancelled", date: "2099-06-05", cutoff: "2099-06-06" },
+      { status: "withdrawn", date: "2099-06-07", cutoff: "2099-06-08" },
+    ] as const)(
+      "blocks retained $status coverage through its last included day",
+      async ({ status: passStatus, date: coveredDate, cutoff }) => {
+        await seedUnlimited({
+          status: passStatus,
+          validFrom: coveredDate,
+          validUntil: "2099-06-30",
+          accessEndsOn: cutoff,
+        });
+        await seedUnlimited({
+          tier: "reserved-desk",
+          validFrom: cutoff,
+          validUntil: "2099-06-10",
+        });
+        const passId = await seedPack();
+        const covered = await draft(coveredDate);
+        await expect(claim(covered, passId, coveredDate)).rejects.toMatchObject(
+          {
+            _tag: "EntryPackUnavailableError",
+          }
+        );
+        expect(await status(covered)).toBeUndefined();
+        expect(await claim(await draft(cutoff), passId, cutoff)).toBe(true);
+      }
+    );
+
+    test("reads newly activated Unlimited coverage after waiting on the holder row", async () => {
+      const serviceDate = "2099-06-29";
+      const unlimitedId = await seedUnlimited({
+        status: "pending_payment",
+        validFrom: serviceDate,
+        validUntil: "2099-07-01",
+      });
+      const passId = await seedPack();
+      const reservation = await draft(serviceDate);
+      // Use the same holder row lock that the activation transaction takes.
+      const activation = await holdPostgresTransaction(
+        database.pool,
+        `with holder_lock as (
+           select id from customer_accounts where id = $1 for no key update
+         )
+         update pass_purchases set status = 'active'
+         from holder_lock where pass_purchases.id = $2
+           and pass_purchases.holder_account_id = holder_lock.id`,
+        [holder, unlimitedId]
+      );
+      const admission = claim(reservation, passId, serviceDate).then(
+        () => "admitted",
+        (failure) => failure
+      );
+      try {
+        await waitForPostgresLockWaiter(database.pool, {
+          condition: "$1 = any(pg_blocking_pids(pid))",
+          values: [activation.pid],
+          description: "Entry pack admission to wait on Unlimited activation",
+        });
+      } finally {
+        await activation.commit();
+      }
+      expect(await admission).toMatchObject({
+        _tag: "EntryPackUnavailableError",
+      });
+      expect(await status(reservation)).toBeUndefined();
+    });
+
+    test("keeps an admitted Entry claim and rejects readmission after coverage starts", async () => {
+      const serviceDate = "2099-06-28";
+      const passId = await seedPack();
+      const reservation = await draft(serviceDate);
+      expect(await claim(reservation, passId, serviceDate)).toBe(true);
+      await seedUnlimited({
+        validFrom: serviceDate,
+        validUntil: "2099-06-29",
+      });
+      const check = () =>
+        runReservations((repository) =>
+          repository.checkEntryPackAvailable(reservation.id, {
+            passId,
+            holderAccountId: holder,
+            date: date(serviceDate),
+            tier: "open-space",
+          })
+        );
+      await check();
+      expect(await status(reservation)).toBe("reserved");
+      await cancelHold(reservation);
+      await expect(check()).rejects.toMatchObject({
+        _tag: "EntryPackUnavailableError",
+      });
+      expect(await status(reservation)).toBe("released");
     });
 
     test("serializes the same Prague date across two packs", async () => {

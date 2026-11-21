@@ -82,6 +82,7 @@ const workspaceDateFromToday = (days: number) =>
   getCurrentWorkspaceDate().add({ days }).toString();
 
 const passId = "7d3c23b3-02f6-4e40-830f-79bddf11e4fa";
+const unusedOpenSpacePackRows = [[["open-space", 5]], [[0]], [], []];
 
 const passQuoteLayer = async (
   gate = CoworkPassesReleaseGate.fromDecision(true),
@@ -92,7 +93,7 @@ const passQuoteLayer = async (
     | null = "open-space"
 ) => {
   const database = await makeRecordingWorkspaceDatabase();
-  database.setRows([tier ? [[tier]] : []]);
+  database.setRows([tier ? [[tier, 5]] : [], [[0]], [], []]);
   const layer = Layer.mergeAll(
     gate,
     database.layer,
@@ -1054,6 +1055,37 @@ describe("getQuote", () => {
 
   testCustomerEndpointGuards(getQuote);
 
+  test.each([
+    { reason: "all entries committed", rows: [[["open-space", 5]], [[5]]] },
+    {
+      reason: "a claim on the selected date",
+      rows: [[["open-space", 5]], [[0]], [["another-reservation"]]],
+    },
+    {
+      reason: "same-tier Unlimited coverage",
+      rows: [[["open-space", 5]], [[0]], [], [["unlimited-pass"]]],
+    },
+  ])("refuses to sign a quote with $reason", async ({ rows }) => {
+    const { database, layer } = await passQuoteLayer();
+    database.setRows([...rows]);
+    const api = makeCustomerApiTestServer({
+      bookingCatalog: pricedCatalog({ entryPackQuote: layer }),
+    });
+    const response = await api.handle(
+      customerApiRequest({
+        ...getQuote,
+        path: `${getQuote.path}&passId=${passId}`,
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      _tag: "CustomerSelectionUnavailable",
+      reason: "availability_changed",
+    });
+    expect(database.statements).toHaveLength(rows.length);
+  });
+
   test("quotes the selection with its summary and the signed quote checkout starts from", async () => {
     const api = makeCustomerApiTestServer({ bookingCatalog: pricedCatalog() });
 
@@ -1666,6 +1698,10 @@ describe("overlapping requests in different release cohorts", () => {
 
   test("funds quotes only within the request's own passes release cohort", async () => {
     const fixture = await passQuoteLayer();
+    fixture.database.setRows([
+      ...unusedOpenSpacePackRows,
+      ...unusedOpenSpacePackRows,
+    ]);
     const getQuote: CustomerApiCall = {
       method: "GET",
       path: `/booking/quote?locale=en-US&family=cowork&tier=open-space&date=${workspaceDateFromToday(1)}&passId=${passId}`,
