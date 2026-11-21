@@ -374,6 +374,10 @@ const fixtureAccountPasses = `
 export async function loadCustomerAccountPasses() {
   return { held: [], boughtForOthers: [] };
 }
+
+export async function loadCustomerAccountUnlimitedPasses() {
+  return [];
+}
 `;
 
 // The fixture's signed-in session links no customer, so the legal page offers
@@ -583,6 +587,9 @@ const writeFixture = async (
           "./fixture/invoice-history.server.ts",
         ],
         "@/features/account/account-passes.server": [
+          "./fixture/account-passes.server.ts",
+        ],
+        "@/features/account/account-unlimited-passes.server": [
           "./fixture/account-passes.server.ts",
         ],
         "@/features/account/backend/customer-authentication.service": [

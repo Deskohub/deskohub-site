@@ -57,6 +57,7 @@ import {
 } from "effect";
 import { HttpRouter } from "effect/http";
 import { HttpApiTest } from "effect/http-api";
+import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   StandaloneAccessCodeAdministration,
   StandaloneAccessCodeCreationError,
@@ -2425,6 +2426,7 @@ describe("customer and reservation administration endpoints", () => {
       ),
       // What only a reservation restore uses.
       Layer.mock(AccountingDocumentSnapshots, {}),
+      Layer.mock(WorkspaceDatabaseAdvisoryLock, {}),
       Layer.mock(PaidFulfillmentQueueService, {}),
       Layer.mock(ReservationInvoiceService, {}),
       Layer.mock(PaymentRefundService, {}),
