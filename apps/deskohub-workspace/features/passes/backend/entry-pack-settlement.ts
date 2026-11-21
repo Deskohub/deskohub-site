@@ -68,10 +68,7 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
   function* (
     order: typeof orders.$inferSelect,
     attemptId: PaymentAttemptId,
-    options: {
-      readonly unavailable?: boolean;
-      readonly confirmedPass?: UnlimitedServiceDate;
-    } = {}
+    confirmationRejected = false
   ) {
     if (
       order.paymentState !== "paid" ||
@@ -90,11 +87,20 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
       )
       .for("update");
     if (attempt?.state !== "paid") return false;
+    const [purchase] = yield* db
+      .select({ tier: passPurchases.tier, validFrom: passPurchases.validFrom })
+      .from(passPurchases)
+      .where(
+        and(
+          eq(passPurchases.id, order.id),
+          eq(passPurchases.product, "unlimited"),
+          eq(passPurchases.status, "pending_payment")
+        )
+      );
+    if (!purchase) return false;
     const now = yield* currentInstant;
     const unavailable =
-      options.unavailable ||
-      (options.confirmedPass &&
-        hasUnlimitedPassFirstDayEnded(options.confirmedPass, now));
+      confirmationRejected || hasUnlimitedPassFirstDayEnded(purchase, now);
     if (!unavailable && attempt.refundState === "not_required") return true;
     if (!unavailable && isUnsolicitedPartialPassRefund(attempt)) {
       yield* Effect.logWarning(
@@ -134,7 +140,11 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
 );
 
 export const canConfirmUnlimitedPass = Effect.fn("canConfirmUnlimitedPass")(
-  function* (id: OrderId, attemptId: PaymentAttemptId, unavailable = false) {
+  function* (
+    id: OrderId,
+    attemptId: PaymentAttemptId,
+    confirmationRejected = false
+  ) {
     const { db, transaction } = yield* WorkspaceDatabase;
     return yield* transaction(
       Effect.gen(function* () {
@@ -144,7 +154,11 @@ export const canConfirmUnlimitedPass = Effect.fn("canConfirmUnlimitedPass")(
           .where(eq(orders.id, id))
           .for("no key update");
         return order
-          ? yield* checkUnlimitedActivation(order, attemptId, { unavailable })
+          ? yield* checkUnlimitedActivation(
+              order,
+              attemptId,
+              confirmationRejected
+            )
           : false;
       })
     );
@@ -168,11 +182,7 @@ export const settlePassPurchase = Effect.fn("settlePassPurchase")(function* (
       if (!order) return undefined;
 
       const [pass] = yield* db
-        .select({
-          product: passPurchases.product,
-          tier: passPurchases.tier,
-          validFrom: passPurchases.validFrom,
-        })
+        .select({ product: passPurchases.product })
         .from(passPurchases)
         .where(eq(passPurchases.id, id));
       if (!pass) return undefined;
@@ -199,9 +209,7 @@ export const settlePassPurchase = Effect.fn("settlePassPurchase")(function* (
         if (
           pass.product === "unlimited" &&
           confirmedAttemptId &&
-          !(yield* checkUnlimitedActivation(order, confirmedAttemptId, {
-            confirmedPass: pass,
-          }))
+          !(yield* checkUnlimitedActivation(order, confirmedAttemptId))
         )
           return undefined;
         const activatedAt = yield* currentInstant;

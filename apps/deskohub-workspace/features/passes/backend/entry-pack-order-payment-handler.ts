@@ -590,20 +590,17 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       );
       if (Result.isFailure(confirmation)) {
         const cause = confirmation.failure;
-        if (
-          cause._tag !== "DotyposReservationCancelledError" &&
-          !(cause._tag === "DotyposRejected" && cause.reason === "not-found") &&
-          !(
-            cause._tag === "UnlimitedPassHoldsUnavailable" &&
-            cause.reason === "changed"
-          )
-        ) {
-          return yield* paymentError(
-            orderId,
-            "Unlimited pass day confirmation needs reconciliation."
-          );
-        }
-        return yield* canConfirmUnlimitedPass(orderId, attemptId, true);
+        const rejected =
+          cause._tag === "DotyposReservationCancelledError" ||
+          (cause._tag === "DotyposRejected" && cause.reason === "not-found") ||
+          (cause._tag === "UnlimitedPassHoldsUnavailable" &&
+            cause.reason === "changed");
+        if (!(yield* canConfirmUnlimitedPass(orderId, attemptId, rejected)))
+          return false;
+        return yield* paymentError(
+          orderId,
+          "Unlimited pass day confirmation needs reconciliation."
+        );
       }
       return (yield* settlePassPurchase(orderId, attemptId)) !== undefined;
     },

@@ -592,6 +592,66 @@ it("rechecks the first service day before activation after provider confirmation
   );
 });
 
+for (const timing of ["before", "during"] as const) {
+  it(`requires a full refund when the first day closes ${timing} a failing confirmation`, async () => {
+    const start = getCurrentWorkspaceDate().add({ days: 300 });
+    const endsAt = Temporal.Instant.from(
+      getCoworkReservationInterval("open-space", start.toString()).endsAt
+    );
+    const beforeClosing = endsAt.subtract({ minutes: 2 });
+    let confirmations = 0;
+    const services = servicesFor({
+      ...provider.service,
+      confirmReservation: () =>
+        Effect.gen(function* () {
+          confirmations += 1;
+          yield* TestClock.setTime(endsAt.epochMilliseconds);
+          return yield* new DotyposRejected({
+            operation: "confirmReservation",
+            reason: "invalid-response",
+          });
+        }),
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* WorkspaceDatabase;
+        yield* TestClock.setTime(beforeClosing.epochMilliseconds);
+        const purchase = yield* recordPurchase(beforeClosing, 0, "open-space");
+        const attemptId = yield* recordAttempt(
+          purchase.id,
+          "paid",
+          beforeClosing
+        );
+        yield* createUnlimitedPassHolds(purchase);
+        yield* db
+          .update(orders)
+          .set({
+            paymentState: "paid",
+            activePaymentAttemptId: attemptId,
+            paidAt: beforeClosing,
+          })
+          .where(eq(orders.id, purchase.id));
+        yield* settlePassPurchase(purchase.id);
+        if (timing === "before")
+          yield* TestClock.setTime(endsAt.epochMilliseconds);
+        const handler = yield* makeEntryPackOrderPaymentHandler;
+        const fulfillment = yield* Effect.result(handler.fulfill(purchase.id));
+
+        const rejected = yield* readState(purchase.id);
+        expect(rejected.purchase?.status).toBe("void");
+        expect(rejected.order?.fulfillmentState).toBe("failed");
+        expect(rejected.attempts[0]).toMatchObject({
+          refundState: "required",
+          refundTargetValue: price.value,
+        });
+        expect(confirmations > 0).toBe(timing === "during");
+        expect(fulfillment).toMatchObject({ _tag: "Success" });
+        yield* reconcileUnlimitedPassReleases({ now: endsAt, limit: 2 });
+      }).pipe(Effect.provide(Layer.merge(services, TestClock.layer())))
+    );
+  });
+}
+
 it("rechecks a refund recorded after provider confirmation before first activation", async () => {
   const now = Temporal.Now.instant();
   await Effect.runPromise(
