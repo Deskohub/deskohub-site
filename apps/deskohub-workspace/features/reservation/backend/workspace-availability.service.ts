@@ -14,7 +14,10 @@ import {
   type InvalidDotyposTableSeats,
 } from "@/features/checkout/backend/reservation";
 import type { WorkspaceCoworkProductTier } from "@/features/checkout/product-catalog";
-import { getBookingsWithPassDayIntents } from "@/features/passes/backend/pass-day-capacity-bookings";
+import {
+  getBookingsWithPassDayIntents,
+  observePassDayInventory,
+} from "@/features/passes/backend/pass-day-capacity-bookings";
 import {
   type CoworkReservationDetails,
   getCoworkReservationIntervalInput,
@@ -244,14 +247,22 @@ const implementation = Effect.gen(function* () {
       // needed to match these intents to provider holds without counting both.
       const reservationInventory =
         passDayIntents.length > 0 ? providerInventory : inventory;
+      const readReservations: Effect.Effect<
+        readonly (DotyposReservation | ReservationRecord)[],
+        AvailabilityInventoryError
+      > = reservationInventory.listActiveReservationsOverlapping(
+        getDateRangeReservationInterval(input.dates)
+      );
 
-      const [tables, reservations, limitations, expiredDotyposReservationIds] =
+      const [tablesRead, observationsRead, limitationsRead, expiredIdsRead] =
         yield* Effect.flatMap(workspaceStatementConcurrency, (concurrency) =>
           Effect.all(
             [
               inventory.tables,
-              reservationInventory.listActiveReservationsOverlapping(
-                getDateRangeReservationInterval(input.dates)
+              observePassDayInventory(
+                workspaceReservations,
+                readReservations,
+                passDayIntents
               ),
               inventory.listLimitations({
                 from: first.toString(),
@@ -259,9 +270,15 @@ const implementation = Effect.gen(function* () {
               }),
               loadExpiredHoldDotyposReservationIds(),
             ],
-            { concurrency }
+            { concurrency, mode: "result" }
           )
         );
+      const observations = yield* Effect.fromResult(observationsRead);
+      const tables = yield* Effect.fromResult(tablesRead);
+      const limitations = yield* Effect.fromResult(limitationsRead);
+      const expiredDotyposReservationIds =
+        yield* Effect.fromResult(expiredIdsRead);
+      const { reservations } = observations;
       const replacementReservationId =
         input.occupancyExclusion?.dotyposReservationId;
       const replacementIsPending = reservations.some(
@@ -294,7 +311,7 @@ const implementation = Effect.gen(function* () {
         tables,
         bookings: getBookingsWithPassDayIntents(
           activeReservations,
-          passDayIntents
+          observations.passDayIntents
         ),
         limitations,
       };

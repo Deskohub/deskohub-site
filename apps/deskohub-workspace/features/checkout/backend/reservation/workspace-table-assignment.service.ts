@@ -9,7 +9,10 @@ import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer, Match, Option } from "effect";
 import { workspaceStatementConcurrency } from "@/db/database.service";
 import { workspaceProductMonitorOptionTableTags } from "@/features/checkout/product-catalog";
-import { getBookingsWithPassDayIntents } from "@/features/passes/backend/pass-day-capacity-bookings";
+import {
+  getBookingsWithPassDayIntents,
+  observePassDayInventory,
+} from "@/features/passes/backend/pass-day-capacity-bookings";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
 import type { ReservationRecord } from "@/features/reservation/backend/reservation-record";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -234,11 +237,15 @@ export class WorkspaceTableAssignmentService extends Context.Service<
         const passDayIntents =
           yield* workspaceReservations.selectPendingPassDayCapacity(dates);
         const concurrency = yield* workspaceStatementConcurrency;
-        const inventory = yield* Effect.all(
+        const reads = yield* Effect.all(
           {
             tables: dotypos.getTables(),
-            reservations: dotypos.listActiveReservationsOverlapping(
-              getOccupancyWindowDates(window)
+            observations: observePassDayInventory(
+              workspaceReservations,
+              dotypos.listActiveReservationsOverlapping(
+                getOccupancyWindowDates(window)
+              ),
+              passDayIntents
             ),
             expiredDotyposReservationIds: workspaceReservations
               .selectExpiredHoldDotyposReservationIds({
@@ -254,9 +261,16 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                 Effect.orElseSucceed((): readonly DotyposReservationId[] => [])
               ),
           },
-          { concurrency }
+          { concurrency, mode: "result" }
         );
-        return { ...inventory, passDayIntents };
+        const observations = yield* Effect.fromResult(reads.observations);
+        return {
+          ...observations,
+          tables: yield* Effect.fromResult(reads.tables),
+          expiredDotyposReservationIds: yield* Effect.fromResult(
+            reads.expiredDotyposReservationIds
+          ),
+        };
       });
 
       const assignTableId = Effect.fn(

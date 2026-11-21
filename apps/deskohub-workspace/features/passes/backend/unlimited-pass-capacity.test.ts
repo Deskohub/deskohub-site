@@ -25,6 +25,7 @@ import {
 } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
+import { getBookingsWithPassDayIntents } from "./pass-day-capacity-bookings";
 import {
   getBookableUnlimitedStartMatrix,
   getBookableUnlimitedStarts,
@@ -119,6 +120,10 @@ test("loads one calendar inventory and ignores only the named draft's durable cl
         tableId: firstDesk.id,
         tier: "reserved-desk",
         serviceDate: plainDateStringSchema.make(startDate.toString()),
+        holdRequestedAt: null,
+        holdAmbiguous: false,
+        holdGeneration: null,
+        providerReservationId: null,
       },
     ],
     onInventoryRead: () => {
@@ -224,12 +229,17 @@ test("the workstation pins an exact monitor setup", async () => {
 
 test("ordinary assignment counts a durable intent and deduplicates its visible provider hold", async () => {
   const serviceDate = plainDateStringSchema.make(startDate.toString());
+  const generation = crypto.randomUUID();
   const intent = {
     tableId: openTable.id,
     serviceDate,
     passId,
     customerId,
     tier: "open-space",
+    holdRequestedAt: Temporal.Instant.from("2099-03-01T12:00:00Z"),
+    holdAmbiguous: false,
+    holdGeneration: generation,
+    providerReservationId: null,
   } as const;
   const interval = getCoworkReservationInterval("open-space", serviceDate);
   const day = { tableId: openTable.id, serviceDate: startDate, interval };
@@ -237,6 +247,7 @@ test("ordinary assignment counts a durable intent and deduplicates its visible p
     passId,
     customerId,
     day,
+    generation,
   }).pipe(
     Effect.provideService(DotyposService, {
       createReservation: ({ note }) =>
@@ -251,10 +262,52 @@ test("ordinary assignment counts a durable intent and deduplicates its visible p
     } as DotyposService["Service"]),
     Effect.runPromise
   );
-  expect(hasUnlimitedPassDayMarker(record, passId, startDate)).toBe(true);
-  expect(matchesUnlimitedPassDayHold(record, { passId, customerId, day })).toBe(
+  expect(hasUnlimitedPassDayMarker(record, passId, startDate, generation)).toBe(
     true
   );
+  expect(
+    matchesUnlimitedPassDayHold(record, { passId, customerId, day, generation })
+  ).toBe(true);
+  const previous = {
+    ...record,
+    id: providerBooking("16", openTable, startDate).id,
+    note: record.note?.replace(generation, crypto.randomUUID()),
+  };
+  expect(
+    getBookingsWithPassDayIntents([previous, record], [intent], passId)
+  ).toHaveLength(2);
+  const copied = { ...record, id: previous.id };
+  const repeated = getBookingsWithPassDayIntents([record, record], [intent]);
+  expect(repeated).toHaveLength(1);
+  const movedRecord = { ...record, _tableId: otherOpenTable.id };
+  expect(
+    getBookingsWithPassDayIntents([movedRecord, record], [intent]).map(
+      ({ tableId }) => tableId
+    )
+  ).toEqual([otherOpenTable.id, openTable.id]);
+  expect(
+    getBookingsWithPassDayIntents([record, copied], [intent], passId)
+  ).toHaveLength(3);
+  expect(
+    getBookingsWithPassDayIntents(
+      [record, copied],
+      [{ ...intent, providerReservationId: record.id }],
+      passId
+    )
+  ).toHaveLength(1);
+  expect(
+    getBookingsWithPassDayIntents(
+      [copied],
+      [{ ...intent, holdAmbiguous: true }],
+      passId
+    )
+  ).toHaveLength(2);
+  expect(
+    getBookingsWithPassDayIntents(
+      [record],
+      [{ ...intent, holdRequestedAt: null }]
+    )
+  ).toHaveLength(2);
 
   const assigned = ({
     tables,
@@ -289,6 +342,12 @@ test("ordinary assignment counts a durable intent and deduplicates its visible p
   await expect(
     assigned({ tables: [openTable], providerBookings: [record] })
   ).resolves.toBe(openTable.id);
+  await expect(
+    assigned({ tables: [openTable], providerBookings: [record, record] })
+  ).resolves.toBe(openTable.id);
+  await expect(
+    assigned({ tables: [openTable], providerBookings: [previous] })
+  ).rejects.toMatchObject({ _tag: "TableAssignmentUnavailableError" });
 
   // The shared snapshot contains the same occupancy without private fields.
   // The calendar must still keep the second seat bookable during handover.
@@ -298,6 +357,9 @@ test("ordinary assignment counts a durable intent and deduplicates its visible p
     listActiveReservationsOverlapping: () =>
       Effect.succeed([toReservationRecord(record)]),
   });
+  const cached = toReservationRecord(record);
+  expect(cached.unlimitedPassDay).toBe(true);
+  expect(cached).not.toHaveProperty("note");
   const { services } = capacityLayer({
     tables: [openTable],
     providerBookings: [record],

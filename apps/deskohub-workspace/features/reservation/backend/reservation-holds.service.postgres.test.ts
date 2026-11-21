@@ -806,6 +806,10 @@ describe.skipIf(!postgresDatabase)(
               serviceDate: reservedDesk.date,
               tableId: bareDesk.id,
               tier: "reserved-desk" as const,
+              holdRequestedAt: null,
+              holdAmbiguous: false,
+              holdGeneration: null,
+              providerReservationId: null,
             };
             const availability = WorkspaceAvailabilityService.Default.pipe(
               Layer.provide(AdvisoryAvailabilityInventory.Provider),

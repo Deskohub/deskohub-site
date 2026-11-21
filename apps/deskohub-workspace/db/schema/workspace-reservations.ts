@@ -15,6 +15,7 @@ import {
   pgTable,
   text,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type {
@@ -116,6 +117,7 @@ export const workspaceReservations = pgTable(
     serviceDate: date("service_date", { mode: "string" }).$type<PlainDate>(),
     passDayTableId: text("pass_day_table_id").$type<DotyposTableId>(),
     passDayHoldRequestedAt: instant("pass_day_hold_requested_at"),
+    passDayHoldGeneration: uuid("pass_day_hold_generation"),
     checkoutSessionKey: text("checkout_session_key")
       .notNull()
       .default(postgresUuidV7)
@@ -211,7 +213,7 @@ export const workspaceReservations = pgTable(
     check(
       "workspace_reservations_pass_day_check",
       sql`(${t.passId} is null and ${t.serviceDate} is null and ${t.passDayTableId} is null
-          and ${t.passDayHoldRequestedAt} is null)
+          and ${t.passDayHoldRequestedAt} is null and ${t.passDayHoldGeneration} is null)
         or (${t.passId} is not null and ${t.serviceDate} is not null and ${t.passDayTableId} is not null
           and ${t.activePaymentAttemptId} is null and ${t.activeCustomerEmailDeliveryId} is null)`
     ),

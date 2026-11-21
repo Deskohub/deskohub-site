@@ -108,6 +108,8 @@ export const recordReplacementUnlimitedPassHolds = Effect.fn(
       .set({
         passDayTableId: day.tableId,
         passDayHoldRequestedAt: null,
+        passDayHoldGeneration: crypto.randomUUID(),
+        failureCode: null,
         reservationHoldExpiresAt: holdsExpireAt,
         reservationHoldExpiredAt: null,
         reservationCancelledAt: null,

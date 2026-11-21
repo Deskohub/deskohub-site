@@ -12,19 +12,15 @@ import {
   getPlainDatesBetween,
   temporalInstantToDate,
 } from "@/shared/utils/temporal";
+import { formatPassDayMarker, readPassDayMarkers } from "../pass-day-marker";
 import { unlimitedPassDays } from "../pass-offer";
 import type { UnlimitedPassDay } from "./unlimited-pass-capacity";
-
-const passDayMarkerPrefix = (passId: OrderId) =>
-  `Deskohub Unlimited ${passId}/`;
-
-const passDayMarker = (passId: OrderId, serviceDate: Temporal.PlainDate) =>
-  `${passDayMarkerPrefix(passId)}${serviceDate}`;
 
 type PassDayHold = {
   readonly passId: OrderId;
   readonly customerId: DotyposCustomerId;
   readonly day: UnlimitedPassDay;
+  readonly generation: string | null;
 };
 
 /** Creates one NEW hold. The caller journals intent before sending it. */
@@ -34,8 +30,10 @@ export const createUnlimitedPassDayHold = Effect.fn(
   passId,
   customerId,
   day,
+  generation,
   coffee,
-}: PassDayHold & {
+}: Omit<PassDayHold, "generation"> & {
+  readonly generation: string;
   readonly coffee?: boolean;
 }) {
   const dotypos = yield* DotyposService;
@@ -49,7 +47,7 @@ export const createUnlimitedPassDayHold = Effect.fn(
     seats: workspaceBookingSeatCount,
     status: "NEW",
     note: [
-      passDayMarker(passId, day.serviceDate),
+      formatPassDayMarker(passId, day.serviceDate, generation),
       `Káva: ${coffee ? "ano" : "ne"}`,
     ].join("\n"),
   });
@@ -77,12 +75,15 @@ export const listUnlimitedPassDayHolds = Effect.fn("listUnlimitedPassDayHolds")(
       getPlainDatesBetween(
         input.startDate,
         endsBefore.subtract({ days: 1 })
-      ).map((date) => passDayMarker(input.passId, date))
+      ).map((date) => formatPassDayMarker(input.passId, date, null))
     );
     return records.filter(
       (record) =>
         record._customerId === input.customerId &&
-        record.note?.split("\n").some((line) => markers.has(line))
+        readPassDayMarkers(record.note).some((marker) => {
+          const [pass, date] = marker.split("/");
+          return markers.has(`${pass}/${date}`);
+        })
     );
   }
 );
@@ -90,10 +91,12 @@ export const listUnlimitedPassDayHolds = Effect.fn("listUnlimitedPassDayHolds")(
 export const hasUnlimitedPassDayMarker = (
   record: Pick<DotyposReservation, "note">,
   passId: OrderId,
-  serviceDate: Temporal.PlainDate
+  serviceDate: Temporal.PlainDate,
+  generation: string | null
 ) =>
-  record.note?.split("\n").includes(passDayMarker(passId, serviceDate)) ??
-  false;
+  record.note
+    ?.split("\n")
+    .includes(formatPassDayMarker(passId, serviceDate, generation)) ?? false;
 
 /** Matches the booking facts required when settling a marked attempt. */
 export const matchesUnlimitedPassDayHold = (
@@ -101,10 +104,10 @@ export const matchesUnlimitedPassDayHold = (
     DotyposReservation,
     "_customerId" | "_tableId" | "note" | "startDate" | "endDate" | "seats"
   >,
-  { passId, customerId, day }: PassDayHold
+  { passId, customerId, day, generation }: PassDayHold
 ) => {
   if (
-    !hasUnlimitedPassDayMarker(record, passId, day.serviceDate) ||
+    !hasUnlimitedPassDayMarker(record, passId, day.serviceDate, generation) ||
     record._customerId !== customerId ||
     record._tableId !== day.tableId
   ) {

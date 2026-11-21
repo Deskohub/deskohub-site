@@ -1,4 +1,5 @@
 import type { DotyposReservation } from "@deskohub/dotypos";
+import { readPassDayMarkers } from "@/features/passes/pass-day-marker";
 
 /**
  * The Dotypos reservation fields Workspace reads to show, place, and check a
@@ -11,9 +12,6 @@ export type ReservationRecord = Pick<
 > & {
   readonly unlimitedPassDay?: true;
 };
-
-const unlimitedPassDayMarker =
-  /^Deskohub Unlimited [0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\/\d{4}-\d{2}-\d{2}$/m;
 
 /** Drops customer links and free-text notes before sharing a reservation. */
 export const toReservationRecord = ({
@@ -32,5 +30,5 @@ export const toReservationRecord = ({
   startDate,
   endDate,
   seats,
-  ...(note && unlimitedPassDayMarker.test(note) && { unlimitedPassDay: true }),
+  ...(readPassDayMarkers(note).length > 0 && { unlimitedPassDay: true }),
 });
