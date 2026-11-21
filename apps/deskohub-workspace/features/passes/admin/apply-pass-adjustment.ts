@@ -69,7 +69,11 @@ export const savePassHolder = Effect.fn("savePassHolder")(function* (
   const [previous] = yield* db
     .delete(entryPackGiftInvitations)
     .where(eq(entryPackGiftInvitations.orderId, purchase.id))
-    .returning({ generation: entryPackGiftInvitations.generation });
+    .returning({
+      generation: entryPackGiftInvitations.generation,
+      sentAt: entryPackGiftInvitations.sentAt,
+      confirmationInvited: entryPackGiftInvitations.confirmationInvited,
+    });
   yield* db
     .update(passPurchases)
     .set({
@@ -91,6 +95,8 @@ export const savePassHolder = Effect.fn("savePassHolder")(function* (
     locale: purchase.locale,
     requestedAt: now,
     nextAttemptAt: toBuyer ? null : now,
+    confirmationInvited:
+      previous?.confirmationInvited ?? Boolean(previous?.sentAt),
   });
 });
 
