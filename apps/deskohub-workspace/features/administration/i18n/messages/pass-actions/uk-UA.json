@@ -44,6 +44,7 @@
   "passActionsNoRefund": "За подарований абонемент кошти не повертаються.",
   "passActionsSelectCustomer": "Обрати цього клієнта",
   "passActionsHistory": "Зміни абонемента",
+  "passActionsTransferConflict": "Перевірте бронювання в Dotypos за ці дні: {dates}. Передавання призупинено.",
   "passActionsAccessToday": "Сьогоднішній доступ діє до завершення бронювання.",
   "passActionsPaid": "Сплачено {amount}",
   "passActionsPackEntries": "5 або 10 відвідувань",

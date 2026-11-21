@@ -467,6 +467,7 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
         generation: unlimitedPassDayMoves.generation,
         customerId: unlimitedPassDayMoves.customerId,
         tableId: unlimitedPassDayMoves.targetTableId,
+        settledAt: unlimitedPassDayMoves.settledAt,
       })
       .from(unlimitedPassDayMoves)
       .innerJoin(
@@ -520,7 +521,8 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
               if (
                 move.reservationId !== row.id ||
                 move.generation !== row.passDayHoldGeneration ||
-                move.customerId !== row.dotyposCustomerId ||
+                (!move.settledAt &&
+                  move.customerId !== row.dotyposCustomerId) ||
                 move.tableId !== row.passDayTableId
               )
                 return yield* new UnlimitedPassHoldsUnavailable({

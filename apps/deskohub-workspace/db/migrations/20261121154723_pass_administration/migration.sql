@@ -7,6 +7,7 @@ CREATE TABLE "pass_administration_changes" (
 	"change" jsonb NOT NULL,
 	"requested_at" timestamp with time zone NOT NULL,
 	"last_attempt_at" timestamp with time zone,
+	"transfer_progress" jsonb,
 	"completed_at" timestamp with time zone,
 	"failed_at" timestamp with time zone,
 	CONSTRAINT "pass_administration_changes_result_check" CHECK (num_nonnulls("completed_at", "failed_at") <= 1

@@ -97,6 +97,7 @@ export function AdministrationCustomerDetail({
         customerId={customerId}
         locale={locale}
         notice={notice}
+        passes={passes}
       />
     );
   }
@@ -209,11 +210,16 @@ function UnavailableCustomerDetail({
   customerId,
   locale,
   notice,
+  passes,
 }: {
   readonly activity: AdministrationCustomerActivity;
   readonly customerId: DotyposCustomerId;
   readonly locale: Locale;
   readonly notice?: AdministrationNotice;
+  readonly passes?: {
+    readonly spent: CustomerDetailFact;
+    readonly content: ReactNode;
+  };
 }) {
   return (
     <AdministrationPage>
@@ -226,6 +232,14 @@ function UnavailableCustomerDetail({
         title={m.administrationCustomerDetailUnavailableTitle({}, { locale })}
       />
       <AdministrationNoticeBanner notice={notice} />
+      {passes && (
+        <div className="mb-7 space-y-5">
+          <div className="rounded-xl border border-navy-blue/10 bg-white p-4">
+            <CustomerStat {...passes.spent} />
+          </div>
+          {passes.content}
+        </div>
+      )}
       {activity.reservationHistoryTruncated && (
         <p className="mb-3 text-sm text-navy-blue/65">
           {m.administrationCustomerDetailReservationsTruncated({}, { locale })}{" "}

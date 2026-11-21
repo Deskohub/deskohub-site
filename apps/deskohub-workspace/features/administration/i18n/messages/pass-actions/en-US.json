@@ -44,6 +44,7 @@
   "passActionsNoRefund": "No refund for a complimentary pass.",
   "passActionsSelectCustomer": "Use this customer",
   "passActionsHistory": "Pass changes",
+  "passActionsTransferConflict": "Check the Dotypos bookings for {dates}. The transfer is paused.",
   "passActionsAccessToday": "Today’s access stays valid until it ends.",
   "passActionsPaid": "Paid {amount}",
   "passActionsPackEntries": "5 or 10 entries",

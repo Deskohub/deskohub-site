@@ -18,6 +18,7 @@ import {
 } from "@/features/discounts/admin/page-data.server";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
 import { AdminCustomerPasses } from "@/features/passes/admin/customer-passes";
+import { AdminGrantPass } from "@/features/passes/admin/pass-administration-actions.server";
 import {
   loadAdminCustomerPasses,
   loadReservationPassLinks,
@@ -71,12 +72,15 @@ export async function AdministrationCustomerDetailContent({
     })
   );
 
-  const [passes, reservationPassLinks] = profile
-    ? await Promise.all([
-        loadAdminCustomerPasses(customerId),
-        loadReservationPassLinks(activity.reservations.map(({ id }) => id)),
-      ])
-    : [null, undefined];
+  const [passes, reservationPassLinks] = await Promise.all([
+    loadAdminCustomerPasses(customerId),
+    profile
+      ? loadReservationPassLinks(activity.reservations.map(({ id }) => id))
+      : undefined,
+  ]);
+  const customerName = profile
+    ? getAdministrationCustomerName(profile.customer, locale)
+    : customerId;
 
   return (
     <AdministrationCustomerDetail
@@ -85,7 +89,8 @@ export async function AdministrationCustomerDetailContent({
       locale={locale}
       notice={discounts.notice}
       passes={
-        profile && passes
+        passes &&
+        (profile || passes.held.length > 0 || passes.boughtForOthers.length > 0)
           ? {
               spent: {
                 label: m.passesSpent({}, { locale }),
@@ -95,10 +100,18 @@ export async function AdministrationCustomerDetailContent({
               },
               content: (
                 <AdminCustomerPasses
+                  actions={
+                    profile && (
+                      <AdminGrantPass
+                        initialEmail={profile.customer.email ?? undefined}
+                        initialName={customerName}
+                      />
+                    )
+                  }
                   boughtForOthers={passes.boughtForOthers}
                   held={passes.held}
                   locale={locale}
-                  name={getAdministrationCustomerName(profile.customer, locale)}
+                  name={customerName}
                 />
               ),
             }

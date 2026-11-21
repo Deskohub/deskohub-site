@@ -106,11 +106,10 @@ const cancelPackBookings = Effect.fn("cancelPackBookings")(function* (
   return yield* transaction(finishPassChange(record, "completed"));
 });
 
-const releasePassChangeDays = Effect.fn("releasePassChangeDays")(function* (
-  purchase: Purchase,
+const hasUnsettledDayMoves = Effect.fn("hasUnsettledDayMoves")(function* (
+  passId: Purchase["id"],
   range: DayRange
 ) {
-  if (range.from >= range.until) return true;
   const { db } = yield* WorkspaceDatabase;
   const [unsettledMove] = yield* db
     .select({ id: unlimitedPassDayMoves.reservationId })
@@ -121,14 +120,22 @@ const releasePassChangeDays = Effect.fn("releasePassChangeDays")(function* (
     )
     .where(
       and(
-        eq(workspaceReservations.passId, purchase.id),
+        eq(workspaceReservations.passId, passId),
         gte(workspaceReservations.serviceDate, range.from),
         lt(workspaceReservations.serviceDate, range.until),
         isNull(unlimitedPassDayMoves.settledAt)
       )
     )
     .limit(1);
-  if (unsettledMove) return false;
+  return unsettledMove !== undefined;
+});
+
+const releasePassChangeDays = Effect.fn("releasePassChangeDays")(function* (
+  purchase: Purchase,
+  range: DayRange
+) {
+  if (range.from >= range.until) return true;
+  if (yield* hasUnsettledDayMoves(purchase.id, range)) return false;
   yield* releaseUnlimitedPassDays(purchase, range);
   const rows = yield* readUnlimitedPassDays(purchase.id);
   return rows.every(
@@ -156,10 +163,36 @@ const transferPassDays = Effect.fn("transferPassDays")(function* (
   ) {
     return yield* new PassChangeRefused({ reason: "changed" });
   }
+  const range = { from: purchase.validFrom, until: purchase.validUntil };
+  if (yield* hasUnsettledDayMoves(purchase.id, range)) return record;
   const now = yield* currentInstant;
+  const initial = record.transferProgress ?? {
+    rollingBack: false,
+    attempted: [],
+    transferred: [],
+    conflicts: [],
+  };
+  let progress = initial;
   const rollback =
+    initial.rollingBack ||
     getWorkspaceDate(now).toString() >= purchase.validFrom ||
     !(yield* findPurchaseLoginEmail(change.holderAccountId));
+  const save = Effect.fnUntraced(function* (
+    next: NonNullable<ChangeRecord["transferProgress"]>
+  ) {
+    yield* db
+      .update(passAdministrationChanges)
+      .set({ transferProgress: next })
+      .where(
+        and(
+          eq(passAdministrationChanges.requestId, record.requestId),
+          pendingPassChange
+        )
+      );
+    progress = next;
+  });
+  if (rollback && !initial.rollingBack)
+    yield* save({ ...initial, rollingBack: true });
   const days = (yield* readUnlimitedPassDays(purchase.id)).filter(
     ({ serviceDate }) =>
       serviceDate >= purchase.validFrom && serviceDate < purchase.validUntil
@@ -167,34 +200,81 @@ const transferPassDays = Effect.fn("transferPassDays")(function* (
   const expectedDays = Temporal.PlainDate.from(purchase.validFrom).until(
     purchase.validUntil
   ).days;
-  if (days.length !== expectedDays)
+  if (!rollback && days.length !== expectedDays)
     return yield* new PassChangeRefused({ reason: "changed" });
+  const conflicts: PlainDate[] = [];
   for (const row of days) {
+    const day = row.serviceDate;
+    if (
+      rollback
+        ? !progress.attempted.includes(day)
+        : progress.transferred.includes(day)
+    )
+      continue;
     if (row.reservationState !== "confirmed" || !row.dotyposReservationId) {
-      return yield* new PassChangeRefused({ reason: "changed" });
+      if (!rollback) return yield* new PassChangeRefused({ reason: "changed" });
+      conflicts.push(day);
+      continue;
+    }
+    if (!rollback && !progress.attempted.includes(day)) {
+      yield* save({ ...progress, attempted: [...progress.attempted, day] });
     }
     const hold = passDayHold(purchase, row);
-    yield* dotypos.reassignReservationCustomerIfMatches({
-      reservationId: row.dotyposReservationId,
-      expectedBooking: {
-        customerId: rollback ? newCustomerId : row.dotyposCustomerId,
-        tableId: hold.day.tableId,
-        seats: workspaceBookingSeatCount,
-        startDate: temporalInstantToDate(
-          Temporal.Instant.from(hold.day.interval.startsAt)
+    const outcome = yield* Effect.result(
+      dotypos.reassignReservationCustomerIfMatches({
+        reservationId: row.dotyposReservationId,
+        expectedBooking: {
+          customerId: rollback ? newCustomerId : row.dotyposCustomerId,
+          tableId: hold.day.tableId,
+          seats: workspaceBookingSeatCount,
+          startDate: temporalInstantToDate(
+            Temporal.Instant.from(hold.day.interval.startsAt)
+          ),
+          endDate: temporalInstantToDate(
+            Temporal.Instant.from(hold.day.interval.endsAt)
+          ),
+        },
+        expectedNoteLine: formatPassDayMarker(
+          hold.passId,
+          hold.day.serviceDate,
+          hold.generation
         ),
-        endDate: temporalInstantToDate(
-          Temporal.Instant.from(hold.day.interval.endsAt)
-        ),
-      },
-      expectedNoteLine: formatPassDayMarker(
-        hold.passId,
-        hold.day.serviceDate,
-        hold.generation
-      ),
-      customerId: rollback ? row.dotyposCustomerId : newCustomerId,
-    });
+        customerId: rollback ? row.dotyposCustomerId : newCustomerId,
+      })
+    );
+    if (Result.isFailure(outcome)) {
+      if (rollback) {
+        conflicts.push(day);
+        continue;
+      }
+      const permanentConflict =
+        outcome.failure._tag === "DotyposVersionConflict" ||
+        (outcome.failure._tag === "DotyposRejected" &&
+          (outcome.failure.reason === "not-found" ||
+            outcome.failure.reason === "invalid-request"));
+      if (permanentConflict)
+        yield* save({ ...progress, rollingBack: true, conflicts: [day] });
+      return record;
+    }
+    yield* save(
+      rollback
+        ? {
+            ...progress,
+            attempted: progress.attempted.filter((date) => date !== day),
+            transferred: progress.transferred.filter((date) => date !== day),
+          }
+        : { ...progress, transferred: [...progress.transferred, day] }
+    );
   }
+  if (rollback && progress.attempted.length > 0) {
+    yield* save({
+      ...progress,
+      conflicts: [...new Set([...conflicts, ...progress.attempted])],
+    });
+    return record;
+  }
+  if (rollback && progress.conflicts.length > 0)
+    yield* save({ ...progress, conflicts: [] });
   return yield* transaction(
     Effect.gen(function* () {
       if (rollback) return yield* finishPassChange(record, "failed");

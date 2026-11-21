@@ -26,6 +26,10 @@ import { StatusBadge } from "@/shared/components/ui/status-badge";
 import { formatMoney, moneyWithValue } from "@/shared/money/money";
 import { formatCount } from "@/shared/utils/number";
 import { getPassTierName } from "../pass-offer.i18n";
+import {
+  PassAdministrationActions,
+  PassAdministrationAudit,
+} from "./pass-administration-actions.server";
 import { loadAdminPass } from "./pass-page-data.server";
 import {
   PassPartyName,
@@ -45,7 +49,16 @@ export async function AdminPassDetailScreen({
 }) {
   const [{ passId }, locale] = await Promise.all([params, getRequestLocale()]);
   const detail = await loadAdminPass(passId);
-  return <AdminPassDetailView detail={detail} locale={locale} />;
+  return (
+    <AdminPassDetailView
+      detail={detail}
+      locale={locale}
+      actions={<PassAdministrationActions passId={passId} />}
+      operatorAudit={
+        <PassAdministrationAudit passId={passId} locale={locale} />
+      }
+    />
+  );
 }
 
 type PassDetailProps = {
@@ -59,8 +72,10 @@ export function AdminPassDetailView({
   detail,
   locale,
   actions,
+  operatorAudit,
 }: PassDetailProps & {
   readonly actions?: ReactNode;
+  readonly operatorAudit?: ReactNode;
 }) {
   const { pass } = detail;
   const purchaseDateLabel = detail.paidAt ? m.passesOrderedAt : m.passesCreated;
@@ -106,6 +121,7 @@ export function AdminPassDetailView({
           )}
           <PaymentAttempts detail={detail} locale={locale} />
           <PassAudit detail={detail} locale={locale} />
+          {operatorAudit}
         </div>
         <aside className="space-y-5">
           <AdministrationDetailSection title={m.passesHolder({}, { locale })}>

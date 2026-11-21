@@ -44,6 +44,7 @@
   "passActionsNoRefund": "Kostenlose Pässe werden nicht erstattet.",
   "passActionsSelectCustomer": "Diesen Kunden auswählen",
   "passActionsHistory": "Änderungen am Pass",
+  "passActionsTransferConflict": "Prüfen Sie die Dotypos-Buchungen für {dates}. Die Übertragung ist pausiert.",
   "passActionsAccessToday": "Der heutige Zugang bleibt bis zum Ende der Buchung gültig.",
   "passActionsPaid": "Bezahlt: {amount}",
   "passActionsPackEntries": "5 oder 10 Eintritte",

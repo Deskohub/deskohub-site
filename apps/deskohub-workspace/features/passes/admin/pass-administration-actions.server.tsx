@@ -1,7 +1,8 @@
 import "server-only";
 
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
+import { connection } from "next/server";
 import { cache } from "react";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
@@ -11,7 +12,10 @@ import {
   passPurchases,
   paymentAttempts,
 } from "@/db/schema";
-import { formatAdministrationDateTime } from "@/features/administration/formatters";
+import {
+  formatAdministrationDateTime,
+  formatAdministrationPlainDate,
+} from "@/features/administration/formatters";
 import { m } from "@/features/administration/i18n";
 import { AdministrationAlert } from "@/features/administration/notice";
 import {
@@ -27,7 +31,7 @@ import {
   CoworkPassesReleaseGate,
   CoworkPassesReleaseGateForRun,
 } from "../backend/cowork-passes-release-gate";
-import { PassAdjustmentDialogs } from "./pass-action-dialogs";
+import { GrantPassDialog, PassAdjustmentDialogs } from "./pass-action-dialogs";
 import {
   getPassCancellationRefund,
   passValidityEnd,
@@ -43,7 +47,7 @@ const readPassActionData = Effect.fn("readPassActionData")(function* (
     Effect.mapError(() => new AdministrationRecordNotFound())
   );
   const { db } = yield* WorkspaceDatabase;
-  const [row, claims, audit] = yield* Effect.all(
+  const [row, claims, audit, creditRecords] = yield* Effect.all(
     [
       db
         .select({
@@ -86,6 +90,7 @@ const readPassActionData = Effect.fn("readPassActionData")(function* (
           change: passAdministrationChanges.change,
           completedAt: passAdministrationChanges.completedAt,
           failedAt: passAdministrationChanges.failedAt,
+          transferProgress: passAdministrationChanges.transferProgress,
         })
         .from(passAdministrationChanges)
         .where(eq(passAdministrationChanges.passId, id))
@@ -94,6 +99,15 @@ const readPassActionData = Effect.fn("readPassActionData")(function* (
           desc(passAdministrationChanges.requestId)
         )
         .limit(50),
+      db
+        .select({ change: passAdministrationChanges.change })
+        .from(passAdministrationChanges)
+        .where(
+          and(
+            eq(passAdministrationChanges.passId, id),
+            sql`${passAdministrationChanges.change}->>'_tag' = 'validity' and (${passAdministrationChanges.change}->>'refundValue')::integer > 0`
+          )
+        ),
     ],
     { concurrency: "unbounded" }
   );
@@ -143,7 +157,7 @@ const readPassActionData = Effect.fn("readPassActionData")(function* (
       ),
     });
   }
-  const refundCredits = audit.flatMap(({ change }) =>
+  const refundCredits = creditRecords.flatMap(({ change }) =>
     change._tag === "validity" && change.refundValue > 0
       ? [
           {
@@ -210,6 +224,23 @@ export async function PassAdministrationActions({
   return adjustment && <PassAdjustmentDialogs pass={adjustment} />;
 }
 
+export async function AdminGrantPass({
+  initialEmail,
+  initialName,
+}: {
+  readonly initialEmail?: string;
+  readonly initialName?: string;
+}) {
+  await connection();
+  return (
+    <GrantPassDialog
+      initialEmail={initialEmail}
+      initialName={initialName}
+      today={getWorkspaceDate(Temporal.Now.instant()).toString()}
+    />
+  );
+}
+
 export async function PassAdministrationAudit({
   passId,
   locale,
@@ -253,6 +284,20 @@ export async function PassAdministrationAudit({
                 {event.failedAt
                   ? m.passActionsFailed({}, { locale })
                   : m.passActionsPending({}, { locale })}
+              </AdministrationAlert>
+            )}
+            {!!event.transferProgress?.conflicts.length && (
+              <AdministrationAlert status="error">
+                {m.passActionsTransferConflict(
+                  {
+                    dates: event.transferProgress.conflicts
+                      .map((date) =>
+                        formatAdministrationPlainDate(date, locale)
+                      )
+                      .join(", "),
+                  },
+                  { locale }
+                )}
               </AdministrationAlert>
             )}
           </li>

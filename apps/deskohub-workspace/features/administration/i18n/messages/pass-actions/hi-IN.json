@@ -44,6 +44,7 @@
   "passActionsNoRefund": "उपहार में दिए पास पर रिफ़ंड नहीं है।",
   "passActionsSelectCustomer": "यह ग्राहक चुनें",
   "passActionsHistory": "पास में बदलाव",
+  "passActionsTransferConflict": "{dates} की Dotypos बुकिंग जाँचें। हस्तांतरण रुका हुआ है।",
   "passActionsAccessToday": "आज की बुकिंग समाप्त होने तक आज की पहुँच बनी रहेगी।",
   "passActionsPaid": "भुगतान किया गया {amount}",
   "passActionsPackEntries": "5 या 10 प्रवेश",

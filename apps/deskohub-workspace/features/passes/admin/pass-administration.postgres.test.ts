@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { DotyposService, DotyposTableSchema } from "@deskohub/dotypos";
+import {
+  DotyposService,
+  DotyposTableSchema,
+  DotyposVersionConflict,
+} from "@deskohub/dotypos";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Result, Schema } from "effect";
@@ -475,6 +479,68 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         holder_version: 1,
         gift_claimed_at: null,
       });
+
+      const service = await run(DotyposService, provider);
+      const conflictingId = restored[1].dotypos_reservation_id;
+      const conflicting = {
+        layer: Layer.succeed(DotyposService, {
+          ...service,
+          reassignReservationCustomerIfMatches: (input) =>
+            input.reservationId === conflictingId
+              ? Effect.fail(
+                  new DotyposVersionConflict({
+                    operation: "reassignReservationCustomerIfMatches",
+                    message: "Fixture provider version conflict",
+                  })
+                )
+              : service.reassignReservationCustomerIfMatches(input),
+        }),
+      };
+      const failedTransfer = await run(
+        beginUnlimitedPassChange({
+          passId,
+          requestId: crypto.randomUUID(),
+          reason: "Fixture conflicting transfer",
+          change: {
+            _tag: "reassign",
+            expectedHolderAccountId: recipient,
+            expectedHolderVersion: 1,
+            holderAccountId: holder,
+            holderCustomerId: "4142",
+          },
+        }),
+        conflicting
+      );
+      await run(completePassChange(failedTransfer), conflicting);
+      const movedAhead = await run(
+        DotyposService.pipe(
+          Effect.flatMap((dotypos) =>
+            dotypos.listReservations({ customerId: "4142" })
+          )
+        ),
+        provider
+      );
+      expect(
+        movedAhead.filter(({ status }) => status === "CONFIRMED")
+      ).toHaveLength(1);
+      await run(completePassChange(failedTransfer), conflicting);
+      const restoredProvider = await run(
+        DotyposService.pipe(
+          Effect.flatMap((dotypos) =>
+            dotypos.listReservations({ customerId: "4143" })
+          )
+        ),
+        provider
+      );
+      expect(restoredProvider).toHaveLength(30);
+      const recorded = await database.pool.query(
+        "select transfer_progress->'conflicts' as conflicts from pass_administration_changes where request_id=$1",
+        [failedTransfer.requestId]
+      );
+      expect(recorded.rows[0]?.conflicts).toEqual([restored[1].service_date]);
+      expect(
+        (await run(completePassChange(failedTransfer), provider)).failedAt
+      ).not.toBeNull();
 
       const assignedDesk = original[0].pass_day_table_id;
       const conflict = getCoworkReservationInterval(

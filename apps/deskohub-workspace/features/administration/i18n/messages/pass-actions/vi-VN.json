@@ -44,6 +44,7 @@
   "passActionsNoRefund": "Thẻ được tặng không có khoản hoàn tiền.",
   "passActionsSelectCustomer": "Chọn khách hàng này",
   "passActionsHistory": "Thay đổi với thẻ",
+  "passActionsTransferConflict": "Vui lòng kiểm tra các lượt đặt chỗ trên Dotypos cho các ngày {dates}. Việc chuyển thẻ đang tạm dừng.",
   "passActionsAccessToday": "Quyền truy cập hôm nay có hiệu lực đến khi lượt đặt chỗ hôm nay kết thúc.",
   "passActionsPaid": "Đã thanh toán {amount}",
   "passActionsPackEntries": "5 hoặc 10 lượt vào",

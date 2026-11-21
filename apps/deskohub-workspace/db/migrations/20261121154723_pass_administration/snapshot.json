@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "1b684126-0409-4d8c-ab8f-3e5fe210e2c8",
+  "id": "6e9da0c4-9e86-49a5-acfc-c1d804289f3c",
   "prevIds": [
     "41c61144-ace4-43f4-8995-053cadc08306"
   ],
@@ -8007,6 +8007,19 @@
       "generated": null,
       "identity": null,
       "name": "last_attempt_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "transfer_progress",
       "entityType": "columns",
       "schema": "public",
       "table": "pass_administration_changes"

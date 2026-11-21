@@ -1,7 +1,11 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
-import { passPurchases, workspaceReservations } from "@/db/schema";
+import {
+  customerAccounts,
+  passPurchases,
+  workspaceReservations,
+} from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { CurrentAdministrator } from "@/features/administrators/backend/current-administrator";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
@@ -202,6 +206,20 @@ export const beginUnlimitedPassChange = Effect.fn("beginUnlimitedPassChange")(
       return yield* transaction(
         Effect.gen(function* () {
           const { db } = yield* WorkspaceTransaction;
+          if (change._tag === "reassign") {
+            // Renewal admission for the former holder uses this same row lock.
+            yield* db
+              .select({ id: customerAccounts.id })
+              .from(customerAccounts)
+              .where(
+                inArray(customerAccounts.id, [
+                  change.expectedHolderAccountId,
+                  change.holderAccountId,
+                ])
+              )
+              .orderBy(asc(customerAccounts.id))
+              .for("no key update");
+          }
           const locked = yield* ensureActiveUnlimited(passId);
           const { purchase } = locked;
           yield* requireNoPendingPassChange(passId);

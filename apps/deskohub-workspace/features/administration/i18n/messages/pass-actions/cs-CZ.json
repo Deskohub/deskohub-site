@@ -44,6 +44,7 @@
   "passActionsNoRefund": "Darovaná permanentka se neproplácí.",
   "passActionsSelectCustomer": "Vybrat zákazníka",
   "passActionsHistory": "Změny permanentky",
+  "passActionsTransferConflict": "Rezervace v Dotykačce pro tyto dny vyžadují kontrolu: {dates}. Převod je pozastaven.",
   "passActionsAccessToday": "Dnešní přístup platí do konce dnešní rezervace.",
   "passActionsPaid": "Zaplaceno {amount}",
   "passActionsPackEntries": "5 nebo 10 vstupů",

@@ -52,7 +52,10 @@ import {
   hasPendingPassChange,
   pendingPassChange,
 } from "./pass-administration-pending";
-import { overlapsUnlimitedPassWindow } from "./unlimited-pass-window";
+import {
+  keepsUnlimitedRenewalSource,
+  overlapsUnlimitedPassWindow,
+} from "./unlimited-pass-window";
 
 export class UnlimitedPassAdmissionError extends Data.TaggedError(
   "UnlimitedPassAdmissionError"
@@ -199,6 +202,11 @@ export const recordReplacementUnlimitedPassHolds = Effect.fn(
     validFrom: purchase.validFrom,
     validUntil: purchase.validUntil,
   });
+  if (!(yield* keepsUnlimitedRenewalSource(db, purchase))) {
+    return yield* new UnlimitedPassAdmissionError({
+      reason: "renewal-unavailable",
+    });
+  }
   const holdsExpireAt = getReservationHoldExpiresAt(now);
   for (const day of days) {
     const [reserved] = yield* db

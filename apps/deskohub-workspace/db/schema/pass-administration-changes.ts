@@ -11,10 +11,18 @@ import {
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { OrderId } from "@/features/order";
 import type { PassChange } from "@/features/passes/admin/pass-change";
+import type { PlainDate } from "@/shared/utils/temporal";
 import { instant } from "../instant";
 import { sensitiveText } from "../sensitive-text";
 import { customerAccounts } from "./customer-accounts";
 import { passPurchases } from "./pass-purchases";
+
+export type PassTransferProgress = {
+  readonly rollingBack: boolean;
+  readonly attempted: readonly PlainDate[];
+  readonly transferred: readonly PlainDate[];
+  readonly conflicts: readonly PlainDate[];
+};
 
 /** The operator's accepted change and its durable progress across provider calls. */
 export const passAdministrationChanges = pgTable(
@@ -34,6 +42,7 @@ export const passAdministrationChanges = pgTable(
     change: jsonb("change").notNull().$type<PassChange>(),
     requestedAt: instant("requested_at").notNull(),
     lastAttemptAt: instant("last_attempt_at"),
+    transferProgress: jsonb("transfer_progress").$type<PassTransferProgress>(),
     completedAt: instant("completed_at"),
     failedAt: instant("failed_at"),
   },
