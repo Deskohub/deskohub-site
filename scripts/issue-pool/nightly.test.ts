@@ -14,8 +14,8 @@ function nightlyRun(id: number, attempt = 1, day = "19") {
     conclusion: "failure",
     event: "workflow_dispatch",
     head_branch: "main",
-    actor: { login: bot },
-    triggering_actor: { login: bot },
+    actor: { id: 41898282, login: bot },
+    triggering_actor: { id: 41898282, login: bot },
     head_repository: { full_name: repo },
     pr_count: 0,
     updated_at: `2026-11-${day}T10:46:28Z`,
@@ -123,6 +123,7 @@ test("ignores contributor dispatches, contributor reruns, PRs, forks and cancell
     { ...nightlyRun(7), head_repository: { full_name: "fork/deskohub-site" } },
     { ...nightlyRun(8), conclusion: "cancelled" },
     { ...nightlyRun(9), status: "in_progress" },
+    { ...nightlyRun(10), actor: { id: 800, login: bot } },
   ]);
 
   expect(await collectNightlyE2E(run, repo)).toEqual([]);
@@ -154,6 +155,11 @@ test("keeps only closed annotation fields and leaves setup failures in triage", 
     { ...failureAnnotation, message: privateValue },
     { ...failureAnnotation, title: privateValue },
     { ...failureAnnotation, annotation_level: "warning" },
+    {
+      ...failureAnnotation,
+      message:
+        "case=checkout-pay-full-price,step=replay-payment-webhook,outcome=failed,failure_kind=error",
+    },
     { ...timedOut, message: `${timedOut.message}\n${privateValue}` },
     { ...timedOut, message: `${timedOut.message},detail=${privateValue}` },
     {

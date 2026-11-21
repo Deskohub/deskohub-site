@@ -2,6 +2,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { type Command, githubIssueTracker } from "./github";
+import { collectNightlyE2E } from "./nightly";
 import { IssuePool, runIssuePool } from "./pool";
 import { collectPostHog, collectVercelFeedback } from "./sources";
 import { t3WorkerRunner } from "./t3";
@@ -113,19 +114,22 @@ async function main(): Promise<void> {
           vercelFetchScript,
           join(project, "apps", "deskohub-workspace")
         ),
+        collectNightlyE2E(run, repo),
       ]),
       run("gh", ["api", "user", "--jq", ".id"]),
       run("gh", ["api", `repos/${repo}`, "--jq", ".owner.id"]),
       legacyVercelOwnership(project),
     ]);
-  const [posthog, vercel] = collectorResults;
+  const [posthog, vercel, nightly] = collectorResults;
   const failedSources = [
     ...(posthog.status === "rejected" ? ["posthog"] : []),
     ...(vercel.status === "rejected" ? ["vercel"] : []),
+    ...(nightly.status === "rejected" ? ["nightly"] : []),
   ];
   const signals = [
     ...(posthog.status === "fulfilled" ? posthog.value : []),
     ...(vercel.status === "fulfilled" ? vercel.value : []),
+    ...(nightly.status === "fulfilled" ? nightly.value : []),
   ];
   const tracker = githubIssueTracker({
     repo,

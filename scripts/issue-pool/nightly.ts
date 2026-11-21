@@ -15,6 +15,7 @@ export type NightlySignal = Readonly<{
 
 const weekMs = 7 * 24 * 60 * 60 * 1000;
 const githubActionsBot = "github-actions[bot]";
+const githubActionsBotId = 41898282;
 const annotationTitle = "Workspace E2E case failed";
 const repoPattern = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/;
 const annotationPattern =
@@ -75,7 +76,11 @@ function isFailure(row: Record<string, unknown>): boolean {
 }
 
 function isActionsBot(actor: unknown): boolean {
-  return isRecord(actor) && actor.login === githubActionsBot;
+  return (
+    isRecord(actor) &&
+    actor.id === githubActionsBotId &&
+    actor.login === githubActionsBot
+  );
 }
 
 function positiveId(value: unknown): number {
@@ -110,6 +115,7 @@ function caseDiagnosis(annotation: Record<string, unknown>) {
     caseId === "invalid" ||
     stepId === "invalid" ||
     (outcome === "timed_out") !== (failureKind === "timeout") ||
+    (diagnosticCode === undefined && (failureKind !== "timeout" || !stepId)) ||
     (diagnosticCode !== undefined &&
       !isWorkspaceE2EDiagnosticCode(diagnosticCode))
   ) {
@@ -149,7 +155,7 @@ export async function collectNightlyE2E(
     run,
     `${workflow}?branch=main&event=workflow_dispatch&status=completed&created=${since}&per_page=100`,
     `.workflow_runs[] | {id, run_attempt, status, conclusion, event, head_branch,
-      actor: {login: .actor.login}, triggering_actor: {login: .triggering_actor.login},
+      actor: {id: .actor.id, login: .actor.login}, triggering_actor: {id: .triggering_actor.id, login: .triggering_actor.login},
       head_repository: {full_name: .head_repository.full_name},
       pr_count: (.pull_requests | if type == "array" then length else null end), updated_at}`
   );
