@@ -19,6 +19,8 @@ concurrency:
 
 jobs:
   start-nightly-e2e:
+    # Only the source repository has the Workspace preview integration.
+    if: ${{ github.repository == 'totalolage/deskohub-site' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
