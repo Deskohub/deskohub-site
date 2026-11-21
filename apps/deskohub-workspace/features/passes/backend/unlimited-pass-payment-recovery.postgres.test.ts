@@ -22,18 +22,29 @@ import {
   passPurchases,
   paymentAttempts,
 } from "@/db/schema";
-import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
+import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
+import {
+  CustomerAccountSections,
+  HeldCustomerAccount,
+} from "@/features/account/backend/customer-account-sections";
+import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { workspaceAccountingSupplier } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
 import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/invoice-email-delivery.repository";
 import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
+import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
+import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
+import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
+import { DiscountService } from "@/features/discounts/discount.service";
+import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -47,7 +58,13 @@ import {
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
+import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
+import {
+  getPassPurchasePriceFingerprint,
+  payForEntryPack,
+  repriceEntryPackPurchase,
+} from "./entry-pack-purchase";
 import {
   canConfirmUnlimitedPass,
   settlePassPurchase,
@@ -207,6 +224,126 @@ const withInterruptedHoldRead = (service: typeof DotyposService.Service) => {
       }),
   } satisfies typeof DotyposService.Service;
 };
+
+for (const { boundary, daysAhead } of [
+  { boundary: "a failed provider read", daysAhead: 465 },
+  { boundary: "payment with a stale price", daysAhead: 505 },
+  { boundary: "repricing discounts", daysAhead: 545 },
+  { boundary: "payment discount affirmation", daysAhead: 585 },
+] as const) {
+  it(`returns quote-expired at checkout when the first day closes at ${boundary}`, async () => {
+    const start = getCurrentWorkspaceDate().add({ days: daysAhead });
+    const closesAt = Temporal.Instant.from(
+      getCoworkReservationInterval("reserved-desk", start.toString()).endsAt
+    );
+    const beforeClosing = closesAt.subtract({ minutes: 2 });
+    const closeFirstDay = TestClock.setTime(closesAt.epochMilliseconds);
+    const services = servicesFor({
+      ...provider.service,
+      getReservationsByIds: (ids, options) =>
+        boundary === "a failed provider read"
+          ? closeFirstDay.pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new DotyposRejected({
+                    operation: "getReservationsByIds",
+                    reason: "invalid-response",
+                  })
+                )
+              )
+            )
+          : provider.service.getReservationsByIds(ids, options),
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(beforeClosing.epochMilliseconds);
+        const purchase = yield* recordPurchase(beforeClosing, 0);
+        yield* createUnlimitedPassHolds(purchase);
+        const handler = yield* makeEntryPackOrderPaymentHandler;
+        const session = {
+          accountId: purchase.buyerAccountId,
+          email: testEmailAddress("cutoff-buyer"),
+          deletionRequested: false,
+          ...testSessionProfile,
+        };
+        const storedQuote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+          purchase.quote
+        );
+        const quote = {
+          ...storedQuote,
+          discountableSubtotal: currencyCZK(100_000),
+          discountedSubtotal: currencyCZK(100_000),
+        };
+        const stale = boundary === "payment with a stale price";
+        const input = {
+          orderId: purchase.id,
+          productKind: "unlimited",
+          displayedPriceFingerprint: getPassPurchasePriceFingerprint(
+            stale ? quote : storedQuote
+          ),
+        } as const;
+        if (stale) yield* closeFirstDay;
+        const checkout =
+          boundary === "repricing discounts"
+            ? repriceEntryPackPurchase(input)
+            : payForEntryPack({
+                ...input,
+                accepted: true,
+                acceptedDocuments: [],
+              });
+        const outcome = yield* checkout.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(CurrentCustomerAccount, {
+                requireActive: Effect.succeed(session),
+              }),
+              Layer.mock(CustomerAccountSections, {
+                withActiveAccount: (_id, work) =>
+                  Effect.provideService(work, HeldCustomerAccount, session),
+              }),
+              Layer.mock(WorkspaceFeatureFlagService, {
+                isEnabled: () => Effect.succeed(true),
+              }),
+              Layer.succeed(
+                OrderPaymentHandlers,
+                OrderPaymentHandlers.make({ "pass-purchase": handler }, () =>
+                  Effect.succeed("pass-purchase")
+                )
+              ),
+              Layer.mock(DiscountService, {
+                quote: () => closeFirstDay.pipe(Effect.as(quote)),
+                affirmDisplayedDiscounts: () =>
+                  closeFirstDay.pipe(
+                    Effect.as({
+                      quote,
+                      commitment: makeDiscountCommitment({
+                        product: { kind: "unlimited", tier: purchase.tier },
+                        firstServiceDate: purchase.validFrom,
+                        applications: [],
+                      }),
+                    })
+                  ),
+              }),
+              Layer.mock(CustomerAccountContactService, {}),
+              Layer.mock(CheckoutAnalytics, {}),
+              Layer.mock(LatePaymentVerificationService, {}),
+              Layer.mock(LegalEvidenceEventRepository, {})
+            )
+          ),
+          Effect.result
+        );
+        expect(outcome).toMatchObject({
+          failure: { _tag: "EntryPackPurchaseError", reason: "quote-expired" },
+        });
+        const state = yield* readState(purchase.id);
+        expect(state.purchase?.quote).toEqual(purchase.quote);
+        expect(state.order?.activePaymentAttemptId).toBeNull();
+        expect(state.attempts).toHaveLength(0);
+      }).pipe(Effect.provide(Layer.merge(services, TestClock.layer())))
+    );
+  });
+}
 
 for (const { tier, closesDuring, daysAhead } of [
   { tier: "open-space", closesDuring: "provider read", daysAhead: 345 },

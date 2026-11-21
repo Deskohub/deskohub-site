@@ -378,6 +378,17 @@ const hasPassQuoteExpired = (now: Temporal.Instant, purchase: PassPurchase) =>
       !purchase.holdsExpireAt ||
       Temporal.Instant.compare(now, purchase.holdsExpireAt) >= 0;
 
+const requireOpenUnlimitedPassQuote = Effect.fnUntraced(function* (
+  purchase: PassPurchase
+) {
+  if (
+    purchase.product === "unlimited" &&
+    hasPassQuoteExpired(yield* currentInstant, purchase)
+  ) {
+    return yield* new EntryPackPurchaseError({ reason: "quote-expired" });
+  }
+});
+
 const hasEndedUnpaidAttempt = ({
   order,
   activeAttempt,
@@ -573,6 +584,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
             }),
           },
         };
+        yield* requireOpenUnlimitedPassQuote(purchase);
         yield* saveEntryPackQuote(order.id, selectedQuote);
         return { status: "ready" as const, quote: selectedQuote };
       })
@@ -697,6 +709,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           : order.paymentState !== "not_started")
       )
         return { status: "pending" as const, statusUrl };
+      yield* requireOpenUnlimitedPassQuote(purchase);
       const accepted = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
         purchase.quote
       );
@@ -723,9 +736,10 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       const now = yield* currentInstant;
       if (hasPassQuoteExpired(now, purchase)) {
         return yield* new EntryPackPurchaseError({
-          reason: order.activePaymentAttemptId
-            ? "payment-in-progress"
-            : "quote-expired",
+          reason:
+            productKind === "entry-pack" && order.activePaymentAttemptId
+              ? "payment-in-progress"
+              : "quote-expired",
         });
       }
       if (productKind === "unlimited") {
@@ -767,6 +781,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           ),
           ...selection,
         });
+      yield* requireOpenUnlimitedPassQuote(purchase);
       const submittedCodeDiscountId = getAppliedPromotionDiscountId(
         quote,
         getDiscountCommitmentPayload(commitment).applications

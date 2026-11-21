@@ -157,13 +157,17 @@ export const reconfirmUnlimitedPassHolds = Effect.fn(
   }
   const holds = yield* readPayableUnlimitedHolds(purchase);
   const dotypos = yield* DotyposService;
-  const provider = yield* dotypos.getReservationsByIds(
-    holds.map((hold) => hold.dotyposReservationId),
-    { concurrency: 1 }
-  );
+  const lookup = yield* dotypos
+    .getReservationsByIds(
+      holds.map((hold) => hold.dotyposReservationId),
+      { concurrency: 1 }
+    )
+    .pipe(Effect.result);
   if (hasUnlimitedPassFirstDayEnded(purchase, yield* currentInstant)) {
     return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
   }
+  if (Result.isFailure(lookup)) return yield* lookup.failure;
+  const provider = lookup.success;
   for (const hold of holds) {
     const reservation = provider.get(hold.dotyposReservationId);
     if (
