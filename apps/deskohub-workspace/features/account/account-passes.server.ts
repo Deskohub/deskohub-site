@@ -18,12 +18,15 @@ import {
   recoverEntryPackGiftClaims,
 } from "@/features/passes/backend/entry-pack-gift";
 import {
+  getHeldEntryPackStatus,
   type HeldEntryPack,
   listHeldEntryPacks,
 } from "@/features/passes/backend/held-entry-packs";
 import {
+  type EntryPackProduct,
   type EntryPackSize,
   getEntryPackLastUsableDate,
+  type UnlimitedPassProduct,
 } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import {
@@ -108,7 +111,7 @@ export const loadAccountPasses = Effect.fn("loadAccountPasses")(function* (
     ],
     { concurrency: "unbounded" }
   );
-  const giftBuyers = yield* readHeldGiftBuyers(
+  const giftBuyers = yield* readHeldPassGiftBuyers(
     accountId,
     packs.map(({ id }) => id),
     profileLayer
@@ -127,6 +130,36 @@ export const loadAccountPasses = Effect.fn("loadAccountPasses")(function* (
 const listBoughtGifts = Effect.fn("listBoughtPassGifts")(function* (
   accountId: CustomerAccountId,
   locale: Locale
+) {
+  const gifts = yield* readBoughtPassGifts(accountId);
+  return gifts.map(
+    ({ orderId, product, canResend, ...gift }): AccountBoughtPass => {
+      const summary = {
+        ...gift,
+        orderId,
+        statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
+        tier: getPassTierName(product.tier, locale),
+      };
+      return product.kind === "unlimited"
+        ? { ...summary, product: "unlimited" }
+        : {
+            ...summary,
+            product: "entry-pack",
+            entryCount: product.size,
+            canResend,
+          };
+    }
+  );
+});
+
+type BoughtPassGift = EntryPackGiftState & {
+  readonly orderId: OrderId;
+  readonly product: EntryPackProduct | UnlimitedPassProduct;
+  readonly maskedHolderEmail?: string;
+};
+
+export const readBoughtPassGifts = Effect.fn("readBoughtPassGifts")(function* (
+  accountId: CustomerAccountId
 ) {
   const { db } = yield* WorkspaceDatabase;
   const gifts = yield* db
@@ -159,93 +192,98 @@ const listBoughtGifts = Effect.fn("listBoughtPassGifts")(function* (
     ],
     { concurrency: "unbounded" }
   );
-  const result: AccountBoughtPass[] = [];
+  const result: BoughtPassGift[] = [];
   for (const { orderId, tier, product, entryCount, holderAccountId } of gifts) {
     const state = states.get(orderId);
     // A refund can end payment eligibility between the two reads.
     if (!state) continue;
-    const { canResend, ...invitation } = state;
     const email = recipients.get(holderAccountId)?.email;
     const masked = email ? maskEmailAddress(email) : undefined;
     const maskedHolderEmail = masked === email ? undefined : masked;
     const summary = {
-      ...invitation,
+      ...state,
       orderId,
-      statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
-      tier: getPassTierName(tier, locale),
       maskedHolderEmail,
+      canResend: state.canResend && maskedHolderEmail !== undefined,
     };
-    if (product === "unlimited") result.push({ ...summary, product });
+    if (product === "unlimited")
+      result.push({ ...summary, product: { kind: product, tier } });
     else if (entryCount !== null)
       result.push({
         ...summary,
-        product,
-        entryCount,
-        canResend: canResend && maskedHolderEmail !== undefined,
+        product: { kind: product, tier, size: entryCount },
       });
   }
   return result;
 });
 
-const readHeldGiftBuyers = Effect.fn("readHeldEntryPackGiftBuyers")(function* (
-  holderAccountId: CustomerAccountId,
-  heldIds: readonly OrderId[],
-  profileLayer: Layer.Layer<CustomerProfileService, unknown>
-) {
-  if (heldIds.length === 0) return new Map<OrderId, string | undefined>();
-  const { db } = yield* WorkspaceDatabase;
-  const gifts = yield* db
-    .select({
-      orderId: passPurchases.id,
-      accountId: passPurchases.buyerAccountId,
-    })
-    .from(passPurchases)
-    .innerJoin(orders, eq(orders.id, passPurchases.id))
-    .where(
-      and(
-        eq(passPurchases.holderAccountId, holderAccountId),
-        eq(orders.paymentState, "paid"),
-        ne(passPurchases.buyerAccountId, holderAccountId),
-        inArray(passPurchases.id, heldIds)
-      )
-    );
-  const buyers = yield* findEntryPackPurchasePartyContacts(
-    gifts.map((gift) => gift.accountId)
-  );
-  const linkedBuyers = [...buyers].flatMap(
-    ([accountId, { dotyposCustomerId }]) =>
-      dotyposCustomerId ? [{ accountId, dotyposCustomerId }] : []
-  );
-  const profileNames = new Map(
-    linkedBuyers.length === 0
-      ? []
-      : yield* Effect.gen(function* () {
-          const profiles = yield* CustomerProfileService;
-          return yield* Effect.forEach(
-            linkedBuyers,
-            (buyer) =>
-              profiles.load(buyer).pipe(
-                Effect.map(({ firstName, lastName }) => {
-                  const name = getCustomerDisplayName({ firstName, lastName });
-                  return name?.includes("@") ? undefined : name;
-                }),
-                catchRecoverableCause(() => Effect.succeed(undefined)),
-                Effect.map((name) => [buyer.accountId, name] as const)
-              ),
-            { concurrency: 4 }
-          );
-        }).pipe(
-          Effect.provide(profileLayer),
-          catchRecoverableCause(() => Effect.succeed([]))
+export const readHeldPassGiftBuyers = Effect.fn("readHeldPassGiftBuyers")(
+  function* (
+    holderAccountId: CustomerAccountId,
+    heldIds: readonly OrderId[],
+    profileLayer: Layer.Layer<
+      CustomerProfileService,
+      unknown
+    > = CustomerProfileService.Live
+  ) {
+    if (heldIds.length === 0) return new Map<OrderId, string | undefined>();
+    const { db } = yield* WorkspaceDatabase;
+    const gifts = yield* db
+      .select({
+        orderId: passPurchases.id,
+        accountId: passPurchases.buyerAccountId,
+      })
+      .from(passPurchases)
+      .innerJoin(orders, eq(orders.id, passPurchases.id))
+      .where(
+        and(
+          eq(passPurchases.holderAccountId, holderAccountId),
+          eq(orders.paymentState, "paid"),
+          ne(passPurchases.buyerAccountId, holderAccountId),
+          inArray(passPurchases.id, heldIds)
         )
-  );
-  return new Map(
-    gifts.map(({ orderId, accountId }) => [
-      orderId,
-      profileNames.get(accountId),
-    ])
-  );
-});
+      );
+    const buyers = yield* findEntryPackPurchasePartyContacts(
+      gifts.map((gift) => gift.accountId)
+    );
+    const linkedBuyers = [...buyers].flatMap(
+      ([accountId, { dotyposCustomerId }]) =>
+        dotyposCustomerId ? [{ accountId, dotyposCustomerId }] : []
+    );
+    const profileNames = new Map(
+      linkedBuyers.length === 0
+        ? []
+        : yield* Effect.gen(function* () {
+            const profiles = yield* CustomerProfileService;
+            return yield* Effect.forEach(
+              linkedBuyers,
+              (buyer) =>
+                profiles.load(buyer).pipe(
+                  Effect.map(({ firstName, lastName }) => {
+                    const name = getCustomerDisplayName({
+                      firstName,
+                      lastName,
+                    });
+                    return name?.includes("@") ? undefined : name;
+                  }),
+                  catchRecoverableCause(() => Effect.succeed(undefined)),
+                  Effect.map((name) => [buyer.accountId, name] as const)
+                ),
+              { concurrency: 4 }
+            );
+          }).pipe(
+            Effect.provide(profileLayer),
+            catchRecoverableCause(() => Effect.succeed([]))
+          )
+    );
+    return new Map(
+      gifts.map(({ orderId, accountId }) => [
+        orderId,
+        profileNames.get(accountId),
+      ])
+    );
+  }
+);
 
 export const loadCustomerAccountPasses = cache(
   (locale: Locale): Promise<AccountPasses> =>
@@ -261,33 +299,13 @@ export const loadCustomerAccountPasses = cache(
     )
 );
 
-const getAccountPassStatus = (
-  pack: HeldEntryPack,
-  today: PlainDate
-): AccountEntryPack["status"] => {
-  switch (pack.status) {
-    case "active":
-      return Temporal.PlainDate.compare(today, pack.validUntil) >= 0
-        ? "expired"
-        : "active";
-    case "depleted":
-    case "expired":
-      return pack.status;
-    case "pending_payment":
-    case "cancelled":
-    case "withdrawn":
-    case "void":
-      return "ended";
-  }
-};
-
 function toAccountEntryPack(
   pack: HeldEntryPack,
   position: number,
   today: PlainDate,
   locale: Locale
 ): AccountEntryPack {
-  const status = getAccountPassStatus(pack, today);
+  const status = getHeldEntryPackStatus(pack, today);
 
   return {
     position,

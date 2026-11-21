@@ -61,12 +61,13 @@ const endpointsOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
 describe("WorkspaceCustomerApi", () => {
   const endpoints = endpointsOf(WorkspaceCustomerApi);
 
-  test("declares the account, reservations, booking, invoices and companies groups", () => {
+  test("declares every customer API group", () => {
     expect(Object.keys(WorkspaceCustomerApi.groups).sort()).toEqual([
       "account",
       "booking",
       "companies",
       "invoices",
+      "passes",
       "reservations",
     ]);
   });

@@ -8,7 +8,6 @@ import {
   workspaceProductMonitorOptions,
 } from "@/features/checkout/product-catalog";
 import { type Locale, m } from "@/features/i18n";
-import type { OrderId } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { recoverEntryPackGiftClaims } from "@/features/passes/backend/entry-pack-gift";
 import {
@@ -24,7 +23,6 @@ import {
   getCoworkReservationDefaultValues,
 } from "@/features/reservation/cowork-reservation";
 import { coworkSelectionLink } from "@/features/reservation/cowork-selection-link";
-import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { reservationCheckoutStepQueryParam } from "@/features/reservation/reservation-checkout-step";
 import { getCoworkPageOfferings } from "@/features/reservation/reservation-page-offerings";
 import {
@@ -45,6 +43,7 @@ import { toURLSearchParams } from "@/shared/utils/search-params";
 import {
   type CoworkEntryPacks,
   firstEntryPackDate,
+  getCoworkBookingPasses,
   getEntryPackCoworkTier,
   type InitialCoworkEntryPack,
 } from "../cowork-entry-packs";
@@ -78,44 +77,6 @@ const loadHeldEntryPacks = Effect.fn("cowork.loadHeldEntryPacks")(function* () {
   );
   return yield* listHeldEntryPacks(active.value.accountId);
 });
-
-const getBookingPasses = (
-  heldEntryPacks: readonly HeldEntryPack[],
-  today: string,
-  restored?: {
-    readonly passId: OrderId;
-    readonly reservationId: WorkspaceReservationId;
-  }
-): CoworkEntryPacks => {
-  const claimedDates = new Set<CoworkEntryPacks["claimedDates"][number]>();
-  const packs = heldEntryPacks.flatMap((pack) => {
-    const editedDate =
-      restored?.passId === pack.id
-        ? pack.reservedEntryDates[restored.reservationId]
-        : undefined;
-    for (const date of pack.claimedDates) {
-      if (date >= today && date !== editedDate) claimedDates.add(date);
-    }
-    const entriesLeft = pack.entriesLeft + Number(editedDate !== undefined);
-    return pack.status === "active" &&
-      (pack.giftIssuedAt === null || pack.giftClaimedAt !== null) &&
-      pack.giftPaymentIsUsable &&
-      entriesLeft > 0 &&
-      today < pack.validUntil
-      ? [
-          {
-            id: pack.id,
-            tier: pack.tier,
-            entryCount: pack.entryCount,
-            entriesLeft,
-            validFrom: pack.validFrom,
-            validUntil: pack.validUntil,
-          },
-        ]
-      : [];
-  });
-  return { packs, claimedDates: [...claimedDates] };
-};
 
 const applyEntryPack = (
   values: CoworkReservationInput,
@@ -232,7 +193,7 @@ export const coworkReservationPage = createReservationPage({
       };
     }
 
-    const bookingPasses = getBookingPasses(
+    const bookingPasses = getCoworkBookingPasses(
       pageData.heldEntryPacks,
       today,
       entryPack
@@ -281,7 +242,10 @@ export const coworkReservationPage = createReservationPage({
       ),
       pageData
     );
-    const bookingPasses = getBookingPasses(pageData.heldEntryPacks, today);
+    const bookingPasses = getCoworkBookingPasses(
+      pageData.heldEntryPacks,
+      today
+    );
     const requestedPack = pageData.entryPackOffered
       ? getSearchParam(searchParams, "pass")
       : undefined;

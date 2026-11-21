@@ -120,6 +120,7 @@ describe("customer request budget classes", () => {
 
     expect(accountReads).toEqual([
       "account.getAccount",
+      "passes.getUnlimitedAccess",
       "reservations.getReservationAccess",
       "reservations.getReservationStatus",
       "reservations.listInvitedReservations",

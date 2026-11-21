@@ -124,6 +124,13 @@ export const customerRequestBudgetClasses = {
     // as the website's lookup has no budget of its own.
     lookupCompany: "workspace-only",
   },
+  passes: {
+    listPassOffers: "workspace-only",
+    listPasses: "dotypos-read",
+    getPassBookingOptions: "workspace-only",
+    getUnlimitedAccess: "account-read",
+    getReservationPassFunding: "workspace-only",
+  },
   booking: {
     // The office's seat maximum reads the shared table snapshot, which
     // reads Dotypos when it misses.

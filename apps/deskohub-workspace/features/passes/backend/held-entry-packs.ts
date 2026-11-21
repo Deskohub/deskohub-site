@@ -38,6 +38,26 @@ export type HeldEntryPack = {
   >;
 };
 
+export const getHeldEntryPackStatus = (
+  pack: HeldEntryPack,
+  today: PlainDate
+) => {
+  switch (pack.status) {
+    case "active":
+      return Temporal.PlainDate.compare(today, pack.validUntil) >= 0
+        ? "expired"
+        : "active";
+    case "depleted":
+    case "expired":
+      return pack.status;
+    case "pending_payment":
+    case "cancelled":
+    case "withdrawn":
+    case "void":
+      return "ended";
+  }
+};
+
 /** Payment and claim state from one snapshot, scoped to the verified holder. */
 export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
   accountId: CustomerAccountId

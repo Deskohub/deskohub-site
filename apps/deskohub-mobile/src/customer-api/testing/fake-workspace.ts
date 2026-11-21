@@ -22,6 +22,7 @@ import {
   type CustomerInvoicesApi,
   CustomerMarketingPreferencesRejected,
   type CustomerOrderStatus,
+  CustomerPassesUnavailable,
   type CustomerPaymentPage,
   CustomerPaymentPageClosed,
   type CustomerPaymentPageClosedReason,
@@ -995,6 +996,19 @@ const serverLayer = (workspace: FakeWorkspace) => {
 
   const booking = fakeBookingGroup(workspace);
 
+  const passesUnavailable = () => Effect.fail(new CustomerPassesUnavailable());
+  const passes = HttpApiBuilder.group(
+    WorkspaceCustomerApi,
+    "passes",
+    (handlers) =>
+      handlers
+        .handle("listPassOffers", passesUnavailable)
+        .handle("listPasses", passesUnavailable)
+        .handle("getPassBookingOptions", passesUnavailable)
+        .handle("getUnlimitedAccess", passesUnavailable)
+        .handle("getReservationPassFunding", passesUnavailable)
+  );
+
   const auth = HttpApiBuilder.group(CustomerAuthHttpApi, "auth", (handlers) =>
     handlers
       .handle("getSession", () =>
@@ -1146,7 +1160,14 @@ const serverLayer = (workspace: FakeWorkspace) => {
   return Layer.mergeAll(
     HttpApiBuilder.layer(WorkspaceCustomerApi).pipe(
       Layer.provide(
-        Layer.mergeAll(account, reservations, invoices, companies, booking)
+        Layer.mergeAll(
+          account,
+          reservations,
+          invoices,
+          companies,
+          booking,
+          passes
+        )
       ),
       Layer.provide(customerMiddleware)
     ),

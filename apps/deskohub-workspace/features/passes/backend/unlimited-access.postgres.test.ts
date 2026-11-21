@@ -28,10 +28,16 @@ import {
   type CustomerAccountId,
   customerAccountIdSchema,
 } from "@/features/account/customer-account";
+import {
+  currentAccountResolving,
+  customerApiRequest,
+  makeCustomerApiTestServer,
+} from "@/features/customer-api/customer-api.test-utils";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
+import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { ReservationAccessService } from "@/features/reservation-access";
 import { ReservationAccessRepository } from "@/features/reservation-access/backend/reservation-access.repository";
 import {
@@ -41,6 +47,7 @@ import {
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import type { PassTier } from "../pass-offer";
 import { unlimitedAccessTokenQueryParam } from "../unlimited-access";
+import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate";
 import { loadUnlimitedAccess } from "./unlimited-access";
 import {
   createUnlimitedAccessUrl,
@@ -578,6 +585,70 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         })
       ).toMatchObject({ state: "ended" });
       expect(reads).toEqual([]);
+    });
+
+    test("the customer API exposes access only to the account holding the claimed pass", async () => {
+      const start = getCurrentWorkspaceDate().add({ days: 30 });
+      const end = start.add({ days: 30 });
+      const { orderId } = await seedPass("reserved-desk", true, {
+        start: start.toString(),
+        end: end.toString(),
+      });
+      await database.pool.query(
+        "update pass_purchases set gift_claimed_at = now() where id = $1",
+        [orderId]
+      );
+
+      const read = (viewer: CustomerAccountId, gateOpen: boolean) => {
+        const api = makeCustomerApiTestServer({
+          session: {
+            ...testSessionProfile,
+            accountId: viewer,
+            deletionRequested: false,
+            email: testEmailAddress("pass-api-viewer"),
+          },
+          reservations: {
+            currentAccount: currentAccountResolving((session) => ({
+              kind: "profile-missing",
+              session,
+              reviewMarker: "absent",
+            })),
+          },
+          passes: {
+            release: CoworkPassesReleaseGate.fromDecision(gateOpen),
+            database: database.layer,
+            accessCodes: Layer.mock(ReservationAccessService, {}),
+            dotypos: Layer.mock(DotyposService, {}),
+          },
+        });
+        return api.handle(
+          customerApiRequest({
+            method: "GET",
+            path: `/passes/${orderId}/access`,
+          })
+        );
+      };
+
+      const allowed = await read(holder, true);
+      expect(allowed.status).toBe(200);
+      expect(await allowed.json()).toEqual({
+        passId: orderId,
+        tier: "reserved-desk",
+        validFrom: start.toString(),
+        lastUsableDate: end.subtract({ days: 1 }).toString(),
+        state: "before-start",
+      });
+
+      const wrongAccount = await read(buyer, true);
+      expect(wrongAccount.status).toBe(404);
+      expect(await wrongAccount.json()).toEqual({
+        _tag: "CustomerPassNotFound",
+      });
+      const closed = await read(holder, false);
+      expect(closed.status).toBe(404);
+      expect(await closed.json()).toEqual({
+        _tag: "CustomerPassesUnavailable",
+      });
     });
 
     test("gates a gift to the claimed holder and never exposes a pass day as a reservation order", async () => {

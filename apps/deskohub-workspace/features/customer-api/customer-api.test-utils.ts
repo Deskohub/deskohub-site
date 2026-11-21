@@ -57,6 +57,7 @@ import { MarketingConsentLedger } from "@/features/legal/backend/marketing-conse
 import { MarketingPreferences } from "@/features/legal/backend/marketing-preferences.service";
 import { MeetingRoomReleaseGate } from "@/features/meeting-room/backend/meeting-room-release-gate";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { ReferralServiceMock } from "@/features/referrals/referral.service.mock";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { ReferralSignupIntentRepository } from "@/features/referrals/signup-intent.repository";
@@ -96,6 +97,10 @@ import {
 } from "./customer-booking-checkout-layers";
 import { CustomerCheckoutOperations } from "./customer-checkout-operations.service";
 import { CustomerInvitedReservationsService } from "./customer-invited-reservations.service";
+import {
+  type CustomerPassLayerSet,
+  CustomerPassLayers,
+} from "./customer-pass-layers";
 import {
   CustomerReservationLayers,
   type CustomerReservationServiceLayers,
@@ -144,6 +149,7 @@ export type CustomerApiTestOptions = {
    * implemented, like `services`.
    */
   readonly reservations?: Partial<CustomerReservationServiceLayers>;
+  readonly passes?: Partial<CustomerPassLayerSet>;
 };
 
 /**
@@ -207,6 +213,10 @@ export const makeCustomerApiTestServer = (
     Layer.succeed(CustomerReservationLayers, {
       ...unusedReservationServices,
       ...options.reservations,
+    }),
+    CustomerPassLayers.withLayers({
+      release: CoworkPassesReleaseGate.fromDecision(false),
+      ...options.passes,
     })
   );
 

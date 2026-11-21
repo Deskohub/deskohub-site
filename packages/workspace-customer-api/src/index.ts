@@ -129,6 +129,20 @@ export {
 } from "./customer-invoices-api";
 export { CustomerLocale, customerSignInLocaleHeader } from "./customer-locale";
 export {
+  CustomerEntryPackProduct,
+  CustomerEntryPackSize,
+  CustomerHeldEntryPack,
+  CustomerHeldUnlimitedPass,
+  CustomerPassBookingOptions,
+  CustomerPassCatalog,
+  CustomerPassesUnavailable,
+  CustomerPassId,
+  CustomerPassList,
+  CustomerPassNotFound,
+  CustomerPassTier,
+  CustomerUnlimitedAccess,
+} from "./customer-pass-reads-api";
+export {
   accountPhoneRegion,
   accountProfileSchemas,
   CustomerProfile,

@@ -59,7 +59,7 @@ export type AccountUnlimitedPasses =
   | readonly AccountUnlimitedPass[]
   | "unavailable";
 
-const readHolderPasses = Effect.fn("account.readHolderUnlimitedPasses")(
+export const listHeldUnlimitedPasses = Effect.fn("listHeldUnlimitedPasses")(
   function* (accountId: CustomerAccountId) {
     const { db } = yield* WorkspaceDatabase;
     return yield* db
@@ -126,7 +126,7 @@ export const loadAccountUnlimitedPasses = Effect.fn(
   yield* recoverEntryPackGiftClaims(accountId, verifiedSignInAt);
   const timeZone = workspaceSiteConstants.location.timeZone;
   const [passes, now] = yield* Effect.all(
-    [readHolderPasses(accountId), currentInstant],
+    [listHeldUnlimitedPasses(accountId), currentInstant],
     { concurrency: "unbounded" }
   );
   const today = getCurrentWorkspaceDate(now);
