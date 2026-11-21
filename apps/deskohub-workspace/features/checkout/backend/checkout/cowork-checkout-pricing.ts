@@ -202,16 +202,20 @@ export const quoteCoworkEntryPackForContinue = Effect.fn(
   input: CoworkEntryPackQuoteInput & {
     readonly advertisedPriceToken?: string;
     readonly locale: Locale;
+    readonly requireEntryPackQuote?: boolean;
   }
 ) {
   const priced = yield* quoteCoworkEntryPack(input);
   const addon = priced.quote.items[1];
-  if (
-    addon === undefined ||
-    input.entryPack.tier === "reserved-desk-workstation" ||
-    input.advertisedPriceToken === undefined
-  ) {
+  const payableAddon =
+    input.entryPack.tier === "reserved-desk-workstation" ? undefined : addon;
+  if (!input.requireEntryPackQuote && payableAddon === undefined) {
     return { ...priced, changedKeys: undefined };
+  }
+  if (input.advertisedPriceToken === undefined) {
+    return input.requireEntryPackQuote
+      ? yield* AdvertisedPriceMismatchError.inputMismatch()
+      : { ...priced, changedKeys: undefined };
   }
 
   const advertisement = yield* openSubmittedAdvertisedPriceState(
@@ -228,14 +232,25 @@ export const quoteCoworkEntryPackForContinue = Effect.fn(
       AdvertisedPriceMismatchError.inputMismatch
     )
   );
+  const funding = advertisement.quote.entryPack;
+  if (
+    funding
+      ? funding.passId !== input.entryPack.passId ||
+        funding.tier !== input.entryPack.tier
+      : input.requireEntryPackQuote
+  ) {
+    return yield* AdvertisedPriceMismatchError.inputMismatch();
+  }
+  if (payableAddon === undefined) return { ...priced, changedKeys: undefined };
+
   const previousAddon = advertisement.quote.items[1];
   const changedKeys: CheckoutSummaryChangedKeys | undefined =
-    previousAddon?.type === addon.type &&
-    moneyEquals(previousAddon.amount, addon.amount)
+    previousAddon?.type === payableAddon.type &&
+    moneyEquals(previousAddon.amount, payableAddon.amount)
       ? undefined
       : {
           sectionKeys: ["order", "total"],
-          itemKeys: [`addon:${addon.type}`, "total:final"],
+          itemKeys: [`addon:${payableAddon.type}`, "total:final"],
         };
   return { ...priced, changedKeys };
 });

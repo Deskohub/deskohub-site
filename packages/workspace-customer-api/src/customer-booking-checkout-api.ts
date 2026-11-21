@@ -7,6 +7,7 @@ import {
   CustomerBookingSelectionInvalid,
   CustomerOfferingUnavailable,
   CustomerOfficePeople,
+  CustomerSelectionUnavailable,
 } from "./customer-booking-selection";
 import { CustomerCheckoutSummary } from "./customer-checkout-summary";
 import { CustomerLocale } from "./customer-locale";
@@ -19,17 +20,7 @@ import { ReferralCode } from "./referral-code";
 
 // Errors
 
-/**
- * The selection can't be held now: a space it needs was taken
- * (`availability_changed`), or another submission of the same checkout
- * holds it (`checkout_conflict`). Quote again and start a new checkout.
- */
-export class CustomerSelectionUnavailable extends Schema.TaggedError<CustomerSelectionUnavailable>()(
-  "CustomerSelectionUnavailable",
-  { reason: Schema.Literals(["availability_changed", "checkout_conflict"]) }
-) {
-  static schema = this.pipe(HttpApiSchema.status("Conflict"));
-}
+export { CustomerSelectionUnavailable };
 
 /**
  * The quote's `advertisedPriceToken` expired, or doesn't match the

@@ -10,6 +10,7 @@ import {
   customerAvailabilityReplacementHeader,
 } from "@deskohub/workspace-customer-api";
 import { Data, Effect, Layer, Match, Option, Struct } from "effect";
+import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
 import { buildAdvertisedPrice } from "@/features/checkout/backend/checkout/advertised-price.server";
 import { loadPublicOfferings } from "@/features/checkout/backend/checkout/public-offerings";
 import { getMeetingRoomCheckoutSummary } from "@/features/checkout/checkout-summary-meeting-room";
@@ -21,7 +22,9 @@ import { getReservationQuoteDiscount } from "@/features/checkout/reservation-quo
 import type { Locale } from "@/features/i18n";
 import { getPaymentSubmitLegalDocuments } from "@/features/legal/payment-submit-evidence";
 import { MeetingRoomReleaseGate } from "@/features/meeting-room/backend/meeting-room-release-gate";
+import { orderIdSchema } from "@/features/order";
 import { resolveBookingQuoteSelection } from "@/features/reservation/backend/booking-selection";
+import { buildEntryPackBookingQuote } from "@/features/reservation/backend/entry-pack-booking";
 import { OvernightStayReleaseGate } from "@/features/reservation/backend/overnight-stay-release-gate";
 import { AvailabilityQueryInvalid } from "@/features/reservation/backend/workspace-availability.service";
 import {
@@ -50,7 +53,10 @@ import {
   answerSessionApiFailure,
   type CustomerSessionApiFailure,
 } from "./customer-api-failure";
-import { CustomerBookingCatalogLayers } from "./customer-booking-catalog-layers";
+import {
+  type CustomerBookingCatalogLayerSet,
+  CustomerBookingCatalogLayers,
+} from "./customer-booking-catalog-layers";
 import type {
   CustomerBookingEndpointName,
   CustomerBookingHandlers,
@@ -98,8 +104,18 @@ export const handleCustomerBookingCatalog = <R>(
   >
 ) =>
   Effect.gen(function* () {
-    const { pricing, inventory, availability, sealedStateKeys, releases } =
-      yield* CustomerBookingCatalogLayers;
+    const {
+      pricing,
+      inventory,
+      availability,
+      sealedStateKeys,
+      entryPackQuote,
+      releases,
+    } = yield* CustomerBookingCatalogLayers;
+    const authentication = Layer.succeed(
+      CustomerAuthentication,
+      yield* CustomerAuthentication
+    );
 
     /**
      * What the offerings read: anonymous prices, the office capacity, and
@@ -206,7 +222,10 @@ export const handleCustomerBookingCatalog = <R>(
         )
       )
       .handle("getQuote", ({ query }) =>
-        quoteSelection(query).pipe(
+        quoteSelection(
+          query,
+          entryPackQuote.pipe(Layer.provide(authentication))
+        ).pipe(
           providePerRequest(quoting),
           answerBookingSelectionFailure("customerApi.getQuote")
         )
@@ -223,25 +242,39 @@ type QuoteQuery = typeof CustomerBookingSelectionQuery.Type & {
 
 /**
  * Prices a selection the way the agent tools' `get_quote` does: resolved as
- * the booking pages accept it, then advertised anonymously, with the signed
- * quote a checkout starts from.
+ * the booking pages accept it, then advertised with the signed quote a
+ * checkout starts from.
  */
 const quoteSelection = Effect.fn("customerApi.quoteSelection")(function* (
-  query: QuoteQuery
+  query: QuoteQuery,
+  entryPackQuote: Layer.Layer<
+    Layer.Success<CustomerBookingCatalogLayerSet["entryPackQuote"]>,
+    Layer.Error<CustomerBookingCatalogLayerSet["entryPackQuote"]>
+  >
 ) {
   const now = yield* currentInstant;
-  const { locale: _locale, coffee, earlySetup, ...fields } = query;
+  const { locale, coffee, earlySetup, passId, ...fields } = query;
   const selection = yield* resolveBookingQuoteSelection({
     selection: yield* toBookingSelectionInput({
       ...fields,
       ...(coffee !== undefined && { coffee: coffee === "true" }),
     }),
-    locale: query.locale,
+    locale,
     now,
   });
   const reservation = yield* withEarlySetup(selection, earlySetup === "true");
-  const advertised = yield* buildAdvertisedPrice(selection.request);
-  if (!advertised.discountsComplete) return yield* new SalePricesUnavailable();
+  const advertised = passId
+    ? yield* buildEntryPackBookingQuote({
+        reservation,
+        passId: orderIdSchema.make(passId),
+        locale,
+      }).pipe(providePerRequest(entryPackQuote))
+    : yield* buildAdvertisedPrice(selection.request).pipe(
+        Effect.filterOrFail(
+          ({ discountsComplete }) => discountsComplete,
+          () => new SalePricesUnavailable()
+        )
+      );
   const { payment } = advertised.quote;
   const summary =
     advertised.kind === "meeting-room" && reservation.kind === "meeting-room"

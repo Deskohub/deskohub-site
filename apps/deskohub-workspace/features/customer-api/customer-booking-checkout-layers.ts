@@ -1,6 +1,7 @@
 import { Context, Layer } from "effect";
 import { CheckoutService } from "@/features/checkout/backend/checkout";
 import { OfficeReleaseGateForRun } from "@/features/office/backend/office-release-gate-run";
+import { CoworkPassesReleaseGateForRun } from "@/features/passes/backend/cowork-passes-release-gate";
 import { ReferralReleaseGateForRun } from "@/features/referrals/referral-release-gate-run";
 import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
 import { OvernightStayReleaseGateForRun } from "@/features/reservation/backend/overnight-stay-release-gate-run";
@@ -19,6 +20,7 @@ const liveCheckoutLayers = {
    * maximum, as the quote read them.
    */
   inventory: SharedAvailabilityInventoryLive,
+  passes: CoworkPassesReleaseGateForRun,
   /** The release gates, each decided once per request. */
   releases: {
     office: OfficeReleaseGateForRun,
