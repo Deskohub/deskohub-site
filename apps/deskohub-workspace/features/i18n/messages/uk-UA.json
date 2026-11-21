@@ -1868,6 +1868,7 @@
   "entryPackCheckoutTermsChanged": "Умови змінилися. Перегляньте чинні умови й підтвердьте їх знову перед оплатою.",
   "passEntryPack": "Пакет відвідувань",
   "passUnlimited": "Безлімітний абонемент",
+  "unlimitedPassRenew": "Продовжити абонемент",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Зарезервований стіл",
   "passTierWorkstation": "Зарезервований стіл із робочою станцією",

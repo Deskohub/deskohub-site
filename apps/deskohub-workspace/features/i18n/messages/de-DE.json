@@ -1832,6 +1832,7 @@
   "entryPackCheckoutTermsChanged": "Die Bedingungen haben sich geändert. Lies die aktuellen Bedingungen und bestätige sie erneut, bevor du bezahlst.",
   "passEntryPack": "Eintrittspaket",
   "passUnlimited": "Unbegrenzter Pass",
+  "unlimitedPassRenew": "Pass verlängern",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Reservierter Schreibtisch",
   "passTierWorkstation": "Reservierter Schreibtisch mit Arbeitsplatz",

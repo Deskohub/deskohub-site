@@ -1832,6 +1832,7 @@
   "entryPackCheckoutTermsChanged": "The terms changed. Review the current terms and confirm them again before paying.",
   "passEntryPack": "Entry pack",
   "passUnlimited": "Unlimited pass",
+  "unlimitedPassRenew": "Renew pass",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Reserved Desk",
   "passTierWorkstation": "Reserved Desk with workstation",
