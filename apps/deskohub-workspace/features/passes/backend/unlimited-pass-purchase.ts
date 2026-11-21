@@ -4,7 +4,7 @@ import { type DotyposCustomerId, DotyposService } from "@deskohub/dotypos";
 import { and, eq, isNull } from "drizzle-orm";
 import { Data, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { customerAccounts, passPurchases } from "@/db/schema";
+import { customerAccounts, type Order, passPurchases } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
@@ -50,7 +50,7 @@ import {
 } from "./entry-pack-purchase";
 import { withUnlimitedPassCapacity } from "./unlimited-pass-capacity";
 import {
-  createUnlimitedPassHolds,
+  attemptUnlimitedPassHolds,
   readUnlimitedPassDays,
   releaseUnlimitedPassDays,
 } from "./unlimited-pass-holds";
@@ -67,14 +67,37 @@ class UnlimitedPassDraftVoided extends Data.TaggedError(
   "UnlimitedPassDraftVoided"
 )<{ readonly blockingDates: readonly PlainDate[] }> {}
 
-const readRejectedHoldDates = (orderId: OrderId) =>
-  readUnlimitedPassDays(orderId).pipe(
-    Effect.map((days) =>
-      days.flatMap((day) =>
-        day.failureCode === rejectedPassDayHoldCode ? [day.serviceDate] : []
-      )
+const rejectedHoldDates = (
+  days: Effect.Success<ReturnType<typeof readUnlimitedPassDays>>
+) =>
+  days.flatMap((day) =>
+    day.failureCode === rejectedPassDayHoldCode ? [day.serviceDate] : []
+  );
+
+// Only void drafts store this checkout outcome alongside the original quote.
+const voidedDraftDetails = Schema.Struct({
+  voidBlockingDates: Schema.optionalKey(Schema.Array(plainDateStringSchema)),
+});
+
+const readVoidedDraftDates = (purchase: Purchase) =>
+  Schema.decodeUnknownEffect(voidedDraftDetails)(purchase.quote).pipe(
+    Effect.flatMap(({ voidBlockingDates }) =>
+      voidBlockingDates === undefined
+        ? readUnlimitedPassDays(purchase.id).pipe(Effect.map(rejectedHoldDates))
+        : Effect.succeed(voidBlockingDates)
     )
   );
+
+const isVoidedUnlimitedDraft = ({
+  order,
+  purchase,
+}: {
+  readonly order: Pick<Order, "paymentState" | "activePaymentAttemptId">;
+  readonly purchase: Pick<Purchase, "status">;
+}) =>
+  purchase.status === "void" &&
+  order.activePaymentAttemptId === null &&
+  (order.paymentState === "not_started" || order.paymentState === "expired");
 
 const resolveGiftCustomer = Effect.fn("resolveUnlimitedGiftCustomer")(
   function* (input: {
@@ -203,7 +226,15 @@ export const beginUnlimitedPassPurchase = Effect.fn(
           return yield* new UnlimitedPassAdmissionError({
             reason: "purchase-conflict",
           });
-        if (existing.order.paymentState !== "not_started") {
+        if (isVoidedUnlimitedDraft(existing)) {
+          return yield* new UnlimitedPassDraftVoided({
+            blockingDates: yield* readVoidedDraftDates(existing.purchase),
+          });
+        }
+        if (
+          existing.order.paymentState !== "not_started" ||
+          existing.order.activePaymentAttemptId
+        ) {
           return yield* new EntryPackPurchaseError({
             reason: "payment-in-progress",
           });
@@ -320,16 +351,14 @@ export const beginUnlimitedPassPurchase = Effect.fn(
         session.accountId,
         "unlimited"
       );
-      if (
-        prepared?.order.paymentState === "not_started" &&
-        prepared.purchase.status === "void"
-      ) {
+      if (prepared && isVoidedUnlimitedDraft(prepared)) {
         return yield* new UnlimitedPassDraftVoided({
-          blockingDates: yield* readRejectedHoldDates(input.orderId),
+          blockingDates: yield* readVoidedDraftDates(prepared.purchase),
         });
       }
       if (
         prepared?.order.paymentState !== "not_started" ||
+        prepared.order.activePaymentAttemptId ||
         prepared.purchase.status !== "pending_payment"
       ) {
         return yield* new EntryPackPurchaseError({
@@ -337,41 +366,52 @@ export const beginUnlimitedPassPurchase = Effect.fn(
         });
       }
       const { purchase } = prepared;
-      yield* createUnlimitedPassHolds(purchase).pipe(
-        Effect.catch(
-          Effect.fnUntraced(function* (error) {
-            const rejectedDates = yield* readRejectedHoldDates(purchase.id);
-            const blocking =
-              error._tag === "UnlimitedPassHoldsUnavailable" &&
-              error.reason !== "unfinished";
-            if (!blocking && rejectedDates.length === 0) return yield* error;
-            const [voided] = yield* db
-              .update(passPurchases)
-              .set({ status: "void" })
-              .where(
-                and(
-                  eq(passPurchases.id, purchase.id),
-                  eq(passPurchases.status, "pending_payment")
-                )
-              )
-              .returning();
-            if (!voided) return yield* error;
-            yield* releaseUnlimitedPassDays(voided).pipe(
-              Effect.catch(() =>
-                Effect.logWarning(
-                  "Unlimited pass hold compensation needs reconciliation"
-                )
-              )
-            );
-            return yield* new UnlimitedPassDraftVoided({
-              blockingDates: blocking
-                ? (error.blockingDates ?? rejectedDates)
-                : rejectedDates,
-            });
-          })
+      const attempt = yield* attemptUnlimitedPassHolds(purchase);
+      if (!attempt) return purchase;
+
+      const { failure } = attempt;
+      const days = yield* readUnlimitedPassDays(purchase.id);
+      const rejectedDates = rejectedHoldDates(days);
+      const blocked =
+        failure._tag === "UnlimitedPassHoldsUnavailable" &&
+        failure.reason !== "unfinished";
+      if (!blocked && rejectedDates.length === 0) return yield* failure;
+
+      const now = yield* currentInstant;
+      const expiredDates = days.flatMap((day) =>
+        day.reservationHoldExpiresAt &&
+        Temporal.Instant.compare(now, day.reservationHoldExpiresAt) >= 0
+          ? [day.serviceDate]
+          : []
+      );
+      const blockingDates = [
+        ...new Set([
+          ...rejectedDates,
+          ...expiredDates,
+          ...attempt.blockingDates,
+          ...(blocked ? (failure.blockingDates ?? []) : []),
+        ]),
+      ].sort();
+      const quote = { ...purchase.quote, voidBlockingDates: blockingDates };
+      const [voided] = yield* db
+        .update(passPurchases)
+        .set({ status: "void", quote })
+        .where(
+          and(
+            eq(passPurchases.id, purchase.id),
+            eq(passPurchases.status, "pending_payment")
+          )
+        )
+        .returning();
+      if (!voided) return yield* failure;
+      yield* releaseUnlimitedPassDays(voided).pipe(
+        Effect.catch(() =>
+          Effect.logWarning(
+            "Unlimited pass hold compensation needs reconciliation"
+          )
         )
       );
-      return purchase;
+      return yield* new UnlimitedPassDraftVoided({ blockingDates });
     }),
     { passPurchaseOrderId: input.orderId }
   );

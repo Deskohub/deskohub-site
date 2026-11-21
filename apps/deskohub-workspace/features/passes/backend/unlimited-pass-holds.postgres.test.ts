@@ -59,7 +59,13 @@ import {
   rejectedPassDayHoldCode,
 } from "../pass-day-marker";
 import { unlimitedPassDays } from "../pass-offer";
+import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
+import {
+  getPassPurchasePriceFingerprint,
+  repriceEntryPackPurchase,
+} from "./entry-pack-purchase";
 import { settlePassPurchase } from "./entry-pack-settlement";
+import { reconcileUnlimitedPassReleases } from "./pass-purchase-reconciliation";
 import { unlimitedConfirmationDeliveryReports } from "./unlimited-confirmation-delivery";
 import { getBookableUnlimitedStarts } from "./unlimited-pass-capacity";
 import {
@@ -679,19 +685,18 @@ for (const firstObservation of [
   });
 }
 
-it("preserves an uncertain Continue and returns the affected date for a voided draft", async () => {
-  const start = getCurrentWorkspaceDate().add({ days: 100 });
-  const rejectedDate = date(start.add({ days: 2 }));
-  const accountId = newAccountId();
-  const email = testEmailAddress("unlimited-draft-retry");
+function unlimitedDraftLayer(
+  accountId: ReturnType<typeof newAccountId>,
+  dotypos: typeof DotyposService.Service
+) {
+  const email = testEmailAddress("unlimited-draft");
   const session = {
     ...testSessionProfile,
     accountId,
     email,
     deletionRequested: false,
   };
-  const provider = makeInMemoryDotypos({});
-  const layer = Layer.mergeAll(
+  return Layer.mergeAll(
     database!.layer,
     Layer.mock(CurrentCustomerAccount, {
       requireActive: Effect.succeed(session),
@@ -708,36 +713,47 @@ it("preserves an uncertain Continue and returns the affected date for a voided d
     Layer.mock(WorkspaceFeatureFlagService, {
       isEnabled: () => Effect.succeed(true),
     }),
-    Layer.mock(WorkspaceDatabaseAdvisoryLock, {}),
+    WorkspaceDatabaseAdvisoryLock.makeLayer(database!.databasePool),
     Layer.mock(WorkspaceReservationRepository, {}),
     Layer.mock(GoogleCalendarWorkspaceLimitationsService, {}),
-    Layer.succeed(DotyposService, {
-      ...provider.service,
-      createReservation: (input) => {
-        if (input.note?.includes(`/${date(start)}/`)) {
-          return provider.service.createReservation(input).pipe(
-            Effect.andThen(
-              Effect.fail(
-                new DotyposUncertain({
-                  operation: "createReservation",
-                  reason: "timeout",
-                })
-              )
-            )
-          );
-        }
-        if (input.note?.includes(`/${rejectedDate}/`)) {
-          return Effect.fail(
-            new DotyposRejected({
-              operation: "createReservation",
-              reason: "invalid-request",
-            })
-          );
-        }
-        return provider.service.createReservation(input);
-      },
-    })
+    Layer.succeed(DotyposService, dotypos)
   );
+}
+
+it("preserves an uncertain Continue and replays both rejected dates after void", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const rejectedDates = [
+    date(start.add({ days: 2 })),
+    date(start.add({ days: 3 })),
+  ];
+  const accountId = newAccountId();
+  const provider = makeInMemoryDotypos({});
+  const layer = unlimitedDraftLayer(accountId, {
+    ...provider.service,
+    createReservation: (input) => {
+      if (input.note?.includes(`/${date(start)}/`)) {
+        return provider.service.createReservation(input).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new DotyposUncertain({
+                operation: "createReservation",
+                reason: "timeout",
+              })
+            )
+          )
+        );
+      }
+      if (rejectedDates.some((day) => input.note?.includes(`/${day}/`))) {
+        return Effect.fail(
+          new DotyposRejected({
+            operation: "createReservation",
+            reason: "invalid-request",
+          })
+        );
+      }
+      return provider.service.createReservation(input);
+    },
+  });
 
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -760,7 +776,7 @@ it("preserves an uncertain Continue and returns the affected date for a voided d
       const expected = Result.fail(
         expect.objectContaining({
           _tag: "UnlimitedPassDraftVoided",
-          blockingDates: [rejectedDate],
+          blockingDates: rejectedDates,
         })
       );
       expect(yield* Effect.result(begin)).toEqual(expected);
@@ -770,14 +786,109 @@ it("preserves an uncertain Continue and returns the affected date for a voided d
   );
 });
 
-it("rejects a Continue replay when an attached day's deadline passed", async () => {
+it("replays expired service dates after losing the Continue response", async () => {
   const provider = makeInMemoryDotypos({});
+  const accountId = newAccountId();
   await Effect.runPromise(
     Effect.gen(function* () {
-      const start = getCurrentWorkspaceDate().add({ days: 4000 });
-      const purchase = yield* record(start);
+      const start = getCurrentWorkspaceDate().add({ days: 100 });
+      const purchase = yield* record(start, accountId, accountId);
       yield* createUnlimitedPassHolds(purchase);
-      const [first] = yield* readUnlimitedPassDays(purchase.id);
+      const days = yield* readUnlimitedPassDays(purchase.id);
+      const expired = [days[0]!, days[2]!];
+      const { db } = yield* WorkspaceDatabase;
+      for (const day of expired) {
+        yield* db
+          .update(workspaceReservations)
+          .set({
+            reservationHoldExpiresAt: Temporal.Now.instant().subtract({
+              seconds: 1,
+            }),
+          })
+          .where(eq(workspaceReservations.id, day.id));
+      }
+      const begin = beginUnlimitedPassPurchase({
+        orderId: purchase.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      });
+      const expected = Result.fail(
+        expect.objectContaining({
+          _tag: "UnlimitedPassDraftVoided",
+          blockingDates: expired.map((day) => day.serviceDate),
+        })
+      );
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      // Retry the same request after the definitive response was lost.
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      const [voided] = yield* db
+        .select({ quote: passPurchases.quote, status: passPurchases.status })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, purchase.id));
+      const decodeQuote = Schema.decodeSync(passPurchaseQuoteCodec);
+      const acceptedQuote = decodeQuote(purchase.quote);
+      expect(voided?.status).toBe("void");
+      expect(decodeQuote(voided!.quote)).toEqual(acceptedQuote);
+      const staleReprice = repriceEntryPackPurchase({
+        orderId: purchase.id,
+        productKind: "unlimited",
+        displayedPriceFingerprint:
+          getPassPurchasePriceFingerprint(acceptedQuote),
+      }).pipe(
+        Effect.provide(
+          Layer.mock(DiscountService, {
+            quote: () => Effect.succeed(acceptedQuote),
+          })
+        )
+      );
+      expect(yield* Effect.result(staleReprice)).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "EntryPackPurchaseError",
+            reason: "quote-expired",
+          })
+        )
+      );
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      expect(provider.reservations.size).toBe(unlimitedPassDays);
+      const released = yield* readUnlimitedPassDays(purchase.id);
+      expect(
+        released.every((day) => day.reservationState === "cancelled")
+      ).toBe(true);
+    }).pipe(Effect.provide(unlimitedDraftLayer(accountId, provider.service)))
+  );
+});
+
+it("replays expiry and change dates without replacing an ambiguous generation", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const accountId = newAccountId();
+  const provider = makeInMemoryDotypos({});
+  const layer = unlimitedDraftLayer(accountId, {
+    ...provider.service,
+    createReservation: (input) => {
+      if (input.note?.includes(`/${date(start)}/`)) {
+        return provider.service.createReservation(input).pipe(
+          Effect.andThen(provider.service.createReservation(input)),
+          Effect.andThen(
+            Effect.fail(
+              new DotyposUncertain({
+                operation: "createReservation",
+                reason: "timeout",
+              })
+            )
+          )
+        );
+      }
+      return provider.service.createReservation(input);
+    },
+  });
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(start, accountId, accountId);
+      expect(yield* Effect.result(createUnlimitedPassHolds(purchase))).toEqual(
+        Result.fail(expect.objectContaining({ _tag: "DotyposUncertain" }))
+      );
+      const [expired, changed] = yield* readUnlimitedPassDays(purchase.id);
       const { db } = yield* WorkspaceDatabase;
       yield* db
         .update(workspaceReservations)
@@ -786,21 +897,260 @@ it("rejects a Continue replay when an attached day's deadline passed", async () 
             seconds: 1,
           }),
         })
+        .where(eq(workspaceReservations.id, expired!.id));
+      yield* provider.service.cancelReservation(changed!.dotyposReservationId!);
+      yield* db
+        .update(workspaceReservations)
+        .set({ reservationState: "cancelled" })
+        .where(eq(workspaceReservations.id, changed!.id));
+      const begin = beginUnlimitedPassPurchase({
+        orderId: purchase.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      });
+      const expected = Result.fail(
+        expect.objectContaining({
+          _tag: "UnlimitedPassDraftVoided",
+          blockingDates: [expired!.serviceDate, changed!.serviceDate],
+        })
+      );
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      const [ambiguous] = yield* readUnlimitedPassDays(purchase.id);
+      expect(ambiguous).toMatchObject({
+        reservationState: "creating_hold",
+        failureCode: ambiguousPassDayHoldCode,
+        dotyposReservationId: null,
+        passDayHoldGeneration: expired!.passDayHoldGeneration,
+        passDayHoldRequestedAt: expired!.passDayHoldRequestedAt,
+      });
+      expect(
+        [...provider.reservations.values()].map((day) => day.status).sort()
+      ).toEqual(["CANCELLED", "NEW", "NEW"]);
+    }).pipe(Effect.provide(layer))
+  );
+});
+
+it("records every elapsed service date after the shared draft deadline", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const accountId = newAccountId();
+  const provider = makeInMemoryDotypos({});
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(start, accountId, accountId);
+      yield* createUnlimitedPassHolds(purchase);
+      const { db, transaction } = yield* WorkspaceDatabase;
+      const deadline = Temporal.Now.instant().subtract({ seconds: 1 });
+      yield* transaction(
+        Effect.gen(function* () {
+          yield* db
+            .update(passPurchases)
+            .set({ holdsExpireAt: deadline })
+            .where(eq(passPurchases.id, purchase.id));
+          yield* db
+            .update(workspaceReservations)
+            .set({ reservationHoldExpiresAt: deadline })
+            .where(eq(workspaceReservations.passId, purchase.id));
+        })
+      );
+      const days = yield* readUnlimitedPassDays(purchase.id);
+      const blockingDates = days.map((day) => day.serviceDate);
+      expect(blockingDates).toHaveLength(unlimitedPassDays);
+      const begin = beginUnlimitedPassPurchase({
+        orderId: purchase.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      });
+      const expected = Result.fail(
+        expect.objectContaining({
+          _tag: "UnlimitedPassDraftVoided",
+          blockingDates,
+        })
+      );
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      const [voided] = yield* db
+        .select({ status: passPurchases.status, quote: passPurchases.quote })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, purchase.id));
+      expect(voided).toMatchObject({
+        status: "void",
+        quote: { voidBlockingDates: blockingDates },
+      });
+      expect(yield* Effect.result(begin)).toEqual(expected);
+    }).pipe(Effect.provide(unlimitedDraftLayer(accountId, provider.service)))
+  );
+});
+
+it("keeps the first uncertain hold retryable when its sibling has expired", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const accountId = newAccountId();
+  const provider = makeInMemoryDotypos({});
+  const uncertain = new DotyposUncertain({
+    operation: "createReservation",
+    reason: "timeout",
+  });
+  const layer = unlimitedDraftLayer(accountId, {
+    ...provider.service,
+    createReservation: (input) =>
+      provider.service
+        .createReservation(input)
+        .pipe(Effect.andThen(Effect.fail(uncertain))),
+  });
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(start, accountId, accountId);
+      const [first, expired, rejected] = yield* readUnlimitedPassDays(
+        purchase.id
+      );
+      const { db } = yield* WorkspaceDatabase;
+      const deadline = Temporal.Now.instant().subtract({ seconds: 1 });
+      yield* db
+        .update(workspaceReservations)
+        .set({ reservationHoldExpiresAt: deadline })
+        .where(eq(workspaceReservations.id, expired!.id));
+      const begin = beginUnlimitedPassPurchase({
+        orderId: purchase.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      });
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(expect.objectContaining({ _tag: "DotyposUncertain" }))
+      );
+      const status = db
+        .select({ status: passPurchases.status })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, purchase.id));
+      expect(yield* status).toEqual([{ status: "pending_payment" }]);
+
+      // Capacity can record ambiguity independently of Continue.
+      yield* db
+        .update(workspaceReservations)
+        .set({
+          failureCode: ambiguousPassDayHoldCode,
+          reservationHoldExpiresAt: deadline,
+        })
         .where(eq(workspaceReservations.id, first!.id));
-      const replay = yield* Effect.result(createUnlimitedPassHolds(purchase));
-      expect(replay).toEqual(
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(expect.objectContaining({ reason: "unfinished" }))
+      );
+      expect(yield* status).toEqual([{ status: "pending_payment" }]);
+
+      yield* db
+        .update(workspaceReservations)
+        .set({
+          failureCode: rejectedPassDayHoldCode,
+          reservationState: "hold_expired",
+        })
+        .where(eq(workspaceReservations.id, rejected!.id));
+      const expected = Result.fail(
+        expect.objectContaining({
+          _tag: "UnlimitedPassDraftVoided",
+          blockingDates: [
+            first!.serviceDate,
+            expired!.serviceDate,
+            rejected!.serviceDate,
+          ],
+        })
+      );
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      const [ambiguous] = yield* readUnlimitedPassDays(purchase.id);
+      expect(ambiguous).toMatchObject({
+        failureCode: ambiguousPassDayHoldCode,
+        reservationState: "creating_hold",
+        dotyposReservationId: null,
+      });
+      expect(
+        [...provider.reservations.values()].map((day) => day.status)
+      ).toEqual(["NEW"]);
+    }).pipe(Effect.provide(layer))
+  );
+});
+
+it("replays reconciled void drafts expired before payment and fences expired attempts", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const accountId = newAccountId();
+  const provider = makeInMemoryDotypos({});
+  const layer = unlimitedDraftLayer(accountId, {
+    ...provider.service,
+    createReservation: () =>
+      Effect.fail(
+        new DotyposRejected({
+          operation: "createReservation",
+          reason: "invalid-request",
+        })
+      ),
+  });
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(start, accountId, accountId);
+      const rejected = yield* Effect.result(createUnlimitedPassHolds(purchase));
+      expect(rejected).toEqual(
+        Result.fail(expect.objectContaining({ _tag: "DotyposRejected" }))
+      );
+      yield* reconcileUnlimitedPassReleases({
+        limit: 1,
+        now: purchase.holdsExpireAt!,
+      });
+      const { db } = yield* WorkspaceDatabase;
+      const [reconciled] = yield* db
+        .select({
+          paymentState: orders.paymentState,
+          activePaymentAttemptId: orders.activePaymentAttemptId,
+          status: passPurchases.status,
+        })
+        .from(orders)
+        .innerJoin(passPurchases, eq(passPurchases.id, orders.id))
+        .where(eq(orders.id, purchase.id));
+      expect(reconciled).toEqual({
+        paymentState: "expired",
+        activePaymentAttemptId: null,
+        status: "void",
+      });
+      const begin = beginUnlimitedPassPurchase({
+        orderId: purchase.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      });
+      expect(yield* Effect.result(begin)).toEqual(
         Result.fail(
           expect.objectContaining({
-            reason: "expired",
-            blockingDates: [first!.serviceDate],
+            _tag: "UnlimitedPassDraftVoided",
+            blockingDates: [date(start), date(start.add({ days: 1 }))],
           })
         )
       );
-      expect(provider.reservations.size).toBe(unlimitedPassDays);
-    }).pipe(
-      Effect.provide(database!.layer),
-      Effect.provideService(DotyposService, provider.service)
-    )
+      const empty = { ...purchase.quote, voidBlockingDates: [] };
+      yield* db
+        .update(passPurchases)
+        .set({ quote: empty })
+        .where(eq(passPurchases.id, purchase.id));
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "UnlimitedPassDraftVoided",
+            blockingDates: [],
+          })
+        )
+      );
+      const malformed = { ...purchase.quote, voidBlockingDates: "invalid" };
+      yield* db
+        .update(passPurchases)
+        .set({ quote: malformed })
+        .where(eq(passPurchases.id, purchase.id));
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(expect.objectContaining({ _tag: "SchemaError" }))
+      );
+      yield* expirePass(purchase.id);
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "EntryPackPurchaseError",
+            reason: "payment-in-progress",
+          })
+        )
+      );
+    }).pipe(Effect.provide(layer))
   );
 });
 

@@ -248,7 +248,7 @@ const observePassDayHolds = (purchase: Purchase, rows: readonly PassDay[]) =>
   );
 
 /** Runs inside the pass-order section after the local intent transaction commits. */
-export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
+export const attemptUnlimitedPassHolds = Effect.fn("attemptUnlimitedPassHolds")(
   function* (purchase: Purchase) {
     const { db } = yield* WorkspaceDatabase;
     const rows = yield* readUnlimitedPassDays(purchase.id);
@@ -314,6 +314,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
         if (!claimed)
           return yield* new UnlimitedPassHoldsUnavailable({
             reason: "changed",
+            blockingDates: [row.serviceDate],
           });
         attempt = {
           ...row,
@@ -365,7 +366,10 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
         .where(matchesPassDayAttempt(attempt))
         .returning({ id: workspaceReservations.id });
       if (!saved) {
-        return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+        return yield* new UnlimitedPassHoldsUnavailable({
+          reason: "changed",
+          blockingDates: [row.serviceDate],
+        });
       }
     });
     for (const pair of EffectArray.chunksOf(rows, 2)) {
@@ -375,9 +379,31 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
         { concurrency: 2 }
       );
       const failure = outcomes.find(Result.isFailure);
-      if (failure) return yield* failure.failure;
+      if (!failure) continue;
+      return {
+        failure: failure.failure,
+        blockingDates: outcomes.flatMap((outcome) =>
+          Result.isFailure(outcome) &&
+          outcome.failure._tag === "UnlimitedPassHoldsUnavailable"
+            ? (outcome.failure.blockingDates ?? [])
+            : []
+        ),
+      };
     }
     yield* readPayableUnlimitedHolds(purchase);
+  },
+  Effect.result,
+  Effect.map((result) =>
+    Result.isSuccess(result)
+      ? result.success
+      : { failure: result.failure, blockingDates: [] }
+  )
+);
+
+export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
+  function* (purchase: Purchase) {
+    const attempt = yield* attemptUnlimitedPassHolds(purchase);
+    if (attempt) return yield* attempt.failure;
   }
 );
 
