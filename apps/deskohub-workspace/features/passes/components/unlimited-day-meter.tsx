@@ -1,11 +1,24 @@
 import { cn } from "@/shared/utils";
 import { unlimitedPassDays } from "../pass-offer";
 
-const days = Array.from({ length: unlimitedPassDays }, (_, index) => index + 1);
-
-export function UnlimitedDayMeter({ day }: { readonly day: number }) {
+export function UnlimitedDayMeter({
+  day,
+  totalDays,
+}: {
+  readonly day: number;
+  readonly totalDays: number;
+}) {
+  const days = Array.from({ length: totalDays }, (_, index) => index + 1);
   return (
-    <div aria-hidden="true" className="flex gap-[3px]">
+    <div
+      aria-hidden="true"
+      className="flex gap-[3px]"
+      style={
+        totalDays > unlimitedPassDays
+          ? { columnGap: `min(3px, ${40 / totalDays}%)` }
+          : undefined
+      }
+    >
       {days.map((segment) => (
         <span
           className={cn(

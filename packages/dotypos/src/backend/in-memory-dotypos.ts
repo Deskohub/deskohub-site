@@ -33,6 +33,7 @@ import {
   dotyposMaximumPageSize,
   type IDotyposService,
   normalizeReservationBooking,
+  normalizeReservationCustomerReassignment,
   type ReservationListOptions,
   type ReservationPage,
   RestoreCancelledReservationResult,
@@ -40,6 +41,7 @@ import {
   restorableReservationStatus,
   validateReservationInterval,
   validateReservationPageNumber,
+  verifyReservationCustomerReassignment,
   verifyReservationStatusTransition,
 } from "./service";
 
@@ -458,6 +460,29 @@ export const makeInMemoryDotypos = (
                   })
                 )
               )
+            )
+          )
+        )
+      ),
+    reassignReservationCustomerIfMatches: (input) =>
+      normalizeReservationCustomerReassignment(input).pipe(
+        Effect.bind("reservation", ({ reservationId }) =>
+          readReservationRecord(
+            reservationId,
+            "reassignReservationCustomerIfMatches",
+            "reservation.version"
+          )
+        ),
+        Effect.flatMap(({ reservation, ...reassignment }) =>
+          verifyReservationCustomerReassignment(reservation, reassignment).pipe(
+            Effect.flatMap(
+              Option.match({
+                onSome: Effect.succeed,
+                onNone: () =>
+                  writeReservation(reservation, {
+                    _customerId: reassignment.customerId,
+                  }),
+              })
             )
           )
         )

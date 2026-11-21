@@ -228,6 +228,18 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         pinId: IgloohomePinIdSchema.make("synthetic-unlimited-pin"),
       });
 
+    test("reads day 31 of a 32-day adjusted term", async () => {
+      const { orderId } = await seedPass("open-space");
+      await database.pool.query(
+        "update pass_purchases set valid_until = '2030-05-02' where id = $1",
+        [orderId]
+      );
+      const onExtension = Temporal.Instant.from("2030-04-30T11:00Z");
+      expect(
+        await load(orderId, "open-space", buyer, onExtension, { issue })
+      ).toMatchObject({ day: 31, totalDays: 32, continuesTomorrow: true });
+    });
+
     const holderCookie = (
       orderId: OrderId,
       holderAccountId: CustomerAccountId
@@ -282,7 +294,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Temporal.Instant.from("2030-03-30T22:59:59Z"),
           provider
         )
-      ).toMatchObject({ state: "closed", day: 30 });
+      ).toMatchObject({ state: "closed", day: 30, totalDays: 30 });
       expect(reads).toEqual([]);
 
       expect(
@@ -319,7 +331,12 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
       expect(
         await load(original.orderId, "open-space", holder, during, provider)
-      ).toMatchObject({ state: "available", day: 1, validFrom: firstDay });
+      ).toMatchObject({
+        state: "available",
+        day: 1,
+        totalDays: 30,
+        validFrom: firstDay,
+      });
       expect(reads).toEqual([firstDay]);
     });
 

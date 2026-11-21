@@ -93,6 +93,11 @@ export const orders = pgTable(
       sql`${t.paymentState} <> 'paid' or ${t.paidAt} is not null`
     ),
     check(
+      "orders_complimentary_check",
+      sql`${t.paymentState} <> 'complimentary' or (${t.kind} = 'pass-purchase'
+        and ${t.activePaymentAttemptId} is null and ${t.paidAt} is null)`
+    ),
+    check(
       "orders_fulfilled_check",
       sql`${t.fulfillmentState} <> 'fulfilled' or ${t.fulfilledAt} is not null`
     ),

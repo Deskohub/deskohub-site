@@ -82,6 +82,10 @@ type GeneratedClientError = {
 
 type ProviderErrorInput = DotyposErrorResponse | string | undefined;
 
+/** A strong entity tag uses the opaque-tag grammar from RFC 9110 §8.8.3. */
+export const isStrongEtag = (etag: string | undefined): etag is string =>
+  etag !== undefined && /^"[\x21\x23-\x7e\x80-\xff]*"$/.test(etag);
+
 export const makeDotyposClient = ({
   config,
   httpClient,

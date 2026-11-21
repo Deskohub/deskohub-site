@@ -1,14 +1,26 @@
-import { and, eq, exists, isNotNull } from "drizzle-orm";
+import { and, eq, exists, isNotNull, lt, or, sql } from "drizzle-orm";
 import type { WorkspaceDatabaseClient } from "@/db/database.service";
 import { orders, passPurchases, paymentAttempts } from "@/db/schema";
 
-/** Checks the payment on the outer pass row, including later refunds. */
-export const hasUnrefundedEntryPackPayment = (db: WorkspaceDatabaseClient) =>
+/** A recorded partial adjustment preserves a pass that remains active. */
+const claimablePassRefund = or(
+  eq(paymentAttempts.refundState, "not_required"),
+  and(
+    lt(paymentAttempts.refundTargetValue, paymentAttempts.amountValue),
+    lt(
+      sql`coalesce(${paymentAttempts.refundedAmountValue}, 0)`,
+      paymentAttempts.amountValue
+    )
+  )
+);
+
+/** Checks the order on the outer pass row, including later refunds. */
+export const hasClaimablePassOrder = (db: WorkspaceDatabaseClient) =>
   exists(
     db
       .select({ id: orders.id })
       .from(orders)
-      .innerJoin(
+      .leftJoin(
         paymentAttempts,
         and(
           eq(paymentAttempts.id, orders.activePaymentAttemptId),
@@ -19,10 +31,18 @@ export const hasUnrefundedEntryPackPayment = (db: WorkspaceDatabaseClient) =>
         and(
           eq(orders.id, passPurchases.id),
           eq(orders.kind, "pass-purchase"),
-          eq(orders.paymentState, "paid"),
-          isNotNull(orders.paidAt),
-          eq(paymentAttempts.state, "paid"),
-          eq(paymentAttempts.refundState, "not_required")
+          or(
+            and(
+              eq(orders.paymentState, "complimentary"),
+              eq(orders.fulfillmentState, "fulfilled")
+            ),
+            and(
+              eq(orders.paymentState, "paid"),
+              isNotNull(orders.paidAt),
+              eq(paymentAttempts.state, "paid"),
+              claimablePassRefund
+            )
+          )
         )
       )
   );

@@ -57,6 +57,7 @@ import type {
   DotyposReservationId,
   DotyposReservationInterval,
   DotyposTable,
+  ReassignDotyposReservationCustomerInput,
   RestoreDotyposReservationInput,
   SetMatchingDotyposReservationStatusInput,
   UpdateDotyposReservationInput,
@@ -80,6 +81,7 @@ import {
   DotyposAccessToken,
   DotyposGeneratedClient,
   DotyposRequestDispatch,
+  isStrongEtag,
   toDotyposWireFailure,
 } from "./api";
 import {
@@ -717,11 +719,33 @@ const changedBookingFields = (
 const decodeReservationInstant = Schema.decodeOption(
   DotyposTimestampFromString
 );
+type ReservationWithEtag = {
+  readonly etag: string | undefined;
+  readonly reservation: DotyposReservation;
+};
+
 const sameReservationInstant = (read: string, expected: Date) =>
   Option.exists(
     decodeReservationInstant(read),
     (microseconds) => microseconds === BigInt(expected.getTime()) * BigInt(1000)
   );
+
+const matchesReservationBooking = (
+  reservation: DotyposReservation,
+  {
+    reservationId,
+    expectedBooking,
+    expectedNoteLine,
+  }: Pick<
+    ReassignDotyposReservationCustomerInput,
+    "reservationId" | "expectedBooking" | "expectedNoteLine"
+  >
+) =>
+  reservation.id === reservationId &&
+  changedBookingFields(reservation, expectedBooking, sameReservationInstant)
+    .length === 0 &&
+  expectedNoteLine.trim().length > 0 &&
+  reservation.note?.split("\n").includes(expectedNoteLine) === true;
 
 /** A conditional status change may act only on its booking and marker. */
 export const verifyReservationStatusTransition = (
@@ -744,12 +768,12 @@ export const verifyReservationStatusTransition = (
     return Effect.succeedSome(reservation);
   }
   if (
-    reservation.id !== reservationId ||
     reservation.status === "CANCELLED" ||
-    changedBookingFields(reservation, booking, sameReservationInstant).length >
-      0 ||
-    !expectedNoteLine.trim() ||
-    !reservation.note?.split("\n").includes(expectedNoteLine)
+    !matchesReservationBooking(reservation, {
+      reservationId,
+      expectedBooking: booking,
+      expectedNoteLine,
+    })
   ) {
     return Effect.fail(
       new DotyposVersionConflict({
@@ -762,6 +786,69 @@ export const verifyReservationStatusTransition = (
   return reservation.status === status
     ? Effect.succeedSome(reservation)
     : Effect.succeedNone;
+};
+
+const reassignReservationCustomerOperation =
+  "reassignReservationCustomerIfMatches";
+
+export const normalizeReservationCustomerReassignment = (
+  input: ReassignDotyposReservationCustomerInput
+): Effect.Effect<ReassignDotyposReservationCustomerInput, DotyposRejected> =>
+  Effect.succeed(input).pipe(
+    Effect.bind("normalizedId", ({ reservationId }) =>
+      normalizeInputIdentifier(
+        DotyposReservationIdSchema,
+        reservationId,
+        "Reservation ID",
+        reassignReservationCustomerOperation
+      )
+    ),
+    Effect.bind("booking", ({ expectedBooking }) =>
+      normalizeReservationBooking(
+        expectedBooking,
+        reassignReservationCustomerOperation
+      )
+    ),
+    Effect.bind("targetCustomerId", ({ customerId }) =>
+      normalizeInputIdentifier(
+        DotyposCustomerIdSchema,
+        customerId,
+        "Customer ID",
+        reassignReservationCustomerOperation
+      )
+    ),
+    Effect.map(
+      ({ normalizedId, booking, targetCustomerId, expectedNoteLine }) => ({
+        reservationId: normalizedId,
+        expectedBooking: booking,
+        expectedNoteLine,
+        customerId: targetCustomerId,
+      })
+    )
+  );
+
+/** Some is a completed replay; none allows reassignment from the expected holder. */
+export const verifyReservationCustomerReassignment = (
+  reservation: DotyposReservation,
+  input: ReassignDotyposReservationCustomerInput
+): Effect.Effect<Option.Option<DotyposReservation>, DotyposVersionConflict> => {
+  const alreadyAssigned = reservation._customerId === input.customerId;
+  const expectedBooking = alreadyAssigned
+    ? { ...input.expectedBooking, customerId: input.customerId }
+    : input.expectedBooking;
+  if (
+    reservation.status !== "CONFIRMED" ||
+    !matchesReservationBooking(reservation, { ...input, expectedBooking })
+  ) {
+    return Effect.fail(
+      new DotyposVersionConflict({
+        operation: reassignReservationCustomerOperation,
+        message:
+          "The Dotypos reservation no longer matches the confirmed booking.",
+      })
+    );
+  }
+  return alreadyAssigned ? Effect.succeedSome(reservation) : Effect.succeedNone;
 };
 
 /**
@@ -1094,6 +1181,10 @@ export interface IDotyposService {
   /** Confirms or cancels the matching booking and note line under its ETag. */
   readonly setReservationStatusIfMatches: (
     input: SetMatchingDotyposReservationStatusInput
+  ) => Effect.Effect<DotyposReservation, DotyposConditionalWriteFailure>;
+  /** Patches only the holder of a matching CONFIRMED booking and verifies it with a separate read. */
+  readonly reassignReservationCustomerIfMatches: (
+    input: ReassignDotyposReservationCustomerInput
   ) => Effect.Effect<DotyposReservation, DotyposConditionalWriteFailure>;
   readonly updateReservation: (
     input: UpdateDotyposReservationInput
@@ -1531,45 +1622,43 @@ const makeDotyposService: Effect.Effect<
       effect.pipe(Effect.annotateLogs({ reservationId }), Effect.scoped)
   );
 
-  const readReservationVersion = Effect.fn(
-    "DotyposService.readReservationVersion"
-  )(
-    (
-      reservationId: DotyposReservationId,
-      operation:
-        | "setReservationStatusIfMatches"
-        | "confirmReservation"
-        | "restoreCancelledReservation"
-        | "updateReservation"
-    ) => {
-      const call = { operation, request: "reservation.version" } as const;
-      return runDotyposRequest(
-        client.getReservation(config.cloudId, reservationId, {
-          config: { includeResponse: true },
-        }),
-        call
-      ).pipe(
-        retryDotyposRequest(call.request),
-        Effect.flatMap(([reservation, response]) => {
-          const etag = response.headers.etag ?? response.headers.ETag;
+  const readReservationWithEtag = Effect.fn(
+    "DotyposService.readReservationWithEtag"
+  )((reservationId: DotyposReservationId, operation: DotyposOperation) => {
+    const call = { operation, request: "reservation.version" } as const;
+    return runDotyposRequest(
+      client.getReservation(config.cloudId, reservationId, {
+        config: { includeResponse: true },
+      }),
+      call
+    ).pipe(
+      retryDotyposRequest(call.request),
+      Effect.flatMap(([reservation, response]) => {
+        const etag = response.headers.etag ?? response.headers.ETag;
+        return decodeProviderEntity(
+          DotyposReservationSchema,
+          reservation,
+          call
+        ).pipe(Effect.map((decoded) => ({ etag, reservation: decoded })));
+      })
+    );
+  });
 
-          if (!etag) {
-            return Effect.fail(
-              dotyposInvalidResponse(call, {
-                message: "Reservation ETag header was missing.",
-              })
-            );
-          }
-
-          return decodeProviderEntity(
-            DotyposReservationSchema,
-            reservation,
-            call
-          ).pipe(Effect.map((decoded) => ({ etag, reservation: decoded })));
-        })
-      );
-    }
-  );
+  const readReservationVersion = (
+    reservationId: DotyposReservationId,
+    operation: DotyposOperation
+  ) =>
+    readReservationWithEtag(reservationId, operation).pipe(
+      Effect.filterOrFail(
+        (current): current is ReservationWithEtag & { readonly etag: string } =>
+          Boolean(current.etag),
+        () =>
+          dotyposInvalidResponse(
+            { operation, request: "reservation.version" },
+            { message: "Reservation ETag header was missing." }
+          )
+      )
+    );
 
   const patchReservationVersion = Effect.fn(
     "DotyposService.patchReservationVersion"
@@ -1580,27 +1669,37 @@ const makeDotyposService: Effect.Effect<
       readonly payload: UpdateReservationRequest;
       readonly operation:
         | "setReservationStatusIfMatches"
+        | "reassignReservationCustomerIfMatches"
         | "confirmReservation"
         | "restoreCancelledReservation"
         | "updateReservation";
     }) => {
       const call = {
         operation: input.operation,
-        request: "reservation.patch",
+        request:
+          input.operation === reassignReservationCustomerOperation
+            ? "reservation.reassignCustomer"
+            : "reservation.patch",
       } as const;
       return runDotyposRequest(
         client.patchReservation(config.cloudId, input.reservationId, {
           params: { "If-Match": input.etag },
           payload: input.payload,
+          config: { includeResponse: true },
         }),
         call
       ).pipe(
         retryDotyposRequest(call.request),
-        Effect.flatMap((reservation) =>
+        Effect.flatMap(([reservation, response]) =>
           decodeProviderEntity(
             DotyposReservationSchema,
             { ...reservation, id: reservation.id ?? input.reservationId },
             call
+          ).pipe(
+            Effect.map((decoded) => ({
+              etag: response.headers.etag ?? response.headers.ETag,
+              reservation: decoded,
+            }))
           )
         )
       );
@@ -1676,7 +1775,7 @@ const makeDotyposService: Effect.Effect<
           payload: { status: input.status },
           operation: input.operation,
         }).pipe(
-          Effect.map(input.patched),
+          Effect.map(({ reservation }) => input.patched(reservation)),
           Effect.mapError(stayUncertain),
           Effect.tapError((failure) =>
             Option.isNone(earlier) &&
@@ -1871,6 +1970,90 @@ const makeDotyposService: Effect.Effect<
       effect.pipe(Effect.annotateLogs({ reservationId: input.reservationId }))
   );
 
+  const reassignReservationCustomerIfMatches = Effect.fn(
+    "DotyposService.reassignReservationCustomerIfMatches"
+  )((input: ReassignDotyposReservationCustomerInput) =>
+    normalizeReservationCustomerReassignment(input).pipe(
+      Effect.bind("current", ({ reservationId }) =>
+        readReservationWithEtag(
+          reservationId,
+          reassignReservationCustomerOperation
+        )
+      ),
+      Effect.bind("alreadyAssigned", ({ current, ...reassignment }) =>
+        verifyReservationCustomerReassignment(current.reservation, reassignment)
+      ),
+      Effect.flatMap(({ alreadyAssigned, current, ...reassignment }) =>
+        Option.match(alreadyAssigned, {
+          onSome: Effect.succeed,
+          onNone: () =>
+            reassignReservationCustomer({ ...reassignment, current }),
+        })
+      )
+    )
+  );
+
+  const reassignReservationCustomer = ({
+    current,
+    reservationId,
+    customerId,
+    expectedBooking,
+    expectedNoteLine,
+  }: ReassignDotyposReservationCustomerInput & {
+    readonly current: ReservationWithEtag;
+  }): Effect.Effect<DotyposReservation, DotyposConditionalWriteFailure> => {
+    const operation = reassignReservationCustomerOperation;
+    const originalEtag = current.etag;
+    if (!isStrongEtag(originalEtag)) {
+      return Effect.fail(
+        dotyposInvalidResponse(
+          { operation, request: "reservation.version" },
+          { message: "Reservation ETag header was missing or unusable." }
+        )
+      );
+    }
+    const unverified = new DotyposUncertain({
+      operation,
+      request: "reservation.reassignCustomer",
+      reason: "invalid-response",
+      message: "Dotypos did not verify the reservation customer reassignment.",
+    });
+
+    // Verify the acknowledged version independently. A lost or unreadable
+    // receipt stays uncertain: a lagging GET could show an older target version.
+    return patchReservationVersion({
+      reservationId,
+      etag: originalEtag,
+      payload: { _customerId: customerId },
+      operation,
+    }).pipe(
+      Effect.filterOrFail(
+        ({ reservation }) => reservation.id === reservationId,
+        () => unverified
+      ),
+      Effect.flatMap(({ etag: patchedEtag }) =>
+        readReservationWithEtag(reservationId, operation).pipe(
+          Effect.mapError(() => unverified),
+          Effect.filterOrFail(
+            ({ etag, reservation }) =>
+              isStrongEtag(etag) &&
+              etag !== originalEtag &&
+              etag === patchedEtag &&
+              reservation.status === "CONFIRMED" &&
+              reservation.note === current.reservation.note &&
+              matchesReservationBooking(reservation, {
+                reservationId,
+                expectedBooking: { ...expectedBooking, customerId },
+                expectedNoteLine,
+              }),
+            () => unverified
+          ),
+          Effect.map(({ reservation }) => reservation)
+        )
+      )
+    );
+  };
+
   const updateReservation = Effect.fn("DotyposService.updateReservation")(
     function* (input: UpdateDotyposReservationInput) {
       const reservationId = yield* normalizeInputIdentifier(
@@ -1902,6 +2085,7 @@ const makeDotyposService: Effect.Effect<
             operation: "updateReservation",
           })
         ),
+        Effect.map(({ reservation }) => reservation),
         Effect.tapError((error) =>
           Effect.logError("Dotypos reservation update failed", { error })
         )
@@ -3067,6 +3251,7 @@ const makeDotyposService: Effect.Effect<
     updateReservation,
     cancelReservation,
     setReservationStatusIfMatches,
+    reassignReservationCustomerIfMatches,
     confirmReservation,
     restoreCancelledReservation,
     getReservation,

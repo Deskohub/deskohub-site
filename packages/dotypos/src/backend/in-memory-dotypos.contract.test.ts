@@ -73,6 +73,7 @@ const fixtureBooking = {
   endDate: new Date("2026-06-20T12:00:00.000Z"),
   seats: 2,
 };
+const reservationMarker = "Unlimited booking marker";
 
 const fixtures = () => ({
   customers: [
@@ -81,7 +82,11 @@ const fixtures = () => ({
   ],
   reservations: [
     reservationFixture({ id: "new" }),
-    reservationFixture({ id: "confirmed", status: "CONFIRMED" }),
+    reservationFixture({
+      id: "confirmed",
+      status: "CONFIRMED",
+      note: reservationMarker,
+    }),
     reservationFixture({ id: "cancelled", status: "CANCELLED" }),
     reservationFixture({ id: "orphan", _customerId: "gone" }),
   ],
@@ -90,6 +95,7 @@ const fixtures = () => ({
 /** A fetch mock serving the fixture records the way the OpenAPI contract documents. */
 const fixtureFetch = (): typeof globalThis.fetch => {
   const { customers, reservations } = fixtures();
+  const versions = new Map<string, number>();
   const notFound = () => new Response(null, { status: 404 });
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -109,13 +115,19 @@ const fixtureFetch = (): typeof globalThis.fetch => {
     }
     const records = collection === "customers" ? customers : reservations;
     const index = records.findIndex((record) => record.id === id);
-    if (index === -1) return notFound();
+    if (id === undefined || index === -1) return notFound();
+    const version = versions.get(id) ?? 0;
+    const etag = `"v${version}"`;
     if (request.method === "PATCH") {
+      if (request.headers.get("If-Match") !== etag) {
+        return new Response(null, { status: 412 });
+      }
       const patched = { ...records[index]!, ...(await request.json()) };
       records[index] = patched;
-      return Response.json(patched);
+      versions.set(id, version + 1);
+      return Response.json(patched, { headers: { ETag: `"v${version + 1}"` } });
     }
-    return Response.json(records[index], { headers: { ETag: `"${index}"` } });
+    return Response.json(records[index], { headers: { ETag: etag } });
   }) as typeof globalThis.fetch;
 };
 
@@ -312,6 +324,39 @@ describe("in-memory Dotypos agrees with Live on recorded response shapes", () =>
       )
     );
     expect(result).toEqual({ value: ["Restored", "CONFIRMED", "CONFIRMED"] });
+  });
+
+  test("reassigns and replays a confirmed booking without changing its details", async () => {
+    const input = {
+      reservationId: reservationId("confirmed"),
+      expectedBooking: fixtureBooking,
+      expectedNoteLine: reservationMarker,
+      customerId: customerId("new-holder"),
+    };
+    const result = await agree(
+      withService((service) =>
+        service.reassignReservationCustomerIfMatches(input).pipe(
+          Effect.flatMap((written) =>
+            service.reassignReservationCustomerIfMatches(input).pipe(
+              Effect.map((replayed) => ({
+                sameVersion: replayed.versionDate === written.versionDate,
+                status: replayed.status,
+                customerId: replayed._customerId,
+                note: replayed.note,
+              }))
+            )
+          )
+        )
+      )
+    );
+    expect(result).toEqual({
+      value: {
+        sameVersion: true,
+        status: "CONFIRMED",
+        customerId: input.customerId,
+        note: input.expectedNoteLine,
+      },
+    });
   });
 
   test("keeps a CONFIRMED reservation and refuses a NEW or changed one", async () => {

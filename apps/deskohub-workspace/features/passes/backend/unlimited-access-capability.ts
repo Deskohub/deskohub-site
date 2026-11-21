@@ -52,10 +52,17 @@ const invalidCapability = () =>
 const holderBinding = (
   secret: Buffer,
   orderId: OrderId,
-  holderAccountId: CustomerAccountId
+  holderAccountId: CustomerAccountId,
+  holderVersion = 0
 ) =>
   createHmac("sha256", secret)
-    .update(JSON.stringify(["unlimited-pass-holder", orderId, holderAccountId]))
+    .update(
+      JSON.stringify(
+        holderVersion === 0
+          ? ["unlimited-pass-holder", orderId, holderAccountId]
+          : ["unlimited-pass-holder", orderId, holderAccountId, holderVersion]
+      )
+    )
     .digest("base64url");
 
 const now = (options: ReservationAccessTokenOptions) =>
@@ -146,8 +153,9 @@ export const openUnlimitedAccessCookie = Effect.fn("passes.access.openCookie")(
     if (claims.orderId !== orderId || claims.expiresAt <= now(options)) {
       return yield* invalidCapability();
     }
-    return (holderAccountId: CustomerAccountId) =>
+    return (holderAccountId: CustomerAccountId, holderVersion = 0) =>
       claims.expiresAt > now(options) &&
-      claims.holder === holderBinding(secret, orderId, holderAccountId);
+      claims.holder ===
+        holderBinding(secret, orderId, holderAccountId, holderVersion);
   }
 );
