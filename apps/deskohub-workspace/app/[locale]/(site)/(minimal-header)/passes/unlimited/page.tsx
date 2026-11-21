@@ -263,7 +263,7 @@ async function UnlimitedPassPageContent({
         }}
         draft={
           order && continuation
-            ? { ...order, holderEmail: continuation.holderEmail }
+            ? { ...order, holderEmail: continuation.holderEmail ?? null }
             : order
         }
         retryPayment={

@@ -518,7 +518,7 @@ test("a reload during Continue retries the committed gift and a date change supe
   expect(reloaded.queryByRole("button", { name: /pay/i })).toBeNull();
 });
 
-test("holder edits after repeated uncertain replacements retain every predecessor", async () => {
+test("holder edits to a reloaded self-purchase retain every uncertain predecessor", async () => {
   const originalId = orderIdSchema.make(crypto.randomUUID());
   const beginCheckout = mock(
     async (_input: {
@@ -533,10 +533,20 @@ test("holder edits after repeated uncertain replacements retain every predecesso
       <UnlimitedPassCheckout
         {...base}
         initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
-        draft={{ kind: "resume", orderId: originalId, holderEmail }}
+        draft={{
+          kind: "submitted",
+          orderId: originalId,
+          predecessorOrderIds: [],
+          holderEmail: null,
+        }}
         beginCheckout={beginCheckout}
       />
     </QueryProvider>
+  );
+  fireEvent.click(
+    view.getByRole("checkbox", {
+      name: m.entryPackCheckoutGift({}, { locale }),
+    })
   );
   const input = view.getByLabelText(
     m.entryPackCheckoutHolderEmail({}, { locale })

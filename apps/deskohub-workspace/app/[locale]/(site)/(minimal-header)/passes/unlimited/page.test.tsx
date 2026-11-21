@@ -7,6 +7,7 @@ import type { OrderId } from "@/features/order";
 let enabled = false;
 let buyerSignedIn = true;
 let submittedOrderCommitted = false;
+let submittedGift = true;
 const ownedOrder = "5413f44e-80ef-430e-9663-ddd7242a2ed0";
 const submittedOrder = "5413f44e-80ef-430e-9663-ddd7242a2ed1";
 const holderEmail = testEmailAddress("unlimited-route-holder");
@@ -15,6 +16,7 @@ beforeEach(() => {
   enabled = false;
   buyerSignedIn = true;
   submittedOrderCommitted = false;
+  submittedGift = true;
 });
 
 mock.module(
@@ -50,7 +52,10 @@ mock.module("@/features/passes/backend/unlimited-pass-purchase", () => ({
         ? {
             locale: "cs-CZ",
             selection: { tier: "reserved-desk", startDate: "2026-12-01" },
-            holderEmail,
+            holderEmail:
+              orderId === submittedOrder && !submittedGift
+                ? undefined
+                : holderEmail,
           }
         : undefined
     ),
@@ -199,6 +204,17 @@ test("reload before commit retains submitted and predecessor IDs without restori
     retryPayment: undefined,
   });
   expect(props.draft).not.toHaveProperty("holderEmail");
+});
+
+test("reload distinguishes an owned self-purchase from a submission that has not committed", async () => {
+  submittedOrderCommitted = true;
+  submittedGift = false;
+  const content = await renderContent({ ...selectionQuery, submittedOrder });
+  expect(content.props.children.props.draft).toMatchObject({
+    kind: "submitted",
+    orderId: submittedOrder,
+    holderEmail: null,
+  });
 });
 
 test("an owned replacement survives reload with the edited selection", async () => {

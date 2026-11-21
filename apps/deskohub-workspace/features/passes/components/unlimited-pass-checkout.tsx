@@ -69,7 +69,9 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
     UnlimitedPassAvailabilityData,
     "today" | "lastStartDate"
   >;
-  readonly draft?: UnlimitedPassOrderLink & { readonly holderEmail?: string };
+  readonly draft?: UnlimitedPassOrderLink & {
+    readonly holderEmail?: string | null;
+  };
   readonly retryPayment?: {
     readonly orderId: OrderId;
     readonly selection: UnlimitedPassSelection;
@@ -173,8 +175,8 @@ export function UnlimitedPassCheckout({
   const detailsDraft = useRef<() => DetailsSchema["Encoded"]>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const submittedHolder = useRef(
-    draft && (draft.kind === "resume" || "holderEmail" in draft)
-      ? { email: draft.holderEmail }
+    draft && (draft.kind === "resume" || draft.holderEmail !== undefined)
+      ? { email: draft.holderEmail ?? undefined }
       : undefined
   );
   const isWide = useSyncExternalStore(
