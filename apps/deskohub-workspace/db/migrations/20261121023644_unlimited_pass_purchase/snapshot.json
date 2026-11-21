@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "21616e3e-f7fe-4877-a41a-649637181b86",
+  "id": "8ad960f3-e1a3-48e7-a438-c70d827320d1",
   "prevIds": [
     "68bfb0c0-85ea-4079-9d55-4c3e73b3af80"
   ],
@@ -475,6 +475,12 @@
     {
       "isRlsEnabled": false,
       "name": "standalone_access_code_attempt_events",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "unlimited_pass_supersessions",
       "entityType": "tables",
       "schema": "public"
     },
@@ -10247,6 +10253,32 @@
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "buyer_account_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "unlimited_pass_supersessions"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "order_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "unlimited_pass_supersessions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
       "default": "uuid_generate_v7()",
       "generated": null,
       "identity": null,
@@ -19134,6 +19166,23 @@
     {
       "nameExplicit": false,
       "columns": [
+        "buyer_account_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "customer_accounts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "unlimited_pass_supersessions_jQBu0VWIqPPM_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "unlimited_pass_supersessions"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
         "voucher_id"
       ],
       "schemaTo": "public",
@@ -19712,6 +19761,17 @@
       "entityType": "pks",
       "schema": "public",
       "table": "referral_attributions"
+    },
+    {
+      "columns": [
+        "buyer_account_id",
+        "order_id"
+      ],
+      "nameExplicit": false,
+      "name": "unlimited_pass_supersessions_pkey",
+      "entityType": "pks",
+      "schema": "public",
+      "table": "unlimited_pass_supersessions"
     },
     {
       "columns": [

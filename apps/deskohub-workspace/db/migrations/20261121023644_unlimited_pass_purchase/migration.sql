@@ -1,4 +1,10 @@
 SET LOCAL lock_timeout = '5s';--> statement-breakpoint
+CREATE TABLE "unlimited_pass_supersessions" (
+	"buyer_account_id" text,
+	"order_id" uuid,
+	CONSTRAINT "unlimited_pass_supersessions_pkey" PRIMARY KEY("buyer_account_id","order_id")
+);
+--> statement-breakpoint
 ALTER TABLE "pass_purchases" DROP CONSTRAINT "pass_purchases_entry_count_check";--> statement-breakpoint
 ALTER TABLE "pass_purchases" ADD COLUMN "unlimited_coffee" boolean;--> statement-breakpoint
 ALTER TABLE "pass_purchases" ADD COLUMN "unlimited_monitor_option" text;--> statement-breakpoint
@@ -12,6 +18,7 @@ ALTER TABLE "workspace_reservations" ADD COLUMN "pass_day_hold_requested_at" tim
 ALTER TABLE "workspace_reservations" ADD COLUMN "pass_day_hold_generation" uuid;--> statement-breakpoint
 ALTER TABLE "pass_purchases" ALTER COLUMN "entry_count" DROP NOT NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "workspace_reservations_pass_date_idx" ON "workspace_reservations" ("pass_id","service_date") WHERE "pass_id" is not null;--> statement-breakpoint
+ALTER TABLE "unlimited_pass_supersessions" ADD CONSTRAINT "unlimited_pass_supersessions_jQBu0VWIqPPM_fkey" FOREIGN KEY ("buyer_account_id") REFERENCES "customer_accounts"("id");--> statement-breakpoint
 ALTER TABLE "workspace_reservations" ADD CONSTRAINT "workspace_reservations_pass_id_pass_purchases_id_fkey" FOREIGN KEY ("pass_id") REFERENCES "pass_purchases"("id");--> statement-breakpoint
 ALTER TABLE "pass_purchases" ADD CONSTRAINT "pass_purchases_monitor_option_check" CHECK ("unlimited_monitor_option" in ('2x27-qhd', '2x32-qhd', '2x27-4k', '2x32-4k'));--> statement-breakpoint
 ALTER TABLE "workspace_reservations" ADD CONSTRAINT "workspace_reservations_pass_day_check" CHECK (("pass_id" is null and "service_date" is null and "pass_day_table_id" is null
