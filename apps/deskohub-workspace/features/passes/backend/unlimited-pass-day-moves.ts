@@ -155,6 +155,7 @@ const makePassDayMoves = Effect.gen(function* () {
         tableId: workspaceReservations.passDayTableId,
         generation: workspaceReservations.passDayHoldGeneration,
         cutoff: passPurchases.accessEndsOn,
+        validUntil: passPurchases.validUntil,
         status: passPurchases.status,
       })
       .from(workspaceReservations)
@@ -177,9 +178,10 @@ const makePassDayMoves = Effect.gen(function* () {
     )
       return false;
     if (
-      (current.status === "withdrawn" || current.status === "cancelled") &&
-      current.cutoff &&
-      key.serviceDate >= current.cutoff
+      key.serviceDate >= current.validUntil ||
+      ((current.status === "withdrawn" || current.status === "cancelled") &&
+        current.cutoff &&
+        key.serviceDate >= current.cutoff)
     )
       return true;
     const replacement = yield* readRecord(move.targetReservationId);

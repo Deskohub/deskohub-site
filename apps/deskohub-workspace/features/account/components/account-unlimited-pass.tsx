@@ -2,7 +2,6 @@ import { Gift, KeyRound } from "lucide-react";
 import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
 import { type Locale, m } from "@/features/i18n";
 import { UnlimitedDayMeter } from "@/features/passes/components/unlimited-day-meter";
-import { unlimitedPassDays } from "@/features/passes/pass-offer";
 import { GuardedLink } from "@/shared/components/guarded-link";
 import { Button } from "@/shared/components/ui/button";
 import { StatusBadge } from "@/shared/components/ui/status-badge";
@@ -19,7 +18,7 @@ function getPeriodStatus({ pass, locale }: PassProps) {
       return m.unlimitedAccessDay(
         {
           day: formatCount(pass.day, locale),
-          total: formatCount(unlimitedPassDays, locale),
+          total: formatCount(pass.totalDays, locale),
         },
         { locale }
       );
@@ -69,7 +68,7 @@ export function UnlimitedReservationItem({ pass, locale }: PassProps) {
                 { locale }
               )}
             </p>
-            <UnlimitedDayMeter day={pass.day} />
+            <UnlimitedDayMeter day={pass.day} totalDays={pass.totalDays} />
           </div>
         )}
       </div>
@@ -119,7 +118,7 @@ export function AccountUnlimitedPassCard({ pass, locale }: PassProps) {
                 { locale }
               )}
             </p>
-            <UnlimitedDayMeter day={pass.day} />
+            <UnlimitedDayMeter day={pass.day} totalDays={pass.totalDays} />
           </div>
         )}
         <dl className="grid gap-4 border-t border-slate-200 pt-4 @xl:grid-cols-2">
@@ -149,9 +148,11 @@ export function AccountUnlimitedPassCard({ pass, locale }: PassProps) {
               {m.accountPassBoughtForYou({}, { locale })}
             </p>
           )}
-          <p className="text-sm text-slate-600">
-            {m.accountPassBoughtOn({ date: pass.boughtOn }, { locale })}
-          </p>
+          {pass.boughtOn && (
+            <p className="text-sm text-slate-600">
+              {m.accountPassBoughtOn({ date: pass.boughtOn }, { locale })}
+            </p>
+          )}
         </div>
         {(pass.renewalPath || pass.status === "active") && (
           <div className="flex flex-wrap items-center gap-2">
