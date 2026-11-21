@@ -55,6 +55,7 @@ import {
   type QuoteSelection,
   resolveBookingQuoteSelection,
 } from "@/features/reservation/backend/booking-selection";
+import { requireCoworkPassesRelease } from "@/features/reservation/backend/entry-pack-booking";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import { providePerRequest } from "@/shared/backend/provide-per-request";
 import { getFirstInvalidFieldPath } from "@/shared/utils/schema-issue";
@@ -67,6 +68,7 @@ import { CustomerBookingCheckoutLayers } from "./customer-booking-checkout-layer
 import type { CustomerBookingHandlers } from "./customer-booking-endpoint";
 import {
   answerBookingSelectionFailure,
+  entryPackUnavailableAnswer,
   toBookingSelectionInput,
   withEarlySetup,
 } from "./customer-booking-selection";
@@ -112,7 +114,7 @@ export const handleCustomerBookingCheckout = <R>(
   handlers: CustomerBookingHandlers<R>
 ) =>
   Effect.gen(function* () {
-    const { operations, checkout, inventory, releases } =
+    const { operations, checkout, inventory, passes, releases } =
       yield* CustomerBookingCheckoutLayers;
     // The authentication the session middleware read the request through,
     // which the operations read the session through.
@@ -146,17 +148,27 @@ export const handleCustomerBookingCheckout = <R>(
       );
 
     return handlers
-      .handle("createCheckout", ({ payload, headers }) =>
-        createCheckout(payload).pipe(
-          providePerRequest(
-            forRequest(headers[customerReferralCodeHeader], Layer.empty)
+      .handle("createCheckout", ({ payload, headers }) => {
+        const passRelease = payload.selection.funding
+          ? requireCoworkPassesRelease.pipe(
+              providePerRequest(passes),
+              Effect.mapError(entryPackUnavailableAnswer)
+            )
+          : Effect.void;
+        return passRelease.pipe(
+          Effect.andThen(
+            createCheckout(payload).pipe(
+              providePerRequest(
+                forRequest(headers[customerReferralCodeHeader], Layer.empty)
+              )
+            )
           ),
           withDeadline(
             "customerApi.createCheckout",
             getPreparePayStateDeadline(env.VERCEL_ENV)
           )
-        )
-      )
+        );
+      })
       .handle("applyCheckoutDiscountCode", ({ payload, headers }) =>
         applyDiscountCode(payload).pipe(
           providePerRequest(
@@ -251,6 +263,9 @@ const toPreparationInput = (
     advertisedPriceToken: payload.advertisedPriceToken,
     ...(payload.marketingConsent === true && { marketingConsent: true }),
     ...(payload.bookingFor === "self" && { customer: "account" }),
+    ...(payload.selection.funding && {
+      entryPackId: payload.selection.funding.passId,
+    }),
     reservation: {
       ...reservation,
       name: payload.contact.name,
@@ -260,11 +275,13 @@ const toPreparationInput = (
     },
     ...(payload.people && { people: payload.people }),
   }).pipe(
-    Effect.map((decoded): Parameters<Operations["preparePayState"]>[0] =>
-      decoded.marketingConsent === true
-        ? { ...decoded, marketingConsentSource: "customer_app" }
-        : decoded
-    ),
+    Effect.map((decoded): Parameters<Operations["preparePayState"]>[0] => ({
+      ...decoded,
+      ...(decoded.marketingConsent === true && {
+        marketingConsentSource: "customer_app",
+      }),
+      ...(decoded.entryPackId && { requireEntryPackQuote: true }),
+    })),
     Effect.mapError(
       (error) =>
         new CustomerCheckoutDetailsInvalid(toCheckoutDetailsField(error.issue))
@@ -356,9 +373,7 @@ const answerPreparationFailure =
             new CustomerCheckoutDetailsInvalid({ field: "contact.email" })
           ),
         EntryPackUnavailableError: () =>
-          Effect.fail(
-            new CustomerSelectionUnavailable({ reason: "availability_changed" })
-          ),
+          Effect.fail(entryPackUnavailableAnswer()),
         // An unknown or unreadable discount is retried, never answered as a
         // changed price.
         PromotionCodeUnavailableError: retryable(operation),

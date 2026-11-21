@@ -27,6 +27,7 @@ const reservationSubmissionFields = (locale: Locale) => ({
    * without it books the office's `seats` with no invitations.
    */
   people: Schema.optionalKey(officePeopleSchema),
+  entryPackId: Schema.optionalKey(orderIdSchema),
   // A Pay edit's displayed price is only a baseline for review.
   // The current advertisement still proves the price to recheck.
   displayedOfficePrice: Schema.optionalKey(checkoutSummarySchema),
@@ -36,17 +37,8 @@ export const preparePayStateInputSchema = Schema.Union(
   locales.map((locale) => Schema.Struct(reservationSubmissionFields(locale)))
 ).check(marketingConsentSourceRequiresConsent);
 
-const prepareWebPayStateInputSchema = Schema.Union(
-  locales.map((locale) =>
-    Schema.Struct({
-      ...reservationSubmissionFields(locale),
-      entryPackId: Schema.optionalKey(orderIdSchema),
-    })
-  )
-).check(marketingConsentSourceRequiresConsent);
-
 export const preparePayStateSchema = Schema.toStandardSchemaV1(
-  prepareWebPayStateInputSchema,
+  preparePayStateInputSchema,
   { parseOptions: { onExcessProperty: "error" } }
 );
 

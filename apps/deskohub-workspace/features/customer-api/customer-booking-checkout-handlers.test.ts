@@ -45,12 +45,14 @@ import {
   DiscountAffirmationUnavailableError,
   DiscountProviderError,
 } from "@/features/discounts/errors";
+import { releaseGateForRunOverFlags } from "@/features/feature-flags/backend/release-cohorts.test-utils";
 import { getPaymentSubmitLegalDocuments } from "@/features/legal/payment-submit-evidence";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
 import {
   InviteeEmail,
   OfficePeopleIssue,
 } from "@/features/office/office-people";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { ReferralServiceMock } from "@/features/referrals/referral.service.mock";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
@@ -68,8 +70,11 @@ import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-uti
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { instantStringSchema } from "@/shared/utils/temporal";
 import {
+  answerInEachReleaseCohort,
   type CustomerApiCall,
   customerApiRequest,
+  expectEachCohortAnsweredAlone,
+  inReleaseCohort,
   makeCustomerApiTestServer,
   testCustomerEndpointGuards,
 } from "./customer-api.test-utils";
@@ -235,6 +240,81 @@ const expectedReadyCheckout = {
 describe("createCheckout", () => {
   testCustomerEndpointGuards(createCheckout());
 
+  const entryPackCheckout = () => {
+    const body = createBody();
+    return createCheckout({
+      ...body,
+      selection: {
+        ...body.selection,
+        funding: {
+          kind: "entry",
+          passId: "7d3c23b3-02f6-4e40-830f-79bddf11e4fa",
+        },
+      },
+    });
+  };
+
+  test("carries funding and the signed quote into the holder's checkout", async () => {
+    const preparation = recordingPreparation(readyHold);
+    const api = makeCustomerApiTestServer({
+      bookingCheckout: checkoutWith({
+        passes: CoworkPassesReleaseGate.fromDecision(true),
+        operations: operationsWith(preparation),
+      }),
+    });
+    const response = await api.handle(customerApiRequest(entryPackCheckout()));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expectedReadyCheckout);
+    expect(preparation.inputs).toEqual([
+      expect.objectContaining({
+        customer: "account",
+        entryPackId: "7d3c23b3-02f6-4e40-830f-79bddf11e4fa",
+        requireEntryPackQuote: true,
+        advertisedPriceToken: "advertised-price-token",
+      }),
+    ]);
+  });
+
+  test("refuses funded checkout while the passes release is closed", async () => {
+    const preparation = recordingPreparation(readyHold);
+    const api = makeCustomerApiTestServer({
+      bookingCheckout: checkoutWith({
+        operations: operationsWith(preparation),
+      }),
+    });
+    const response = await api.handle(customerApiRequest(entryPackCheckout()));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      _tag: "CustomerSelectionUnavailable",
+      reason: "availability_changed",
+    });
+    expect(preparation.inputs).toEqual([]);
+  });
+
+  test("creates funded checkouts only within the request's passes release cohort", async () => {
+    const preparation = recordingPreparation(readyHold);
+    const answers = await answerInEachReleaseCohort({
+      serve: (flags) =>
+        makeCustomerApiTestServer({
+          bookingCheckout: checkoutWith({
+            passes: releaseGateForRunOverFlags(CoworkPassesReleaseGate, flags),
+            operations: operationsWith(preparation),
+          }),
+        }),
+      send: (cohort) =>
+        customerApiRequest(inReleaseCohort(entryPackCheckout(), cohort)),
+      answer: async (response) => ({ status: response.status }),
+    });
+    expect(answers.alone).toEqual({
+      open: { status: 200 },
+      closed: { status: 409 },
+    });
+    expectEachCohortAnsweredAlone(answers);
+    expect(preparation.inputs).toHaveLength(2);
+  });
+
   test("holds the selection for the account and answers its checkout", async () => {
     const preparation = recordingPreparation(readyHold);
     const api = makeCustomerApiTestServer({
@@ -263,6 +343,8 @@ describe("createCheckout", () => {
       },
     });
     expect(preparation.inputs[0]).not.toHaveProperty("marketingConsent");
+    expect(preparation.inputs[0]).not.toHaveProperty("entryPackId");
+    expect(preparation.inputs[0]).not.toHaveProperty("requireEntryPackQuote");
   });
 
   test("books someone else as the submitted contact, not as the account", async () => {

@@ -128,6 +128,64 @@ describe("Entry pack checkout pricing", () => {
     ["reserved-desk-workstation", workstation, 0, 53_000, "workstation"],
   ] as const;
 
+  test("requires the exact signed Entry pack even when nothing is payable", async () => {
+    const entryPack = { passId, tier: "open-space" } as const;
+    const quoteFor = (funded: boolean) =>
+      Effect.gen(function* () {
+        const quote = yield* buildCoworkReservationQuote(
+          openSpace,
+          funded ? { entryPack } : {}
+        );
+        const advertisement = yield* buildAdvertisedPriceState({
+          kind: openSpace.kind,
+          locale: "en-US",
+          reservation: getCoworkAdvertisedPriceReservation(openSpace),
+          quote,
+        });
+        return yield* sealAdvertisedPriceState(advertisement);
+      });
+    const continueWith = (
+      token: string,
+      selectedPassId = passId,
+      order = openSpace
+    ) =>
+      quoteCoworkEntryPackForContinue({
+        reservation: order,
+        entryPack: { ...entryPack, passId: selectedPassId },
+        advertisedPriceToken: token,
+        requireEntryPackQuote: true,
+        locale: "en-US",
+      });
+    const result = await Effect.gen(function* () {
+      const funded = yield* quoteFor(true);
+      const card = yield* quoteFor(false);
+      const accepted = yield* continueWith(funded);
+      const swapped = yield* Effect.flip(
+        continueWith(
+          funded,
+          orderIdSchema.make("00000000-0000-4000-8000-000000000002")
+        )
+      );
+      const wrongSelection = yield* Effect.flip(
+        continueWith(funded, passId, { ...openSpace, date: "2099-07-31" })
+      );
+      const unbound = yield* Effect.flip(continueWith(card));
+      return { accepted, swapped, wrongSelection, unbound };
+    }).pipe(Effect.provide(TestSealedStateKeys), Effect.runPromise);
+
+    expect(result.accepted.quote.payment.expectedPrice).toEqual(money(0));
+    for (const failure of [
+      result.swapped,
+      result.wrongSelection,
+      result.unbound,
+    ]) {
+      expect(failure).toMatchObject({
+        _tag: "AdvertisedPriceMismatchError",
+        reason: "input_mismatch",
+      });
+    }
+  });
+
   test.each(cases)(
     "quotes %s at Continue and reaffirms the same add-on amounts at Pay",
     async (tier, order, total, covered, addon) => {

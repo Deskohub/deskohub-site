@@ -4,6 +4,7 @@ import {
   customerApiPathPrefix,
 } from "@deskohub/workspace-customer-api";
 import { Effect, Layer, Option } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { AccountDataExportService } from "@/features/account/backend/account-data-export.service";
 import {
@@ -398,6 +399,11 @@ const unusedBookingCatalog: CustomerBookingCatalogLayerSet = {
     TestSealedStateKeys
   ),
   sealedStateKeys: TestSealedStateKeys,
+  entryPackQuote: Layer.mergeAll(
+    CoworkPassesReleaseGate.fromDecision(false),
+    Layer.mock(CurrentCustomerAccount, {}),
+    Layer.mock(WorkspaceDatabase, {})
+  ),
   releases: {
     meetingRoom: MeetingRoomReleaseGate.fromDecision(true),
     office: OfficeReleaseGate.fromDecision(false),
@@ -410,6 +416,7 @@ const unusedBookingCheckout: CustomerBookingCheckoutLayerSet = {
   operations: Layer.mock(CustomerCheckoutOperations, {}),
   checkout: Layer.mock(CheckoutService, {}),
   inventory: Layer.mock(AdvisoryAvailabilityInventory, {}),
+  passes: CoworkPassesReleaseGate.fromDecision(false),
   releases: {
     office: OfficeReleaseGate.fromDecision(false),
     overnightStay: OvernightStayReleaseGate.fromDecision(false),

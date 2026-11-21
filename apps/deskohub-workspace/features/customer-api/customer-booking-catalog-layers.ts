@@ -1,7 +1,10 @@
 import { Context, Layer } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
+import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { MeetingRoomReleaseGateForRun } from "@/features/meeting-room/backend/meeting-room-release-gate-run";
 import { OfficeReleaseGateForRun } from "@/features/office/backend/office-release-gate-run";
+import { CoworkPassesReleaseGateForRun } from "@/features/passes/backend/cowork-passes-release-gate";
 import { ReferralReleaseGateForRun } from "@/features/referrals/referral-release-gate-run";
 import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
 import { OvernightStayReleaseGateForRun } from "@/features/reservation/backend/overnight-stay-release-gate-run";
@@ -20,6 +23,12 @@ const liveCatalogLayers = {
   availability: WorkspaceAvailabilityLoaderLive,
   /** Seals the quote a checkout starts from. */
   sealedStateKeys: SealedStateKeys.Default,
+  /** The holder and their pass are read only on a funded quote. */
+  entryPackQuote: Layer.mergeAll(
+    CoworkPassesReleaseGateForRun,
+    CurrentCustomerAccount.ForProvidedAuthentication,
+    WorkspaceDatabase.Default
+  ),
   /**
    * The release gates, each decided once per build, so an endpoint that
    * reads one builds it per request.

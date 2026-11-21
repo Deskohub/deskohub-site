@@ -12,6 +12,7 @@ import {
   CustomerOfferingUnavailable,
   CustomerPlainDate,
   CustomerReservationFamily,
+  CustomerSelectionUnavailable,
   CustomerStartTime,
 } from "./customer-booking-selection";
 import {
@@ -293,8 +294,8 @@ export type CustomerMeetingRoomUnavailableDates =
 // Quote
 
 /**
- * The anonymous price of one selection, including any public sale running
- * when it was quoted. It doesn't check availability; checkout confirms both.
+ * The price of one selection, including any public sale or selected Entry
+ * pack. Checkout confirms availability and holds the selection.
  */
 export const CustomerBookingQuote = Schema.Struct({
   family: CustomerReservationFamily,
@@ -397,6 +398,7 @@ export const customerBookingCatalogEndpoints = [
       CustomerBookingSelectionInvalid.schema,
       CustomerBookingDateOutOfRange.schema,
       CustomerOfferingUnavailable.schema,
+      CustomerSelectionUnavailable.schema,
       CustomerServiceUnavailable.schema,
     ],
   }),
