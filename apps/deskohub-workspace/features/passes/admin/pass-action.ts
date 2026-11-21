@@ -126,6 +126,7 @@ const action = defineAdministrationAction(
           change: {
             _tag: "reassign" as const,
             expectedHolderAccountId: change.expectedHolderAccountId,
+            expectedHolderVersion: change.expectedHolderVersion,
             holderAccountId,
             ...(holderCustomerId && { holderCustomerId }),
           },

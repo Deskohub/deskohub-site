@@ -10,6 +10,7 @@ import { CurrentAdministrator } from "@/features/administrators/backend/current-
 import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import {
@@ -201,6 +202,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             change: {
               _tag: "reassign",
               expectedHolderAccountId: holder,
+              expectedHolderVersion: 0,
               holderAccountId: recipient,
             },
           })
@@ -243,7 +245,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
     test("reassignment rotates invitation identity and holder capability versions", async () => {
       const { passId } = await seedPack();
-      const reassign = (previous, next) =>
+      const reassign = (previous, next, version) =>
         run(
           applyPackAdjustment({
             passId,
@@ -252,11 +254,12 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             change: {
               _tag: "reassign",
               expectedHolderAccountId: previous,
+              expectedHolderVersion: version,
               holderAccountId: next,
             },
           })
         );
-      await reassign(holder, recipient);
+      await reassign(holder, recipient, 0);
       const first = (
         await database.pool.query(
           "select context_id, generation, first_generation from entry_pack_gift_invitations where order_id=$1",
@@ -264,8 +267,11 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         )
       ).rows[0];
       expect(first.generation).toBe(first.first_generation);
-      await reassign(recipient, holder);
-      await reassign(holder, recipient);
+      await reassign(recipient, holder, 1);
+      await expect(reassign(holder, recipient, 0)).rejects.toMatchObject({
+        reason: "changed",
+      });
+      await reassign(holder, recipient, 2);
       const current = (
         await database.pool.query(
           `select invitation.context_id, invitation.generation,
@@ -330,7 +336,12 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         seats: "1",
         tags: ["cowork:reserved-desk"],
       });
-      const provider = makeInMemoryDotypos({ tables: [table] });
+      const alternate = {
+        ...table,
+        id: "4145",
+        name: "Synthetic alternate desk",
+      };
+      const provider = makeInMemoryDotypos({ tables: [table, alternate] });
       const passId = orderIdSchema.make(crypto.randomUUID());
       const start = getWorkspaceDate(Temporal.Now.instant()).add({ days: 2 });
       const originalEnd = date(start.add({ days: 30 }).toString());
@@ -356,7 +367,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const passDays = async () =>
         (
           await database.pool.query(
-            `select service_date::text, reservation_state, dotypos_reservation_id from workspace_reservations
+            `select service_date::text, reservation_state, dotypos_reservation_id, pass_day_table_id from workspace_reservations
       where pass_id=$1 order by service_date`,
             [passId]
           )
@@ -427,6 +438,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           change: {
             _tag: "reassign",
             expectedHolderAccountId: holder,
+            expectedHolderVersion: 0,
             holderAccountId: recipient,
             holderCustomerId: "4143",
           },
@@ -463,6 +475,54 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         holder_version: 1,
         gift_claimed_at: null,
       });
+
+      const assignedDesk = original[0].pass_day_table_id;
+      const conflict = getCoworkReservationInterval(
+        "reserved-desk",
+        originalEnd
+      );
+      await run(
+        DotyposService.pipe(
+          Effect.flatMap((dotypos) =>
+            dotypos.createReservation({
+              customerId: "4141",
+              tableId: assignedDesk,
+              status: "CONFIRMED",
+              seats: 1,
+              startDate: new Date(conflict.startsAt),
+              endDate: new Date(conflict.endsAt),
+            })
+          )
+        ),
+        provider
+      );
+      await expect(
+        adjust(originalEnd, Temporal.PlainDate.from(originalEnd))
+      ).rejects.toMatchObject({ reason: "capacity" });
+      expect(await passDays()).toEqual(restored);
+
+      const cancellation = await run(
+        beginUnlimitedPassChange({
+          passId,
+          requestId: crypto.randomUUID(),
+          reason: "Fixture cancellation before start",
+          change: {
+            _tag: "cancel",
+            expectedValidUntil: originalEnd,
+            refundValue: 0,
+            sendCancellationEmail: false,
+          },
+        }),
+        provider
+      );
+      expect(
+        (await run(completePassChange(cancellation), provider)).completedAt
+      ).not.toBeNull();
+      expect(
+        (await passDays()).every(
+          ({ reservation_state }) => reservation_state === "cancelled"
+        )
+      ).toBe(true);
     });
   }
 );

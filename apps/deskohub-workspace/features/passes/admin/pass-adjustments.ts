@@ -19,12 +19,19 @@ export const remainingPassRefundValue = (
   refunded: number
 ) => Math.max(0, paid - Math.max(target, refunded));
 
+export type PassRefundCredit = {
+  readonly from: PlainDate;
+  readonly until: PlainDate;
+  readonly value: number;
+};
+
 export function getPassShorteningRefund(input: {
   readonly product: "entry-pack" | "unlimited";
   readonly paid: Money;
   readonly validFrom: PlainDate;
   readonly validUntil: PlainDate;
   readonly newValidUntil: PlainDate;
+  readonly credits?: readonly PassRefundCredit[];
 }): number {
   const removedDays = daysBetween(input.newValidUntil, input.validUntil);
   const totalDays =
@@ -35,7 +42,21 @@ export function getPassShorteningRefund(input: {
   const wholeKoruna =
     (BigInt(input.paid.value) * BigInt(Math.min(removedDays, totalDays))) /
     (BigInt(totalDays) * 100n);
-  return Number(wholeKoruna * 100n);
+  const prior = (input.credits ?? []).reduce((total, credit) => {
+    const from =
+      credit.from > input.newValidUntil ? credit.from : input.newValidUntil;
+    const until =
+      credit.until < input.validUntil ? credit.until : input.validUntil;
+    if (from >= until) return total;
+    return (
+      total +
+      Math.floor(
+        (credit.value * daysBetween(from, until)) /
+          daysBetween(credit.from, credit.until)
+      )
+    );
+  }, 0);
+  return Math.max(0, Number(wholeKoruna * 100n) - prior);
 }
 
 type PassCancellationTerms = {

@@ -30,7 +30,11 @@ import { type EntryPackSize, passTiers } from "../pass-offer";
 import { getPassTierName } from "../pass-offer.i18n";
 import { submitPassAction } from "./pass-action";
 import type { PassActionInput } from "./pass-action-input";
-import { getPassShorteningRefund, passValidityEnd } from "./pass-adjustments";
+import {
+  getPassShorteningRefund,
+  type PassRefundCredit,
+  passValidityEnd,
+} from "./pass-adjustments";
 
 const field = "grid gap-1.5 text-sm font-medium";
 const select = "h-9 rounded-md border border-input bg-background px-3 text-sm";
@@ -38,13 +42,17 @@ const select = "h-9 rounded-md border border-input bg-background px-3 text-sm";
 type AdjustmentProps = {
   readonly passId: string;
   readonly holderAccountId: string;
+  readonly holderVersion: number;
   readonly product: "entry-pack" | "unlimited";
   readonly validFrom: PlainDate;
   readonly validUntil: PlainDate;
   readonly earliestLastDay: PlainDate;
   readonly today: PlainDate;
   readonly paidValue: number | null;
+  readonly complimentary: boolean;
+  readonly refundable: boolean;
   readonly refundLimit: number;
+  readonly refundCredits: readonly PassRefundCredit[];
   readonly cancellationRefund: number;
   readonly canReassign: boolean;
 };
@@ -259,6 +267,7 @@ function ValidityDialog({ pass }: { readonly pass: AdjustmentProps }) {
           validFrom: pass.validFrom,
           validUntil: pass.validUntil,
           newValidUntil: passValidityEnd(plainDateStringSchema.make(lastDay)),
+          credits: pass.refundCredits,
         })
       : 0;
   return (
@@ -295,7 +304,7 @@ function ValidityDialog({ pass }: { readonly pass: AdjustmentProps }) {
         value={lastDay}
         onChange={setLastDay}
       />
-      {shortening && pass.paidValue !== null && (
+      {shortening && pass.refundable && (
         <RefundField
           value={
             edited ??
@@ -337,28 +346,32 @@ function CancelDialog({ pass }: { readonly pass: AdjustmentProps }) {
         sendCancellationEmail: data.get("notify") === "on",
       })}
     >
-      {pass.paidValue === null ? (
+      {pass.complimentary ? (
         <p className="text-sm">{m.passActionsNoRefund({}, { locale })}</p>
       ) : (
         <>
-          <p className="text-sm">
-            {m.passActionsPaid(
-              { amount: formatMoney(currencyCZK(pass.paidValue), locale) },
-              { locale }
-            )}
-          </p>
-          <RefundField
-            value={
-              edited ??
-              String(
-                Math.floor(
-                  Math.min(pass.refundLimit, pass.cancellationRefund) / 100
+          {pass.paidValue !== null && (
+            <p className="text-sm">
+              {m.passActionsPaid(
+                { amount: formatMoney(currencyCZK(pass.paidValue), locale) },
+                { locale }
+              )}
+            </p>
+          )}
+          {pass.refundable && (
+            <RefundField
+              value={
+                edited ??
+                String(
+                  Math.floor(
+                    Math.min(pass.refundLimit, pass.cancellationRefund) / 100
+                  )
                 )
-              )
-            }
-            onChange={setEdited}
-            limit={pass.refundLimit}
-          />
+              }
+              onChange={setEdited}
+              limit={pass.refundLimit}
+            />
+          )}
         </>
       )}
       {pass.product === "entry-pack" && (
@@ -441,6 +454,7 @@ export function PassAdjustmentDialogs({
           _tag: "reassign",
           passId: pass.passId,
           expectedHolderAccountId: pass.holderAccountId,
+          expectedHolderVersion: pass.holderVersion,
           ...recipientFrom(data),
         })}
       >

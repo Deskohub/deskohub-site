@@ -151,6 +151,7 @@ const transferPassDays = Effect.fn("transferPassDays")(function* (
   if (
     !newCustomerId ||
     purchase.holderAccountId !== change.expectedHolderAccountId ||
+    purchase.holderVersion !== change.expectedHolderVersion ||
     purchase.status !== "active"
   ) {
     return yield* new PassChangeRefused({ reason: "changed" });
@@ -204,7 +205,8 @@ const transferPassDays = Effect.fn("transferPassDays")(function* (
       const { purchase: latest } = yield* lockPassForChange(record.passId);
       if (
         latest.status !== "active" ||
-        latest.holderAccountId !== change.expectedHolderAccountId
+        latest.holderAccountId !== change.expectedHolderAccountId ||
+        latest.holderVersion !== change.expectedHolderVersion
       ) {
         return yield* new PassChangeRefused({ reason: "changed" });
       }

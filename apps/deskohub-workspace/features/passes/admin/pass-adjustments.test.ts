@@ -49,4 +49,23 @@ describe("pass adjustment refunds", () => {
     expect(remainingPassRefundValue(100_000, 25_000, 60_000)).toBe(40_000);
     expect(remainingPassRefundValue(100_000, 100_000, 0)).toBe(0);
   });
+
+  test("credits an earlier refund when the same Unlimited days are removed again", () => {
+    expect(
+      getPassShorteningRefund({
+        product: "unlimited",
+        paid: currencyCZK(3_000_00),
+        validFrom: date("2026-11-01"),
+        validUntil: date("2026-12-01"),
+        newValidUntil: date("2026-11-26"),
+        credits: [
+          {
+            from: date("2026-11-27"),
+            until: date("2026-12-01"),
+            value: 40_000,
+          },
+        ],
+      })
+    ).toBe(10_000);
+  });
 });

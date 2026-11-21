@@ -30,6 +30,7 @@ import {
 import { PassAdjustmentDialogs } from "./pass-action-dialogs";
 import {
   getPassCancellationRefund,
+  passValidityEnd,
   remainingPassRefundValue,
 } from "./pass-adjustments";
 
@@ -106,11 +107,13 @@ const readPassActionData = Effect.fn("readPassActionData")(function* (
     (last, claim) => (claim.date > last ? claim.date : last),
     today > pass.validFrom ? today : pass.validFrom
   );
-  const payable =
-    attempt?.provider === "nexi" &&
-    attempt.currency === "CZK" &&
-    attempt.exponent === 2
+  const captured =
+    attempt && attempt.currency === "CZK" && attempt.exponent === 2
       ? attempt
+      : null;
+  const payable =
+    captured?.provider === "nexi" && order.paymentState === "paid"
+      ? captured
       : null;
   const refundLimit = payable
     ? remainingPassRefundValue(
@@ -140,9 +143,19 @@ const readPassActionData = Effect.fn("readPassActionData")(function* (
       ),
     });
   }
-  const earlierAdjustments = audit.reduce(
-    (total, event) =>
-      total + (event.change._tag === "validity" ? event.change.refundValue : 0),
+  const refundCredits = audit.flatMap(({ change }) =>
+    change._tag === "validity" && change.refundValue > 0
+      ? [
+          {
+            from: passValidityEnd(change.lastDay),
+            until: change.expectedValidUntil,
+            value: change.refundValue,
+          },
+        ]
+      : []
+  );
+  const earlierAdjustments = refundCredits.reduce(
+    (total, credit) => total + credit.value,
     0
   );
   const canAdjust =
@@ -155,16 +168,17 @@ const readPassActionData = Effect.fn("readPassActionData")(function* (
       ? {
           passId: id,
           holderAccountId: pass.holderAccountId,
+          holderVersion: pass.holderVersion,
           product: pass.product,
           validFrom: pass.validFrom,
           validUntil: pass.validUntil,
           earliestLastDay,
           today,
-          paidValue:
-            order.paymentState === "complimentary"
-              ? null
-              : (payable?.amount ?? 0),
+          paidValue: captured?.amount ?? null,
+          complimentary: order.paymentState === "complimentary",
+          refundable: payable !== null,
           refundLimit,
+          refundCredits,
           cancellationRefund: Math.max(
             0,
             rawCancellationRefund - earlierAdjustments

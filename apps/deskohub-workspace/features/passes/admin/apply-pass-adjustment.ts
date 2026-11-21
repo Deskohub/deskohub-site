@@ -45,6 +45,7 @@ const reassignPack = Effect.fn("reassignPack")(function* (
 ) {
   if (
     purchase.holderAccountId !== change.expectedHolderAccountId ||
+    purchase.holderVersion !== change.expectedHolderVersion ||
     purchase.holderAccountId === change.holderAccountId
   ) {
     return yield* new PassChangeRefused({ reason: "changed" });

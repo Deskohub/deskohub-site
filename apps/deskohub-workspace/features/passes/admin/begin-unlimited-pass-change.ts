@@ -212,6 +212,7 @@ export const beginUnlimitedPassChange = Effect.fn("beginUnlimitedPassChange")(
               return yield* new PassChangeRefused({ reason: "first-use" });
             if (
               change.expectedHolderAccountId !== purchase.holderAccountId ||
+              change.expectedHolderVersion !== purchase.holderVersion ||
               change.holderAccountId === purchase.holderAccountId ||
               !change.holderCustomerId
             ) {

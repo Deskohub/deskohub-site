@@ -34,6 +34,7 @@ export const passChangeSchema = Schema.TaggedUnion({
   },
   reassign: {
     expectedHolderAccountId: customerAccountIdSchema,
+    expectedHolderVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     holderAccountId: customerAccountIdSchema,
     holderCustomerId: Schema.optionalKey(DotyposCustomerIdSchema),
   },

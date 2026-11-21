@@ -25,6 +25,7 @@ export const passActionInputSchema = Schema.Struct({
       ...recipient,
       passId: orderIdSchema,
       expectedHolderAccountId: customerAccountIdSchema,
+      expectedHolderVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     },
     validity: {
       passId: orderIdSchema,
