@@ -6,8 +6,12 @@ import {
   eq,
   exists,
   inArray,
+  isNotNull,
   isNull,
+  lt,
   lte,
+  ne,
+  notExists,
   notInArray,
   or,
   sql,
@@ -28,6 +32,7 @@ import { PaymentProviders } from "@/features/checkout/backend/payment/payment-pr
 import { PaymentProvidersLive } from "@/features/checkout/backend/payment/payment-providers";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
 import { providerOrderAbandonmentTimeoutMinutes } from "@/features/checkout/provider-order-abandonment";
+import { endedUnpaidPaymentStates } from "@/features/order";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { entryPackGiftInvitationDue } from "./entry-pack-gift";
 import { settlePassPurchase } from "./entry-pack-settlement";
@@ -44,7 +49,12 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
     const providers = yield* PaymentProviders;
     const registry = yield* OrderPaymentHandlers;
     const handler = registry.byKind["pass-purchase"];
-    if (!handler) return { paymentsChecked: 0, fulfillmentRetried: 0 };
+    if (!handler)
+      return {
+        paymentsChecked: 0,
+        fulfillmentRetried: 0,
+        recoveriesRetried: 0,
+      };
 
     const retryBefore = input.now.subtract({ minutes: 5 });
     const providerCreatedBefore = input.now.subtract({
@@ -52,7 +62,7 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
     });
     // Move each claimed row to the back before calling providers. This also
     // gives an interrupted or inconclusive run a finite retry delay.
-    const { expired, unfulfilled } = yield* transaction(
+    const { expired, unfulfilled, recoveries } = yield* transaction(
       Effect.gen(function* () {
         const expired = yield* db
           .select({
@@ -113,7 +123,73 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
           .orderBy(asc(orders.updatedAt), asc(orders.id))
           .limit(input.limit)
           .for("no key update", { of: orders, skipLocked: true });
-        const claimed = [...expired, ...unfulfilled].map(
+        const winningAttempt = eq(
+          orders.activePaymentAttemptId,
+          paymentAttempts.id
+        );
+        const supersededAttempt = sql`${orders.activePaymentAttemptId} is distinct from ${paymentAttempts.id}`;
+        const unpaidOrder = inArray(
+          orders.paymentState,
+          endedUnpaidPaymentStates
+        );
+        const refundedPartially = and(
+          eq(paymentAttempts.refundState, "refunded"),
+          lt(paymentAttempts.refundedAmountValue, paymentAttempts.amountValue)
+        );
+        const recoveries = yield* db
+          .select({ orderId: orders.id, paymentAttemptId: paymentAttempts.id })
+          .from(paymentAttempts)
+          .innerJoin(orders, eq(orders.id, paymentAttempts.orderId))
+          .innerJoin(passPurchases, eq(passPurchases.id, orders.id))
+          .where(
+            and(
+              eq(passPurchases.product, "unlimited"),
+              eq(paymentAttempts.state, "paid"),
+              ne(paymentAttempts.provider, "internal"),
+              lte(orders.updatedAt, retryBefore),
+              or(
+                and(
+                  supersededAttempt,
+                  or(
+                    eq(paymentAttempts.refundState, "not_required"),
+                    refundedPartially,
+                    and(
+                      eq(paymentAttempts.refundState, "required"),
+                      lt(
+                        paymentAttempts.refundTargetValue,
+                        paymentAttempts.amountValue
+                      )
+                    )
+                  )
+                ),
+                and(
+                  winningAttempt,
+                  unpaidOrder,
+                  or(
+                    eq(paymentAttempts.refundState, "not_required"),
+                    and(
+                      refundedPartially,
+                      isNull(paymentAttempts.refundTargetValue)
+                    ),
+                    and(
+                      isNull(orders.paidAt),
+                      eq(paymentAttempts.refundState, "required"),
+                      isNull(paymentAttempts.refundTargetValue)
+                    ),
+                    eq(passPurchases.status, "pending_payment")
+                  )
+                )
+              )
+            )
+          )
+          .orderBy(
+            asc(orders.updatedAt),
+            asc(orders.id),
+            asc(paymentAttempts.id)
+          )
+          .limit(Math.min(input.limit, 2))
+          .for("no key update", { of: orders, skipLocked: true });
+        const claimed = [...expired, ...unfulfilled, ...recoveries].map(
           ({ orderId }) => orderId
         );
         if (claimed.length > 0) {
@@ -122,7 +198,7 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
             .set({ updatedAt: input.now })
             .where(inArray(orders.id, claimed));
         }
-        return { expired, unfulfilled };
+        return { expired, unfulfilled, recoveries };
       })
     );
     for (const { orderId, paymentAttemptId } of expired) {
@@ -151,6 +227,17 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
         )
       );
     }
+    for (const recovery of recoveries) {
+      yield* handler.resumeRecovery(recovery).pipe(
+        Effect.timeout("90 seconds"),
+        Effect.catch(() =>
+          Effect.logWarning(
+            "Unlimited pass payment recovery needs reconciliation",
+            { orderId: recovery.orderId }
+          )
+        )
+      );
+    }
     for (const { orderId } of unfulfilled) {
       yield* handler.fulfill(orderId).pipe(
         Effect.catch(() =>
@@ -163,6 +250,7 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
     return {
       paymentsChecked: expired.length,
       fulfillmentRetried: unfulfilled.length,
+      recoveriesRetried: recoveries.length,
     };
   }
 );
@@ -190,77 +278,102 @@ export const runPassPurchaseReconciliation = Effect.fn(
   )
 );
 
-const reconcileUnlimitedPassReleases = Effect.fn(
+export const reconcileUnlimitedPassReleases = Effect.fn(
   "reconcileUnlimitedPassReleases"
 )(function* (input: {
   readonly now: Temporal.Instant;
   readonly limit: number;
 }) {
-  const { db } = yield* WorkspaceDatabase;
-  const due = (now: Temporal.Instant) =>
+  const { db, transaction } = yield* WorkspaceDatabase;
+  const expiryDue = and(
+    eq(passPurchases.status, "pending_payment"),
     or(
-      eq(passPurchases.status, "void"),
       and(
-        inArray(passPurchases.status, ["withdrawn", "cancelled"]),
-        sql`${passPurchases.accessEndsOn} is not null`
+        eq(orders.paymentState, "not_started"),
+        lte(passPurchases.holdsExpireAt, input.now)
       ),
       and(
-        eq(passPurchases.status, "pending_payment"),
-        eq(orders.paymentState, "not_started"),
-        lte(passPurchases.holdsExpireAt, now)
-      )
-    );
-  const batch = yield* db
-    .select({ id: passPurchases.id })
-    .from(passPurchases)
-    .innerJoin(orders, eq(orders.id, passPurchases.id))
-    .where(
-      and(
-        eq(passPurchases.product, "unlimited"),
-        due(input.now),
-        exists(
+        inArray(orders.paymentState, endedUnpaidPaymentStates),
+        notExists(
           db
-            .select({ id: workspaceReservations.id })
-            .from(workspaceReservations)
+            .select({ id: paymentAttempts.id })
+            .from(paymentAttempts)
             .where(
               and(
-                eq(workspaceReservations.passId, passPurchases.id),
-                notInArray(workspaceReservations.reservationState, [
-                  "cancelled",
-                  "hold_expired",
-                ]),
-                sql`(${passPurchases.accessEndsOn} is null or ${workspaceReservations.serviceDate} >= ${passPurchases.accessEndsOn})`
+                eq(paymentAttempts.id, orders.activePaymentAttemptId),
+                eq(paymentAttempts.state, "paid")
               )
             )
         )
       )
     )
+  );
+  const releaseDue = and(
+    or(
+      eq(passPurchases.status, "void"),
+      and(
+        inArray(passPurchases.status, ["withdrawn", "cancelled"]),
+        isNotNull(passPurchases.accessEndsOn)
+      )
+    ),
+    exists(
+      db
+        .select({ id: workspaceReservations.id })
+        .from(workspaceReservations)
+        .where(
+          and(
+            eq(workspaceReservations.passId, passPurchases.id),
+            notInArray(workspaceReservations.reservationState, [
+              "cancelled",
+              "hold_expired",
+            ]),
+            sql`(${passPurchases.accessEndsOn} is null or ${workspaceReservations.serviceDate} >= ${passPurchases.accessEndsOn})`
+          )
+        )
+    )
+  );
+  const due = or(expiryDue, releaseDue);
+  const batch = yield* db
+    .select({ id: passPurchases.id })
+    .from(passPurchases)
+    .innerJoin(orders, eq(orders.id, passPurchases.id))
+    .where(and(eq(passPurchases.product, "unlimited"), due))
     .orderBy(asc(orders.updatedAt), asc(orders.id))
     .limit(Math.min(input.limit, 2));
 
   for (const { id } of batch) {
     yield* Effect.gen(function* () {
-      const [entry] = yield* db
-        .select({ order: orders, purchase: passPurchases })
-        .from(passPurchases)
-        .innerJoin(orders, eq(orders.id, passPurchases.id))
-        .where(and(eq(passPurchases.id, id), due(input.now)));
-      if (!entry) return;
-      if (entry.purchase.status === "pending_payment") {
-        const [expired] = yield* db
-          .update(orders)
-          .set({ paymentState: "expired", updatedAt: input.now })
-          .where(and(eq(orders.id, id), eq(orders.paymentState, "not_started")))
-          .returning({ id: orders.id });
-        if (!expired) return;
-        yield* settlePassPurchase(id);
-      } else {
-        yield* db
-          .update(orders)
-          .set({ updatedAt: input.now })
-          .where(eq(orders.id, id));
-      }
-      yield* releaseUnlimitedPassDays(entry.purchase);
+      const purchase = yield* transaction(
+        Effect.gen(function* () {
+          const [entry] = yield* db
+            .select({ order: orders, purchase: passPurchases })
+            .from(passPurchases)
+            .innerJoin(orders, eq(orders.id, passPurchases.id))
+            .where(and(eq(passPurchases.id, id), due))
+            .for("no key update", { of: orders });
+          if (!entry) return undefined;
+          yield* db
+            .update(orders)
+            .set({
+              updatedAt: input.now,
+              paymentState:
+                entry.purchase.status === "pending_payment" &&
+                entry.order.paymentState === "not_started"
+                  ? "expired"
+                  : entry.order.paymentState,
+            })
+            .where(eq(orders.id, id));
+          if (entry.purchase.status !== "pending_payment")
+            return entry.purchase;
+          yield* settlePassPurchase(id);
+          const [expired] = yield* db
+            .select()
+            .from(passPurchases)
+            .where(eq(passPurchases.id, id));
+          return expired;
+        })
+      );
+      if (purchase) yield* releaseUnlimitedPassDays(purchase);
     }).pipe(
       WorkspaceLockSections.passPurchaseFulfillment(id),
       WorkspaceLockSections.unlimitedPassRecovery(id),
