@@ -14,12 +14,14 @@ import {
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
+import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { runWorkspaceEffect } from "@/shared/backend/workspace-effect";
 import { withWorkspaceRequestContext } from "@/shared/backend/workspace-request-context";
 import { maskEmailAddress } from "@/shared/utils";
 import { currentInstant } from "@/shared/utils/temporal";
 import { getEntryPackPayPath } from "../entry-pack-checkout";
 import { isEntryPackQuoteExpired } from "../pass-offer";
+import { getUnlimitedPassAccessDay } from "../unlimited-pass-period";
 import { readEntryPackGiftState } from "./entry-pack-gift";
 
 const readOrderForViewer = Effect.fnUntraced(function* (
@@ -173,9 +175,6 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
       lateCapture: row.paymentState !== "paid",
     } as const;
   }
-  if (row.purchaseStatus === "cancelled") {
-    return { ...details, status: "cancelled" } as const;
-  }
   if (row.paymentState === "complimentary") {
     if (
       row.fulfillmentState !== "fulfilled" ||
@@ -184,16 +183,29 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
     ) {
       return { status: "not_found" } as const;
     }
+    const cancelled = row.purchaseStatus === "cancelled";
+    const canOpenAccess =
+      entryCount === null &&
+      row.holderAccountId === accountId &&
+      (row.purchaseStatus === "active" ||
+        (cancelled &&
+          getUnlimitedPassAccessDay({
+            validFrom,
+            validUntil,
+            accessEndsOn: row.accessEndsOn,
+            status: row.purchaseStatus,
+            date: getCurrentWorkspaceDate(yield* currentInstant),
+          }) !== undefined));
     return {
       ...details,
-      status: "granted",
+      status: cancelled ? "grant_cancelled" : "granted",
       validFrom,
-      validUntil: row.accessEndsOn ?? validUntil,
-      canOpenAccess:
-        entryCount === null &&
-        row.holderAccountId === accountId &&
-        row.purchaseStatus === "active",
+      validUntil: row.accessEndsOn ?? (cancelled ? validFrom : validUntil),
+      canOpenAccess,
     } as const;
+  }
+  if (row.purchaseStatus === "cancelled") {
+    return { ...details, status: "cancelled" } as const;
   }
   if (row.paymentState === "paid" && paidAt) {
     if (entryCount === null && row.purchaseStatus === "void") {

@@ -1963,6 +1963,7 @@
   "unlimitedPassGiftMailBody": "Hãy nhận thẻ không giới hạn bằng địa chỉ email bên dưới.",
   "entryPackStatusPaidTitle": "Gói lượt vào của bạn đã được thanh toán",
   "passStatusGrantedTitle": "Đã cấp thẻ miễn phí",
+  "passStatusGrantCancelledTitle": "Đã hủy thẻ miễn phí",
   "entryPackStatusGiftInvitationNotSent": "Chưa gửi lời mời",
   "entryPackStatusGiftInvitationPending": "Lời mời đang chờ gửi",
   "entryPackStatusGiftInvitationSent": "Đã gửi lời mời",

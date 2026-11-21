@@ -24,6 +24,7 @@ type OrderStatus = Exclude<
 const statusTitles = {
   paid: m.entryPackStatusPaidTitle,
   granted: m.passStatusGrantedTitle,
+  grant_cancelled: m.passStatusGrantCancelledTitle,
   pending: m.checkoutStatusPendingTitle,
   checking: m.checkoutStatusPaymentPendingDelayedTitle,
   not_started: m.entryPackStatusNotStartedTitle,
@@ -38,6 +39,7 @@ const statusTitles = {
 const statusIcons = {
   paid: Check,
   granted: Check,
+  grant_cancelled: CircleAlert,
   pending: Clock,
   checking: Clock,
   not_started: Clock,
@@ -61,7 +63,8 @@ export function EntryPackStatusPage({
   readonly presentation: "page" | "modal";
 }) {
   const isPaid = status.status === "paid";
-  const isGranted = status.status === "granted";
+  const isGrant =
+    status.status === "granted" || status.status === "grant_cancelled";
   const unlimited = status.entryCount === null;
   const isPending = status.status === "pending";
   const retryPath =
@@ -164,7 +167,7 @@ export function EntryPackStatusPage({
           {status.entryCount !== null &&
             ` · ${m.passEntryCount({ count: status.entryCount }, { locale })}`}
         </p>
-        {(isPaid || isGranted) && (
+        {(isPaid || isGrant) && status.validFrom < status.validUntil && (
           <p className="mt-1 text-sm text-navy-blue/70">
             {m.passEmailValid(
               {
@@ -211,7 +214,7 @@ export function EntryPackStatusPage({
       </div>
       <div className="mt-8 flex flex-wrap gap-3">
         {((isPaid && unlimited && !status.gift) ||
-          (isGranted && status.canOpenAccess)) && (
+          (isGrant && status.canOpenAccess)) && (
           <Button asChild size="lg">
             <Link
               href={getUnlimitedAccessPath(locale, status.orderId)}

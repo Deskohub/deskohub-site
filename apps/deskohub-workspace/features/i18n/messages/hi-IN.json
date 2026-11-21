@@ -1982,6 +1982,7 @@
   "unlimitedPassGiftMailBody": "नीचे दिए गए ईमेल पते से अपना असीमित पास स्वीकार करें।",
   "entryPackStatusPaidTitle": "आपके प्रवेश पैक का भुगतान हो गया है",
   "passStatusGrantedTitle": "मुफ़्त पास जारी किया गया",
+  "passStatusGrantCancelledTitle": "मुफ़्त पास रद्द कर दिया गया",
   "entryPackStatusGiftInvitationNotSent": "निमंत्रण नहीं भेजा गया",
   "entryPackStatusGiftInvitationPending": "निमंत्रण भेजा जाना बाकी है",
   "entryPackStatusGiftInvitationSent": "निमंत्रण भेज दिया गया",

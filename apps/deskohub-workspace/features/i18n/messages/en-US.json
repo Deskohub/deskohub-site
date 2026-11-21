@@ -1982,6 +1982,7 @@
   "unlimitedPassGiftMailBody": "Claim your Unlimited pass with the email address below.",
   "entryPackStatusPaidTitle": "Your Entry pack is paid",
   "passStatusGrantedTitle": "Complimentary pass granted",
+  "passStatusGrantCancelledTitle": "Complimentary pass cancelled",
   "entryPackStatusGiftInvitationNotSent": "Invitation not sent",
   "entryPackStatusGiftInvitationPending": "Invitation queued",
   "entryPackStatusGiftInvitationSent": "Invitation sent",

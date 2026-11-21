@@ -110,8 +110,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         viewer = buyer,
         finalize,
         recover,
+        viewedAt = now,
       }: {
         readonly viewer?: CustomerAccountId | null;
+        readonly viewedAt?: Temporal.Instant;
         readonly finalize?: (
           id: OrderId
         ) => Effect.Effect<"awaiting_payment" | "pending">;
@@ -151,7 +153,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               })
             )
           ),
-          atInstant(now)
+          atInstant(viewedAt)
         )
       );
 
@@ -219,7 +221,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       await database.pool.query(
         `insert into pass_purchases
           (id, buyer_account_id, holder_account_id, product, tier, unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
-         values ($1, $2, $3, 'unlimited', 'open-space', false, 'pending_payment', '2026-11-19', '2026-12-19', '{}', 'en-US', $4)`,
+         values ($1, $2, $3, 'unlimited', 'open-space', false, 'pending_payment', '2026-11-20', '2026-12-20', '{}', 'en-US', $4)`,
         [orderId, buyer, holder, now.toString()]
       );
 
@@ -241,8 +243,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         orderId,
         tier: "open-space",
         entryCount: null,
-        validFrom: "2026-11-19",
-        validUntil: "2026-12-19",
+        validFrom: "2026-11-20",
+        validUntil: "2026-12-20",
       };
       expect(await view(orderId)).toEqual({ ...granted, canOpenAccess: false });
       expect(await view(orderId, { viewer: holder })).toEqual({
@@ -263,6 +265,39 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await view(orderId, { viewer: null })).toEqual({
         status: "sign_in",
       });
+
+      await database.pool.query(
+        "update pass_purchases set status = 'cancelled', access_ends_on = valid_from where id = $1",
+        [orderId]
+      );
+      const cancelled = { ...granted, status: "grant_cancelled" };
+      const empty = { ...cancelled, validUntil: granted.validFrom };
+      const beforeStart = Temporal.Instant.from("2026-11-19T12:00:00Z");
+      expect(await view(orderId, { viewedAt: beforeStart })).toEqual({
+        ...empty,
+        canOpenAccess: false,
+      });
+      expect(
+        await view(orderId, { viewer: holder, viewedAt: beforeStart })
+      ).toEqual({ ...empty, canOpenAccess: false });
+
+      await database.pool.query(
+        "update pass_purchases set access_ends_on = '2026-11-25' where id = $1",
+        [orderId]
+      );
+      const truncated = { ...cancelled, validUntil: "2026-11-25" };
+      const retainedDay = Temporal.Instant.from("2026-11-24T12:00:00Z");
+      expect(await view(orderId, { viewedAt: retainedDay })).toEqual({
+        ...truncated,
+        canOpenAccess: false,
+      });
+      expect(
+        await view(orderId, { viewer: holder, viewedAt: retainedDay })
+      ).toEqual({ ...truncated, canOpenAccess: true });
+      const cutoff = Temporal.Instant.from("2026-11-24T23:00:00Z");
+      expect(await view(orderId, { viewer: holder, viewedAt: cutoff })).toEqual(
+        { ...truncated, canOpenAccess: false }
+      );
     });
 
     test("reads a recorded delivery and claim for the buyer", async () => {

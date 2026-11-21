@@ -2020,6 +2020,7 @@
   "unlimitedPassGiftMailBody": "Prijmite neobmedzený pas pomocou e-mailovej adresy uvedenej nižšie.",
   "entryPackStatusPaidTitle": "Tvoj balík vstupov je zaplatený",
   "passStatusGrantedTitle": "Bezplatná permanentka bola vydaná",
+  "passStatusGrantCancelledTitle": "Bezplatná permanentka bola zrušená",
   "entryPackStatusGiftInvitationNotSent": "Pozvánka neodoslaná",
   "entryPackStatusGiftInvitationPending": "Pozvánka čaká na odoslanie",
   "entryPackStatusGiftInvitationSent": "Pozvánka odoslaná",

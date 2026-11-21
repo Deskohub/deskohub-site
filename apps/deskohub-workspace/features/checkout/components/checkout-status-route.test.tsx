@@ -498,6 +498,43 @@ describe("CheckoutStatusRoute", () => {
   );
 
   test.each([
+    { entryCount: null, validUntil: "2026-11-19", canOpenAccess: false },
+    { entryCount: null, validUntil: "2026-11-25", canOpenAccess: false },
+    { entryCount: null, validUntil: "2026-11-25", canOpenAccess: true },
+    { entryCount: 5, validUntil: "2026-11-19", canOpenAccess: false },
+  ])(
+    "renders complimentary cancellation with the effective period and retained access (%p)",
+    async ({ entryCount, validUntil, canOpenAccess }) => {
+      orderKind = "pass-purchase";
+      passStatus = {
+        ...passOrder,
+        entryCount,
+        status: "grant_cancelled",
+        validFrom: plainDateStringSchema.make("2026-11-19"),
+        validUntil: plainDateStringSchema.make(validUntil),
+        canOpenAccess,
+      };
+
+      const { errors, html } = await renderRoute({ order: passOrderId });
+
+      expect(errors).toEqual([]);
+      expect(html).toContain('data-entry-pack-status="grant_cancelled"');
+      expect(html).toContain("Complimentary pass cancelled");
+      expect(html).not.toContain("Payment was cancelled");
+      expect(html).not.toContain("Try again");
+      expect(html).toContain('data-auto-refresh="false"');
+      if (validUntil === "2026-11-25") {
+        expect(html).toMatch(/Nov 19\s*–\s*24, 2026/);
+      } else {
+        expect(html).not.toContain("Nov 19");
+      }
+      expect(
+        html.includes(`href="/en-US/reservation/access/${passOrderId}"`)
+      ).toBe(canOpenAccess);
+    }
+  );
+
+  test.each([
     ["not_sent", false, m.entryPackStatusGiftInvitationNotSent],
     ["pending", false, m.entryPackStatusGiftInvitationPending],
     ["sent", false, m.entryPackStatusGiftInvitationSent],
