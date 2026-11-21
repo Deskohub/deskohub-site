@@ -639,6 +639,45 @@ test("a reload during Continue retries the committed gift and a date change supe
   expect(reloaded.queryByRole("button", { name: /pay/i })).toBeNull();
 });
 
+test("a linked gift keeps its recipient and original order until Continue succeeds", async () => {
+  const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000004");
+  const handoffPath = "/en-US/passes/unlimited?step=details&handoff=opaque";
+  const response = Promise.withResolvers<{ data: typeof readyCheckout }>();
+  const beginCheckout = mock(() => response.promise);
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        initialHandoffPath={handoffPath}
+        draft={{ kind: "resume", orderId, holderEmail }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  expect(view.getByDisplayValue(holderEmail)).toBeDefined();
+  const name = view.getByRole<HTMLInputElement>("textbox", {
+    name: recipientNameLabel,
+  });
+  fireEvent.change(name, { target: { value: "   " } });
+  fireEvent.submit(name.form!);
+  expect(await view.findByText("Enter the recipient’s name.")).toBeDefined();
+  expect(beginCheckout).not.toHaveBeenCalled();
+
+  enterRecipientName(view);
+  fireEvent.submit(name.form!);
+  await waitFor(() =>
+    expect(beginCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId, holderEmail, recipientName })
+    )
+  );
+  expect(checkoutUrl().searchParams.get("handoff")).toBe("opaque");
+  await act(async () => response.resolve({ data: readyCheckout }));
+  expect(await view.findByRole("button", { name: /pay/i })).toBeDefined();
+  expect(checkoutUrl().searchParams.get("order")).toBe(orderId);
+  expect(checkoutUrl().searchParams.get("handoff")).toBeNull();
+});
+
 test("Unlimited gift requires a private name and clears it when returning to self-purchase", async () => {
   const beginCheckout = mock(async () => ({ data: readyCheckout }));
   const view = render(

@@ -73,6 +73,7 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
   readonly draft?: UnlimitedPassOrderLink & {
     readonly holderEmail?: string | null;
   };
+  readonly initialHandoffPath?: string;
   readonly initialPayment?: {
     readonly orderId: OrderId;
     readonly selection: UnlimitedPassSelection;
@@ -129,6 +130,7 @@ export function UnlimitedPassCheckout({
   renewsPassId,
   initialBounds,
   draft,
+  initialHandoffPath,
   initialPayment,
   discountCodeEntryEnabled,
   getAvailability,
@@ -175,6 +177,7 @@ export function UnlimitedPassCheckout({
   );
   const [error, setError] = useState<string>();
   const [order, setOrder] = useState<UnlimitedPassOrderLink | undefined>(draft);
+  const handoffPath = useRef(initialHandoffPath);
   const detailRevision = useRef(0);
   useEffect(
     () => () => {
@@ -363,12 +366,15 @@ export function UnlimitedPassCheckout({
     const revision = ++detailRevision.current;
     beginPending.current = true;
     setBeginning(true);
+    const submissionPath = (order: UnlimitedPassOrderLink) =>
+      order.kind === "submitted" &&
+      draft?.kind === "resume" &&
+      order.orderId === draft.orderId &&
+      handoffPath.current
+        ? handoffPath.current
+        : getUnlimitedPassDetailsPath(locale, selection, order, renewsPassId);
     const saveOrder = (order: UnlimitedPassOrderLink) => {
-      window.history.replaceState(
-        null,
-        "",
-        getUnlimitedPassDetailsPath(locale, selection, order, renewsPassId)
-      );
+      window.history.replaceState(null, "", submissionPath(order));
       setOrder(order);
     };
     const beginSubmission = async (attempt: SubmittedOrder) => {
@@ -426,17 +432,10 @@ export function UnlimitedPassCheckout({
       const { orderId } = submission;
       if (result.data?.status === "signed_out") {
         window.location.assign(
-          getAccountSignInPath(
-            locale,
-            getUnlimitedPassDetailsPath(
-              locale,
-              selection,
-              submission,
-              renewsPassId
-            )
-          )
+          getAccountSignInPath(locale, submissionPath(submission))
         );
       } else if (result.data?.status === "ready") {
+        handoffPath.current = undefined;
         if (submission.predecessorOrderIds.length === 0) {
           saveOrder({ kind: "resume", orderId });
         }

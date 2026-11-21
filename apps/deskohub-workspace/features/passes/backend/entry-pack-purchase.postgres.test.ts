@@ -110,6 +110,7 @@ import {
 import { loadEntryPackRedemption } from "./entry-pack-redemption";
 import { settlePassPurchase } from "./entry-pack-settlement";
 import { loadEntryPackStatus } from "./entry-pack-status";
+import { readPassCheckoutHandoff } from "./pass-checkout-handoff";
 import { reconcilePassPurchases } from "./pass-purchase-reconciliation";
 
 describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
@@ -247,17 +248,30 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           reviewMarker: "absent",
         }),
       });
+      const detailsOrderId = orderIdSchema.make(crypto.randomUUID());
+      const unavailable = await Effect.runPromise(
+        startPurchase({ ...request, orderId: detailsOrderId }).pipe(
+          Effect.provide(profileRequired),
+          Effect.provide(Layer.merge(services, SealedStateKeys.Default))
+        )
+      );
+      expect(unavailable.status).toBe("details_required");
+      const details = new URL(
+        unavailable.checkoutPath,
+        "https://deskohub.test"
+      );
+      expect(details.pathname).toBe("/en-US/passes/entry-pack");
+      expect(details.searchParams.get("step")).toBe("details");
       expect(
         await Effect.runPromise(
-          startPurchase({
-            ...request,
-            orderId: orderIdSchema.make(crypto.randomUUID()),
-          }).pipe(Effect.provide(profileRequired), Effect.provide(services))
+          readPassCheckoutHandoff(details.searchParams.get("handoff")!).pipe(
+            Effect.provide(Layer.merge(services, SealedStateKeys.Default))
+          )
         )
-      ).toEqual({
-        status: "details_required",
-        checkoutPath:
-          "/en-US/passes/entry-pack?tier=open-space&size=5&step=details",
+      ).toMatchObject({
+        buyerAccountId: session.accountId,
+        orderId: detailsOrderId,
+        product,
       });
     });
 
@@ -852,6 +866,16 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             Effect.provide(ProviderPaymentFinalizationService.Default),
             Effect.provide(services)
           ),
+        replayCustomerStart: () => {
+          const input = {
+            orderId,
+            locale: "en-US",
+            product: { kind: "entry-pack", tier: "open-space", size: 5 },
+          } as const;
+          return startPurchase(input).pipe(
+            Effect.provide(Layer.merge(services, SealedStateKeys.Default))
+          );
+        },
         status: () =>
           Effect.runPromise(
             loadEntryPackStatus(orderId).pipe(
@@ -1424,6 +1448,16 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(purchase.providerOrders).toHaveLength(1);
       expect(await purchase.evidenceCount()).toBeGreaterThan(0);
 
+      const statusPath = `/en-US/reservation/status/${purchase.orderId}`;
+      const expectedStatus = {
+        status: "status",
+        orderId: purchase.orderId,
+        checkoutPath: statusPath,
+        statusPath,
+      };
+      expect(await Effect.runPromise(purchase.replayCustomerStart())).toEqual(
+        expectedStatus
+      );
       const { resultUrl, cancelUrl } = purchase.providerReturns[0]!;
       const reservations = Layer.mock(WorkspaceReservationRepository, {
         findPaymentReturnTarget: () => Effect.succeed(undefined),
@@ -1477,6 +1511,14 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           resultUrl
         ).toString()
       );
+      await purchase.notify("success");
+      expect(await Effect.runPromise(purchase.customerStatus())).toMatchObject({
+        status: "paid",
+      });
+      expect(await Effect.runPromise(purchase.replayCustomerStart())).toEqual(
+        expectedStatus
+      );
+      expect(purchase.providerOrders).toHaveLength(1);
     });
 
     test("retries only the failed internal invoice copy after confirming the purchase", async () => {

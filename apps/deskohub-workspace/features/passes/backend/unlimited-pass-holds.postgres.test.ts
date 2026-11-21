@@ -53,6 +53,7 @@ import {
   deliveryReportEmailId,
   deliveryReportEventId,
 } from "@/shared/backend/email/delivery-reports";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
@@ -69,12 +70,17 @@ import {
 import { unlimitedPassDays } from "../pass-offer";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { unlimitedCheckoutPredecessorLimit } from "../unlimited-pass-checkout";
-import { beginPurchase, purchaseStartDates } from "./customer-pass-purchase";
+import {
+  beginPurchase,
+  purchaseStartDates,
+  startPurchase,
+} from "./customer-pass-purchase";
 import {
   getPassPurchasePriceFingerprint,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
 import { settlePassPurchase } from "./entry-pack-settlement";
+import { readPassCheckoutHandoff } from "./pass-checkout-handoff";
 import { reconcileUnlimitedPassReleases } from "./pass-purchase-reconciliation";
 import { unlimitedConfirmationDeliveryReports } from "./unlimited-confirmation-delivery";
 import { getBookableUnlimitedStarts } from "./unlimited-pass-capacity";
@@ -1102,6 +1108,8 @@ function makeUnlimitedDraftProvider() {
 
 it("uses the website's dates, holds and fresh Pay continuation for an Unlimited purchase", async () => {
   const accountId = newAccountId();
+  const holderAccountId = newAccountId();
+  const holderEmail = testEmailAddress("customer-unlimited-holder");
   const provider = makeUnlimitedDraftProvider();
   const services = unlimitedNewDraftLayer(
     accountId,
@@ -1111,7 +1119,20 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
   await Effect.runPromise(
     Effect.gen(function* () {
       const { db } = yield* WorkspaceDatabase;
-      yield* db.insert(customerAccounts).values({ id: accountId });
+      yield* db.insert(customerAccounts).values([
+        { id: accountId },
+        {
+          id: holderAccountId,
+          dotyposCustomerId: DotyposCustomerIdSchema.make(
+            "customer-pass-recipient"
+          ),
+        },
+      ]);
+      yield* db.insert(authUser).values({
+        id: holderAccountId,
+        email: holderEmail,
+        name: "Fixture Recipient",
+      });
       const startDate = date(getCurrentWorkspaceDate().add({ days: 2 }));
       const availability = yield* purchaseStartDates({ startsOn: startDate });
       expect(availability.status).toBe("ready");
@@ -1119,15 +1140,52 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
         throw new Error("Expected start dates");
       expect(availability.starts["reserved-desk"]).toContain(startDate);
       const orderId = orderIdSchema.make(crypto.randomUUID());
-      const begin = beginPurchase({
+      const requested = {
         orderId,
-        locale: "en-US",
+        locale: "en-US" as const,
         product: {
-          kind: "unlimited",
-          selection: { tier: "reserved-desk", startDate },
+          kind: "unlimited" as const,
+          selection: { tier: "reserved-desk" as const, startDate },
         },
+        holderEmail,
+      };
+      const start = yield* startPurchase(requested);
+      expect(start.status).toBe("details_required");
+      expect(start.checkoutPath).not.toContain(holderEmail);
+      const details = new URL(start.checkoutPath, "https://deskohub.test");
+      expect(details.pathname).toBe("/en-US/passes/unlimited");
+      expect(details.searchParams.get("step")).toBe("details");
+      const handoff = readPassCheckoutHandoff(
+        details.searchParams.get("handoff")!
+      );
+      const anotherBuyer = Layer.mock(CurrentCustomerAccount, {
+        requireActive: Effect.succeed({
+          ...testSessionProfile,
+          accountId: holderAccountId,
+          email: holderEmail,
+          deletionRequested: false,
+        }),
+      });
+      expect(yield* handoff.pipe(Effect.provide(anotherBuyer))).toBeUndefined();
+      const fields = yield* handoff;
+      expect(fields).toMatchObject({
+        orderId,
+        holderEmail,
+        product: requested.product,
+      });
+      if (!fields) throw new Error("Expected buyer-owned gift details");
+      const begin = beginPurchase({
+        ...fields,
+        locale: "en-US",
+        recipientName: "Fixture Recipient",
       });
       const draft = yield* begin;
+      expect(draft.orderId).toBe(orderId);
+      const [purchase] = yield* db
+        .select({ holderAccountId: passPurchases.holderAccountId })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, orderId));
+      expect(purchase?.holderAccountId).toBe(holderAccountId);
       expect(yield* begin).toEqual(draft);
       expect(draft.payPath).toBe(
         `/en-US/passes/unlimited?order=${orderId}&step=pay`
@@ -1148,7 +1206,7 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
       });
       if (continuation?.kind !== "pay") throw new Error("Expected fresh Pay");
       expect(continuation.payment).not.toHaveProperty("priorPaymentAttemptId");
-    }).pipe(Effect.provide(services))
+    }).pipe(Effect.provide(Layer.merge(services, SealedStateKeys.Default)))
   );
 });
 

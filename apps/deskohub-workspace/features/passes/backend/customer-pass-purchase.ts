@@ -12,13 +12,10 @@ import { reservationCustomerEmailSchema } from "@/features/reservation/reservati
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { currentInstant, type PlainDate } from "@/shared/utils/temporal";
+import { getEntryPackPayPath } from "../entry-pack-checkout";
 import {
-  getEntryPackDetailsPath,
-  getEntryPackPayPath,
-} from "../entry-pack-checkout";
-import {
-  type EntryPackProduct,
   getEntryPackLastUsableDate,
+  isEntryPackQuoteExpired,
 } from "../pass-offer";
 import { unlimitedGiftRecipientNameSchema } from "../pass-purchase-details";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
@@ -26,10 +23,7 @@ import {
   type UnlimitedPassSelection,
   unlimitedPassRequiresEarlyStart,
 } from "../unlimited-pass";
-import {
-  getUnlimitedPassDetailsPath,
-  getUnlimitedPassPayPath,
-} from "../unlimited-pass-checkout";
+import { getUnlimitedPassPayPath } from "../unlimited-pass-checkout";
 import { findOwnedPassPurchaseOrder } from "./entry-pack-order";
 import {
   beginEntryPackPurchase,
@@ -41,14 +35,17 @@ import {
 } from "./entry-pack-purchase";
 import { loadEntryPackStatus } from "./entry-pack-status";
 import {
+  getPassCheckoutHandoffPath,
+  type PassPurchaseProduct,
+  sealPassCheckoutHandoff,
+} from "./pass-checkout-handoff";
+import {
   beginUnlimitedPassPurchase,
   getUnlimitedPassPaymentDisclosure,
 } from "./unlimited-pass-purchase";
 import { readUnlimitedPassStartDates } from "./unlimited-pass-start-dates";
 
-export type PassPurchaseProduct =
-  | EntryPackProduct
-  | { readonly kind: "unlimited"; readonly selection: UnlimitedPassSelection };
+export type { PassPurchaseProduct } from "./pass-checkout-handoff";
 
 export type BeginPassPurchaseInput = {
   readonly orderId: OrderId;
@@ -145,23 +142,32 @@ const beginPassOrder = Effect.fn("passes.beginPassOrder")(function* (
   if (input.supersedeOrderId) {
     return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
   }
-  return yield* beginEntryPackPurchase({ ...input, product });
+  const purchase = yield* beginEntryPackPurchase({ ...input, product });
+  const owned = yield* findOwnedPassPurchaseOrder(
+    purchase.id,
+    session.accountId,
+    product.kind
+  );
+  if (!owned) {
+    return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
+  }
+  if (
+    owned.order.paymentState !== "not_started" ||
+    owned.order.activePaymentAttemptId
+  ) {
+    return yield* new EntryPackPurchaseError({ reason: "payment-in-progress" });
+  }
+  if (
+    owned.purchase.status !== "pending_payment" ||
+    isEntryPackQuoteExpired(yield* currentInstant, owned.purchase.validUntil)
+  ) {
+    return yield* new EntryPackPurchaseError({ reason: "quote-expired" });
+  }
+  return owned.purchase;
 });
 
-const getPassCheckoutPath = (
-  locale: Locale,
-  product: PassPurchaseProduct,
-  orderId?: OrderId
-) => {
-  if (product.kind === "entry-pack") {
-    return orderId
-      ? getEntryPackPayPath(locale, orderId)
-      : getEntryPackDetailsPath(locale, product);
-  }
-  return orderId
-    ? getUnlimitedPassPayPath(locale, orderId)
-    : getUnlimitedPassDetailsPath(locale, product.selection);
-};
+const getPassStatusPath = (locale: Locale, orderId: OrderId) =>
+  `/${locale}${reservationStatusPath}/${orderId}`;
 
 /** Creates a payable draft and projects what the buyer needs to approve it. */
 export const beginPurchase = Effect.fn("passes.beginPurchase")(
@@ -177,8 +183,11 @@ export const beginPurchase = Effect.fn("passes.beginPurchase")(
       Effect.map(({ product, purchase, quote, disclosure }) => ({
         orderId: purchase.id,
         product,
-        payPath: getPassCheckoutPath(purchase.locale, product, purchase.id),
-        statusPath: `/${purchase.locale}${reservationStatusPath}/${purchase.id}`,
+        payPath:
+          product.kind === "entry-pack"
+            ? getEntryPackPayPath(purchase.locale, purchase.id)
+            : getUnlimitedPassPayPath(purchase.locale, purchase.id),
+        statusPath: getPassStatusPath(purchase.locale, purchase.id),
         price: displayPassPurchasePrice(quote),
         validFrom: purchase.validFrom,
         lastUsableDate: getEntryPackLastUsableDate(
@@ -188,6 +197,55 @@ export const beginPurchase = Effect.fn("passes.beginPurchase")(
       }))
     )
 );
+
+const startPurchaseDetails = Effect.fn("passes.startPurchaseDetails")(
+  function* ({
+    locale,
+    orderId,
+    product,
+    holderEmail,
+  }: BeginPassPurchaseInput) {
+    const actor = yield* CurrentCustomerAccount;
+    const { accountId, email } = yield* actor.requireActive;
+    const giftRecipient = holderEmail?.trim().toLowerCase();
+    const token = yield* sealPassCheckoutHandoff({
+      buyerAccountId: accountId,
+      orderId,
+      product,
+      ...(giftRecipient &&
+        giftRecipient !== email.toLowerCase() && {
+          holderEmail: giftRecipient,
+        }),
+    });
+    return {
+      status: "details_required" as const,
+      checkoutPath: getPassCheckoutHandoffPath(locale, product.kind, token),
+    };
+  }
+);
+
+const startPurchaseStatus = Effect.fn("passes.startPurchaseStatus")(function* (
+  input: BeginPassPurchaseInput
+) {
+  const actor = yield* CurrentCustomerAccount;
+  const { accountId } = yield* actor.requireActive;
+  const owned = yield* findOwnedPassPurchaseOrder(
+    input.orderId,
+    accountId,
+    input.product.kind
+  );
+  if (!owned) {
+    return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
+  }
+  const orderId = owned.order.id;
+  const statusPath = getPassStatusPath(owned.purchase.locale, orderId);
+  return {
+    status: "status" as const,
+    orderId,
+    checkoutPath: statusPath,
+    statusPath,
+  };
+});
 
 /** Starts a website checkout from a signed-in customer channel. */
 export const startPurchase = Effect.fn("passes.startPurchase")(
@@ -199,14 +257,19 @@ export const startPurchase = Effect.fn("passes.startPurchase")(
         checkoutPath: payPath,
         statusPath,
       })),
-      Effect.catchTag("EntryPackPurchaseError", (error) =>
-        error.reason === "buyer-profile-required" ||
-        error.reason === "holder-unavailable"
-          ? Effect.succeed({
-              status: "details_required" as const,
-              checkoutPath: getPassCheckoutPath(input.locale, input.product),
-            })
-          : Effect.fail(error)
+      Effect.catchTag(
+        "EntryPackPurchaseError",
+        Effect.fnUntraced(function* (error: EntryPackPurchaseError) {
+          switch (error.reason) {
+            case "buyer-profile-required":
+            case "holder-unavailable":
+              return yield* startPurchaseDetails(input);
+            case "payment-in-progress":
+              return yield* startPurchaseStatus(input);
+            default:
+              return yield* error;
+          }
+        })
       )
     )
 );

@@ -12,6 +12,11 @@ import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { readOwnedPassPurchaseOrderLocale } from "@/features/passes/backend/entry-pack-order";
+import {
+  getPassCheckoutHandoffPath,
+  passCheckoutHandoffTokenSchema,
+  readPassCheckoutHandoff,
+} from "@/features/passes/backend/pass-checkout-handoff";
 import { readPassPurchaseBuyer } from "@/features/passes/backend/pass-purchase-buyer";
 import {
   loadUnlimitedCheckoutContinuation,
@@ -38,6 +43,7 @@ import { createNoindexedPageMetadata } from "@/features/public-pages/page-metada
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import { QueryProvider } from "@/shared/components/query-provider";
 import { formatCount } from "@/shared/utils/number";
@@ -53,6 +59,7 @@ type Query = Parameters<typeof readUnlimitedPassSelection>[0] & {
   readonly supersedeOrder?: string | string[];
   readonly predecessorOrder?: string | string[];
   readonly renew?: string | string[];
+  readonly handoff?: string | string[];
 };
 
 const customerServices = Layer.mergeAll(
@@ -188,6 +195,18 @@ async function UnlimitedPassPageContent({
 }) {
   const query = await searchParams;
   const order = readOrderLink(query);
+  const handoffToken = Schema.is(passCheckoutHandoffTokenSchema)(query.handoff)
+    ? query.handoff
+    : undefined;
+  if (
+    query.handoff !== undefined &&
+    (!handoffToken ||
+      order !== undefined ||
+      query.renew !== undefined ||
+      query.step !== "details")
+  ) {
+    notFound();
+  }
   if (query.renew !== undefined && !Schema.is(orderIdSchema)(query.renew))
     notFound();
   const requestedRenewal = query.renew;
@@ -224,12 +243,23 @@ async function UnlimitedPassPageContent({
     );
   };
   const [checkout, continuation] = await Promise.all([
-    Effect.all({
-      buyer: readPassPurchaseBuyer(),
-      today: currentInstant.pipe(Effect.map(workspaceDate)),
-      discountCodeEntryEnabled: getDiscountCodeEntryEnabled.pipe(
-        Effect.orElseSucceed(() => false)
-      ),
+    Effect.gen(function* () {
+      const checkout = yield* Effect.all({
+        buyer: readPassPurchaseBuyer(),
+        today: currentInstant.pipe(Effect.map(workspaceDate)),
+        discountCodeEntryEnabled: getDiscountCodeEntryEnabled.pipe(
+          Effect.orElseSucceed(() => false)
+        ),
+      });
+      const handoff =
+        handoffToken &&
+        (checkout.buyer.kind === "linked" ||
+          checkout.buyer.kind === "profile-required")
+          ? yield* readPassCheckoutHandoff(handoffToken).pipe(
+              Effect.provide(SealedStateKeys.Default)
+            )
+          : undefined;
+      return { ...checkout, handoff };
     }).pipe(
       Effect.provide(customerServices),
       runWorkspaceEffectOrElse("passes.unlimited-checkout-page", {
@@ -238,12 +268,25 @@ async function UnlimitedPassPageContent({
           buyer: { kind: "unavailable" as const },
           today: workspaceDate(Temporal.Now.instant()),
           discountCodeEntryEnabled: false,
+          handoff: undefined,
         }),
       })
     ),
     orderId &&
       readContinuation(orderId, isPaymentStep ? "payment" : continuationMode),
   ]);
+  const { handoff } = checkout;
+  if (handoffToken !== undefined) {
+    if (checkout.buyer.kind === "signed-out") {
+      redirect(
+        getAccountSignInPath(
+          locale,
+          getPassCheckoutHandoffPath(locale, "unlimited", handoffToken)
+        )
+      );
+    }
+    if (handoff?.product.kind !== "unlimited") notFound();
+  }
   if ((order || requestedRenewal) && checkout.buyer.kind === "signed-out") {
     redirect(getAccountSignInPath(locale, checkoutPath(locale)));
   }
@@ -289,10 +332,22 @@ async function UnlimitedPassPageContent({
     ...(query.tier === undefined ? renewal.selection : options),
     startDate: renewal.selection.startDate,
   };
+  const draftSelection = resumesDraft ? draft?.selection : undefined;
   const selection =
-    resumesDraft && draft
-      ? draft.selection
-      : (renewalSelection ?? requestedSelection);
+    handoff?.product.kind === "unlimited"
+      ? handoff.product.selection
+      : (draftSelection ?? renewalSelection ?? requestedSelection);
+  const checkoutDraft =
+    order && draft
+      ? { ...order, holderEmail: draft.holderEmail ?? null }
+      : order;
+  const handoffDraft = handoff
+    ? {
+        kind: "resume" as const,
+        orderId: handoff.orderId,
+        holderEmail: handoff.holderEmail ?? null,
+      }
+    : undefined;
   const initialPayment = draft?.kind === "pay" ? draft.payment : undefined;
   if (
     orderId &&
@@ -324,6 +379,14 @@ async function UnlimitedPassPageContent({
         initialOptions={selection ?? options}
         initialStartDate={selection?.startDate}
         initialDetails={query.step === "details" ? selection : undefined}
+        {...(handoff &&
+          handoffToken && {
+            initialHandoffPath: getPassCheckoutHandoffPath(
+              locale,
+              "unlimited",
+              handoffToken
+            ),
+          })}
         renewsPassId={renewsPassId}
         initialBounds={{
           today,
@@ -331,11 +394,7 @@ async function UnlimitedPassPageContent({
             getWorkspaceAvailabilityRange(today).to
           ),
         }}
-        draft={
-          order && draft
-            ? { ...order, holderEmail: draft.holderEmail ?? null }
-            : order
-        }
+        draft={handoffDraft ?? checkoutDraft}
         initialPayment={
           orderId && draft && initialPayment
             ? {

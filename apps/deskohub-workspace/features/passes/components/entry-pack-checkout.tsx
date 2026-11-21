@@ -65,6 +65,7 @@ export function EntryPackCheckout({
     readonly orderId: OrderId;
     readonly holderEmail?: string;
     readonly validUntil?: string;
+    readonly handoffPath?: string;
   };
   readonly initialPayment?: {
     readonly orderId: OrderId;
@@ -141,14 +142,19 @@ export function EntryPackCheckout({
       });
       if (detailsRevision.current !== revision) return;
       if (result.data?.status === "signed_out") {
+        const unfinishedHandoff =
+          !payment && continuation?.orderId === orderId
+            ? continuation.handoffPath
+            : undefined;
         window.location.assign(
           getAccountSignInPath(
             locale,
-            getEntryPackDetailsPath(
-              locale,
-              product,
-              savedOrderId === orderId ? savedOrderId : undefined
-            )
+            unfinishedHandoff ??
+              getEntryPackDetailsPath(
+                locale,
+                product,
+                savedOrderId === orderId ? savedOrderId : undefined
+              )
           )
         );
         return;

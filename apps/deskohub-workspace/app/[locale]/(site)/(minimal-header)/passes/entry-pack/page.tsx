@@ -21,6 +21,11 @@ import {
   readEntryPackCheckoutDraft,
   readEntryPackCheckoutPayment,
 } from "@/features/passes/backend/entry-pack-purchase";
+import {
+  getPassCheckoutHandoffPath,
+  passCheckoutHandoffTokenSchema,
+  readPassCheckoutHandoff,
+} from "@/features/passes/backend/pass-checkout-handoff";
 import { EntryPackCheckout } from "@/features/passes/components/entry-pack-checkout";
 import {
   type EntryPackBuyer,
@@ -34,6 +39,7 @@ import {
   getEntryPackValidity,
 } from "@/features/passes/pass-offer";
 import { reservationStatusPath } from "@/features/reservation/routes";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import { currentInstant } from "@/shared/utils/temporal";
 
@@ -44,6 +50,7 @@ type Query = {
   readonly size?: string | string[];
   readonly step?: string | string[];
   readonly order?: string | string[];
+  readonly handoff?: string | string[];
 };
 
 const readOrderLocale = cache((orderId: OrderId) =>
@@ -137,24 +144,41 @@ async function EntryPackPageContent({
   readonly searchParams: Promise<Query>;
 }) {
   const query = await searchParams;
+  const handoffToken = Schema.is(passCheckoutHandoffTokenSchema)(query.handoff)
+    ? query.handoff
+    : undefined;
+  if (
+    query.handoff !== undefined &&
+    (!handoffToken || query.order !== undefined || query.step !== "details")
+  ) {
+    notFound();
+  }
   const orderId = Schema.is(orderIdSchema)(query.order)
     ? query.order
     : undefined;
   if (query.order !== undefined && !orderId) notFound();
   const isPaymentStep = orderId !== undefined && query.step === "pay";
-  const { buyer, validity, draft, discountCodeEntryEnabled } =
+  const { buyer, validity, draft, handoff, discountCodeEntryEnabled } =
     await runWorkspaceEffectOrElse("passes.entry-pack-page", {
       failureCode: "entry_pack_page_unavailable",
       orElse: () => ({
         buyer: { kind: "unavailable" } as const,
         validity: {},
         draft: undefined,
+        handoff: undefined,
         discountCodeEntryEnabled: false,
       }),
     })(
       Effect.gen(function* () {
         const now = yield* currentInstant;
         const buyer = yield* readBuyer();
+        const handoff =
+          handoffToken &&
+          (buyer.kind === "linked" || buyer.kind === "profile-required")
+            ? yield* readPassCheckoutHandoff(handoffToken).pipe(
+                Effect.provide(SealedStateKeys.Default)
+              )
+            : undefined;
         const draft =
           orderId &&
           (buyer.kind === "linked" || buyer.kind === "profile-required")
@@ -196,7 +220,7 @@ async function EntryPackPageContent({
           yield* getDiscountCodeEntryEnabled.pipe(
             Effect.orElseSucceed(() => false)
           );
-        return { buyer, validity, draft, discountCodeEntryEnabled };
+        return { buyer, validity, draft, handoff, discountCodeEntryEnabled };
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -207,6 +231,17 @@ async function EntryPackPageContent({
         )
       )
     );
+  if (handoffToken !== undefined) {
+    if (buyer.kind === "signed-out") {
+      redirect(
+        getAccountSignInPath(
+          locale,
+          getPassCheckoutHandoffPath(locale, "entry-pack", handoffToken)
+        )
+      );
+    }
+    if (handoff?.product.kind !== "entry-pack") notFound();
+  }
   if (draft?.kind === "missing") notFound();
   if (isPaymentStep) {
     if (buyer.kind === "signed-out") {
@@ -231,12 +266,36 @@ async function EntryPackPageContent({
   if (orderId && draft?.kind === "status") {
     redirect(`/${locale}${reservationStatusPath}/${orderId}`);
   }
+  const details =
+    draft?.kind === "draft" || draft?.kind === "ready" ? draft : undefined;
+  const storedProduct =
+    details?.product ?? (draft?.kind === "retry" ? draft.product : undefined);
   const product =
-    draft?.kind === "draft" ||
-    draft?.kind === "ready" ||
-    draft?.kind === "retry"
-      ? draft.product
-      : readEntryPackSelection(query);
+    handoff?.product.kind === "entry-pack"
+      ? handoff.product
+      : (storedProduct ?? readEntryPackSelection(query));
+  const continuation =
+    orderId && (details || buyer.kind === "signed-out")
+      ? {
+          orderId,
+          holderEmail: details?.holderEmail,
+          validUntil:
+            details &&
+            getEntryPackLastUsableDate(details.validUntil).toString(),
+        }
+      : undefined;
+  const handoffContinuation =
+    handoff && handoffToken
+      ? {
+          orderId: handoff.orderId,
+          holderEmail: handoff.holderEmail,
+          handoffPath: getPassCheckoutHandoffPath(
+            locale,
+            "entry-pack",
+            handoffToken
+          ),
+        }
+      : undefined;
 
   return (
     <EntryPackCheckout
@@ -244,24 +303,7 @@ async function EntryPackPageContent({
       buyer={buyer}
       initialProduct={product}
       initialStep={query.step === "details" || orderId ? "details" : "choose"}
-      continuation={
-        orderId &&
-        (draft?.kind === "draft" ||
-          draft?.kind === "ready" ||
-          buyer.kind === "signed-out")
-          ? {
-              orderId,
-              holderEmail:
-                draft?.kind === "draft" || draft?.kind === "ready"
-                  ? draft.holderEmail
-                  : undefined,
-              validUntil:
-                draft?.kind === "draft" || draft?.kind === "ready"
-                  ? getEntryPackLastUsableDate(draft.validUntil).toString()
-                  : undefined,
-            }
-          : undefined
-      }
+      continuation={handoffContinuation ?? continuation}
       validity={validity}
       initialPayment={
         orderId && (draft?.kind === "ready" || draft?.kind === "retry")
