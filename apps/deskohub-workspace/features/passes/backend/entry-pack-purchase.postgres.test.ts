@@ -14,10 +14,12 @@ import {
   NexiService,
 } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
+import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
+import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { promotionCodes, vouchers } from "@/db/schema";
+import { passPurchases, promotionCodes, vouchers } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import {
   CurrentCustomerAccount,
@@ -42,6 +44,7 @@ import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/in
 import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
 import { companyRegistrationIdSchema } from "@/features/accounting/billing-identity";
 import { getInvoicePresentation } from "@/features/accounting/invoice-presentation";
+import { CurrentAdministrator } from "@/features/administrators/backend/current-administrator";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
 import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
@@ -73,6 +76,7 @@ import {
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
+import { applyPackAdjustment } from "../admin/apply-pass-adjustment";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate";
 import {
@@ -1842,19 +1846,34 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         [replacement, replacementEmail]
       );
       payment.beforeInvitationAccountLock(
-        Effect.promise(async () => {
-          await db.pool.query(
-            `with reassigned as (
-               update pass_purchases
-                 set holder_account_id=$2, holder_version=holder_version+1
-                 where id=$1 returning id
-             )
-             update entry_pack_gift_invitations
-               set holder_account_id=$2, generation=generation+1, first_generation=generation+1
-               from reassigned where entry_pack_gift_invitations.order_id=reassigned.id`,
-            [payment.orderId, replacement]
-          );
-        })
+        Effect.gen(function* () {
+          const { db: workspaceDb } = yield* WorkspaceDatabase;
+          const [purchase] = yield* workspaceDb
+            .select()
+            .from(passPurchases)
+            .where(eq(passPurchases.id, payment.orderId));
+          if (!purchase) throw new Error("Missing fixture purchase");
+          yield* applyPackAdjustment({
+            requestId: crypto.randomUUID(),
+            passId: payment.orderId,
+            reason: "Synthetic holder correction",
+            change: {
+              _tag: "reassign",
+              expectedHolderAccountId: purchase.holderAccountId,
+              expectedHolderVersion: purchase.holderVersion,
+              holderAccountId: replacement,
+            },
+          });
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              db.layer,
+              WorkspaceDatabaseAdvisoryLock.makeLayer(db.databasePool),
+              Layer.succeed(CurrentAdministrator, { accountId, email })
+            )
+          ),
+          Effect.orDie
+        )
       );
 
       expect(await payment.pay()).toMatchObject({ status: "paid" });

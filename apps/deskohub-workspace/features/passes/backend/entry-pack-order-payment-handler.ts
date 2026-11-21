@@ -2,13 +2,14 @@ import "server-only";
 
 import { DotyposService } from "@deskohub/dotypos";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
-import { and, eq, inArray, isNotNull, lte, ne } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { Context, Data, Effect, Option, Result } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   entryPackGiftInvitations,
   orders,
+  passAdministrationChanges,
   passPurchases,
   paymentAttempts,
   workspaceReservations,
@@ -56,8 +57,9 @@ import { WorkspaceReservationRepository } from "@/features/reservation/backend/w
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
-import { isEntryPackQuoteExpired } from "../pass-offer";
+import { getEntryPackEndDate, isEntryPackQuoteExpired } from "../pass-offer";
 import { withPassPurchaseAddons } from "../pass-purchase-quote";
+import { getUnlimitedPassEndDate } from "../unlimited-pass";
 import { recordConfirmationInvitationState } from "./entry-pack-gift";
 import { deliverPendingEntryPackInvitation } from "./entry-pack-gift-delivery";
 import { sendEntryPackPurchaseEmail } from "./entry-pack-purchase-email";
@@ -403,6 +405,35 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     return transition(attempt, true, now);
   });
 
+  const findReceiptHolder = Effect.fn("passPurchase.findReceiptHolder")(
+    function* (purchase: typeof passPurchases.$inferSelect) {
+      if (purchase.holderVersion === 0) return purchase.holderAccountId;
+      const [original] = yield* db
+        .select({ change: passAdministrationChanges.change })
+        .from(passAdministrationChanges)
+        .where(
+          and(
+            eq(passAdministrationChanges.passId, purchase.id),
+            isNotNull(passAdministrationChanges.completedAt),
+            sql`${passAdministrationChanges.change}->>'_tag' = 'reassign'`,
+            sql`${passAdministrationChanges.change}->>'expectedHolderVersion' = '0'`
+          )
+        )
+        .orderBy(
+          passAdministrationChanges.requestedAt,
+          passAdministrationChanges.requestId
+        )
+        .limit(1);
+      if (original?.change._tag !== "reassign") {
+        return yield* paymentError(
+          purchase.id,
+          "Pass purchase has no original holder change."
+        );
+      }
+      return original.change.expectedHolderAccountId;
+    }
+  );
+
   const fulfillBuyer = Effect.fn("entryPack.fulfillBuyer")(
     function* (orderId: OrderId) {
       const [paid] = yield* db
@@ -420,7 +451,6 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           orderId,
           "Paid Entry pack has no active payment attempt."
         );
-      const gift = purchase.buyerAccountId !== purchase.holderAccountId;
       if (
         fulfillmentState !== "not_started" &&
         fulfillmentState !== "awaiting_delivery"
@@ -455,8 +485,10 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           purchase.buyerAccountId
         ).pipe(Effect.provide(services));
         if (buyer) {
+          const holderAccountId = yield* findReceiptHolder(purchase);
+          const gift = purchase.buyerAccountId !== holderAccountId;
           const holderEmail = gift
-            ? ((yield* findPurchaseLoginEmail(purchase.holderAccountId).pipe(
+            ? ((yield* findPurchaseLoginEmail(holderAccountId).pipe(
                 Effect.provide(services)
               )) ?? null)
             : null;
@@ -465,8 +497,13 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
                 Effect.provide(services)
               )
             : false;
+          const validFrom = snapshot.serviceDate;
+          const validUntil =
+            snapshot.product.kind === "unlimited"
+              ? getUnlimitedPassEndDate(validFrom)
+              : getEntryPackEndDate(validFrom, snapshot.product.size);
           yield* sendEntryPackPurchaseEmail({
-            purchase,
+            purchase: { ...purchase, holderAccountId, validFrom, validUntil },
             paymentAttemptId: activePaymentAttemptId,
             buyer: { email: buyer },
             holderEmail,
