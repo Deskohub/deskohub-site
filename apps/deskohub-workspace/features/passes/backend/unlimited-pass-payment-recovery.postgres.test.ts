@@ -1,6 +1,6 @@
 import "@/shared/testing/workspace-test-env";
 
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 import {
   DotyposCustomerIdSchema,
   DotyposRejected,
@@ -9,7 +9,11 @@ import {
   DotyposTableSchema,
 } from "@deskohub/dotypos";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
-import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
+import {
+  EmailConfigTag,
+  EmailDeliveryIdSchema,
+  EmailServiceTag,
+} from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
@@ -18,10 +22,12 @@ import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   customerAccounts,
+  entryPackGiftInvitations,
   orders,
   passPurchases,
   paymentAttempts,
 } from "@/db/schema";
+import { authUser } from "@/db/schema/auth";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
 import {
@@ -35,6 +41,8 @@ import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accou
 import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
 import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/invoice-email-delivery.repository";
 import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
+import { AccountingRecordUnavailable } from "@/features/accounting/backend/sealed-accounting-json";
+import { invoiceIdSchema } from "@/features/accounting/manual-invoice";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
@@ -998,6 +1006,214 @@ it("rechecks a refund recorded after provider confirmation before first activati
               "CANCELLED"
         )
       ).toBe(true);
+    }).pipe(Effect.provide(servicesFor(provider.service)))
+  );
+});
+
+it("finishes a cancelled Unlimited gift's pending buyer confirmation and invoice", async () => {
+  const now = Temporal.Now.instant();
+  const buyerEmail = testEmailAddress("cancelled-unlimited-buyer");
+  const invoiceId = invoiceIdSchema.make(crypto.randomUUID());
+  const confirmation = mock(() =>
+    Effect.succeed({
+      id: EmailDeliveryIdSchema.make(crypto.randomUUID()),
+      status: "sent" as const,
+      provider: "fixture",
+      timestamp: new Date(),
+    })
+  );
+  const deliverInvoice = mock(() =>
+    Effect.succeed({ status: "delivered" as const, changed: true })
+  );
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      const purchase = yield* recordPurchase(now, 345);
+      const holderAccountId = customerAccountIdSchema.make(crypto.randomUUID());
+      yield* db.insert(customerAccounts).values({ id: holderAccountId });
+      yield* db.insert(authUser).values({
+        id: purchase.buyerAccountId,
+        email: buyerEmail,
+        name: "Synthetic Buyer",
+        emailVerified: true,
+      });
+      yield* db
+        .update(passPurchases)
+        .set({ holderAccountId })
+        .where(eq(passPurchases.id, purchase.id));
+      const attemptId = yield* recordAttempt(purchase.id, "paid", now);
+      yield* createUnlimitedPassHolds(purchase);
+      yield* db
+        .update(orders)
+        .set({
+          paymentState: "paid",
+          activePaymentAttemptId: attemptId,
+          paidAt: now,
+        })
+        .where(eq(orders.id, purchase.id));
+      yield* settlePassPurchase(purchase.id);
+      yield* confirmUnlimitedPassDays(purchase);
+      const active = yield* settlePassPurchase(purchase.id, attemptId);
+      expect(active).toMatchObject({ status: "active", holderAccountId });
+      expect(active?.giftIssuedAt).not.toBeNull();
+      yield* db
+        .update(entryPackGiftInvitations)
+        .set({
+          nextAttemptAt: now.add({ minutes: 10 }),
+          confirmationInvited: false,
+        })
+        .where(eq(entryPackGiftInvitations.orderId, purchase.id));
+
+      const cancelled = {
+        status: "cancelled",
+        accessEndsOn: purchase.validFrom,
+      } as const;
+      yield* db
+        .update(passPurchases)
+        .set(cancelled)
+        .where(eq(passPurchases.id, purchase.id));
+      yield* reconcileUnlimitedPassReleases({ now, limit: 2 });
+      const released = yield* readUnlimitedPassDays(purchase.id);
+      expect(released).toHaveLength(unlimitedPassDays);
+      expect(
+        released.every((day) => day.reservationState === "cancelled")
+      ).toBe(true);
+
+      const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+        purchase.quote
+      );
+      const issueInvoice = mock<
+        typeof InvoiceRepository.Service.issueEntryPack
+      >(() => Effect.succeed(invoiceId));
+      issueInvoice.mockImplementationOnce(() =>
+        Effect.fail(
+          new AccountingRecordUnavailable({
+            operation: "load",
+            reference: { type: "paymentAttemptId", id: attemptId },
+            message: "Synthetic invoice issuance failure.",
+          })
+        )
+      );
+      const handler = yield* makeEntryPackOrderPaymentHandler.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(AccountingDocumentSnapshots, {
+              findPassPurchase: () =>
+                Effect.succeed({
+                  orderId: purchase.id,
+                  dotyposCustomerId: customerId,
+                  locale: purchase.locale,
+                  serviceDate: purchase.validFrom,
+                  supplier: workspaceAccountingSupplier,
+                  buyer: { kind: "person", legalName: "Synthetic Buyer" },
+                  billing: {
+                    purpose: "personal",
+                    invoice: "requested",
+                    address: {
+                      line1: "Synthetic Street 1",
+                      city: "Praha",
+                      postalCode: "180 00",
+                      country: "CZ",
+                    },
+                  },
+                  delivery: { email: buyerEmail },
+                  product: { kind: "unlimited", tier: "reserved-desk" },
+                  quote,
+                }),
+            }),
+            Layer.mock(EmailConfigTag, { defaultFrom: { email: buyerEmail } }),
+            Layer.mock(EmailServiceTag, { send: confirmation }),
+            Layer.mock(InvoiceRepository, { issueEntryPack: issueInvoice }),
+            Layer.mock(InvoiceEmailDeliveryService, {
+              deliverByInvoiceId: deliverInvoice,
+            }),
+            Layer.mock(InvoiceEmailDeliveryRepository, {
+              status: () =>
+                Effect.succeed(
+                  new Map([
+                    [
+                      invoiceId,
+                      {
+                        customer: "accepted",
+                        internal: "accepted",
+                        needsAttention: false,
+                        sentTo: ["customer", "internal"],
+                      },
+                    ],
+                  ])
+                ),
+            })
+          )
+        )
+      );
+
+      const expiredAttemptId = yield* recordAttempt(
+        purchase.id,
+        "expired",
+        now
+      );
+      yield* db
+        .update(orders)
+        .set({ activePaymentAttemptId: expiredAttemptId })
+        .where(eq(orders.id, purchase.id));
+      const unverified = yield* Effect.result(handler.fulfill(purchase.id));
+      expect(unverified).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          message: "Cancelled Unlimited pass has no active paid attempt.",
+        },
+      });
+      expect(confirmation).toHaveBeenCalledTimes(0);
+      expect(issueInvoice).toHaveBeenCalledTimes(0);
+      yield* db
+        .update(orders)
+        .set({ activePaymentAttemptId: attemptId })
+        .where(eq(orders.id, purchase.id));
+
+      const first = yield* Effect.result(handler.fulfill(purchase.id));
+      expect(first).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "AccountingRecordUnavailable" },
+      });
+      expect((yield* readState(purchase.id)).order?.fulfillmentState).toBe(
+        "awaiting_delivery"
+      );
+      yield* handler.fulfill(purchase.id);
+      yield* handler.fulfill(purchase.id);
+
+      const state = yield* readState(purchase.id);
+      expect(state.order).toMatchObject({
+        paymentState: "paid",
+        fulfillmentState: "fulfilled",
+      });
+      expect(state.purchase).toMatchObject({
+        ...cancelled,
+        holderAccountId,
+        giftIssuedAt: active?.giftIssuedAt,
+      });
+      expect(yield* readUnlimitedPassDays(purchase.id)).toEqual(released);
+      const [invitation] = yield* db
+        .select()
+        .from(entryPackGiftInvitations)
+        .where(eq(entryPackGiftInvitations.orderId, purchase.id));
+      expect(invitation).toMatchObject({
+        nextAttemptAt: null,
+        confirmationInvited: false,
+      });
+      expect(confirmation).toHaveBeenCalledTimes(1);
+      expect(confirmation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: { email: buyerEmail },
+          idempotencyKey: `entry-pack-purchase:${purchase.id}`,
+        })
+      );
+      expect(issueInvoice).toHaveBeenCalledTimes(2);
+      expect(issueInvoice).toHaveBeenCalledWith({
+        orderId: purchase.id,
+        paymentAttemptId: attemptId,
+      });
+      expect(deliverInvoice).toHaveBeenCalledTimes(1);
     }).pipe(Effect.provide(servicesFor(provider.service)))
   );
 });
