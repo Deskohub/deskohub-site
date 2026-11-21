@@ -1,9 +1,10 @@
 import "server-only";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
+  customerAccounts,
   orders,
   passPurchases,
   paymentAttempts,
@@ -88,7 +89,11 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
       .for("update");
     if (attempt?.state !== "paid") return false;
     const [purchase] = yield* db
-      .select({ tier: passPurchases.tier, validFrom: passPurchases.validFrom })
+      .select({
+        tier: passPurchases.tier,
+        validFrom: passPurchases.validFrom,
+        holderAccountId: passPurchases.holderAccountId,
+      })
       .from(passPurchases)
       .where(
         and(
@@ -98,9 +103,21 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
         )
       );
     if (!purchase) return false;
+    const [holder] = yield* db
+      .select({ id: customerAccounts.id })
+      .from(customerAccounts)
+      .where(
+        and(
+          eq(customerAccounts.id, purchase.holderAccountId),
+          isNull(customerAccounts.deletedAt)
+        )
+      )
+      .for("no key update");
     const now = yield* currentInstant;
     const unavailable =
-      confirmationRejected || hasUnlimitedPassFirstDayEnded(purchase, now);
+      !holder ||
+      confirmationRejected ||
+      hasUnlimitedPassFirstDayEnded(purchase, now);
     if (!unavailable && attempt.refundState === "not_required") return true;
     if (!unavailable && isUnsolicitedPartialPassRefund(attempt)) {
       yield* Effect.logWarning(
@@ -124,13 +141,16 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
     if (!ended) return false;
 
     if (unavailable) yield* requireFullPassRefund(attempt, now);
+    const unavailableCode = holder
+      ? "unlimited_pass_day_unavailable"
+      : "unlimited_pass_holder_unavailable";
     yield* db
       .update(orders)
       .set({
         fulfillmentState: "failed",
         fulfillmentFailedAt: now,
         fulfillmentFailureCode: unavailable
-          ? "unlimited_pass_day_unavailable"
+          ? unavailableCode
           : "unlimited_pass_payment_refunded",
         updatedAt: now,
       })

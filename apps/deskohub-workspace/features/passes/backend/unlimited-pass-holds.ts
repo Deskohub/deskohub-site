@@ -14,6 +14,7 @@ import { getCoworkReservationInterval } from "@/features/reservation/cowork-rese
 import { currentInstant } from "@/shared/utils/temporal";
 import { ambiguousPassDayHoldCode } from "../pass-day-marker";
 import { type PassTier, unlimitedPassDays } from "../pass-offer";
+import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
 import { recordAmbiguousPassDayHolds } from "./pass-day-hold-ownership";
 import {
   createUnlimitedPassDayHold,
@@ -151,12 +152,18 @@ export const reconfirmUnlimitedPassHolds = Effect.fn(
     "id" | "status" | "validFrom" | "holdsExpireAt" | "tier"
   >
 ) {
+  if (hasUnlimitedPassFirstDayEnded(purchase, yield* currentInstant)) {
+    return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+  }
   const holds = yield* readPayableUnlimitedHolds(purchase);
   const dotypos = yield* DotyposService;
   const provider = yield* dotypos.getReservationsByIds(
     holds.map((hold) => hold.dotyposReservationId),
     { concurrency: 1 }
   );
+  if (hasUnlimitedPassFirstDayEnded(purchase, yield* currentInstant)) {
+    return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+  }
   for (const hold of holds) {
     const reservation = provider.get(hold.dotyposReservationId);
     if (
