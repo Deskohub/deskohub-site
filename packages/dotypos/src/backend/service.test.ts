@@ -3002,6 +3002,39 @@ describe("DotyposService marked reservation transitions", () => {
     seats: 2,
   };
 
+  test.each([
+    [503, "DotyposUnavailable", "server"],
+    [200, "DotyposRejected", "invalid-response"],
+  ] as const)(
+    "preserves a token failure at HTTP %s before a journaled POST",
+    async (status, tag, reason) => {
+      let posts = 0;
+      const fetchMock = mockDotyposFetch((request) => {
+        if (new URL(request.url).pathname === "/signin/token") {
+          return Response.json({}, { status });
+        }
+        posts++;
+        return Response.json([reservation()]);
+      });
+      const result = await runWithServiceRetryingInstantly(
+        Effect.flatMap(DotyposService, (dotypos) =>
+          dotypos.createReservation({
+            ...booking,
+            note: noteLine,
+            status: "NEW",
+            singleAttempt: true,
+          })
+        ).pipe(Effect.result),
+        fetchMock
+      );
+      expect(posts).toBe(0);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: tag, reason },
+      });
+    }
+  );
+
   test.each(["empty", "missing-id"] as const)(
     "sends a single journaled POST on a %s response",
     async (response) => {

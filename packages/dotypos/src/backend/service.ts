@@ -1188,7 +1188,10 @@ const makeDotyposService: Effect.Effect<
     );
 
   /** A creation answered with an empty array created nothing, so it can be retried. */
-  const firstCreated = <A>(items: readonly A[], call: DotyposCall) => {
+  const firstCreated = <A>(
+    items: readonly A[],
+    call: DotyposCall
+  ): Effect.Effect<A, DotyposUnavailable> => {
     const item = items[0];
     return item
       ? Effect.succeed(item)
@@ -1360,11 +1363,24 @@ const makeDotyposService: Effect.Effect<
         operation: "createReservation",
         request: "reservation.create",
       } as const;
+      const incompleteCreation = () =>
+        new DotyposUncertain({
+          ...call,
+          reason: "invalid-response",
+          message:
+            "Dotypos did not provide a usable reservation after creation.",
+        });
       const reservationResult = yield* runDotyposRequest(
         client.createReservation(config.cloudId, { payload: [request] }),
         call
       ).pipe(
-        Effect.flatMap((reservations) => firstCreated(reservations, call)),
+        Effect.flatMap((reservations) =>
+          firstCreated(reservations, call).pipe(
+            Effect.mapError((error) =>
+              input.singleAttempt ? incompleteCreation() : error
+            )
+          )
+        ),
         Effect.withSpan("dotyposService.createReservation"),
         input.singleAttempt ? identity : retryDotyposRequest(call.request),
         Effect.tapError((error) =>
@@ -1374,16 +1390,22 @@ const makeDotyposService: Effect.Effect<
         )
       );
 
-      const reservationId = yield* decodeResponseIdentifier(
+      const reservation = yield* decodeResponseIdentifier(
         DotyposReservationIdSchema,
         reservationResult.id ?? "",
         "Reservation ID",
         call
-      );
-      const reservation = yield* decodeProviderEntity(
-        DotyposReservationSchema,
-        { ...reservationResult, id: reservationId },
-        call
+      ).pipe(
+        Effect.flatMap((id) =>
+          decodeProviderEntity(
+            DotyposReservationSchema,
+            { ...reservationResult, id },
+            call
+          )
+        ),
+        Effect.mapError((error) =>
+          input.singleAttempt ? incompleteCreation() : error
+        )
       );
 
       yield* Effect.annotateLogsScoped({ reservation });
@@ -1393,21 +1415,6 @@ const makeDotyposService: Effect.Effect<
     },
     (effect, input) =>
       effect.pipe(
-        Effect.mapError((error) =>
-          input.singleAttempt &&
-          ((error._tag === "DotyposUnavailable" &&
-            error.reason === "empty-response") ||
-            (error._tag === "DotyposRejected" &&
-              error.reason === "invalid-response"))
-            ? new DotyposUncertain({
-                operation: "createReservation",
-                request: "reservation.create",
-                reason: "invalid-response",
-                message:
-                  "Dotypos did not provide a usable reservation after creation.",
-              })
-            : error
-        ),
         Effect.annotateLogs({
           customerId: input.customerId,
           tableId: input.tableId,

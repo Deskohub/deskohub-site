@@ -5,6 +5,7 @@ import {
   DotyposCustomerIdSchema,
   DotyposService,
   DotyposTableSchema,
+  DotyposUnavailable,
   DotyposUncertain,
 } from "@deskohub/dotypos";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
@@ -141,6 +142,17 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
     const availability = await readDay();
     const getRecord = (id: typeof original.id) =>
       Effect.runPromise(provider.service.getReservationWithoutCustomer(id));
+    const targetHasMoveClaim = Effect.gen(function* () {
+      const repository = yield* WorkspaceReservationRepository;
+      const serviceDate = Temporal.PlainDate.from(date);
+      const claims = yield* repository.selectPendingPassDayCapacity({
+        first: serviceDate,
+        last: serviceDate,
+      });
+      return claims.some(
+        (claim) => claim.moveClaim && claim.tableId === target.id
+      );
+    });
     const baseProvider = {
       ...provider.service,
       getTables: () => Effect.succeed([source, target]),
@@ -193,6 +205,7 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
       runtime,
       reserve,
       assign,
+      targetHasMoveClaim,
     };
   };
 
@@ -371,6 +384,70 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
     }
   );
 
+  test("a token failure releases the destination intent without replacing the source", async () => {
+    const day = await fixture();
+    const layer = day.runtime({
+      createReservation: () =>
+        new DotyposUnavailable({
+          operation: "createReservation",
+          reason: "server",
+        }),
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        expect(Result.isFailure(yield* Effect.result(day.reserve()))).toBe(
+          true
+        );
+        expect(yield* day.targetHasMoveClaim).toBe(false);
+      }).pipe(Effect.provide(layer))
+    );
+    const [audit] = await day.moves();
+    expect(audit.settled_at).not.toBeNull();
+    expect(audit.target_reservation_id).toBeNull();
+    expect((await day.readDay()).dotypos_reservation_id).toBe(day.original.id);
+    expect((await day.getRecord(day.original.id)).status).toBe("CONFIRMED");
+  });
+
+  test("a known target that disappears during cancellation releases its intent on retry", async () => {
+    const day = await fixture();
+    const layer = day.runtime({
+      setReservationStatusIfMatches: (input) =>
+        input.status === "CONFIRMED"
+          ? TestClock.setTime(afterMidnight.epochMilliseconds).pipe(
+              Effect.andThen(
+                provider.service.setReservationStatusIfMatches(input)
+              )
+            )
+          : Effect.sync(() =>
+              provider.reservations.delete(input.reservationId)
+            ).pipe(
+              Effect.andThen(
+                new DotyposUncertain({
+                  operation: "setReservationStatusIfMatches",
+                  reason: "timeout",
+                })
+              )
+            ),
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        expect(Result.isFailure(yield* Effect.result(day.reserve()))).toBe(
+          true
+        );
+        expect(yield* day.targetHasMoveClaim).toBe(true);
+        const worker = yield* PassDayMoves;
+        yield* worker.reconcile(2);
+        expect(yield* day.targetHasMoveClaim).toBe(false);
+      }).pipe(Effect.provide(layer))
+    );
+    const [audit] = await day.moves();
+    expect(audit.settled_at).not.toBeNull();
+    expect(audit.attached_at).toBeNull();
+    expect(audit.target_reservation_id).not.toBeNull();
+    expect((await day.readDay()).dotypos_reservation_id).toBe(day.original.id);
+    expect((await day.getRecord(day.original.id)).status).toBe("CONFIRMED");
+  });
+
   test("withdrawal committed during confirmation wins the attachment fence", async () => {
     const { original, passId, runtime, reserve, moves, getRecord, readDay } =
       await fixture();
@@ -400,6 +477,31 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
     expect((await getRecord(audit.target_reservation_id)).status).toBe(
       "CANCELLED"
     );
+  });
+
+  test("crossing Prague midnight while verifying the source sends no create request", async () => {
+    const day = await fixture();
+    let attempts = 0;
+    const layer = day.runtime({
+      getReservationWithoutCustomer: (id) =>
+        TestClock.setTime(afterMidnight.epochMilliseconds).pipe(
+          Effect.andThen(provider.service.getReservationWithoutCustomer(id))
+        ),
+      createReservation: (input) => {
+        attempts++;
+        return provider.service.createReservation(input);
+      },
+    });
+    expect(
+      Result.isFailure(
+        await Effect.runPromise(
+          day.reserve().pipe(Effect.result, Effect.provide(layer))
+        )
+      )
+    ).toBe(true);
+    expect(attempts).toBe(0);
+    expect((await day.readDay()).dotypos_reservation_id).toBe(day.original.id);
+    expect((await day.moves())[0]!.settled_at).not.toBeNull();
   });
 
   test("crossing Prague midnight during confirmation keeps the original day", async () => {

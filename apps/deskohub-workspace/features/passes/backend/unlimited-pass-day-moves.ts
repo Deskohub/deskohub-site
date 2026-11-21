@@ -383,7 +383,10 @@ const makePassDayMoves = Effect.gen(function* () {
     if (move.ambiguousAt) return false;
     if (move.attachedAt) return yield* retireHold(key, move, "source");
     const target = created ?? (yield* findTarget(key, move));
-    if (!target) return false;
+    if (!target) {
+      if (move.targetReservationId) yield* markSettled(move);
+      return false;
+    }
     const targetHold = expectedHold(key, move, "target");
     if (
       target.id === move.sourceReservationId ||
@@ -490,6 +493,12 @@ const makePassDayMoves = Effect.gen(function* () {
         .returning({ generation: unlimitedPassDayMoves.generation });
       if (!pending) return false;
       const { day } = expectedHold(key, move, "target");
+      if (
+        key.serviceDate <= getWorkspaceDate(yield* currentInstant).toString()
+      ) {
+        yield* markSettled(pending);
+        return false;
+      }
       const created = yield* createUnlimitedPassDayHold({
         passId: key.passId,
         customerId: move.customerId,
@@ -500,14 +509,7 @@ const makePassDayMoves = Effect.gen(function* () {
       }).pipe(
         Effect.provideService(DotyposService, dotypos),
         Effect.tapError((error) =>
-          (error._tag === "DotyposRejected" &&
-            (error.reason === "invalid-request" ||
-              error.reason === "not-found" ||
-              error.reason === "unauthorized")) ||
-          (error._tag === "DotyposUnavailable" &&
-            error.reason === "rate-limited")
-            ? markSettled(pending)
-            : Effect.void
+          error._tag === "DotyposUncertain" ? Effect.void : markSettled(pending)
         )
       );
       return yield* continueMove(key, move, created);
