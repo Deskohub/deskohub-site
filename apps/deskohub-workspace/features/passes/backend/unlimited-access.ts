@@ -166,12 +166,12 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   const { tier, validFrom, accessEndsOn, reservation, status } = access;
   const validUntil = accessEndsOn ?? access.validUntil;
   const period = { tier, validFrom, validUntil };
-  const day = getUnlimitedPassAccessDay({ ...access, date });
+  const accessDay = getUnlimitedPassAccessDay({ ...access, date });
 
   if (status === "active" && Temporal.PlainDate.compare(date, validFrom) < 0) {
     return { ...period, state: "before-start" } as const;
   }
-  if (day === undefined) {
+  if (!accessDay) {
     const canRenew =
       sessionAccountId === access.holderAccountId &&
       access.paymentState === "paid" &&
@@ -195,7 +195,7 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   const view = {
     ...period,
     date,
-    day,
+    ...accessDay,
     continuesTomorrow:
       Temporal.PlainDate.compare(date.add({ days: 1 }), validUntil) < 0,
   };

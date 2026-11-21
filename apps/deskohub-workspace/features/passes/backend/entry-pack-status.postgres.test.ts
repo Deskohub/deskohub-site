@@ -110,8 +110,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         viewer = buyer,
         finalize,
         recover,
+        viewedAt = now,
       }: {
         readonly viewer?: CustomerAccountId | null;
+        readonly viewedAt?: Temporal.Instant;
         readonly finalize?: (
           id: OrderId
         ) => Effect.Effect<"awaiting_payment" | "pending">;
@@ -151,7 +153,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               })
             )
           ),
-          atInstant(now)
+          atInstant(viewedAt)
         )
       );
 
@@ -206,6 +208,96 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       });
       expect(selfStatus).not.toHaveProperty("maskedHolderEmail");
       expect(selfStatus).not.toHaveProperty("invitation");
+    });
+
+    test("exposes a fulfilled complimentary order to its author and claimed holder without payment details", async () => {
+      const orderId = orderIdSchema.make(crypto.randomUUID());
+      const unrelated = customerAccountIdSchema.make(crypto.randomUUID());
+      await database.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state)
+         values ($1, 'pass-purchase', 'fixture-holder', 'complimentary', 'processing')`,
+        [orderId]
+      );
+      await database.pool.query(
+        `insert into pass_purchases
+          (id, buyer_account_id, holder_account_id, product, tier, unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $3, 'unlimited', 'open-space', false, 'pending_payment', '2026-11-20', '2026-12-20', '{}', 'en-US', $4)`,
+        [orderId, buyer, holder, now.toString()]
+      );
+
+      expect(await view(orderId)).toEqual({ status: "not_found" });
+      expect(await view(orderId, { viewer: holder })).toEqual({
+        status: "not_found",
+      });
+
+      await database.pool.query(
+        "update orders set fulfillment_state = 'fulfilled', fulfilled_at = $2 where id = $1",
+        [orderId, now.toString()]
+      );
+      await database.pool.query(
+        "update pass_purchases set status = 'active', gift_issued_at = $2 where id = $1",
+        [orderId, now.toString()]
+      );
+      const granted = {
+        status: "granted",
+        orderId,
+        tier: "open-space",
+        entryCount: null,
+        validFrom: "2026-11-20",
+        validUntil: "2026-12-20",
+      };
+      expect(await view(orderId)).toEqual({ ...granted, canOpenAccess: false });
+      expect(await view(orderId, { viewer: holder })).toEqual({
+        status: "not_found",
+      });
+
+      await database.pool.query(
+        "update pass_purchases set gift_claimed_at = $2 where id = $1",
+        [orderId, now.toString()]
+      );
+      expect(await view(orderId, { viewer: holder })).toEqual({
+        ...granted,
+        canOpenAccess: true,
+      });
+      expect(await view(orderId, { viewer: unrelated })).toEqual({
+        status: "not_found",
+      });
+      expect(await view(orderId, { viewer: null })).toEqual({
+        status: "sign_in",
+      });
+
+      await database.pool.query(
+        "update pass_purchases set status = 'cancelled', access_ends_on = valid_from where id = $1",
+        [orderId]
+      );
+      const cancelled = { ...granted, status: "grant_cancelled" };
+      const empty = { ...cancelled, validUntil: granted.validFrom };
+      const beforeStart = Temporal.Instant.from("2026-11-19T12:00:00Z");
+      expect(await view(orderId, { viewedAt: beforeStart })).toEqual({
+        ...empty,
+        canOpenAccess: false,
+      });
+      expect(
+        await view(orderId, { viewer: holder, viewedAt: beforeStart })
+      ).toEqual({ ...empty, canOpenAccess: false });
+
+      await database.pool.query(
+        "update pass_purchases set access_ends_on = '2026-11-25' where id = $1",
+        [orderId]
+      );
+      const truncated = { ...cancelled, validUntil: "2026-11-25" };
+      const retainedDay = Temporal.Instant.from("2026-11-24T12:00:00Z");
+      expect(await view(orderId, { viewedAt: retainedDay })).toEqual({
+        ...truncated,
+        canOpenAccess: false,
+      });
+      expect(
+        await view(orderId, { viewer: holder, viewedAt: retainedDay })
+      ).toEqual({ ...truncated, canOpenAccess: true });
+      const cutoff = Temporal.Instant.from("2026-11-24T23:00:00Z");
+      expect(await view(orderId, { viewer: holder, viewedAt: cutoff })).toEqual(
+        { ...truncated, canOpenAccess: false }
+      );
     });
 
     test("reads a recorded delivery and claim for the buyer", async () => {
