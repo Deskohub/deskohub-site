@@ -67,6 +67,10 @@ export const dotyposRequestProfiles = {
   },
   "reservation.version": transientRead,
   "reservation.patch": conditionalWrite,
+  "reservation.reassignCustomer": {
+    ...conditionalWrite,
+    retry: "none",
+  },
   "reservation.delete": { effect: "write", repeat: "unsafe", retry: "none" },
   "customer.get": transientRead,
   "customer.version": transientRead,

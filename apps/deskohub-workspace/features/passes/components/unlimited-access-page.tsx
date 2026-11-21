@@ -11,7 +11,6 @@ import {
 } from "@/shared/utils/date-time-format";
 import { formatCount } from "@/shared/utils/number";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import { unlimitedPassDays } from "../pass-offer";
 import { getPassTierName } from "../pass-offer.i18n";
 import { getUnlimitedAccessPath, getUnlimitedRenewalPath } from "../routes";
 import type { UnlimitedAccessView } from "../unlimited-access";
@@ -94,7 +93,7 @@ export function UnlimitedAccessPage({
                     {m.unlimitedAccessDay(
                       {
                         day: formatCount(access.day, locale),
-                        total: formatCount(unlimitedPassDays, locale),
+                        total: formatCount(access.totalDays, locale),
                       },
                       { locale }
                     )}
@@ -113,7 +112,10 @@ export function UnlimitedAccessPage({
                     )}
                   </p>
                 </div>
-                <UnlimitedDayMeter day={access.day} />
+                <UnlimitedDayMeter
+                  day={access.day}
+                  totalDays={access.totalDays}
+                />
               </div>
             </div>
           )}

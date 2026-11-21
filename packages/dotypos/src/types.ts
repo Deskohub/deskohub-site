@@ -206,6 +206,13 @@ export interface SetMatchingDotyposReservationStatusInput {
   readonly expectedNoteLine: string;
 }
 
+export interface ReassignDotyposReservationCustomerInput {
+  readonly reservationId: DotyposReservationId;
+  readonly expectedBooking: DotyposReservationBooking;
+  readonly expectedNoteLine: string;
+  readonly customerId: DotyposCustomerId;
+}
+
 export interface UpdateDotyposReservationInput {
   readonly reservationId: DotyposReservationId;
   readonly note: string;

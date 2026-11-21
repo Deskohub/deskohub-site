@@ -133,6 +133,11 @@ export const administrationAreas = {
     label: m.shellBreadcrumbOrders,
     record: { label: m.shellBreadcrumbOrder },
   },
+  passes: {
+    href: administrationHref("/[locale]/admin/passes"),
+    label: m.passesTitle,
+    record: { label: m.passesTitle },
+  },
   reservations: {
     href: administrationHref("/[locale]/admin/reservations"),
     label: m.shellBreadcrumbReservations,

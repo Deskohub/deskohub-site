@@ -21,6 +21,10 @@ import {
 
 mock.module("server-only", () => ({}));
 mock.module("next/server", () => ({ connection: () => Promise.resolve() }));
+mock.module("@/features/passes/admin/pass-page-data.server", () => ({
+  loadReservationPassLinks: () => Promise.resolve(undefined),
+}));
+
 let routeLocale: "cs-CZ" | "en-US" = "en-US";
 
 mock.module("next/root-params", () => ({

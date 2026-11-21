@@ -13,7 +13,7 @@ import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { PlainDate } from "@/shared/utils/temporal";
 import type { PassTier } from "../pass-offer";
-import { hasUnrefundedEntryPackPayment } from "./entry-pack-payment-eligibility";
+import { hasClaimablePassOrder } from "./entry-pack-payment-eligibility";
 
 export class EntryPackUnavailableError extends Data.TaggedError(
   "EntryPackUnavailableError"
@@ -41,10 +41,7 @@ const passForBooking = (
     eq(passPurchases.status, "active"),
     or(
       isNull(passPurchases.giftIssuedAt),
-      and(
-        isNotNull(passPurchases.giftClaimedAt),
-        hasUnrefundedEntryPackPayment(db)
-      )
+      and(isNotNull(passPurchases.giftClaimedAt), hasClaimablePassOrder(db))
     ),
     sql`${passPurchases.validFrom} <= ${request.date} and ${request.date} < ${passPurchases.validUntil}`
   );

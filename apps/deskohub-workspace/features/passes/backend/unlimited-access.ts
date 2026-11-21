@@ -1,5 +1,5 @@
 import { DotyposService } from "@deskohub/dotypos";
-import { and, eq, isNotNull, or, sql } from "drizzle-orm";
+import { and, eq, isNotNull, not, or, sql } from "drizzle-orm";
 import { Effect, Layer, Option, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { orders, passPurchases, workspaceReservations } from "@/db/schema";
@@ -22,6 +22,7 @@ import {
 import type { UnlimitedAccessView } from "../unlimited-access";
 import { isUnlimitedPassRenewalEligible } from "../unlimited-pass";
 import { getUnlimitedPassAccessDay } from "../unlimited-pass-period";
+import { hasPendingPassChange } from "./pass-administration-pending";
 import { openUnlimitedAccessCookie } from "./unlimited-access-capability";
 import { hasUnlimitedRenewalOverlap } from "./unlimited-pass-window";
 
@@ -85,6 +86,7 @@ const readPassDay = Effect.fn("passes.unlimitedAccess.readDay")(function* (
       validUntil: passPurchases.validUntil,
       accessEndsOn: passPurchases.accessEndsOn,
       holderAccountId: passPurchases.holderAccountId,
+      holderVersion: passPurchases.holderVersion,
       paymentState: orders.paymentState,
       renewalOverlaps: hasUnlimitedRenewalOverlap,
       reservation: {
@@ -100,7 +102,10 @@ const readPassDay = Effect.fn("passes.unlimitedAccess.readDay")(function* (
       and(
         eq(workspaceReservations.passId, passPurchases.id),
         eq(workspaceReservations.serviceDate, serviceDate),
-        eq(workspaceReservations.paymentState, "paid"),
+        or(
+          eq(workspaceReservations.paymentState, "paid"),
+          eq(orders.paymentState, "complimentary")
+        ),
         eq(workspaceReservations.reservationState, "confirmed")
       )
     )
@@ -113,6 +118,7 @@ const readPassDay = Effect.fn("passes.unlimitedAccess.readDay")(function* (
             : orderId
         ),
         eq(passPurchases.product, "unlimited"),
+        not(hasPendingPassChange(db, passPurchases.id, "reassign")),
         hasVerifiedActiveLogin(db, passPurchases.holderAccountId),
         or(
           eq(passPurchases.buyerAccountId, passPurchases.holderAccountId),
@@ -127,7 +133,7 @@ const readPassDay = Effect.fn("passes.unlimitedAccess.readDay")(function* (
 
 const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   orderId: OrderId,
-  isHolder: (accountId: CustomerAccountId) => boolean,
+  isHolder: (accountId: CustomerAccountId, holderVersion: number) => boolean,
   sessionAccountId: CustomerAccountId | undefined,
   hasAccessCapability: boolean
 ) {
@@ -151,7 +157,7 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
 
   if (
     !access ||
-    !isHolder(access.holderAccountId) ||
+    !isHolder(access.holderAccountId, access.holderVersion) ||
     access.status === "pending_payment" ||
     access.status === "void"
   )
@@ -160,12 +166,12 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   const { tier, validFrom, accessEndsOn, reservation, status } = access;
   const validUntil = accessEndsOn ?? access.validUntil;
   const period = { tier, validFrom, validUntil };
-  const day = getUnlimitedPassAccessDay({ ...access, date });
+  const accessDay = getUnlimitedPassAccessDay({ ...access, date });
 
   if (status === "active" && Temporal.PlainDate.compare(date, validFrom) < 0) {
     return { ...period, state: "before-start" } as const;
   }
-  if (day === undefined) {
+  if (!accessDay) {
     const canRenew =
       sessionAccountId === access.holderAccountId &&
       access.paymentState === "paid" &&
@@ -189,7 +195,7 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   const view = {
     ...period,
     date,
-    day,
+    ...accessDay,
     continuesTomorrow:
       Temporal.PlainDate.compare(date.add({ days: 1 }), validUntil) < 0,
   };
@@ -269,7 +275,8 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
     const hasAccessCapability = allowsHolder !== undefined;
     const access = yield* readPassAccess(
       orderId,
-      (holderId) => holderId === accountId || allowsHolder?.(holderId) === true,
+      (holderId, version) =>
+        holderId === accountId || allowsHolder?.(holderId, version) === true,
       accountId,
       hasAccessCapability
     );
@@ -282,9 +289,10 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
       const settledAccountId = Option.getOrUndefined(settledAccount)?.accountId;
       return yield* readPassAccess(
         orderId,
-        (holderId) =>
+        (holderId, version) =>
           holderId === access.holderAccountId &&
-          (holderId === settledAccountId || allowsHolder?.(holderId) === true),
+          (holderId === settledAccountId ||
+            allowsHolder?.(holderId, version) === true),
         settledAccountId,
         hasAccessCapability
       );

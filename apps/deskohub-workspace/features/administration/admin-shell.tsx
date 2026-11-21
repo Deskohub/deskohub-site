@@ -112,16 +112,24 @@ const isActive = (pathname: string, href: AdministrationHref) => {
     : unprefixedPathname.startsWith(href);
 };
 
-function ActiveNavigation({ mobile = false }: { readonly mobile?: boolean }) {
+function ActiveNavigation({
+  mobile = false,
+  passes,
+}: {
+  readonly mobile?: boolean;
+  readonly passes?: ReactNode;
+}) {
   const pathname = usePathname();
-  return <Navigation mobile={mobile} pathname={pathname} />;
+  return <Navigation mobile={mobile} passes={passes} pathname={pathname} />;
 }
 
 function Navigation({
   mobile = false,
+  passes,
   pathname,
 }: {
   readonly mobile?: boolean;
+  readonly passes?: ReactNode;
   readonly pathname?: string;
 }) {
   const locale = useRouteLocale();
@@ -154,10 +162,30 @@ function Navigation({
                 </li>
               );
             })}
+            {index === 0 && passes}
           </ul>
         </div>
       ))}
     </nav>
+  );
+}
+
+export function PassesNavigationItem({
+  mobile = false,
+}: {
+  readonly mobile?: boolean;
+}) {
+  const locale = useRouteLocale();
+  const pathname = usePathname();
+  return (
+    <li>
+      <NavigationLink
+        item={{ icon: Ticket, page: administrationAreas.passes }}
+        locale={locale}
+        mobile={mobile}
+        pathname={pathname}
+      />
+    </li>
   );
 }
 
@@ -275,10 +303,15 @@ export function AdminShell({
   breadcrumb,
   children,
   localeSwitcher,
+  passesNavigation,
 }: {
   readonly breadcrumb: ReactNode;
   readonly children: ReactNode;
   readonly localeSwitcher: ReactNode;
+  readonly passesNavigation?: {
+    readonly desktop: ReactNode;
+    readonly mobile: ReactNode;
+  };
 }) {
   const locale = useRouteLocale();
 
@@ -290,7 +323,7 @@ export function AdminShell({
           <Brand locale={locale} />
           <div className="mt-9">
             <Suspense fallback={<Navigation />}>
-              <ActiveNavigation />
+              <ActiveNavigation passes={passesNavigation?.desktop} />
             </Suspense>
           </div>
         </div>
@@ -326,7 +359,10 @@ export function AdminShell({
                 <Brand locale={locale} />
                 <div className="mt-9">
                   <Suspense fallback={<Navigation mobile />}>
-                    <ActiveNavigation mobile />
+                    <ActiveNavigation
+                      mobile
+                      passes={passesNavigation?.mobile}
+                    />
                   </Suspense>
                 </div>
               </SheetContent>
