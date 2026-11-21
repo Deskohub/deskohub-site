@@ -371,6 +371,59 @@ test("Unlimited reissues gift context before replacement and after capacity reje
   });
 });
 
+test("a prepared recipient edit returns the original status when payment starts before submission", async () => {
+  const originalOrderId = orderIdSchema.make(crypto.randomUUID());
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const holderEmail = testEmailAddress("unlimited-race-recipient");
+  const selection = {
+    tier: "reserved-desk",
+    startDate: plainDateStringSchema.make("2026-12-05"),
+  } as const;
+  const token = await sealHandoff({
+    buyerAccountId: accountId,
+    orderId: originalOrderId,
+    product: { kind: "unlimited", selection },
+  });
+  const input = {
+    orderId,
+    buyerEmail,
+    holderEmail,
+    locale: "en-US" as const,
+    selection,
+    recipientName: "Fixture Recipient",
+  };
+  const prepared = await withoutReferer(() =>
+    beginUnlimitedCheckout({ ...input, handoffToken: token })
+  );
+  if (prepared.data?.status !== "handoff_updated")
+    throw new Error("Expected prepared replacement");
+  const handoffToken = prepared.data.handoff.token;
+  paidOrders.add(originalOrderId);
+  unlimitedFailures.set(
+    orderId,
+    new unlimited.UnlimitedPassHandoffPaymentStarted({
+      orderId: originalOrderId,
+    })
+  );
+  const result = await withoutReferer(() =>
+    beginUnlimitedCheckout({
+      ...input,
+      handoffToken,
+    })
+  );
+  expect(result.data).toMatchObject({
+    status: "status",
+    statusPath: `/en-US/reservation/status/${originalOrderId}`,
+  });
+  expect(beginUnlimited).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      orderId,
+      continueFromHandoff: true,
+      supersedeOrderIds: [originalOrderId],
+    })
+  );
+});
+
 test("an open Unlimited Continue returns to the buyer's status after payment starts", async () => {
   const orderId = orderIdSchema.make(crypto.randomUUID());
   paidOrders.add(orderId);

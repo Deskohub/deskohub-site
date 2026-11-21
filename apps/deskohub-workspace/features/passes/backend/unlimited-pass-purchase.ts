@@ -213,7 +213,26 @@ type UnlimitedPassPurchaseInput = {
   readonly referralCode?: CanonicalPromotionCode;
   readonly supersedeOrderId?: OrderId;
   readonly supersedeOrderIds?: readonly OrderId[];
+  readonly continueFromHandoff?: true;
 };
+
+export class UnlimitedPassHandoffPaymentStarted extends Data.TaggedError(
+  "UnlimitedPassHandoffPaymentStarted"
+)<{ readonly orderId: OrderId }> {}
+
+const requireUnpaidHandoffOrder = Effect.fnUntraced(function* (
+  entry: Effect.Success<ReturnType<typeof findOwnedPassPurchaseOrder>>
+) {
+  if (
+    entry &&
+    hasPassPurchasePaymentStarted(entry.order) &&
+    !isVoidedUnlimitedDraft(entry)
+  ) {
+    return yield* new UnlimitedPassHandoffPaymentStarted({
+      orderId: entry.order.id,
+    });
+  }
+});
 
 export const beginUnlimitedPassPurchase = Effect.fn(
   "beginUnlimitedPassPurchase"
@@ -232,7 +251,22 @@ export const beginUnlimitedPassPurchase = Effect.fn(
   const retiredPredecessorOrderIds: OrderId[] = [];
   const outcome = yield* Effect.result(
     Effect.gen(function* () {
-      for (const priorOrderId of priorOrderIds) {
+      if (input.continueFromHandoff && priorOrderIds.size > 0) {
+        yield* accounts.withActiveAccount(
+          session.accountId,
+          findOwnedPassPurchaseOrder(
+            input.orderId,
+            session.accountId,
+            "unlimited"
+          ).pipe(Effect.flatMap(requireUnpaidHandoffOrder)),
+          { passPurchaseOrderId: input.orderId }
+        );
+      }
+      // A handoff appends the draft it replaces. Check it before earlier predecessors.
+      const retirementOrder = input.continueFromHandoff
+        ? [...priorOrderIds].reverse()
+        : priorOrderIds;
+      for (const priorOrderId of retirementOrder) {
         yield* accounts.withActiveAccount(
           session.accountId,
           Effect.gen(function* () {
@@ -241,6 +275,8 @@ export const beginUnlimitedPassPurchase = Effect.fn(
               session.accountId,
               "unlimited"
             );
+            if (input.continueFromHandoff)
+              yield* requireUnpaidHandoffOrder(prior);
             if (!prior) {
               yield* retireUnrecordedUnlimitedDraft(
                 session.accountId,
@@ -313,6 +349,8 @@ const continueUnlimitedPassPurchase = Effect.fn(
             blockingDates: yield* readVoidedDraftDates(existing.purchase),
           });
         }
+        if (input.continueFromHandoff)
+          yield* requireUnpaidHandoffOrder(existing);
         const selection = readUnlimitedPassSelection(existing.purchase);
         const holderId = giftEmail
           ? yield* findPassHolderAccount(giftEmail)
@@ -490,6 +528,7 @@ const continueUnlimitedPassPurchase = Effect.fn(
           blockingDates: yield* readVoidedDraftDates(prepared.purchase),
         });
       }
+      if (input.continueFromHandoff) yield* requireUnpaidHandoffOrder(prepared);
       if (prepared && hasPassPurchasePaymentStarted(prepared.order)) {
         return yield* new EntryPackPurchaseError({
           reason: "payment-in-progress",

@@ -76,6 +76,7 @@ import {
   purchaseStartDates,
   startPurchase,
 } from "./customer-pass-purchase";
+import { readOwnedPassPurchaseStatusPath } from "./entry-pack-order";
 import {
   getPassPurchasePriceFingerprint,
   repriceEntryPackPurchase,
@@ -1243,6 +1244,55 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
       expect(yield* Effect.result(begin)).toEqual(
         Result.fail(expect.objectContaining({ reason: "payment-in-progress" }))
       );
+      const replacementOrderId = orderIdSchema.make(crypto.randomUUID());
+      const editedSelection = {
+        tier: "reserved-desk" as const,
+        startDate: date(Temporal.PlainDate.from(startDate).add({ days: 1 })),
+      };
+      const editedDraft = {
+        orderId,
+        locale: "en-US" as const,
+        selection: editedSelection,
+        holderEmail,
+      };
+      const ordinary =
+        yield* beginUnlimitedPassPurchaseWithDisposition(editedDraft);
+      expect(ordinary.outcome).toEqual(
+        Result.fail(expect.objectContaining({ reason: "purchase-conflict" }))
+      );
+      for (const input of [
+        editedDraft,
+        {
+          ...editedDraft,
+          orderId: replacementOrderId,
+          holderEmail: testEmailAddress("unlimited-race-edited-recipient"),
+          supersedeOrderIds: [supersedeOrderId, orderId],
+        },
+      ]) {
+        const protectedResult =
+          yield* beginUnlimitedPassPurchaseWithDisposition({
+            ...input,
+            continueFromHandoff: true,
+          });
+        expect(protectedResult.outcome).toEqual(
+          Result.fail(
+            expect.objectContaining({
+              _tag: "UnlimitedPassHandoffPaymentStarted",
+              orderId,
+            })
+          )
+        );
+        expect(protectedResult.retiredPredecessorOrderIds).toEqual([]);
+      }
+      expect(
+        yield* readOwnedPassPurchaseStatusPath(orderId, accountId, "unlimited")
+      ).toBe(`/en-US/reservation/status/${orderId}`);
+      expect(
+        yield* db
+          .select({ id: orders.id })
+          .from(orders)
+          .where(eq(orders.id, replacementOrderId))
+      ).toEqual([]);
     }).pipe(Effect.provide(Layer.merge(services, SealedStateKeys.Default)))
   );
 });

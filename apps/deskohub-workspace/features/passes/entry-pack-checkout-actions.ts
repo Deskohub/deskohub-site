@@ -473,6 +473,7 @@ const beginUnlimitedAction = defineWorkspaceAction(
           yield* beginUnlimitedPassPurchase({
             ...details,
             ...(referralCode && { referralCode }),
+            ...(handoff && { continueFromHandoff: true as const }),
             ...(!handoff && supersedeOrderId && { supersedeOrderId }),
             ...(predecessorOrderIds && {
               supersedeOrderIds: predecessorOrderIds,
@@ -501,6 +502,22 @@ const beginUnlimitedAction = defineWorkspaceAction(
               ),
             };
           }).pipe(
+            Effect.catchTag(
+              "UnlimitedPassHandoffPaymentStarted",
+              Effect.fnUntraced(function* ({ orderId }) {
+                const statusPath = yield* readOwnedPassPurchaseStatusPath(
+                  orderId,
+                  session.accountId,
+                  "unlimited"
+                );
+                if (!statusPath) {
+                  return yield* new EntryPackPurchaseError({
+                    reason: "unavailable",
+                  });
+                }
+                return { status: "status" as const, statusPath };
+              })
+            ),
             Effect.catchTag(
               "EntryPackPurchaseError",
               Effect.fnUntraced(function* (error: EntryPackPurchaseError) {
