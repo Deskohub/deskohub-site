@@ -47,7 +47,7 @@ export type AccountEntryPack = {
   readonly tier: string;
   readonly entryCount: number;
   readonly entriesLeft: number;
-  readonly boughtOn: string;
+  readonly boughtOn?: string;
   readonly lastUsableDay: string;
   readonly status: "active" | "expired" | "depleted" | "ended";
   readonly bookPath?: string;
@@ -200,9 +200,11 @@ const readHeldGiftBuyers = Effect.fn("readHeldEntryPackGiftBuyers")(function* (
       accountId: passPurchases.buyerAccountId,
     })
     .from(passPurchases)
+    .innerJoin(orders, eq(orders.id, passPurchases.id))
     .where(
       and(
         eq(passPurchases.holderAccountId, holderAccountId),
+        eq(orders.paymentState, "paid"),
         ne(passPurchases.buyerAccountId, holderAccountId),
         inArray(passPurchases.id, heldIds)
       )
@@ -292,7 +294,9 @@ function toAccountEntryPack(
     tier: getPassTierName(pack.tier, locale),
     entryCount: pack.entryCount,
     entriesLeft: pack.entriesLeft,
-    boughtOn: formatInstantDate({ instant: pack.paidAt, locale, timeZone }),
+    ...(!pack.complimentary && {
+      boughtOn: formatInstantDate({ instant: pack.paidAt, locale, timeZone }),
+    }),
     lastUsableDay: formatPlainDate({
       date: getEntryPackLastUsableDate(pack.validUntil),
       locale,

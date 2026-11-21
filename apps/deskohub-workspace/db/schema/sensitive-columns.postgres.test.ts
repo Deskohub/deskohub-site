@@ -24,15 +24,22 @@ import {
   ne,
 } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { Cause, Effect, Exit, Predicate } from "effect";
+import { Cause, Effect, Exit, Predicate, Schema } from "effect";
 import type { PoolClient } from "pg";
 import type { WorkspaceDatabaseClient } from "@/db/database.service";
 import { seedCampaignSend } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
+import { orderIdSchema } from "@/features/order";
+import { getEntryPackValidity } from "@/features/passes/pass-offer";
+import { passPurchaseQuoteCodec } from "@/features/passes/pass-purchase-quote";
+import { currencyCZK } from "@/shared/money/currencies";
 import {
   captureDatabaseQueryLogsWithExit,
   expectQueryLogsToOmit,
 } from "@/shared/testing/workspace-database-query-log.test-utils";
-import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
+import {
+  syntheticDotyposCustomerId,
+  workspaceFixtures,
+} from "@/shared/testing/workspace-fixtures.test-utils";
 import {
   connectWorkspacePostgresTestDatabase,
   holdDatabaseConnection,
@@ -71,6 +78,9 @@ import {
   invoices,
   manualInvoiceActors,
   mockPaymentSessions,
+  orders,
+  passAdministrationChanges,
+  passPurchases,
   paymentAttempts,
   promotionCodes,
   reservationAccessGrants,
@@ -412,6 +422,60 @@ const rowFixtures = new Map([
         paymentId: syntheticId("mock-payment"),
         amountMinor: 100,
         currency: "CZK",
+      }),
+  }),
+  rowFixture(passAdministrationChanges, {
+    row: (db) =>
+      Effect.gen(function* () {
+        const passId = orderIdSchema.make(crypto.randomUUID());
+        const actorAccountId = yield* workspaceFixtures(db).customerAccount();
+        const requestedAt = now();
+        const product = {
+          kind: "entry-pack",
+          tier: "open-space",
+          size: 5,
+        } as const;
+        const validity = getEntryPackValidity(requestedAt, product.size);
+        const zero = currencyCZK(0);
+        yield* db.insert(orders).values({
+          id: passId,
+          kind: "pass-purchase",
+          dotyposCustomerId: syntheticDotyposCustomerId(),
+          paymentState: "complimentary",
+          fulfillmentState: "fulfilled",
+          fulfilledAt: requestedAt,
+        });
+        yield* db.insert(passPurchases).values({
+          id: passId,
+          buyerAccountId: actorAccountId,
+          holderAccountId: actorAccountId,
+          product: product.kind,
+          tier: product.tier,
+          entryCount: product.size,
+          status: "active",
+          ...validity,
+          quote: Schema.encodeSync(passPurchaseQuoteCodec)({
+            product,
+            discountableSubtotal: zero,
+            discountedSubtotal: zero,
+            totalDiscount: zero,
+            discounts: [],
+          }),
+          locale: "en-US",
+          createdAt: requestedAt,
+        });
+        return {
+          requestId: crypto.randomUUID(),
+          passId,
+          actorAccountId,
+          requestedAt,
+          change: {
+            _tag: "cancel",
+            expectedValidUntil: validity.validUntil,
+            refundValue: 0,
+            sendCancellationEmail: false,
+          },
+        };
       }),
   }),
   rowFixture(paymentAttempts, {

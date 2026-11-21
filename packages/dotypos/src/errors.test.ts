@@ -48,6 +48,7 @@ type ReadOperation = Exclude<
   | "findOrCreateCustomer"
   | "cancelReservation"
   | "setReservationStatusIfMatches"
+  | "reassignReservationCustomerIfMatches"
   | "updateReservation"
   | "confirmReservation"
   | "restoreCancelledReservation"

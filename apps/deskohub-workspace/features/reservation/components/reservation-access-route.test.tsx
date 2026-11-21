@@ -237,6 +237,7 @@ describe("ReservationAccessRoute", () => {
       validUntil: plainDateStringSchema.make("2030-04-28"),
       date: Temporal.PlainDate.from("2030-03-31"),
       day: 3,
+      totalDays: 30,
       continuesTomorrow: true,
       endsAt: Temporal.Instant.from("2030-03-31T22:00Z"),
       deskLabel: "Desk 14",
@@ -254,6 +255,21 @@ describe("ReservationAccessRoute", () => {
     expect(html).toContain("Day 3 of 30");
     expect(html).toContain("Desk 14");
     expect(html).toContain("until midnight");
+
+    unlimitedAccess = {
+      ...unlimitedAccess,
+      day: 31,
+      totalDays: 32,
+      date: Temporal.PlainDate.from("2030-04-28"),
+      validUntil: plainDateStringSchema.make("2030-04-30"),
+      endsAt: Temporal.Instant.from("2030-04-28T22:00Z"),
+    };
+    const adjusted = await renderRoute(passOrderId);
+    expect(adjusted.errors).toEqual([]);
+    expect(adjusted.html).toContain("Day 31 of 32");
+    expect(adjusted.html.match(/min-w-0 flex-1 rounded-full/g)).toHaveLength(
+      32
+    );
   });
 
   test("continues sign-in to the same pass access URL", async () => {

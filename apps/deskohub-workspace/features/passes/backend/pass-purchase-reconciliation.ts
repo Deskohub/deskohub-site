@@ -27,6 +27,7 @@ import {
   workspaceReservations,
 } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
+import { ReservationAdministrationService } from "@/features/administration/reservation-administration.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
 import { PaymentProvidersLive } from "@/features/checkout/backend/payment/payment-providers";
@@ -35,8 +36,10 @@ import { providerOrderAbandonmentTimeoutMinutes } from "@/features/checkout/prov
 import { endedUnpaidPaymentStates } from "@/features/order";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
+import { reconcilePassChanges } from "../admin/complete-pass-change";
 import { entryPackGiftInvitationDue } from "./entry-pack-gift";
 import { settlePassPurchase } from "./entry-pack-settlement";
+import { hasPendingPassChange } from "./pass-administration-pending";
 import { PassDayMoves } from "./unlimited-pass-day-moves";
 import { releaseUnlimitedPassDays } from "./unlimited-pass-holds";
 
@@ -111,13 +114,21 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
           .where(
             and(
               eq(orders.kind, "pass-purchase"),
-              eq(orders.paymentState, "paid"),
               or(
-                inArray(orders.fulfillmentState, [
-                  "not_started",
-                  "awaiting_delivery",
-                ]),
-                entryPackGiftInvitationDue(input.now)
+                and(
+                  eq(orders.paymentState, "paid"),
+                  or(
+                    inArray(orders.fulfillmentState, [
+                      "not_started",
+                      "awaiting_delivery",
+                    ]),
+                    entryPackGiftInvitationDue(input.now)
+                  )
+                ),
+                and(
+                  eq(orders.paymentState, "complimentary"),
+                  entryPackGiftInvitationDue(input.now)
+                )
               ),
               lte(orders.updatedAt, retryBefore)
             )
@@ -268,7 +279,10 @@ export const runPassPurchaseReconciliation = Effect.fn(
     const releasesChecked = yield* reconcileUnlimitedPassReleases(input);
     const moves = yield* PassDayMoves;
     const reseatsChecked = yield* moves.reconcile(input.limit);
-    return { ...summary, releasesChecked, reseatsChecked };
+    const changesChecked = yield* reconcilePassChanges(
+      Math.min(input.limit, 2)
+    );
+    return { ...summary, releasesChecked, reseatsChecked, changesChecked };
   },
   Effect.provide(
     Layer.mergeAll(
@@ -281,6 +295,7 @@ export const runPassPurchaseReconciliation = Effect.fn(
       WorkspaceDatabase.Default,
       WorkspaceDatabaseAdvisoryLock.Default,
       WorkspaceDotyposLayer,
+      ReservationAdministrationService.Live,
       OrderPaymentHandlers.Live,
       PaymentProvidersLive,
       ProviderPaymentFinalizationService.Live
@@ -319,6 +334,7 @@ export const reconcileUnlimitedPassReleases = Effect.fn(
     )
   );
   const releaseDue = and(
+    sql`not ${hasPendingPassChange(db, passPurchases.id)}`,
     or(
       eq(passPurchases.status, "void"),
       and(

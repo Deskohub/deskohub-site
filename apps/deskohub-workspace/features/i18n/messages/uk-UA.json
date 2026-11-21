@@ -2019,6 +2019,8 @@
   "unlimitedPassGiftMailTitle": "Ви отримали безлімітний абонемент у Deskohub Workspace",
   "unlimitedPassGiftMailBody": "Активуйте безлімітний абонемент за адресою електронної пошти, указаною нижче.",
   "entryPackStatusPaidTitle": "Ваш пакет відвідувань оплачено",
+  "passStatusGrantedTitle": "Безоплатний абонемент видано",
+  "passStatusGrantCancelledTitle": "Безоплатний абонемент скасовано",
   "entryPackStatusGiftInvitationNotSent": "Запрошення не надіслано",
   "entryPackStatusGiftInvitationPending": "Запрошення очікує на надсилання",
   "entryPackStatusGiftInvitationSent": "Запрошення надіслано",

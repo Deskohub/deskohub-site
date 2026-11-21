@@ -515,6 +515,7 @@ describe.skipIf(!testDatabase)(
           {
             status: "active",
             day: 1,
+            totalDays: 30,
             daysLeft: 30,
             accessPath: `/en-US/reservation/access/${passId}`,
           },
@@ -530,10 +531,59 @@ describe.skipIf(!testDatabase)(
       );
       expect(
         (await readPassViews(holder, "2026-03-16T22:59:59Z")).unlimited
-      ).toMatchObject([{ status: "active", day: 1, daysLeft: 1 }]);
+      ).toMatchObject([
+        { status: "active", day: 1, totalDays: 1, daysLeft: 1 },
+      ]);
       expect(
         (await readPassViews(holder, "2026-03-16T23:00:00Z")).unlimited
       ).toMatchObject([{ status: "ended" }]);
+
+      await testDatabase!.pool.query(
+        `update orders set payment_state = 'complimentary', paid_at = null,
+          fulfillment_state = 'processing' where id = $1`,
+        [passId]
+      );
+      await testDatabase!.pool.query(
+        `update pass_purchases set status = 'pending_payment', access_ends_on = null,
+          valid_until = '2026-04-17', gift_claimed_at = null where id = $1`,
+        [passId]
+      );
+      expect((await readPassViews(holder, firstDay)).unlimited).toEqual([]);
+
+      await testDatabase!.pool.query(
+        "update orders set fulfillment_state = 'fulfilled', fulfilled_at = $2 where id = $1",
+        [passId, firstDay]
+      );
+      await testDatabase!.pool.query(
+        "update pass_purchases set status = 'active' where id = $1",
+        [passId]
+      );
+      expect((await readPassViews(holder, firstDay)).unlimited).toEqual([]);
+      await testDatabase!.pool.query(
+        "update pass_purchases set gift_claimed_at = $2 where id = $1",
+        [passId, firstDay]
+      );
+
+      expect(
+        (await readPassViews(holder, "2026-03-15T22:59:59Z")).unlimited
+      ).toMatchObject([{ status: "upcoming" }]);
+      expect(
+        (await readPassViews(holder, "2026-04-15T11:00:00Z")).unlimited
+      ).toEqual([
+        {
+          orderId: passId,
+          tier: "Open Space",
+          boughtForYou: false,
+          period: expect.any(String),
+          seating: { kind: "shared" },
+          status: "active",
+          day: 31,
+          totalDays: 32,
+          daysLeft: 2,
+          accessPath: `/en-US/reservation/access/${passId}`,
+        },
+      ]);
+      expect((await readPassViews(buyer, firstDay)).unlimited).toEqual([]);
     });
 
     test("scopes Entry pack payment to an owner-matched reservation and booking to the pack's validity", async () => {
