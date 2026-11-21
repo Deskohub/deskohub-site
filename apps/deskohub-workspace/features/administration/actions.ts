@@ -204,8 +204,12 @@ const restoreAdministrationReservationAction = defineAdministrationAction(
     revalidates: reservationPath,
   },
   Effect.fn(function* (input: ReservationRestorationInput) {
+    const { actor, source } = yield* currentAdministrationProvenance;
     const administration = yield* ReservationAdministrationService;
-    return yield* administration.restore(input);
+    return yield* administration.restore({
+      ...input,
+      actor: { source, administrator: actor },
+    });
   })
 );
 

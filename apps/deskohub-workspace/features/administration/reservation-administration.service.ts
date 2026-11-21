@@ -1,8 +1,12 @@
 import { DotyposService } from "@deskohub/dotypos";
+import type { AdministrationReservationAuditPage } from "@deskohub/workspace-admin-api";
 import { Context, Effect, Layer, Option, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { isDatabaseQueryError } from "@/db/sql-constraint";
+import {
+  type DatabaseQueryError,
+  isDatabaseQueryError,
+} from "@/db/sql-constraint";
 import { CustomerEmailLocaleService } from "@/features/account";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
@@ -25,6 +29,10 @@ import { PaymentRefundService } from "@/features/checkout/backend/payment/paymen
 import { administrationForcedPaymentCancellationFailureCode } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
+import {
+  type ReservationAuditAttempt,
+  startReservationAudit,
+} from "@/features/reservation/backend/reservation-audit";
 import { SeatingMapReleaseGate } from "@/features/reservation/backend/seating-map-release-gate";
 import {
   type WorkspaceReservation,
@@ -48,6 +56,7 @@ import {
   ReservationAdministrationError,
   type ReservationCancellationFailureReason,
 } from "./reservation-administration-error";
+import { readReservationAudit } from "./reservation-audit-read";
 import {
   type ReservationRestorationInput,
   type ReservationRestorationResult,
@@ -116,6 +125,12 @@ export type ReservationCancellationInput = {
 };
 
 interface IReservationAdministrationService {
+  readonly readAudit: (
+    input: Parameters<typeof readReservationAudit>[0]
+  ) => Effect.Effect<
+    AdministrationReservationAuditPage | null,
+    DatabaseQueryError
+  >;
   readonly cancel: (
     input: ReservationCancellationInput
   ) => Effect.Effect<
@@ -149,7 +164,8 @@ export class ReservationAdministrationService extends Context.Service<
 
       const claimCancellation = Effect.fnUntraced(function* (
         current: WorkspaceReservation,
-        forcedPendingPayment: boolean
+        forcedPendingPayment: boolean,
+        audit: ReservationAuditAttempt
       ) {
         const pendingPaymentCancellation = getPendingPaymentCancellation(
           current,
@@ -157,6 +173,7 @@ export class ReservationAdministrationService extends Context.Service<
         );
         const claimed = yield* reservations
           .claimAdministrationCancellation({
+            audit,
             id: current.id,
             ...(pendingPaymentCancellation && {
               pendingPaymentCancellation,
@@ -194,7 +211,8 @@ export class ReservationAdministrationService extends Context.Service<
         current: WorkspaceReservation,
         details: WorkspaceReservationDetails,
         claimed: WorkspaceReservation,
-        administrationForceCancellation: boolean
+        administrationForceCancellation: boolean,
+        audit: ReservationAuditAttempt
       ) {
         yield* dotypos.cancelReservation(details.dotyposReservationId).pipe(
           Effect.catch(
@@ -209,6 +227,8 @@ export class ReservationAdministrationService extends Context.Service<
 
               yield* reservations
                 .markAdministrationCancellationFailed({
+                  audit,
+                  reason: "provider_cancellation_failed",
                   id: claimed.id,
                   claimedAt: claimed.updatedAt,
                   failureCode: getCancellationFailureCode(
@@ -239,12 +259,14 @@ export class ReservationAdministrationService extends Context.Service<
       const recordCancellation = Effect.fnUntraced(function* (
         claimed: WorkspaceReservation,
         administrationForceCancellation: boolean,
-        actor: AdministrationActor
+        actor: AdministrationActor,
+        audit: ReservationAuditAttempt
       ) {
         const cancelledAt = Temporal.Now.instant();
         const invoiceRecording = yield* transaction(
           Effect.gen(function* () {
             yield* reservations.markAdministrationCancelled({
+              audit,
               id: claimed.id,
               cancelledAt,
               claimedAt: claimed.updatedAt,
@@ -262,6 +284,8 @@ export class ReservationAdministrationService extends Context.Service<
           Effect.tapError(() =>
             reservations
               .markAdministrationCancellationFailed({
+                audit,
+                reason: "local_cancellation_failed",
                 id: claimed.id,
                 claimedAt: claimed.updatedAt,
                 failureCode: getCancellationFailureCode(
@@ -334,13 +358,15 @@ export class ReservationAdministrationService extends Context.Service<
       const claimWithInvoiceConsequences = Effect.fnUntraced(function* (
         input: ReservationCancellationInput,
         current: WorkspaceReservation,
-        forcedPendingPayment: boolean
+        forcedPendingPayment: boolean,
+        audit: ReservationAuditAttempt
       ) {
         return yield* transaction(
           Effect.gen(function* () {
             const claimed = yield* claimCancellation(
               current,
-              forcedPendingPayment
+              forcedPendingPayment,
+              audit
             );
             yield* checkInvoiceConsequences(input);
             return claimed;
@@ -539,6 +565,7 @@ export class ReservationAdministrationService extends Context.Service<
       });
 
       return {
+        readAudit: (input) => transaction(readReservationAudit(input)),
         cancel: Effect.fn("ReservationAdministrationService.cancel")(
           function* (input) {
             const current = yield* reservations
@@ -599,10 +626,12 @@ export class ReservationAdministrationService extends Context.Service<
               forcedPendingPayment
             );
             if (refusal) return yield* refusal;
+            const audit = yield* startReservationAudit(input.actor);
             const claimed = yield* claimWithInvoiceConsequences(
               input,
               current,
-              forcedPendingPayment
+              forcedPendingPayment,
+              audit
             );
 
             if (details.providerStatus !== "CANCELLED") {
@@ -610,14 +639,16 @@ export class ReservationAdministrationService extends Context.Service<
                 current,
                 details,
                 claimed,
-                administrationForceCancellation
+                administrationForceCancellation,
+                audit
               );
             }
 
             const { cancelledAt, invoiceRecording } = yield* recordCancellation(
               claimed,
               administrationForceCancellation,
-              input.actor
+              input.actor,
+              audit
             );
 
             const email = yield* sendLoadedCancellationEmail({
@@ -677,7 +708,7 @@ export class ReservationAdministrationService extends Context.Service<
   ) =>
     servicePerOperation(
       this,
-      { cancel: true, restore: true },
+      { cancel: true, restore: true, readAudit: true },
       this.Default.pipe(
         Layer.provide(ReservationRestorationService.Default),
         Layer.provide(WorkspaceReservationService.Default),

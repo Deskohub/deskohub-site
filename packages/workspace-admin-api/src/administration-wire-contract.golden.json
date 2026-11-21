@@ -1997,6 +1997,280 @@
           }
         }
       },
+      "getReservationAudit": {
+        "method": "GET",
+        "path": "/api/v1/cli/reservations/:reservationId/audit",
+        "parseOptions": {
+          "headers": null,
+          "params": null,
+          "query": null,
+          "payload": {}
+        },
+        "decodedParameters": {
+          "headers": null,
+          "params": {
+            "dialect": "draft-2020-12",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "reservationId": {
+                  "$ref": "#/$defs/WorkspaceReservationId"
+                }
+              },
+              "required": [
+                "reservationId"
+              ],
+              "additionalProperties": true
+            },
+            "definitions": {
+              "WorkspaceReservationId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Opaque identifier for a persisted Workspace reservation."
+              }
+            }
+          },
+          "query": {
+            "dialect": "draft-2020-12",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "before": {
+                  "type": "string",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              },
+              "additionalProperties": true
+            },
+            "definitions": {}
+          }
+        },
+        "middleware": [
+          "@deskohub/workspace-admin-api/AdministrationActionRecord",
+          "@deskohub/workspace-admin-api/AdministrationAuthentication"
+        ],
+        "annotations": {
+          "@deskohub/workspace-admin-api/AdministrationOperationBehavior": {
+            "kind": "read",
+            "idempotent": true
+          }
+        },
+        "effectiveAnnotations": {
+          "minimumDhwVersion": {
+            "_tag": "None"
+          },
+          "outdatedDhwRefusal": "CliInputInvalid"
+        },
+        "operation": {
+          "tags": [
+            "administration"
+          ],
+          "operationId": "administration.getReservationAudit",
+          "parameters": [
+            {
+              "name": "reservationId",
+              "in": "path",
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceReservationId"
+              },
+              "required": true
+            },
+            {
+              "name": "before",
+              "in": "query",
+              "schema": {
+                "type": "string",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              },
+              "required": false
+            }
+          ],
+          "security": [
+            {
+              "bearer": []
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Success",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "reservationId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "events": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                              "format": "uuid"
+                            },
+                            "actorAccountId": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": [
+                                "admin-ui",
+                                "dhw-cli",
+                                "assistant"
+                              ]
+                            },
+                            "beforeState": {
+                              "type": "string",
+                              "enum": [
+                                "held",
+                                "hold_expired",
+                                "confirmed",
+                                "cancelling",
+                                "cancellation_failed",
+                                "cancelled"
+                              ]
+                            },
+                            "afterState": {
+                              "type": "string",
+                              "enum": [
+                                "held",
+                                "hold_expired",
+                                "confirmed",
+                                "cancelling",
+                                "cancellation_failed",
+                                "cancelled"
+                              ]
+                            },
+                            "reason": {
+                              "type": "string",
+                              "enum": [
+                                "operator_cancellation",
+                                "forced_pending_payment_cancellation",
+                                "cancellation_reclaimed",
+                                "provider_cancellation_failed",
+                                "local_cancellation_failed",
+                                "cancellation_completed",
+                                "operator_restoration"
+                              ]
+                            },
+                            "occurredAt": {
+                              "type": "string"
+                            },
+                            "correlationId": {
+                              "type": "string",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                              "format": "uuid"
+                            },
+                            "administrationActionId": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                                  "format": "uuid"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "causedByEventId": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                                  "format": "uuid"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "schemaVersion": {
+                              "type": "number",
+                              "enum": [
+                                1
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "actorAccountId",
+                            "source",
+                            "beforeState",
+                            "afterState",
+                            "reason",
+                            "occurredAt",
+                            "correlationId",
+                            "administrationActionId",
+                            "causedByEventId",
+                            "schemaVersion"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "nextBefore": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                            "format": "uuid"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "reservationId",
+                      "events",
+                      "nextBefore"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "CliSessionUnauthorized",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CliSessionUnauthorizedEncoded"
+                  }
+                }
+              }
+            },
+            "404": {
+              "description": "CliResourceNotFound",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CliResourceNotFoundEncoded"
+                  }
+                }
+              }
+            },
+            "503": {
+              "description": "CliServiceUnavailable",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CliServiceUnavailableEncoded"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "getReservation": {
         "method": "GET",
         "path": "/api/v1/cli/reservations/:reservationId",

@@ -147,6 +147,10 @@ export {
 } from "./referrals";
 export { requestBudgetSpends } from "./request-budget-spends";
 export { reservationAccessGrants } from "./reservation-access-grants";
+export {
+  reservationAuditAccesses,
+  reservationAuditEvents,
+} from "./reservation-audit";
 export { reservationInviteeNotices } from "./reservation-invitee-notices";
 export { reservationInvitees } from "./reservation-invitees";
 export {

@@ -851,7 +851,9 @@ describe("administration tools through the assistant API", () => {
         },
       },
     });
-    expect(restorations).toEqual([input]);
+    expect(restorations).toEqual([
+      { ...input, actor: { source: "assistant", administrator } },
+    ]);
     expect(callers.map(({ channel }) => channel)).toEqual([assistantChannel]);
   });
 

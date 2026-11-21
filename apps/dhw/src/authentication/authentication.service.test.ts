@@ -29,6 +29,7 @@ describe("AuthenticationService", () => {
       getReservationActivity: () => Effect.die("not used"),
       listReservations: () => Effect.die("not used"),
       getReservation: () => Effect.die("not used"),
+      getReservationAudit: () => Effect.die("not used"),
       backfillReservationProductDetails: () => Effect.die("not used"),
       listAdministrators: () => Effect.die("not used"),
       grantAdministrator: () => Effect.die("not used"),

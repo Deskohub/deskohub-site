@@ -81,6 +81,10 @@ import { ambiguousPassDayHoldCode } from "@/features/passes/pass-day-marker";
 import type { PassTier } from "@/features/passes/pass-offer";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import type { AgentSelectionKey } from "@/features/reservation/backend/booking-agent";
+import {
+  appendReservationAuditEvent,
+  type ReservationAuditAttempt,
+} from "@/features/reservation/backend/reservation-audit";
 import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
 import {
   reservationOrderId,
@@ -491,7 +495,7 @@ export interface IWorkspaceReservationRepository {
         IWorkspaceReservationRepository["claimRequestedCancellation"]
       >[0],
       "cause"
-    >
+    > & { readonly audit: ReservationAuditAttempt }
   ) => ReturnType<
     IWorkspaceReservationRepository["claimRequestedCancellation"]
   >;
@@ -533,7 +537,7 @@ export interface IWorkspaceReservationRepository {
         IWorkspaceReservationRepository["completeRequestedCancellation"]
       >[0],
       "refund"
-    >
+    > & { readonly audit: ReservationAuditAttempt }
   ) => ReturnType<
     IWorkspaceReservationRepository["completeRequestedCancellation"]
   >;
@@ -563,6 +567,7 @@ export interface IWorkspaceReservationRepository {
    * aborts the caller's transaction, which must roll back.
    */
   readonly markAdministrationRestored: (input: {
+    readonly audit: ReservationAuditAttempt;
     readonly id: WorkspaceReservationId;
     readonly cancelledAt: Temporal.Instant;
     readonly restoredAt: Temporal.Instant;
@@ -618,9 +623,15 @@ export interface IWorkspaceReservationRepository {
   readonly markAdministrationCancellationFailed: (
     input: Parameters<
       IWorkspaceReservationRepository["markRequestedCancellationFailed"]
-    >[0]
-  ) => ReturnType<
-    IWorkspaceReservationRepository["markRequestedCancellationFailed"]
+    >[0] & {
+      readonly audit: ReservationAuditAttempt;
+      readonly reason:
+        | "provider_cancellation_failed"
+        | "local_cancellation_failed";
+    }
+  ) => Effect.Effect<
+    void,
+    EffectDrizzleQueryError | SqlError.SqlError | WorkspaceReservationStateError
   >;
   readonly markRequestedCancellationFailed: (input: {
     readonly id: WorkspaceReservationId;
@@ -1158,7 +1169,7 @@ export class WorkspaceReservationRepository extends Context.Service<
       )(function* (
         input: Parameters<
           IWorkspaceReservationRepository["claimRequestedCancellation"]
-        >[0]
+        >[0] & { readonly audit?: ReservationAuditAttempt }
       ) {
         const claim = transaction(
           Effect.gen(function* () {
@@ -1167,14 +1178,18 @@ export class WorkspaceReservationRepository extends Context.Service<
               yield* lockReferralClaimRelease(input.id);
             }
             const [grant] = yield* lockAccessGrantOfReservation(input.id);
+            let beforeState:
+              | WorkspaceReservation["reservationState"]
+              | undefined;
             if (input.cause === "operator") {
               // Lock before checking the ledger so a withdrawal committing
               // during the lock wait is visible to the next statement.
-              yield* db
-                .select({ id: workspaceReservations.id })
+              const [before] = yield* db
+                .select({ state: workspaceReservations.reservationState })
                 .from(workspaceReservations)
                 .where(eq(workspaceReservations.id, input.id))
                 .for("update");
+              beforeState = before?.state;
               const [withdrawal] = yield* db
                 .select({ id: contractWithdrawals.id })
                 .from(contractWithdrawals)
@@ -1203,6 +1218,34 @@ export class WorkspaceReservationRepository extends Context.Service<
 
             if (grant && isLiveAccessGrantState(grant.state)) {
               yield* expireAccessGrant(grant.id, now);
+            }
+            if (input.audit) {
+              switch (beforeState) {
+                case "held":
+                case "hold_expired":
+                case "confirmed":
+                case "cancelling":
+                case "cancellation_failed": {
+                  const initialReason = input.pendingPaymentCancellation
+                    ? "forced_pending_payment_cancellation"
+                    : "operator_cancellation";
+                  yield* appendReservationAuditEvent(input.audit, {
+                    reservationId: claimed.id,
+                    beforeState,
+                    afterState: "cancelling",
+                    reason:
+                      beforeState === "cancelling" ||
+                      beforeState === "cancellation_failed"
+                        ? "cancellation_reclaimed"
+                        : initialReason,
+                  });
+                  break;
+                }
+                default:
+                  return yield* Effect.die(
+                    "Cancellation claimed a reservation outside its allowed states."
+                  );
+              }
             }
             return yield* decodeWorkspaceReservation(claimed);
           })
@@ -1889,7 +1932,18 @@ export class WorkspaceReservationRepository extends Context.Service<
         ),
         completeRequestedCancellation,
         markAdministrationCancelled: (input) =>
-          completeRequestedCancellation(input),
+          transaction(
+            completeRequestedCancellation(input).pipe(
+              Effect.andThen(
+                appendReservationAuditEvent(input.audit, {
+                  reservationId: input.id,
+                  beforeState: "cancelling",
+                  afterState: "cancelled",
+                  reason: "cancellation_completed",
+                })
+              )
+            )
+          ),
         completeSupersessionAndCreateDraft: Effect.fn(
           "workspaceReservations.completeSupersessionAndCreateDraft"
         )(function* (input) {
@@ -2049,6 +2103,12 @@ export class WorkspaceReservationRepository extends Context.Service<
                 )
               );
             if (!restored) return null;
+            yield* appendReservationAuditEvent(input.audit, {
+              reservationId: restored.id,
+              beforeState: "cancelled",
+              afterState: "confirmed",
+              reason: "operator_restoration",
+            });
             if (restored.officeContactAttends !== null) {
               yield* recordReservationInviteeNotices({
                 reservationId: input.id,
@@ -2161,7 +2221,18 @@ export class WorkspaceReservationRepository extends Context.Service<
         ),
         markRequestedCancellationFailed,
         markAdministrationCancellationFailed: (input) =>
-          markRequestedCancellationFailed(input),
+          transaction(
+            markRequestedCancellationFailed(input).pipe(
+              Effect.andThen(() =>
+                appendReservationAuditEvent(input.audit, {
+                  reservationId: input.id,
+                  beforeState: "cancelling",
+                  afterState: "cancellation_failed",
+                  reason: input.reason,
+                })
+              )
+            )
+          ),
         recordHoldCleanupSkipped: Effect.fn(
           "workspaceReservations.recordHoldCleanupSkipped"
         )(function* (input) {

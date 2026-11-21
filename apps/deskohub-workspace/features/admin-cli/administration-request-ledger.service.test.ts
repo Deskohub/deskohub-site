@@ -367,6 +367,7 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
       const inAction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
           Effect.provideService(CurrentAdministrationAction, {
+            id: crypto.randomUUID(),
             markReplayed: Ref.update(replays, (count) => count + 1),
           })
         );
@@ -608,6 +609,7 @@ describe.skipIf(!testDatabase)("administration request ledger", () => {
             })
           ),
           Effect.provideService(CurrentAdministrationAction, {
+            id: crypto.randomUUID(),
             markReplayed: Ref.update(replays, (count) => count + 1),
           })
         )

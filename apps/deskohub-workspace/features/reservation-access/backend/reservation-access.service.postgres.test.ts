@@ -13,6 +13,7 @@ import { Deferred, Effect, Fiber, Layer, Option, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { reservationAccessGrants } from "@/db/schema";
+import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
@@ -502,9 +503,8 @@ describe.skipIf(!testDatabase)(
             WorkspaceReservationRepository,
             (reservations) =>
               reservations.claimAdministrationCancellation({
+                audit: makeTestReservationAuditAttempt(),
                 id: reservationId,
-                providerCredentialRemoved: false,
-                accessGrantUpdatedAt: null,
                 staleCancellingBefore: restoredAt,
               })
           ).pipe(

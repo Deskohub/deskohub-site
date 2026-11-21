@@ -3,6 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, describe, expect, test } from "bun:test";
 import { Effect, Option } from "effect";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
@@ -98,6 +99,7 @@ describe.skipIf(!testDatabase)(
         Effect.gen(function* () {
           const repository = yield* WorkspaceReservationRepository;
           return yield* repository.claimAdministrationCancellation({
+            audit: makeTestReservationAuditAttempt(),
             id,
             staleCancellingBefore: Temporal.Now.instant(),
           });

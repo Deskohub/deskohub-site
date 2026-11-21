@@ -47,6 +47,7 @@ import {
 } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { makeTestReservationAuditAttempt } from "./reservation-audit.test-utils";
 import {
   WorkspaceReservationRepository,
   WorkspaceReservationSessionTakenError,
@@ -1057,6 +1058,7 @@ describe.skipIf(!testDatabase)(
           Effect.flatMap(WorkspaceDatabase, ({ transaction }) =>
             transaction(
               repository.markAdministrationRestored({
+                audit: makeTestReservationAuditAttempt(),
                 id,
                 cancelledAt: input.cancelledAt ?? cancelledAt,
                 restoredAt,
@@ -1075,7 +1077,7 @@ describe.skipIf(!testDatabase)(
           { updatedAt: claimedAt, ...overrides }
         );
         await run((repository) =>
-          repository.markAdministrationCancelled({
+          repository.completeRequestedCancellation({
             id,
             cancelledAt,
             claimedAt,
@@ -1209,6 +1211,7 @@ describe.skipIf(!testDatabase)(
           Effect.flatMap(WorkspaceDatabase, ({ transaction }) =>
             transaction(
               repository.markAdministrationRestored({
+                audit: makeTestReservationAuditAttempt(),
                 id,
                 cancelledAt,
                 restoredAt,
@@ -1227,7 +1230,12 @@ describe.skipIf(!testDatabase)(
 
       test("lets only one of two concurrent restores finalize", async () => {
         const id = await insertRestorable();
-        const input = { id, cancelledAt, restoredAt };
+        const input = {
+          id,
+          cancelledAt,
+          restoredAt,
+          audit: makeTestReservationAuditAttempt(),
+        };
 
         const [first, second] = await run((repository) =>
           Effect.gen(function* () {
@@ -1263,6 +1271,114 @@ describe.skipIf(!testDatabase)(
         expect(first?.reservation.id).toBe(id);
         expect(second).toBeNull();
         expect((await readReservation(id))?.reservationState).toBe("confirmed");
+        expect(
+          (
+            await testDatabase.pool.query(
+              "select before_state, after_state, reason, source from reservation_audit_events where reservation_id = $1",
+              [id]
+            )
+          ).rows
+        ).toEqual([
+          {
+            before_state: "cancelled",
+            after_state: "confirmed",
+            reason: "operator_restoration",
+            source: "admin-ui",
+          },
+        ]);
+      });
+
+      test("rolls back the restore when its audit event cannot append", async () => {
+        const id = await insertRestorable();
+        await testDatabase.pool.query(
+          "alter table reservation_audit_events add constraint reject_test_restore check (reason <> 'operator_restoration') not valid"
+        );
+        try {
+          await expect(restore(id)).rejects.toThrow();
+          expect((await readReservation(id))?.reservationState).toBe(
+            "cancelled"
+          );
+          expect(
+            (
+              await testDatabase.pool.query(
+                "select id from reservation_audit_events where reservation_id = $1",
+                [id]
+              )
+            ).rows
+          ).toEqual([]);
+        } finally {
+          await testDatabase.pool.query(
+            "alter table reservation_audit_events drop constraint reject_test_restore"
+          );
+        }
+      });
+
+      test("orders the restore after a cancellation that committed before its reservation read", async () => {
+        const id = await insertReservation(
+          {
+            reservation: "confirmed",
+            payment: "paid",
+            fulfillment: "fulfilled",
+          },
+          { reservationConfirmedAt: at(1) }
+        );
+        const restored = await run((repository) =>
+          Effect.gen(function* () {
+            const { transaction } = yield* WorkspaceDatabase;
+            const restoreStarted = yield* Deferred.make<void>();
+            const readCancellation = yield* Deferred.make<void>();
+            const restoring = yield* Effect.forkChild(
+              Effect.gen(function* () {
+                const restoredAt = Temporal.Now.instant();
+                yield* Deferred.succeed(restoreStarted, undefined);
+                yield* Deferred.await(readCancellation);
+                const reservation = yield* repository.findById(id);
+                if (!reservation?.reservationCancelledAt) {
+                  return yield* Effect.die(
+                    "Expected the committed cancellation."
+                  );
+                }
+                return yield* transaction(
+                  repository.markAdministrationRestored({
+                    audit: makeTestReservationAuditAttempt(),
+                    id,
+                    cancelledAt: reservation.reservationCancelledAt,
+                    restoredAt,
+                  })
+                );
+              })
+            );
+            yield* Deferred.await(restoreStarted);
+            const audit = makeTestReservationAuditAttempt();
+            const claimed = yield* repository.claimAdministrationCancellation({
+              audit,
+              id,
+              staleCancellingBefore: Temporal.Now.instant(),
+            });
+            if (!claimed)
+              return yield* Effect.die("Expected a cancellation claim.");
+            yield* repository.markAdministrationCancelled({
+              audit,
+              id,
+              cancelledAt: Temporal.Now.instant(),
+              claimedAt: claimed.updatedAt,
+              failureCode: null,
+            });
+            yield* Deferred.succeed(readCancellation, undefined);
+            return yield* Fiber.join(restoring);
+          })
+        );
+
+        expect(restored?.reservation.reservationState).toBe("confirmed");
+        const { rows } = await testDatabase.pool.query<{ reason: string }>(
+          "select reason from reservation_audit_events where reservation_id = $1 order by occurred_at desc, id desc",
+          [id]
+        );
+        expect(rows.map(({ reason }) => reason)).toEqual([
+          "operator_restoration",
+          "cancellation_completed",
+          "operator_cancellation",
+        ]);
       });
 
       describe("cancellation email record", () => {
@@ -1371,6 +1487,7 @@ describe.skipIf(!testDatabase)(
                   })
                 ).toBe("issue");
                 const restored = yield* repository.markAdministrationRestored({
+                  audit: makeTestReservationAuditAttempt(),
                   id,
                   cancelledAt,
                   restoredAt,
@@ -1397,11 +1514,11 @@ describe.skipIf(!testDatabase)(
         );
         expect(retraction).toBe("retracted");
 
+        const audit = makeTestReservationAuditAttempt();
         const claimed = await run((repository) =>
           repository.claimAdministrationCancellation({
+            audit,
             id,
-            providerCredentialRemoved: false,
-            accessGrantUpdatedAt: null,
             staleCancellingBefore: at(10),
           })
         );
@@ -1409,6 +1526,7 @@ describe.skipIf(!testDatabase)(
         const cancelledAgainAt = at(40);
         await run((repository) =>
           repository.markAdministrationCancelled({
+            audit,
             id,
             cancelledAt: cancelledAgainAt,
             claimedAt: claimed!.updatedAt,
@@ -1585,7 +1703,7 @@ describe.skipIf(!testDatabase)(
           claimedAt: Temporal.Instant
         ) =>
           run((repository) =>
-            repository.markAdministrationCancelled({
+            repository.completeRequestedCancellation({
               id,
               cancelledAt,
               claimedAt,

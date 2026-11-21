@@ -201,6 +201,25 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
       .handle("listReservations", ({ query }) =>
         administration.listReservations(query).pipe(mapServiceFailure)
       )
+      .handle(
+        "getReservationAudit",
+        Effect.fn(function* ({ params, query }) {
+          const { actor, source } = yield* currentAdministrationProvenance;
+          const page = yield* reservationAdministration
+            .readAudit({
+              ...query,
+              reservationId: params.reservationId,
+              actor: { source, administrator: actor },
+            })
+            .pipe(mapServiceFailure);
+          if (!page) {
+            return yield* new CliResourceNotFound({
+              message: "The reservation or its audit cursor was not found.",
+            });
+          }
+          return page;
+        })
+      )
       .handle("getReservation", ({ params }) =>
         administration.loadReservation(params.reservationId).pipe(
           mapServiceFailure,
@@ -248,25 +267,30 @@ export const AdminCliAdministrationApiHandlers = HttpApiBuilder.group(
             );
         })
       )
-      .handle("restoreReservation", ({ params, payload }) =>
-        reservationAdministration
-          .restore({
-            acknowledgeRefundedPayment: payload.acknowledgeRefundedPayment,
-            reservationId: params.reservationId,
-            sendRestorationEmail: payload.sendRestorationEmail,
-          })
-          .pipe(
-            Effect.map(({ invoice, ...result }) => ({
-              ...result,
-              invoice: invoice && {
-                ...invoice,
-                invoiceId:
-                  invoice.invoiceId &&
-                  AdministrationInvoiceId.make(invoice.invoiceId),
-              },
-            })),
-            mapAdministrationApiFailure(mapReservationRestorationFailure)
-          )
+      .handle(
+        "restoreReservation",
+        Effect.fn(function* ({ params, payload }) {
+          const { actor, source } = yield* currentAdministrationProvenance;
+          return yield* reservationAdministration
+            .restore({
+              actor: { source, administrator: actor },
+              acknowledgeRefundedPayment: payload.acknowledgeRefundedPayment,
+              reservationId: params.reservationId,
+              sendRestorationEmail: payload.sendRestorationEmail,
+            })
+            .pipe(
+              Effect.map(({ invoice, ...result }) => ({
+                ...result,
+                invoice: invoice && {
+                  ...invoice,
+                  invoiceId:
+                    invoice.invoiceId &&
+                    AdministrationInvoiceId.make(invoice.invoiceId),
+                },
+              })),
+              mapAdministrationApiFailure(mapReservationRestorationFailure)
+            );
+        })
       )
       .handle("retryReservationWithdrawal", ({ params }) =>
         retryReservationWithdrawal(params.reservationId).pipe(

@@ -31,6 +31,7 @@ import {
   type ValidOfficePeople,
 } from "@/features/office/office-people";
 import { ReservationAccessService } from "@/features/reservation/backend/reservation-access.service";
+import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { ReservationAuthorizationService } from "@/features/reservation/backend/reservation-authorization.service";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -375,12 +376,15 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
     await run(
       Effect.gen(function* () {
         const reservations = yield* WorkspaceReservationRepository;
+        const audit = makeTestReservationAuditAttempt();
         const claimed = yield* reservations.claimAdministrationCancellation({
+          audit,
           id,
           staleCancellingBefore: cancelledAt.subtract({ hours: 1 }),
         });
         if (!claimed) throw new Error("expected a cancellation claim");
         yield* reservations.markAdministrationCancelled({
+          audit,
           id,
           cancelledAt,
           claimedAt: claimed.updatedAt,
@@ -389,6 +393,7 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
         const { transaction } = yield* WorkspaceDatabase;
         const restored = yield* transaction(
           reservations.markAdministrationRestored({
+            audit: makeTestReservationAuditAttempt(),
             id,
             cancelledAt,
             restoredAt,
@@ -866,8 +871,10 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
       "Synthetic process loss before dispatch"
     );
     delivery.loseProcessBeforeDispatch = false;
+    const audit = makeTestReservationAuditAttempt();
     const claim = await repository((orders) =>
       orders.claimAdministrationCancellation({
+        audit,
         id,
         staleCancellingBefore: tick(-60),
       })
@@ -879,6 +886,7 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
     expect(sent).toEqual([]);
     await repository((orders) =>
       orders.markAdministrationCancelled({
+        audit,
         id,
         cancelledAt: tick(2),
         claimedAt: claim.updatedAt,
@@ -965,12 +973,15 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
     const cancel = (cancelledAt: Temporal.Instant) =>
       repository((reservations) =>
         Effect.gen(function* () {
+          const audit = makeTestReservationAuditAttempt();
           const claimed = yield* reservations.claimAdministrationCancellation({
+            audit,
             id,
             staleCancellingBefore: cancelledAt.subtract({ hours: 2 }),
           });
           if (!claimed) throw new Error("expected a cancellation claim");
           yield* reservations.markAdministrationCancelled({
+            audit,
             id,
             cancelledAt,
             claimedAt: claimed.updatedAt,
@@ -988,6 +999,7 @@ describe.skipIf(!testDatabase)("ReservationInvitees on Postgres", () => {
           const { transaction } = yield* WorkspaceDatabase;
           const restored = yield* transaction(
             reservations.markAdministrationRestored({
+              audit: makeTestReservationAuditAttempt(),
               id,
               cancelledAt,
               restoredAt,
