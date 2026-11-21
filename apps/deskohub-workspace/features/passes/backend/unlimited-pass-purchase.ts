@@ -23,7 +23,11 @@ import type { CanonicalPromotionCode } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { type Locale, m } from "@/features/i18n";
 import { getPaymentSubmitLegalDocuments } from "@/features/legal/payment-submit-evidence";
-import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
+import {
+  isEndedUnpaidPaymentState,
+  type OrderId,
+  orderIdSchema,
+} from "@/features/order";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import {
@@ -138,6 +142,7 @@ export const beginUnlimitedPassPurchase = Effect.fn(
   readonly buyerProfile?: CustomerProfileSave;
   readonly referralCode?: CanonicalPromotionCode;
   readonly supersedeOrderId?: OrderId;
+  readonly supersedeOrderIds?: readonly OrderId[];
 }) {
   yield* requirePassPurchasesEnabled();
   const current = yield* CurrentCustomerAccount;
@@ -150,8 +155,13 @@ export const beginUnlimitedPassPurchase = Effect.fn(
       ? holderEmail
       : undefined;
 
-  if (input.supersedeOrderId && input.supersedeOrderId !== input.orderId) {
-    const priorOrderId = input.supersedeOrderId;
+  const priorOrderIds = new Set(
+    [input.supersedeOrderId, ...(input.supersedeOrderIds ?? [])]
+      .filter((id) => id !== undefined)
+      .map((id) => orderIdSchema.make(id.toLowerCase()))
+  );
+  priorOrderIds.delete(orderIdSchema.make(input.orderId.toLowerCase()));
+  for (const priorOrderId of priorOrderIds) {
     yield* accounts.withActiveAccount(
       session.accountId,
       Effect.gen(function* () {
@@ -160,11 +170,16 @@ export const beginUnlimitedPassPurchase = Effect.fn(
           session.accountId,
           "unlimited"
         );
+        if (!prior || prior.order.activePaymentAttemptId) return;
         if (
-          prior?.order.paymentState !== "not_started" ||
-          prior.order.activePaymentAttemptId
-        )
+          prior.purchase.status === "void" &&
+          (prior.order.paymentState === "not_started" ||
+            prior.order.paymentState === "expired")
+        ) {
+          yield* releaseUnlimitedPassDays(prior.purchase);
           return;
+        }
+        if (prior.order.paymentState !== "not_started") return;
         const [voided] = yield* db
           .update(passPurchases)
           .set({ status: "void" })
@@ -414,7 +429,7 @@ export const getUnlimitedPassPaymentDisclosure = (
 export const loadUnlimitedCheckoutContinuation = Effect.fn(
   "loadUnlimitedCheckoutContinuation"
 )(
-  function* (orderId: OrderId, retry: boolean) {
+  function* (orderId: OrderId, mode: "draft" | "submitted" | "payment-retry") {
     const draft = yield* readUnlimitedPassBuyerDraft(orderId).pipe(
       Effect.catchTag("CustomerAccountAccessError", () => Effect.undefined)
     );
@@ -427,8 +442,23 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
       purchase.holdsExpireAt &&
       Temporal.Instant.compare(now, purchase.holdsExpireAt) < 0;
     const base = { locale: purchase.locale, selection, holderEmail };
+    if (mode === "submitted" && order.activePaymentAttemptId === null) {
+      if (
+        purchase.status === "pending_payment" &&
+        order.paymentState === "not_started"
+      )
+        return base;
+      if (
+        purchase.status === "void" &&
+        (order.paymentState === "not_started" ||
+          order.paymentState === "expired")
+      )
+        return base;
+    }
     if (!payable) return undefined;
-    if (!retry) return order.paymentState === "not_started" ? base : undefined;
+    if (mode !== "payment-retry") {
+      return order.paymentState === "not_started" ? base : undefined;
+    }
     if (
       !priorPaymentAttemptId ||
       !isEndedUnpaidPaymentState(order.paymentState) ||

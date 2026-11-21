@@ -77,7 +77,30 @@ export function readUnlimitedPassSelection(query: {
 
 export type UnlimitedPassOrderLink =
   | { readonly kind: "resume"; readonly orderId: OrderId }
-  | { readonly kind: "replace"; readonly orderId: OrderId };
+  | { readonly kind: "replace"; readonly orderId: OrderId }
+  | { readonly kind: "edit"; readonly predecessorOrderIds: readonly OrderId[] }
+  | {
+      readonly kind: "submitted";
+      readonly orderId: OrderId;
+      readonly predecessorOrderIds: readonly OrderId[];
+    };
+
+export const unlimitedCheckoutPredecessorLimit = 8;
+
+export function getUnlimitedCheckoutPredecessors(
+  order?: UnlimitedPassOrderLink
+) {
+  if (!order) return [];
+  switch (order.kind) {
+    case "edit":
+      return order.predecessorOrderIds;
+    case "submitted":
+      return [order.orderId, ...order.predecessorOrderIds];
+    case "replace":
+    case "resume":
+      return [order.orderId];
+  }
+}
 
 export function getUnlimitedPassChoosePath(
   locale: Locale,
@@ -90,11 +113,17 @@ export function getUnlimitedPassChoosePath(
     ...(startDate !== undefined && { startDate }),
     ...(order?.kind === "resume" && { order: order.orderId }),
     ...(order?.kind === "replace" && { supersedeOrder: order.orderId }),
+    ...(order?.kind === "submitted" && { submittedOrder: order.orderId }),
     ...(options.tier === "open-space" && options.coffee && { coffee: "true" }),
     ...(options.tier === "reserved-desk-workstation" && {
       monitorOption: options.monitorOption,
     }),
   });
+  if (order?.kind === "submitted" || order?.kind === "edit") {
+    for (const orderId of order.predecessorOrderIds) {
+      query.append("predecessorOrder", orderId);
+    }
+  }
   return `/${locale}${unlimitedPassCheckoutPath}?${query}`;
 }
 

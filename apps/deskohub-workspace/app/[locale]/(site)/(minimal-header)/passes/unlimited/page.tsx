@@ -28,6 +28,7 @@ import {
   getUnlimitedPassPayPath,
   readUnlimitedPassSelection,
   type UnlimitedPassOrderLink,
+  unlimitedCheckoutPredecessorLimit,
 } from "@/features/passes/unlimited-pass-checkout";
 import { createNoindexedPageMetadata } from "@/features/public-pages/page-metadata";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
@@ -44,7 +45,9 @@ export const maxDuration = 240;
 type Query = Parameters<typeof readUnlimitedPassSelection>[0] & {
   readonly step?: string | string[];
   readonly order?: string | string[];
+  readonly submittedOrder?: string | string[];
   readonly supersedeOrder?: string | string[];
+  readonly predecessorOrder?: string | string[];
 };
 
 const customerServices = Layer.mergeAll(
@@ -56,14 +59,15 @@ const customerServices = Layer.mergeAll(
 const workspaceDate = (instant: Temporal.Instant) =>
   plainDateStringSchema.make(getCurrentWorkspaceDate(instant).toString());
 
-const readContinuation = cache((orderId: OrderId, retry: boolean) =>
-  loadUnlimitedCheckoutContinuation(orderId, retry).pipe(
-    Effect.provide(customerServices),
-    runWorkspaceEffectOrElse("passes.unlimited-checkout-continuation", {
-      failureCode: "unlimited_checkout_unavailable",
-      orElse: () => undefined,
-    })
-  )
+const readContinuation = cache(
+  (orderId: OrderId, mode: "draft" | "submitted" | "payment-retry") =>
+    loadUnlimitedCheckoutContinuation(orderId, mode).pipe(
+      Effect.provide(customerServices),
+      runWorkspaceEffectOrElse("passes.unlimited-checkout-continuation", {
+        failureCode: "unlimited_checkout_unavailable",
+        orElse: () => undefined,
+      })
+    )
 );
 
 const readOwnedLocale = cache((orderId: OrderId) =>
@@ -83,6 +87,33 @@ async function leaveUnavailableOrder(orderId: OrderId): Promise<never> {
 }
 
 function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
+  if (
+    query.submittedOrder !== undefined ||
+    query.predecessorOrder !== undefined
+  ) {
+    const { submittedOrder, predecessorOrder } = query;
+    const ids = Array.isArray(predecessorOrder)
+      ? predecessorOrder
+      : [predecessorOrder].filter((id) => id !== undefined);
+    const isOrderId = Schema.is(orderIdSchema);
+    if (
+      query.order !== undefined ||
+      query.supersedeOrder !== undefined ||
+      (query.step !== undefined && query.step !== "details") ||
+      ids.length > unlimitedCheckoutPredecessorLimit ||
+      !ids.every(isOrderId)
+    )
+      notFound();
+    const predecessorOrderIds = [
+      ...new Set(ids.map((id) => orderIdSchema.make(id.toLowerCase()))),
+    ];
+    if (submittedOrder === undefined)
+      return { kind: "edit", predecessorOrderIds };
+    if (!isOrderId(submittedOrder)) notFound();
+    const orderId = orderIdSchema.make(submittedOrder.toLowerCase());
+    if (predecessorOrderIds.includes(orderId)) notFound();
+    return { kind: "submitted", orderId, predecessorOrderIds };
+  }
   if (query.order !== undefined && query.supersedeOrder !== undefined)
     notFound();
   if (query.supersedeOrder !== undefined && query.step === "pay") notFound();
@@ -95,7 +126,9 @@ function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
 async function requirePageOpen(searchParams: Promise<Query>) {
   if (await isCoworkPassesPageOpenAfterConnection()) return;
   const order = readOrderLink(await searchParams);
-  if (order) await leaveUnavailableOrder(order.orderId);
+  const orderId =
+    order?.kind === "edit" ? order.predecessorOrderIds[0] : order?.orderId;
+  if (orderId) await leaveUnavailableOrder(orderId);
   notFound();
 }
 
@@ -141,10 +174,12 @@ async function UnlimitedPassPageContent({
 }) {
   const query = await searchParams;
   const order = readOrderLink(query);
-  const orderId = order?.orderId;
+  const orderId = order?.kind === "edit" ? undefined : order?.orderId;
   const isRetry = order?.kind === "resume" && query.step === "pay";
+  const continuationMode = order?.kind === "submitted" ? "submitted" : "draft";
   const { options, startDate } = readUnlimitedPassSelection(query);
   const requestedSelection = startDate && { ...options, startDate };
+  if (order?.kind === "submitted" && !requestedSelection) notFound();
   const checkoutPath = (
     targetLocale: Locale,
     selection: typeof requestedSelection = requestedSelection
@@ -179,15 +214,23 @@ async function UnlimitedPassPageContent({
         }),
       })
     ),
-    orderId && readContinuation(orderId, isRetry),
+    orderId &&
+      readContinuation(orderId, isRetry ? "payment-retry" : continuationMode),
   ]);
-  if (orderId && checkout.buyer.kind === "signed-out") {
+  if (order && checkout.buyer.kind === "signed-out") {
     redirect(getAccountSignInPath(locale, checkoutPath(locale)));
   }
-  if (orderId && !continuation) await leaveUnavailableOrder(orderId);
+  if (orderId && !continuation) {
+    if (order?.kind !== "submitted") await leaveUnavailableOrder(orderId);
+    const ownedLocale = await readOwnedLocale(orderId);
+    if (ownedLocale)
+      redirect(`/${ownedLocale}${reservationStatusPath}/${orderId}`);
+  }
 
   const selection =
-    order?.kind === "resume" ? continuation?.selection : requestedSelection;
+    order?.kind === "resume" || (order?.kind === "submitted" && continuation)
+      ? continuation?.selection
+      : requestedSelection;
   const retryPayment =
     continuation && "retryPayment" in continuation
       ? continuation.retryPayment
@@ -219,11 +262,9 @@ async function UnlimitedPassPageContent({
           ),
         }}
         draft={
-          order &&
-          continuation && {
-            ...order,
-            holderEmail: continuation.holderEmail ?? undefined,
-          }
+          order && continuation
+            ? { ...order, holderEmail: continuation.holderEmail }
+            : order
         }
         retryPayment={
           orderId && isRetry && continuation && retryPayment

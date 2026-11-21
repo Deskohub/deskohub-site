@@ -65,6 +65,11 @@ import {
   unlimitedPassRequiresEarlyStart,
   unlimitedPassSelectionSchema,
 } from "./unlimited-pass";
+import { unlimitedCheckoutPredecessorLimit } from "./unlimited-pass-checkout";
+
+const unlimitedCheckoutPredecessorsSchema = Schema.Array(orderIdSchema).check(
+  Schema.isMaxLength(unlimitedCheckoutPredecessorLimit)
+);
 
 const purchaseLayer = Layer.mergeAll(
   WorkspaceDatabase.Default,
@@ -297,6 +302,9 @@ const beginUnlimitedAction = defineWorkspaceAction(
           selection: unlimitedPassSelectionSchema,
           recipientName: Schema.optionalKey(reservationCustomerNameSchema),
           supersedeOrderId: Schema.optionalKey(orderIdSchema),
+          supersedeOrderIds: Schema.optionalKey(
+            unlimitedCheckoutPredecessorsSchema
+          ),
         })
       ),
     deadline: Duration.seconds(180),
@@ -370,6 +378,11 @@ const unlimitedAvailabilityAction = defineWorkspaceAction(
         locale: Schema.Literals(locales),
         startsOn: Schema.optionalKey(plainDateStringSchema),
         supersedeOrderId: Schema.optionalKey(orderIdSchema),
+        supersedeOrderIds: Schema.optionalKey(
+          Schema.Array(orderIdSchema).check(
+            Schema.isMaxLength(unlimitedCheckoutPredecessorLimit + 1)
+          )
+        ),
       })
     ),
     deadline: Duration.seconds(18),
@@ -378,6 +391,7 @@ const unlimitedAvailabilityAction = defineWorkspaceAction(
   Effect.fnUntraced(function* (input: {
     readonly startsOn?: typeof plainDateStringSchema.Type;
     readonly supersedeOrderId?: OrderId;
+    readonly supersedeOrderIds?: readonly OrderId[];
   }) {
     const flags = yield* WorkspaceFeatureFlagService;
     if (!(yield* flags.isEnabled("cowork_passes")))
@@ -400,23 +414,28 @@ const unlimitedAvailabilityAction = defineWorkspaceAction(
         ? lastStartDate.add({ days: 1 })
         : rangeEnd;
     let supersedeOrderId: OrderId | undefined;
-    if (input.supersedeOrderId) {
+    const predecessorOrderIds = new Set(input.supersedeOrderIds);
+    if (input.supersedeOrderId) predecessorOrderIds.add(input.supersedeOrderId);
+    if (predecessorOrderIds.size > 0) {
       const actor = yield* CurrentCustomerAccount;
       const session = yield* actor.requireActive.pipe(
         Effect.catchTag("CustomerAccountAccessError", () => Effect.undefined)
       );
       if (session) {
-        const owned = yield* findOwnedPassPurchaseOrder(
-          input.supersedeOrderId,
-          session.accountId,
-          "unlimited"
-        );
-        if (
-          owned?.order.paymentState === "not_started" &&
-          !owned.order.activePaymentAttemptId &&
-          owned.purchase.status === "pending_payment"
-        ) {
-          supersedeOrderId = owned.order.id;
+        for (const predecessorOrderId of predecessorOrderIds) {
+          const owned = yield* findOwnedPassPurchaseOrder(
+            predecessorOrderId,
+            session.accountId,
+            "unlimited"
+          );
+          if (
+            owned?.order.paymentState === "not_started" &&
+            !owned.order.activePaymentAttemptId &&
+            owned.purchase.status === "pending_payment"
+          ) {
+            supersedeOrderId = owned.order.id;
+            break;
+          }
         }
       }
     }

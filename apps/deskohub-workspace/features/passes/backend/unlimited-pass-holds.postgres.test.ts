@@ -98,7 +98,10 @@ const record = (
 ) =>
   Effect.gen(function* () {
     const { db, transaction } = yield* WorkspaceDatabase;
-    yield* db.insert(customerAccounts).values({ id: buyer });
+    yield* db
+      .insert(customerAccounts)
+      .values({ id: buyer })
+      .onConflictDoNothing();
     return yield* transaction(
       recordUnlimitedPassOrder({
         orderId: orderIdSchema.make(crypto.randomUUID()),
@@ -766,6 +769,94 @@ it("preserves an uncertain Continue and returns the affected date for a voided d
       expect(yield* Effect.result(begin)).toEqual(expected);
       expect(yield* status).toEqual([{ status: "void" }]);
       expect(yield* Effect.result(begin)).toEqual(expected);
+    }).pipe(Effect.provide(layer))
+  );
+});
+
+it("Continue releases each owned predecessor and leaves other buyers' drafts in place", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const accountId = newAccountId();
+  const email = testEmailAddress("unlimited-replacement-chain");
+  const provider = makeInMemoryDotypos({});
+  const layer = Layer.mergeAll(
+    database!.layer,
+    Layer.mock(CurrentCustomerAccount, {
+      requireActive: Effect.succeed({
+        ...testSessionProfile,
+        accountId,
+        email,
+        deletionRequested: false,
+      }),
+    }),
+    Layer.mock(CustomerAccountSections, {
+      withActiveAccount: (_accountId, operation) =>
+        Effect.provideService(operation, HeldCustomerAccount, {
+          accountId,
+          email,
+        }),
+    }),
+    Layer.mock(CustomerAccountContactService, {}),
+    Layer.mock(DiscountService, {}),
+    Layer.mock(WorkspaceFeatureFlagService, {
+      isEnabled: () => Effect.succeed(true),
+    }),
+    Layer.mock(WorkspaceDatabaseAdvisoryLock, {}),
+    Layer.mock(WorkspaceReservationRepository, {}),
+    Layer.mock(GoogleCalendarWorkspaceLimitationsService, {}),
+    Layer.succeed(DotyposService, provider.service)
+  );
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const first = yield* record(start, accountId, accountId);
+      const second = yield* record(
+        start.add({ days: 31 }),
+        accountId,
+        accountId
+      );
+      const foreign = yield* record(
+        start,
+        newAccountId(),
+        fixtureReservationAuthorId
+      );
+      const replacement = yield* record(
+        start.add({ days: 62 }),
+        accountId,
+        accountId
+      );
+      yield* createUnlimitedPassHolds(first);
+      yield* createUnlimitedPassHolds(second);
+
+      const result = yield* beginUnlimitedPassPurchase({
+        orderId: replacement.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: replacement.validFrom },
+        supersedeOrderId: first.id,
+        supersedeOrderIds: [foreign.id, second.id, first.id, replacement.id],
+      });
+      expect(result.id).toBe(replacement.id);
+      const { db } = yield* WorkspaceDatabase;
+      for (const prior of [first, second]) {
+        const [purchase] = yield* db
+          .select({ status: passPurchases.status })
+          .from(passPurchases)
+          .where(eq(passPurchases.id, prior.id));
+        expect(purchase?.status).toBe("void");
+        const rows = yield* readUnlimitedPassDays(prior.id);
+        expect(rows.every((day) => day.reservationState === "cancelled")).toBe(
+          true
+        );
+      }
+      const [foreignPurchase] = yield* db
+        .select({ status: passPurchases.status })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, foreign.id));
+      expect(foreignPurchase?.status).toBe("pending_payment");
+      expect(
+        [...provider.reservations.values()].filter(
+          (row) => row.status === "NEW"
+        )
+      ).toHaveLength(unlimitedPassDays);
     }).pipe(Effect.provide(layer))
   );
 });
