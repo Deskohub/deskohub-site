@@ -57,6 +57,7 @@ function fixture() {
     suppressesRecurrence: async () => false,
     pendingReply: async () => null,
     recordReply: async () => {},
+    recordNightlyRuns: async () => {},
     recordWorker: async (number) => {
       reported.add(number);
     },
@@ -204,7 +205,9 @@ test("matches the exact Vercel comment ID without depending on its permalink", a
     issues.push(issue(1, "https://vercel.com/team/project/c/threadx"));
     const preview = await run(pool, tracker, runner, [feedbackSignal], false);
     expect(preview.plannedIntake).toEqual([feedbackSignal.key]);
-    issues.push(issue(2, "https://vercel.com/team/project/c/thread"));
+    issues.push(
+      issue(2, "https://vercel.com/team/project/c/thread/?from=toolbar")
+    );
     const match = await run(pool, tracker, runner, [
       { ...feedbackSignal, legacyMarkers: [] },
     ]);
@@ -219,6 +222,86 @@ test("matches the exact Vercel comment ID without depending on its permalink", a
     );
     expect(manifestOnly.filed).toEqual([]);
     expect(launches).toEqual([2]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("keeps an existing worker when two open issues match the same fingerprint", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  try {
+    const markers = [
+      "<!-- posthog-log-uuid:prior-one -->",
+      "<!-- posthog-log-uuid:prior-two -->",
+    ];
+    issues.push(...markers.map((marker, index) => issue(index + 1, marker)));
+    const ownership = {
+      ...tracker,
+      hasOwner: async (number: number) => number === 2,
+    };
+    const first = await run(pool, ownership, runner, [
+      { ...logSignal, legacyMarkers: markers },
+    ]);
+    const later = await run(pool, ownership, runner, []);
+    expect(first.duplicateGroups).toEqual([[1, 2]]);
+    expect(later.duplicateGroups).toEqual([[1, 2]]);
+    expect(launches).toEqual([]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("assigns one worker when different sources explicitly name the same fix", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  const fix = "<!-- issue-pool-fix:checkout-pricing -->";
+  try {
+    issues.push(
+      issue(1, [fix, ...logSignal.legacyMarkers].join("\n")),
+      issue(2, [fix, ...feedbackSignal.legacyMarkers].join("\n"))
+    );
+    const result = await runIssuePool({
+      pool,
+      tracker,
+      runner,
+      signals: [logSignal, feedbackSignal],
+      apply: true,
+      maxNewIssues: 2,
+      maxNewWorkers: 2,
+    });
+    expect(result.duplicateGroups).toEqual([[1, 2]]);
+    expect(launches).toEqual([1]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("preserves maintainer replies after adopted feedback leaves the collector", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  const reply = { commentId: 52, message: "The answer", threadId: "worker-1" };
+  const delivered: number[] = [];
+  try {
+    issues.push(issue(1, feedbackSignal.legacyMarkers.join("\n")));
+    await run(pool, tracker, runner, [feedbackSignal]);
+    const result = await run(
+      pool,
+      {
+        ...tracker,
+        pendingReply: async () => reply,
+      },
+      {
+        ...runner,
+        sendReply: async ({ commentId }) => {
+          delivered.push(commentId);
+        },
+      },
+      []
+    );
+    expect(result.replied).toEqual([1]);
+    expect(delivered).toEqual([52]);
+    expect(launches).toEqual([1]);
   } finally {
     pool.close();
   }
@@ -323,6 +406,42 @@ test("keeps an ambiguous issue creation reserved and adopts it when it appears",
     expect(
       (await run(pool, uncertainTracker, runner, [logSignal])).assigned
     ).toEqual([1]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("repeated nightly run failures accumulate on one issue and worker", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  const attempts = [
+    "https://github.com/owner/repository/actions/runs/101/attempts/1",
+    "https://github.com/owner/repository/actions/runs/102/attempts/1",
+  ];
+  const firstNight: Signal = {
+    ...logSignal,
+    key: "nightly:diagnostic:checkout-timeout",
+    source: "nightly",
+    legacyMarkers: [],
+    runUrls: attempts.slice(0, 1),
+  };
+  const observed: { number: number; runs: readonly string[] }[] = [];
+  const trackerWithEvidence: IssueTracker = {
+    ...tracker,
+    async recordNightlyRuns(existing, runs) {
+      observed.push({ number: existing.number, runs });
+    },
+  };
+  try {
+    await run(pool, trackerWithEvidence, runner, [firstNight]);
+    const later = await run(pool, trackerWithEvidence, runner, [
+      { ...firstNight, runUrls: attempts },
+    ]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.body).toContain(attempts[0]);
+    expect(later.filed).toEqual([]);
+    expect(observed).toEqual([{ number: 1, runs: attempts }]);
+    expect(launches).toEqual([1]);
   } finally {
     pool.close();
   }

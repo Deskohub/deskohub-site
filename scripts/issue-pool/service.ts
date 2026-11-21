@@ -104,8 +104,8 @@ async function main(): Promise<void> {
     await run("git", ["-C", project, "fetch", "origin", "main"]);
   }
 
-  const [collectorResults, reporter, legacyFeedbackClaimed] = await Promise.all(
-    [
+  const [collectorResults, reporter, maintainer, legacyFeedbackClaimed] =
+    await Promise.all([
       Promise.allSettled([
         collectPostHog(run),
         collectVercelFeedback(
@@ -114,10 +114,10 @@ async function main(): Promise<void> {
           join(project, "apps", "deskohub-workspace")
         ),
       ]),
-      run("gh", ["api", "user", "--jq", ".login"]),
+      run("gh", ["api", "user", "--jq", ".id"]),
+      run("gh", ["api", `repos/${repo}`, "--jq", ".owner.id"]),
       legacyVercelOwnership(project),
-    ]
-  );
+    ]);
   const [posthog, vercel] = collectorResults;
   const failedSources = [
     ...(posthog.status === "rejected" ? ["posthog"] : []),
@@ -130,7 +130,11 @@ async function main(): Promise<void> {
   const tracker = githubIssueTracker({
     repo,
     run,
-    trustedReporters: ["totalolage", reporter.trim()],
+    reporterId: positiveInteger(reporter.trim(), "GitHub reporter ID"),
+    maintainerId: positiveInteger(
+      maintainer.trim(),
+      "GitHub repository owner ID"
+    ),
     legacyFeedbackClaimed,
   });
   const runner = t3WorkerRunner({ executable: t3, project, repo, run });

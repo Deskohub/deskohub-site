@@ -1,8 +1,10 @@
 # Deskohub issue pool
 
-GitHub issues in `totalolage/deskohub-site` are the shared backlog. `scripts/issue-pool/service.ts` collects PostHog production errors and unresolved Workspace Vercel feedback. It sorts source signals by priority, observation time, then source key. The issue body carries stable source markers for deduplication. Maintainers can enroll an existing issue with the `issue-pool` label.
+GitHub issues in `totalolage/deskohub-site` are the shared backlog. `scripts/issue-pool/service.ts` collects PostHog production errors, unresolved Workspace Vercel feedback, and nightly E2E diagnostics. It sorts source signals by priority, observation time, then source key. A report matches an open issue through stable source evidence. Later nightly runs add links to that issue. A recurrence after a fix can get a new issue when its observation is newer than the closure.
 
-The service uses Bun, the authenticated `gh`, `posthog-cli`, and `vercel` clients, and the local T3 CLI. It starts workers in separate worktrees from `origin/main`. Each pass respects existing GitHub assignees, linked open PRs, and trusted worker markers. It adopts legacy PostHog issues by occurrence ID and stores the fingerprint association. It matches Vercel feedback by comment ID in GitHub and the existing track manifest.
+The service compares the repository owner's and authenticated reporter's immutable GitHub account IDs against issue authors before it considers labels or markers. Only issues from those authors are eligible. The owner can enroll their own issue with the `issue-pool` label. When two approved issues refer to the same fix across sources, put the same `<!-- issue-pool-fix:<slug> -->` marker in both issue bodies. The dispatcher retains any existing owner across the group and otherwise selects the oldest eligible issue.
+
+The service uses Bun, the authenticated `gh`, `posthog-cli`, and `vercel` clients, and the local T3 CLI. It starts standard T3 workers in separate worktrees from `origin/main` using the project defaults. Each worker invokes `$full-send` and settles its thread after verification and delivery. Each pass respects existing GitHub assignees, linked open PRs, and trusted worker markers. It adopts legacy PostHog issues by occurrence ID and stores the fingerprint association. It matches Vercel feedback by comment ID in GitHub and the existing track manifest.
 
 ## Preview a pass
 
@@ -14,7 +16,7 @@ bun scripts/issue-pool/service.ts \
   --vercel-fetch-script /home/dev/.agents/skills/vercel-comments/scripts/fetch-comments.sh
 ```
 
-The JSON summary records proposed issue keys and issue numbers. Check `failedSources`, `pendingIntake`, `pendingAssignment`, and `pendingReply` before cutover. Pass the existing `--state` path to inspect persisted associations and reservations in read-only mode.
+The JSON summary records proposed issue keys, issue numbers, and groups of overlapping issues. Check `failedSources`, `pendingIntake`, `pendingAssignment`, and `pendingReply` before cutover. Pass the existing `--state` path to inspect persisted associations and reservations in read-only mode.
 
 ## Activate the timer
 

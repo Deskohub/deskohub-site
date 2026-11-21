@@ -35,7 +35,11 @@ test("queues the issue in its own T3 worktree and sends only its trusted brief",
       expect(args.slice(0, 2)).toEqual(["thread", "start"]);
       expect(args).toContain("origin/main");
       expect(args).toContain("issue-pool/issue-32");
+      expect(args).not.toContain("--provider");
+      expect(args).not.toContain("--model");
+      expect(stdin?.startsWith("$full-send\n")).toBe(true);
       expect(stdin).toContain("https://github.com/owner/repository/issues/32");
+      expect(stdin).toContain("settle your own T3 thread");
       return JSON.stringify({ threadId: "worker-id" });
     },
   });

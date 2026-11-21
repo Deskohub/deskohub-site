@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { groupOpenIssues } from "./deduplication";
 import { feedbackCommentIds } from "./feedback";
+import { formatNightlyEvidence } from "./nightly-evidence";
 import type { Signal } from "./sources";
 
 export interface Issue {
@@ -21,6 +23,7 @@ export interface IssueTracker {
   suppressesRecurrence(number: number): Promise<boolean>;
   pendingReply(number: number): Promise<WorkerReply | null>;
   recordReply(number: number, commentId: number): Promise<void>;
+  recordNightlyRuns(issue: Issue, runUrls: readonly string[]): Promise<void>;
 }
 
 export interface WorkerReply {
@@ -51,6 +54,7 @@ export interface PassResult {
   replied: number[];
   pendingReply: number[];
   plannedReply: number[];
+  duplicateGroups: number[][];
 }
 
 const issuePoolLabel = "issue-pool";
@@ -131,15 +135,22 @@ export class IssuePool {
     this.database.close();
   }
 
-  linkedIssues(key: string): ReadonlySet<number> {
-    return new Set(
-      this.database
-        .query<{ issue: number }, [string]>(
-          "SELECT issue FROM source_issue WHERE source_key = ?"
-        )
-        .all(key)
-        .map(({ issue }) => issue)
-    );
+  sourceGroups(): Map<string, Set<number>> {
+    const sources = new Map<string, Set<number>>();
+    const rows = this.database
+      .query<{ sourceKey: string; issue: number }, []>(
+        "SELECT source_key AS sourceKey, issue FROM source_issue"
+      )
+      .all();
+    for (const { sourceKey, issue } of rows) {
+      let members = sources.get(sourceKey);
+      if (!members) {
+        members = new Set();
+        sources.set(sourceKey, members);
+      }
+      members.add(issue);
+    }
+    return sources;
   }
 
   linkIssue(key: string, number: number): void {
@@ -236,10 +247,15 @@ export async function runIssuePool({
     replied: [],
     pendingReply: [],
     plannedReply: [],
+    duplicateGroups: [],
   };
   const issues = [...(await tracker.list())];
   const eligible = new Set<number>();
   const seen = new Set<string>();
+  const sourceGroups = pool.sourceGroups();
+  for (const members of sourceGroups.values()) {
+    for (const number of members) eligible.add(number);
+  }
   let intakeAttempts = 0;
   let assignmentAttempts = 0;
   const ordered = Array.from(signals).sort(
@@ -254,15 +270,22 @@ export async function runIssuePool({
       continue;
     }
     seen.add(signal.key);
-    const linked = pool.linkedIssues(signal.key);
+    const linked = sourceGroups.get(signal.key) ?? new Set<number>();
+    sourceGroups.set(signal.key, linked);
     const matching = issues.filter(
       (issue) => linked.has(issue.number) || matches(issue, signal)
     );
     for (const issue of matching) {
       eligible.add(issue.number);
-      if (apply) pool.linkIssue(signal.key, issue.number);
+      if (apply && !linked.has(issue.number))
+        pool.linkIssue(signal.key, issue.number);
+      linked.add(issue.number);
     }
     try {
+      if (apply && signal.source === "nightly") {
+        const existing = matching.find((issue) => issue.state === "open");
+        if (existing) await tracker.recordNightlyRuns(existing, signal.runUrls);
+      }
       if (!(await needsIssue(matching, signal, tracker))) {
         continue;
       }
@@ -283,12 +306,16 @@ export async function runIssuePool({
         signal.title,
         [
           signal.evidence,
+          ...(signal.source === "nightly"
+            ? [formatNightlyEvidence(signal.runUrls)]
+            : []),
           sourceMarker(signal.key),
           ...signal.legacyMarkers.slice(-20),
         ].join("\n\n")
       );
       issues.push(issue);
       pool.linkIssue(signal.key, issue.number);
+      linked.add(issue.number);
       eligible.add(issue.number);
       result.filed.push(issue.number);
     } catch {
@@ -299,22 +326,38 @@ export async function runIssuePool({
   const orderedIssues = issues.toSorted(
     (left, right) => left.number - right.number
   );
-  for (const issue of orderedIssues) {
-    if (issue.state !== "open") {
+  for (const group of groupOpenIssues(orderedIssues, sourceGroups.values())) {
+    const candidates = group.filter(
+      (issue) =>
+        ownedByPool(issue) ||
+        eligible.has(issue.number) ||
+        pool.claim(issue.number) !== null
+    );
+    if (candidates.length === 0) {
       continue;
     }
-    if (!ownedByPool(issue) && !eligible.has(issue.number)) {
-      continue;
+    for (const issue of candidates) {
+      await reconcileReply({
+        apply,
+        number: issue.number,
+        pool,
+        result,
+        runner,
+        tracker,
+      });
     }
-    await reconcileReply({
-      apply,
-      number: issue.number,
-      pool,
-      result,
-      runner,
-      tracker,
-    });
-    if (issue.assignees.length > 0) {
+    let issue = candidates[0];
+    if (group.length > 1) {
+      result.duplicateGroups.push(group.map((member) => member.number));
+      issue = await chooseGroupIssue(group, issue, {
+        pool,
+        result,
+        runner,
+        tracker,
+        apply,
+      });
+    }
+    if (!issue || issue.assignees.length > 0) {
       continue;
     }
     assignmentAttempts += await assignIssue({
@@ -328,6 +371,47 @@ export async function runIssuePool({
     });
   }
   return result;
+}
+
+async function chooseGroupIssue(
+  group: readonly Issue[],
+  fallback: Issue | undefined,
+  {
+    pool,
+    result,
+    runner,
+    tracker,
+    apply,
+  }: {
+    pool: IssuePool;
+    result: PassResult;
+    runner: WorkerRunner;
+    tracker: IssueTracker;
+    apply: boolean;
+  }
+): Promise<Issue | undefined> {
+  try {
+    for (const issue of group) {
+      if (issue.assignees.length > 0 || (await tracker.hasOwner(issue.number)))
+        return;
+    }
+    const claimed = group.find((issue) => pool.claim(issue.number) !== null);
+    if (claimed) return claimed;
+    if (apply) {
+      for (const issue of group) {
+        const threadId = await runner.find(issue.number);
+        if (threadId) {
+          pool.reserveAssignment(issue.number);
+          pool.record(issue.number, threadId);
+          return issue;
+        }
+      }
+    }
+    return fallback;
+  } catch {
+    if (fallback) result.pendingAssignment.push(fallback.number);
+    return;
+  }
 }
 
 async function reconcileReply({

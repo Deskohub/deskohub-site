@@ -16,6 +16,7 @@ export type Signal = Readonly<{
   (
     | { readonly source: "posthog" }
     | { readonly source: "vercel"; readonly commentId: string }
+    | { readonly source: "nightly"; readonly runUrls: readonly string[] }
   );
 
 const weekMs = 7 * 24 * 60 * 60 * 1000;

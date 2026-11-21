@@ -1,4 +1,5 @@
 import { feedbackCommentIds } from "./feedback";
+import { formatNightlyEvidence, nightlyRunMarker } from "./nightly-evidence";
 import type { Issue, IssueTracker } from "./pool";
 
 export type Command = (
@@ -14,14 +15,14 @@ interface RestIssue {
   body: string | null;
   assignees: { login: string }[];
   labels: { name: string }[];
-  user: { login: string } | null;
+  user: { id: number } | null;
   pull_request?: object;
 }
 
 interface IssueComment {
   id: number;
   body: string | null;
-  user: { login: string } | null;
+  user: { id: number } | null;
 }
 
 const threadMarker = /<!-- t3-worker-thread:([a-zA-Z0-9:%_-]+) -->/;
@@ -29,17 +30,11 @@ const humanNeeded = "<!-- posthog-agent:human-needed -->";
 const consumed = (commentId: number) =>
   `<!-- posthog-agent:consumed-comment:${commentId} -->`;
 
-const issueFromRest = (
-  issue: RestIssue,
-  trusted: ReadonlySet<string>
-): Issue => ({
+const issueFromRest = (issue: RestIssue): Issue => ({
   number: issue.number,
   state: issue.state,
   closedAt: issue.closed_at,
-  body:
-    issue.user && trusted.has(issue.user.login.toLowerCase())
-      ? (issue.body ?? "")
-      : "",
+  body: issue.body ?? "",
   labels: issue.labels.map((label) => label.name),
   assignees: issue.assignees.map((assignee) => assignee.login),
 });
@@ -49,7 +44,7 @@ interface IssueOwnership {
     issue: {
       state: "OPEN" | "CLOSED";
       body: string;
-      author: { login: string } | null;
+      author: { databaseId?: number | null } | null;
       assignees: { totalCount: number };
       closedByPullRequestsReferences: { nodes: { state: string }[] };
     } | null;
@@ -61,7 +56,7 @@ const ownershipQuery = `query ($owner: String!, $name: String!, $number: Int!) {
     issue(number: $number) {
       state
       body
-      author { login }
+      author { ... on User { databaseId } ... on Bot { databaseId } }
       assignees(first: 1) { totalCount }
       closedByPullRequestsReferences(first: 100) { nodes { state } }
     }
@@ -71,31 +66,38 @@ const ownershipQuery = `query ($owner: String!, $name: String!, $number: Int!) {
 export function githubIssueTracker({
   repo,
   run,
-  trustedReporters,
+  reporterId,
+  maintainerId,
   legacyFeedbackClaimed,
 }: {
   repo: string;
   run: Command;
-  trustedReporters: readonly string[];
+  reporterId: number;
+  maintainerId: number;
   legacyFeedbackClaimed: (commentId: string) => boolean;
 }): IssueTracker {
   const [owner = "", name = ""] = repo.split("/");
   const base = `repos/${repo}/issues`;
-  const trusted = new Set(trustedReporters.map((login) => login.toLowerCase()));
+  const trusted = new Set([reporterId, maintainerId]);
+  const trustedAuthor = (authorId: number | null | undefined) =>
+    authorId != null && trusted.has(authorId);
   const getPages = async <T>(path: string): Promise<T[]> => {
     const response = await run("gh", ["api", "--paginate", "--slurp", path]);
     const pages: T[][] = JSON.parse(response);
     return pages.flat();
   };
   const comments = new Map<number, Promise<IssueComment[]>>();
-  function issueComments(number: number): Promise<IssueComment[]> {
-    let cached = comments.get(number);
+  function issueComments(
+    number: number,
+    fresh = false
+  ): Promise<IssueComment[]> {
+    let cached = fresh ? undefined : comments.get(number);
     if (!cached) {
       cached = getPages<IssueComment>(
         `${base}/${number}/comments?per_page=100`
       ).then((rows) =>
         rows
-          .filter(({ user }) => user && trusted.has(user.login.toLowerCase()))
+          .filter(({ user }) => trustedAuthor(user?.id))
           .sort((left, right) => left.id - right.id)
       );
       comments.set(number, cached);
@@ -103,7 +105,7 @@ export function githubIssueTracker({
     return cached;
   }
   const workerRecorded = async (number: number) =>
-    (await issueComments(number)).some(({ body }) =>
+    (await issueComments(number, true)).some(({ body }) =>
       threadMarker.test(body ?? "")
     );
   async function postComment(number: number, body: string): Promise<void> {
@@ -136,8 +138,8 @@ export function githubIssueTracker({
         `${base}?state=all&per_page=100`
       );
       return issues
-        .filter((issue) => !issue.pull_request)
-        .map((issue) => issueFromRest(issue, trusted));
+        .filter((issue) => !issue.pull_request && trustedAuthor(issue.user?.id))
+        .map(issueFromRest);
     },
     async file(title, body) {
       const response = await run(
@@ -146,7 +148,10 @@ export function githubIssueTracker({
         JSON.stringify({ title, body })
       );
       const issue: RestIssue = JSON.parse(response);
-      const created = issueFromRest(issue, trusted);
+      if (issue.user?.id !== reporterId) {
+        throw new Error("Created issue did not have the authenticated author");
+      }
+      const created = issueFromRest(issue);
       if (created.body !== body) {
         throw new Error("Created issue did not retain the pool source marker");
       }
@@ -156,22 +161,22 @@ export function githubIssueTracker({
       const issue = await readOwnership(number);
       return (
         issue?.state !== "OPEN" ||
+        !trustedAuthor(issue.author?.databaseId) ||
         issue.assignees.totalCount > 0 ||
         issue.closedByPullRequestsReferences.nodes.some(
           (pr) => pr.state === "OPEN"
         ) ||
         (await workerRecorded(number)) ||
-        (issue.author !== null &&
-          trusted.has(issue.author.login.toLowerCase()) &&
-          Array.from(feedbackCommentIds(issue.body)).some(
-            legacyFeedbackClaimed
-          ))
+        Array.from(feedbackCommentIds(issue.body)).some(legacyFeedbackClaimed)
       );
     },
     async recordWorker(number, threadId) {
       if (!/^[a-zA-Z0-9:%_-]+$/.test(threadId)) {
         throw new Error("Unexpected T3 thread identifier");
       }
+      const issue = await readOwnership(number);
+      if (issue?.state !== "OPEN" || !trustedAuthor(issue.author?.databaseId))
+        return;
       if (await workerRecorded(number)) {
         return;
       }
@@ -181,6 +186,25 @@ export function githubIssueTracker({
       );
     },
     legacyFeedbackClaimed,
+    async recordNightlyRuns(issue, runUrls) {
+      const known = [
+        issue.body,
+        ...(await issueComments(issue.number, true)).map(
+          ({ body }) => body ?? ""
+        ),
+      ];
+      const newRuns = runUrls.filter(
+        (url) => !known.some((body) => body.includes(nightlyRunMarker(url)))
+      );
+      if (newRuns.length === 0) return;
+      const current = await readOwnership(issue.number);
+      if (
+        current?.state === "OPEN" &&
+        trustedAuthor(current.author?.databaseId)
+      ) {
+        await postComment(issue.number, formatNightlyEvidence(newRuns));
+      }
+    },
     async suppressesRecurrence(number) {
       return (await issueComments(number)).some(({ body }) =>
         body?.includes("<!-- posthog-agent:triage-non-actionable -->")
@@ -195,12 +219,14 @@ export function githubIssueTracker({
       const reply = rows.find(
         ({ id, body, user }) =>
           id > question.id &&
-          user?.login.toLowerCase() === "totalolage" &&
+          user?.id === maintainerId &&
           body?.trim() &&
           !/<!-- (?:posthog-agent:|t3-worker-thread:)/.test(body) &&
           !rows.some(({ body: comment }) => comment?.includes(consumed(id)))
       );
-      if (!reply?.body || (await readOwnership(number))?.state !== "OPEN")
+      if (!reply?.body) return null;
+      const issue = await readOwnership(number);
+      if (issue?.state !== "OPEN" || !trustedAuthor(issue.author?.databaseId))
         return null;
       return { commentId: reply.id, threadId, message: reply.body };
     },
