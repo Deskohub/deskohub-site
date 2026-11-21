@@ -1,6 +1,8 @@
 import type { PlainDate } from "@/shared/utils/temporal";
 import type { PassTier } from "./pass-offer";
 
+export const unlimitedAccessTokenQueryParam = "passAccessToken";
+
 type UnlimitedAccessPeriod = {
   readonly tier: PassTier;
   readonly validFrom: PlainDate;

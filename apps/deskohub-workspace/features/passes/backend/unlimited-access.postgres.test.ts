@@ -7,6 +7,7 @@ import {
   IgloohomePinIdSchema,
   IgloohomeService,
 } from "@deskohub/igloohome";
+import { testEmailAddress } from "@deskohub/test-email";
 import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
@@ -30,7 +31,12 @@ import {
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import type { PassTier } from "../pass-offer";
+import { unlimitedAccessTokenQueryParam } from "../unlimited-access";
 import { loadUnlimitedAccess } from "./unlimited-access";
+import {
+  createUnlimitedAccessUrl,
+  exchangeUnlimitedAccessToken,
+} from "./unlimited-access-capability";
 
 const firstDay = "2030-03-31"; // Prague moves to summer time on this date.
 const nextDay = "2030-04-01";
@@ -53,6 +59,16 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       await database.pool.query(
         "insert into customer_accounts (id) values ($1), ($2)",
         [buyer, holder]
+      );
+      await database.pool.query(
+        `insert into auth."user" (id, name, email, email_verified)
+         values ($1, 'Synthetic buyer', $3, true), ($2, 'Synthetic holder', $4, true)`,
+        [
+          buyer,
+          holder,
+          testEmailAddress("pass-buyer"),
+          testEmailAddress("pass-holder"),
+        ]
       );
     });
 
@@ -101,6 +117,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       readonly readReservation?: DotyposService["Service"]["getReservationWithoutCustomer"];
       readonly intervalEndsEarly?: boolean;
       readonly isSignedIn?: () => boolean;
+      readonly accessCookie?: string;
     };
 
     const load = (
@@ -121,7 +138,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
 
       return Effect.runPromise(
-        loadUnlimitedAccess(orderId).pipe(
+        loadUnlimitedAccess(orderId, provider.accessCookie).pipe(
           Effect.provide(
             Layer.mergeAll(
               database.layer,
@@ -135,7 +152,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
                           ...testSessionProfile,
                           accountId: viewer,
                           deletionRequested: false,
-                          email: "test-holder@example.invalid",
+                          email: testEmailAddress("pass-viewer"),
                         }
                   )
                 ),
@@ -179,6 +196,37 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         pin: syntheticPin,
         pinId: IgloohomePinIdSchema.make("synthetic-unlimited-pin"),
       });
+
+    const holderCookie = (
+      orderId: OrderId,
+      holderAccountId: CustomerAccountId
+    ) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const locale = "en-US";
+          const url = yield* createUnlimitedAccessUrl({
+            orderId,
+            holderAccountId,
+            locale,
+            origin: new URL("https://workspace.example"),
+          });
+          const token = new URL(url).searchParams.get(
+            unlimitedAccessTokenQueryParam
+          )!;
+          const cookie = yield* exchangeUnlimitedAccessToken({
+            token,
+            orderId,
+            locale,
+          });
+          return cookie.value;
+        })
+      );
+
+    const reassignToHolder = (orderId: OrderId) =>
+      database.pool.query(
+        "update pass_purchases set holder_account_id = $2, gift_claimed_at = now() where id = $1",
+        [orderId, holder]
+      );
 
     test("gates a gift to the claimed holder and never exposes a pass day as a reservation order", async () => {
       const {
@@ -233,6 +281,92 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(
         await load(orderId, "reserved-desk", holder, nextMidnight, provider)
       ).toMatchObject({ state: "ended" });
+    });
+
+    test("opens for the named holder without a session and rejects replay after reassignment", async () => {
+      const { orderId } = await seedPass("open-space");
+      const accessCookie = await holderCookie(orderId, buyer);
+      const reads: string[] = [];
+      const provider = { issue, reads, accessCookie };
+
+      expect(
+        await load(orderId, "open-space", null, during, provider)
+      ).toMatchObject({
+        state: "available",
+        code: syntheticPin,
+        endsAt: openSpaceClosing,
+      });
+      await reassignToHolder(orderId);
+
+      // Reopening the original email is still bound to its original holder.
+      const reopenedCookie = await holderCookie(orderId, buyer);
+      for (const cookie of [accessCookie, reopenedCookie]) {
+        expect(
+          await load(orderId, "open-space", null, during, {
+            ...provider,
+            accessCookie: cookie,
+          })
+        ).toEqual({ state: "not-found" });
+      }
+      expect(
+        await load(orderId, "open-space", buyer, during, provider)
+      ).toEqual({ state: "not-found" });
+      expect(reads).toEqual([firstDay]);
+      expect(
+        await load(orderId, "open-space", holder, during, provider)
+      ).toMatchObject({
+        state: "available",
+        code: syntheticPin,
+      });
+    });
+
+    test("withholds the code if the pass changes holder during issuance", async () => {
+      const { orderId } = await seedPass("open-space");
+      const accessCookie = await holderCookie(orderId, buyer);
+      const access = await load(orderId, "open-space", null, during, {
+        accessCookie,
+        issue: () =>
+          Effect.promise(() => reassignToHolder(orderId)).pipe(
+            Effect.andThen(issue())
+          ),
+      });
+      expect(access).toEqual({ state: "not-found" });
+    });
+
+    test("withholds bearer access while the holder's login is unverified or awaiting deletion", async () => {
+      const { orderId } = await seedPass("open-space");
+      const accessCookie = await holderCookie(orderId, buyer);
+      const reads: string[] = [];
+      try {
+        await database.pool.query(
+          `update auth."user" set email_verified = false where id = $1`,
+          [buyer]
+        );
+        expect(
+          await load(orderId, "open-space", null, during, {
+            issue,
+            reads,
+            accessCookie,
+          })
+        ).toEqual({ state: "not-found" });
+        await database.pool.query(
+          `update auth."user" set email_verified = true, deletion_requested_at = now() where id = $1`,
+          [buyer]
+        );
+        expect(
+          await load(orderId, "open-space", null, during, {
+            issue,
+            reads,
+            accessCookie,
+          })
+        ).toEqual({ state: "not-found" });
+        expect(reads).toEqual([]);
+      } finally {
+        await database.pool.query(
+          `update auth."user" set email_verified = true, deletion_requested_at = null where id = $1`,
+          [buyer]
+        );
+      }
     });
 
     test("only one request issues today's code and the next Prague date has a different grant", async () => {

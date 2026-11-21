@@ -11,6 +11,7 @@ import { loadOrderKind } from "@/features/order/backend/order-kind";
 import { orderIdSchema } from "@/features/order/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { loadUnlimitedAccessPage } from "@/features/passes/backend/unlimited-access";
+import { getUnlimitedAccessCookieName } from "@/features/passes/backend/unlimited-access-capability";
 import { UnlimitedAccessPage } from "@/features/passes/components/unlimited-access-page";
 import { getUnlimitedAccessPath } from "@/features/passes/routes";
 import { ReservationAccessService } from "@/features/reservation/backend/reservation-access.service";
@@ -85,7 +86,15 @@ async function renderUnlimitedAccess(locale: Locale, rawOrderId: string) {
   );
   if (!(await isCoworkPassesPageOpenAfterConnection())) notFound();
 
-  const access = await loadUnlimitedAccessPage(orderId, await headers());
+  const cookieStore = await cookies();
+  const accessCookie = cookieStore.get(
+    getUnlimitedAccessCookieName(orderId)
+  )?.value;
+  const access = await loadUnlimitedAccessPage(
+    orderId,
+    await headers(),
+    accessCookie
+  );
   if (access.state === "sign-in") {
     redirect(
       getAccountSignInPath(locale, getUnlimitedAccessPath(locale, orderId))

@@ -19,6 +19,7 @@ import { reservationStatusPath } from "@/features/reservation/routes";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import { emailKindTags } from "@/shared/backend/email/email-kind";
 import { renderWorkspaceEmail } from "@/shared/backend/email/render-react-email";
+import { createUnlimitedAccessUrl } from "./unlimited-access-capability";
 import { unlimitedConfirmationEmailKind } from "./unlimited-confirmation-email-kind";
 
 export const sendEntryPackPurchaseEmail = Effect.fn(
@@ -41,6 +42,17 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
   const quote = yield* Schema.decodeUnknownEffect(discountQuoteCodec)(
     purchase.quote
   );
+  const accessUrl =
+    purchase.product === "unlimited" &&
+    !input.gift &&
+    purchase.holderAccountId === purchase.buyerAccountId
+      ? yield* createUnlimitedAccessUrl({
+          orderId: id,
+          holderAccountId: purchase.holderAccountId,
+          locale,
+          origin,
+        })
+      : undefined;
   const rendered = yield* renderWorkspaceEmail(
     <EntryPackPurchaseEmail
       {...purchase}
@@ -59,11 +71,7 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
       }
       invoiceRequested={input.invoiceRequested}
       unlimitedCoffee={purchase.unlimitedCoffee === true}
-      {...(purchase.product === "unlimited" &&
-        purchase.holderAccountId === purchase.buyerAccountId && {
-          accessUrl: new URL(`/${locale}/reservation/access/${id}`, origin)
-            .href,
-        })}
+      accessUrl={accessUrl}
     />
   );
 

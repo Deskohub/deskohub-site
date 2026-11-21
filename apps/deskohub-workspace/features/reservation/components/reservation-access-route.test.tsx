@@ -3,7 +3,8 @@ import "@/shared/polyfills/temporal";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { Context, Effect, Layer } from "effect";
 import { prerender } from "react-dom/static";
-import type { OrderKind } from "@/features/order";
+import { type OrderKind, orderIdSchema } from "@/features/order";
+import { getUnlimitedAccessCookieName } from "@/features/passes/backend/unlimited-access-capability";
 import type { UnlimitedAccessView } from "@/features/passes/unlimited-access";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
 import { getReservationInvitationCookieName } from "@/features/reservation/backend/reservation-invitation-capability";
@@ -62,7 +63,7 @@ let unlimitedAccess: UnlimitedAccessView | { state: "sign-in" | "not-found" } =
   {
     state: "not-found",
   };
-const unlimitedReads: string[] = [];
+const unlimitedReads: Array<{ id: string; cookie?: string }> = [];
 mock.module(
   "@/features/passes/backend/cowork-passes-release-gate.server",
   () => ({
@@ -70,8 +71,12 @@ mock.module(
   })
 );
 mock.module("@/features/passes/backend/unlimited-access", () => ({
-  loadUnlimitedAccessPage: async (id: string) => {
-    unlimitedReads.push(id);
+  loadUnlimitedAccessPage: async (
+    id: string,
+    _headers: Headers,
+    cookie?: string
+  ) => {
+    unlimitedReads.push({ id, cookie });
     return unlimitedAccess;
   },
 }));
@@ -126,7 +131,7 @@ mock.module(
 const { ReservationAccessRoute } = await import("./reservation-access-route");
 
 const orderId = workspaceReservationIdSchema.make("reservation-access-route");
-const passOrderId = "01900000-0000-7000-8000-000000000014";
+const passOrderId = orderIdSchema.make("01900000-0000-7000-8000-000000000014");
 
 const renderRoute = async (order: string = orderId) => {
   const errors: unknown[] = [];
@@ -176,6 +181,10 @@ describe("ReservationAccessRoute", () => {
 
   test("passes both access cookies for this reservation to authorization", async () => {
     requestCookies.set(
+      getUnlimitedAccessCookieName(passOrderId),
+      "synthetic-pass-cookie"
+    );
+    requestCookies.set(
       getReservationAccessCookieName(orderId),
       "synthetic-owner-cookie"
     );
@@ -213,6 +222,14 @@ describe("ReservationAccessRoute", () => {
   test("renders the Unlimited purchase access route without consulting ordinary reservation authorization", async () => {
     orderKind = "pass-purchase";
     passesEnabled = true;
+    requestCookies.set(
+      getUnlimitedAccessCookieName(passOrderId),
+      "synthetic-pass-cookie"
+    );
+    requestCookies.set(
+      getReservationAccessCookieName(passOrderId),
+      "synthetic-reservation-cookie"
+    );
     unlimitedAccess = {
       state: "available",
       tier: "reserved-desk",
@@ -229,7 +246,9 @@ describe("ReservationAccessRoute", () => {
     const { errors, html } = await renderRoute(passOrderId);
 
     expect(errors).toEqual([]);
-    expect(unlimitedReads).toEqual([passOrderId]);
+    expect(unlimitedReads).toEqual([
+      { id: passOrderId, cookie: "synthetic-pass-cookie" },
+    ]);
     expect(accessReads).toEqual([]);
     expect(html).toContain("Today’s door code");
     expect(html).toContain("Day 3 of 30");
