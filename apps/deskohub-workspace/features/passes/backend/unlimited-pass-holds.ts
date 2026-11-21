@@ -249,7 +249,7 @@ const observePassDayHolds = (purchase: Purchase, rows: readonly PassDay[]) =>
 
 /** Runs inside the pass-order section after the local intent transaction commits. */
 export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
-  function* (purchase: Purchase) {
+  function* (purchase: Purchase, options?: { reportBlockingDates: true }) {
     const { db } = yield* WorkspaceDatabase;
     const rows = yield* readUnlimitedPassDays(purchase.id);
     if (
@@ -314,6 +314,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
         if (!claimed)
           return yield* new UnlimitedPassHoldsUnavailable({
             reason: "changed",
+            blockingDates: [row.serviceDate],
           });
         attempt = {
           ...row,
@@ -365,7 +366,10 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
         .where(matchesPassDayAttempt(attempt))
         .returning({ id: workspaceReservations.id });
       if (!saved) {
-        return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+        return yield* new UnlimitedPassHoldsUnavailable({
+          reason: "changed",
+          blockingDates: [row.serviceDate],
+        });
       }
     });
     for (const pair of EffectArray.chunksOf(rows, 2)) {
@@ -375,7 +379,26 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
         { concurrency: 2 }
       );
       const failure = outcomes.find(Result.isFailure);
-      if (failure) return yield* failure.failure;
+      if (!failure) continue;
+      if (options?.reportBlockingDates) {
+        const blockers = outcomes.flatMap((outcome) =>
+          Result.isFailure(outcome) &&
+          outcome.failure._tag === "UnlimitedPassHoldsUnavailable" &&
+          outcome.failure.blockingDates?.length
+            ? [outcome.failure]
+            : []
+        );
+        const [first] = blockers;
+        if (first) {
+          return yield* new UnlimitedPassHoldsUnavailable({
+            reason: first.reason,
+            blockingDates: blockers.flatMap(
+              (blocker) => blocker.blockingDates ?? []
+            ),
+          });
+        }
+      }
+      return yield* failure.failure;
     }
     yield* readPayableUnlimitedHolds(purchase);
   }

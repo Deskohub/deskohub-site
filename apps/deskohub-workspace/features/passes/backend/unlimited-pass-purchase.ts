@@ -2,9 +2,9 @@ import "server-only";
 
 import { type DotyposCustomerId, DotyposService } from "@deskohub/dotypos";
 import { and, eq, isNull } from "drizzle-orm";
-import { Data, Effect, Layer, Schema } from "effect";
+import { Data, Effect, Layer, Option, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { customerAccounts, passPurchases } from "@/db/schema";
+import { customerAccounts, type Order, passPurchases } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
@@ -75,6 +75,30 @@ const readRejectedHoldDates = (orderId: OrderId) =>
       )
     )
   );
+
+// Only void drafts store this checkout outcome alongside the original quote.
+const voidedDraftDetails = Schema.Struct({
+  voidBlockingDates: Schema.Array(plainDateStringSchema),
+});
+
+const readVoidedDraftDates = (purchase: Purchase) =>
+  Schema.decodeUnknownOption(voidedDraftDetails)(purchase.quote).pipe(
+    Option.match({
+      onNone: () => readRejectedHoldDates(purchase.id),
+      onSome: ({ voidBlockingDates }) => Effect.succeed(voidBlockingDates),
+    })
+  );
+
+const isVoidedUnlimitedDraft = ({
+  order,
+  purchase,
+}: {
+  readonly order: Pick<Order, "paymentState" | "activePaymentAttemptId">;
+  readonly purchase: Pick<Purchase, "status">;
+}) =>
+  purchase.status === "void" &&
+  order.activePaymentAttemptId === null &&
+  (order.paymentState === "not_started" || order.paymentState === "expired");
 
 const resolveGiftCustomer = Effect.fn("resolveUnlimitedGiftCustomer")(
   function* (input: {
@@ -203,7 +227,15 @@ export const beginUnlimitedPassPurchase = Effect.fn(
           return yield* new UnlimitedPassAdmissionError({
             reason: "purchase-conflict",
           });
-        if (existing.order.paymentState !== "not_started") {
+        if (isVoidedUnlimitedDraft(existing)) {
+          return yield* new UnlimitedPassDraftVoided({
+            blockingDates: yield* readVoidedDraftDates(existing.purchase),
+          });
+        }
+        if (
+          existing.order.paymentState !== "not_started" ||
+          existing.order.activePaymentAttemptId
+        ) {
           return yield* new EntryPackPurchaseError({
             reason: "payment-in-progress",
           });
@@ -320,16 +352,14 @@ export const beginUnlimitedPassPurchase = Effect.fn(
         session.accountId,
         "unlimited"
       );
-      if (
-        prepared?.order.paymentState === "not_started" &&
-        prepared.purchase.status === "void"
-      ) {
+      if (prepared && isVoidedUnlimitedDraft(prepared)) {
         return yield* new UnlimitedPassDraftVoided({
-          blockingDates: yield* readRejectedHoldDates(input.orderId),
+          blockingDates: yield* readVoidedDraftDates(prepared.purchase),
         });
       }
       if (
         prepared?.order.paymentState !== "not_started" ||
+        prepared.order.activePaymentAttemptId ||
         prepared.purchase.status !== "pending_payment"
       ) {
         return yield* new EntryPackPurchaseError({
@@ -337,7 +367,9 @@ export const beginUnlimitedPassPurchase = Effect.fn(
         });
       }
       const { purchase } = prepared;
-      yield* createUnlimitedPassHolds(purchase).pipe(
+      yield* createUnlimitedPassHolds(purchase, {
+        reportBlockingDates: true,
+      }).pipe(
         Effect.catch(
           Effect.fnUntraced(function* (error) {
             const rejectedDates = yield* readRejectedHoldDates(purchase.id);
@@ -345,9 +377,19 @@ export const beginUnlimitedPassPurchase = Effect.fn(
               error._tag === "UnlimitedPassHoldsUnavailable" &&
               error.reason !== "unfinished";
             if (!blocking && rejectedDates.length === 0) return yield* error;
+            const blockingDates = [
+              ...new Set([
+                ...rejectedDates,
+                ...(blocking ? (error.blockingDates ?? []) : []),
+              ]),
+            ].sort();
+            const quote = {
+              ...purchase.quote,
+              voidBlockingDates: blockingDates,
+            };
             const [voided] = yield* db
               .update(passPurchases)
-              .set({ status: "void" })
+              .set({ status: "void", quote })
               .where(
                 and(
                   eq(passPurchases.id, purchase.id),
@@ -363,11 +405,7 @@ export const beginUnlimitedPassPurchase = Effect.fn(
                 )
               )
             );
-            return yield* new UnlimitedPassDraftVoided({
-              blockingDates: blocking
-                ? (error.blockingDates ?? rejectedDates)
-                : rejectedDates,
-            });
+            return yield* new UnlimitedPassDraftVoided({ blockingDates });
           })
         )
       );
