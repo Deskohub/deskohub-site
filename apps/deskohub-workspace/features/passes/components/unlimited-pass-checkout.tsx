@@ -361,14 +361,13 @@ export function UnlimitedPassCheckout({
       if (detailRevision.current !== revision) return;
       if (
         result.data?.status === "purchase_error" &&
-        result.data.reason === "draft-changed" &&
-        submission.predecessorOrderIds.length <
-          unlimitedCheckoutPredecessorLimit
+        result.data.reason === "draft-changed"
       ) {
+        // Begin processes the submitted predecessors before checking the draft.
         submission = {
           kind: "submitted",
           orderId: orderIdSchema.make(crypto.randomUUID()),
-          predecessorOrderIds: getUnlimitedCheckoutPredecessors(submission),
+          predecessorOrderIds: [submission.orderId],
         };
         result = await beginSubmission(submission);
       }
