@@ -48,7 +48,7 @@ import {
 } from "@/features/checkout/schemas/checkout-details";
 import type { Locale } from "@/features/i18n";
 import type { ValidOfficePeople } from "@/features/office/office-people";
-import { CoworkPassesReleaseGateForRun } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import { CoworkPassesReleaseGateForRun } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
   type EntryPackRedemption,
   EntryPackUnavailableError,

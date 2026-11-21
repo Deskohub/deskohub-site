@@ -9,7 +9,7 @@ import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Data, Effect, Layer, Match, Option } from "effect";
 import { workspaceStatementConcurrency } from "@/db/database.service";
 import { workspaceProductMonitorOptionTableTags } from "@/features/checkout/product-catalog";
-import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
   getBookingsWithPassDayIntents,
   observePassDayInventory,

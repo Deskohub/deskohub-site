@@ -31,7 +31,7 @@ import {
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
-import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate.server";
+import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate";
 import { PassDayMoves } from "./unlimited-pass-day-moves";
 import { createUnlimitedPassDayHold } from "./unlimited-pass-dotypos-holds";
 import { releaseUnlimitedPassDays } from "./unlimited-pass-holds";

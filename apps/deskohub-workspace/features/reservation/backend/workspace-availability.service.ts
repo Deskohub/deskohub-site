@@ -17,7 +17,7 @@ import type { WorkspaceCoworkProductTier } from "@/features/checkout/product-cat
 import {
   CoworkPassesReleaseGate,
   CoworkPassesReleaseGateForRun,
-} from "@/features/passes/backend/cowork-passes-release-gate.server";
+} from "@/features/passes/backend/cowork-passes-release-gate";
 import {
   getBookingsWithPassDayIntents,
   observePassDayInventory,
