@@ -14,6 +14,7 @@ import type { EntryPackStatus } from "../backend/entry-pack-status";
 import { getEntryPackDetailsPath } from "../entry-pack-checkout";
 import { getEntryPackLastUsableDate } from "../pass-offer";
 import { getPassTierName } from "../pass-offer.i18n";
+import { getUnlimitedAccessPath } from "../routes";
 
 type OrderStatus = Exclude<
   EntryPackStatus,
@@ -22,6 +23,7 @@ type OrderStatus = Exclude<
 
 const statusTitles = {
   paid: m.entryPackStatusPaidTitle,
+  granted: m.passStatusGrantedTitle,
   pending: m.checkoutStatusPendingTitle,
   checking: m.checkoutStatusPaymentPendingDelayedTitle,
   not_started: m.entryPackStatusNotStartedTitle,
@@ -35,6 +37,7 @@ const statusTitles = {
 
 const statusIcons = {
   paid: Check,
+  granted: Check,
   pending: Clock,
   checking: Clock,
   not_started: Clock,
@@ -58,6 +61,7 @@ export function EntryPackStatusPage({
   readonly presentation: "page" | "modal";
 }) {
   const isPaid = status.status === "paid";
+  const isGranted = status.status === "granted";
   const unlimited = status.entryCount === null;
   const isPending = status.status === "pending";
   const retryPath =
@@ -160,7 +164,7 @@ export function EntryPackStatusPage({
           {status.entryCount !== null &&
             ` · ${m.passEntryCount({ count: status.entryCount }, { locale })}`}
         </p>
-        {isPaid && (
+        {(isPaid || isGranted) && (
           <p className="mt-1 text-sm text-navy-blue/70">
             {m.passEmailValid(
               {
@@ -206,10 +210,11 @@ export function EntryPackStatusPage({
         </dl>
       </div>
       <div className="mt-8 flex flex-wrap gap-3">
-        {isPaid && unlimited && !status.gift && (
+        {((isPaid && unlimited && !status.gift) ||
+          (isGranted && status.canOpenAccess)) && (
           <Button asChild size="lg">
             <Link
-              href={`/${locale}/reservation/access/${status.orderId}`}
+              href={getUnlimitedAccessPath(locale, status.orderId)}
               prefetch={false}
             >
               {m.unlimitedPassOpenAccess({}, { locale })}

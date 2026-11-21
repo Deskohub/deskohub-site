@@ -208,6 +208,63 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(selfStatus).not.toHaveProperty("invitation");
     });
 
+    test("exposes a fulfilled complimentary order to its author and claimed holder without payment details", async () => {
+      const orderId = orderIdSchema.make(crypto.randomUUID());
+      const unrelated = customerAccountIdSchema.make(crypto.randomUUID());
+      await database.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state)
+         values ($1, 'pass-purchase', 'fixture-holder', 'complimentary', 'processing')`,
+        [orderId]
+      );
+      await database.pool.query(
+        `insert into pass_purchases
+          (id, buyer_account_id, holder_account_id, product, tier, unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $3, 'unlimited', 'open-space', false, 'pending_payment', '2026-11-19', '2026-12-19', '{}', 'en-US', $4)`,
+        [orderId, buyer, holder, now.toString()]
+      );
+
+      expect(await view(orderId)).toEqual({ status: "not_found" });
+      expect(await view(orderId, { viewer: holder })).toEqual({
+        status: "not_found",
+      });
+
+      await database.pool.query(
+        "update orders set fulfillment_state = 'fulfilled', fulfilled_at = $2 where id = $1",
+        [orderId, now.toString()]
+      );
+      await database.pool.query(
+        "update pass_purchases set status = 'active', gift_issued_at = $2 where id = $1",
+        [orderId, now.toString()]
+      );
+      const granted = {
+        status: "granted",
+        orderId,
+        tier: "open-space",
+        entryCount: null,
+        validFrom: "2026-11-19",
+        validUntil: "2026-12-19",
+      };
+      expect(await view(orderId)).toEqual({ ...granted, canOpenAccess: false });
+      expect(await view(orderId, { viewer: holder })).toEqual({
+        status: "not_found",
+      });
+
+      await database.pool.query(
+        "update pass_purchases set gift_claimed_at = $2 where id = $1",
+        [orderId, now.toString()]
+      );
+      expect(await view(orderId, { viewer: holder })).toEqual({
+        ...granted,
+        canOpenAccess: true,
+      });
+      expect(await view(orderId, { viewer: unrelated })).toEqual({
+        status: "not_found",
+      });
+      expect(await view(orderId, { viewer: null })).toEqual({
+        status: "sign_in",
+      });
+    });
+
     test("reads a recorded delivery and claim for the buyer", async () => {
       const { orderId } = await seedOrder({
         paymentState: "paid",

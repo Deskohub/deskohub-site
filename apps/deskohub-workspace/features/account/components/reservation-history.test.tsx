@@ -170,6 +170,7 @@ describe("ReservationHistory", () => {
       period: "Nov 10 – Dec 9, 2026",
       status: "active",
       day: 8,
+      totalDays: 30,
       daysLeft: 23,
       accessPath: `/en-US/reservation/access/${orderId}`,
     };

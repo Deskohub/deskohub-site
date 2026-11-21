@@ -463,6 +463,41 @@ describe("CheckoutStatusRoute", () => {
   });
 
   test.each([
+    { entryCount: 5, canOpenAccess: false },
+    { entryCount: null, canOpenAccess: false },
+    { entryCount: null, canOpenAccess: true },
+  ])(
+    "renders a complimentary pass with only its available actions (%p)",
+    async ({ entryCount, canOpenAccess }) => {
+      orderKind = "pass-purchase";
+      passStatus = {
+        ...passOrder,
+        entryCount,
+        status: "granted",
+        validFrom: plainDateStringSchema.make("2026-11-19"),
+        validUntil: plainDateStringSchema.make("2026-12-19"),
+        canOpenAccess,
+      };
+
+      const { errors, html } = await renderRoute({ order: passOrderId });
+
+      expect(errors).toEqual([]);
+      expect(html).toContain('data-entry-pack-status="granted"');
+      expect(html).toContain("Complimentary pass granted");
+      expect(html).toContain(
+        entryCount === null ? "Unlimited pass" : "Entry pack"
+      );
+      expect(html).toContain('data-auto-refresh="false"');
+      expect(html).not.toContain("Paid on");
+      expect(html).not.toContain("Continue to payment");
+      expect(html).not.toContain("Try again");
+      expect(
+        html.includes(`href="/en-US/reservation/access/${passOrderId}"`)
+      ).toBe(canOpenAccess);
+    }
+  );
+
+  test.each([
     ["not_sent", false, m.entryPackStatusGiftInvitationNotSent],
     ["pending", false, m.entryPackStatusGiftInvitationPending],
     ["sent", false, m.entryPackStatusGiftInvitationSent],

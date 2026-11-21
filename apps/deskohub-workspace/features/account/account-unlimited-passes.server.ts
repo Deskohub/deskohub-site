@@ -48,6 +48,7 @@ export type AccountUnlimitedPass = {
   | {
       readonly status: "active";
       readonly day: number;
+      readonly totalDays: number;
       readonly daysLeft: number;
       readonly accessPath: string;
     }
@@ -97,7 +98,10 @@ const readHolderPasses = Effect.fn("account.readHolderUnlimitedPasses")(
           eq(orders.kind, "pass-purchase"),
           or(
             isNotNull(orders.paidAt),
-            eq(orders.paymentState, "complimentary")
+            and(
+              eq(orders.paymentState, "complimentary"),
+              eq(orders.fulfillmentState, "fulfilled")
+            )
           ),
           notInArray(passPurchases.status, ["pending_payment", "void"])
         )
@@ -172,18 +176,17 @@ export const loadAccountUnlimitedPasses = Effect.fn(
           renewalPath: getUnlimitedRenewalPath(locale, pass.orderId),
         }),
     };
-    const day = getUnlimitedPassAccessDay({ ...pass, date: today });
+    const accessDay = getUnlimitedPassAccessDay({ ...pass, date: today });
+    const issued =
+      pass.paymentState === "paid" || pass.paymentState === "complimentary";
 
-    if (
-      day !== undefined &&
-      (pass.status !== "active" || pass.paymentState === "paid")
-    ) {
+    if (accessDay && (pass.status !== "active" || issued)) {
       return [
         {
           ...summary,
           status: "active",
-          day,
-          daysLeft: today.until(end, { largestUnit: "day" }).days,
+          ...accessDay,
+          daysLeft: accessDay.totalDays - accessDay.day + 1,
           accessPath: getUnlimitedAccessPath(locale, pass.orderId),
         },
       ];
@@ -191,7 +194,7 @@ export const loadAccountUnlimitedPasses = Effect.fn(
 
     if (
       pass.status === "active" &&
-      pass.paymentState === "paid" &&
+      issued &&
       Temporal.PlainDate.compare(today, start) < 0
     ) {
       return [
