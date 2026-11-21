@@ -3,6 +3,10 @@ import { AdministrationService } from "@/features/administration/administration.
 import { defineAdministrationListExportRoute } from "@/features/administration/list-export.server";
 import { getAdministrationReservationExportColumns } from "@/features/administration/reservation-export";
 import { reservationListQuery } from "@/features/administration/reservation-list-query";
+import {
+  CoworkPassesReleaseGate,
+  CoworkPassesReleaseGateForRun,
+} from "@/features/passes/backend/cowork-passes-release-gate";
 
 // The export reads Dotypos in sequence: the date range, then batches of
 // bookings and customers. Each read can wait out the 30-second Dotypos request
@@ -12,12 +16,16 @@ export const maxDuration = 300;
 const exportReservations = defineAdministrationListExportRoute({
   columns: getAdministrationReservationExportColumns,
   name: "reservations",
-  rows: (params) =>
-    Effect.flatMap(AdministrationService, (administration) =>
-      administration.exportReservations(
-        reservationListQuery.parseExport(params)
-      )
-    ),
+  rows: Effect.fnUntraced(function* (params) {
+    const includePassDays = yield* CoworkPassesReleaseGate.isOpen.pipe(
+      Effect.provide(CoworkPassesReleaseGateForRun)
+    );
+    const administration = yield* AdministrationService;
+    return yield* administration.exportReservations({
+      ...reservationListQuery.parseExport(params),
+      ...(includePassDays && { includePassDays: true }),
+    });
+  }),
 });
 
 export { exportReservations as GET };

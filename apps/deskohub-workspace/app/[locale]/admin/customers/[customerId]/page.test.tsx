@@ -95,6 +95,21 @@ mock.module("@/features/administration/page-data.server", () => ({
     Promise.resolve({ from: "2025-08-25", to: "2026-08-24", dates: [] }),
 }));
 
+let passSectionsOpen = false;
+mock.module("@/features/passes/admin/pass-page-data.server", () => ({
+  loadAdminCustomerPasses: () =>
+    Promise.resolve(
+      passSectionsOpen
+        ? {
+            held: [],
+            boughtForOthers: [],
+            spent: [],
+          }
+        : null
+    ),
+  loadReservationPassLinks: () => Promise.resolve(undefined),
+}));
+
 // The page's server modules read server-only settings, so it loads before
 // the DOM environment exists.
 const { AdministrationCustomerDetailContent } = await import("./page");
@@ -136,6 +151,28 @@ describe("AdministrationCustomerDetailContent", () => {
   afterAll(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await unregisterWorkspaceComponentTestEnv();
+  });
+
+  test("shows pass sections and the spend statistic only when the release gate returns the pass projection", async () => {
+    expect(
+      within(await prerenderCustomerDetail()).queryByRole("heading", {
+        name: "Passes",
+      })
+    ).toBeNull();
+    passSectionsOpen = true;
+    try {
+      const profile = within(await prerenderCustomerDetail());
+      expect(profile.getByRole("heading", { name: "Passes" })).toBeDefined();
+      expect(
+        profile.getByRole("heading", { name: "Held by Alex Example" })
+      ).toBeDefined();
+      expect(
+        profile.getByRole("heading", { name: "Bought for others" })
+      ).toBeDefined();
+      expect(profile.getByText("Spent on passes")).toBeDefined();
+    } finally {
+      passSectionsOpen = false;
+    }
   });
 
   test("shows the customer's administration page when Dotypos returns the customer and the discount sections load", async () => {
