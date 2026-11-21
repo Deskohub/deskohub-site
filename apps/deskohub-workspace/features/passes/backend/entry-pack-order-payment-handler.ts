@@ -2,7 +2,7 @@ import "server-only";
 
 import { DotyposService } from "@deskohub/dotypos";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
-import { and, eq, inArray, lte, ne } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lte, ne } from "drizzle-orm";
 import { Context, Data, Effect, Option, Result } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -427,6 +427,14 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       ) {
         return;
       }
+      if (purchase.product === "unlimited" && purchase.status === "cancelled") {
+        const [attempt] = yield* readAttempt(orderId, activePaymentAttemptId);
+        if (attempt?.state !== "paid")
+          return yield* paymentError(
+            orderId,
+            "Cancelled Unlimited pass has no active paid attempt."
+          );
+      }
       const attemptIsActive = and(
         eq(orders.id, orderId),
         eq(orders.paymentState, "paid"),
@@ -604,13 +612,27 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         purchase.status === "active" ||
         purchase.status === "withdrawn"
       )
-        return true;
-      if (purchase.status !== "pending_payment") return false;
+        return "buyer-and-gift" as const;
+      if (purchase.status === "cancelled") {
+        // Stop holder retries and keep the buyer's original receipt details.
+        yield* db
+          .update(entryPackGiftInvitations)
+          .set({ nextAttemptAt: null })
+          .where(
+            and(
+              eq(entryPackGiftInvitations.orderId, orderId),
+              isNotNull(entryPackGiftInvitations.nextAttemptAt)
+            )
+          );
+        return "buyer-only" as const;
+      }
+      if (purchase.status !== "pending_payment") return "blocked" as const;
       const [order] = yield* readOrder(orderId);
       if (order?.paymentState !== "paid" || !order.activePaymentAttemptId)
-        return false;
+        return "blocked" as const;
       const attemptId = order.activePaymentAttemptId;
-      if (!(yield* canConfirmUnlimitedPass(orderId, attemptId))) return false;
+      if (!(yield* canConfirmUnlimitedPass(orderId, attemptId)))
+        return "blocked" as const;
       if (Option.isNone(dotypos))
         return yield* paymentError(
           orderId,
@@ -628,13 +650,15 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           (cause._tag === "UnlimitedPassHoldsUnavailable" &&
             cause.reason === "changed");
         if (!(yield* canConfirmUnlimitedPass(orderId, attemptId, rejected)))
-          return false;
+          return "blocked" as const;
         return yield* paymentError(
           orderId,
           "Unlimited pass day confirmation needs reconciliation."
         );
       }
-      return (yield* settlePassPurchase(orderId, attemptId)) !== undefined;
+      return (yield* settlePassPurchase(orderId, attemptId)) === undefined
+        ? ("blocked" as const)
+        : ("buyer-and-gift" as const);
     },
     (effect, orderId) =>
       effect.pipe(
@@ -647,8 +671,10 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   const fulfill = Effect.fn("passPurchase.fulfill")(function* (
     orderId: OrderId
   ) {
-    if (!(yield* fulfillUnlimited(orderId))) return;
+    const next = yield* fulfillUnlimited(orderId);
+    if (next === "blocked") return;
     yield* fulfillGift(orderId).pipe(
+      Effect.when(Effect.succeed(next === "buyer-and-gift")),
       Effect.catch(() =>
         Effect.logWarning("Entry pack gift fulfillment could not complete")
       )
