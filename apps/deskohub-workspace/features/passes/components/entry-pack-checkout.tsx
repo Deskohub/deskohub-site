@@ -24,6 +24,7 @@ import type {
   PassPurchaseBuyer,
   passPurchaseDetailsSchema,
 } from "../pass-purchase-details";
+import { getPassCheckoutHandoffPath } from "../routes";
 import { EntryPackChoose } from "./entry-pack-choose";
 import { EntryPackDetails } from "./entry-pack-details";
 import { EntryPackPay } from "./entry-pack-pay";
@@ -65,7 +66,7 @@ export function EntryPackCheckout({
     readonly orderId: OrderId;
     readonly holderEmail?: string;
     readonly validUntil?: string;
-    readonly handoffPath?: string;
+    readonly handoffToken?: string;
   };
   readonly initialPayment?: {
     readonly orderId: OrderId;
@@ -128,6 +129,10 @@ export function EntryPackCheckout({
       };
     }
     const { orderId } = attempt.current;
+    const handoffToken =
+      !payment && continuation?.orderId === orderId
+        ? continuation.handoffToken
+        : undefined;
     const revision = ++detailsRevision.current;
     try {
       const result = await beginEntryPackCheckout({
@@ -135,6 +140,7 @@ export function EntryPackCheckout({
         product,
         locale,
         buyerEmail: buyer.email,
+        ...(handoffToken && { handoffToken }),
         ...(holderEmail !== undefined && { holderEmail }),
         ...(values.buyerProfile !== undefined && {
           buyerProfile: values.buyerProfile,
@@ -142,21 +148,22 @@ export function EntryPackCheckout({
       });
       if (detailsRevision.current !== revision) return;
       if (result.data?.status === "signed_out") {
-        const unfinishedHandoff =
-          !payment && continuation?.orderId === orderId
-            ? continuation.handoffPath
-            : undefined;
         window.location.assign(
           getAccountSignInPath(
             locale,
-            unfinishedHandoff ??
-              getEntryPackDetailsPath(
-                locale,
-                product,
-                savedOrderId === orderId ? savedOrderId : undefined
-              )
+            handoffToken
+              ? getPassCheckoutHandoffPath(locale, "entry-pack", handoffToken)
+              : getEntryPackDetailsPath(
+                  locale,
+                  product,
+                  savedOrderId === orderId ? savedOrderId : undefined
+                )
           )
         );
+        return;
+      }
+      if (result.data?.status === "status") {
+        window.location.assign(result.data.statusPath);
         return;
       }
       if (result.data?.status === "ready") {

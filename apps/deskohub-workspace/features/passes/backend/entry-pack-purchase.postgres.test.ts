@@ -110,7 +110,11 @@ import {
 import { loadEntryPackRedemption } from "./entry-pack-redemption";
 import { settlePassPurchase } from "./entry-pack-settlement";
 import { loadEntryPackStatus } from "./entry-pack-status";
-import { readPassCheckoutHandoff } from "./pass-checkout-handoff";
+import {
+  readPassCheckoutHandoff,
+  readPassCheckoutHandoffForPage,
+  sealPassCheckoutHandoff,
+} from "./pass-checkout-handoff";
 import { reconcilePassPurchases } from "./pass-purchase-reconciliation";
 
 describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
@@ -876,6 +880,17 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             Effect.provide(Layer.merge(services, SealedStateKeys.Default))
           );
         },
+        customerHandoff: () =>
+          sealPassCheckoutHandoff({
+            buyerAccountId: accountId,
+            orderId,
+            product: { kind: "entry-pack", tier: "open-space", size: 5 },
+          }).pipe(Effect.provide(SealedStateKeys.Default)),
+        reopenCustomerHandoff: (token: string) =>
+          readPassCheckoutHandoffForPage(token, "entry-pack").pipe(
+            Effect.map((draft) => draft?.statusPath),
+            Effect.provide(Layer.merge(services, SealedStateKeys.Default))
+          ),
         status: () =>
           Effect.runPromise(
             loadEntryPackStatus(orderId).pipe(
@@ -1394,6 +1409,12 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     test("customer Pay verifies the buyer, current consent and price before opening Nexi", async () => {
       const db = database!;
       const purchase = await integration(db, 20_000);
+      const originalHandoff = await Effect.runPromise(
+        purchase.customerHandoff()
+      );
+      expect(
+        await Effect.runPromise(purchase.reopenCustomerHandoff(originalHandoff))
+      ).toBeUndefined();
       expect(await Effect.runPromise(purchase.customerStatus())).toEqual({
         orderId: purchase.orderId,
         tier: "open-space",
@@ -1512,6 +1533,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         ).toString()
       );
       await purchase.notify("success");
+      expect(
+        await Effect.runPromise(purchase.reopenCustomerHandoff(originalHandoff))
+      ).toBe(statusPath);
       expect(await Effect.runPromise(purchase.customerStatus())).toMatchObject({
         status: "paid",
       });

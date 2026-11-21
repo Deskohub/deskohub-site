@@ -8,6 +8,14 @@ import { CurrentCustomerAccount } from "@/features/account/backend/current-custo
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { OrderId } from "@/features/order";
 
+export const hasPassPurchasePaymentStarted = (
+  order: Pick<
+    typeof orders.$inferSelect,
+    "paymentState" | "activePaymentAttemptId"
+  >
+) =>
+  order.paymentState !== "not_started" || order.activePaymentAttemptId !== null;
+
 export const findOwnedPassPurchaseOrder = Effect.fn(
   "findOwnedPassPurchaseOrder"
 )(function* (

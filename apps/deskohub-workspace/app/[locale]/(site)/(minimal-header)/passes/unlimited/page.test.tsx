@@ -106,6 +106,19 @@ mock.module("@/features/passes/backend/entry-pack-order", () => ({
         : undefined
     ),
 }));
+mock.module("@/features/passes/backend/pass-checkout-handoff", () => ({
+  readPassCheckoutHandoffForPage: (token: string) =>
+    Effect.succeed(
+      token === "opaque"
+        ? {
+            orderId: submittedOrder,
+            holderEmail,
+            supersedeOrderId: ownedOrder,
+            product: { kind: "unlimited", selection: renewalSelection },
+          }
+        : undefined
+    ),
+}));
 
 const { default: UnlimitedPassPage, generateMetadata } = await import("./page");
 
@@ -191,6 +204,26 @@ async function renderContent(query: Record<string, string | string[]>) {
   const content = page.props.children;
   return content.type(content.props);
 }
+
+test("Choose and Details can reload before the gift handoff has an order", async () => {
+  const query = {
+    handoff: "opaque",
+    tier: "reserved-desk",
+    startDate: "2026-12-20",
+  };
+  const choose = await renderContent(query);
+  expect(choose.props.children.props).toMatchObject({
+    initialHandoff: { token: "opaque", supersedeOrderId: ownedOrder },
+    initialDetails: undefined,
+    initialStartDate: query.startDate,
+    draft: { kind: "resume", orderId: submittedOrder, holderEmail },
+  });
+  const details = await renderContent({ ...query, step: "details" });
+  expect(details.props.children.props).toMatchObject({
+    initialDetails: { tier: query.tier, startDate: query.startDate },
+    draft: { kind: "resume", orderId: submittedOrder, holderEmail },
+  });
+});
 
 test("a renewal preselects the holder's prior configuration and authoritative exclusive end", async () => {
   const content = await renderContent({ renew: renewalSource });

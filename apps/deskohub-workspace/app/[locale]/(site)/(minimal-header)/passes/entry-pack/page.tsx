@@ -21,16 +21,13 @@ import {
   readEntryPackCheckoutDraft,
   readEntryPackCheckoutPayment,
 } from "@/features/passes/backend/entry-pack-purchase";
-import {
-  getPassCheckoutHandoffPath,
-  passCheckoutHandoffTokenSchema,
-  readPassCheckoutHandoff,
-} from "@/features/passes/backend/pass-checkout-handoff";
+import { readPassCheckoutHandoffForPage } from "@/features/passes/backend/pass-checkout-handoff";
 import { EntryPackCheckout } from "@/features/passes/components/entry-pack-checkout";
 import {
   type EntryPackBuyer,
   getEntryPackDetailsPath,
   getEntryPackPayPath,
+  passCheckoutHandoffTokenSchema,
   readEntryPackSelection,
 } from "@/features/passes/entry-pack-checkout";
 import {
@@ -38,6 +35,7 @@ import {
   getEntryPackLastUsableDate,
   getEntryPackValidity,
 } from "@/features/passes/pass-offer";
+import { getPassCheckoutHandoffPath } from "@/features/passes/routes";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
@@ -173,11 +171,11 @@ async function EntryPackPageContent({
         const now = yield* currentInstant;
         const buyer = yield* readBuyer();
         const handoff =
-          handoffToken &&
-          (buyer.kind === "linked" || buyer.kind === "profile-required")
-            ? yield* readPassCheckoutHandoff(handoffToken).pipe(
-                Effect.provide(SealedStateKeys.Default)
-              )
+          handoffToken && buyer.kind !== "signed-out"
+            ? yield* readPassCheckoutHandoffForPage(
+                handoffToken,
+                "entry-pack"
+              ).pipe(Effect.provide(SealedStateKeys.Default))
             : undefined;
         const draft =
           orderId &&
@@ -241,6 +239,7 @@ async function EntryPackPageContent({
       );
     }
     if (handoff?.product.kind !== "entry-pack") notFound();
+    if (handoff.statusPath) redirect(handoff.statusPath);
   }
   if (draft?.kind === "missing") notFound();
   if (isPaymentStep) {
@@ -289,11 +288,7 @@ async function EntryPackPageContent({
       ? {
           orderId: handoff.orderId,
           holderEmail: handoff.holderEmail,
-          handoffPath: getPassCheckoutHandoffPath(
-            locale,
-            "entry-pack",
-            handoffToken
-          ),
+          handoffToken,
         }
       : undefined;
 

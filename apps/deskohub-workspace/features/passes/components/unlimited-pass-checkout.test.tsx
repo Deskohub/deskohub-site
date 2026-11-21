@@ -641,7 +641,6 @@ test("a reload during Continue retries the committed gift and a date change supe
 
 test("a linked gift keeps its recipient and original order until Continue succeeds", async () => {
   const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000004");
-  const handoffPath = "/en-US/passes/unlimited?step=details&handoff=opaque";
   const response = Promise.withResolvers<{ data: typeof readyCheckout }>();
   const beginCheckout = mock(() => response.promise);
   const view = render(
@@ -649,7 +648,7 @@ test("a linked gift keeps its recipient and original order until Continue succee
       <UnlimitedPassCheckout
         {...base}
         initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
-        initialHandoffPath={handoffPath}
+        initialHandoff={{ token: "opaque" }}
         draft={{ kind: "resume", orderId, holderEmail }}
         beginCheckout={beginCheckout}
       />
@@ -668,7 +667,12 @@ test("a linked gift keeps its recipient and original order until Continue succee
   fireEvent.submit(name.form!);
   await waitFor(() =>
     expect(beginCheckout).toHaveBeenCalledWith(
-      expect.objectContaining({ orderId, holderEmail, recipientName })
+      expect.objectContaining({
+        orderId,
+        holderEmail,
+        recipientName,
+        handoffToken: "opaque",
+      })
     )
   );
   expect(checkoutUrl().searchParams.get("handoff")).toBe("opaque");
@@ -676,6 +680,30 @@ test("a linked gift keeps its recipient and original order until Continue succee
   expect(await view.findByRole("button", { name: /pay/i })).toBeDefined();
   expect(checkoutUrl().searchParams.get("order")).toBe(orderId);
   expect(checkoutUrl().searchParams.get("handoff")).toBeNull();
+});
+
+test("a gift can reopen Choose before Continue creates an order", () => {
+  const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000005");
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        initialHandoff={{ token: "opaque" }}
+        draft={{ kind: "resume", orderId, holderEmail }}
+      />
+    </QueryProvider>
+  );
+  fireEvent.click(
+    view.getByRole("button", {
+      name: m.reservationSelectionChange({}, { locale }),
+    })
+  );
+  const params = checkoutUrl().searchParams;
+  expect(params.get("handoff")).toBe("opaque");
+  expect(params.get("startDate")).toBe(openSpaceStart);
+  expect(params.get("step")).toBeNull();
+  expect(params.get("order")).toBeNull();
 });
 
 test("Unlimited gift requires a private name and clears it when returning to self-purchase", async () => {

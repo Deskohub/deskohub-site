@@ -10,11 +10,14 @@ import {
 } from "@/features/account/backend/saved-locale-preference.test-utils";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
+import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { type Locale, m } from "@/features/i18n";
 import { getLocale } from "@/features/i18n/paraglide/runtime.js";
 import { type OrderId, orderIdSchema } from "@/features/order";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId as accountId } from "@/shared/testing/workspace-fixtures.test-utils";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { passPurchaseQuoteCodec } from "./pass-purchase-quote";
 
 const requestHeaders = new AsyncLocalStorage<Headers>();
@@ -50,6 +53,7 @@ Object.defineProperty(CurrentCustomerAccount, "Live", {
 });
 
 const issuedOrders = new Map<OrderId, Locale>();
+const paidOrders = new Set<OrderId>();
 const entryPackOrders = await import("./backend/entry-pack-order");
 const readOwnedLocale = mock((orderId: OrderId) =>
   Effect.succeed(issuedOrders.get(orderId))
@@ -57,6 +61,20 @@ const readOwnedLocale = mock((orderId: OrderId) =>
 mock.module("./backend/entry-pack-order", () => ({
   ...entryPackOrders,
   readOwnedPassPurchaseOrderLocale: readOwnedLocale,
+  findOwnedPassPurchaseOrder: (orderId: OrderId) =>
+    Effect.sync(() => {
+      const locale = issuedOrders.get(orderId);
+      return (
+        locale && {
+          order: {
+            id: orderId,
+            paymentState: paidOrders.has(orderId) ? "paid" : "not_started",
+            activePaymentAttemptId: null,
+          },
+          purchase: { locale },
+        }
+      );
+    }),
 }));
 
 const amount = currencyCZK(115_000);
@@ -71,6 +89,7 @@ mock.module("./backend/entry-pack-purchase", () => ({
     Effect.sync(() => {
       issuedOrders.set(input.orderId, input.locale);
       return {
+        id: input.orderId,
         locale: input.locale,
         tier: input.product.tier,
         entryCount: input.product.size,
@@ -116,6 +135,9 @@ mock.module("./backend/unlimited-pass-purchase", () => ({
 
 const { beginEntryPackCheckout, beginUnlimitedCheckout, payEntryPackCheckout } =
   await import("./entry-pack-checkout-actions");
+const { sealPassCheckoutHandoff } = await import(
+  "./backend/pass-checkout-handoff"
+);
 
 const withoutReferer = <A>(action: () => A) =>
   requestHeaders.run(
@@ -123,6 +145,11 @@ const withoutReferer = <A>(action: () => A) =>
       cookie: `${syntheticSessionCookie}; PARAGLIDE_LOCALE=cs-CZ`,
     }),
     action
+  );
+
+const sealHandoff = (value: Parameters<typeof sealPassCheckoutHandoff>[0]) =>
+  Effect.runPromise(
+    sealPassCheckoutHandoff(value).pipe(Effect.provide(SealedStateKeys.Default))
   );
 
 test("Details issues an order and in-place Pay uses its verified locale without Referer", async () => {
@@ -179,6 +206,76 @@ test("Details issues an order and in-place Pay uses its verified locale without 
   );
   expect(malformed.validationErrors?.fieldErrors.orderId).toBeDefined();
   expect(readOwnedLocale).toHaveBeenCalledTimes(lookups);
+});
+
+test("Continue from an open Entry Pack handoff returns to status after payment", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const product = {
+    kind: "entry-pack",
+    tier: "reserved-desk",
+    size: 5,
+  } as const;
+  const handoffToken = await sealHandoff({
+    buyerAccountId: accountId,
+    orderId,
+    product,
+  });
+  paidOrders.add(orderId);
+  const result = await withoutReferer(() =>
+    beginEntryPackCheckout({
+      orderId,
+      locale: "en-US",
+      buyerEmail,
+      product,
+      handoffToken,
+    })
+  );
+  expect(result.data).toEqual({
+    status: "status",
+    statusPath: `/en-US/reservation/status/${orderId}`,
+  });
+});
+
+test("Unlimited Continue applies the protected predecessor and referral from the handoff", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const supersedeOrderId = orderIdSchema.make(crypto.randomUUID());
+  const referralCode = canonicalPromotionCodeSchema.make("REFERRAL");
+  const holderEmail = testEmailAddress("unlimited-handoff-recipient");
+  const selection = {
+    tier: "reserved-desk",
+    startDate: plainDateStringSchema.make("2026-12-05"),
+  } as const;
+  const handoffToken = await sealHandoff({
+    buyerAccountId: accountId,
+    orderId,
+    product: { kind: "unlimited", selection },
+    holderEmail,
+    supersedeOrderId,
+    referralCode,
+  });
+  unlimitedFailures.set(
+    orderId,
+    new purchase.EntryPackPurchaseError({ reason: "holds-unavailable" })
+  );
+  await withoutReferer(() =>
+    beginUnlimitedCheckout({
+      locale: "en-US",
+      orderId,
+      buyerEmail,
+      holderEmail,
+      selection,
+      recipientName: "Fixture Recipient",
+      handoffToken,
+    })
+  );
+  expect(beginUnlimited).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      orderId,
+      holderEmail,
+      supersedeOrderId,
+      referralCode,
+    })
+  );
 });
 
 test.each([undefined, "", " \t "])(

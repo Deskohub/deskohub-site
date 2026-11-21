@@ -43,6 +43,7 @@ import { testSessionProfile } from "@/features/account/backend/customer-authenti
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { orderIdSchema } from "@/features/order";
@@ -1134,7 +1135,18 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
         name: "Fixture Recipient",
       });
       const startDate = date(getCurrentWorkspaceDate().add({ days: 2 }));
-      const availability = yield* purchaseStartDates({ startsOn: startDate });
+      const predecessor = yield* record(
+        Temporal.PlainDate.from(startDate),
+        accountId,
+        holderAccountId
+      );
+      yield* createUnlimitedPassHolds(predecessor);
+      const supersedeOrderId = predecessor.id;
+      const referralCode = canonicalPromotionCodeSchema.make("REFERRAL");
+      const availability = yield* purchaseStartDates({
+        startsOn: startDate,
+        supersedeOrderId,
+      });
       expect(availability.status).toBe("ready");
       if (availability.status !== "ready")
         throw new Error("Expected start dates");
@@ -1148,6 +1160,8 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
           selection: { tier: "reserved-desk" as const, startDate },
         },
         holderEmail,
+        supersedeOrderId,
+        referralCode,
       };
       const start = yield* startPurchase(requested);
       expect(start.status).toBe("details_required");
@@ -1172,6 +1186,8 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
         orderId,
         holderEmail,
         product: requested.product,
+        supersedeOrderId,
+        referralCode,
       });
       if (!fields) throw new Error("Expected buyer-owned gift details");
       const begin = beginPurchase({
@@ -1182,16 +1198,32 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
       const draft = yield* begin;
       expect(draft.orderId).toBe(orderId);
       const [purchase] = yield* db
-        .select({ holderAccountId: passPurchases.holderAccountId })
+        .select({
+          holderAccountId: passPurchases.holderAccountId,
+          quote: passPurchases.quote,
+        })
         .from(passPurchases)
         .where(eq(passPurchases.id, orderId));
       expect(purchase?.holderAccountId).toBe(holderAccountId);
+      const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+        purchase!.quote
+      );
+      expect(quote.selection?.referralCode).toBe(referralCode);
+      const [retired] = yield* db
+        .select({ status: passPurchases.status })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, supersedeOrderId));
+      expect(retired?.status).toBe("void");
       expect(yield* begin).toEqual(draft);
       expect(draft.payPath).toBe(
         `/en-US/passes/unlimited?order=${orderId}&step=pay`
       );
       expect(draft.disclosure.earlyStartRequest).toBeDefined();
-      expect(provider.reservations.size).toBe(unlimitedPassDays);
+      expect(
+        [...provider.reservations.values()].filter(
+          ({ status }) => status === "NEW"
+        )
+      ).toHaveLength(unlimitedPassDays);
 
       const continuation = yield* loadUnlimitedCheckoutContinuation(
         orderId,

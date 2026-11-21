@@ -12,19 +12,20 @@ import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { readOwnedPassPurchaseOrderLocale } from "@/features/passes/backend/entry-pack-order";
-import {
-  getPassCheckoutHandoffPath,
-  passCheckoutHandoffTokenSchema,
-  readPassCheckoutHandoff,
-} from "@/features/passes/backend/pass-checkout-handoff";
+import { readPassCheckoutHandoffForPage } from "@/features/passes/backend/pass-checkout-handoff";
 import { readPassPurchaseBuyer } from "@/features/passes/backend/pass-purchase-buyer";
 import {
   loadUnlimitedCheckoutContinuation,
   readUnlimitedCheckoutRenewal,
 } from "@/features/passes/backend/unlimited-pass-purchase";
 import { UnlimitedPassCheckout } from "@/features/passes/components/unlimited-pass-checkout";
+import { passCheckoutHandoffTokenSchema } from "@/features/passes/entry-pack-checkout";
 import { unlimitedPassDays } from "@/features/passes/pass-offer";
-import { getUnlimitedRenewalPath } from "@/features/passes/routes";
+import {
+  getPassCheckoutHandoffPath,
+  getUnlimitedRenewalPath,
+  withPassCheckoutHandoff,
+} from "@/features/passes/routes";
 import {
   beginUnlimitedCheckout,
   getUnlimitedCheckoutAvailability,
@@ -203,7 +204,7 @@ async function UnlimitedPassPageContent({
     (!handoffToken ||
       order !== undefined ||
       query.renew !== undefined ||
-      query.step !== "details")
+      (query.step !== undefined && query.step !== "details"))
   ) {
     notFound();
   }
@@ -252,12 +253,11 @@ async function UnlimitedPassPageContent({
         ),
       });
       const handoff =
-        handoffToken &&
-        (checkout.buyer.kind === "linked" ||
-          checkout.buyer.kind === "profile-required")
-          ? yield* readPassCheckoutHandoff(handoffToken).pipe(
-              Effect.provide(SealedStateKeys.Default)
-            )
+        handoffToken && checkout.buyer.kind !== "signed-out"
+          ? yield* readPassCheckoutHandoffForPage(
+              handoffToken,
+              "unlimited"
+            ).pipe(Effect.provide(SealedStateKeys.Default))
           : undefined;
       return { ...checkout, handoff };
     }).pipe(
@@ -281,11 +281,14 @@ async function UnlimitedPassPageContent({
       redirect(
         getAccountSignInPath(
           locale,
-          getPassCheckoutHandoffPath(locale, "unlimited", handoffToken)
+          query.tier === undefined
+            ? getPassCheckoutHandoffPath(locale, "unlimited", handoffToken)
+            : withPassCheckoutHandoff(checkoutPath(locale), handoffToken)
         )
       );
     }
     if (handoff?.product.kind !== "unlimited") notFound();
+    if (handoff.statusPath) redirect(handoff.statusPath);
   }
   if ((order || requestedRenewal) && checkout.buyer.kind === "signed-out") {
     redirect(getAccountSignInPath(locale, checkoutPath(locale)));
@@ -334,7 +337,7 @@ async function UnlimitedPassPageContent({
   };
   const draftSelection = resumesDraft ? draft?.selection : undefined;
   const selection =
-    handoff?.product.kind === "unlimited"
+    handoff?.product.kind === "unlimited" && query.tier === undefined
       ? handoff.product.selection
       : (draftSelection ?? renewalSelection ?? requestedSelection);
   const checkoutDraft =
@@ -381,11 +384,10 @@ async function UnlimitedPassPageContent({
         initialDetails={query.step === "details" ? selection : undefined}
         {...(handoff &&
           handoffToken && {
-            initialHandoffPath: getPassCheckoutHandoffPath(
-              locale,
-              "unlimited",
-              handoffToken
-            ),
+            initialHandoff: {
+              token: handoffToken,
+              supersedeOrderId: handoff.supersedeOrderId,
+            },
           })}
         renewsPassId={renewsPassId}
         initialBounds={{

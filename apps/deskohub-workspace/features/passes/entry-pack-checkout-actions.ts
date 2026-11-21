@@ -28,11 +28,16 @@ import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservatio
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import type { ResolveIssuedActionLocale } from "@/shared/utils/action-middleware/locale";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
-import { readOwnedPassPurchaseOrderLocale } from "./backend/entry-pack-order";
+import {
+  findOwnedPassPurchaseOrder,
+  hasPassPurchasePaymentStarted,
+  readOwnedPassPurchaseOrderLocale,
+} from "./backend/entry-pack-order";
 import {
   beginEntryPackPurchase,
   displayPassPurchasePrice,
@@ -41,6 +46,7 @@ import {
   payForEntryPack,
   repriceEntryPackPurchase,
 } from "./backend/entry-pack-purchase";
+import { readPassCheckoutHandoff } from "./backend/pass-checkout-handoff";
 import {
   beginUnlimitedPassPurchase,
   getUnlimitedPassPaymentDisclosure,
@@ -57,6 +63,7 @@ import {
   unlimitedGiftRecipientNameSchema,
 } from "./pass-purchase-details";
 import { passPurchaseQuoteCodec } from "./pass-purchase-quote";
+import { getPassPurchaseStatusPath } from "./routes";
 import {
   unlimitedPassRequiresEarlyStart,
   unlimitedPassSelectionSchema,
@@ -130,6 +137,30 @@ const readReferralCode = Effect.gen(function* () {
   );
 });
 
+const readCheckoutSubmissionHandoff = Effect.fn(
+  "passes.readCheckoutSubmissionHandoff"
+)(function* (
+  input: {
+    readonly handoffToken?: string;
+    readonly orderId: OrderId;
+    readonly holderEmail?: string;
+  },
+  productKind: "entry-pack" | "unlimited"
+) {
+  if (!input.handoffToken) return undefined;
+  const handoff = yield* readPassCheckoutHandoff(input.handoffToken).pipe(
+    Effect.provide(SealedStateKeys.Default)
+  );
+  if (
+    handoff?.product.kind !== productKind ||
+    handoff.orderId.toLowerCase() !== input.orderId.toLowerCase() ||
+    handoff.holderEmail !== input.holderEmail?.toLowerCase()
+  ) {
+    return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
+  }
+  return handoff;
+});
+
 const purchaseFailure = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   product: "entry-pack" | "unlimited" = "entry-pack"
@@ -177,11 +208,33 @@ const beginAction = defineWorkspaceAction(
         if (session.email.toLowerCase() !== input.buyerEmail.toLowerCase()) {
           return { status: "signed_out" as const };
         }
-        const referralCode = yield* readReferralCode;
+        const handoff = yield* readCheckoutSubmissionHandoff(
+          input,
+          "entry-pack"
+        );
+        const referralCode = handoff?.referralCode ?? (yield* readReferralCode);
+        const { handoffToken: _, ...details } = input;
         const purchase = yield* beginEntryPackPurchase({
-          ...input,
+          ...details,
           ...(referralCode && { referralCode }),
         });
+        const owned = yield* findOwnedPassPurchaseOrder(
+          purchase.id,
+          session.accountId,
+          "entry-pack"
+        );
+        if (!owned) {
+          return yield* new EntryPackPurchaseError({ reason: "unavailable" });
+        }
+        if (hasPassPurchasePaymentStarted(owned.order)) {
+          return {
+            status: "status" as const,
+            statusPath: getPassPurchaseStatusPath(
+              owned.purchase.locale,
+              owned.order.id
+            ),
+          };
+        }
         const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
           purchase.quote
         );
@@ -323,11 +376,19 @@ const beginUnlimitedAction = defineWorkspaceAction(
         if (session.email.toLowerCase() !== input.buyerEmail.toLowerCase()) {
           return { status: "signed_out" as const };
         }
-        const referralCode = yield* readReferralCode;
+        const handoff = yield* readCheckoutSubmissionHandoff(
+          input,
+          "unlimited"
+        );
+        const referralCode = handoff?.referralCode ?? (yield* readReferralCode);
+        const { handoffToken: _, ...details } = input;
         const { outcome, retiredPredecessorOrderIds } =
           yield* beginUnlimitedPassPurchase({
-            ...input,
+            ...details,
             ...(referralCode && { referralCode }),
+            ...(handoff?.supersedeOrderId && {
+              supersedeOrderId: handoff.supersedeOrderId,
+            }),
           });
         const result = yield* purchaseFailure(
           Effect.gen(function* () {
