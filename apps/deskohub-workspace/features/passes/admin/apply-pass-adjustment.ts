@@ -23,7 +23,7 @@ import {
   requireNoPendingPassChange,
 } from "./pass-change-records";
 
-export const readPackClaims = Effect.fn("readPackClaims")(function* (
+const readPackClaims = Effect.fn("readPackClaims")(function* (
   passId: PassChangeRequest["passId"]
 ) {
   const { db } = yield* WorkspaceTransaction;

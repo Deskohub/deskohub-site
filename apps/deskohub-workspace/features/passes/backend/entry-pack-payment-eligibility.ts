@@ -3,7 +3,7 @@ import type { WorkspaceDatabaseClient } from "@/db/database.service";
 import { orders, passPurchases, paymentAttempts } from "@/db/schema";
 
 /** A recorded partial adjustment preserves a pass that remains active. */
-export const claimablePassRefund = or(
+const claimablePassRefund = or(
   eq(paymentAttempts.refundState, "not_required"),
   and(
     lt(paymentAttempts.refundTargetValue, paymentAttempts.amountValue),

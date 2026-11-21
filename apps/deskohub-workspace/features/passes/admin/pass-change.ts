@@ -42,7 +42,7 @@ export const passChangeSchema = Schema.TaggedUnion({
 
 export type PassChange = Schema.Schema.Type<typeof passChangeSchema>;
 
-export const passChangeRequestSchema = Schema.Struct({
+const passChangeRequestSchema = Schema.Struct({
   requestId: passChangeRequestIdSchema,
   passId: orderIdSchema,
   change: passChangeSchema,
