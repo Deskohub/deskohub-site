@@ -483,11 +483,7 @@ export function UnlimitedPassCheckout({
               !step.retry &&
               !paymentRequested && {
                 contact: {
-                  onSelect: () =>
-                    goToDetails(step.selection, {
-                      kind: "resume",
-                      orderId: step.orderId,
-                    }),
+                  onSelect: () => goToDetails(step.selection, order),
                 },
               }),
           }}
@@ -557,15 +553,15 @@ export function UnlimitedPassCheckout({
             locale,
             step.retry
               ? getUnlimitedPassPayPath(locale, step.orderId)
-              : getUnlimitedPassDetailsPath(locale, step.selection, {
-                  kind: "resume",
-                  orderId: step.orderId,
-                })
+              : getUnlimitedPassDetailsPath(locale, step.selection, order)
           )}
           headingRef={heading}
           onRequestPayment={() => setPaymentRequested(true)}
           onExpire={() => {
-            const editedOrder = editOrder(order);
+            const editedOrder =
+              predecessorOrderIds.length > unlimitedCheckoutPredecessorLimit
+                ? order
+                : editOrder(order);
             setOrder(editedOrder);
             setDetails({ ...details, billing: step.state.billing });
             goToDetails(step.selection, editedOrder);

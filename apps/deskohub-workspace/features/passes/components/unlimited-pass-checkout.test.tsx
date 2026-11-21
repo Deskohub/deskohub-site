@@ -828,6 +828,107 @@ test("Refresh quote from first Pay carries the existing order into the next Cont
   ]);
 });
 
+test.each(["Details", "sign-in"] as const)(
+  "Pay preserves an unacknowledged predecessor on return through %s",
+  async (destination) => {
+    const orderId = orderIdSchema.make(crypto.randomUUID());
+    const predecessorOrderIds = [orderIdSchema.make(crypto.randomUUID())];
+    const assign = spyOn(window.location, "assign").mockImplementation(
+      () => {}
+    );
+    try {
+      const view = render(
+        <QueryProvider>
+          <UnlimitedPassCheckout
+            {...base}
+            initialDetails={{
+              ...base.initialOptions,
+              startDate: openSpaceStart,
+            }}
+            draft={{ kind: "submitted", orderId, predecessorOrderIds }}
+            beginCheckout={async () => ({
+              data: { ...readyCheckout, retiredPredecessorOrderIds: [] },
+            })}
+            payCheckout={async () => ({ data: { status: "signed_out" } })}
+          />
+        </QueryProvider>
+      );
+      fireEvent.click(view.getByRole("button", { name: /continue/i }));
+      const pay = await view.findByRole("button", { name: /pay/i });
+      let url: URL;
+      if (destination === "Details") {
+        fireEvent.click(
+          view.getByRole("button", {
+            name: new RegExp(
+              m.unlimitedPassCheckoutHolder({}, { locale }),
+              "i"
+            ),
+          })
+        );
+        url = checkoutUrl();
+      } else {
+        fireEvent.click(view.getByRole("checkbox"));
+        fireEvent.click(pay);
+        await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+        const signIn = new URL(
+          assign.mock.calls[0]![0],
+          "https://deskohub.example"
+        );
+        url = new URL(signIn.searchParams.get("returnTo")!, signIn.origin);
+      }
+      expect(url.searchParams.get("step")).toBe("details");
+      expect(url.searchParams.get("submittedOrder")).toBe(orderId);
+      expect(url.searchParams.getAll("predecessorOrder")).toEqual(
+        predecessorOrderIds
+      );
+    } finally {
+      assign.mockRestore();
+    }
+  }
+);
+
+test("Refresh quote at the predecessor limit keeps the current draft separate", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const predecessorOrderIds = Array.from(
+    { length: unlimitedCheckoutPredecessorLimit },
+    () => orderIdSchema.make(crypto.randomUUID())
+  );
+  const beginCheckout = mock(async (_input: { orderId: OrderId }) => ({
+    data: { ...readyCheckout, retiredPredecessorOrderIds: [] },
+  }));
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        draft={{ kind: "submitted", orderId, predecessorOrderIds }}
+        beginCheckout={beginCheckout}
+        payCheckout={async () => ({
+          data: { status: "purchase_error", reason: "quote-expired" },
+        })}
+      />
+    </QueryProvider>
+  );
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  const pay = await view.findByRole("button", { name: /pay/i });
+  fireEvent.click(view.getByRole("checkbox"));
+  fireEvent.click(pay);
+  fireEvent.click(
+    await view.findByRole("button", {
+      name: m.entryPackCheckoutRefreshQuote({}, { locale }),
+    })
+  );
+  expect(checkoutUrl().searchParams.get("submittedOrder")).toBe(orderId);
+  expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual(
+    predecessorOrderIds
+  );
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(2));
+  expect(beginCheckout).toHaveBeenLastCalledWith(
+    expect.objectContaining({ orderId, supersedeOrderIds: predecessorOrderIds })
+  );
+});
+
 test("an expired status-originated payment retry returns to that same order", async () => {
   const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000002");
   const replace = spyOn(window.location, "replace").mockImplementation(
