@@ -60,6 +60,10 @@ import {
 } from "../pass-day-marker";
 import { unlimitedPassDays } from "../pass-offer";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
+import {
+  getPassPurchasePriceFingerprint,
+  repriceEntryPackPurchase,
+} from "./entry-pack-purchase";
 import { settlePassPurchase } from "./entry-pack-settlement";
 import { reconcileUnlimitedPassReleases } from "./pass-purchase-reconciliation";
 import { unlimitedConfirmationDeliveryReports } from "./unlimited-confirmation-delivery";
@@ -822,8 +826,30 @@ it("replays expired service dates after losing the Continue response", async () 
         .from(passPurchases)
         .where(eq(passPurchases.id, purchase.id));
       const decodeQuote = Schema.decodeSync(passPurchaseQuoteCodec);
+      const acceptedQuote = decodeQuote(purchase.quote);
       expect(voided?.status).toBe("void");
-      expect(decodeQuote(voided!.quote)).toEqual(decodeQuote(purchase.quote));
+      expect(decodeQuote(voided!.quote)).toEqual(acceptedQuote);
+      const staleReprice = repriceEntryPackPurchase({
+        orderId: purchase.id,
+        productKind: "unlimited",
+        displayedPriceFingerprint:
+          getPassPurchasePriceFingerprint(acceptedQuote),
+      }).pipe(
+        Effect.provide(
+          Layer.mock(DiscountService, {
+            quote: () => Effect.succeed(acceptedQuote),
+          })
+        )
+      );
+      expect(yield* Effect.result(staleReprice)).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "EntryPackPurchaseError",
+            reason: "quote-expired",
+          })
+        )
+      );
+      expect(yield* Effect.result(begin)).toEqual(expected);
       expect(provider.reservations.size).toBe(unlimitedPassDays);
       const released = yield* readUnlimitedPassDays(purchase.id);
       expect(

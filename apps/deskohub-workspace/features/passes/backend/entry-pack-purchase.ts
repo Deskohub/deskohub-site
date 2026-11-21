@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { discountApplications, orders, passPurchases } from "@/db/schema";
@@ -487,16 +487,26 @@ export const readEntryPackPaymentRetry = Effect.fn("readEntryPackPaymentRetry")(
   }
 );
 
-const saveEntryPackQuote = Effect.fn("saveEntryPackQuote")(function* (
-  orderId: OrderId,
+const savePassPurchaseQuote = Effect.fn("savePassPurchaseQuote")(function* (
+  purchase: Pick<PassPurchase, "id" | "product">,
   quote: PassPurchaseQuote
 ) {
   const { db } = yield* WorkspaceDatabase;
   const encoded = yield* Schema.encodeEffect(passPurchaseQuoteCodec)(quote);
-  yield* db
+  const unlimited = purchase.product === "unlimited";
+  const [saved] = yield* db
     .update(passPurchases)
     .set({ quote: encoded })
-    .where(eq(passPurchases.id, orderId));
+    .where(
+      and(
+        eq(passPurchases.id, purchase.id),
+        unlimited ? eq(passPurchases.status, "pending_payment") : undefined
+      )
+    )
+    .returning({ id: passPurchases.id });
+  if (unlimited && !saved) {
+    return yield* new EntryPackPurchaseError({ reason: "quote-expired" });
+  }
 });
 
 /** Reprices an unpaid pass without making a payment attempt. */
@@ -585,7 +595,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
           },
         };
         yield* requireOpenUnlimitedPassQuote(purchase);
-        yield* saveEntryPackQuote(order.id, selectedQuote);
+        yield* savePassPurchaseQuote(purchase, selectedQuote);
         return { status: "ready" as const, quote: selectedQuote };
       })
     );
@@ -803,7 +813,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
             reason: "payment-in-progress",
           });
         }
-        yield* saveEntryPackQuote(order.id, refreshedQuote);
+        yield* savePassPurchaseQuote(purchase, refreshedQuote);
         return { status: "pricing_changed" as const, quote: refreshedQuote };
       }
 
