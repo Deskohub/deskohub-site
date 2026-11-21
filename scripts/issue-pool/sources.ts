@@ -11,9 +11,12 @@ export type Signal = Readonly<{
   evidence: string;
   legacyMarkers: readonly string[];
   observedAt: string;
-  source: "posthog" | "vercel";
   priority: "high" | "normal";
-}>;
+}> &
+  (
+    | { readonly source: "posthog" }
+    | { readonly source: "vercel"; readonly commentId: string }
+  );
 
 const weekMs = 7 * 24 * 60 * 60 * 1000;
 const logLimit = 1000;
@@ -431,6 +434,7 @@ export async function collectVercelFeedback(
     }
     const threadLink = link ?? previousLink;
     signals.set(id, {
+      commentId: id,
       key: `vercel:comment:${id}`,
       title: `[Vercel] Unresolved Toolbar comment ${id}`,
       evidence: `Vercel Toolbar thread ID: ${id}.${threadLink ? ` [Open comment](${threadLink})` : ""}`,

@@ -1,3 +1,4 @@
+import { feedbackCommentIds } from "./feedback";
 import type { Issue, IssueTracker } from "./pool";
 
 export type Command = (
@@ -16,6 +17,17 @@ interface RestIssue {
   user: { login: string } | null;
   pull_request?: object;
 }
+
+interface IssueComment {
+  id: number;
+  body: string | null;
+  user: { login: string } | null;
+}
+
+const threadMarker = /<!-- t3-worker-thread:([a-zA-Z0-9:%_-]+) -->/;
+const humanNeeded = "<!-- posthog-agent:human-needed -->";
+const consumed = (commentId: number) =>
+  `<!-- posthog-agent:consumed-comment:${commentId} -->`;
 
 const issueFromRest = (
   issue: RestIssue,
@@ -60,12 +72,12 @@ export function githubIssueTracker({
   repo,
   run,
   trustedReporters,
-  legacyVercelReported,
+  legacyFeedbackClaimed,
 }: {
   repo: string;
   run: Command;
   trustedReporters: readonly string[];
-  legacyVercelReported: (body: string) => boolean;
+  legacyFeedbackClaimed: (commentId: string) => boolean;
 }): IssueTracker {
   const [owner = "", name = ""] = repo.split("/");
   const base = `repos/${repo}/issues`;
@@ -75,17 +87,49 @@ export function githubIssueTracker({
     const pages: T[][] = JSON.parse(response);
     return pages.flat();
   };
-  const workerRecorded = async (number: number) =>
-    (
-      await getPages<{ body: string | null; user: { login: string } | null }>(
+  const comments = new Map<number, Promise<IssueComment[]>>();
+  function issueComments(number: number): Promise<IssueComment[]> {
+    let cached = comments.get(number);
+    if (!cached) {
+      cached = getPages<IssueComment>(
         `${base}/${number}/comments?per_page=100`
-      )
-    ).some(
-      ({ body, user }) =>
-        user &&
-        trusted.has(user.login.toLowerCase()) &&
-        body?.includes("<!-- t3-worker-thread:")
+      ).then((rows) =>
+        rows
+          .filter(({ user }) => user && trusted.has(user.login.toLowerCase()))
+          .sort((left, right) => left.id - right.id)
+      );
+      comments.set(number, cached);
+    }
+    return cached;
+  }
+  const workerRecorded = async (number: number) =>
+    (await issueComments(number)).some(({ body }) =>
+      threadMarker.test(body ?? "")
     );
+  async function postComment(number: number, body: string): Promise<void> {
+    await run(
+      "gh",
+      ["api", "--method", "POST", `${base}/${number}/comments`, "--input", "-"],
+      JSON.stringify({ body })
+    );
+    comments.delete(number);
+  }
+  async function readOwnership(number: number) {
+    const response = await run("gh", [
+      "api",
+      "graphql",
+      "-f",
+      `query=${ownershipQuery}`,
+      "-f",
+      `owner=${owner}`,
+      "-f",
+      `name=${name}`,
+      "-F",
+      `number=${number}`,
+    ]);
+    const { data }: { data: IssueOwnership } = JSON.parse(response);
+    return data.repository?.issue;
+  }
   return {
     async list() {
       const issues = await getPages<RestIssue>(
@@ -109,20 +153,7 @@ export function githubIssueTracker({
       return created;
     },
     async hasOwner(number) {
-      const response = await run("gh", [
-        "api",
-        "graphql",
-        "-f",
-        `query=${ownershipQuery}`,
-        "-f",
-        `owner=${owner}`,
-        "-f",
-        `name=${name}`,
-        "-F",
-        `number=${number}`,
-      ]);
-      const { data }: { data: IssueOwnership } = JSON.parse(response);
-      const issue = data.repository?.issue;
+      const issue = await readOwnership(number);
       return (
         issue?.state !== "OPEN" ||
         issue.assignees.totalCount > 0 ||
@@ -132,7 +163,9 @@ export function githubIssueTracker({
         (await workerRecorded(number)) ||
         (issue.author !== null &&
           trusted.has(issue.author.login.toLowerCase()) &&
-          legacyVercelReported(issue.body))
+          Array.from(feedbackCommentIds(issue.body)).some(
+            legacyFeedbackClaimed
+          ))
       );
     },
     async recordWorker(number, threadId) {
@@ -142,20 +175,43 @@ export function githubIssueTracker({
       if (await workerRecorded(number)) {
         return;
       }
-      await run(
-        "gh",
-        [
-          "api",
-          "--method",
-          "POST",
-          `${base}/${number}/comments`,
-          "--input",
-          "-",
-        ],
-        JSON.stringify({
-          body: `Assigned to T3 worker \`${threadId}\`.\n\n<!-- t3-worker-thread:${threadId} -->`,
-        })
+      await postComment(
+        number,
+        `Assigned to T3 worker \`${threadId}\`.\n\n<!-- t3-worker-thread:${threadId} -->`
       );
+    },
+    legacyFeedbackClaimed,
+    async suppressesRecurrence(number) {
+      return (await issueComments(number)).some(({ body }) =>
+        body?.includes("<!-- posthog-agent:triage-non-actionable -->")
+      );
+    },
+    async pendingReply(number) {
+      const rows = await issueComments(number);
+      const question = rows.findLast(({ body }) => body?.includes(humanNeeded));
+      const worker = rows.findLast(({ body }) => threadMarker.test(body ?? ""));
+      const threadId = worker?.body?.match(threadMarker)?.[1];
+      if (!question || !threadId) return null;
+      const reply = rows.find(
+        ({ id, body, user }) =>
+          id > question.id &&
+          user?.login.toLowerCase() === "totalolage" &&
+          body?.trim() &&
+          !/<!-- (?:posthog-agent:|t3-worker-thread:)/.test(body) &&
+          !rows.some(({ body: comment }) => comment?.includes(consumed(id)))
+      );
+      if (!reply?.body || (await readOwnership(number))?.state !== "OPEN")
+        return null;
+      return { commentId: reply.id, threadId, message: reply.body };
+    },
+    async recordReply(number, commentId) {
+      if (
+        !(await issueComments(number)).some(({ body }) =>
+          body?.includes(consumed(commentId))
+        )
+      ) {
+        await postComment(number, consumed(commentId));
+      }
     },
   };
 }

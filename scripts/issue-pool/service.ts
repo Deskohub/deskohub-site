@@ -74,15 +74,7 @@ async function legacyVercelOwnership(
       .filter(([, entry]) => entry.threadId || entry.state === "pending")
       .map(([id]) => id)
   );
-  return (body) => {
-    for (const url of body.matchAll(/https:\/\/vercel\.com\/[^\s<>()]+/g)) {
-      const id = new URL(url[0]).pathname.match(/\/c\/([^/]+)\/?$/)?.[1];
-      if (id && assignedIds.has(id)) {
-        return true;
-      }
-    }
-    return false;
-  };
+  return (commentId) => assignedIds.has(commentId);
 }
 
 async function main(): Promise<void> {
@@ -112,18 +104,20 @@ async function main(): Promise<void> {
     await run("git", ["-C", project, "fetch", "origin", "main"]);
   }
 
-  const [collectorResults, reporter, legacyVercelReported] = await Promise.all([
-    Promise.allSettled([
-      collectPostHog(run),
-      collectVercelFeedback(
-        run,
-        vercelFetchScript,
-        join(project, "apps", "deskohub-workspace")
-      ),
-    ]),
-    run("gh", ["api", "user", "--jq", ".login"]),
-    legacyVercelOwnership(project),
-  ]);
+  const [collectorResults, reporter, legacyFeedbackClaimed] = await Promise.all(
+    [
+      Promise.allSettled([
+        collectPostHog(run),
+        collectVercelFeedback(
+          run,
+          vercelFetchScript,
+          join(project, "apps", "deskohub-workspace")
+        ),
+      ]),
+      run("gh", ["api", "user", "--jq", ".login"]),
+      legacyVercelOwnership(project),
+    ]
+  );
   const [posthog, vercel] = collectorResults;
   const failedSources = [
     ...(posthog.status === "rejected" ? ["posthog"] : []),
@@ -137,10 +131,13 @@ async function main(): Promise<void> {
     repo,
     run,
     trustedReporters: ["totalolage", reporter.trim()],
-    legacyVercelReported,
+    legacyFeedbackClaimed,
   });
   const runner = t3WorkerRunner({ executable: t3, project, repo, run });
-  const pool = new IssuePool(apply && state ? state : ":memory:");
+  const pool =
+    state && (apply || (await Bun.file(state).exists()))
+      ? new IssuePool(state, !apply)
+      : new IssuePool(":memory:");
   try {
     const result = await runIssuePool({
       apply,
@@ -162,7 +159,8 @@ async function main(): Promise<void> {
     if (
       failedSources.length > 0 ||
       result.pendingAssignment.length > 0 ||
-      result.pendingIntake.length > 0
+      result.pendingIntake.length > 0 ||
+      result.pendingReply.length > 0
     ) {
       process.exitCode = 1;
     }

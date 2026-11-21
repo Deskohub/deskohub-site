@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { feedbackCommentIds } from "./feedback";
 import type { Signal } from "./sources";
 
 export interface Issue {
@@ -16,11 +17,23 @@ export interface IssueTracker {
   file(title: string, body: string): Promise<Issue>;
   hasOwner(number: number): Promise<boolean>;
   recordWorker(number: number, threadId: string): Promise<void>;
+  legacyFeedbackClaimed(commentId: string): boolean;
+  suppressesRecurrence(number: number): Promise<boolean>;
+  pendingReply(number: number): Promise<WorkerReply | null>;
+  recordReply(number: number, commentId: number): Promise<void>;
+}
+
+export interface WorkerReply {
+  commentId: number;
+  threadId: string;
+  message: string;
 }
 
 export interface WorkerRunner {
   find(number: number): Promise<string | null>;
   start(number: number): Promise<string>;
+  sendReply(reply: WorkerReply): Promise<void>;
+  receivedReply(reply: WorkerReply): Promise<boolean>;
 }
 
 interface Claim {
@@ -35,6 +48,9 @@ export interface PassResult {
   pendingAssignment: number[];
   plannedIntake: string[];
   plannedAssignment: number[];
+  replied: number[];
+  pendingReply: number[];
+  plannedReply: number[];
 }
 
 const issuePoolLabel = "issue-pool";
@@ -49,28 +65,46 @@ const ownedByPool = (issue: Issue) =>
 
 const matches = (issue: Issue, signal: Signal) =>
   issue.body.includes(sourceMarker(signal.key)) ||
-  signal.legacyMarkers.some((marker) => issue.body.includes(marker));
+  (signal.source === "vercel"
+    ? feedbackCommentIds(issue.body).has(signal.commentId)
+    : signal.legacyMarkers.some((marker) => issue.body.includes(marker)));
 
-const needsIssue = (matching: readonly Issue[], signal: Signal) =>
-  matching.every(
-    (issue) =>
-      issue.state === "closed" &&
-      issue.closedAt !== null &&
-      !(
-        signal.source === "vercel" &&
-        signal.legacyMarkers.some((marker) => issue.body.includes(marker))
-      ) &&
-      !issue.body.includes("<!-- posthog-agent:triage-non-actionable -->") &&
-      Date.parse(signal.observedAt) > Date.parse(issue.closedAt)
-  );
+async function needsIssue(
+  matching: readonly Issue[],
+  signal: Signal,
+  tracker: IssueTracker
+) {
+  if (signal.source === "vercel") {
+    return (
+      matching.length === 0 && !tracker.legacyFeedbackClaimed(signal.commentId)
+    );
+  }
+  for (const issue of matching) {
+    if (
+      issue.state !== "closed" ||
+      issue.closedAt === null ||
+      Date.parse(signal.observedAt) <= Date.parse(issue.closedAt) ||
+      issue.body.includes("<!-- posthog-agent:triage-non-actionable -->") ||
+      (await tracker.suppressesRecurrence(issue.number))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export class IssuePool {
   private readonly database: Database;
 
-  constructor(path: string) {
-    this.database = new Database(path, { create: true, strict: true });
-    this.database.exec(`
-      PRAGMA busy_timeout = 5000;
+  constructor(path: string, readonly = false) {
+    this.database = new Database(path, {
+      readonly,
+      create: !readonly,
+      strict: true,
+    });
+    this.database.exec("PRAGMA busy_timeout = 5000");
+    if (!readonly)
+      this.database.exec(`
       CREATE TABLE IF NOT EXISTS intake (
         source_key TEXT NOT NULL,
         previous_issue INTEGER NOT NULL,
@@ -81,11 +115,61 @@ export class IssuePool {
         thread_id TEXT,
         reported INTEGER NOT NULL DEFAULT 0
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS source_issue (
+        source_key TEXT NOT NULL,
+        issue INTEGER NOT NULL,
+        PRIMARY KEY (source_key, issue)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS worker_reply (
+        comment_id INTEGER PRIMARY KEY,
+        accepted INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
     `);
   }
 
   close(): void {
     this.database.close();
+  }
+
+  linkedIssues(key: string): ReadonlySet<number> {
+    return new Set(
+      this.database
+        .query<{ issue: number }, [string]>(
+          "SELECT issue FROM source_issue WHERE source_key = ?"
+        )
+        .all(key)
+        .map(({ issue }) => issue)
+    );
+  }
+
+  linkIssue(key: string, number: number): void {
+    this.database
+      .query("INSERT OR IGNORE INTO source_issue VALUES (?, ?)")
+      .run(key, number);
+  }
+
+  reserveReply(commentId: number): boolean {
+    return (
+      this.database
+        .query("INSERT OR IGNORE INTO worker_reply (comment_id) VALUES (?)")
+        .run(commentId).changes === 1
+    );
+  }
+
+  replyAccepted(commentId: number): boolean {
+    return (
+      this.database
+        .query<{ accepted: number }, [number]>(
+          "SELECT accepted FROM worker_reply WHERE comment_id = ?"
+        )
+        .get(commentId)?.accepted === 1
+    );
+  }
+
+  acceptReply(commentId: number): void {
+    this.database
+      .query("UPDATE worker_reply SET accepted = 1 WHERE comment_id = ?")
+      .run(commentId);
   }
 
   reserveIntake(key: string, previousIssue: number): boolean {
@@ -149,6 +233,9 @@ export async function runIssuePool({
     pendingAssignment: [],
     plannedIntake: [],
     plannedAssignment: [],
+    replied: [],
+    pendingReply: [],
+    plannedReply: [],
   };
   const issues = [...(await tracker.list())];
   const eligible = new Set<number>();
@@ -167,23 +254,30 @@ export async function runIssuePool({
       continue;
     }
     seen.add(signal.key);
-    const matching = issues.filter((issue) => matches(issue, signal));
+    const linked = pool.linkedIssues(signal.key);
+    const matching = issues.filter(
+      (issue) => linked.has(issue.number) || matches(issue, signal)
+    );
     for (const issue of matching) {
       eligible.add(issue.number);
-    }
-    if (!needsIssue(matching, signal)) {
-      continue;
-    }
-    result.plannedIntake.push(signal.key);
-    if (!apply || intakeAttempts >= maxNewIssues) {
-      continue;
-    }
-    const previousIssue = Math.max(0, ...matching.map((issue) => issue.number));
-    if (!pool.reserveIntake(signal.key, previousIssue)) {
-      result.pendingIntake.push(signal.key);
-      continue;
+      if (apply) pool.linkIssue(signal.key, issue.number);
     }
     try {
+      if (!(await needsIssue(matching, signal, tracker))) {
+        continue;
+      }
+      result.plannedIntake.push(signal.key);
+      if (!apply || intakeAttempts >= maxNewIssues) {
+        continue;
+      }
+      const previousIssue = Math.max(
+        0,
+        ...matching.map((issue) => issue.number)
+      );
+      if (!pool.reserveIntake(signal.key, previousIssue)) {
+        result.pendingIntake.push(signal.key);
+        continue;
+      }
       intakeAttempts++;
       const issue = await tracker.file(
         signal.title,
@@ -194,6 +288,7 @@ export async function runIssuePool({
         ].join("\n\n")
       );
       issues.push(issue);
+      pool.linkIssue(signal.key, issue.number);
       eligible.add(issue.number);
       result.filed.push(issue.number);
     } catch {
@@ -205,10 +300,21 @@ export async function runIssuePool({
     (left, right) => left.number - right.number
   );
   for (const issue of orderedIssues) {
-    if (issue.state !== "open" || issue.assignees.length > 0) {
+    if (issue.state !== "open") {
       continue;
     }
     if (!ownedByPool(issue) && !eligible.has(issue.number)) {
+      continue;
+    }
+    await reconcileReply({
+      apply,
+      number: issue.number,
+      pool,
+      result,
+      runner,
+      tracker,
+    });
+    if (issue.assignees.length > 0) {
       continue;
     }
     assignmentAttempts += await assignIssue({
@@ -222,6 +328,43 @@ export async function runIssuePool({
     });
   }
   return result;
+}
+
+async function reconcileReply({
+  apply,
+  number,
+  pool,
+  result,
+  runner,
+  tracker,
+}: {
+  apply: boolean;
+  number: number;
+  pool: IssuePool;
+  result: PassResult;
+  runner: WorkerRunner;
+  tracker: IssueTracker;
+}): Promise<void> {
+  try {
+    const reply = await tracker.pendingReply(number);
+    if (!reply) return;
+    result.plannedReply.push(number);
+    if (!apply) return;
+    if (pool.reserveReply(reply.commentId)) {
+      await runner.sendReply(reply);
+      pool.acceptReply(reply.commentId);
+    } else if (!pool.replyAccepted(reply.commentId)) {
+      if (!(await runner.receivedReply(reply))) {
+        result.pendingReply.push(number);
+        return;
+      }
+      pool.acceptReply(reply.commentId);
+    }
+    await tracker.recordReply(number, reply.commentId);
+    result.replied.push(number);
+  } catch {
+    result.pendingReply.push(number);
+  }
 }
 
 async function assignIssue({

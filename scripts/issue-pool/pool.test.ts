@@ -21,6 +21,7 @@ const logSignal: Signal = {
   priority: "high",
 };
 const feedbackSignal: Signal = {
+  commentId: "thread",
   key: "vercel:feedback:stable-thread",
   title: "Vercel feedback",
   evidence: "A feedback link",
@@ -52,11 +53,17 @@ function fixture() {
       return created;
     },
     hasOwner: async (number) => reported.has(number),
+    legacyFeedbackClaimed: () => false,
+    suppressesRecurrence: async () => false,
+    pendingReply: async () => null,
+    recordReply: async () => {},
     recordWorker: async (number) => {
       reported.add(number);
     },
   };
   const runner: WorkerRunner = {
+    sendReply: async () => {},
+    receivedReply: async () => false,
     find: async (number) => workers.get(number) ?? null,
     start: async (number) => {
       launches.push(number);
@@ -141,7 +148,7 @@ test("reconciles an accepted launch whose response was lost across a restart", a
   const path = join(dir, "state.sqlite");
   const { launches, tracker, runner } = fixture();
   const uncertainRunner: WorkerRunner = {
-    find: runner.find,
+    ...runner,
     async start(number) {
       await runner.start(number);
       throw new Error("Lost response");
@@ -165,6 +172,128 @@ test("reconciles an accepted launch whose response was lost across a restart", a
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("remembers adoption after a legacy PostHog occurrence ages out", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  try {
+    issues.push({
+      ...issue(1, logSignal.legacyMarkers.join("\n")),
+      assignees: ["maintainer"],
+    });
+    await run(pool, tracker, runner, [logSignal]);
+    const result = await run(pool, tracker, runner, [
+      {
+        ...logSignal,
+        legacyMarkers: ["<!-- posthog-log-uuid:later-event -->"],
+      },
+    ]);
+    expect(result.filed).toEqual([]);
+    expect(launches).toEqual([]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("matches the exact Vercel comment ID without depending on its permalink", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  try {
+    issues.push(issue(1, "https://vercel.com/team/project/c/threadx"));
+    const preview = await run(pool, tracker, runner, [feedbackSignal], false);
+    expect(preview.plannedIntake).toEqual([feedbackSignal.key]);
+    issues.push(issue(2, "https://vercel.com/team/project/c/thread"));
+    const match = await run(pool, tracker, runner, [
+      { ...feedbackSignal, legacyMarkers: [] },
+    ]);
+    expect(match.filed).toEqual([]);
+    expect(launches).toEqual([2]);
+    issues.length = 0;
+    const manifestOnly = await run(
+      pool,
+      { ...tracker, legacyFeedbackClaimed: (id) => id === "thread" },
+      runner,
+      [{ ...feedbackSignal, legacyMarkers: [] }]
+    );
+    expect(manifestOnly.filed).toEqual([]);
+    expect(launches).toEqual([2]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("honors the disposition on a closed legacy issue before filing a recurrence", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner } = fixture();
+  try {
+    issues.push({
+      ...issue(1, logSignal.legacyMarkers.join("\n")),
+      state: "closed",
+      closedAt: "2026-11-21T12:00:00Z",
+    });
+    const withoutDisposition = await run(
+      pool,
+      tracker,
+      runner,
+      [logSignal],
+      false
+    );
+    expect(withoutDisposition.plannedIntake).toEqual([logSignal.key]);
+    const suppressed = await run(
+      pool,
+      { ...tracker, suppressesRecurrence: async (number) => number === 1 },
+      runner,
+      [logSignal]
+    );
+    expect(suppressed.filed).toEqual([]);
+    expect(suppressed.plannedIntake).toEqual([]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("resumes a recorded worker once and recovers a lost reply acknowledgement", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  const reply = {
+    commentId: 52,
+    message: "Here is the answer",
+    threadId: "prior-worker",
+  };
+  let sends = 0;
+  let consumed = false;
+  const migrationTracker: IssueTracker = {
+    ...tracker,
+    hasOwner: async () => true,
+    pendingReply: async () => (consumed ? null : reply),
+    async recordReply(number, commentId) {
+      expect([number, commentId]).toEqual([1, 52]);
+      consumed = true;
+    },
+  };
+  const migrationRunner: WorkerRunner = {
+    ...runner,
+    async sendReply(answer) {
+      expect(answer).toEqual(reply);
+      sends++;
+      throw new Error("Lost response after send");
+    },
+    receivedReply: async () => sends === 1,
+  };
+  try {
+    issues.push(issue(1, logSignal.legacyMarkers.join("\n")));
+    const firstPass = await run(pool, migrationTracker, migrationRunner, []);
+    expect(firstPass.pendingReply).toEqual([1]);
+    expect(consumed).toBe(false);
+    const secondPass = await run(pool, migrationTracker, migrationRunner, []);
+    expect(secondPass.replied).toEqual([1]);
+    await run(pool, migrationTracker, migrationRunner, []);
+    expect(sends).toBe(1);
+    expect(launches).toEqual([]);
+  } finally {
+    pool.close();
   }
 });
 

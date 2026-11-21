@@ -41,3 +41,29 @@ test("queues the issue in its own T3 worktree and sends only its trusted brief",
   });
   expect(await runner.start(32)).toBe("worker-id");
 });
+
+test("marks a reply and recovers it only from a user message in the recorded thread", async () => {
+  const reply = { commentId: 52, threadId: "worker-32", message: "The answer" };
+  const marker = "<!-- issue-pool-reply:52 -->";
+  let sent = "";
+  let role = "assistant";
+  const runner = t3WorkerRunner({
+    repo: "owner/repository",
+    project: "project-id",
+    executable: "t3",
+    async run(_command, args, stdin) {
+      expect(args).toContain(reply.threadId);
+      if (args.includes("send")) {
+        sent = stdin ?? "";
+        return "{}";
+      }
+      return JSON.stringify({ messages: [{ role, text: sent }] });
+    },
+  });
+  await runner.sendReply(reply);
+  expect(sent.startsWith(`${marker}\n`)).toBe(true);
+  expect(sent.endsWith(reply.message)).toBe(true);
+  expect(await runner.receivedReply(reply)).toBe(false);
+  role = "user";
+  expect(await runner.receivedReply(reply)).toBe(true);
+});
