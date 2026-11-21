@@ -7,6 +7,7 @@ import { orders, passPurchases } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
+import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
 import { withUnlimitedPassCapacity } from "./unlimited-pass-capacity";
@@ -15,6 +16,7 @@ import {
   readUnlimitedPassDays,
   reconfirmUnlimitedPassHolds,
   releaseUnlimitedPassDays,
+  UnlimitedPassHoldsUnavailable,
 } from "./unlimited-pass-holds";
 import {
   readUnlimitedPassSelection,
@@ -43,27 +45,70 @@ export const prepareUnlimitedPassRecovery = Effect.fn(
   });
 
   const previous = yield* Effect.gen(function* () {
+    const now = yield* currentInstant;
     const purchase = yield* load;
     if (
       !purchase ||
       (purchase.status !== "void" && purchase.status !== "pending_payment")
     )
       return undefined;
-    if (purchase.status === "void") {
-      yield* releaseUnlimitedPassDays(purchase);
+    if (
+      Temporal.PlainDate.compare(
+        purchase.validFrom,
+        getCurrentWorkspaceDate(now)
+      ) < 0
+    )
+      return undefined;
+    let releasing = purchase;
+    if (
+      purchase.status === "pending_payment" &&
+      (!purchase.holdsExpireAt ||
+        Temporal.Instant.compare(purchase.holdsExpireAt, now) <= 0)
+    ) {
+      const [expired] = yield* transaction(
+        Effect.gen(function* () {
+          const [order] = yield* db
+            .select()
+            .from(orders)
+            .where(eq(orders.id, orderId))
+            .for("no key update");
+          if (
+            order?.activePaymentAttemptId !== attemptId ||
+            !isEndedUnpaidPaymentState(order.paymentState)
+          )
+            return [];
+          return yield* db
+            .update(passPurchases)
+            .set({ status: "void" })
+            .where(
+              and(
+                eq(passPurchases.id, orderId),
+                eq(passPurchases.status, "pending_payment")
+              )
+            )
+            .returning();
+        })
+      );
+      if (!expired) return undefined;
+      releasing = expired;
+    }
+    if (releasing.status === "void") {
+      yield* releaseUnlimitedPassDays(releasing);
       const days = yield* readUnlimitedPassDays(orderId);
+      if (days.length !== unlimitedPassDays) return undefined;
       if (
-        days.length !== unlimitedPassDays ||
         days.some(
           (day) =>
             day.reservationState !== "cancelled" &&
             day.reservationState !== "hold_expired"
         )
       ) {
-        return undefined;
+        return yield* new UnlimitedPassHoldsUnavailable({
+          reason: "unfinished",
+        });
       }
     }
-    return purchase;
+    return releasing;
   }).pipe(WorkspaceLockSections.passPurchaseFulfillment(orderId));
   if (!previous) return false;
 
@@ -71,7 +116,7 @@ export const prepareUnlimitedPassRecovery = Effect.fn(
     const selection = readUnlimitedPassSelection(previous);
     if (!selection) return false;
     const now = yield* currentInstant;
-    yield* withUnlimitedPassCapacity(
+    const replaced = yield* withUnlimitedPassCapacity(
       {
         selection,
         startDate: Temporal.PlainDate.from(previous.validFrom),
@@ -90,14 +135,42 @@ export const prepareUnlimitedPassRecovery = Effect.fn(
             now,
           })
         )
+    ).pipe(
+      Effect.as(true),
+      Effect.catchTags({
+        UnlimitedPassCapacityUnavailable: () => Effect.succeed(false),
+        UnlimitedPassAdmissionError: () => Effect.succeed(false),
+      })
     );
+    if (!replaced) return false;
   }
 
   return yield* Effect.gen(function* () {
     const purchase = yield* load;
     if (purchase?.status !== "pending_payment") return false;
-    yield* createUnlimitedPassHolds(purchase);
-    yield* reconfirmUnlimitedPassHolds(purchase);
-    return true;
+    const created = yield* createUnlimitedPassHolds(purchase).pipe(
+      Effect.as(true),
+      Effect.catchTags({
+        DotyposRejected: (failure) =>
+          failure.operation === "createReservation" &&
+          (failure.reason === "invalid-request" ||
+            failure.reason === "not-found")
+            ? Effect.succeed(false)
+            : Effect.fail(failure),
+        UnlimitedPassHoldsUnavailable: (failure) =>
+          failure.reason === "changed"
+            ? Effect.succeed(false)
+            : Effect.fail(failure),
+      })
+    );
+    if (!created) return false;
+    return yield* reconfirmUnlimitedPassHolds(purchase).pipe(
+      Effect.as(true),
+      Effect.catchTag("UnlimitedPassHoldsUnavailable", (failure) =>
+        failure.reason === "changed"
+          ? Effect.succeed(false)
+          : Effect.fail(failure)
+      )
+    );
   }).pipe(WorkspaceLockSections.passPurchaseFulfillment(orderId));
 });

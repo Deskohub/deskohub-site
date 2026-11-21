@@ -297,16 +297,32 @@ it("adopts an ambiguous POST, reconfirms all days, then retains today on release
 
       const now = Temporal.Now.instant();
       const { db } = yield* WorkspaceDatabase;
+      const attemptId = paymentAttemptIdSchema.make(crypto.randomUUID());
+      yield* db.insert(paymentAttempts).values({
+        id: attemptId,
+        orderId: purchase.id,
+        provider: "mock",
+        providerOrderId: "fixture-ambiguous-holds-payment",
+        state: "paid",
+        amountValue: 599_000,
+        amountExponent: 2,
+        currency: "CZK",
+      });
       yield* db
         .update(orders)
-        .set({ paymentState: "paid", paidAt: now, updatedAt: now })
+        .set({
+          paymentState: "paid",
+          activePaymentAttemptId: attemptId,
+          paidAt: now,
+          updatedAt: now,
+        })
         .where(eq(orders.id, purchase.id));
       expect(yield* settlePassPurchase(purchase.id)).toBeUndefined();
       yield* confirmUnlimitedPassDays(purchase);
       yield* confirmUnlimitedPassDays(purchase);
-      expect(
-        (yield* settlePassPurchase(purchase.id, "completed"))?.status
-      ).toBe("active");
+      expect((yield* settlePassPurchase(purchase.id, attemptId))?.status).toBe(
+        "active"
+      );
       expect(
         [...provider.reservations.values()].every(
           (row) => row.status === "CONFIRMED"
