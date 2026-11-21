@@ -25,6 +25,11 @@ mock.module("server-only", () => ({}));
 mock.module("next/root-params", () => ({
   locale: () => Promise.resolve("en-US"),
 }));
+const nextServer = await import("next/server");
+mock.module("next/server", () => ({
+  ...nextServer,
+  connection: async () => {},
+}));
 // The page's client components read the router outside a Next app router.
 const navigation = await import("next/navigation");
 mock.module("next/navigation", () => ({

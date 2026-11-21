@@ -1,4 +1,4 @@
-import "server-only";
+"use server";
 
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
@@ -10,6 +10,7 @@ import {
   ensurePassHolderAccount,
   findPassHolderAccount,
 } from "@/features/account/backend/customer-account-by-email";
+import { administrationHref } from "@/features/administration/administration-href";
 import { m } from "@/features/administration/i18n";
 import { ReservationAdministrationService } from "@/features/administration/reservation-administration.service";
 import { defineAdministrationAction } from "@/features/administrators/server/administration-request.server";
@@ -47,6 +48,12 @@ const action = defineAdministrationAction(
       WorkspaceReservationRepository.Live,
       ReservationAdministrationService.Live
     ),
+    revalidates: ({ requestId, change }) => [
+      administrationHref("/[locale]/admin/passes"),
+      administrationHref("/[locale]/admin/passes/[passId]", {
+        passId: change._tag === "grant" ? requestId : change.passId,
+      }),
+    ],
     publicFailure: (cause, locale) => {
       if (!(cause instanceof PassChangeRefused))
         return m.passActionsUnavailable({}, { locale });
@@ -161,6 +168,5 @@ const action = defineAdministrationAction(
 );
 
 export const submitPassAction: typeof action = async (...args) => {
-  "use server";
   return await action(...args);
 };
