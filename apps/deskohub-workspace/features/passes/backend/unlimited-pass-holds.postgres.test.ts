@@ -125,10 +125,12 @@ const record = (
     tier = "reserved-desk",
     createdAt = Temporal.Now.instant(),
     renewsPassId,
+    assignedTableId = tableId,
   }: {
     tier?: "open-space" | "reserved-desk";
     createdAt?: Temporal.Instant;
     renewsPassId?: typeof passPurchases.$inferSelect.id;
+    assignedTableId?: typeof tableId;
   } = {}
 ) =>
   Effect.gen(function* () {
@@ -158,7 +160,7 @@ const record = (
         },
         days: Array.from({ length: unlimitedPassDays }, (_, index) => ({
           serviceDate: date(start.add({ days: index })),
-          tableId,
+          tableId: assignedTableId,
         })),
       })
     );
@@ -302,6 +304,59 @@ it("offers a gifted Unlimited renewal only to its current holder after claim", a
         startDate: source.validUntil,
       });
     }).pipe(Effect.provide(database!.layer))
+  );
+});
+
+it("rejects late renewal recovery after a regular order takes the holder's window", async () => {
+  const testDatabase = database!;
+  const competingTableId = DotyposTableIdSchema.make("43");
+  const tables = [tableId, competingTableId].map((id) =>
+    Schema.decodeUnknownSync(DotyposTableSchema)({
+      id,
+      _cloudId: "1",
+      display: true,
+      enabled: true,
+      name: `Synthetic reserved desk ${id}`,
+      seats: "1",
+      tags: ["cowork:reserved-desk"],
+    })
+  );
+  const provider = makeInMemoryDotypos({ tables });
+  const services = Layer.mergeAll(
+    testDatabase.layer,
+    provider.layer,
+    WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase.databasePool),
+    WorkspaceReservationRepository.Default.pipe(
+      Layer.provide(testDatabase.layer)
+    ),
+    Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
+      listLimitations: () => Effect.succeed([]),
+    })
+  );
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { source, buyer, holder, now } = yield* recordRenewableGift();
+      const start = Temporal.PlainDate.from(source.validUntil);
+      const renewal = yield* record(start, holder, holder, {
+        createdAt: now,
+        renewsPassId: source.id,
+      });
+      yield* createUnlimitedPassHolds(renewal);
+      const attemptId = yield* expirePass(renewal.id);
+      yield* record(start, buyer, holder, {
+        assignedTableId: competingTableId,
+      });
+
+      expect(
+        yield* prepareUnlimitedPassRecovery(renewal.id, attemptId).pipe(
+          WorkspaceLockSections.unlimitedPassRecovery(renewal.id)
+        )
+      ).toBe(false);
+      expect(
+        [...provider.reservations.values()].map(({ status }) => status)
+      ).toEqual(Array(unlimitedPassDays).fill("CANCELLED"));
+    }).pipe(Effect.provide(services))
   );
 });
 

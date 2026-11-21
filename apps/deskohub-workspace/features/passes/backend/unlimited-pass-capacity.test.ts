@@ -1,7 +1,7 @@
 import "@/shared/polyfills/temporal";
 import "@/shared/testing/workspace-test-env";
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import {
   DotyposCustomerIdSchema,
   type DotyposReservation,
@@ -239,6 +239,24 @@ test.each([
       expectedDesk.id,
     ])
   );
+});
+
+test("the selected tier determines availability after the Open Space cutoff on a renewal date", async () => {
+  const clock = spyOn(Temporal.Now, "instant").mockReturnValue(
+    Temporal.Instant.from("2027-03-28T15:00:00Z")
+  );
+  try {
+    const startDate = Temporal.PlainDate.from("2027-03-28");
+    const { services } = capacityLayer({ tables: [openTable, firstDesk] });
+    const matrix = await getBookableUnlimitedStartMatrix({
+      startsOn: startDate,
+      endsBefore: startDate.add({ days: 1 }),
+    }).pipe(Effect.provide(services), Effect.runPromise);
+    expect(matrix["open-space"]).toEqual([]);
+    expect(matrix["reserved-desk"].map(String)).toEqual([startDate.toString()]);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 test("the workstation pins an exact monitor setup", async () => {

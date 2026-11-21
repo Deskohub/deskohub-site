@@ -1,13 +1,12 @@
 import { Schema } from "effect";
 import { workspaceProductMonitorOptions } from "@/features/checkout/product-catalog";
-import { isCoworkOpenSpaceDayCutoffReached } from "@/features/reservation/cowork-reservation";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { currencyCZK } from "@/shared/money/currencies";
 import { type Money, sameMoneyUnit } from "@/shared/money/money";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
 import type { PassStatus } from "./pass";
-import { type PassTier, unlimitedPassDays } from "./pass-offer";
+import { unlimitedPassDays } from "./pass-offer";
 
 const periodFields = { startDate: plainDateStringSchema };
 
@@ -28,7 +27,7 @@ export const unlimitedPassSelectionSchema = Schema.Union([
 export type UnlimitedPassSelection = typeof unlimitedPassSelectionSchema.Type;
 
 export function isUnlimitedPassRenewalEligible(
-  pass: { tier: PassTier; status: PassStatus; validUntil: PlainDate },
+  pass: { status: PassStatus; validUntil: PlainDate },
   now: Temporal.Instant
 ) {
   if (
@@ -45,12 +44,7 @@ export function isUnlimitedPassRenewalEligible(
     Temporal.PlainDate.compare(
       pass.validUntil,
       getWorkspaceAvailabilityRange(today).to
-    ) <= 0 &&
-    !isCoworkOpenSpaceDayCutoffReached({
-      entryTier: pass.tier === "open-space" ? "open-space" : "reserved-desk",
-      date: pass.validUntil,
-      now,
-    })
+    ) <= 0
   );
 }
 

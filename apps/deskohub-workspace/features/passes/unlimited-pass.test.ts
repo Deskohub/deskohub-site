@@ -44,33 +44,20 @@ describe("Unlimited pass terms", () => {
     expect(getUnlimitedPassEndDate(date("2027-10-16"))).toBe("2027-11-15");
   });
 
-  test("admits a renewal on its Prague start date only during the tier's service window", () => {
+  test("keeps the renewal's fixed start eligible until Prague midnight", () => {
     const pass = {
-      tier: "open-space",
       status: "withdrawn",
       validUntil: date("2027-03-28"),
     } as const;
     expect(
       isUnlimitedPassRenewalEligible(
         pass,
-        Temporal.Instant.from("2027-03-28T14:59:59Z")
-      )
-    ).toBe(true);
-    expect(
-      isUnlimitedPassRenewalEligible(
-        pass,
-        Temporal.Instant.from("2027-03-28T15:00:00Z")
-      )
-    ).toBe(false);
-    expect(
-      isUnlimitedPassRenewalEligible(
-        { ...pass, tier: "reserved-desk" },
         Temporal.Instant.from("2027-03-28T21:59:59Z")
       )
     ).toBe(true);
     expect(
       isUnlimitedPassRenewalEligible(
-        { ...pass, tier: "reserved-desk" },
+        pass,
         Temporal.Instant.from("2027-03-28T22:00:00Z")
       )
     ).toBe(false);
