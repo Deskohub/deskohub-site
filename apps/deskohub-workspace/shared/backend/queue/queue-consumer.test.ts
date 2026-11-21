@@ -7,6 +7,7 @@ import { Cause, Data, Duration, Effect, Logger, Schema } from "effect";
 import { SqlError } from "effect/sql";
 import { reservationHoldCleanupTopic } from "@/features/checkout/backend/holds/reservation-hold-cleanup-topic";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { WorkspaceLoggerLive } from "@/shared/backend/logging/censorship";
 import { makeMemoryQueue } from "./memory-queue.test-utils";
 import {
   decideQueueRedelivery,
@@ -272,6 +273,24 @@ describe("queue delivery", () => {
       const entries = log.mock.calls.flat().join("\n");
       expect(entries).toContain("transient_failure");
       expect(entries).not.toContain(email);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test("keeps censored defect details in Workspace logs", async () => {
+    const privateMessage = "private-defect-message";
+    const log = spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await consumer(() => Effect.die(new TypeError(privateMessage)))(
+        { ...metadata(1), payload: {} },
+        "durable"
+      ).pipe(Effect.provide(WorkspaceLoggerLive), Effect.runPromise);
+
+      const entries = log.mock.calls.flat().join("\n");
+      expect(entries).toContain("TypeError");
+      expect(entries).not.toContain(privateMessage);
     } finally {
       log.mockRestore();
     }

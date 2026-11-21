@@ -213,9 +213,14 @@ export const defineQueueConsumer =
           mode,
         });
         const log = redeliveryLogs[decision.reason];
+        const censoredCause = censorLogValue(cause);
         return Effect.logWithLevel(log.level)(log.message, {
           ...decision,
-          cause: censorLogValue(cause),
+          // Log data rather than a new Effect cause. A censoring logger
+          // otherwise censors its already-sanitized defect a second time.
+          cause: Cause.isCause(censoredCause)
+            ? censoredCause.toJSON()
+            : censoredCause,
         }).pipe(Effect.as(QueueDeliveryOutcome.Failed(decision)));
       }),
       Effect.annotateLogs({
