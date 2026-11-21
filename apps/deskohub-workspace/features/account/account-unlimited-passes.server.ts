@@ -10,7 +10,7 @@ import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import { recoverEntryPackGiftClaims } from "@/features/passes/backend/entry-pack-gift";
-import { hasPaidUnlimitedRenewal } from "@/features/passes/backend/paid-unlimited-renewal";
+import { hasUnlimitedRenewalOverlap } from "@/features/passes/backend/unlimited-pass-window";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import {
   getUnlimitedAccessPath,
@@ -72,7 +72,7 @@ const readHolderPasses = Effect.fn("account.readHolderUnlimitedPasses")(
         status: passPurchases.status,
         paidAt: orders.paidAt,
         paymentState: orders.paymentState,
-        hasPaidRenewal: hasPaidUnlimitedRenewal,
+        renewalOverlaps: hasUnlimitedRenewalOverlap,
         deskId: workspaceReservations.passDayTableId,
       })
       .from(passPurchases)
@@ -158,7 +158,7 @@ export const loadAccountUnlimitedPasses = Effect.fn(
       period,
       seating,
       ...(pass.paymentState === "paid" &&
-        !pass.hasPaidRenewal &&
+        !pass.renewalOverlaps &&
         isUnlimitedPassRenewalEligible(pass, now) && {
           renewalPath: getUnlimitedRenewalPath(locale, pass.orderId),
         }),

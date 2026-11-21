@@ -1,6 +1,13 @@
 import "@/shared/testing/workspace-test-env";
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { DotyposRejected, DotyposService } from "@deskohub/dotypos";
 import {
   AlgoPinSchema,
@@ -48,14 +55,19 @@ const syntheticPin = AlgoPinSchema.make("246813579");
 describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
   "Unlimited access on disposable Postgres",
   () => {
-    const buyer = customerAccountIdSchema.make(crypto.randomUUID());
-    const holder = customerAccountIdSchema.make(crypto.randomUUID());
+    let buyer: CustomerAccountId;
+    let holder: CustomerAccountId;
     let database: WorkspacePostgresSuiteDatabase;
 
     beforeAll(async () => {
       database = (await createWorkspacePostgresSuiteDatabase(
         "unlimited_access"
       ))!;
+    });
+
+    beforeEach(async () => {
+      buyer = customerAccountIdSchema.make(crypto.randomUUID());
+      holder = customerAccountIdSchema.make(crypto.randomUUID());
       await database.pool.query(
         "insert into customer_accounts (id) values ($1), ($2)",
         [buyer, holder]
@@ -66,8 +78,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         [
           buyer,
           holder,
-          testEmailAddress("pass-buyer"),
-          testEmailAddress("pass-holder"),
+          testEmailAddress(`pass-buyer-${buyer}`),
+          testEmailAddress(`pass-holder-${holder}`),
         ]
       );
     });
@@ -345,6 +357,38 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(reads).toEqual([]);
     });
 
+    test("a historical paid fork blocks access through its only current descendant", async () => {
+      const original = await seedPass("open-space", false, {
+        start: "2030-01-30",
+        end: "2030-03-01",
+      });
+      const period = {
+        start: "2030-03-01",
+        end: firstDay,
+        renews: original.orderId,
+      };
+      const middle = await seedPass("open-space", false, period);
+      const sibling = await seedPass("open-space", false, period);
+      await database.pool.query(
+        "update pass_purchases set status = 'expired' where id in ($1, $2)",
+        [middle.orderId, sibling.orderId]
+      );
+      await seedPass("open-space", false, {
+        start: firstDay,
+        end: "2030-04-30",
+        renews: middle.orderId,
+      });
+
+      const reads: string[] = [];
+      expect(
+        await load(original.orderId, "open-space", buyer, during, {
+          issue,
+          reads,
+        })
+      ).toMatchObject({ state: "ended", validUntil: "2030-03-01" });
+      expect(reads).toEqual([]);
+    });
+
     test("withdrawal preserves the access cutoff and offers exactly the original term end to the holder", async () => {
       const original = await seedPass("open-space", false, {
         start: "2030-03-01",
@@ -366,6 +410,65 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         validUntil: "2030-03-28",
         renewalOrderId: original.orderId,
       });
+
+      const accessCookie = await holderCookie(original.orderId, buyer);
+      expect(
+        await load(original.orderId, "open-space", buyer, afterCutoff, {
+          issue,
+          accessCookie,
+        })
+      ).toMatchObject({ state: "ended", renewalOrderId: original.orderId });
+      const capabilityOnly = await load(
+        original.orderId,
+        "open-space",
+        null,
+        afterCutoff,
+        { issue, accessCookie }
+      );
+      expect(capabilityOnly).toMatchObject({ state: "ended" });
+      expect(capabilityOnly).not.toHaveProperty("renewalOrderId");
+
+      const independentlyBought = await seedPass("open-space", false, {
+        start: "2030-04-02",
+        end: "2030-05-02",
+      });
+      const overlapping = await load(
+        original.orderId,
+        "open-space",
+        buyer,
+        afterCutoff,
+        { issue }
+      );
+      expect(overlapping).not.toHaveProperty("renewalOrderId");
+      await database.pool.query(
+        "update pass_purchases set status = 'withdrawn', access_ends_on = valid_from where id = $1",
+        [independentlyBought.orderId]
+      );
+      expect(
+        await load(original.orderId, "open-space", buyer, afterCutoff, {
+          issue,
+        })
+      ).toMatchObject({ state: "ended", renewalOrderId: original.orderId });
+
+      const pending = await seedPass("open-space", false, {
+        start: firstDay,
+        end: "2030-04-30",
+        renews: original.orderId,
+      });
+      await database.pool.query(
+        "update pass_purchases set status = 'pending_payment' where id = $1",
+        [pending.orderId]
+      );
+      await database.pool.query(
+        "update orders set payment_state = 'pending', paid_at = null where id = $1",
+        [pending.orderId]
+      );
+      expect(
+        await load(original.orderId, "open-space", buyer, afterCutoff, {
+          issue,
+        })
+      ).toMatchObject({ state: "ended", renewalOrderId: original.orderId });
+
       const afterOriginalEnd = Temporal.Instant.from("2030-04-01T11:00Z");
       const lapsed = await load(
         original.orderId,

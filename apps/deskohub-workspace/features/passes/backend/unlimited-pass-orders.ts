@@ -3,18 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { DotyposCustomerId, DotyposTableId } from "@deskohub/dotypos";
 import { NexiCorrelationIdSchema } from "@deskohub/nexi";
-import {
-  and,
-  eq,
-  gt,
-  inArray,
-  isNotNull,
-  isNull,
-  lt,
-  ne,
-  or,
-  sql,
-} from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
@@ -46,6 +35,7 @@ import {
   isUnlimitedPassRenewalEligible,
   type UnlimitedPassSelection,
 } from "../unlimited-pass";
+import { overlapsUnlimitedPassWindow } from "./unlimited-pass-window";
 
 export class UnlimitedPassAdmissionError extends Data.TaggedError(
   "UnlimitedPassAdmissionError"
@@ -268,12 +258,8 @@ export const requireUnlimitedPassWindow = Effect.fn(
     .where(
       and(
         ne(passPurchases.id, input.orderId),
-        eq(passPurchases.product, "unlimited"),
         eq(passPurchases.holderAccountId, input.holderAccountId),
-        lt(passPurchases.validFrom, input.validUntil),
-        sql`coalesce(${passPurchases.accessEndsOn}, ${passPurchases.validUntil}) > ${input.validFrom}`,
-        sql`(${passPurchases.status} in ('pending_payment', 'active') or
-          (${passPurchases.status} in ('withdrawn', 'cancelled') and ${passPurchases.accessEndsOn} > ${passPurchases.validFrom}))`
+        overlapsUnlimitedPassWindow(passPurchases, input, true)
       )
     )
     .limit(1);

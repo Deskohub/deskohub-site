@@ -22,8 +22,8 @@ import {
 import type { UnlimitedAccessView } from "../unlimited-access";
 import { isUnlimitedPassRenewalEligible } from "../unlimited-pass";
 import { getUnlimitedPassAccessDay } from "../unlimited-pass-period";
-import { hasPaidUnlimitedRenewal } from "./paid-unlimited-renewal";
 import { openUnlimitedAccessCookie } from "./unlimited-access-capability";
+import { hasUnlimitedRenewalOverlap } from "./unlimited-pass-window";
 
 const noPass = { state: "not-found" } as const;
 
@@ -33,12 +33,11 @@ const findAccessPassId = (
   date: PlainDate
 ) => sql<OrderId>`(
   with recursive paid_pass as not materialized (
-    select pass.id, pass.valid_from, pass.valid_until, pass.renews_pass_id,
-      case pass.status
-        when 'active' then coalesce(pass.access_ends_on, pass.valid_until)
-        when 'cancelled' then pass.access_ends_on
-        when 'withdrawn' then pass.access_ends_on
-      end as access_end
+    select pass.id, pass.status, pass.valid_from, pass.valid_until, pass.renews_pass_id,
+      case when pass.status in ('active', 'expired')
+        then coalesce(pass.access_ends_on, pass.valid_until)
+        else pass.access_ends_on
+      end as entitled_until
     from ${passPurchases} pass
     join ${orders} purchase_order on purchase_order.id = pass.id
     where pass.holder_account_id = ${holderId} and pass.product = 'unlimited'
@@ -47,17 +46,25 @@ const findAccessPassId = (
       and purchase_order.kind = 'pass-purchase' and purchase_order.payment_state = 'paid'
       and purchase_order.paid_at is not null
   ), renewal_chain as (
-    select id, valid_from, valid_until, access_end from paid_pass where id = ${orderId}
+    select id, status, valid_from, valid_until, entitled_until from paid_pass where id = ${orderId}
     union all
-    select next_pass.id, next_pass.valid_from, next_pass.valid_until, next_pass.access_end
+    select next_pass.id, next_pass.status, next_pass.valid_from, next_pass.valid_until, next_pass.entitled_until
     from renewal_chain current_pass
     join paid_pass next_pass on next_pass.renews_pass_id = current_pass.id
     where next_pass.valid_from = current_pass.valid_until
       and next_pass.valid_from <= ${date}::date
+      and not exists (
+        select 1 from paid_pass sibling
+        where sibling.renews_pass_id = next_pass.renews_pass_id
+          and sibling.valid_from = next_pass.valid_from
+          and sibling.id <> next_pass.id
+          and sibling.entitled_until > sibling.valid_from
+      )
   )
   select coalesce(
     (select min(id) from renewal_chain
-      where ${date}::date >= valid_from and ${date}::date < access_end
+      where status <> 'expired'
+        and ${date}::date >= valid_from and ${date}::date < entitled_until
       having count(*) = 1),
     ${orderId}
   )
@@ -79,7 +86,7 @@ const readPassDay = Effect.fn("passes.unlimitedAccess.readDay")(function* (
       accessEndsOn: passPurchases.accessEndsOn,
       holderAccountId: passPurchases.holderAccountId,
       paymentState: orders.paymentState,
-      hasPaidRenewal: hasPaidUnlimitedRenewal,
+      renewalOverlaps: hasUnlimitedRenewalOverlap,
       reservation: {
         id: workspaceReservations.id,
         dotyposId: workspaceReservations.dotyposReservationId,
@@ -121,12 +128,13 @@ const readPassDay = Effect.fn("passes.unlimitedAccess.readDay")(function* (
 const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   orderId: OrderId,
   isHolder: (accountId: CustomerAccountId) => boolean,
-  signedInHolderId: CustomerAccountId | undefined
+  sessionAccountId: CustomerAccountId | undefined,
+  hasAccessCapability: boolean
 ) {
   const readDay = (date: Temporal.PlainDate) =>
     readPassDay(
       orderId,
-      signedInHolderId,
+      hasAccessCapability ? undefined : sessionAccountId,
       plainDateStringSchema.make(date.toString())
     );
   let requestedDate = getCurrentWorkspaceDate(yield* currentInstant);
@@ -159,9 +167,9 @@ const readPassAccess = Effect.fn("passes.unlimitedAccess.read")(function* (
   }
   if (day === undefined) {
     const canRenew =
-      signedInHolderId === access.holderAccountId &&
+      sessionAccountId === access.holderAccountId &&
       access.paymentState === "paid" &&
-      !access.hasPaidRenewal &&
+      !access.renewalOverlaps &&
       isUnlimitedPassRenewalEligible(access, now);
     return {
       ...period,
@@ -257,12 +265,13 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
     const accountId = Result.isSuccess(session)
       ? session.success.accountId
       : undefined;
-    // The exchanged capability is scoped to the URL's own pass.
-    const signedInHolderId = allowsHolder ? undefined : accountId;
+    // The exchanged capability pins the URL's pass but grants no renewal authority.
+    const hasAccessCapability = allowsHolder !== undefined;
     const access = yield* readPassAccess(
       orderId,
       (holderId) => holderId === accountId || allowsHolder?.(holderId) === true,
-      signedInHolderId
+      accountId,
+      hasAccessCapability
     );
     if (access.state !== "open") return access;
     const recheckAccess = Effect.gen(function* () {
@@ -276,7 +285,8 @@ export const loadUnlimitedAccess = Effect.fn("passes.unlimitedAccess.load")(
         (holderId) =>
           holderId === access.holderAccountId &&
           (holderId === settledAccountId || allowsHolder?.(holderId) === true),
-        allowsHolder ? undefined : settledAccountId
+        settledAccountId,
+        hasAccessCapability
       );
     });
 
