@@ -4,7 +4,16 @@ import {
   DotyposService,
   getCustomerDisplayName,
 } from "@deskohub/dotypos";
-import { and, desc, eq, exists, inArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  arrayOverlaps,
+  desc,
+  eq,
+  exists,
+  inArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Option } from "effect";
 import type { SqlError } from "effect/sql";
@@ -705,18 +714,22 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
       .select({
         source: unlimitedPassDayMoves.sourceReservationId,
         target: unlimitedPassDayMoves.targetReservationId,
+        ambiguous: unlimitedPassDayMoves.ambiguousReservationIds,
       })
       .from(unlimitedPassDayMoves)
       .where(
         or(
           inArray(unlimitedPassDayMoves.sourceReservationId, ids),
-          inArray(unlimitedPassDayMoves.targetReservationId, ids)
+          inArray(unlimitedPassDayMoves.targetReservationId, ids),
+          arrayOverlaps(unlimitedPassDayMoves.ambiguousReservationIds, ids)
         )
       );
     return new Set(
-      rows.flatMap(({ source, target }) =>
-        target ? [source, target] : [source]
-      )
+      rows.flatMap(({ source, target, ambiguous }) => [
+        source,
+        ...(target ? [target] : []),
+        ...(ambiguous ?? []),
+      ])
     );
   });
 

@@ -357,6 +357,7 @@ describe.skipIf(!testDatabase)(
       const ordinary = DotyposReservationIdSchema.make(uniqueId());
       const pendingDay = DotyposReservationIdSchema.make(uniqueId());
       const replacedDay = DotyposReservationIdSchema.make(uniqueId());
+      const parkedDay = DotyposReservationIdSchema.make(uniqueId());
 
       for (const accountId of [buyer, holder]) {
         await insertAuthUser(accountId, testEmailAddress(`h-${accountId}`));
@@ -395,6 +396,14 @@ describe.skipIf(!testDatabase)(
          from workspace_reservations where pass_id = $4`,
         [dotyposCustomerId, replacedDay, attachedDay, passId]
       );
+      await testDatabase!.pool.query(
+        `insert into unlimited_pass_day_moves
+           (generation, reservation_id, customer_id, source_reservation_id, source_table_id,
+            target_table_id, requested_at, checked_at, ambiguous_at, ambiguous_reservation_ids)
+         select uuid_generate_v7(), id, $1, $2, '9', '10', now(), now(), now(), $3::text[]
+         from workspace_reservations where pass_id = $4`,
+        [dotyposCustomerId, attachedDay, [parkedDay, uniqueId()], passId]
+      );
       const accountHistory = await Effect.runPromise(
         Effect.flatMap(CustomerReservationHistoryService, (service) =>
           service.load({ accountId: holder, dotyposCustomerId })
@@ -412,6 +421,11 @@ describe.skipIf(!testDatabase)(
                 id: replacedDay,
                 status: "CANCELLED",
                 note: "Synthetic staff note after the move",
+              }),
+              makeDotyposReservation({
+                id: parkedDay,
+                status: "CONFIRMED",
+                note: "Synthetic staff note after parking the move",
               }),
             ])
           )

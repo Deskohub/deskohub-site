@@ -3041,6 +3041,7 @@ describe("DotyposService marked reservation transitions", () => {
   ] as const)(
     "classifies a timeout during %s by dispatch",
     async (stalledAt, tag, expectedPosts) => {
+      const lateToken = Promise.withResolvers<Response>();
       const stall = (request: Request) =>
         new Promise<Response>((_resolve, reject) => {
           request.signal.addEventListener(
@@ -3055,7 +3056,7 @@ describe("DotyposService marked reservation transitions", () => {
         if (new URL(request.url).pathname === "/signin/token") {
           tokens++;
           return stalledAt === "token lookup"
-            ? stall(request)
+            ? lateToken.promise
             : tokenResponse();
         }
         expect(request.method).toBe("POST");
@@ -3084,10 +3085,20 @@ describe("DotyposService marked reservation transitions", () => {
           request: "reservation.create",
         },
       });
+      if (stalledAt === "token lookup") {
+        lateToken.resolve(tokenResponse());
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(posts).toBe(0);
+      }
     }
   );
 
-  test.each(["empty", "missing-id", "multiple-ids"] as const)(
+  test.each([
+    "empty",
+    "missing-id",
+    "multiple-ids",
+    "malformed-multiple-ids",
+  ] as const)(
     "sends a single journaled POST on a %s response",
     async (response) => {
       let posts = 0;
@@ -3097,9 +3108,14 @@ describe("DotyposService marked reservation transitions", () => {
         expect(request.method).toBe("POST");
         posts++;
         if (response === "empty") return Response.json([]);
-        if (response === "multiple-ids") {
+        if (
+          response === "multiple-ids" ||
+          response === "malformed-multiple-ids"
+        ) {
           return Response.json([
-            reservation(),
+            response === "malformed-multiple-ids"
+              ? { ...reservation(), seats: 2 }
+              : reservation(),
             reservation({ id: "second-reservation" }),
           ]);
         }
@@ -3124,7 +3140,8 @@ describe("DotyposService marked reservation transitions", () => {
           _tag: "DotyposUncertain",
           reason: "invalid-response",
           operation: "createReservation",
-          ...(response === "multiple-ids" && {
+          ...((response === "multiple-ids" ||
+            response === "malformed-multiple-ids") && {
             createdReservationIds: ["reservation-id", "second-reservation"],
           }),
         },

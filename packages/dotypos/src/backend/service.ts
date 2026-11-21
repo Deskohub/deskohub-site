@@ -30,11 +30,12 @@ import {
   DotyposVersionConflict,
   type DotyposWriteFailure,
 } from "../errors";
-import type {
-  CreateCustomerRequest,
-  CreateReservationRequest,
-  UpdateCustomerRequest,
-  UpdateReservationRequest,
+import {
+  type CreateCustomerRequest,
+  type CreateReservationRequest,
+  ReservationWriteRecord,
+  type UpdateCustomerRequest,
+  type UpdateReservationRequest,
 } from "../generated/effect.gen";
 import {
   type DotyposTimestamp,
@@ -1180,6 +1181,13 @@ export interface IDotyposService {
   >;
 }
 
+const readCreateReceiptId = Schema.decodeUnknownOption(
+  Schema.Struct({ id: DotyposReservationIdSchema })
+);
+const decodeCreatedReservationRecords = Schema.decodeUnknownEffect(
+  Schema.Array(ReservationWriteRecord)
+);
+
 const makeDotyposService: Effect.Effect<
   IDotyposService,
   never,
@@ -1208,7 +1216,7 @@ const makeDotyposService: Effect.Effect<
       requestPolicy.attempt(onTimeout)
     );
 
-  /** A creation answered with an empty array created nothing, so it can be retried. */
+  /** The default creation profile can retry an empty batch response. */
   const firstCreated = <A>(
     items: readonly A[],
     call: DotyposCall
@@ -1415,17 +1423,32 @@ const makeDotyposService: Effect.Effect<
       ).pipe(
         Effect.flatMap((reservations) => {
           if (input.singleAttempt && reservations.length > 1) {
-            const decoded = reservations.map(({ id }) =>
-              Schema.decodeUnknownOption(DotyposReservationIdSchema)(id)
+            const decoded = reservations.map((receipt) =>
+              readCreateReceiptId(receipt)
             );
-            const ids = [...new Set(decoded.flatMap(Option.toArray))];
+            const ids = [
+              ...new Set(
+                decoded.flatMap((receipt) =>
+                  Option.isSome(receipt) ? [receipt.value.id] : []
+                )
+              ),
+            ];
             if (ids.length > 1 || decoded.some(Option.isNone)) {
               return Effect.fail(incompleteCreation(ids));
             }
           }
-          return firstCreated(reservations, call).pipe(
-            Effect.mapError((error) =>
-              input.singleAttempt ? incompleteCreation() : error
+          return decodeCreatedReservationRecords(reservations).pipe(
+            Effect.mapError(() =>
+              dotyposInvalidResponse(call, {
+                message: "Dotypos returned malformed reservation records.",
+              })
+            ),
+            Effect.flatMap((records) =>
+              firstCreated(records, call).pipe(
+                Effect.mapError((error) =>
+                  input.singleAttempt ? incompleteCreation() : error
+                )
+              )
             )
           );
         }),
