@@ -16,6 +16,7 @@ import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
 import { eq } from "drizzle-orm";
 import { Deferred, Effect, Fiber, Layer, Result, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
@@ -115,7 +116,14 @@ const beginUnlimitedPassPurchase = (
 const record = (
   start: Temporal.PlainDate,
   buyer = newAccountId(),
-  holder = fixtureReservationAuthorId
+  holder = fixtureReservationAuthorId,
+  {
+    tier = "reserved-desk",
+    createdAt = Temporal.Now.instant(),
+  }: {
+    tier?: "open-space" | "reserved-desk";
+    createdAt?: Temporal.Instant;
+  } = {}
 ) =>
   Effect.gen(function* () {
     const { db, transaction } = yield* WorkspaceDatabase;
@@ -129,10 +137,13 @@ const record = (
         locale: "en-US",
         buyer: { accountId: buyer, customerId },
         holder: { accountId: holder, customerId },
-        createdAt: Temporal.Now.instant(),
-        selection: { startDate: date(start), tier: "reserved-desk" },
+        createdAt,
+        selection:
+          tier === "open-space"
+            ? { startDate: date(start), tier, coffee: false }
+            : { startDate: date(start), tier },
         quote: {
-          product: { kind: "unlimited", tier: "reserved-desk" },
+          product: { kind: "unlimited", tier },
           discountableSubtotal: currencyCZK(599_000),
           discountedSubtotal: currencyCZK(599_000),
           totalDiscount: currencyCZK(0),
@@ -1204,6 +1215,164 @@ it("replays expired service dates after losing the Continue response", async () 
     }).pipe(Effect.provide(unlimitedDraftLayer(accountId, provider.service)))
   );
 });
+
+it.each([
+  { tier: "open-space", closesAt: "2030-01-15T16:00:00Z" },
+  { tier: "reserved-desk", closesAt: "2030-01-15T23:00:00Z" },
+] as const)(
+  "Continue voids live $tier holds at the first Prague cutoff",
+  async ({ tier, closesAt }) => {
+    const start = Temporal.PlainDate.from("2030-01-15");
+    const cutoff = Temporal.Instant.from(closesAt);
+    const beforeCutoff = cutoff.subtract({ minutes: 2 });
+    const accountId = newAccountId();
+    const provider = makeInMemoryDotypos({});
+    const layer = Layer.merge(
+      unlimitedDraftLayer(accountId, provider.service),
+      TestClock.layer()
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(beforeCutoff.epochMilliseconds);
+        const purchase = yield* record(start, accountId, accountId, {
+          tier,
+          createdAt: beforeCutoff,
+        });
+        yield* createUnlimitedPassHolds(purchase);
+        const selection =
+          tier === "open-space"
+            ? { tier, coffee: false, startDate: date(start) }
+            : { tier, startDate: date(start) };
+        const input = {
+          orderId: purchase.id,
+          locale: "en-US",
+          selection,
+        } as const;
+        expect((yield* beginUnlimitedPassPurchase(input)).id).toBe(purchase.id);
+        const days = yield* readUnlimitedPassDays(purchase.id);
+        expect(days).toHaveLength(unlimitedPassDays);
+        expect(
+          days.every(
+            (day) =>
+              day.reservationState === "held" &&
+              day.reservationHoldExpiresAt &&
+              Temporal.Instant.compare(day.reservationHoldExpiresAt, cutoff) > 0
+          )
+        ).toBe(true);
+        expect(Temporal.Instant.compare(purchase.holdsExpireAt!, cutoff)).toBe(
+          1
+        );
+        const { db } = yield* WorkspaceDatabase;
+        expect(yield* db.select().from(paymentAttempts)).toEqual([]);
+
+        yield* TestClock.setTime(cutoff.epochMilliseconds);
+        const predecessorOrderIds = Array.from(
+          { length: unlimitedCheckoutPredecessorLimit },
+          () => orderIdSchema.make(crypto.randomUUID())
+        );
+        const outcome = Result.fail(
+          expect.objectContaining({
+            _tag: "UnlimitedPassDraftVoided",
+            blockingDates: [date(start)],
+          })
+        );
+        expect(
+          yield* beginUnlimitedPassPurchaseWithDisposition({
+            ...input,
+            supersedeOrderIds: predecessorOrderIds,
+          })
+        ).toEqual({ outcome, retiredPredecessorOrderIds: predecessorOrderIds });
+        expect(yield* Effect.result(beginUnlimitedPassPurchase(input))).toEqual(
+          outcome
+        );
+        const [voided] = yield* db
+          .select()
+          .from(passPurchases)
+          .where(eq(passPurchases.id, purchase.id));
+        expect(voided).toMatchObject({
+          status: "void",
+          quote: { voidBlockingDates: [date(start)] },
+        });
+        const released = yield* readUnlimitedPassDays(purchase.id);
+        expect(
+          released.every((day) => day.reservationState === "cancelled")
+        ).toBe(true);
+        expect(
+          [...provider.reservations.values()].map(({ status }) => status)
+        ).toEqual(Array(unlimitedPassDays).fill("CANCELLED"));
+        expect(yield* db.select().from(paymentAttempts)).toEqual([]);
+      }).pipe(Effect.provide(layer))
+    );
+  }
+);
+
+it.each(["before", "during"] as const)(
+  "Continue voids a draft when the first service day closes %s hold creation",
+  async (timing) => {
+    const start = Temporal.PlainDate.from("2030-01-15");
+    const cutoff = Temporal.Instant.from("2030-01-15T16:00:00Z");
+    const beforeCutoff = cutoff.subtract({ minutes: 2 });
+    const accountId = newAccountId();
+    const provider = makeInMemoryDotypos({});
+    const layer = Layer.merge(
+      unlimitedDraftLayer(accountId, {
+        ...provider.service,
+        createReservation: (input) =>
+          provider.service
+            .createReservation(input)
+            .pipe(
+              Effect.tap(() =>
+                provider.reservations.size === unlimitedPassDays
+                  ? TestClock.setTime(cutoff.epochMilliseconds)
+                  : Effect.void
+              )
+            ),
+      }),
+      TestClock.layer()
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(
+          (timing === "before" ? cutoff : beforeCutoff).epochMilliseconds
+        );
+        const purchase = yield* record(start, accountId, accountId, {
+          tier: "open-space",
+          createdAt: beforeCutoff,
+        });
+        expect(
+          yield* Effect.result(
+            beginUnlimitedPassPurchase({
+              orderId: purchase.id,
+              locale: "en-US",
+              selection: {
+                tier: "open-space",
+                coffee: false,
+                startDate: date(start),
+              },
+            })
+          )
+        ).toEqual(
+          Result.fail(
+            expect.objectContaining({
+              _tag: "UnlimitedPassDraftVoided",
+              blockingDates: [date(start)],
+            })
+          )
+        );
+        expect(provider.reservations.size).toBe(
+          timing === "before" ? 0 : unlimitedPassDays
+        );
+        const released = yield* readUnlimitedPassDays(purchase.id);
+        const releasedState =
+          timing === "before" ? "hold_expired" : "cancelled";
+        expect(
+          released.every((day) => day.reservationState === releasedState)
+        ).toBe(true);
+      }).pipe(Effect.provide(layer))
+    );
+  }
+);
 
 it("replays expiry and change dates without replacing an ambiguous generation", async () => {
   const start = getCurrentWorkspaceDate().add({ days: 100 });

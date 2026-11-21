@@ -189,8 +189,15 @@ test.each([
     error: new Error("Synthetic late Continue failure"),
     response: { status: "purchase_error", reason: "unavailable" },
   },
+  {
+    error: Object.assign(new Error("Synthetic cutoff void"), {
+      _tag: "UnlimitedPassDraftVoided",
+      blockingDates: ["2026-11-20"],
+    }),
+    response: { status: "draft_voided", blockingDates: ["2026-11-20"] },
+  },
 ])(
-  "Unlimited Continue returns durable predecessor acknowledgements on $response.reason",
+  "Unlimited Continue returns durable predecessor acknowledgements for $error.message",
   async ({ error, response }) => {
     const orderId = orderIdSchema.make(crypto.randomUUID());
     const predecessorOrderIds = Array.from({ length: 8 }, () =>

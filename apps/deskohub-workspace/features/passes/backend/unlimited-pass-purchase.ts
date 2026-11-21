@@ -58,6 +58,7 @@ import {
   EntryPackPurchaseError,
   requirePassPurchasesEnabled,
 } from "./entry-pack-purchase";
+import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
 import { withUnlimitedPassCapacity } from "./unlimited-pass-capacity";
 import {
   attemptUnlimitedPassHolds,
@@ -446,16 +447,26 @@ const continueUnlimitedPassPurchase = Effect.fn(
         });
       }
       const { purchase } = prepared;
-      const attempt = yield* attemptUnlimitedPassHolds(purchase);
-      if (!attempt) return purchase;
+      const closedBeforeHolds = hasUnlimitedPassFirstDayEnded(
+        purchase,
+        yield* currentInstant
+      );
+      const attempt = closedBeforeHolds
+        ? undefined
+        : yield* attemptUnlimitedPassHolds(purchase);
+      const firstDayEnded =
+        closedBeforeHolds ||
+        hasUnlimitedPassFirstDayEnded(purchase, yield* currentInstant);
+      if (!attempt && !firstDayEnded) return purchase;
 
-      const { failure } = attempt;
+      const failure = attempt?.failure;
       const days = yield* readUnlimitedPassDays(purchase.id);
       const rejectedDates = rejectedHoldDates(days);
       const blocked =
-        failure._tag === "UnlimitedPassHoldsUnavailable" &&
+        failure?._tag === "UnlimitedPassHoldsUnavailable" &&
         failure.reason !== "unfinished";
-      if (!blocked && rejectedDates.length === 0) return yield* failure;
+      if (failure && !firstDayEnded && !blocked && rejectedDates.length === 0)
+        return yield* failure;
 
       const now = yield* currentInstant;
       const expiredDates = days.flatMap((day) =>
@@ -468,7 +479,8 @@ const continueUnlimitedPassPurchase = Effect.fn(
         ...new Set([
           ...rejectedDates,
           ...expiredDates,
-          ...attempt.blockingDates,
+          ...(firstDayEnded ? [purchase.validFrom] : []),
+          ...(attempt?.blockingDates ?? []),
           ...(blocked ? (failure.blockingDates ?? []) : []),
         ]),
       ].sort();
@@ -483,7 +495,10 @@ const continueUnlimitedPassPurchase = Effect.fn(
           )
         )
         .returning();
-      if (!voided) return yield* failure;
+      if (!voided) {
+        return yield* failure ??
+          new EntryPackPurchaseError({ reason: "holds-unavailable" });
+      }
       yield* releaseUnlimitedPassDays(voided).pipe(
         Effect.catch(() =>
           Effect.logWarning(

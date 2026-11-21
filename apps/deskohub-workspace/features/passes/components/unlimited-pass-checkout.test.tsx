@@ -887,15 +887,25 @@ test.each(["Details", "sign-in"] as const)(
   }
 );
 
-test("Refresh quote at the predecessor limit keeps the current draft separate", async () => {
+test("Refresh quote at the predecessor limit clears a voided draft and lets the buyer select a new date", async () => {
   const orderId = orderIdSchema.make(crypto.randomUUID());
   const predecessorOrderIds = Array.from(
     { length: unlimitedCheckoutPredecessorLimit },
     () => orderIdSchema.make(crypto.randomUUID())
   );
-  const beginCheckout = mock(async (_input: { orderId: OrderId }) => ({
-    data: { ...readyCheckout, retiredPredecessorOrderIds: [] },
-  }));
+  const unresolvedPredecessor = predecessorOrderIds.at(-1)!;
+  let cutoffReached = false;
+  const beginCheckout = mock(async (input: { orderId: OrderId }) =>
+    cutoffReached && input.orderId === orderId
+      ? {
+          data: {
+            status: "draft_voided" as const,
+            blockingDates: [openSpaceStart],
+            retiredPredecessorOrderIds: predecessorOrderIds.slice(0, -1),
+          },
+        }
+      : { data: { ...readyCheckout, retiredPredecessorOrderIds: [] } }
+  );
   const view = render(
     <QueryProvider>
       <UnlimitedPassCheckout
@@ -903,6 +913,12 @@ test("Refresh quote at the predecessor limit keeps the current draft separate", 
         initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
         draft={{ kind: "submitted", orderId, predecessorOrderIds }}
         beginCheckout={beginCheckout}
+        getAvailability={async () => ({
+          data: {
+            ...availability,
+            starts: { ...availability.starts, "open-space": [monitorStart] },
+          },
+        })}
         payCheckout={async () => ({
           data: { status: "purchase_error", reason: "quote-expired" },
         })}
@@ -922,10 +938,29 @@ test("Refresh quote at the predecessor limit keeps the current draft separate", 
   expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual(
     predecessorOrderIds
   );
+  cutoffReached = true;
   fireEvent.click(view.getByRole("button", { name: /continue/i }));
-  await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(2));
+  await view.findByText(/pass can’t cover Nov 1, 2026/i);
   expect(beginCheckout).toHaveBeenLastCalledWith(
     expect.objectContaining({ orderId, supersedeOrderIds: predecessorOrderIds })
+  );
+  expect(checkoutUrl().searchParams.get("submittedOrder")).toBeNull();
+  expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
+    unresolvedPredecessor,
+  ]);
+  fireEvent.click(
+    await view.findByRole("button", { name: /November 2nd, 2026/i })
+  );
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  await view.findByRole("button", { name: /pay/i });
+  expect(beginCheckout).toHaveBeenCalledTimes(3);
+  expect(beginCheckout).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      orderId: expect.not.stringMatching(orderId),
+      selection: { ...base.initialOptions, startDate: monitorStart },
+      supersedeOrderIds: [unresolvedPredecessor],
+    })
   );
 });
 
