@@ -78,9 +78,11 @@ function vercelFixture(
 }
 
 test("groups recurrent logs by template and operation while keeping occurrence aliases", async () => {
+  const firstEmail = testEmailAddress("first");
+  const secondEmail = testEmailAddress("second");
   const first = log(1, {
     uuid: uuid(1).toUpperCase(),
-    body: `Checkout rejected for ${testEmailAddress("first")} at https://example.test/secret. access_code=${privateText}`,
+    body: `Checkout rejected for ${firstEmail} at https://example.test/secret. access_code=${privateText}`,
     attributes: {
       operation: "checkout.reserve",
       fiberId: "#1",
@@ -91,7 +93,7 @@ test("groups recurrent logs by template and operation while keeping occurrence a
     timestamp: "2026-11-20T16:30:02+02:00",
     severity_text: "fatal",
     body: JSON.stringify([
-      `Checkout rejected for ${testEmailAddress("second")} at https://other.test/other. access_code=rotated`,
+      `Checkout rejected for ${secondEmail} at https://other.test/other. access_code=rotated`,
       { authorization: privateText },
     ]),
     attributes: { operation: "checkout.reserve", fiberId: "#2" },
@@ -123,8 +125,11 @@ test("groups recurrent logs by template and operation while keeping occurrence a
   expect(grouped?.key).toMatch(/^posthog:log:[0-9a-f]{64}$/);
   expect(grouped?.evidence).toContain("past seven days: 2");
   expect(grouped?.evidence).toContain(uuid(2));
-  expect(JSON.stringify(signals)).not.toMatch(
-    /example\.test|private-customer|rotated|checkout\.reserve/
+  const evidence = JSON.stringify(signals);
+  expect(evidence).not.toContain(firstEmail);
+  expect(evidence).not.toContain(secondEmail);
+  expect(evidence).not.toMatch(
+    /example\.test|other\.test|private-customer|rotated|checkout\.reserve/
   );
 
   const recurrence = await collectPostHog(
