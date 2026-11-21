@@ -65,8 +65,12 @@ import {
   findOwnedEntryPackOrder,
   findOwnedPassPurchaseOrder,
 } from "./entry-pack-order";
-import { isStaleEntryPackPaymentApproval } from "./entry-pack-order-payment-handler";
+import {
+  isStaleEntryPackPaymentApproval,
+  isUnlimitedPassFirstDayAdmissionExpired,
+} from "./entry-pack-order-payment-handler";
 import { quoteEntryPack } from "./entry-pack-quote";
+import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
 import { reconfirmUnlimitedPassHolds } from "./unlimited-pass-holds";
 
 export class EntryPackPurchaseError extends Data.TaggedError(
@@ -370,8 +374,20 @@ const readOwnedPayablePass = Effect.fn("readOwnedPayablePass")(function* (
 const hasPassQuoteExpired = (now: Temporal.Instant, purchase: PassPurchase) =>
   purchase.product === "entry-pack"
     ? isEntryPackQuoteExpired(now, purchase.validUntil)
-    : !purchase.holdsExpireAt ||
+    : hasUnlimitedPassFirstDayEnded(purchase, now) ||
+      !purchase.holdsExpireAt ||
       Temporal.Instant.compare(now, purchase.holdsExpireAt) >= 0;
+
+const requireOpenUnlimitedPassQuote = Effect.fnUntraced(function* (
+  purchase: PassPurchase
+) {
+  if (
+    purchase.product === "unlimited" &&
+    hasPassQuoteExpired(yield* currentInstant, purchase)
+  ) {
+    return yield* new EntryPackPurchaseError({ reason: "quote-expired" });
+  }
+});
 
 const hasEndedUnpaidAttempt = ({
   order,
@@ -568,6 +584,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
             }),
           },
         };
+        yield* requireOpenUnlimitedPassQuote(purchase);
         yield* saveEntryPackQuote(order.id, selectedQuote);
         return { status: "ready" as const, quote: selectedQuote };
       })
@@ -692,6 +709,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           : order.paymentState !== "not_started")
       )
         return { status: "pending" as const, statusUrl };
+      yield* requireOpenUnlimitedPassQuote(purchase);
       const accepted = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
         purchase.quote
       );
@@ -718,16 +736,23 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       const now = yield* currentInstant;
       if (hasPassQuoteExpired(now, purchase)) {
         return yield* new EntryPackPurchaseError({
-          reason: order.activePaymentAttemptId
-            ? "payment-in-progress"
-            : "quote-expired",
+          reason:
+            productKind === "entry-pack" && order.activePaymentAttemptId
+              ? "payment-in-progress"
+              : "quote-expired",
         });
       }
       if (productKind === "unlimited") {
         yield* reconfirmUnlimitedPassHolds(purchase).pipe(
           Effect.catchTag("UnlimitedPassHoldsUnavailable", () =>
-            Effect.fail(
-              new EntryPackPurchaseError({ reason: "holds-unavailable" })
+            Effect.flatMap(currentInstant, (checkedAt) =>
+              Effect.fail(
+                new EntryPackPurchaseError({
+                  reason: hasUnlimitedPassFirstDayEnded(purchase, checkedAt)
+                    ? "quote-expired"
+                    : "holds-unavailable",
+                })
+              )
             )
           )
         );
@@ -756,6 +781,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
           ),
           ...selection,
         });
+      yield* requireOpenUnlimitedPassQuote(purchase);
       const submittedCodeDiscountId = getAppliedPromotionDiscountId(
         quote,
         getDiscountCommitmentPayload(commitment).applications
@@ -871,13 +897,14 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       };
       const analytics = yield* CheckoutAnalytics;
       if (admission.amount.value === 0) {
-        const payment = yield* handler
-          .admitInternal(admission)
-          .pipe(
-            Effect.catchIf(isStaleEntryPackPaymentApproval, () =>
-              Effect.succeed(undefined)
-            )
-          );
+        const payment = yield* handler.admitInternal(admission).pipe(
+          Effect.catchIf(isUnlimitedPassFirstDayAdmissionExpired, () =>
+            Effect.fail(new EntryPackPurchaseError({ reason: "quote-expired" }))
+          ),
+          Effect.catchIf(isStaleEntryPackPaymentApproval, () =>
+            Effect.succeed(undefined)
+          )
+        );
         if (!payment) return { status: "pending" as const, statusUrl };
         if (payment.changed)
           yield* analytics.paymentCompleted({
@@ -895,6 +922,9 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
         beforeAttempt: Effect.void,
       }).pipe(
         Effect.scoped,
+        Effect.catchIf(isUnlimitedPassFirstDayAdmissionExpired, () =>
+          Effect.fail(new EntryPackPurchaseError({ reason: "quote-expired" }))
+        ),
         Effect.catchIf(isStaleEntryPackPaymentApproval, () =>
           Effect.succeed(undefined)
         )

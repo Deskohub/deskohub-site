@@ -17,6 +17,7 @@ import {
   rejectedPassDayHoldCode,
 } from "../pass-day-marker";
 import { type PassTier, unlimitedPassDays } from "../pass-offer";
+import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
 import { recordAmbiguousPassDayHolds } from "./pass-day-hold-ownership";
 import {
   createUnlimitedPassDayHold,
@@ -168,12 +169,22 @@ export const reconfirmUnlimitedPassHolds = Effect.fn(
     "id" | "status" | "validFrom" | "holdsExpireAt" | "tier"
   >
 ) {
+  if (hasUnlimitedPassFirstDayEnded(purchase, yield* currentInstant)) {
+    return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+  }
   const holds = yield* readPayableUnlimitedHolds(purchase);
   const dotypos = yield* DotyposService;
-  const provider = yield* dotypos.getReservationsByIds(
-    holds.map((hold) => hold.dotyposReservationId),
-    { concurrency: 1 }
-  );
+  const lookup = yield* dotypos
+    .getReservationsByIds(
+      holds.map((hold) => hold.dotyposReservationId),
+      { concurrency: 1 }
+    )
+    .pipe(Effect.result);
+  if (hasUnlimitedPassFirstDayEnded(purchase, yield* currentInstant)) {
+    return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+  }
+  if (Result.isFailure(lookup)) return yield* lookup.failure;
+  const provider = lookup.success;
   for (const hold of holds) {
     const reservation = provider.get(hold.dotyposReservationId);
     if (

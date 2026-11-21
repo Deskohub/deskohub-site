@@ -10,6 +10,7 @@ import {
 } from "@deskohub/dotypos";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
+import { testEmailAddress } from "@deskohub/test-email";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -21,20 +22,34 @@ import {
   passPurchases,
   paymentAttempts,
 } from "@/db/schema";
-import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
+import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
+import {
+  CustomerAccountSections,
+  HeldCustomerAccount,
+} from "@/features/account/backend/customer-account-sections";
+import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { workspaceAccountingSupplier } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { InvoiceRepository } from "@/features/accounting/backend/invoice.repository";
 import { InvoiceEmailDeliveryRepository } from "@/features/accounting/backend/invoice-email-delivery.repository";
 import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
+import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
+import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
+import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { makeDiscountCommitment } from "@/features/discounts/commitment";
+import { DiscountService } from "@/features/discounts/discount.service";
+import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
+import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currencyCZK } from "@/shared/money/currencies";
 import {
@@ -43,7 +58,13 @@ import {
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
+import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { makeEntryPackOrderPaymentHandler } from "./entry-pack-order-payment-handler";
+import {
+  getPassPurchasePriceFingerprint,
+  payForEntryPack,
+  repriceEntryPackPurchase,
+} from "./entry-pack-purchase";
 import {
   canConfirmUnlimitedPass,
   settlePassPurchase,
@@ -56,6 +77,7 @@ import {
   confirmUnlimitedPassDays,
   createUnlimitedPassHolds,
   readUnlimitedPassDays,
+  reconfirmUnlimitedPassHolds,
 } from "./unlimited-pass-holds";
 import { recordUnlimitedPassOrder } from "./unlimited-pass-orders";
 
@@ -202,6 +224,225 @@ const withInterruptedHoldRead = (service: typeof DotyposService.Service) => {
       }),
   } satisfies typeof DotyposService.Service;
 };
+
+for (const { boundary, daysAhead } of [
+  { boundary: "a failed provider read", daysAhead: 465 },
+  { boundary: "payment with a stale price", daysAhead: 505 },
+  { boundary: "repricing discounts", daysAhead: 545 },
+  { boundary: "payment discount affirmation", daysAhead: 585 },
+] as const) {
+  it(`returns quote-expired at checkout when the first day closes at ${boundary}`, async () => {
+    const start = getCurrentWorkspaceDate().add({ days: daysAhead });
+    const closesAt = Temporal.Instant.from(
+      getCoworkReservationInterval("reserved-desk", start.toString()).endsAt
+    );
+    const beforeClosing = closesAt.subtract({ minutes: 2 });
+    const closeFirstDay = TestClock.setTime(closesAt.epochMilliseconds);
+    const services = servicesFor({
+      ...provider.service,
+      getReservationsByIds: (ids, options) =>
+        boundary === "a failed provider read"
+          ? closeFirstDay.pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new DotyposRejected({
+                    operation: "getReservationsByIds",
+                    reason: "invalid-response",
+                  })
+                )
+              )
+            )
+          : provider.service.getReservationsByIds(ids, options),
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(beforeClosing.epochMilliseconds);
+        const purchase = yield* recordPurchase(beforeClosing, 0);
+        yield* createUnlimitedPassHolds(purchase);
+        const handler = yield* makeEntryPackOrderPaymentHandler;
+        const session = {
+          accountId: purchase.buyerAccountId,
+          email: testEmailAddress("cutoff-buyer"),
+          deletionRequested: false,
+          ...testSessionProfile,
+        };
+        const storedQuote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+          purchase.quote
+        );
+        const quote = {
+          ...storedQuote,
+          discountableSubtotal: currencyCZK(100_000),
+          discountedSubtotal: currencyCZK(100_000),
+        };
+        const stale = boundary === "payment with a stale price";
+        const input = {
+          orderId: purchase.id,
+          productKind: "unlimited",
+          displayedPriceFingerprint: getPassPurchasePriceFingerprint(
+            stale ? quote : storedQuote
+          ),
+        } as const;
+        if (stale) yield* closeFirstDay;
+        const checkout =
+          boundary === "repricing discounts"
+            ? repriceEntryPackPurchase(input)
+            : payForEntryPack({
+                ...input,
+                accepted: true,
+                acceptedDocuments: [],
+              });
+        const outcome = yield* checkout.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(CurrentCustomerAccount, {
+                requireActive: Effect.succeed(session),
+              }),
+              Layer.mock(CustomerAccountSections, {
+                withActiveAccount: (_id, work) =>
+                  Effect.provideService(work, HeldCustomerAccount, session),
+              }),
+              Layer.mock(WorkspaceFeatureFlagService, {
+                isEnabled: () => Effect.succeed(true),
+              }),
+              Layer.succeed(
+                OrderPaymentHandlers,
+                OrderPaymentHandlers.make({ "pass-purchase": handler }, () =>
+                  Effect.succeed("pass-purchase")
+                )
+              ),
+              Layer.mock(DiscountService, {
+                quote: () => closeFirstDay.pipe(Effect.as(quote)),
+                affirmDisplayedDiscounts: () =>
+                  closeFirstDay.pipe(
+                    Effect.as({
+                      quote,
+                      commitment: makeDiscountCommitment({
+                        product: { kind: "unlimited", tier: purchase.tier },
+                        firstServiceDate: purchase.validFrom,
+                        applications: [],
+                      }),
+                    })
+                  ),
+              }),
+              Layer.mock(CustomerAccountContactService, {}),
+              Layer.mock(CheckoutAnalytics, {}),
+              Layer.mock(LatePaymentVerificationService, {}),
+              Layer.mock(LegalEvidenceEventRepository, {})
+            )
+          ),
+          Effect.result
+        );
+        expect(outcome).toMatchObject({
+          failure: { _tag: "EntryPackPurchaseError", reason: "quote-expired" },
+        });
+        const state = yield* readState(purchase.id);
+        expect(state.purchase?.quote).toEqual(purchase.quote);
+        expect(state.order?.activePaymentAttemptId).toBeNull();
+        expect(state.attempts).toHaveLength(0);
+      }).pipe(Effect.provide(Layer.merge(services, TestClock.layer())))
+    );
+  });
+}
+
+for (const { tier, closesDuring, daysAhead } of [
+  { tier: "open-space", closesDuring: "provider read", daysAhead: 345 },
+  { tier: "reserved-desk", closesDuring: "admission", daysAhead: 385 },
+] as const) {
+  it(`refuses a new ${tier} payment when the first day closes during ${closesDuring}`, async () => {
+    const start = getCurrentWorkspaceDate().add({ days: daysAhead });
+    const closesAt = Temporal.Instant.from(
+      getCoworkReservationInterval(tier, start.toString()).endsAt
+    );
+    const beforeClosing = closesAt.subtract({ minutes: 2 });
+    const closeFirstDay = TestClock.setTime(closesAt.epochMilliseconds);
+    let providerReads = 0;
+    let consentWrites = 0;
+    const services = servicesFor({
+      ...provider.service,
+      getReservationsByIds: (ids, options) =>
+        provider.service.getReservationsByIds(ids, options).pipe(
+          Effect.tap(() => {
+            providerReads++;
+            return closesDuring === "provider read"
+              ? closeFirstDay
+              : Effect.void;
+          })
+        ),
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(beforeClosing.epochMilliseconds);
+        const purchase = yield* recordPurchase(beforeClosing, 0, tier);
+        yield* createUnlimitedPassHolds(purchase);
+        const reconfirmed = yield* Effect.result(
+          reconfirmUnlimitedPassHolds(purchase)
+        );
+        expect(reconfirmed._tag).toBe(
+          closesDuring === "provider read" ? "Failure" : "Success"
+        );
+
+        const handler = yield* makeEntryPackOrderPaymentHandler;
+        const product = { kind: "unlimited", tier } as const;
+        const admitted = yield* Effect.result(
+          handler.admitProvider({
+            orderId: purchase.id,
+            amount: price,
+            locale: purchase.locale,
+            provider: "nexi",
+            providerOrderId: `synthetic-cutoff-${tier}`,
+            details: {
+              approvedAfterAttemptId: null,
+              recordConsent: Effect.gen(function* () {
+                consentWrites++;
+                yield* closeFirstDay;
+              }),
+              commitment: makeDiscountCommitment({
+                product,
+                firstServiceDate: purchase.validFrom,
+                applications: [],
+              }),
+              snapshot: {
+                orderId: purchase.id,
+                dotyposCustomerId: customerId,
+                locale: purchase.locale,
+                supplier: workspaceAccountingSupplier,
+                buyer: { kind: "person", legalName: "Synthetic Buyer" },
+                billing: defaultReservationBillingSelection,
+                delivery: { email: testEmailAddress("cutoff-buyer") },
+                serviceDate: purchase.validFrom,
+                product,
+                quote: purchase.quote,
+              },
+            },
+          })
+        );
+        expect(admitted).toMatchObject({
+          failure: {
+            operation: "PaymentLifecycleRepository.admitUnlimitedPassFirstDay",
+          },
+        });
+        expect(consentWrites).toBe(closesDuring === "admission" ? 1 : 0);
+
+        const alreadyClosed = yield* Effect.result(
+          reconfirmUnlimitedPassHolds(purchase)
+        );
+        expect(alreadyClosed).toMatchObject({
+          failure: { _tag: "UnlimitedPassHoldsUnavailable", reason: "changed" },
+        });
+        expect(providerReads).toBe(1);
+
+        const state = yield* readState(purchase.id);
+        expect(state.order).toMatchObject({
+          activePaymentAttemptId: null,
+          paymentState: "not_started",
+        });
+        expect(state.attempts).toHaveLength(0);
+      }).pipe(Effect.provide(Layer.merge(services, TestClock.layer())))
+    );
+  });
+}
 
 it("recovers a verified capture after an interrupted read of replacement holds", async () => {
   const now = Temporal.Now.instant().round({ smallestUnit: "millisecond" });
@@ -589,6 +830,70 @@ it("rechecks the first service day before activation after provider confirmation
         Layer.merge(servicesFor(provider.service), TestClock.layer())
       )
     )
+  );
+});
+
+it("requires a full refund if the holder is tombstoned during provider confirmation", async () => {
+  const now = Temporal.Now.instant();
+  const purchase = await Effect.runPromise(
+    recordPurchase(now, 425).pipe(Effect.provide(database!.layer))
+  );
+  const tombstoneHolder = Effect.gen(function* () {
+    const { db } = yield* WorkspaceDatabase;
+    yield* db
+      .update(customerAccounts)
+      .set({ deletedAt: now })
+      .where(eq(customerAccounts.id, purchase.holderAccountId));
+  }).pipe(Effect.provide(database!.layer), Effect.orDie);
+  let confirmations = 0;
+  const services = servicesFor({
+    ...provider.service,
+    confirmReservation: (id) =>
+      provider.service.confirmReservation(id).pipe(
+        Effect.tap(() => {
+          confirmations++;
+          return confirmations === 1 ? tombstoneHolder : Effect.void;
+        })
+      ),
+  });
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      const attemptId = yield* recordAttempt(purchase.id, "paid", now);
+      yield* createUnlimitedPassHolds(purchase);
+      yield* db
+        .update(orders)
+        .set({
+          paymentState: "paid",
+          activePaymentAttemptId: attemptId,
+          paidAt: now,
+        })
+        .where(eq(orders.id, purchase.id));
+      yield* settlePassPurchase(purchase.id);
+
+      const handler = yield* makeEntryPackOrderPaymentHandler;
+      yield* handler.fulfill(purchase.id);
+
+      expect(confirmations).toBe(unlimitedPassDays);
+      const rejected = yield* readState(purchase.id);
+      expect(rejected.purchase?.status).toBe("void");
+      expect(rejected.order).toMatchObject({
+        paymentState: "paid",
+        fulfillmentState: "failed",
+        fulfillmentFailureCode: "unlimited_pass_holder_unavailable",
+      });
+      expect(rejected.attempts[0]).toMatchObject({
+        refundState: "required",
+        refundTargetValue: price.value,
+      });
+      yield* reconcileUnlimitedPassReleases({ now, limit: 2 });
+      expect(
+        (yield* readUnlimitedPassDays(purchase.id)).every(
+          ({ reservationState }) => reservationState === "cancelled"
+        )
+      ).toBe(true);
+    }).pipe(Effect.provide(services))
   );
 });
 

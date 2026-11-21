@@ -88,6 +88,8 @@ export type EntryPackPaymentAdmissionDetails = {
 
 const approvalOperation =
   "PaymentLifecycleRepository.admitEntryPackPaymentApproval";
+const firstDayAdmissionOperation =
+  "PaymentLifecycleRepository.admitUnlimitedPassFirstDay";
 
 export const isStaleEntryPackPaymentApproval = (
   error: Error
@@ -100,6 +102,22 @@ const staleApproval = (orderId: OrderId) =>
     operation: approvalOperation,
     paymentReference: { type: "orderId", id: orderId },
     message: "The approved Entry pack payment attempt changed.",
+  });
+
+export const isUnlimitedPassFirstDayAdmissionExpired = (
+  error: Error
+): error is PaymentLifecycleStateError & {
+  readonly operation: typeof firstDayAdmissionOperation;
+} =>
+  error instanceof PaymentLifecycleStateError &&
+  error.operation === firstDayAdmissionOperation;
+
+const firstDayAdmissionExpired = (orderId: OrderId) =>
+  new PaymentLifecycleStateError({
+    operation: firstDayAdmissionOperation,
+    paymentReference: { type: "orderId", id: orderId },
+    message:
+      "The first Unlimited pass service day ended. Choose a new start date.",
   });
 
 type Handler = AdmittingOrderPaymentHandler<EntryPackPaymentAdmissionDetails>;
@@ -302,6 +320,9 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       );
     }
     if (pack.product === "unlimited") {
+      if (hasUnlimitedPassFirstDayEnded(pack, now)) {
+        return yield* firstDayAdmissionExpired(order.id);
+      }
       yield* readPayableUnlimitedHolds(pack).pipe(
         Effect.catchTag("UnlimitedPassHoldsUnavailable", () =>
           Effect.fail(staleApproval(order.id))
@@ -319,6 +340,12 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     );
 
     yield* input.details.recordConsent;
+    if (
+      pack.product === "unlimited" &&
+      hasUnlimitedPassFirstDayEnded(pack, yield* currentInstant)
+    ) {
+      return yield* firstDayAdmissionExpired(order.id);
+    }
     const attempt = yield* insertPaymentAttempt({
       orderId: order.id,
       workspaceReservationId: null,
