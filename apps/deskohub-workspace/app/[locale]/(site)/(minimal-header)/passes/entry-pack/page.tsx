@@ -19,7 +19,7 @@ import {
   displayPassPurchasePrice,
   getEntryPackPaymentDisclosure,
   readEntryPackCheckoutDraft,
-  readEntryPackPaymentRetry,
+  readEntryPackCheckoutPayment,
 } from "@/features/passes/backend/entry-pack-purchase";
 import { EntryPackCheckout } from "@/features/passes/components/entry-pack-checkout";
 import {
@@ -141,7 +141,7 @@ async function EntryPackPageContent({
     ? query.order
     : undefined;
   if (query.order !== undefined && !orderId) notFound();
-  const isPaymentRetry = orderId !== undefined && query.step === "pay";
+  const isPaymentStep = orderId !== undefined && query.step === "pay";
   const { buyer, validity, draft, discountCodeEntryEnabled } =
     await runWorkspaceEffectOrElse("passes.entry-pack-page", {
       failureCode: "entry_pack_page_unavailable",
@@ -159,9 +159,9 @@ async function EntryPackPageContent({
           orderId &&
           (buyer.kind === "linked" || buyer.kind === "profile-required")
             ? yield* Effect.gen(function* () {
-                if (!isPaymentRetry)
+                if (!isPaymentStep)
                   return yield* readEntryPackCheckoutDraft(orderId);
-                return yield* readEntryPackPaymentRetry(orderId).pipe(
+                return yield* readEntryPackCheckoutPayment(orderId).pipe(
                   Effect.provide(
                     Layer.mergeAll(
                       AccountingDocumentSnapshots.Default.pipe(
@@ -208,16 +208,19 @@ async function EntryPackPageContent({
       )
     );
   if (draft?.kind === "missing") notFound();
-  if (isPaymentRetry) {
+  if (isPaymentStep) {
     if (buyer.kind === "signed-out") {
       redirect(
         getAccountSignInPath(locale, getEntryPackPayPath(locale, orderId))
       );
     }
-    if (draft?.kind !== "retry") {
+    if (draft?.kind !== "retry" && draft?.kind !== "ready") {
       redirect(
         `/${draft?.kind === "status" && "locale" in draft ? draft.locale : locale}${reservationStatusPath}/${orderId}`
       );
+    }
+    if (draft.kind === "ready" && buyer.kind === "profile-required") {
+      redirect(getEntryPackDetailsPath(draft.locale, draft.product, orderId));
     }
     if (draft.locale !== locale)
       redirect(getEntryPackPayPath(draft.locale, orderId));
@@ -229,7 +232,9 @@ async function EntryPackPageContent({
     redirect(`/${locale}${reservationStatusPath}/${orderId}`);
   }
   const product =
-    draft?.kind === "draft" || draft?.kind === "retry"
+    draft?.kind === "draft" ||
+    draft?.kind === "ready" ||
+    draft?.kind === "retry"
       ? draft.product
       : readEntryPackSelection(query);
 
@@ -240,21 +245,26 @@ async function EntryPackPageContent({
       initialProduct={product}
       initialStep={query.step === "details" || orderId ? "details" : "choose"}
       continuation={
-        orderId && (draft?.kind === "draft" || buyer.kind === "signed-out")
+        orderId &&
+        (draft?.kind === "draft" ||
+          draft?.kind === "ready" ||
+          buyer.kind === "signed-out")
           ? {
               orderId,
               holderEmail:
-                draft?.kind === "draft" ? draft.holderEmail : undefined,
+                draft?.kind === "draft" || draft?.kind === "ready"
+                  ? draft.holderEmail
+                  : undefined,
               validUntil:
-                draft?.kind === "draft"
+                draft?.kind === "draft" || draft?.kind === "ready"
                   ? getEntryPackLastUsableDate(draft.validUntil).toString()
                   : undefined,
             }
           : undefined
       }
       validity={validity}
-      retryPayment={
-        orderId && draft?.kind === "retry"
+      initialPayment={
+        orderId && (draft?.kind === "ready" || draft?.kind === "retry")
           ? {
               orderId,
               state: {
@@ -266,7 +276,9 @@ async function EntryPackPageContent({
                   draft.validUntil
                 ).toString(),
                 disclosure: getEntryPackPaymentDisclosure(draft.locale),
-                priorPaymentAttemptId: draft.priorPaymentAttemptId,
+                ...(draft.kind === "retry" && {
+                  priorPaymentAttemptId: draft.priorPaymentAttemptId,
+                }),
                 billing: draft.billing,
                 ...(draft.holderEmail && { holderEmail: draft.holderEmail }),
               },

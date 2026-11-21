@@ -34,6 +34,10 @@ import {
   type OrderId,
   orderIdSchema,
 } from "@/features/order";
+import {
+  defaultReservationBillingSelection,
+  type ReservationBillingSelection,
+} from "@/features/reservation/reservation-billing";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import {
@@ -576,6 +580,7 @@ const readUnlimitedPassBuyerDraft = Effect.fn("readUnlimitedPassBuyerDraft")(
     return {
       ...order,
       selection,
+      isGift: purchase.holderAccountId !== accountId,
       holderEmail:
         purchase.holderAccountId === accountId
           ? undefined
@@ -597,12 +602,13 @@ export const getUnlimitedPassPaymentDisclosure = (
 export const loadUnlimitedCheckoutContinuation = Effect.fn(
   "loadUnlimitedCheckoutContinuation"
 )(
-  function* (orderId: OrderId, mode: "draft" | "submitted" | "payment-retry") {
+  function* (orderId: OrderId, mode: "draft" | "submitted" | "payment") {
     const draft = yield* readUnlimitedPassBuyerDraft(orderId).pipe(
       Effect.catchTag("CustomerAccountAccessError", () => Effect.undefined)
     );
     if (!draft) return undefined;
-    const { order, purchase, selection, holderEmail, activeAttempt } = draft;
+    const { order, purchase, selection, isGift, holderEmail, activeAttempt } =
+      draft;
     const status = { kind: "status" as const, locale: purchase.locale };
     if (!selection) return status;
     const priorPaymentAttemptId = order.activePaymentAttemptId;
@@ -626,30 +632,41 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
     )
       return { ...base, kind: "details" as const };
     if (!payable) return status;
-    if (mode !== "payment-retry") {
+    if (mode !== "payment") {
       return order.paymentState === "not_started"
         ? { ...base, kind: "details" as const }
         : status;
     }
-    if (
-      !priorPaymentAttemptId ||
-      !isEndedUnpaidPaymentState(order.paymentState) ||
-      !activeAttempt ||
-      activeAttempt.refundState !== "not_required" ||
-      !isEndedUnpaidPaymentState(activeAttempt.state)
-    )
+    if (isGift && !holderEmail) return status;
+    let billing: ReservationBillingSelection =
+      defaultReservationBillingSelection;
+    if (priorPaymentAttemptId) {
+      if (
+        !isEndedUnpaidPaymentState(order.paymentState) ||
+        !activeAttempt ||
+        activeAttempt.refundState !== "not_required" ||
+        !isEndedUnpaidPaymentState(activeAttempt.state)
+      ) {
+        return status;
+      }
+      const documents = yield* AccountingDocumentSnapshots;
+      const snapshot = yield* documents.findPassPurchase(priorPaymentAttemptId);
+      if (!snapshot) return status;
+      billing = snapshot.billing;
+    } else if (
+      order.paymentState !== "not_started" ||
+      hasUnlimitedPassFirstDayEnded(purchase, now)
+    ) {
       return status;
-    const documents = yield* AccountingDocumentSnapshots;
-    const snapshot = yield* documents.findPassPurchase(priorPaymentAttemptId);
-    if (!snapshot) return status;
+    }
     const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
       purchase.quote
     );
     return {
       ...base,
       kind: "pay" as const,
-      retryPayment: {
-        billing: snapshot.billing,
+      payment: {
+        billing,
         price: displayPassPurchasePrice(quote),
         disclosure: getUnlimitedPassPaymentDisclosure(
           purchase.locale,
@@ -658,7 +675,7 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
             getCurrentWorkspaceDate(now)
           )
         ),
-        priorPaymentAttemptId,
+        ...(priorPaymentAttemptId && { priorPaymentAttemptId }),
         validFrom: purchase.validFrom,
         lastUsableDate: getEntryPackLastUsableDate(
           purchase.validUntil

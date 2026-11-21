@@ -27,16 +27,12 @@ import { RememberedReferral } from "@/features/referrals/remembered-referral.ser
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
-import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { defineWorkspaceAction } from "@/shared/backend/workspace-action";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import type { ResolveIssuedActionLocale } from "@/shared/utils/action-middleware/locale";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
-import {
-  findOwnedPassPurchaseOrder,
-  readOwnedPassPurchaseOrderLocale,
-} from "./backend/entry-pack-order";
+import { readOwnedPassPurchaseOrderLocale } from "./backend/entry-pack-order";
 import {
   beginEntryPackPurchase,
   displayPassPurchasePrice,
@@ -46,13 +42,10 @@ import {
   repriceEntryPackPurchase,
 } from "./backend/entry-pack-purchase";
 import {
-  getBookableUnlimitedStartMatrix,
-  unlimitedStartRangeMaxDays,
-} from "./backend/unlimited-pass-capacity";
-import {
   beginUnlimitedPassPurchase,
   getUnlimitedPassPaymentDisclosure,
 } from "./backend/unlimited-pass-purchase";
+import { readUnlimitedPassStartDates } from "./backend/unlimited-pass-start-dates";
 import {
   beginEntryPackCheckoutSchema,
   payEntryPackCheckoutSchema,
@@ -429,74 +422,21 @@ const unlimitedAvailabilityAction = defineWorkspaceAction(
     const flags = yield* WorkspaceFeatureFlagService;
     if (!(yield* flags.isEnabled("cowork_passes")))
       return { status: "unavailable" as const };
-    const today = getCurrentWorkspaceDate(yield* currentInstant);
-    const lastStartDate = Temporal.PlainDate.from(
-      getWorkspaceAvailabilityRange(today.toString()).to
-    );
-    const requested = input.startsOn && Temporal.PlainDate.from(input.startsOn);
-    const startsOn =
-      requested && Temporal.PlainDate.compare(requested, today) > 0
-        ? requested
-        : today;
-    if (Temporal.PlainDate.compare(startsOn, lastStartDate) > 0) {
-      return { status: "unavailable" as const };
-    }
-    const rangeEnd = startsOn.add({ days: unlimitedStartRangeMaxDays });
-    const endsBefore =
-      Temporal.PlainDate.compare(rangeEnd, lastStartDate) > 0
-        ? lastStartDate.add({ days: 1 })
-        : rangeEnd;
-    let supersedeOrderId: OrderId | undefined;
     const predecessorOrderIds = new Set(input.supersedeOrderIds);
     if (input.supersedeOrderId) predecessorOrderIds.add(input.supersedeOrderId);
-    if (predecessorOrderIds.size > 0) {
-      const actor = yield* CurrentCustomerAccount;
-      const session = yield* actor.requireActive.pipe(
-        Effect.catchTag("CustomerAccountAccessError", () => Effect.undefined)
-      );
-      if (session) {
-        for (const predecessorOrderId of predecessorOrderIds) {
-          const owned = yield* findOwnedPassPurchaseOrder(
-            predecessorOrderId,
-            session.accountId,
-            "unlimited"
-          );
-          if (
-            owned?.order.paymentState === "not_started" &&
-            !owned.order.activePaymentAttemptId &&
-            owned.purchase.status === "pending_payment"
-          ) {
-            supersedeOrderId = owned.order.id;
-            break;
-          }
-        }
-      }
-    }
-    const matrix = yield* getBookableUnlimitedStartMatrix({
-      startsOn,
-      endsBefore,
-      ...(supersedeOrderId && { supersedeOrderId }),
+    const actor = yield* CurrentCustomerAccount;
+    const session = predecessorOrderIds.size
+      ? yield* actor.requireActive.pipe(
+          Effect.catchTag("CustomerAccountAccessError", () => Effect.undefined)
+        )
+      : undefined;
+    return yield* readUnlimitedPassStartDates({
+      ...(input.startsOn && { startsOn: input.startsOn }),
+      ...(session && {
+        buyerAccountId: session.accountId,
+        predecessorOrderIds,
+      }),
     });
-    const toDates = (dates: readonly Temporal.PlainDate[]) =>
-      dates.map((date) => plainDateStringSchema.make(date.toString()));
-    const workstation = matrix["reserved-desk-workstation"];
-    return {
-      status: "ready" as const,
-      today: plainDateStringSchema.make(today.toString()),
-      lastStartDate: plainDateStringSchema.make(
-        endsBefore.subtract({ days: 1 }).toString()
-      ),
-      starts: {
-        "open-space": toDates(matrix["open-space"]),
-        "reserved-desk": toDates(matrix["reserved-desk"]),
-        "reserved-desk-workstation": {
-          "2x27-qhd": toDates(workstation["2x27-qhd"]),
-          "2x32-qhd": toDates(workstation["2x32-qhd"]),
-          "2x27-4k": toDates(workstation["2x27-4k"]),
-          "2x32-4k": toDates(workstation["2x32-4k"]),
-        },
-      },
-    };
   }, Effect.provide(unlimitedPurchaseLayer))
 );
 

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
 import {
@@ -1140,7 +1141,7 @@ test("an expired status-originated payment retry returns to that same order", as
       <QueryProvider>
         <UnlimitedPassCheckout
           {...base}
-          retryPayment={{
+          initialPayment={{
             orderId,
             selection: {
               tier: "open-space",
@@ -1148,6 +1149,9 @@ test("an expired status-originated payment retry returns to that same order", as
               startDate: openSpaceStart,
             },
             state: {
+              priorPaymentAttemptId: paymentAttemptIdSchema.make(
+                "018f8000-0000-7000-8000-000000000003"
+              ),
               validFrom: openSpaceStart,
               lastUsableDate: "2026-11-30",
               billing: { purpose: "personal", invoice: "none" },

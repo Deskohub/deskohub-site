@@ -65,7 +65,7 @@ const workspaceDate = (instant: Temporal.Instant) =>
   plainDateStringSchema.make(getCurrentWorkspaceDate(instant).toString());
 
 const readContinuation = cache(
-  (orderId: OrderId, mode: "draft" | "submitted" | "payment-retry") =>
+  (orderId: OrderId, mode: "draft" | "submitted" | "payment") =>
     loadUnlimitedCheckoutContinuation(orderId, mode).pipe(
       Effect.provide(customerServices),
       runWorkspaceEffectOrElse("passes.unlimited-checkout-continuation", {
@@ -192,7 +192,7 @@ async function UnlimitedPassPageContent({
     notFound();
   const requestedRenewal = query.renew;
   const orderId = order?.kind === "edit" ? undefined : order?.orderId;
-  const isRetry = order?.kind === "resume" && query.step === "pay";
+  const isPaymentStep = order?.kind === "resume" && query.step === "pay";
   const continuationMode = order?.kind === "submitted" ? "submitted" : "draft";
   const { options, startDate } = readUnlimitedPassSelection(query);
   const requestedSelection = startDate && { ...options, startDate };
@@ -203,7 +203,7 @@ async function UnlimitedPassPageContent({
     selection: typeof requestedSelection = requestedSelection,
     renewsPassId = requestedRenewal
   ) => {
-    if (isRetry && orderId)
+    if (isPaymentStep && orderId)
       return getUnlimitedPassPayPath(targetLocale, orderId);
     if (query.step === "details" && selection) {
       return getUnlimitedPassDetailsPath(
@@ -242,7 +242,7 @@ async function UnlimitedPassPageContent({
       })
     ),
     orderId &&
-      readContinuation(orderId, isRetry ? "payment-retry" : continuationMode),
+      readContinuation(orderId, isPaymentStep ? "payment" : continuationMode),
   ]);
   if ((order || requestedRenewal) && checkout.buyer.kind === "signed-out") {
     redirect(getAccountSignInPath(locale, checkoutPath(locale)));
@@ -293,7 +293,22 @@ async function UnlimitedPassPageContent({
     resumesDraft && draft
       ? draft.selection
       : (renewalSelection ?? requestedSelection);
-  const retryPayment = draft?.kind === "pay" ? draft.retryPayment : undefined;
+  const initialPayment = draft?.kind === "pay" ? draft.payment : undefined;
+  if (
+    orderId &&
+    draft?.kind === "pay" &&
+    !initialPayment?.priorPaymentAttemptId &&
+    checkout.buyer.kind === "profile-required"
+  ) {
+    redirect(
+      getUnlimitedPassDetailsPath(
+        draft.locale,
+        draft.selection,
+        { kind: "resume", orderId },
+        renewsPassId
+      )
+    );
+  }
   if (draft && draft.locale !== locale) {
     redirect(checkoutPath(draft.locale, selection, renewsPassId));
   }
@@ -321,13 +336,13 @@ async function UnlimitedPassPageContent({
             ? { ...order, holderEmail: draft.holderEmail ?? null }
             : order
         }
-        retryPayment={
-          orderId && draft && retryPayment
+        initialPayment={
+          orderId && draft && initialPayment
             ? {
                 orderId,
                 selection: draft.selection,
                 state: {
-                  ...retryPayment,
+                  ...initialPayment,
                   holderEmail: draft.holderEmail,
                 },
               }

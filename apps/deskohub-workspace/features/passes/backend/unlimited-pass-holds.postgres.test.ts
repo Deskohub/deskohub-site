@@ -69,6 +69,7 @@ import {
 import { unlimitedPassDays } from "../pass-offer";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { unlimitedCheckoutPredecessorLimit } from "../unlimited-pass-checkout";
+import { beginPurchase, purchaseStartDates } from "./customer-pass-purchase";
 import {
   getPassPurchasePriceFingerprint,
   repriceEntryPackPurchase,
@@ -1098,6 +1099,58 @@ function makeUnlimitedDraftProvider() {
     ],
   });
 }
+
+it("uses the website's dates, holds and fresh Pay continuation for an Unlimited purchase", async () => {
+  const accountId = newAccountId();
+  const provider = makeUnlimitedDraftProvider();
+  const services = unlimitedNewDraftLayer(
+    accountId,
+    testEmailAddress("customer-unlimited-buyer"),
+    provider.service
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      yield* db.insert(customerAccounts).values({ id: accountId });
+      const startDate = date(getCurrentWorkspaceDate().add({ days: 2 }));
+      const availability = yield* purchaseStartDates({ startsOn: startDate });
+      expect(availability.status).toBe("ready");
+      if (availability.status !== "ready")
+        throw new Error("Expected start dates");
+      expect(availability.starts["reserved-desk"]).toContain(startDate);
+      const orderId = orderIdSchema.make(crypto.randomUUID());
+      const begin = beginPurchase({
+        orderId,
+        locale: "en-US",
+        product: {
+          kind: "unlimited",
+          selection: { tier: "reserved-desk", startDate },
+        },
+      });
+      const draft = yield* begin;
+      expect(yield* begin).toEqual(draft);
+      expect(draft.payPath).toBe(
+        `/en-US/passes/unlimited?order=${orderId}&step=pay`
+      );
+      expect(draft.disclosure.earlyStartRequest).toBeDefined();
+      expect(provider.reservations.size).toBe(unlimitedPassDays);
+
+      const continuation = yield* loadUnlimitedCheckoutContinuation(
+        orderId,
+        "payment"
+      );
+      expect(continuation).toMatchObject({
+        kind: "pay",
+        payment: {
+          price: { fingerprint: draft.price.fingerprint },
+          disclosure: draft.disclosure,
+        },
+      });
+      if (continuation?.kind !== "pay") throw new Error("Expected fresh Pay");
+      expect(continuation.payment).not.toHaveProperty("priorPaymentAttemptId");
+    }).pipe(Effect.provide(services))
+  );
+});
 
 function unlimitedNewDraftLayer(
   accountId: ReturnType<typeof newAccountId>,

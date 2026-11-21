@@ -6,3 +6,6 @@
 export const paymentReturnTargets = ["native-app", "web-app"] as const;
 
 export type PaymentReturnTarget = (typeof paymentReturnTargets)[number];
+
+/** The app destination hint sent round trip through a pass payment provider. */
+export const passPaymentReturnTargetParam = "passReturnTarget";

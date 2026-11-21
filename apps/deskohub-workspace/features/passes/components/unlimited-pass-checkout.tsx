@@ -73,7 +73,7 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
   readonly draft?: UnlimitedPassOrderLink & {
     readonly holderEmail?: string | null;
   };
-  readonly retryPayment?: {
+  readonly initialPayment?: {
     readonly orderId: OrderId;
     readonly selection: UnlimitedPassSelection;
     readonly state: PassPurchasePayState;
@@ -129,7 +129,7 @@ export function UnlimitedPassCheckout({
   renewsPassId,
   initialBounds,
   draft,
-  retryPayment,
+  initialPayment,
   discountCodeEntryEnabled,
   getAvailability,
   beginCheckout,
@@ -154,7 +154,13 @@ export function UnlimitedPassCheckout({
     );
   });
   const [step, setStep] = useState<CheckoutStep>(() => {
-    if (retryPayment) return { kind: "pay", retry: true, ...retryPayment };
+    if (initialPayment) {
+      return {
+        kind: "pay",
+        ...initialPayment,
+        ...(initialPayment.state.priorPaymentAttemptId && { retry: true }),
+      };
+    }
     if (initialDetails) return { kind: "details", selection: initialDetails };
     return { kind: "choose" };
   });

@@ -269,7 +269,7 @@ test("reload restores an owned submitted draft to Details using the committed se
       predecessorOrderIds: [ownedOrder],
     },
     initialDetails: { tier: "reserved-desk", startDate: "2026-12-01" },
-    retryPayment: undefined,
+    initialPayment: undefined,
   });
 });
 
@@ -292,7 +292,7 @@ test("reload before commit retains submitted and predecessor IDs without restori
       startDate: "2026-12-15",
       coffee: true,
     },
-    retryPayment: undefined,
+    initialPayment: undefined,
   });
   expect(props.draft).not.toHaveProperty("holderEmail");
 });
@@ -319,7 +319,7 @@ test("an order committed after the reload's owner read stays on Details", async 
       startDate: "2026-12-15",
       coffee: true,
     },
-    retryPayment: undefined,
+    initialPayment: undefined,
   });
 });
 
