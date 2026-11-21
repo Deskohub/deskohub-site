@@ -1,6 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
+import {
+  evaluateWorkflowValue,
+  findStepByName,
+  parseWorkflow,
+  workflowExpressionString,
+} from "./shared/workflow-contract";
 import {
   createWorkflowStepRunner,
   type GhFixtures,
@@ -289,6 +294,25 @@ describe("Workspace E2E nightly preview check", () => {
 });
 
 describe("Workspace E2E nightly workflow contract", () => {
+  test.each([
+    ["totalolage/deskohub-site", true],
+    ["deskohub-bar/website", false],
+  ] as const)(
+    "evaluates nightly job eligibility in %s",
+    (repositoryName, expected) => {
+      const condition = nightly.jobs["start-nightly-e2e"]?.if;
+      const eligible =
+        condition === undefined ||
+        evaluateWorkflowValue(condition, {
+          contexts: ["github"],
+          values: new Map([
+            ["github.repository", workflowExpressionString(repositoryName)],
+          ]),
+        }) === "true";
+      expect(eligible).toBe(expected);
+    }
+  );
+
   test("runs on a schedule and on demand, one run at a time", () => {
     expect(Object.keys(nightlyTriggers).sort()).toEqual([
       "schedule",
