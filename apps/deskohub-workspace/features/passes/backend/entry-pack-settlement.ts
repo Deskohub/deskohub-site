@@ -11,8 +11,25 @@ import {
 } from "@/db/schema";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
+import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { currentInstant } from "@/shared/utils/temporal";
 import { queueInitialEntryPackGift } from "./entry-pack-gift";
+
+type UnlimitedServiceDate = Pick<
+  typeof passPurchases.$inferSelect,
+  "tier" | "validFrom"
+>;
+
+export const hasUnlimitedPassFirstDayEnded = (
+  purchase: UnlimitedServiceDate,
+  now: Temporal.Instant
+) => {
+  const { endsAt } = getCoworkReservationInterval(
+    purchase.tier === "open-space" ? "open-space" : "reserved-desk",
+    purchase.validFrom
+  );
+  return Temporal.Instant.compare(now, endsAt) >= 0;
+};
 
 export const isUnsolicitedPartialPassRefund = (
   attempt: typeof paymentAttempts.$inferSelect
@@ -51,7 +68,10 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
   function* (
     order: typeof orders.$inferSelect,
     attemptId: PaymentAttemptId,
-    unavailable = false
+    options: {
+      readonly unavailable?: boolean;
+      readonly confirmedPass?: UnlimitedServiceDate;
+    } = {}
   ) {
     if (
       order.paymentState !== "paid" ||
@@ -70,6 +90,11 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
       )
       .for("update");
     if (attempt?.state !== "paid") return false;
+    const now = yield* currentInstant;
+    const unavailable =
+      options.unavailable ||
+      (options.confirmedPass &&
+        hasUnlimitedPassFirstDayEnded(options.confirmedPass, now));
     if (!unavailable && attempt.refundState === "not_required") return true;
     if (!unavailable && isUnsolicitedPartialPassRefund(attempt)) {
       yield* Effect.logWarning(
@@ -92,7 +117,6 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
       .returning({ id: passPurchases.id });
     if (!ended) return false;
 
-    const now = yield* currentInstant;
     if (unavailable) yield* requireFullPassRefund(attempt, now);
     yield* db
       .update(orders)
@@ -120,7 +144,7 @@ export const canConfirmUnlimitedPass = Effect.fn("canConfirmUnlimitedPass")(
           .where(eq(orders.id, id))
           .for("no key update");
         return order
-          ? yield* checkUnlimitedActivation(order, attemptId, unavailable)
+          ? yield* checkUnlimitedActivation(order, attemptId, { unavailable })
           : false;
       })
     );
@@ -144,7 +168,11 @@ export const settlePassPurchase = Effect.fn("settlePassPurchase")(function* (
       if (!order) return undefined;
 
       const [pass] = yield* db
-        .select({ product: passPurchases.product })
+        .select({
+          product: passPurchases.product,
+          tier: passPurchases.tier,
+          validFrom: passPurchases.validFrom,
+        })
         .from(passPurchases)
         .where(eq(passPurchases.id, id));
       if (!pass) return undefined;
@@ -171,7 +199,9 @@ export const settlePassPurchase = Effect.fn("settlePassPurchase")(function* (
         if (
           pass.product === "unlimited" &&
           confirmedAttemptId &&
-          !(yield* checkUnlimitedActivation(order, confirmedAttemptId))
+          !(yield* checkUnlimitedActivation(order, confirmedAttemptId, {
+            confirmedPass: pass,
+          }))
         )
           return undefined;
         const activatedAt = yield* currentInstant;

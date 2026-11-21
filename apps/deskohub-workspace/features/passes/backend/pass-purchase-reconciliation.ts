@@ -171,6 +171,11 @@ export const reconcilePassPurchases = Effect.fn("reconcilePassPurchases")(
                       refundedPartially,
                       isNull(paymentAttempts.refundTargetValue)
                     ),
+                    and(
+                      isNull(orders.paidAt),
+                      eq(paymentAttempts.refundState, "required"),
+                      isNull(paymentAttempts.refundTargetValue)
+                    ),
                     eq(passPurchases.status, "pending_payment")
                   )
                 )

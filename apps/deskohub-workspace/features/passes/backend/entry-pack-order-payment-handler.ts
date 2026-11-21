@@ -3,7 +3,7 @@ import "server-only";
 import { DotyposService } from "@deskohub/dotypos";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
 import { and, eq, lte, ne } from "drizzle-orm";
-import { Context, Effect, Option, Result } from "effect";
+import { Context, Data, Effect, Option, Result } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
@@ -63,6 +63,7 @@ import { deliverPendingEntryPackInvitation } from "./entry-pack-gift-delivery";
 import { sendEntryPackPurchaseEmail } from "./entry-pack-purchase-email";
 import {
   canConfirmUnlimitedPass,
+  hasUnlimitedPassFirstDayEnded,
   isUnsolicitedPartialPassRefund,
   requireFullPassRefund,
   settlePassPurchase,
@@ -71,7 +72,12 @@ import {
   confirmUnlimitedPassDays,
   readPayableUnlimitedHolds,
 } from "./unlimited-pass-holds";
+import { requireUnlimitedPassWindow } from "./unlimited-pass-orders";
 import { prepareUnlimitedPassRecovery } from "./unlimited-pass-recovery";
+
+class UnlimitedPassFirstDayEnded extends Data.TaggedError(
+  "UnlimitedPassFirstDayEnded"
+) {}
 
 export type EntryPackPaymentAdmissionDetails = {
   readonly approvedAfterAttemptId: PaymentAttemptId | null;
@@ -718,10 +724,10 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         );
       }
       // The attempt records the verified provider capture before any provider work.
-      const attempt =
-        verification && existing.state !== "paid"
-          ? yield* recordLateCapture(verification, existing, false)
-          : existing;
+      const newCapture = existing.state !== "paid" ? verification : undefined;
+      const attempt = newCapture
+        ? yield* recordLateCapture(newCapture, existing, false)
+        : existing;
 
       const winningAttempt = order.activePaymentAttemptId === attempt.id;
       if (winningAttempt && order.paymentState === "paid")
@@ -729,18 +735,24 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
 
       const canRecover =
         winningAttempt && isEndedUnpaidPaymentState(order.paymentState);
-      if (canRecover && verification && existing.state !== "paid") {
+      const capturedAt = newCapture?.paidAt ?? order.paidAt;
+      if (canRecover && newCapture) {
         // The order retains the winning capture time when later refund writes
         // change the attempt's updatedAt.
         yield* db
           .update(orders)
-          .set({ paidAt: verification.paidAt })
+          .set({ paidAt: newCapture.paidAt })
           .where(eq(orders.id, orderId));
       }
       const refundAllowsRecovery =
         attempt.refundState === "not_required" ||
         isUnsolicitedPartialPassRefund(attempt);
-      if (canRecover && refundAllowsRecovery && prep !== "unavailable") {
+      if (
+        canRecover &&
+        capturedAt &&
+        refundAllowsRecovery &&
+        prep !== "unavailable"
+      ) {
         if (!prep) return "prepare" as const;
         const [purchase] = yield* db
           .select()
@@ -750,15 +762,29 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           // A failed local read or an expired replacement hold leaves the captured
           // attempt for reconciliation. A rejected claim is a definitive refusal.
           yield* readPayableUnlimitedHolds(purchase);
-          const paidAt = order.paidAt ?? attempt.updatedAt;
           const recovered = yield* transaction(
             Effect.gen(function* () {
-              yield* redeemClaims(order, attempt.id, paidAt, true);
-              yield* setPaid(order, attempt, paidAt);
+              yield* requireUnlimitedPassWindow({
+                orderId,
+                holderAccountId: purchase.holderAccountId,
+                validFrom: purchase.validFrom,
+                validUntil: purchase.validUntil,
+              });
+              yield* redeemClaims(order, attempt.id, capturedAt, true);
+              if (
+                hasUnlimitedPassFirstDayEnded(purchase, yield* currentInstant)
+              ) {
+                return yield* new UnlimitedPassFirstDayEnded();
+              }
+              yield* setPaid(order, attempt, capturedAt);
               return true;
             }).pipe(Effect.provide(services))
           ).pipe(
-            Effect.catchTag("DiscountClaimError", () => Effect.succeed(false))
+            Effect.catchTags({
+              DiscountClaimError: () => Effect.succeed(false),
+              UnlimitedPassAdmissionError: () => Effect.succeed(false),
+              UnlimitedPassFirstDayEnded: () => Effect.succeed(false),
+            })
           );
           if (recovered) return "fulfill" as const;
         }
@@ -766,6 +792,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
 
       if (
         !canRecover ||
+        !capturedAt ||
         prep === "unavailable" ||
         (prep === "ready" && refundAllowsRecovery)
       ) {

@@ -11,7 +11,8 @@ import {
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
 import { eq } from "drizzle-orm";
-import { Effect, Layer, Result, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
@@ -33,6 +34,7 @@ import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers
 import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
+import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currencyCZK } from "@/shared/money/currencies";
 import {
@@ -84,7 +86,11 @@ const date = (day: Temporal.PlainDate) =>
   plainDateStringSchema.make(day.toString());
 const price = currencyCZK(599_000);
 
-const recordPurchase = (now: Temporal.Instant, startDaysAhead = 10) =>
+const recordPurchase = (
+  now: Temporal.Instant,
+  startDaysAhead = 10,
+  tier: "reserved-desk" | "open-space" = "reserved-desk"
+) =>
   Effect.gen(function* () {
     const { db, transaction } = yield* WorkspaceDatabase;
     const accountId = customerAccountIdSchema.make(crypto.randomUUID());
@@ -97,9 +103,12 @@ const recordPurchase = (now: Temporal.Instant, startDaysAhead = 10) =>
         buyer: { accountId, customerId },
         holder: { accountId, customerId },
         createdAt: now,
-        selection: { startDate: date(start), tier: "reserved-desk" },
+        selection:
+          tier === "open-space"
+            ? { startDate: date(start), tier, coffee: false }
+            : { startDate: date(start), tier },
         quote: {
-          product: { kind: "unlimited", tier: "reserved-desk" },
+          product: { kind: "unlimited", tier },
           discountableSubtotal: price,
           discountedSubtotal: price,
           totalDiscount: currencyCZK(0),
@@ -176,32 +185,14 @@ const servicesFor = (dotypos: typeof DotyposService.Service) =>
     Layer.mock(ProviderPaymentFinalizationService, {})
   );
 
-it("recovers a verified capture after an interrupted read of replacement holds", async () => {
-  const now = Temporal.Now.instant().round({ smallestUnit: "millisecond" });
-  const purchase = await Effect.runPromise(
-    recordPurchase(now).pipe(Effect.provide(database!.layer))
-  );
-  let failFirstRead = true;
-  const services = servicesFor({
-    ...provider.service,
-    getTables: () =>
-      Effect.gen(function* () {
-        const { attempts, order } = yield* readState(purchase.id).pipe(
-          Effect.provide(database!.layer)
-        );
-        expect(attempts[0]).toMatchObject({
-          state: "paid",
-          refundState: "not_required",
-          lastProviderOperationId: "verified-operation",
-        });
-        expect(order?.paidAt?.toString()).toBe(now.toString());
-        return yield* provider.service.getTables();
-      }),
+const withInterruptedHoldRead = (service: typeof DotyposService.Service) => {
+  let interruptRead = true;
+  return {
+    ...service,
     getReservationsByIds: (ids, options) =>
       Effect.suspend(() => {
-        if (!failFirstRead)
-          return provider.service.getReservationsByIds(ids, options);
-        failFirstRead = false;
+        if (!interruptRead) return service.getReservationsByIds(ids, options);
+        interruptRead = false;
         return Effect.fail(
           new DotyposRejected({
             operation: "getReservationsByIds",
@@ -209,7 +200,32 @@ it("recovers a verified capture after an interrupted read of replacement holds",
           })
         );
       }),
-  });
+  } satisfies typeof DotyposService.Service;
+};
+
+it("recovers a verified capture after an interrupted read of replacement holds", async () => {
+  const now = Temporal.Now.instant().round({ smallestUnit: "millisecond" });
+  const purchase = await Effect.runPromise(
+    recordPurchase(now).pipe(Effect.provide(database!.layer))
+  );
+  const services = servicesFor(
+    withInterruptedHoldRead({
+      ...provider.service,
+      getTables: () =>
+        Effect.gen(function* () {
+          const { attempts, order } = yield* readState(purchase.id).pipe(
+            Effect.provide(database!.layer)
+          );
+          expect(attempts[0]).toMatchObject({
+            state: "paid",
+            refundState: "not_required",
+            lastProviderOperationId: "verified-operation",
+          });
+          expect(order?.paidAt?.toString()).toBe(now.toString());
+          return yield* provider.service.getTables();
+        }),
+    })
+  );
 
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -230,8 +246,9 @@ it("recovers a verified capture after an interrupted read of replacement holds",
           verifiedPaidAt: now,
         })
       );
-      expect(Result.isFailure(interrupted)).toBe(true);
-      expect(failFirstRead).toBe(false);
+      expect(interrupted).toMatchObject({
+        failure: { _tag: "DotyposRejected", operation: "getReservationsByIds" },
+      });
       const recorded = yield* readState(purchase.id);
       expect(recorded.order?.paymentState).toBe("expired");
       expect(recorded.purchase?.status).toBe("pending_payment");
@@ -327,6 +344,58 @@ it("requires a full refund for a verified superseded attempt without touching th
   );
 });
 
+it("preserves legacy full refund obligations after a partial refund record", async () => {
+  const now = Temporal.Now.instant();
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      const purchase = yield* recordPurchase(now, 225);
+      const attemptId = yield* recordAttempt(purchase.id, "paid", now);
+      yield* db
+        .update(orders)
+        .set({
+          paymentState: "expired",
+          activePaymentAttemptId: attemptId,
+        })
+        .where(eq(orders.id, purchase.id));
+      yield* settlePassPurchase(purchase.id);
+      yield* db
+        .update(paymentAttempts)
+        .set({
+          refundState: "refunded",
+          refundedAmountValue: 100_000,
+          refundedAt: now,
+        })
+        .where(eq(paymentAttempts.id, attemptId));
+      const recordsBefore = provider.reservations.size;
+      const handler = yield* makeEntryPackOrderPaymentHandler;
+      const registry = OrderPaymentHandlers.make(
+        { "pass-purchase": handler },
+        () => Effect.succeed("pass-purchase")
+      );
+      expect(
+        yield* reconcilePassPurchases({
+          now: now.add({ minutes: 6 }),
+          limit: 1,
+        }).pipe(Effect.provideService(OrderPaymentHandlers, registry))
+      ).toMatchObject({ recoveriesRetried: 1 });
+      const rejected = yield* readState(purchase.id);
+      expect(rejected.order).toMatchObject({
+        paymentState: "expired",
+        paidAt: null,
+      });
+      expect(rejected.purchase?.status).toBe("void");
+      expect(rejected.attempts[0]).toMatchObject({
+        state: "paid",
+        refundState: "required",
+        refundTargetValue: price.value,
+        refundedAmountValue: 100_000,
+      });
+      expect(provider.reservations.size).toBe(recordsBefore);
+    }).pipe(Effect.provide(servicesFor(provider.service)))
+  );
+});
+
 it("requires a full refund when the original holder cannot be readmitted", async () => {
   const now = Temporal.Now.instant();
   await Effect.runPromise(
@@ -360,6 +429,166 @@ it("requires a full refund when the original holder cannot be readmitted", async
       });
       expect(provider.reservations.size).toBe(recordsBefore);
     }).pipe(Effect.provide(servicesFor(provider.service)))
+  );
+});
+
+it("requires a full refund when the holder is deleted after replacement holds are stored", async () => {
+  const now = Temporal.Now.instant();
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      const purchase = yield* recordPurchase(now, 150);
+      const attemptId = yield* recordAttempt(purchase.id, "expired", now);
+      yield* db
+        .update(orders)
+        .set({
+          paymentState: "expired",
+          activePaymentAttemptId: attemptId,
+        })
+        .where(eq(orders.id, purchase.id));
+      yield* settlePassPurchase(purchase.id);
+      const handler = yield* makeEntryPackOrderPaymentHandler;
+      const interrupted = yield* Effect.result(
+        handler.startRecovery({
+          orderId: purchase.id,
+          paymentAttemptId: attemptId,
+          verifiedPaidAt: now,
+        })
+      );
+      expect(interrupted).toMatchObject({
+        failure: { _tag: "DotyposRejected", operation: "getReservationsByIds" },
+      });
+      const replacementDays = yield* readUnlimitedPassDays(purchase.id);
+      expect(replacementDays).toHaveLength(unlimitedPassDays);
+      expect(
+        replacementDays.every(
+          ({ reservationState }) => reservationState === "held"
+        )
+      ).toBe(true);
+
+      yield* db
+        .update(customerAccounts)
+        .set({ deletedAt: now })
+        .where(eq(customerAccounts.id, purchase.holderAccountId));
+      const resumed = yield* Effect.result(
+        handler.resumeRecovery({
+          orderId: purchase.id,
+          paymentAttemptId: attemptId,
+        })
+      );
+      const rejected = yield* readState(purchase.id);
+      expect(rejected.order?.paymentState).toBe("expired");
+      expect(rejected.purchase?.status).toBe("void");
+      expect(rejected.attempts[0]).toMatchObject({
+        state: "paid",
+        refundState: "required",
+        refundTargetValue: price.value,
+      });
+      expect(resumed).toMatchObject({ success: true });
+
+      yield* reconcileUnlimitedPassReleases({ now, limit: 2 });
+      expect(
+        (yield* readUnlimitedPassDays(purchase.id)).every(
+          ({ reservationState }) => reservationState === "cancelled"
+        )
+      ).toBe(true);
+    }).pipe(
+      Effect.provide(servicesFor(withInterruptedHoldRead(provider.service)))
+    )
+  );
+});
+
+for (const tier of ["open-space", "reserved-desk"] as const) {
+  it(`requires a full refund when the first ${tier} service day ends during recovery`, async () => {
+    const start = getCurrentWorkspaceDate().add({ days: 190 });
+    const endsAt = Temporal.Instant.from(
+      getCoworkReservationInterval(tier, start.toString()).endsAt
+    );
+    const beforeClosing = endsAt.subtract({ minutes: 2 });
+    const services = servicesFor({
+      ...provider.service,
+      getReservationsByIds: (ids, options) =>
+        provider.service
+          .getReservationsByIds(ids, options)
+          .pipe(Effect.tap(() => TestClock.setTime(endsAt.epochMilliseconds))),
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(beforeClosing.epochMilliseconds);
+        const { db } = yield* WorkspaceDatabase;
+        const purchase = yield* recordPurchase(beforeClosing, 0, tier);
+        const attemptId = yield* recordAttempt(
+          purchase.id,
+          "expired",
+          beforeClosing
+        );
+        yield* createUnlimitedPassHolds(purchase);
+        yield* db
+          .update(orders)
+          .set({
+            paymentState: "expired",
+            activePaymentAttemptId: attemptId,
+          })
+          .where(eq(orders.id, purchase.id));
+        const handler = yield* makeEntryPackOrderPaymentHandler;
+        yield* handler.startRecovery({
+          orderId: purchase.id,
+          paymentAttemptId: attemptId,
+          verifiedPaidAt: beforeClosing,
+        });
+        const rejected = yield* readState(purchase.id);
+        expect(rejected.order?.paymentState).toBe("expired");
+        expect(rejected.purchase?.status).toBe("void");
+        expect(rejected.attempts[0]).toMatchObject({
+          state: "paid",
+          refundState: "required",
+          refundTargetValue: price.value,
+        });
+        yield* reconcileUnlimitedPassReleases({ now: endsAt, limit: 2 });
+      }).pipe(Effect.provide(Layer.merge(services, TestClock.layer())))
+    );
+  });
+}
+
+it("rechecks the first service day before activation after provider confirmation", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 265 });
+  const endsAt = Temporal.Instant.from(
+    getCoworkReservationInterval("open-space", start.toString()).endsAt
+  );
+  const beforeClosing = endsAt.subtract({ minutes: 2 });
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      yield* TestClock.setTime(beforeClosing.epochMilliseconds);
+      const purchase = yield* recordPurchase(beforeClosing, 0, "open-space");
+      const paidId = yield* recordAttempt(purchase.id, "paid", beforeClosing);
+      yield* createUnlimitedPassHolds(purchase);
+      yield* db
+        .update(orders)
+        .set({
+          paymentState: "paid",
+          activePaymentAttemptId: paidId,
+          paidAt: beforeClosing,
+        })
+        .where(eq(orders.id, purchase.id));
+      yield* settlePassPurchase(purchase.id);
+      yield* confirmUnlimitedPassDays(purchase);
+      yield* TestClock.setTime(endsAt.epochMilliseconds);
+
+      expect(yield* settlePassPurchase(purchase.id, paidId)).toBeUndefined();
+      const rejected = yield* readState(purchase.id);
+      expect(rejected.purchase?.status).toBe("void");
+      expect(rejected.order?.fulfillmentState).toBe("failed");
+      expect(rejected.attempts[0]).toMatchObject({
+        refundState: "required",
+        refundTargetValue: price.value,
+      });
+      yield* reconcileUnlimitedPassReleases({ now: endsAt, limit: 2 });
+    }).pipe(
+      Effect.provide(
+        Layer.merge(servicesFor(provider.service), TestClock.layer())
+      )
+    )
   );
 });
 

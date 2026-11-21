@@ -7,9 +7,9 @@ import { orders, passPurchases } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
-import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
+import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
 import { withUnlimitedPassCapacity } from "./unlimited-pass-capacity";
 import {
   createUnlimitedPassHolds,
@@ -52,13 +52,7 @@ export const prepareUnlimitedPassRecovery = Effect.fn(
       (purchase.status !== "void" && purchase.status !== "pending_payment")
     )
       return undefined;
-    if (
-      Temporal.PlainDate.compare(
-        purchase.validFrom,
-        getCurrentWorkspaceDate(now)
-      ) < 0
-    )
-      return undefined;
+    if (hasUnlimitedPassFirstDayEnded(purchase, now)) return undefined;
     let releasing = purchase;
     if (
       purchase.status === "pending_payment" &&
