@@ -42,6 +42,7 @@ test("posts the private query and selected filters, then shows a linked pass", a
         status: "active",
         validFrom: plainDateStringSchema.make("2026-11-01"),
         validUntil: plainDateStringSchema.make("2026-12-01"),
+        accessEndsOn: null,
         day: null,
         complimentary: false,
         claimed: false,

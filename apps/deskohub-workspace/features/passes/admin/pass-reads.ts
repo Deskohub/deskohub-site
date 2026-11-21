@@ -1,4 +1,8 @@
-import type { DotyposCustomer, DotyposCustomerId } from "@deskohub/dotypos";
+import {
+  type DotyposCustomer,
+  type DotyposCustomerId,
+  getCustomerDisplayName,
+} from "@deskohub/dotypos";
 import {
   and,
   count,
@@ -9,6 +13,7 @@ import {
   isNull,
   ne,
   or,
+  type SQL,
   sql,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -17,6 +22,7 @@ import {
   WorkspaceDatabase,
   type WorkspaceDatabaseClient,
 } from "@/db/database.service";
+import { equalsAny } from "@/db/equals-any";
 import { authUser } from "@/db/schema/auth";
 import { contractWithdrawals } from "@/db/schema/contract-withdrawals";
 import { customerAccounts } from "@/db/schema/customer-accounts";
@@ -25,10 +31,14 @@ import { orders } from "@/db/schema/orders";
 import { passEntryClaims } from "@/db/schema/pass-entry-claims";
 import { passPurchases } from "@/db/schema/pass-purchases";
 import { paymentAttempts } from "@/db/schema/payment-attempts";
+import { reservationAccessGrants } from "@/db/schema/reservation-access-grants";
 import { unlimitedPassDayMoves } from "@/db/schema/unlimited-pass-day-moves";
 import { workspaceReservations } from "@/db/schema/workspace-reservations";
 import { AdministrationCustomerDirectory } from "@/features/administration/customer-directory.service";
-import { nameAdministrationCustomer } from "@/features/administration/customer-identity";
+import {
+  isFindableAdministrationCustomer,
+  nameAdministrationCustomer,
+} from "@/features/administration/customer-identity";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
@@ -74,6 +84,22 @@ const paidOrder = and(
   isNotNull(orders.paidAt)
 );
 const activeClaims = inArray(passEntryClaims.status, ["reserved", "consumed"]);
+const passOrder = and(
+  eq(orders.id, passPurchases.id),
+  eq(orders.kind, "pass-purchase")
+);
+const passBuyerAccount = eq(buyerAccount.id, passPurchases.buyerAccountId);
+const passHolderAccount = eq(holderAccount.id, passPurchases.holderAccountId);
+const buyerEligible = and(
+  isNull(buyerAccount.deletedAt),
+  isNull(buyerLogin.deletionRequestedAt)
+);
+const holderEligible = and(
+  isNull(holderAccount.deletedAt),
+  isNull(holderLogin.deletionRequestedAt)
+);
+const buyerCustomerId = sql<DotyposCustomerId | null>`case when ${buyerEligible} then ${buyerAccount.dotyposCustomerId} end`;
+const holderCustomerId = sql<DotyposCustomerId | null>`case when ${holderEligible} then ${holderAccount.dotyposCustomerId} end`;
 
 const passRows = (db: WorkspaceDatabaseClient, today: PassDate) =>
   db
@@ -96,12 +122,16 @@ const passRows = (db: WorkspaceDatabaseClient, today: PassDate) =>
       accessEndsOn: passPurchases.accessEndsOn,
       gifted: sql<boolean>`${isGift}`,
       claimed: isNotNull(passPurchases.giftClaimedAt).mapWith(Boolean),
-      buyerCustomerId: buyerAccount.dotyposCustomerId,
+      buyerCustomerId,
       buyerDeletedAt: buyerAccount.deletedAt,
-      buyerEmail: buyerLogin.email,
-      holderCustomerId: holderAccount.dotyposCustomerId,
+      buyerEmail: sql<
+        string | null
+      >`case when ${buyerEligible} then ${buyerLogin.email} end`,
+      holderCustomerId,
       holderDeletedAt: holderAccount.deletedAt,
-      holderEmail: holderLogin.email,
+      holderEmail: sql<
+        string | null
+      >`case when ${holderEligible} then ${holderLogin.email} end`,
       winningPayment: {
         value: winningAttempt.amountValue,
         currency: winningAttempt.currency,
@@ -118,10 +148,7 @@ const passRows = (db: WorkspaceDatabaseClient, today: PassDate) =>
       paidAt: orders.paidAt,
     })
     .from(passPurchases)
-    .innerJoin(
-      orders,
-      and(eq(orders.id, passPurchases.id), eq(orders.kind, "pass-purchase"))
-    )
+    .innerJoin(orders, passOrder)
     .leftJoin(
       winningAttempt,
       and(
@@ -130,43 +157,37 @@ const passRows = (db: WorkspaceDatabaseClient, today: PassDate) =>
         eq(winningAttempt.state, "paid")
       )
     )
-    .innerJoin(buyerAccount, eq(buyerAccount.id, passPurchases.buyerAccountId))
-    .innerJoin(
-      holderAccount,
-      eq(holderAccount.id, passPurchases.holderAccountId)
-    )
-    .leftJoin(
-      buyerLogin,
-      and(
-        eq(buyerLogin.id, buyerAccount.id),
-        isNull(buyerAccount.deletedAt),
-        isNull(buyerLogin.deletionRequestedAt)
-      )
-    )
-    .leftJoin(
-      holderLogin,
-      and(
-        eq(holderLogin.id, holderAccount.id),
-        isNull(holderAccount.deletedAt),
-        isNull(holderLogin.deletionRequestedAt)
-      )
-    )
+    .innerJoin(buyerAccount, passBuyerAccount)
+    .innerJoin(holderAccount, passHolderAccount)
+    .leftJoin(buyerLogin, eq(buyerLogin.id, buyerAccount.id))
+    .leftJoin(holderLogin, eq(holderLogin.id, holderAccount.id))
     .$dynamic();
 
 type PassRow = Effect.Success<ReturnType<typeof passRows>>[number];
 
+type PassCustomerIds = Pick<PassRow, "buyerCustomerId" | "holderCustomerId">;
+
+const passPartyIds = (rows: readonly PassCustomerIds[]) => [
+  ...new Set(
+    rows.flatMap(({ buyerCustomerId, holderCustomerId }) =>
+      [buyerCustomerId, holderCustomerId].filter(
+        (id): id is DotyposCustomerId => id !== null
+      )
+    )
+  ),
+];
+
 const passParties = Effect.fn("administration.passParties")(function* (
-  rows: readonly PassRow[]
+  rows: readonly PassRow[],
+  profiles?: ReadonlyMap<DotyposCustomerId, DotyposCustomer>
 ) {
   const directory = yield* AdministrationCustomerDirectory;
-  const ids = rows.flatMap((row) =>
-    [row.buyerCustomerId, row.holderCustomerId].filter(
-      (id): id is DotyposCustomerId => id !== null
-    )
-  );
-  const customers = ids.length
-    ? yield* directory.findMany(ids)
-    : new Map<DotyposCustomerId, DotyposCustomer>();
+  const ids = passPartyIds(rows);
+  const customers =
+    profiles ??
+    (ids.length
+      ? yield* directory.findMany(ids)
+      : new Map<DotyposCustomerId, DotyposCustomer>());
   const now = yield* DateTime.nowAsDate;
   return (
     customerId: DotyposCustomerId | null,
@@ -206,6 +227,7 @@ const toPassSummary = (
   status: row.status,
   validFrom: row.validFrom,
   validUntil: row.validUntil,
+  accessEndsOn: row.accessEndsOn,
   day:
     row.product === "unlimited" && row.status === "active"
       ? Temporal.PlainDate.from(row.validFrom).until(today).days + 1
@@ -232,39 +254,96 @@ const toPassSummary = (
 });
 
 const passSearch = Effect.fn("administration.passSearch")(function* (
-  query: string
+  query: string,
+  filters: SQL | undefined
 ) {
-  const id = Schema.decodeOption(orderIdSchema)(query.toLowerCase());
-  if (Option.isSome(id))
+  const search = query.toLowerCase();
+  const id = Schema.decodeOption(orderIdSchema)(search);
+  if (Option.isSome(id)) {
     return { condition: eq(passPurchases.id, id.value), incomplete: false };
+  }
 
-  // An invited holder can have a login before a Dotypos profile exists.
-  // The sensitiveText encoder censors the bound email.
-  const unlinkedGift = query.includes("@")
-    ? and(
-        isGift,
-        isNull(holderAccount.dotyposCustomerId),
-        eq(holderLogin.email, query.toLowerCase())
+  // Fetch profiles by existing linked IDs. The operator's input stays inside
+  // Workspace, and unrelated directory records cannot crowd out a match.
+  const { db } = yield* WorkspaceDatabase;
+  const candidates = yield* db
+    .selectDistinct({
+      buyerCustomerId,
+      holderCustomerId,
+    })
+    .from(passPurchases)
+    .innerJoin(orders, passOrder)
+    .innerJoin(buyerAccount, passBuyerAccount)
+    .innerJoin(holderAccount, passHolderAccount)
+    .leftJoin(buyerLogin, eq(buyerLogin.id, buyerAccount.id))
+    .leftJoin(holderLogin, eq(holderLogin.id, holderAccount.id))
+    .where(filters);
+  const candidateIds = passPartyIds(candidates);
+  const directory = yield* AdministrationCustomerDirectory;
+  const profiles = candidateIds.length
+    ? yield* directory.findMany(candidateIds)
+    : new Map<DotyposCustomerId, DotyposCustomer>();
+  const now = yield* DateTime.nowAsDate;
+  const activeProfiles = [...profiles.values()].filter((profile) =>
+    isFindableAdministrationCustomer(profile, now)
+  );
+  const matches = activeProfiles
+    .filter((profile) =>
+      [
+        getCustomerDisplayName(profile),
+        profile.companyName,
+        profile.email,
+      ].some((field) => field?.toLowerCase().includes(search))
+    )
+    .map(({ id }) => id);
+  const activeIds = activeProfiles.map(({ id }) => id);
+
+  // Invited holders can have a login before a Dotypos profile exists. A
+  // linked login can match only after its profile was found to be active.
+  // The sensitiveText encoder censors the bound email in each predicate.
+  const emailMatch = search.includes("@")
+    ? or(
+        and(
+          isGift,
+          holderEligible,
+          isNull(holderAccount.dotyposCustomerId),
+          eq(holderLogin.email, search)
+        ),
+        activeIds.length
+          ? or(
+              and(
+                buyerEligible,
+                equalsAny(buyerAccount.dotyposCustomerId, activeIds),
+                eq(buyerLogin.email, search)
+              ),
+              and(
+                holderEligible,
+                equalsAny(holderAccount.dotyposCustomerId, activeIds),
+                eq(holderLogin.email, search)
+              )
+            )
+          : undefined
       )
     : undefined;
-  const directory = yield* AdministrationCustomerDirectory;
-  const found =
-    query.length <= 100 && !/[|;]/.test(query)
-      ? yield* directory.search(query).pipe(Effect.orElseSucceed(() => null))
-      : null;
-  const customerIds = found?.customers.map((customer) => customer.id) ?? [];
   return {
     condition:
       or(
-        unlinkedGift,
-        customerIds.length
+        emailMatch,
+        matches.length
           ? or(
-              inArray(buyerAccount.dotyposCustomerId, customerIds),
-              inArray(holderAccount.dotyposCustomerId, customerIds)
+              and(
+                buyerEligible,
+                equalsAny(buyerAccount.dotyposCustomerId, matches)
+              ),
+              and(
+                holderEligible,
+                equalsAny(holderAccount.dotyposCustomerId, matches)
+              )
             )
           : undefined
       ) ?? sql`false`,
-    incomplete: found === null,
+    incomplete: candidateIds.some((id) => !profiles.has(id)),
+    profiles,
   };
 });
 
@@ -278,22 +357,22 @@ export const listAdminPasses = Effect.fn("administration.listAdminPasses")(
       gift: and(paidOrder, isGift),
       complimentary: complimentaryOrder,
     };
-    const search = input.query ? yield* passSearch(input.query) : undefined;
+    const filters = and(
+      input.product ? eq(passPurchases.product, input.product) : undefined,
+      input.tier ? eq(passPurchases.tier, input.tier) : undefined,
+      input.status ? eq(statusOn(today), input.status) : undefined,
+      input.source ? source[input.source] : undefined
+    );
+    const search = input.query
+      ? yield* passSearch(input.query, filters)
+      : undefined;
     const rows = yield* passRows(db, today)
-      .where(
-        and(
-          input.product ? eq(passPurchases.product, input.product) : undefined,
-          input.tier ? eq(passPurchases.tier, input.tier) : undefined,
-          input.status ? eq(statusOn(today), input.status) : undefined,
-          input.source ? source[input.source] : undefined,
-          search?.condition
-        )
-      )
+      .where(and(filters, search?.condition))
       .orderBy(desc(passPurchases.createdAt), desc(passPurchases.id))
       .limit(adminPassPageSize + 1)
       .offset((page - 1) * adminPassPageSize);
     const visible = rows.slice(0, adminPassPageSize);
-    const party = yield* passParties(visible);
+    const party = yield* passParties(visible, search?.profiles);
     return {
       passes: visible.map((row) => toPassSummary(row, today, party)),
       total: rows[0]?.matchingCount ?? 0,
@@ -310,28 +389,35 @@ export const readAdminCustomerPasses = Effect.fn(
   const today = yield* workspaceToday;
   const rows = yield* passRows(db, today)
     .where(
-      and(
-        or(
-          eq(holderAccount.dotyposCustomerId, customerId),
-          and(
-            eq(buyerAccount.dotyposCustomerId, customerId),
-            sql`not (${complimentaryOrder})`
-          )
-        ),
-        ne(passPurchases.status, "pending_payment"),
-        ne(passPurchases.status, "void")
+      or(
+        and(holderEligible, eq(holderAccount.dotyposCustomerId, customerId)),
+        and(
+          buyerEligible,
+          eq(buyerAccount.dotyposCustomerId, customerId),
+          sql`not (${complimentaryOrder})`
+        )
       )
     )
     .orderBy(desc(passPurchases.createdAt), desc(passPurchases.id));
-  const party = yield* passParties(rows);
-  const purchases = rows.map((row) => ({
+  const visible = rows.filter(
+    (row) =>
+      row.storedStatus !== "pending_payment" && row.storedStatus !== "void"
+  );
+  const party = yield* passParties(visible);
+  const purchases = visible.map((row) => ({
     row,
     pass: toPassSummary(row, today, party),
   }));
-  // The order's winning attempt excludes rejected or superseded captures.
+
+  // Spending follows the order even when its pass could not be fulfilled.
+  // The winning attempt excludes rejected or superseded captures.
   const totals = new Map<string, Money>();
-  for (const { row, pass } of purchases) {
-    if (row.buyerCustomerId !== customerId || !row.winningPayment || !pass.paid)
+  for (const row of rows) {
+    if (
+      row.buyerCustomerId !== customerId ||
+      row.complimentary ||
+      !row.winningPayment
+    )
       continue;
     const { currency, exponent, value, refundedValue } = row.winningPayment;
     const unit = `${currency}:${exponent}`;
@@ -436,9 +522,19 @@ export const readAdminPass = Effect.fn("administration.readAdminPass")(
               id: workspaceReservations.id,
               date: workspaceReservations.serviceDate,
               tableId: workspaceReservations.passDayTableId,
+              accessIssued: isNotNull(reservationAccessGrants.issuedAt).mapWith(
+                Boolean
+              ),
               status: workspaceReservations.reservationState,
             })
             .from(workspaceReservations)
+            .leftJoin(
+              reservationAccessGrants,
+              eq(
+                reservationAccessGrants.workspaceReservationId,
+                workspaceReservations.id
+              )
+            )
             .where(eq(workspaceReservations.passId, passId))
             .orderBy(
               workspaceReservations.serviceDate,
@@ -471,6 +567,7 @@ export const readAdminPass = Effect.fn("administration.readAdminPass")(
     return {
       pass: toPassSummary(row, today, party),
       storedStatus: row.storedStatus,
+      today,
       accessEndsOn: row.accessEndsOn,
       paymentState: row.paymentState,
       fulfillmentState: row.fulfillmentState,

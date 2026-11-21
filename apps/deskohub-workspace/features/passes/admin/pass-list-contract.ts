@@ -54,6 +54,7 @@ const adminPassSummary = Schema.Struct({
   status: Schema.Literals(adminPassStatuses),
   validFrom: plainDateStringSchema,
   validUntil: plainDateStringSchema,
+  accessEndsOn: Schema.NullOr(plainDateStringSchema),
   day: Schema.NullOr(Schema.Int),
   complimentary: Schema.Boolean,
   claimed: Schema.Boolean,

@@ -2,16 +2,16 @@ import type { ReactNode } from "react";
 import { AdministrationLink } from "@/features/administration/admin-link";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
-import { formatPassDate, getPassTierName } from "../pass-offer.i18n";
+import { getPassTierName } from "../pass-offer.i18n";
 import type { AdminPassSummary } from "./pass-list-contract";
 import {
   PassStatusBadge,
   passHref,
-  passLastDate,
   passPaidLabel,
   passPartyLabel,
   passProductTitle,
   passRemainingLabel,
+  passValidityRange,
 } from "./pass-presentation";
 
 export function AdminCustomerPasses({
@@ -108,8 +108,7 @@ function CustomerPassGroup({
                       {passRemainingLabel(pass, locale)}
                     </p>
                     <p className="text-xs text-navy-blue/65">
-                      {formatPassDate(pass.validFrom, locale)} –{" "}
-                      {passLastDate(pass, locale)}
+                      {passValidityRange(pass, locale)}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2 sm:flex-col sm:items-end">

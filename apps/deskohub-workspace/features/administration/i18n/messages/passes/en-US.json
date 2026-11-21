@@ -81,5 +81,14 @@
   "passesReservationPack": "Pack",
   "passesReservationUnlimited": "Unlimited pass day",
   "passesTerms": "Terms and conditions",
-  "passesSearchIncomplete": "Customer search was incomplete. Pass IDs and unlinked invitations may still match."
+  "passesSearchIncomplete": "Customer search was incomplete. Pass IDs and unlinked invitations may still match.",
+  "passesUsage": "Usage",
+  "passesCodeIssued": "Code issued",
+  "passesPastDay": "Past day",
+  "passesToday": "Today",
+  "passesFutureDay": "Upcoming",
+  "passesShowReservations": "Show reservations ({count})",
+  "passesUnlimitedDuration": "Unlimited pass · {count} days",
+  "passesNoAccessDays": "No access days",
+  "passesCreated": "Created"
 }

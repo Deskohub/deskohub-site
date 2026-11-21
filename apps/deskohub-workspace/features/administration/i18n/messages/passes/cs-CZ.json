@@ -81,5 +81,14 @@
   "passesReservationPack": "Balíček vstupů",
   "passesReservationUnlimited": "Den neomezené permanentky",
   "passesTerms": "Obchodní podmínky",
-  "passesSearchIncomplete": "Vyhledávání zákazníků nebylo úplné. Čísla permanentek a pozvánky bez propojeného zákazníka lze stále najít."
+  "passesSearchIncomplete": "Vyhledávání zákazníků nebylo úplné. Čísla permanentek a pozvánky bez propojeného zákazníka lze stále najít.",
+  "passesUsage": "Využití",
+  "passesCodeIssued": "Kód vydán",
+  "passesPastDay": "Uplynulý den",
+  "passesToday": "Dnes",
+  "passesFutureDay": "Nadcházející",
+  "passesShowReservations": "Zobrazit rezervace ({count})",
+  "passesUnlimitedDuration": "Neomezená permanentka · {count} dní",
+  "passesNoAccessDays": "Žádné dny s přístupem",
+  "passesCreated": "Vytvořeno"
 }

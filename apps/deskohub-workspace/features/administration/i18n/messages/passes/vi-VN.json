@@ -81,5 +81,14 @@
   "passesReservationPack": "Gói lượt vào",
   "passesReservationUnlimited": "Ngày dùng thẻ không giới hạn",
   "passesTerms": "Điều kiện Giao dịch Chung",
-  "passesSearchIncomplete": "Không thể tìm kiếm đầy đủ thông tin khách hàng. Vẫn có thể tìm theo mã thẻ hoặc lời mời chưa liên kết."
+  "passesSearchIncomplete": "Không thể tìm kiếm đầy đủ thông tin khách hàng. Vẫn có thể tìm theo mã thẻ hoặc lời mời chưa liên kết.",
+  "passesUsage": "Lượt sử dụng",
+  "passesCodeIssued": "Đã cấp mã",
+  "passesPastDay": "Ngày đã qua",
+  "passesToday": "Hôm nay",
+  "passesFutureDay": "Sắp tới",
+  "passesShowReservations": "Hiện lượt đặt chỗ ({count})",
+  "passesUnlimitedDuration": "Thẻ không giới hạn · {count} ngày",
+  "passesNoAccessDays": "Không có ngày được vào",
+  "passesCreated": "Đã tạo"
 }

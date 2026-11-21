@@ -70,7 +70,15 @@ export const passProductLabel = (
 
 export const passProductTitle = (pass: AdminPassSummary, locale: Locale) =>
   pass.entryCount === null
-    ? passProductLabel(pass.product, locale)
+    ? m.passesUnlimitedDuration(
+        {
+          count: formatCount(
+            Temporal.PlainDate.from(pass.validFrom).until(pass.validUntil).days,
+            locale
+          ),
+        },
+        { locale }
+      )
     : m.passesEntryPackSize(
         { count: formatCount(pass.entryCount, locale) },
         { locale }
@@ -96,11 +104,21 @@ export const passRemainingLabel = (pass: AdminPassSummary, locale: Locale) => {
   );
 };
 
-export const passLastDate = (pass: AdminPassSummary, locale: Locale) =>
-  formatPassDate(
-    Temporal.PlainDate.from(pass.validUntil).subtract({ days: 1 }).toString(),
+export const passLastDate = (pass: AdminPassSummary, locale: Locale) => {
+  const cutoff = pass.accessEndsOn ?? pass.validUntil;
+  if (cutoff <= pass.validFrom) return null;
+  return formatPassDate(
+    Temporal.PlainDate.from(cutoff).subtract({ days: 1 }).toString(),
     locale
   );
+};
+
+export const passValidityRange = (pass: AdminPassSummary, locale: Locale) => {
+  const lastDay = passLastDate(pass, locale);
+  return lastDay
+    ? `${formatPassDate(pass.validFrom, locale)} – ${lastDay}`
+    : m.passesNoAccessDays({}, { locale });
+};
 
 export const passPaidLabel = (pass: AdminPassSummary, locale: Locale) => {
   if (pass.complimentary) return m.passesGranted({}, { locale });

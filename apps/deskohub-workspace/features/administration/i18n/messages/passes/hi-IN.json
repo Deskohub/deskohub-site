@@ -81,5 +81,14 @@
   "passesReservationPack": "प्रवेश पैक",
   "passesReservationUnlimited": "असीमित पास का दिन",
   "passesTerms": "नियम और शर्तें",
-  "passesSearchIncomplete": "ग्राहक खोज पूरी नहीं हो सकी। पास आईडी और बिना जुड़े आमंत्रणों के परिणाम अभी भी मिल सकते हैं।"
+  "passesSearchIncomplete": "ग्राहक खोज पूरी नहीं हो सकी। पास आईडी और बिना जुड़े आमंत्रणों के परिणाम अभी भी मिल सकते हैं।",
+  "passesUsage": "इस्तेमाल",
+  "passesCodeIssued": "कोड जारी हुआ",
+  "passesPastDay": "बीता दिन",
+  "passesToday": "आज",
+  "passesFutureDay": "आगामी",
+  "passesShowReservations": "बुकिंग दिखाएँ ({count})",
+  "passesUnlimitedDuration": "असीमित पास · {count} दिन",
+  "passesNoAccessDays": "प्रवेश का कोई दिन नहीं",
+  "passesCreated": "बनाया गया"
 }

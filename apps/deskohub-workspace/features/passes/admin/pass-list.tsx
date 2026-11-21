@@ -447,11 +447,11 @@ function Validity({
   readonly pass: AdminPassSummary;
   readonly locale: Locale;
 }) {
+  const lastDay = passLastDate(pass, locale);
+  if (!lastDay) return <p>{m.passesNoAccessDays({}, { locale })}</p>;
   return (
     <div>
-      <p>
-        {m.passesThroughDate({ date: passLastDate(pass, locale) }, { locale })}
-      </p>
+      <p>{m.passesThroughDate({ date: lastDay }, { locale })}</p>
       <p className="text-xs text-navy-blue/65">
         {m.passesFromDate(
           { date: formatPassDate(pass.validFrom, locale) },

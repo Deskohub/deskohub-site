@@ -24,17 +24,19 @@ import { getRequestLocale } from "@/features/i18n/server/request-locale";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { StatusBadge } from "@/shared/components/ui/status-badge";
 import { formatMoney, moneyWithValue } from "@/shared/money/money";
-import { formatPassDate, getPassTierName } from "../pass-offer.i18n";
+import { formatCount } from "@/shared/utils/number";
+import { getPassTierName } from "../pass-offer.i18n";
 import { loadAdminPass } from "./pass-page-data.server";
 import {
   PassPartyName,
   PassStatusBadge,
-  passLastDate,
   passPaidLabel,
   passProductTitle,
   passRemainingLabel,
+  passValidityRange,
 } from "./pass-presentation";
 import type { AdminPassDetail } from "./pass-reads";
+import { UnlimitedDayCalendar } from "./unlimited-day-calendar";
 
 export async function AdminPassDetailScreen({
   params,
@@ -61,6 +63,7 @@ export function AdminPassDetailView({
   readonly actions?: ReactNode;
 }) {
   const { pass } = detail;
+  const purchaseDateLabel = detail.paidAt ? m.passesOrderedAt : m.passesCreated;
   const tableId = pass.tier === "open-space" ? null : detail.days[0]?.tableId;
   const desk = tableId ? (detail.deskLabels.get(tableId) ?? tableId) : null;
   return (
@@ -93,8 +96,7 @@ export function AdminPassDetailView({
           <div className="flex flex-wrap justify-between gap-2 text-sm">
             <p className="font-semibold">{passRemainingLabel(pass, locale)}</p>
             <p className="text-navy-blue/70">
-              {formatPassDate(pass.validFrom, locale)} –{" "}
-              {passLastDate(pass, locale)}
+              {passValidityRange(pass, locale)}
             </p>
           </div>
           {pass.product === "entry-pack" ? (
@@ -109,16 +111,14 @@ export function AdminPassDetailView({
           <AdministrationDetailSection title={m.passesHolder({}, { locale })}>
             <div className="space-y-2">
               <PassPartyName party={pass.holder} locale={locale} />
-              {pass.buyer && (
-                <div>
-                  <StatusBadge tone={pass.claimed ? "positive" : "progress"}>
-                    {(pass.claimed ? m.passesClaimed : m.passesUnclaimed)(
-                      {},
-                      { locale }
-                    )}
-                  </StatusBadge>
-                </div>
-              )}
+              <div>
+                <StatusBadge tone={pass.claimed ? "positive" : "progress"}>
+                  {(pass.claimed ? m.passesClaimed : m.passesUnclaimed)(
+                    {},
+                    { locale }
+                  )}
+                </StatusBadge>
+              </div>
             </div>
           </AdministrationDetailSection>
           {(detail.coffee || detail.monitor) && (
@@ -146,7 +146,7 @@ export function AdminPassDetailView({
               <AdministrationFact
                 label={(pass.complimentary
                   ? m.passesGranted
-                  : m.passesOrderedAt)({}, { locale })}
+                  : purchaseDateLabel)({}, { locale })}
                 value={formatAdministrationDateTime(
                   (detail.paidAt ?? detail.createdAt).toString(),
                   locale
@@ -223,26 +223,45 @@ function UnlimitedDays({ detail, locale }: PassDetailProps) {
   };
   return (
     <>
-      <PassDetailTable
-        title={m.passesDays({}, { locale })}
-        headings={[
-          m.passesDate({}, { locale }),
-          m.passesDesk({}, { locale }),
-          m.passesReservation({}, { locale }),
-          m.passesStatus({}, { locale }),
-        ]}
-        rows={detail.days.map((day) => ({
-          id: day.id,
-          cells: [
-            day.date ? formatAdministrationPlainDate(day.date, locale) : "—",
-            day.tableId
-              ? (detail.deskLabels.get(day.tableId) ?? day.tableId)
-              : "—",
-            <ReservationLink id={day.id} key="reservation" locale={locale} />,
-            dayLabels[day.status]({}, { locale }),
-          ],
-        }))}
-      />
+      <UnlimitedDayCalendar detail={detail} locale={locale} />
+      {detail.days.length > 0 && (
+        <details className="rounded-xl border border-navy-blue/10 bg-white">
+          <summary className="cursor-pointer p-4 font-semibold">
+            {m.passesShowReservations(
+              { count: formatCount(detail.days.length, locale) },
+              { locale }
+            )}
+          </summary>
+          <div className="border-t border-navy-blue/10 p-4">
+            <PassDetailTable
+              title={m.passesDays({}, { locale })}
+              headings={[
+                m.passesDate({}, { locale }),
+                m.passesDesk({}, { locale }),
+                m.passesReservation({}, { locale }),
+                m.passesStatus({}, { locale }),
+              ]}
+              rows={detail.days.map((day) => ({
+                id: day.id,
+                cells: [
+                  day.date
+                    ? formatAdministrationPlainDate(day.date, locale)
+                    : "—",
+                  day.tableId
+                    ? (detail.deskLabels.get(day.tableId) ?? day.tableId)
+                    : "—",
+                  <ReservationLink
+                    id={day.id}
+                    key="reservation"
+                    locale={locale}
+                  />,
+                  dayLabels[day.status]({}, { locale }),
+                ],
+              }))}
+            />
+          </div>
+        </details>
+      )}
       {detail.moves.length > 0 && (
         <PassDetailTable
           title={m.passesMoves({}, { locale })}

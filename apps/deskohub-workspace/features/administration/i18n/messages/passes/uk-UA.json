@@ -81,5 +81,14 @@
   "passesReservationPack": "Пакет відвідувань",
   "passesReservationUnlimited": "День за безлімітним абонементом",
   "passesTerms": "Загальні умови",
-  "passesSearchIncomplete": "Пошук клієнтів був неповним. Пошук за номером абонемента й досі може знаходити результати, як і пошук непривʼязаних запрошень."
+  "passesSearchIncomplete": "Пошук клієнтів був неповним. Пошук за номером абонемента й досі може знаходити результати, як і пошук непривʼязаних запрошень.",
+  "passesUsage": "Використання",
+  "passesCodeIssued": "Код видано",
+  "passesPastDay": "Минулий день",
+  "passesToday": "Сьогодні",
+  "passesFutureDay": "Майбутній день",
+  "passesShowReservations": "Показати бронювання ({count})",
+  "passesUnlimitedDuration": "Безлімітний абонемент · днів: {count}",
+  "passesNoAccessDays": "Немає днів із доступом",
+  "passesCreated": "Створено"
 }

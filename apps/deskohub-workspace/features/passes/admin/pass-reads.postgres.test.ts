@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import {
+  type DotyposCustomer,
+  type DotyposCustomerId,
+  DotyposCustomerIdSchema,
+} from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
 import { AdministrationCustomerDirectory } from "@/features/administration/customer-directory.service";
@@ -142,6 +146,14 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       dayReservationId = workspaceReservationIdSchema.make(day.rows[0]!.id);
       await pool.query(
+        `insert into reservation_access_grants
+          (workspace_reservation_id, device_id, state, reservation_starts_at,
+           access_starts_at, access_ends_at, issued_at)
+         values ($1, 'synthetic-device', 'expired', now(),
+           now(), now() + interval '1 hour', now())`,
+        [dayReservationId]
+      );
+      await pool.query(
         `insert into unlimited_pass_day_moves
           (generation, reservation_id, customer_id, source_reservation_id,
            source_table_id, target_table_id, target_reservation_id, requested_at,
@@ -180,18 +192,80 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
     });
 
     test("keeps eligible unlinked invitations searchable during a customer directory outage", async () => {
-      const unavailableDirectory = Layer.mock(AdministrationCustomerDirectory, {
-        findMany: () => Effect.succeed(new Map()),
-        search: () => Effect.fail("synthetic directory failure"),
-      });
-      const response = await Effect.runPromise(
-        listAdminPasses({ query: invitationEmail }).pipe(
-          Effect.provide(unavailableDirectory),
-          Effect.provide(database.layer)
-        )
-      );
+      const response = await run(listAdminPasses({ query: invitationEmail }));
       expect(response.searchIncomplete).toBe(true);
       expect(response.passes).toMatchObject([{ id: unlimitedId }]);
+    });
+
+    test("matches the full eligible party set without sending the search term to the directory", async () => {
+      const { rows: fixtureCustomers } = await database.pool.query<{
+        id: string;
+        customer: string;
+      }>(
+        `with accounts as (
+          insert into customer_accounts (id, dotypos_customer_id)
+          select uuid_generate_v7(), 'eligible-pass-customer-' || number
+          from generate_series(1, 51) as number
+          returning id, dotypos_customer_id
+        ), purchased as (
+          insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state)
+          select id, 'pass-purchase', dotypos_customer_id, 'not_started', 'not_started'
+          from accounts
+          returning id, dotypos_customer_id
+        )
+        insert into pass_purchases
+          (id, buyer_account_id, holder_account_id, product, tier, status,
+           valid_from, valid_until, quote, locale, created_at)
+        select id, id, id, 'unlimited', 'reserved-desk', 'pending_payment',
+          '2098-01-01', '2098-02-01', '{}', 'en-US', now()
+        from purchased
+        returning id, (select dotypos_customer_id from accounts where accounts.id = pass_purchases.id) as customer`
+      );
+      const match = fixtureCustomers.find(
+        ({ customer }) => customer === "eligible-pass-customer-51"
+      )!;
+      const contacts = new Map(
+        fixtureCustomers.map(({ customer }) => {
+          const id = DotyposCustomerIdSchema.make(customer);
+          return [
+            id,
+            {
+              id,
+              firstName: customer === match.customer ? "Target" : "Unrelated",
+              lastName: "Customer",
+              deleted: false,
+            } as DotyposCustomer,
+          ] as const;
+        })
+      );
+      const requests: DotyposCustomerId[] = [];
+      const directory = Layer.mock(AdministrationCustomerDirectory, {
+        findMany: (ids) =>
+          Effect.sync(() => {
+            requests.push(...ids);
+            return new Map(
+              requests.flatMap((id) => {
+                const contact = contacts.get(id);
+                return contact ? [[id, contact] as const] : [];
+              })
+            );
+          }),
+        search: () =>
+          Effect.die(
+            new Error("Private search terms must never reach the directory")
+          ),
+      });
+      const answer = await Effect.runPromise(
+        listAdminPasses({
+          product: "unlimited",
+          tier: "reserved-desk",
+          query: "Target Customer",
+        }).pipe(Effect.provide(directory), Effect.provide(database.layer))
+      );
+      expect(requests).toHaveLength(51);
+      expect(answer.searchIncomplete).toBe(false);
+      expect(answer.total).toBe(1);
+      expect(answer.passes).toMatchObject([{ id: match.id }]);
     });
 
     test("uses current account links and counts only the winning payment less confirmed refunds", async () => {
@@ -204,6 +278,112 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       ]);
       expect(holder.held).toMatchObject([{ id: passId }]);
       expect(holder.spent).toEqual([]);
+    });
+
+    test("keeps paid but unfulfilled passes out of the entitlement lists and in spending", async () => {
+      try {
+        for (const status of ["void", "pending_payment"]) {
+          await database.pool.query(
+            "update pass_purchases set status = $1 where id = $2",
+            [status, passId]
+          );
+          const customer = await run(readAdminCustomerPasses(buyerId));
+          expect(customer.boughtForOthers).toEqual([]);
+          expect(customer.spent).toEqual([
+            { value: 90000, exponent: 2, currency: "CZK" },
+          ]);
+        }
+      } finally {
+        await database.pool.query(
+          "update pass_purchases set status = 'active' where id = $1",
+          [passId]
+        );
+      }
+    });
+
+    test("matches a linked login email only for active accounts and never projects pending-deletion contact data", async () => {
+      const buyerEmail = testEmailAddress("admin-pass-buyer-login");
+      const holderEmail = testEmailAddress("admin-pass-pending-deletion");
+      await database.pool.query(
+        `insert into auth."user" (id, name, email, deletion_requested_at)
+         values ($1, '', $3, null), ($2, '', $4, now())`,
+        [buyerAccount, holderAccount, buyerEmail, holderEmail]
+      );
+      const seen = new Set<DotyposCustomerId>();
+      const profiles = new Map<DotyposCustomerId, DotyposCustomer>([
+        [
+          buyerId,
+          {
+            id: buyerId,
+            firstName: "Eligible Buyer",
+            email: testEmailAddress("different-directory-email"),
+            deleted: false,
+          } as DotyposCustomer,
+        ],
+        [
+          holderId,
+          {
+            id: holderId,
+            firstName: "Pending Deletion Holder",
+            email: holderEmail,
+            deleted: false,
+          } as DotyposCustomer,
+        ],
+      ]);
+      const directory = Layer.mock(AdministrationCustomerDirectory, {
+        findMany: (ids) =>
+          Effect.sync(
+            () =>
+              new Map(
+                [...ids].flatMap((id) => {
+                  seen.add(id);
+                  const profile = profiles.get(id);
+                  return profile ? [[id, profile] as const] : [];
+                })
+              )
+          ),
+        search: () =>
+          Effect.die(
+            new Error("Private search terms must never reach the directory")
+          ),
+      });
+      try {
+        const read = <A, E>(
+          effect: Effect.Effect<
+            A,
+            E,
+            | AdministrationCustomerDirectory
+            | import("@/db/database.service").WorkspaceDatabase
+          >
+        ) =>
+          Effect.runPromise(
+            effect.pipe(
+              Effect.provide(directory),
+              Effect.provide(database.layer)
+            )
+          );
+        const buyer = await read(
+          listAdminPasses({ product: "entry-pack", query: buyerEmail })
+        );
+        expect(buyer.passes).toMatchObject([{ id: passId }]);
+        const holder = await read(
+          listAdminPasses({ product: "entry-pack", query: holderEmail })
+        );
+        expect(holder.passes).toEqual([]);
+        expect(seen.has(holderId)).toBe(false);
+        const detail = await read(readAdminPass(passId));
+        expect(detail?.pass.holder).toMatchObject({
+          customerId: null,
+          name: null,
+          email: null,
+        });
+        expect(JSON.stringify(detail)).not.toContain(holderEmail);
+      } finally {
+        await database.pool.query(
+          'delete from auth."user" where id in ($1, $2)',
+          [buyerAccount, holderAccount]
+        );
+      }
     });
 
     test("projects attempts, consent, claims and day moves without provider credentials", async () => {
@@ -231,6 +411,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           id: dayReservationId,
           date: reservedDate,
           tableId: "synthetic-desk-2",
+          accessIssued: true,
         },
       ]);
       expect(unlimited?.moves).toMatchObject([
