@@ -278,11 +278,77 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
   );
 });
 
-test("editing an owned draft sends a new order and reports the capacity refusal", async () => {
-  const existingOrderId = orderIdSchema.make(
-    "018f8000-0000-7000-8000-000000000001"
-  );
-  const requests: unknown[] = [];
+test.each(["capacity_unavailable", "draft_voided"] as const)(
+  "a %s result clears the owned draft and starts a fresh choice",
+  async (status) => {
+    const existingOrderId = orderIdSchema.make(
+      "018f8000-0000-7000-8000-000000000001"
+    );
+    const requests: Array<{ orderId: string; supersedeOrderId?: string }> = [];
+    const view = render(
+      <QueryProvider>
+        <UnlimitedPassCheckout
+          {...base}
+          initialDetails={{
+            tier: "open-space",
+            coffee: false,
+            startDate: openSpaceStart,
+          }}
+          draft={{ kind: "resume", orderId: existingOrderId }}
+          beginCheckout={async (input) => {
+            requests.push(input);
+            return {
+              data: {
+                status,
+                blockingDates: [monitorStart],
+              },
+            };
+          }}
+        />
+      </QueryProvider>
+    );
+    fireEvent.click(
+      view.getByRole("checkbox", {
+        name: m.entryPackCheckoutGift({}, { locale }),
+      })
+    );
+    fireEvent.change(
+      view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
+      {
+        target: { value: holderEmail },
+      }
+    );
+    fireEvent.click(view.getByRole("button", { name: /continue/i }));
+    await waitFor(() =>
+      expect(view.getByText(/pass can’t cover Nov 2, 2026/i)).toBeDefined()
+    );
+    expect(requests).toEqual([
+      expect.objectContaining({
+        orderId: expect.not.stringMatching(existingOrderId),
+        supersedeOrderId: existingOrderId,
+        holderEmail,
+      }),
+    ]);
+    expect(
+      view.getByRole<HTMLButtonElement>("button", { name: /continue/i })
+        .disabled
+    ).toBe(true);
+    const reopenedUrl = checkoutUrl();
+    expect(reopenedUrl.searchParams.get("supersedeOrder")).toBeNull();
+    expect(reopenedUrl.searchParams.get("order")).toBeNull();
+    expect(reopenedUrl.searchParams.get("step")).toBeNull();
+    expect(reopenedUrl.pathname).toBe("/en-US/passes/unlimited");
+    fireEvent.click(view.getByRole("button", { name: /November 1st, 2026/i }));
+    fireEvent.click(view.getByRole("button", { name: /continue/i }));
+    fireEvent.click(view.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1]?.orderId).not.toBe(requests[0]?.orderId);
+    expect(requests[1]?.supersedeOrderId).toBeUndefined();
+  }
+);
+
+test("an unknown Continue outcome retries the same draft", async () => {
+  const orderIds: string[] = [];
   const view = render(
     <QueryProvider>
       <UnlimitedPassCheckout
@@ -292,49 +358,25 @@ test("editing an owned draft sends a new order and reports the capacity refusal"
           coffee: false,
           startDate: openSpaceStart,
         }}
-        draft={{ kind: "resume", orderId: existingOrderId }}
-        beginCheckout={async (input) => {
-          requests.push(input);
-          return {
-            data: {
-              status: "capacity_unavailable",
-              blockingDates: [monitorStart],
-            },
-          };
+        beginCheckout={async ({ orderId }) => {
+          orderIds.push(orderId);
+          throw new Error("Synthetic network failure");
         }}
       />
     </QueryProvider>
   );
-  fireEvent.click(
-    view.getByRole("checkbox", {
-      name: m.entryPackCheckoutGift({}, { locale }),
-    })
-  );
-  fireEvent.change(
-    view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
-    {
-      target: { value: holderEmail },
-    }
-  );
-  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  const submit = view.getByRole<HTMLButtonElement>("button", {
+    name: /continue/i,
+  });
+  fireEvent.click(submit);
   await waitFor(() =>
-    expect(view.getByText(/pass can’t cover Nov 2, 2026/i)).toBeDefined()
+    expect(
+      view.getByText(m.actionFailedUnexpectedly({}, { locale }))
+    ).toBeDefined()
   );
-  expect(requests).toEqual([
-    expect.objectContaining({
-      orderId: expect.not.stringMatching(existingOrderId),
-      supersedeOrderId: existingOrderId,
-      holderEmail,
-    }),
-  ]);
-  expect(
-    view.getByRole<HTMLButtonElement>("button", { name: /continue/i }).disabled
-  ).toBe(true);
-  const reopenedUrl = checkoutUrl();
-  expect(reopenedUrl.searchParams.get("supersedeOrder")).toBeNull();
-  expect(reopenedUrl.searchParams.get("order")).toBeNull();
-  expect(reopenedUrl.searchParams.get("step")).toBeNull();
-  expect(reopenedUrl.pathname).toBe("/en-US/passes/unlimited");
+  fireEvent.click(submit);
+  await waitFor(() => expect(orderIds).toHaveLength(2));
+  expect(orderIds[1]).toBe(orderIds[0]);
 });
 
 test("Details cannot hand off another selection while Begin is creating holds", async () => {

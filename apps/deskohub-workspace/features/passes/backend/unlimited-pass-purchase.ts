@@ -2,7 +2,7 @@ import "server-only";
 
 import { type DotyposCustomerId, DotyposService } from "@deskohub/dotypos";
 import { and, eq, isNull } from "drizzle-orm";
-import { Effect, Layer, Schema } from "effect";
+import { Data, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { customerAccounts, passPurchases } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
@@ -26,7 +26,12 @@ import { getPaymentSubmitLegalDocuments } from "@/features/legal/payment-submit-
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
-import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
+import {
+  currentInstant,
+  type PlainDate,
+  plainDateStringSchema,
+} from "@/shared/utils/temporal";
+import { rejectedPassDayHoldCode } from "../pass-day-marker";
 import {
   getEntryPackLastUsableDate,
   getUnlimitedPassPrice,
@@ -46,6 +51,7 @@ import {
 import { withUnlimitedPassCapacity } from "./unlimited-pass-capacity";
 import {
   createUnlimitedPassHolds,
+  readUnlimitedPassDays,
   releaseUnlimitedPassDays,
 } from "./unlimited-pass-holds";
 import {
@@ -56,6 +62,19 @@ import {
 
 type Purchase = typeof passPurchases.$inferSelect;
 const sameSelection = Schema.toEquivalence(unlimitedPassSelectionSchema);
+
+class UnlimitedPassDraftVoided extends Data.TaggedError(
+  "UnlimitedPassDraftVoided"
+)<{ readonly blockingDates: readonly PlainDate[] }> {}
+
+const readRejectedHoldDates = (orderId: OrderId) =>
+  readUnlimitedPassDays(orderId).pipe(
+    Effect.map((days) =>
+      days.flatMap((day) =>
+        day.failureCode === rejectedPassDayHoldCode ? [day.serviceDate] : []
+      )
+    )
+  );
 
 const resolveGiftCustomer = Effect.fn("resolveUnlimitedGiftCustomer")(
   function* (input: {
@@ -302,6 +321,14 @@ export const beginUnlimitedPassPurchase = Effect.fn(
         "unlimited"
       );
       if (
+        prepared?.order.paymentState === "not_started" &&
+        prepared.purchase.status === "void"
+      ) {
+        return yield* new UnlimitedPassDraftVoided({
+          blockingDates: yield* readRejectedHoldDates(input.orderId),
+        });
+      }
+      if (
         prepared?.order.paymentState !== "not_started" ||
         prepared.purchase.status !== "pending_payment"
       ) {
@@ -313,6 +340,11 @@ export const beginUnlimitedPassPurchase = Effect.fn(
       yield* createUnlimitedPassHolds(purchase).pipe(
         Effect.catch(
           Effect.fnUntraced(function* (error) {
+            const rejectedDates = yield* readRejectedHoldDates(purchase.id);
+            const blocking =
+              error._tag === "UnlimitedPassHoldsUnavailable" &&
+              error.reason !== "unfinished";
+            if (!blocking && rejectedDates.length === 0) return yield* error;
             const [voided] = yield* db
               .update(passPurchases)
               .set({ status: "void" })
@@ -323,16 +355,19 @@ export const beginUnlimitedPassPurchase = Effect.fn(
                 )
               )
               .returning();
-            if (voided) {
-              yield* releaseUnlimitedPassDays(voided).pipe(
-                Effect.catch(() =>
-                  Effect.logWarning(
-                    "Unlimited pass hold compensation needs reconciliation"
-                  )
+            if (!voided) return yield* error;
+            yield* releaseUnlimitedPassDays(voided).pipe(
+              Effect.catch(() =>
+                Effect.logWarning(
+                  "Unlimited pass hold compensation needs reconciliation"
                 )
-              );
-            }
-            return yield* error;
+              )
+            );
+            return yield* new UnlimitedPassDraftVoided({
+              blockingDates: blocking
+                ? (error.blockingDates ?? rejectedDates)
+                : rejectedDates,
+            });
           })
         )
       );
@@ -342,29 +377,29 @@ export const beginUnlimitedPassPurchase = Effect.fn(
   );
 });
 
-export const readUnlimitedPassBuyerDraft = Effect.fn(
-  "readUnlimitedPassBuyerDraft"
-)(function* (orderId: OrderId) {
-  const account = yield* CurrentCustomerAccount;
-  const { accountId } = yield* account.requireActive;
-  const order = yield* findOwnedPassPurchaseOrder(
-    orderId,
-    accountId,
-    "unlimited"
-  );
-  if (!order) return undefined;
-  const { purchase } = order;
-  const selection = readUnlimitedPassSelection(purchase);
-  if (!selection) return undefined;
-  return {
-    ...order,
-    selection,
-    holderEmail:
-      purchase.holderAccountId === accountId
-        ? undefined
-        : yield* findPurchaseLoginEmail(purchase.holderAccountId),
-  };
-});
+const readUnlimitedPassBuyerDraft = Effect.fn("readUnlimitedPassBuyerDraft")(
+  function* (orderId: OrderId) {
+    const account = yield* CurrentCustomerAccount;
+    const { accountId } = yield* account.requireActive;
+    const order = yield* findOwnedPassPurchaseOrder(
+      orderId,
+      accountId,
+      "unlimited"
+    );
+    if (!order) return undefined;
+    const { purchase } = order;
+    const selection = readUnlimitedPassSelection(purchase);
+    if (!selection) return undefined;
+    return {
+      ...order,
+      selection,
+      holderEmail:
+        purchase.holderAccountId === accountId
+          ? undefined
+          : yield* findPurchaseLoginEmail(purchase.holderAccountId),
+    };
+  }
+);
 
 export const getUnlimitedPassPaymentDisclosure = (
   locale: Locale,

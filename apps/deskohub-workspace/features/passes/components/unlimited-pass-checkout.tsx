@@ -94,7 +94,10 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
       | (Omit<PassPurchasePayState, "billing"> & { status: "ready" })
       | { status: "signed_out" | "terms_changed" }
       | { status: "purchase_error"; reason: string }
-      | { status: "capacity_unavailable"; blockingDates: readonly string[] };
+      | {
+          status: "capacity_unavailable" | "draft_voided";
+          blockingDates: readonly string[];
+        };
     serverError?: string;
   }>;
 };
@@ -375,7 +378,10 @@ export function UnlimitedPassCheckout({
             ...(holderEmail !== undefined && { holderEmail }),
           },
         });
-      } else if (result.data?.status === "capacity_unavailable") {
+      } else if (
+        result.data?.status === "capacity_unavailable" ||
+        result.data?.status === "draft_voided"
+      ) {
         attempt.current = undefined;
         setSavedOrderId(undefined);
         setActiveDraftOrderId(undefined);

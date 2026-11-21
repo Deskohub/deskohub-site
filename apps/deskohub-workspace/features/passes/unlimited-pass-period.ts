@@ -6,7 +6,7 @@ type UnlimitedPassPeriod = {
   readonly validUntil: PlainDate;
 };
 
-export const getUnlimitedPassDay = ({
+const getUnlimitedPassDay = ({
   validFrom,
   validUntil,
   date,

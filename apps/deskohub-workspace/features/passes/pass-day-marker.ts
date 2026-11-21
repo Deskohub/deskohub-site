@@ -1,6 +1,7 @@
 import type { OrderId } from "@/features/order";
 
 export const ambiguousPassDayHoldCode = "ambiguous_pass_day_hold";
+export const rejectedPassDayHoldCode = "rejected_pass_day_hold";
 
 const uuid = "[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}";
 const passDayMarkerPattern = new RegExp(

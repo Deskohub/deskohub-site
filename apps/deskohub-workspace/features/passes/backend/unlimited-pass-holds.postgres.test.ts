@@ -13,6 +13,7 @@ import {
 } from "@deskohub/dotypos";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
+import { testEmailAddress } from "@deskohub/test-email";
 import { eq } from "drizzle-orm";
 import { Deferred, Effect, Fiber, Layer, Result, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
@@ -25,9 +26,18 @@ import {
   workspaceReservations,
 } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
+import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
+import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
+import {
+  CustomerAccountSections,
+  HeldCustomerAccount,
+} from "@/features/account/backend/customer-account-sections";
+import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { DiscountService } from "@/features/discounts/discount.service";
+import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -46,6 +56,7 @@ import { plainDateStringSchema } from "@/shared/utils/temporal";
 import {
   ambiguousPassDayHoldCode,
   formatPassDayMarker,
+  rejectedPassDayHoldCode,
 } from "../pass-day-marker";
 import { unlimitedPassDays } from "../pass-offer";
 import { settlePassPurchase } from "./entry-pack-settlement";
@@ -62,6 +73,7 @@ import {
   recordReplacementUnlimitedPassHolds,
   recordUnlimitedPassOrder,
 } from "./unlimited-pass-orders";
+import { beginUnlimitedPassPurchase } from "./unlimited-pass-purchase";
 import { prepareUnlimitedPassRecovery } from "./unlimited-pass-recovery";
 
 let database: WorkspacePostgresSuiteDatabase | null;
@@ -79,7 +91,11 @@ const date = (value: Temporal.PlainDate) =>
   plainDateStringSchema.make(value.toString());
 const newAccountId = () => customerAccountIdSchema.make(crypto.randomUUID());
 
-const record = (start: Temporal.PlainDate, buyer = newAccountId()) =>
+const record = (
+  start: Temporal.PlainDate,
+  buyer = newAccountId(),
+  holder = fixtureReservationAuthorId
+) =>
   Effect.gen(function* () {
     const { db, transaction } = yield* WorkspaceDatabase;
     yield* db.insert(customerAccounts).values({ id: buyer });
@@ -88,7 +104,7 @@ const record = (start: Temporal.PlainDate, buyer = newAccountId()) =>
         orderId: orderIdSchema.make(crypto.randomUUID()),
         locale: "en-US",
         buyer: { accountId: buyer, customerId },
-        holder: { accountId: fixtureReservationAuthorId, customerId },
+        holder: { accountId: holder, customerId },
         createdAt: Temporal.Now.instant(),
         selection: { startDate: date(start), tier: "reserved-desk" },
         quote: {
@@ -307,6 +323,7 @@ it("releases a definitively rejected POST and retains an interrupted POST", asyn
       const [released, held] = yield* readUnlimitedPassDays(purchase.id);
       expect(released).toMatchObject({
         id: first!.id,
+        failureCode: rejectedPassDayHoldCode,
         reservationState: "hold_expired",
         dotyposReservationId: null,
         passDayHoldGeneration: expect.any(String),
@@ -661,6 +678,131 @@ for (const firstObservation of [
     );
   });
 }
+
+it("preserves an uncertain Continue and returns the affected date for a voided draft", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const rejectedDate = date(start.add({ days: 2 }));
+  const accountId = newAccountId();
+  const email = testEmailAddress("unlimited-draft-retry");
+  const session = {
+    ...testSessionProfile,
+    accountId,
+    email,
+    deletionRequested: false,
+  };
+  const provider = makeInMemoryDotypos({});
+  const layer = Layer.mergeAll(
+    database!.layer,
+    Layer.mock(CurrentCustomerAccount, {
+      requireActive: Effect.succeed(session),
+    }),
+    Layer.mock(CustomerAccountSections, {
+      withActiveAccount: (_accountId, operation) =>
+        Effect.provideService(operation, HeldCustomerAccount, {
+          accountId,
+          email,
+        }),
+    }),
+    Layer.mock(CustomerAccountContactService, {}),
+    Layer.mock(DiscountService, {}),
+    Layer.mock(WorkspaceFeatureFlagService, {
+      isEnabled: () => Effect.succeed(true),
+    }),
+    Layer.mock(WorkspaceDatabaseAdvisoryLock, {}),
+    Layer.mock(WorkspaceReservationRepository, {}),
+    Layer.mock(GoogleCalendarWorkspaceLimitationsService, {}),
+    Layer.succeed(DotyposService, {
+      ...provider.service,
+      createReservation: (input) => {
+        if (input.note?.includes(`/${date(start)}/`)) {
+          return provider.service.createReservation(input).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new DotyposUncertain({
+                  operation: "createReservation",
+                  reason: "timeout",
+                })
+              )
+            )
+          );
+        }
+        if (input.note?.includes(`/${rejectedDate}/`)) {
+          return Effect.fail(
+            new DotyposRejected({
+              operation: "createReservation",
+              reason: "invalid-request",
+            })
+          );
+        }
+        return provider.service.createReservation(input);
+      },
+    })
+  );
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(start, accountId, accountId);
+      const begin = beginUnlimitedPassPurchase({
+        orderId: purchase.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      });
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(expect.objectContaining({ _tag: "DotyposUncertain" }))
+      );
+      const { db } = yield* WorkspaceDatabase;
+      const status = db
+        .select({ status: passPurchases.status })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, purchase.id));
+      expect(yield* status).toEqual([{ status: "pending_payment" }]);
+
+      const expected = Result.fail(
+        expect.objectContaining({
+          _tag: "UnlimitedPassDraftVoided",
+          blockingDates: [rejectedDate],
+        })
+      );
+      expect(yield* Effect.result(begin)).toEqual(expected);
+      expect(yield* status).toEqual([{ status: "void" }]);
+      expect(yield* Effect.result(begin)).toEqual(expected);
+    }).pipe(Effect.provide(layer))
+  );
+});
+
+it("rejects a Continue replay when an attached day's deadline passed", async () => {
+  const provider = makeInMemoryDotypos({});
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const start = getCurrentWorkspaceDate().add({ days: 4000 });
+      const purchase = yield* record(start);
+      yield* createUnlimitedPassHolds(purchase);
+      const [first] = yield* readUnlimitedPassDays(purchase.id);
+      const { db } = yield* WorkspaceDatabase;
+      yield* db
+        .update(workspaceReservations)
+        .set({
+          reservationHoldExpiresAt: Temporal.Now.instant().subtract({
+            seconds: 1,
+          }),
+        })
+        .where(eq(workspaceReservations.id, first!.id));
+      const replay = yield* Effect.result(createUnlimitedPassHolds(purchase));
+      expect(replay).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            reason: "expired",
+            blockingDates: [first!.serviceDate],
+          })
+        )
+      );
+      expect(provider.reservations.size).toBe(unlimitedPassDays);
+    }).pipe(
+      Effect.provide(database!.layer),
+      Effect.provideService(DotyposService, provider.service)
+    )
+  );
+});
 
 it("adopts an ambiguous POST, reconfirms all days, then retains today on release", async () => {
   const provider = makeInMemoryDotypos({});

@@ -11,8 +11,11 @@ import {
 } from "@/db/schema";
 import type { OrderId } from "@/features/order";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
-import { currentInstant } from "@/shared/utils/temporal";
-import { ambiguousPassDayHoldCode } from "../pass-day-marker";
+import { currentInstant, type PlainDate } from "@/shared/utils/temporal";
+import {
+  ambiguousPassDayHoldCode,
+  rejectedPassDayHoldCode,
+} from "../pass-day-marker";
 import { type PassTier, unlimitedPassDays } from "../pass-offer";
 import { recordAmbiguousPassDayHolds } from "./pass-day-hold-ownership";
 import {
@@ -23,7 +26,10 @@ import {
 
 export class UnlimitedPassHoldsUnavailable extends Data.TaggedError(
   "UnlimitedPassHoldsUnavailable"
-)<{ readonly reason: "expired" | "unfinished" | "changed" }> {}
+)<{
+  readonly reason: "expired" | "unfinished" | "changed";
+  readonly blockingDates?: readonly PlainDate[];
+}> {}
 
 type PassDay = WorkspaceReservationRow & {
   readonly serviceDate: NonNullable<WorkspaceReservationRow["serviceDate"]>;
@@ -114,6 +120,7 @@ export const readPayableUnlimitedHolds = Effect.fn("readPayableUnlimitedHolds")(
   function* (
     purchase: Pick<Purchase, "id" | "status" | "validFrom" | "holdsExpireAt">
   ) {
+    const rows = yield* readUnlimitedPassDays(purchase.id);
     const now = yield* currentInstant;
     if (
       !purchase.holdsExpireAt ||
@@ -124,14 +131,24 @@ export const readPayableUnlimitedHolds = Effect.fn("readPayableUnlimitedHolds")(
     if (purchase.status !== "pending_payment") {
       return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
     }
-    const rows = yield* readUnlimitedPassDays(purchase.id);
+    const expiredDates = rows.flatMap((row) =>
+      row.reservationHoldExpiresAt &&
+      Temporal.Instant.compare(now, row.reservationHoldExpiresAt) >= 0
+        ? [row.serviceDate]
+        : []
+    );
+    if (expiredDates.length > 0) {
+      return yield* new UnlimitedPassHoldsUnavailable({
+        reason: "expired",
+        blockingDates: expiredDates,
+      });
+    }
     const start = Temporal.PlainDate.from(purchase.validFrom);
     const holds = rows.flatMap((row, index) =>
       row.reservationState === "held" &&
       row.serviceDate === start.add({ days: index }).toString() &&
       row.dotyposReservationId &&
-      row.reservationHoldExpiresAt &&
-      Temporal.Instant.compare(now, row.reservationHoldExpiresAt) < 0
+      row.reservationHoldExpiresAt
         ? [{ ...row, dotyposReservationId: row.dotyposReservationId }]
         : []
     );
@@ -248,6 +265,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
       if (row.reservationState !== "creating_hold") {
         return yield* new UnlimitedPassHoldsUnavailable({
           reason: "changed",
+          blockingDates: [row.serviceDate],
         });
       }
       const now = yield* currentInstant;
@@ -257,6 +275,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
       ) {
         return yield* new UnlimitedPassHoldsUnavailable({
           reason: "expired",
+          blockingDates: [row.serviceDate],
         });
       }
       let attempt = row;
@@ -305,6 +324,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
                   yield* db
                     .update(workspaceReservations)
                     .set({
+                      failureCode: rejectedPassDayHoldCode,
                       reservationState: "hold_expired",
                       reservationHoldExpiredAt: failedAt,
                       updatedAt: failedAt,
@@ -320,6 +340,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
       ) {
         return yield* new UnlimitedPassHoldsUnavailable({
           reason: "changed",
+          blockingDates: [row.serviceDate],
         });
       }
       const [saved] = yield* db
@@ -345,6 +366,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
       const failure = outcomes.find(Result.isFailure);
       if (failure) return yield* failure.failure;
     }
+    yield* readPayableUnlimitedHolds(purchase);
   }
 );
 

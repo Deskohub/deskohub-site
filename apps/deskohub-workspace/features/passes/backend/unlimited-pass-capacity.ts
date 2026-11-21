@@ -57,14 +57,14 @@ export type UnlimitedPassCapacityPlan = {
   > | null;
 };
 
-export class UnlimitedPassCapacityUnavailable extends Data.TaggedError(
+class UnlimitedPassCapacityUnavailable extends Data.TaggedError(
   "UnlimitedPassCapacityUnavailable"
 )<{
   readonly blockingDates: readonly Temporal.PlainDate[];
   readonly reason: "day-unavailable" | "no-common-desk";
 }> {}
 
-export class InvalidUnlimitedStartRange extends Data.TaggedError(
+class InvalidUnlimitedStartRange extends Data.TaggedError(
   "InvalidUnlimitedStartRange"
 )<{
   readonly message: string;

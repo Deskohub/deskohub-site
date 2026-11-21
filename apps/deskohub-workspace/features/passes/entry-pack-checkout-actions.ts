@@ -345,6 +345,12 @@ const beginUnlimitedAction = defineWorkspaceAction(
               ),
             })
         ),
+        Effect.catchTag("UnlimitedPassDraftVoided", ({ blockingDates }) =>
+          Effect.succeed({
+            status: "draft_voided" as const,
+            blockingDates,
+          })
+        ),
         Effect.catchTag("UnlimitedPassAdmissionError", ({ reason }) =>
           Effect.succeed({
             status: "purchase_error" as const,

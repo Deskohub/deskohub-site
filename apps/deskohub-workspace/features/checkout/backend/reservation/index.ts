@@ -12,7 +12,6 @@ export {
   excludeDotyposReservationsById,
   getOccupancyWindow,
   getTableBookingOccupancyById,
-  toTableBookings,
   workspaceBookingSeatCount,
 } from "./workspace-table-occupancy";
 export type {
