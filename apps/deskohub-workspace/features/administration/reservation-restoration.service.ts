@@ -899,7 +899,8 @@ const findRestorableCancellation = (
   hasActiveSuccessor: boolean
 ): Option.Option<RestorableCancellation> => {
   const { dotyposReservationId, reservationCancelledAt } = reservation;
-  return canRestoreReservation(reservation, { hasActiveSuccessor }) &&
+  return !reservation.passId &&
+    canRestoreReservation(reservation, { hasActiveSuccessor }) &&
     dotyposReservationId !== null &&
     reservationCancelledAt !== null
     ? Option.some({ cancelledAt: reservationCancelledAt, dotyposReservationId })

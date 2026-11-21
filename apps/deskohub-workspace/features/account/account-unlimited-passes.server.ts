@@ -36,7 +36,7 @@ import { currentInstant } from "@/shared/utils/temporal";
 export type AccountUnlimitedPass = {
   readonly orderId: OrderId;
   readonly tier: string;
-  readonly boughtOn: string;
+  readonly boughtOn?: string;
   readonly boughtForYou: boolean;
   readonly period: string;
   readonly renewalPath?: string;
@@ -71,6 +71,7 @@ const readHolderPasses = Effect.fn("account.readHolderUnlimitedPasses")(
         accessEndsOn: passPurchases.accessEndsOn,
         status: passPurchases.status,
         paidAt: orders.paidAt,
+        grantedAt: orders.fulfilledAt,
         paymentState: orders.paymentState,
         renewalOverlaps: hasUnlimitedRenewalOverlap,
         deskId: workspaceReservations.passDayTableId,
@@ -94,7 +95,10 @@ const readHolderPasses = Effect.fn("account.readHolderUnlimitedPasses")(
             isNotNull(passPurchases.giftClaimedAt)
           ),
           eq(orders.kind, "pass-purchase"),
-          isNotNull(orders.paidAt),
+          or(
+            isNotNull(orders.paidAt),
+            eq(orders.paymentState, "complimentary")
+          ),
           notInArray(passPurchases.status, ["pending_payment", "void"])
         )
       )
@@ -133,7 +137,9 @@ export const loadAccountUnlimitedPasses = Effect.fn(
   );
 
   return passes.flatMap((pass): AccountUnlimitedPass[] => {
-    if (pass.paidAt === null) return [];
+    const acquiredAt =
+      pass.paymentState === "complimentary" ? pass.grantedAt : pass.paidAt;
+    if (acquiredAt === null) return [];
 
     const start = Temporal.PlainDate.from(pass.validFrom);
     const validUntil = pass.accessEndsOn ?? pass.validUntil;
@@ -153,8 +159,11 @@ export const loadAccountUnlimitedPasses = Effect.fn(
     const summary = {
       orderId: pass.orderId,
       tier: getPassTierName(pass.tier, locale),
-      boughtOn: formatInstantDate({ instant: pass.paidAt, locale, timeZone }),
-      boughtForYou: pass.buyerAccountId !== accountId,
+      ...(pass.paymentState === "paid" && {
+        boughtOn: formatInstantDate({ instant: acquiredAt, locale, timeZone }),
+      }),
+      boughtForYou:
+        pass.paymentState === "paid" && pass.buyerAccountId !== accountId,
       period,
       seating,
       ...(pass.paymentState === "paid" &&

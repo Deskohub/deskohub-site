@@ -149,9 +149,11 @@ export function AccountUnlimitedPassCard({ pass, locale }: PassProps) {
               {m.accountPassBoughtForYou({}, { locale })}
             </p>
           )}
-          <p className="text-sm text-slate-600">
-            {m.accountPassBoughtOn({ date: pass.boughtOn }, { locale })}
-          </p>
+          {pass.boughtOn && (
+            <p className="text-sm text-slate-600">
+              {m.accountPassBoughtOn({ date: pass.boughtOn }, { locale })}
+            </p>
+          )}
         </div>
         {(pass.renewalPath || pass.status === "active") && (
           <div className="flex flex-wrap items-center gap-2">

@@ -2,7 +2,7 @@ import "server-only";
 
 import { DotyposService } from "@deskohub/dotypos";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
-import { and, eq, lte, ne } from "drizzle-orm";
+import { and, eq, inArray, lte, ne } from "drizzle-orm";
 import { Context, Data, Effect, Option, Result } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -529,6 +529,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         generation: entryPackGiftInvitations.generation,
         holderAccountId: passPurchases.holderAccountId,
         paymentAttemptId: orders.activePaymentAttemptId,
+        paymentState: orders.paymentState,
       })
       .from(entryPackGiftInvitations)
       .innerJoin(
@@ -539,7 +540,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       .where(
         and(
           eq(orders.id, orderId),
-          eq(orders.paymentState, "paid"),
+          inArray(orders.paymentState, ["paid", "complimentary"]),
           eq(
             entryPackGiftInvitations.holderAccountId,
             passPurchases.holderAccountId
@@ -548,7 +549,11 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           lte(entryPackGiftInvitations.nextAttemptAt, yield* currentInstant)
         )
       );
-    if (!target?.paymentAttemptId) return;
+    if (
+      !target ||
+      (!target.paymentAttemptId && target.paymentState !== "complimentary")
+    )
+      return;
 
     // Account deletion takes this same section. Acquire it before the order
     // section, and release it before the buyer's independent fulfillment.

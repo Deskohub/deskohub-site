@@ -10,4 +10,5 @@ export {
   orderKindSchema,
   orderKinds,
   orderPaymentStates,
+  reservationPaymentStates,
 } from "./order";

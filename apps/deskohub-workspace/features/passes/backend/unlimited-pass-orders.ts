@@ -3,12 +3,25 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { DotyposCustomerId, DotyposTableId } from "@deskohub/dotypos";
 import { NexiCorrelationIdSchema } from "@deskohub/nexi";
-import { and, eq, gt, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
+import {
+  and,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  ne,
+  not,
+  or,
+  sql,
+} from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
   customerAccounts,
   orders,
+  passAdministrationChanges,
   passPurchases,
   workspaceReservations,
 } from "@/db/schema";
@@ -35,6 +48,10 @@ import {
   isUnlimitedPassRenewalEligible,
   type UnlimitedPassSelection,
 } from "../unlimited-pass";
+import {
+  hasPendingPassChange,
+  pendingPassChange,
+} from "./pass-administration-pending";
 import { overlapsUnlimitedPassWindow } from "./unlimited-pass-window";
 
 export class UnlimitedPassAdmissionError extends Data.TaggedError(
@@ -91,6 +108,7 @@ export const readUnlimitedPassRenewal = Effect.fn("readUnlimitedPassRenewal")(
           eq(passPurchases.id, passId),
           eq(passPurchases.product, "unlimited"),
           eq(passPurchases.holderAccountId, holderAccountId),
+          not(hasPendingPassChange(db, passPurchases.id)),
           hasVerifiedActiveLogin(db, holderAccountId),
           or(
             eq(passPurchases.buyerAccountId, passPurchases.holderAccountId),
@@ -263,7 +281,36 @@ export const requireUnlimitedPassWindow = Effect.fn(
       )
     )
     .limit(1);
-  if (overlap) {
+  const [pendingOverlap] = yield* db
+    .select({ id: passPurchases.id })
+    .from(passAdministrationChanges)
+    .innerJoin(
+      passPurchases,
+      eq(passPurchases.id, passAdministrationChanges.passId)
+    )
+    .where(
+      and(
+        pendingPassChange,
+        ne(passPurchases.id, input.orderId),
+        eq(passPurchases.product, "unlimited"),
+        lt(passPurchases.validFrom, input.validUntil),
+        or(
+          and(
+            eq(passPurchases.holderAccountId, input.holderAccountId),
+            sql`${passAdministrationChanges.change}->>'_tag' = 'validity'
+            and (${passAdministrationChanges.change}->>'lastDay')::date >= ${passPurchases.validUntil}
+            and (${passAdministrationChanges.change}->>'lastDay')::date >= ${input.validFrom}::date`
+          ),
+          and(
+            sql`${passAdministrationChanges.change}->>'_tag' = 'reassign'
+            and ${passAdministrationChanges.change}->>'holderAccountId' = ${input.holderAccountId}`,
+            gt(passPurchases.validUntil, input.validFrom)
+          )
+        )
+      )
+    )
+    .limit(1);
+  if (overlap || pendingOverlap) {
     return yield* new UnlimitedPassAdmissionError({
       reason: "overlapping-pass",
     });
@@ -283,6 +330,7 @@ export const recordUnlimitedPassOrder = Effect.fn("recordUnlimitedPassOrder")(
     };
     readonly locale: Locale;
     readonly createdAt: Temporal.Instant;
+    readonly complimentary?: true;
     readonly selection: UnlimitedPassSelection;
     readonly renewsPassId?: OrderId;
     readonly quote: PassPurchaseQuote;
@@ -333,8 +381,8 @@ export const recordUnlimitedPassOrder = Effect.fn("recordUnlimitedPassOrder")(
         id: orderId,
         kind: "pass-purchase",
         dotyposCustomerId: buyer.customerId,
-        paymentState: "not_started",
-        fulfillmentState: "not_started",
+        paymentState: input.complimentary ? "complimentary" : "not_started",
+        fulfillmentState: input.complimentary ? "processing" : "not_started",
       })
       .onConflictDoNothing({ target: orders.id })
       .returning({ id: orders.id });
@@ -375,6 +423,39 @@ export const recordUnlimitedPassOrder = Effect.fn("recordUnlimitedPassOrder")(
     if (!purchase)
       return yield* Effect.die("Unlimited pass insert returned no row.");
 
+    yield* db.insert(workspaceReservations).values(
+      yield* makeUnlimitedPassDayRows({
+        orderId,
+        buyerAccountId: buyer.accountId,
+        holderCustomerId: holder.customerId,
+        selection,
+        days: input.days,
+        holdsExpireAt,
+        locale,
+      })
+    );
+    return purchase;
+  }
+);
+
+export const makeUnlimitedPassDayRows = Effect.fn("makeUnlimitedPassDayRows")(
+  function* ({
+    orderId,
+    buyerAccountId,
+    holderCustomerId,
+    selection,
+    days,
+    holdsExpireAt,
+    locale,
+  }: {
+    readonly orderId: OrderId;
+    readonly buyerAccountId: CustomerAccountId;
+    readonly holderCustomerId: DotyposCustomerId;
+    readonly selection: UnlimitedPassSelection;
+    readonly days: readonly PassDayPlan[];
+    readonly holdsExpireAt: Temporal.Instant;
+    readonly locale: Locale;
+  }) {
     const reservationDetails = yield* StoredReservationDetails.encode(
       selection.tier === "open-space"
         ? { kind: "cowork", entryTier: "open-space", coffee: selection.coffee }
@@ -387,30 +468,27 @@ export const recordUnlimitedPassOrder = Effect.fn("recordUnlimitedPassOrder")(
             }),
           }
     );
-    yield* db.insert(workspaceReservations).values(
-      input.days.map(({ serviceDate, tableId }) => {
-        const key = createHash("sha256")
-          .update(`unlimited-pass-day:${orderId}:${serviceDate}`)
-          .digest("hex");
-        return {
-          id: workspaceReservationIdSchema.make(key),
-          passId: orderId,
-          serviceDate,
-          passDayTableId: tableId,
-          checkoutSessionKey: checkoutSessionKeySchema.make(key),
-          checkoutAttemptKey: checkoutAttemptKeySchema.make(key),
-          correlationId: NexiCorrelationIdSchema.make(key),
-          dotyposCustomerId: holder.customerId,
-          authorAccountId: buyer.accountId,
-          reservationState: "creating_hold",
-          paymentState: "not_started",
-          fulfillmentState: "not_started",
-          reservationHoldExpiresAt: holdsExpireAt,
-          reservationDetails,
-          locale,
-        } as const;
-      })
-    );
-    return purchase;
+    return days.map(({ serviceDate, tableId }) => {
+      const key = createHash("sha256")
+        .update(`unlimited-pass-day:${orderId}:${serviceDate}`)
+        .digest("hex");
+      return {
+        id: workspaceReservationIdSchema.make(key),
+        passId: orderId,
+        serviceDate,
+        passDayTableId: tableId,
+        checkoutSessionKey: checkoutSessionKeySchema.make(key),
+        checkoutAttemptKey: checkoutAttemptKeySchema.make(key),
+        correlationId: NexiCorrelationIdSchema.make(key),
+        dotyposCustomerId: holderCustomerId,
+        authorAccountId: buyerAccountId,
+        reservationState: "creating_hold",
+        paymentState: "not_started",
+        fulfillmentState: "not_started",
+        reservationHoldExpiresAt: holdsExpireAt,
+        reservationDetails,
+        locale,
+      } as const;
+    });
   }
 );

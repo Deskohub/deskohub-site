@@ -40,7 +40,7 @@ const retryMinutes = [10, 30, 120, 120] as const;
 /** Uses the same order section as paid fulfillment and manual resend. */
 export const deliverPendingEntryPackInvitation = Effect.fn(
   "deliverPendingEntryPackInvitation"
-)(function* (orderId: OrderId, paymentAttemptId: PaymentAttemptId) {
+)(function* (orderId: OrderId, paymentAttemptId: PaymentAttemptId | null) {
   const now = yield* currentInstant;
   const work = yield* readPendingEntryPackInvitation(orderId, now);
   if (!work) return;
@@ -102,7 +102,9 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
 
   const sent = yield* Effect.gen(function* () {
     const snapshots = yield* AccountingDocumentSnapshots;
-    const snapshot = yield* snapshots.findPassPurchase(paymentAttemptId);
+    const snapshot = paymentAttemptId
+      ? yield* snapshots.findPassPurchase(paymentAttemptId)
+      : null;
     // Only the buyer's supplied personal name belongs in the invitation.
     // The frozen accounting identity keeps the body stable across attempts.
     const personalName =

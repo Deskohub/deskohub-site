@@ -559,6 +559,13 @@ export class ReservationAdministrationService extends Context.Service<
                 message: "The reservation was not found.",
               });
             }
+            if (current.passId) {
+              return yield* new ReservationAdministrationError({
+                code: "not_cancellable",
+                reason: "invalid_state",
+                message: "Cancel or change validity on the Unlimited pass.",
+              });
+            }
             if (current.reservationState === "cancelled") {
               return {
                 outcome: "already_cancelled",

@@ -163,6 +163,9 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
       lateCapture: row.paymentState !== "paid",
     } as const;
   }
+  if (row.purchaseStatus === "cancelled") {
+    return { ...details, status: "cancelled" } as const;
+  }
   if (row.paymentState === "paid" && paidAt) {
     if (entryCount === null && row.purchaseStatus === "void") {
       return { ...details, status: "failed" } as const;

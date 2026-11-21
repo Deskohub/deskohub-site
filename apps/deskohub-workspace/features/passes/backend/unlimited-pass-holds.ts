@@ -67,7 +67,7 @@ const providerDay = (row: PassDay, tier: PassTier) => ({
   ),
 });
 
-const passDayHold = (
+export const passDayHold = (
   purchase: Pick<Purchase, "id" | "tier">,
   row: PassDay
 ) => ({
@@ -202,7 +202,13 @@ export const reconfirmUnlimitedPassHolds = Effect.fn(
   }
 });
 
-const observePassDayHolds = (purchase: Purchase, rows: readonly PassDay[]) =>
+type PassDayRange = { readonly from: PlainDate; readonly until: PlainDate };
+
+const observePassDayHolds = (
+  purchase: Purchase,
+  rows: readonly PassDay[],
+  range?: PassDayRange
+) =>
   Effect.uninterruptibleMask(
     Effect.fnUntraced(function* (restore) {
       const first = rows.find((day) => day.passDayHoldRequestedAt);
@@ -211,7 +217,12 @@ const observePassDayHolds = (purchase: Purchase, rows: readonly PassDay[]) =>
             listUnlimitedPassDayHolds({
               passId: purchase.id,
               customerId: first.dotyposCustomerId,
-              startDate: Temporal.PlainDate.from(purchase.validFrom),
+              startDate: Temporal.PlainDate.from(
+                range?.from ?? purchase.validFrom
+              ),
+              ...(range && {
+                endsBefore: Temporal.PlainDate.from(range.until),
+              }),
             })
           )
         : [];
@@ -251,12 +262,19 @@ const observePassDayHolds = (purchase: Purchase, rows: readonly PassDay[]) =>
 
 /** Runs inside the pass-order section after the local intent transaction commits. */
 export const attemptUnlimitedPassHolds = Effect.fn("attemptUnlimitedPassHolds")(
-  function* (purchase: Purchase) {
+  function* (purchase: Purchase, range?: PassDayRange) {
     const { db } = yield* WorkspaceDatabase;
-    const rows = yield* readUnlimitedPassDays(purchase.id);
+    const rows = (yield* readUnlimitedPassDays(purchase.id)).filter(
+      (day) =>
+        !range ||
+        (day.serviceDate >= range.from && day.serviceDate < range.until)
+    );
+    const count = range
+      ? Temporal.PlainDate.from(range.from).until(range.until).days
+      : unlimitedPassDays;
     if (
-      rows.length !== unlimitedPassDays ||
-      purchase.status !== "pending_payment"
+      rows.length !== count ||
+      (!range && purchase.status !== "pending_payment")
     ) {
       return yield* new UnlimitedPassHoldsUnavailable({ reason: "unfinished" });
     }
@@ -266,7 +284,8 @@ export const attemptUnlimitedPassHolds = Effect.fn("attemptUnlimitedPassHolds")(
         (row) =>
           !row.dotyposReservationId &&
           row.failureCode !== ambiguousPassDayHoldCode
-      )
+      ),
+      range
     );
     const attachHold = Effect.fnUntraced(function* (row: PassDay) {
       if (row.failureCode === ambiguousPassDayHoldCode) {
@@ -274,7 +293,14 @@ export const attemptUnlimitedPassHolds = Effect.fn("attemptUnlimitedPassHolds")(
           reason: "unfinished",
         });
       }
-      if (row.reservationState === "held" && row.dotyposReservationId) return;
+      if (
+        row.dotyposReservationId &&
+        (row.reservationState === "held" ||
+          (range &&
+            (row.reservationState === "confirming" ||
+              row.reservationState === "confirmed")))
+      )
+        return;
       if (row.reservationState !== "creating_hold") {
         return yield* new UnlimitedPassHoldsUnavailable({
           reason: "changed",
@@ -327,6 +353,7 @@ export const attemptUnlimitedPassHolds = Effect.fn("attemptUnlimitedPassHolds")(
         attached = yield* createUnlimitedPassDayHold({
           ...hold,
           generation,
+          ...(range && { singleAttempt: true }),
           coffee:
             purchase.tier !== "open-space" || purchase.unlimitedCoffee === true,
         }).pipe(
@@ -392,7 +419,7 @@ export const attemptUnlimitedPassHolds = Effect.fn("attemptUnlimitedPassHolds")(
         ),
       };
     }
-    yield* readPayableUnlimitedHolds(purchase);
+    if (!range) yield* readPayableUnlimitedHolds(purchase);
   },
   Effect.result,
   Effect.map((result) =>
@@ -411,7 +438,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
 
 /** Under the pass fulfillment section, keeps uncertain POST claims allocated until observed. */
 export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
-  function* (purchase: Purchase) {
+  function* (purchase: Purchase, range?: PassDayRange) {
     if (
       (purchase.status === "withdrawn" || purchase.status === "cancelled") &&
       !purchase.accessEndsOn
@@ -425,9 +452,13 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
         day.reservationState !== "cancelled" &&
         day.reservationState !== "hold_expired" &&
         day.failureCode !== ambiguousPassDayHoldCode &&
-        (!purchase.accessEndsOn || day.serviceDate >= purchase.accessEndsOn)
+        (!purchase.accessEndsOn || day.serviceDate >= purchase.accessEndsOn) &&
+        (!range ||
+          (day.serviceDate >= range.from && day.serviceDate < range.until))
     );
-    const lookup = yield* Effect.result(observePassDayHolds(purchase, rows));
+    const lookup = yield* Effect.result(
+      observePassDayHolds(purchase, rows, range)
+    );
     const provider = Result.isSuccess(lookup) ? lookup.success : undefined;
     const attachedMoves = yield* db
       .select({
@@ -507,6 +538,12 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
                     : Effect.fail(error)
                 )
               );
+            } else if (range && released?.status !== "CANCELLED") {
+              yield* setUnlimitedPassDayHoldStatus(
+                releasedId,
+                passDayHold(purchase, row),
+                "CANCELLED"
+              );
             } else if (released?.status !== "CANCELLED") {
               yield* dotypos.cancelReservation(releasedId);
             }
@@ -536,13 +573,20 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
 
 /** Confirms each stable day idempotently before the entitlement is activated. */
 export const confirmUnlimitedPassDays = Effect.fn("confirmUnlimitedPassDays")(
-  function* (purchase: Purchase) {
+  function* (purchase: Purchase, range?: PassDayRange) {
     const { db } = yield* WorkspaceDatabase;
     const dotypos = yield* DotyposService;
-    const rows = yield* readUnlimitedPassDays(purchase.id);
+    const rows = (yield* readUnlimitedPassDays(purchase.id)).filter(
+      (day) =>
+        !range ||
+        (day.serviceDate >= range.from && day.serviceDate < range.until)
+    );
+    const count = range
+      ? Temporal.PlainDate.from(range.from).until(range.until).days
+      : unlimitedPassDays;
     if (
-      rows.length !== unlimitedPassDays ||
-      rows.some((day) => day.paymentState !== "paid")
+      rows.length !== count ||
+      (!range && rows.some((day) => day.paymentState !== "paid"))
     ) {
       return yield* new UnlimitedPassHoldsUnavailable({ reason: "unfinished" });
     }
@@ -562,9 +606,13 @@ export const confirmUnlimitedPassDays = Effect.fn("confirmUnlimitedPassDays")(
             reason: "unfinished",
           });
         }
-        const confirmed = yield* dotypos.confirmReservation(
-          row.dotyposReservationId
-        );
+        const confirmed = range
+          ? yield* setUnlimitedPassDayHoldStatus(
+              row.dotyposReservationId,
+              passDayHold(purchase, row),
+              "CONFIRMED"
+            )
+          : yield* dotypos.confirmReservation(row.dotyposReservationId);
         if (
           confirmed.status !== "CONFIRMED" ||
           !matchesUnlimitedPassDayHold(confirmed, passDayHold(purchase, row))
