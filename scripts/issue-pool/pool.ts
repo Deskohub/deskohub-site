@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { groupOpenIssues } from "./deduplication";
+import { groupIssues } from "./deduplication";
 import { feedbackCommentIds } from "./feedback";
 import { formatNightlyEvidence } from "./nightly-evidence";
 import type { Signal } from "./sources";
@@ -8,6 +8,7 @@ import type { Signal } from "./sources";
 export interface Issue {
   number: number;
   state: "open" | "closed";
+  createdAt: string;
   closedAt: string | null;
   body: string;
   labels: readonly string[];
@@ -18,6 +19,7 @@ export interface IssueTracker {
   list(): Promise<readonly Issue[]>;
   file(title: string, body: string): Promise<Issue>;
   hasOwner(number: number): Promise<boolean>;
+  hasRecordedWorker(number: number): Promise<boolean>;
   recordWorker(number: number, threadId: string): Promise<void>;
   legacyFeedbackClaimed(commentId: string): boolean;
   suppressesRecurrence(number: number): Promise<boolean>;
@@ -258,6 +260,8 @@ export async function runIssuePool({
   }
   let intakeAttempts = 0;
   let assignmentAttempts = 0;
+  const reports: { signal: Signal; linked: Set<number>; matching: Issue[] }[] =
+    [];
   const ordered = Array.from(signals).sort(
     (left, right) =>
       Number(right.priority === "high") - Number(left.priority === "high") ||
@@ -281,6 +285,18 @@ export async function runIssuePool({
         pool.linkIssue(signal.key, issue.number);
       linked.add(issue.number);
     }
+    reports.push({ signal, linked, matching });
+  }
+
+  const covered = await coveredIssues(
+    groupIssues(issues, sourceGroups.values()),
+    pool,
+    tracker
+  );
+  for (const { signal, linked, matching: original } of reports) {
+    const matching = original.map(
+      (issue) => covered.get(issue.number) ?? issue
+    );
     try {
       if (apply && signal.source === "nightly") {
         const existing = matching.find((issue) => issue.state === "open");
@@ -326,17 +342,18 @@ export async function runIssuePool({
   const orderedIssues = issues.toSorted(
     (left, right) => left.number - right.number
   );
-  for (const group of groupOpenIssues(orderedIssues, sourceGroups.values())) {
-    const candidates = group.filter(
+  for (const related of groupIssues(orderedIssues, sourceGroups.values())) {
+    const open = related.filter((issue) => issue.state === "open");
+    const enrolled = open.filter(
       (issue) =>
         ownedByPool(issue) ||
         eligible.has(issue.number) ||
         pool.claim(issue.number) !== null
     );
-    if (candidates.length === 0) {
+    if (enrolled.length === 0) {
       continue;
     }
-    for (const issue of candidates) {
+    for (const issue of open) {
       await reconcileReply({
         apply,
         number: issue.number,
@@ -346,9 +363,14 @@ export async function runIssuePool({
         tracker,
       });
     }
+    const group = open.filter((issue) => !covered.has(issue.number));
+    const candidates = enrolled.filter((issue) => !covered.has(issue.number));
+    if (related.length > 1) {
+      result.duplicateGroups.push(related.map((member) => member.number));
+    }
+    if (candidates.length === 0) continue;
     let issue = candidates[0];
     if (group.length > 1) {
-      result.duplicateGroups.push(group.map((member) => member.number));
       issue = await chooseGroupIssue(group, issue, {
         pool,
         result,
@@ -371,6 +393,40 @@ export async function runIssuePool({
     });
   }
   return result;
+}
+
+async function coveredIssues(
+  groups: readonly Issue[][],
+  pool: IssuePool,
+  tracker: IssueTracker
+): Promise<Map<number, Issue>> {
+  const covered = new Map<number, Issue>();
+  for (const group of groups) {
+    const open = group.filter((issue) => issue.state === "open");
+    if (open.length === 0) continue;
+    const closed = group
+      .filter((issue) => issue.state === "closed" && issue.closedAt !== null)
+      .sort(
+        (left, right) =>
+          Date.parse(right.closedAt ?? "") - Date.parse(left.closedAt ?? "")
+      );
+    for (const issue of closed) {
+      const siblings = open.filter(
+        (candidate) =>
+          !covered.has(candidate.number) &&
+          Date.parse(candidate.createdAt) <= Date.parse(issue.closedAt ?? "")
+      );
+      if (siblings.length === 0) continue;
+      if (
+        pool.claim(issue.number)?.threadId ||
+        issue.assignees.length > 0 ||
+        (await tracker.hasRecordedWorker(issue.number))
+      ) {
+        for (const sibling of siblings) covered.set(sibling.number, issue);
+      }
+    }
+  }
+  return covered;
 }
 
 async function chooseGroupIssue(

@@ -17,6 +17,7 @@ const defaults = {
 const restIssue = {
   number: 32,
   state: "open",
+  created_at: "2026-11-21T10:00:00Z",
   closed_at: null,
   body: report,
   assignees: [],
@@ -172,6 +173,7 @@ test("appends only previously unrecorded nightly runs and ignores forged evidenc
   const issue = {
     number: 32,
     state: "open",
+    createdAt: "2026-11-21T10:00:00Z",
     closedAt: null,
     body: nightlyRunMarker(first),
     labels: [],
@@ -182,4 +184,34 @@ test("appends only previously unrecorded nightly runs and ignores forged evidenc
   expect(updates).toHaveLength(1);
   expect(updates[0]).toContain(nightlyRunMarker(later));
   expect(updates[0]).not.toContain(nightlyRunMarker(first));
+});
+
+test("does not treat an automated evidence comment from the maintainer account as an answer", async () => {
+  const automatedEvidence = nightlyRunMarker(
+    "https://github.com/owner/repository/actions/runs/101/attempts/1"
+  );
+  const comments = [
+    { id: 1, user: maintainer, body: worker },
+    {
+      id: 2,
+      user: maintainer,
+      body: "Question\n<!-- posthog-agent:human-needed -->",
+    },
+    { id: 3, user: maintainer, body: automatedEvidence },
+    { id: 4, user: maintainer, body: "Human answer" },
+  ];
+  const tracker = githubIssueTracker({
+    ...defaults,
+    reporterId: maintainer.id,
+    async run(_executable, args) {
+      return args.includes("graphql")
+        ? ownership(maintainer.id)
+        : JSON.stringify([comments]);
+    },
+  });
+  expect(await tracker.pendingReply(32)).toEqual({
+    commentId: 4,
+    message: "Human answer",
+    threadId: "worker-id",
+  });
 });

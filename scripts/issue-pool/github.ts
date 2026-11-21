@@ -11,6 +11,7 @@ export type Command = (
 interface RestIssue {
   number: number;
   state: "open" | "closed";
+  created_at: string;
   closed_at: string | null;
   body: string | null;
   assignees: { login: string }[];
@@ -33,6 +34,7 @@ const consumed = (commentId: number) =>
 const issueFromRest = (issue: RestIssue): Issue => ({
   number: issue.number,
   state: issue.state,
+  createdAt: issue.created_at,
   closedAt: issue.closed_at,
   body: issue.body ?? "",
   labels: issue.labels.map((label) => label.name),
@@ -186,6 +188,7 @@ export function githubIssueTracker({
       );
     },
     legacyFeedbackClaimed,
+    hasRecordedWorker: workerRecorded,
     async recordNightlyRuns(issue, runUrls) {
       const known = [
         issue.body,
@@ -221,7 +224,7 @@ export function githubIssueTracker({
           id > question.id &&
           user?.id === maintainerId &&
           body?.trim() &&
-          !/<!-- (?:posthog-agent:|t3-worker-thread:)/.test(body) &&
+          !/<!-- (?:posthog-agent:|t3-worker-thread:|issue-pool-)/.test(body) &&
           !rows.some(({ body: comment }) => comment?.includes(consumed(id)))
       );
       if (!reply?.body) return null;

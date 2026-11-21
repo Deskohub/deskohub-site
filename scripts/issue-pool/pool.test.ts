@@ -37,6 +37,7 @@ const issue = (number: number, body = ""): Issue => ({
   labels: [],
   assignees: [],
   state: "open",
+  createdAt: "2026-11-21T10:00:00Z",
   closedAt: null,
 });
 
@@ -53,6 +54,7 @@ function fixture() {
       return created;
     },
     hasOwner: async (number) => reported.has(number),
+    hasRecordedWorker: async (number) => reported.has(number),
     legacyFeedbackClaimed: () => false,
     suppressesRecurrence: async () => false,
     pendingReply: async () => null,
@@ -272,6 +274,68 @@ test("assigns one worker when different sources explicitly name the same fix", a
     });
     expect(result.duplicateGroups).toEqual([[1, 2]]);
     expect(launches).toEqual([1]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("closing the owned issue covers its old siblings while newer evidence can open a recurrence", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  const fix = "<!-- issue-pool-fix:checkout-pricing -->";
+  try {
+    const primary = { ...issue(1, fix), labels: ["issue-pool"] };
+    issues.push(
+      primary,
+      issue(2, [fix, ...logSignal.legacyMarkers].join("\n"))
+    );
+    await run(pool, tracker, runner, [logSignal]);
+    expect(launches).toEqual([1]);
+    issues[0] = {
+      ...primary,
+      state: "closed",
+      closedAt: "2026-11-21T14:00:00Z",
+    };
+    await run(pool, tracker, runner, []);
+    await run(pool, tracker, runner, [logSignal]);
+    expect(issues).toHaveLength(2);
+    expect(launches).toEqual([1]);
+    const recurrence = await run(pool, tracker, runner, [
+      { ...logSignal, observedAt: "2026-11-21T15:00:00Z" },
+    ]);
+    expect(recurrence.filed).toEqual([3]);
+    expect(launches).toEqual([1, 3]);
+  } finally {
+    pool.close();
+  }
+});
+
+test("reconciles the existing worker's reply even when only its sibling is enrolled", async () => {
+  const pool = new IssuePool(":memory:");
+  const { issues, tracker, runner, launches } = fixture();
+  const fix = "<!-- issue-pool-fix:checkout-pricing -->";
+  const reply = { commentId: 52, message: "The answer", threadId: "worker-2" };
+  const delivered: string[] = [];
+  try {
+    issues.push({ ...issue(1, fix), labels: ["issue-pool"] }, issue(2, fix));
+    const result = await run(
+      pool,
+      {
+        ...tracker,
+        hasOwner: async (number) => number === 2,
+        pendingReply: async (number) => (number === 2 ? reply : null),
+      },
+      {
+        ...runner,
+        sendReply: async ({ threadId }) => {
+          delivered.push(threadId);
+        },
+      },
+      []
+    );
+    expect(result.replied).toEqual([2]);
+    expect(delivered).toEqual(["worker-2"]);
+    expect(launches).toEqual([]);
   } finally {
     pool.close();
   }
