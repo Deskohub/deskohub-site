@@ -18,7 +18,6 @@ import {
   getOccupancyWindow,
   getOccupancyWindowDates,
   getTableBookingOccupancyById,
-  workspaceBookingSeatCount,
 } from "@/features/checkout/backend/reservation/workspace-table-occupancy";
 import {
   decodeTableSeatCapacity,
@@ -29,7 +28,6 @@ import { WorkspaceReservationRepository } from "@/features/reservation/backend/w
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
-import { formatPassDayMarker } from "../pass-day-marker";
 import { movablePassDay } from "./movable-pass-day";
 import { getBookingsWithPassDayIntents } from "./pass-day-capacity-bookings";
 import type { MovablePassDay, PassDayMovePlan } from "./pass-day-move-plan";
@@ -37,6 +35,7 @@ import {
   createUnlimitedPassDayHold,
   hasUnlimitedPassDayMarker,
   matchesUnlimitedPassDayHold,
+  setUnlimitedPassDayHoldStatus,
 } from "./unlimited-pass-dotypos-holds";
 
 type Move = typeof unlimitedPassDayMoves.$inferSelect;
@@ -116,11 +115,19 @@ const makePassDayMoves = Effect.gen(function* () {
       .where(stillPending(move));
   });
 
-  const markAmbiguous = Effect.fnUntraced(function* (move: Move) {
+  const markAmbiguous = Effect.fnUntraced(function* (
+    move: Move,
+    ambiguousReservationIds?: readonly DotyposReservationId[]
+  ) {
     const now = yield* currentInstant;
     yield* db
       .update(unlimitedPassDayMoves)
-      .set({ ambiguousAt: now })
+      .set({
+        ambiguousAt: now,
+        ...(ambiguousReservationIds && {
+          ambiguousReservationIds: [...ambiguousReservationIds],
+        }),
+      })
       .where(stillPending(move));
     yield* Effect.logWarning(
       "Unlimited pass day move provider ownership is uncertain"
@@ -132,21 +139,9 @@ const makePassDayMoves = Effect.gen(function* () {
     hold: ReturnType<typeof expectedHold>,
     status: "CONFIRMED" | "CANCELLED"
   ) =>
-    dotypos.setReservationStatusIfMatches({
-      reservationId,
-      status,
-      expectedBooking: {
-        ...getOccupancyWindowDates(getOccupancyWindow(hold.day.interval)),
-        customerId: hold.customerId,
-        seats: workspaceBookingSeatCount,
-        tableId: hold.day.tableId,
-      },
-      expectedNoteLine: formatPassDayMarker(
-        hold.passId,
-        hold.day.serviceDate,
-        hold.generation
-      ),
-    });
+    setUnlimitedPassDayHoldStatus(reservationId, hold, status).pipe(
+      Effect.provideService(DotyposService, dotypos)
+    );
 
   const canReleaseSource = Effect.fnUntraced(function* (
     key: MoveKey,
@@ -255,7 +250,7 @@ const makePassDayMoves = Effect.gen(function* () {
         .map((record) => [record.id, record])
     );
     if (marked.size > 1) {
-      yield* markAmbiguous(move);
+      yield* markAmbiguous(move, [...marked.keys()]);
       return undefined;
     }
     return marked.values().next().value;
@@ -263,7 +258,7 @@ const makePassDayMoves = Effect.gen(function* () {
 
   const targetCapacity = Effect.fnUntraced(function* (
     key: MoveKey,
-    move: Move
+    move: Move & { readonly targetReservationId: DotyposReservationId }
   ) {
     const { day } = expectedHold(key, move, "target");
     const claims = yield* reservations.selectPendingPassDayCapacity({
@@ -280,19 +275,21 @@ const makePassDayMoves = Effect.gen(function* () {
         now: yield* currentInstant,
       }),
     });
-    if (
-      records.some(
-        (record) =>
-          record.id !== move.targetReservationId &&
-          hasUnlimitedPassDayMarker(
-            record,
-            key.passId,
-            day.serviceDate,
-            move.generation
-          )
-      )
-    ) {
-      yield* markAmbiguous(move);
+    const ids = new Set([
+      move.targetReservationId,
+      ...records.flatMap((record) =>
+        hasUnlimitedPassDayMarker(
+          record,
+          key.passId,
+          day.serviceDate,
+          move.generation
+        )
+          ? [record.id]
+          : []
+      ),
+    ]);
+    if (ids.size > 1) {
+      yield* markAmbiguous(move, [...ids]);
       return "ambiguous" as const;
     }
     const table = tables.find(
@@ -348,13 +345,18 @@ const makePassDayMoves = Effect.gen(function* () {
           .from(orders)
           .where(eq(orders.id, key.passId))
           .for("no key update");
-        const now = yield* currentInstant;
         const [current] = yield* readSource(
           key,
           move.sourceReservationId,
-          now
+          yield* currentInstant
         ).for("no key update", { of: [passPurchases, workspaceReservations] });
-        if (!current || !sameSource(current.day, move)) return false;
+        const now = yield* currentInstant;
+        if (
+          !current ||
+          !sameSource(current.day, move) ||
+          key.serviceDate <= getWorkspaceDate(now).toString()
+        )
+          return false;
 
         yield* db
           .update(workspaceReservations)
@@ -479,6 +481,7 @@ const makePassDayMoves = Effect.gen(function* () {
         attachedAt: null,
         settledAt: null,
         ambiguousAt: null,
+        ambiguousReservationIds: null,
       };
       const source = yield* readRecord(move.sourceReservationId);
       if (
@@ -499,17 +502,23 @@ const makePassDayMoves = Effect.gen(function* () {
         yield* markSettled(pending);
         return false;
       }
-      const created = yield* createUnlimitedPassDayHold({
-        passId: key.passId,
-        customerId: move.customerId,
-        day,
-        generation: move.generation,
-        coffee: current.coffee === true,
-        singleAttempt: true,
-      }).pipe(
-        Effect.provideService(DotyposService, dotypos),
-        Effect.tapError((error) =>
-          error._tag === "DotyposUncertain" ? Effect.void : markSettled(pending)
+      const created = yield* Effect.uninterruptibleMask((restore) =>
+        restore(
+          createUnlimitedPassDayHold({
+            passId: key.passId,
+            customerId: move.customerId,
+            day,
+            generation: move.generation,
+            coffee: current.coffee === true,
+            singleAttempt: true,
+          }).pipe(Effect.provideService(DotyposService, dotypos))
+        ).pipe(
+          Effect.tapError((error) => {
+            if (error._tag !== "DotyposUncertain") return markSettled(pending);
+            if (error.createdReservationIds)
+              return markAmbiguous(move, error.createdReservationIds);
+            return Effect.void;
+          })
         )
       );
       return yield* continueMove(key, move, created);

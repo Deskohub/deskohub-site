@@ -3035,7 +3035,59 @@ describe("DotyposService marked reservation transitions", () => {
     }
   );
 
-  test.each(["empty", "missing-id"] as const)(
+  test.each([
+    ["token lookup", "DotyposUnavailable", 0],
+    ["reservation POST", "DotyposUncertain", 1],
+  ] as const)(
+    "classifies a timeout during %s by dispatch",
+    async (stalledAt, tag, expectedPosts) => {
+      const stall = (request: Request) =>
+        new Promise<Response>((_resolve, reject) => {
+          request.signal.addEventListener(
+            "abort",
+            () => reject(request.signal.reason),
+            { once: true }
+          );
+        });
+      let tokens = 0;
+      let posts = 0;
+      const fetchMock = mockDotyposFetch((request) => {
+        if (new URL(request.url).pathname === "/signin/token") {
+          tokens++;
+          return stalledAt === "token lookup"
+            ? stall(request)
+            : tokenResponse();
+        }
+        expect(request.method).toBe("POST");
+        posts++;
+        return stall(request);
+      });
+      const result = await runWithServiceRetryingInstantly(
+        Effect.flatMap(DotyposService, (dotypos) =>
+          dotypos.createReservation({
+            ...booking,
+            note: noteLine,
+            status: "NEW",
+            singleAttempt: true,
+          })
+        ).pipe(Effect.result),
+        fetchMock
+      );
+      expect(tokens).toBe(1);
+      expect(posts).toBe(expectedPosts);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: tag,
+          reason: "timeout",
+          operation: "createReservation",
+          request: "reservation.create",
+        },
+      });
+    }
+  );
+
+  test.each(["empty", "missing-id", "multiple-ids"] as const)(
     "sends a single journaled POST on a %s response",
     async (response) => {
       let posts = 0;
@@ -3045,6 +3097,12 @@ describe("DotyposService marked reservation transitions", () => {
         expect(request.method).toBe("POST");
         posts++;
         if (response === "empty") return Response.json([]);
+        if (response === "multiple-ids") {
+          return Response.json([
+            reservation(),
+            reservation({ id: "second-reservation" }),
+          ]);
+        }
         const { id: _id, ...withoutId } = reservation();
         return Response.json([withoutId]);
       });
@@ -3066,6 +3124,9 @@ describe("DotyposService marked reservation transitions", () => {
           _tag: "DotyposUncertain",
           reason: "invalid-response",
           operation: "createReservation",
+          ...(response === "multiple-ids" && {
+            createdReservationIds: ["reservation-id", "second-reservation"],
+          }),
         },
       });
     }
@@ -3096,6 +3157,21 @@ describe("DotyposService marked reservation transitions", () => {
     {
       label: "does not patch changed booking facts",
       reads: ["changed-table"],
+      patches: [],
+      expected: "DotyposVersionConflict",
+      etags: [],
+    },
+    {
+      label: "does not patch a version returned for the wrong ID",
+      reads: ["changed-id"],
+      patches: [],
+      expected: "DotyposVersionConflict",
+      etags: [],
+    },
+    {
+      label:
+        "does not patch booking bounds changed within the same millisecond",
+      reads: ["changed-microseconds"],
       patches: [],
       expected: "DotyposVersionConflict",
       etags: [],
@@ -3139,6 +3215,10 @@ describe("DotyposService marked reservation transitions", () => {
         expect(state).toBeDefined();
         return Response.json(
           reservation({
+            ...(state === "changed-id" && { id: "different-reservation" }),
+            ...(state === "changed-microseconds" && {
+              startDate: "2026-06-20T10:00:00.000100Z",
+            }),
             _tableId:
               state === "changed-table"
                 ? dotyposTableId("other-table")

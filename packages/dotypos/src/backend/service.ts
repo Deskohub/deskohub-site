@@ -36,7 +36,11 @@ import type {
   UpdateCustomerRequest,
   UpdateReservationRequest,
 } from "../generated/effect.gen";
-import { type DotyposTimestamp, formatDotyposTimestamp } from "../timestamp";
+import {
+  type DotyposTimestamp,
+  DotyposTimestampFromString,
+  formatDotyposTimestamp,
+} from "../timestamp";
 import type {
   CreateDotyposReservationInput,
   DotyposCategory,
@@ -74,6 +78,7 @@ import { customerLifecycle } from "../utils/customer-lifecycle";
 import {
   DotyposAccessToken,
   DotyposGeneratedClient,
+  DotyposRequestDispatch,
   toDotyposWireFailure,
 } from "./api";
 import {
@@ -694,20 +699,28 @@ export const normalizeReservationBooking = (
 /** The facts in which `reservation` books something other than `booking`. */
 const changedBookingFields = (
   reservation: DotyposReservation,
-  booking: DotyposReservationBooking
+  booking: DotyposReservationBooking,
+  sameInstant = (read: string, expected: Date) =>
+    Date.parse(read) === expected.getTime()
 ): readonly DotyposReservationBookingField[] =>
   (
     [
       ["customer", reservation._customerId === booking.customerId],
       ["table", reservation._tableId === booking.tableId],
-      [
-        "start",
-        Date.parse(reservation.startDate) === booking.startDate.getTime(),
-      ],
-      ["end", Date.parse(reservation.endDate) === booking.endDate.getTime()],
+      ["start", sameInstant(reservation.startDate, booking.startDate)],
+      ["end", sameInstant(reservation.endDate, booking.endDate)],
       ["seats", Number(reservation.seats) === booking.seats],
     ] as const
   ).flatMap(([field, matches]) => (matches ? [] : [field]));
+
+const decodeReservationInstant = Schema.decodeOption(
+  DotyposTimestampFromString
+);
+const sameReservationInstant = (read: string, expected: Date) =>
+  Option.exists(
+    decodeReservationInstant(read),
+    (microseconds) => microseconds === BigInt(expected.getTime()) * 1000n
+  );
 
 /** A conditional status change may act only on its booking and marker. */
 export const verifyReservationStatusTransition = (
@@ -716,17 +729,24 @@ export const verifyReservationStatusTransition = (
   {
     status,
     expectedNoteLine,
+    reservationId,
   }: Pick<
     SetMatchingDotyposReservationStatusInput,
-    "status" | "expectedNoteLine"
+    "status" | "expectedNoteLine" | "reservationId"
   >
 ): Effect.Effect<Option.Option<DotyposReservation>, DotyposVersionConflict> => {
-  if (reservation.status === "CANCELLED" && status === "CANCELLED") {
+  if (
+    reservation.id === reservationId &&
+    reservation.status === "CANCELLED" &&
+    status === "CANCELLED"
+  ) {
     return Effect.succeedSome(reservation);
   }
   if (
+    reservation.id !== reservationId ||
     reservation.status === "CANCELLED" ||
-    changedBookingFields(reservation, booking).length > 0 ||
+    changedBookingFields(reservation, booking, sameReservationInstant).length >
+      0 ||
     !expectedNoteLine.trim() ||
     !reservation.note?.split("\n").includes(expectedNoteLine)
   ) {
@@ -1175,7 +1195,8 @@ const makeDotyposService: Effect.Effect<
    */
   const runDotyposRequest = <A, E, Request extends DotyposRequest>(
     effect: Effect.Effect<A, E>,
-    call: DotyposCall<Request>
+    call: DotyposCall<Request>,
+    onTimeout = () => dotyposTimeout(call)
   ): Effect.Effect<A, DotyposRequestFailure<Request>> =>
     effect.pipe(
       Effect.mapError((error) =>
@@ -1184,7 +1205,7 @@ const makeDotyposService: Effect.Effect<
           call
         )
       ),
-      requestPolicy.attempt(() => dotyposTimeout(call))
+      requestPolicy.attempt(onTimeout)
     );
 
   /** A creation answered with an empty array created nothing, so it can be retried. */
@@ -1363,24 +1384,51 @@ const makeDotyposService: Effect.Effect<
         operation: "createReservation",
         request: "reservation.create",
       } as const;
-      const incompleteCreation = () =>
+      const incompleteCreation = (
+        createdReservationIds?: readonly DotyposReservationId[]
+      ) =>
         new DotyposUncertain({
           ...call,
           reason: "invalid-response",
           message:
             "Dotypos did not provide a usable reservation after creation.",
+          ...(createdReservationIds && { createdReservationIds }),
         });
+      const dispatch = { waitingForToken: false, expiredBeforeDispatch: false };
+      const post = client.createReservation(config.cloudId, {
+        payload: [request],
+      });
       const reservationResult = yield* runDotyposRequest(
-        client.createReservation(config.cloudId, { payload: [request] }),
-        call
+        input.singleAttempt
+          ? post.pipe(Effect.provideService(DotyposRequestDispatch, dispatch))
+          : post,
+        call,
+        () => {
+          if (!dispatch.waitingForToken) return dotyposTimeout(call);
+          dispatch.expiredBeforeDispatch = true;
+          return new DotyposUnavailable({
+            ...call,
+            reason: "timeout",
+            message: "Dotypos access token request timed out.",
+          });
+        }
       ).pipe(
-        Effect.flatMap((reservations) =>
-          firstCreated(reservations, call).pipe(
+        Effect.flatMap((reservations) => {
+          if (input.singleAttempt && reservations.length > 1) {
+            const decoded = reservations.map(({ id }) =>
+              Schema.decodeUnknownOption(DotyposReservationIdSchema)(id)
+            );
+            const ids = [...new Set(decoded.flatMap(Option.toArray))];
+            if (ids.length > 1 || decoded.some(Option.isNone)) {
+              return Effect.fail(incompleteCreation(ids));
+            }
+          }
+          return firstCreated(reservations, call).pipe(
             Effect.mapError((error) =>
               input.singleAttempt ? incompleteCreation() : error
             )
-          )
-        ),
+          );
+        }),
         Effect.withSpan("dotyposService.createReservation"),
         input.singleAttempt ? identity : retryDotyposRequest(call.request),
         Effect.tapError((error) =>
@@ -1773,7 +1821,10 @@ const makeDotyposService: Effect.Effect<
         operation,
         status: input.status,
         settle: (record, replayed) =>
-          verifyReservationStatusTransition(record, booking, input).pipe(
+          verifyReservationStatusTransition(record, booking, {
+            ...input,
+            reservationId: id,
+          }).pipe(
             Effect.mapError((conflict) =>
               Option.getOrElse(
                 replayed,

@@ -9,9 +9,13 @@ import {
   DotyposUncertain,
 } from "@deskohub/dotypos";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
-import { Deferred, Effect, Layer, Result, Schema } from "effect";
+import { eq } from "drizzle-orm";
+import { Deferred, Effect, Fiber, Layer, Result, Schema } from "effect";
 import { TestClock } from "effect/testing";
+import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import { passPurchases } from "@/db/schema";
+import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { withWorkspaceReservationCapacity } from "@/features/checkout/backend/reservation/dotypos-reservation.adapter";
 import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
 import { orderIdSchema } from "@/features/order";
@@ -20,12 +24,17 @@ import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservatio
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
-import { waitForAdvisoryLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
+import {
+  holdPostgresTransaction,
+  waitForAdvisoryLockWaiter,
+  waitForPostgresLockWaiter,
+} from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate.server";
 import { PassDayMoves } from "./unlimited-pass-day-moves";
 import { createUnlimitedPassDayHold } from "./unlimited-pass-dotypos-holds";
+import { releaseUnlimitedPassDays } from "./unlimited-pass-holds";
 
 const database = await createWorkspacePostgresSuiteDatabase("pass_day_moves");
 afterAll(() => database?.close());
@@ -384,29 +393,34 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
     }
   );
 
-  test("a token failure releases the destination intent without replacing the source", async () => {
-    const day = await fixture();
-    const layer = day.runtime({
-      createReservation: () =>
-        new DotyposUnavailable({
-          operation: "createReservation",
-          reason: "server",
-        }),
-    });
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        expect(Result.isFailure(yield* Effect.result(day.reserve()))).toBe(
-          true
-        );
-        expect(yield* day.targetHasMoveClaim).toBe(false);
-      }).pipe(Effect.provide(layer))
-    );
-    const [audit] = await day.moves();
-    expect(audit.settled_at).not.toBeNull();
-    expect(audit.target_reservation_id).toBeNull();
-    expect((await day.readDay()).dotypos_reservation_id).toBe(day.original.id);
-    expect((await day.getRecord(day.original.id)).status).toBe("CONFIRMED");
-  });
+  test.each(["server", "timeout"] as const)(
+    "a token %s failure releases the destination intent without replacing the source",
+    async (reason) => {
+      const day = await fixture();
+      const layer = day.runtime({
+        createReservation: () =>
+          new DotyposUnavailable({
+            operation: "createReservation",
+            reason,
+          }),
+      });
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          expect(Result.isFailure(yield* Effect.result(day.reserve()))).toBe(
+            true
+          );
+          expect(yield* day.targetHasMoveClaim).toBe(false);
+        }).pipe(Effect.provide(layer))
+      );
+      const [audit] = await day.moves();
+      expect(audit.settled_at).not.toBeNull();
+      expect(audit.target_reservation_id).toBeNull();
+      expect((await day.readDay()).dotypos_reservation_id).toBe(
+        day.original.id
+      );
+      expect((await day.getRecord(day.original.id)).status).toBe("CONFIRMED");
+    }
+  );
 
   test("a known target that disappears during cancellation releases its intent on retry", async () => {
     const day = await fixture();
@@ -532,6 +546,49 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
     );
   });
 
+  test("crossing Prague midnight while waiting for the attachment row lock keeps the source", async () => {
+    const day = await fixture();
+    const blocker = await holdPostgresTransaction(
+      pool,
+      "select id from workspace_reservations where id = $1 for no key update",
+      [day.availability.id]
+    );
+    let committed = false;
+    try {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const move = yield* Effect.result(day.reserve()).pipe(
+            Effect.forkChild
+          );
+          yield* Effect.promise(() =>
+            waitForPostgresLockWaiter(pool, {
+              condition: "$1 = any(pg_blocking_pids(pid))",
+              values: [blocker.pid],
+              description: "the move to wait for its attachment row lock",
+            })
+          );
+          yield* TestClock.setTime(afterMidnight.epochMilliseconds);
+          yield* Effect.promise(async () => {
+            await blocker.commit();
+            committed = true;
+          });
+          return yield* Fiber.join(move);
+        }).pipe(Effect.provide(day.runtime()))
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      const [audit] = await day.moves();
+      expect(audit.attached_at).toBeNull();
+      expect((await day.readDay()).dotypos_reservation_id).toBe(
+        day.original.id
+      );
+      expect((await day.getRecord(audit.target_reservation_id)).status).toBe(
+        "CANCELLED"
+      );
+    } finally {
+      if (!committed) await blocker.commit();
+    }
+  });
+
   test("preserves the source when the provider shows two matching replacements", async () => {
     const { original, target, runtime, reserve, moves, readDay, getRecord } =
       await fixture();
@@ -558,6 +615,106 @@ describe.skipIf(!database)("Unlimited Open Space re-seating", () => {
         ({ _tableId, status }) => _tableId === target.id && status === "NEW"
       )
     ).toHaveLength(2);
+  });
+
+  test("parks a multi-ID create response before reconciliation can discover only one target", async () => {
+    const day = await fixture();
+    const createdIds: (typeof day.original.id)[] = [];
+    const layer = day.runtime({
+      createReservation: Effect.fnUntraced(function* (input) {
+        const first = yield* provider.service.createReservation(input);
+        const second = yield* provider.service.createReservation(input);
+        createdIds.push(first.id, second.id);
+        provider.reservations.delete(second.id);
+        return yield* new DotyposUncertain({
+          operation: "createReservation",
+          reason: "invalid-response",
+          createdReservationIds: [...createdIds],
+        });
+      }),
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        expect(Result.isFailure(yield* Effect.result(day.reserve()))).toBe(
+          true
+        );
+        const worker = yield* PassDayMoves;
+        yield* worker.reconcile(2);
+        expect(yield* day.targetHasMoveClaim).toBe(true);
+      }).pipe(Effect.provide(layer))
+    );
+    const [audit] = await day.moves();
+    expect(audit.ambiguous_reservation_ids).toEqual(createdIds);
+    expect(audit.attached_at).toBeNull();
+    expect(audit.settled_at).toBeNull();
+    expect((await day.readDay()).dotypos_reservation_id).toBe(day.original.id);
+    expect((await day.getRecord(day.original.id)).status).toBe("CONFIRMED");
+  });
+
+  test("counts the old source if refreshed provider inventory reports it active", async () => {
+    const day = await fixture();
+    const layer = day.runtime({
+      listActiveReservationsOverlapping: Effect.fnUntraced(
+        function* (interval) {
+          const old = provider.reservations.get(day.original.id);
+          if (old?.status === "CANCELLED") {
+            provider.reservations.set(old.id, { ...old, status: "CONFIRMED" });
+          }
+          return yield* provider.service.listActiveReservationsOverlapping(
+            interval
+          );
+        }
+      ),
+    });
+    expect(
+      Result.isFailure(
+        await Effect.runPromise(
+          day.reserve().pipe(Effect.result, Effect.provide(layer))
+        )
+      )
+    ).toBe(true);
+    const [audit] = await day.moves();
+    expect(audit.attached_at).not.toBeNull();
+    expect((await day.getRecord(day.original.id)).status).toBe("CONFIRMED");
+  });
+
+  test("withdrawal never cancels a changed moved hold and releases it after exact ownership is restored", async () => {
+    const day = await fixture();
+    await Effect.runPromise(day.reserve().pipe(Effect.provide(day.runtime())));
+    const [audit] = await day.moves();
+    const target = await day.getRecord(audit.target_reservation_id);
+    provider.reservations.set(target.id, {
+      ...target,
+      note: "Different booking marker",
+    });
+    await pool.query(
+      "update pass_purchases set status = 'withdrawn', access_ends_on = valid_from where id = $1",
+      [day.passId]
+    );
+    let unconditionalCancellations = 0;
+    const layer = day.runtime({
+      cancelReservation: (id) => {
+        unconditionalCancellations++;
+        return provider.service.cancelReservation(id);
+      },
+    });
+    const release = Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      const [purchase] = yield* db
+        .select()
+        .from(passPurchases)
+        .where(eq(passPurchases.id, day.passId));
+      yield* releaseUnlimitedPassDays(purchase!);
+    }).pipe(WorkspaceLockSections.passPurchaseFulfillment(day.passId));
+    await Effect.runPromise(release.pipe(Effect.provide(layer)));
+    expect((await day.readDay()).reservation_state).toBe("cancelling");
+    expect((await day.getRecord(target.id)).status).toBe("CONFIRMED");
+
+    provider.reservations.set(target.id, target);
+    await Effect.runPromise(release.pipe(Effect.provide(layer)));
+    expect((await day.readDay()).reservation_state).toBe("cancelled");
+    expect((await day.getRecord(target.id)).status).toBe("CANCELLED");
+    expect(unconditionalCancellations).toBe(0);
   });
 
   test("a competing allocation waits for the move and sees the ordinary claim", async () => {

@@ -459,15 +459,12 @@ export class WorkspaceTableAssignmentService extends Context.Service<
                     ))
                 )
                   return undefined;
-                // DELETE succeeded under this capacity section. A lagging list
-                // may still return the old provider ID.
+                // Recheck before allocating. Dotypos can reopen the old
+                // reservation independently of the Workspace capacity lock.
                 const refreshed = yield* loadInventory(occupancyWindow);
                 const remaining = excludeDotyposReservationsById(
                   refreshed.reservations,
-                  [
-                    ...refreshed.expiredDotyposReservationIds,
-                    move.source.sourceReservationId,
-                  ]
+                  refreshed.expiredDotyposReservationIds
                 );
                 return yield* selectWorkspaceTableFromCandidates(
                   getWorkspaceTableCandidatesByPredicate(

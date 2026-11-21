@@ -40,6 +40,9 @@ export const unlimitedPassDayMoves = pgTable(
     attachedAt: instant("attached_at"),
     settledAt: instant("settled_at"),
     ambiguousAt: instant("ambiguous_at"),
+    ambiguousReservationIds: text("ambiguous_reservation_ids")
+      .$type<DotyposReservationId>()
+      .array(),
   },
   (t) => [
     uniqueIndex("unlimited_pass_day_moves_pending_reservation_idx")

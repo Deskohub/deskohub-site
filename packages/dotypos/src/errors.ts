@@ -126,6 +126,10 @@ export class DotyposUncertain extends Schema.TaggedError<DotyposUncertain>()(
       "invalid-response",
       "conflict-after-replay",
     ]),
+    /** Distinct IDs observed in an ambiguous single-reservation create reply. */
+    createdReservationIds: Schema.optional(
+      Schema.Array(DotyposReservationIdSchema)
+    ),
   }
 ) {}
 

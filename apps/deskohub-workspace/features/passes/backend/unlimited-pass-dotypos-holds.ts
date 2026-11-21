@@ -1,6 +1,7 @@
 import {
   type DotyposCustomerId,
   type DotyposReservation,
+  type DotyposReservationId,
   DotyposService,
 } from "@deskohub/dotypos";
 import { Effect, Option } from "effect";
@@ -53,6 +54,33 @@ export const createUnlimitedPassDayHold = Effect.fn(
       formatPassDayMarker(passId, day.serviceDate, generation),
       `Káva: ${coffee ? "ano" : "ne"}`,
     ].join("\n"),
+  });
+});
+
+/** Changes status only while the provider version still names this exact pass-day booking. */
+export const setUnlimitedPassDayHoldStatus = Effect.fn(
+  "setUnlimitedPassDayHoldStatus"
+)(function* (
+  reservationId: DotyposReservationId,
+  { customerId, day, generation, passId }: PassDayHold,
+  status: "CONFIRMED" | "CANCELLED"
+) {
+  const dotypos = yield* DotyposService;
+  return yield* dotypos.setReservationStatusIfMatches({
+    reservationId,
+    status,
+    expectedBooking: {
+      customerId,
+      tableId: day.tableId,
+      seats: workspaceBookingSeatCount,
+      startDate: temporalInstantToDate(
+        Temporal.Instant.from(day.interval.startsAt)
+      ),
+      endDate: temporalInstantToDate(
+        Temporal.Instant.from(day.interval.endsAt)
+      ),
+    },
+    expectedNoteLine: formatPassDayMarker(passId, day.serviceDate, generation),
   });
 });
 
