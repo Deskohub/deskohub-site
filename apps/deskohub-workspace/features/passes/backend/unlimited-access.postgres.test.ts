@@ -18,6 +18,7 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
+import { loadAccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
 import {
   CurrentCustomerAccount,
   requireVerifiedIdentity,
@@ -28,6 +29,7 @@ import {
   customerAccountIdSchema,
 } from "@/features/account/customer-account";
 import { type OrderId, orderIdSchema } from "@/features/order";
+import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { ReservationAccessService } from "@/features/reservation-access";
@@ -399,6 +401,34 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         [original.orderId]
       );
       const afterCutoff = Temporal.Instant.from("2030-03-28T11:00Z");
+      const accountPass = async () => {
+        const passes = await Effect.runPromise(
+          loadAccountUnlimitedPasses("en-US").pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                database.layer,
+                Layer.mock(AdvisoryAvailabilityInventory, {}),
+                Layer.mock(CurrentCustomerAccount, {
+                  peek: Effect.succeed({
+                    kind: "unlinked",
+                    reviewMarker: "absent",
+                    session: {
+                      ...testSessionProfile,
+                      accountId: buyer,
+                      deletionRequested: false,
+                      email: testEmailAddress("pass-viewer"),
+                    },
+                  }),
+                })
+              )
+            ),
+            atInstant(afterCutoff)
+          )
+        );
+        return passes.find((pass) => pass.orderId === original.orderId);
+      };
+      const renewalPath = `/en-US/passes/unlimited?renew=${original.orderId}`;
+      expect(await accountPass()).toMatchObject({ renewalPath });
       const reads: string[] = [];
       expect(
         await load(original.orderId, "open-space", buyer, afterCutoff, {
@@ -440,6 +470,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         { issue }
       );
       expect(overlapping).not.toHaveProperty("renewalOrderId");
+      expect(await accountPass()).not.toHaveProperty("renewalPath");
       await database.pool.query(
         "update pass_purchases set status = 'withdrawn', access_ends_on = valid_from where id = $1",
         [independentlyBought.orderId]
@@ -449,6 +480,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           issue,
         })
       ).toMatchObject({ state: "ended", renewalOrderId: original.orderId });
+      expect(await accountPass()).toMatchObject({ renewalPath });
 
       const pending = await seedPass("open-space", false, {
         start: firstDay,
