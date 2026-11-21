@@ -70,6 +70,11 @@ import {
   reserveEntryPackClaim,
   reserveReleasedEntryPackClaim,
 } from "@/features/passes/backend/entry-pack-redemption";
+import {
+  recordAmbiguousPassDayHolds,
+  type UnboundPassDayHold,
+} from "@/features/passes/backend/pass-day-hold-ownership";
+import { ambiguousPassDayHoldCode } from "@/features/passes/pass-day-marker";
 import type { PassTier } from "@/features/passes/pass-offer";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import type { AgentSelectionKey } from "@/features/reservation/backend/booking-agent";
@@ -254,6 +259,10 @@ export type PendingPassDayCapacity = {
   readonly tableId: DotyposTableId;
   readonly customerId: DotyposCustomerId;
   readonly tier: PassTier;
+  readonly holdRequestedAt: Temporal.Instant | null;
+  readonly holdAmbiguous: boolean;
+  readonly holdGeneration: string | null;
+  readonly providerReservationId: DotyposReservationId | null;
 };
 
 export interface IWorkspaceReservationRepository {
@@ -642,6 +651,9 @@ export interface IWorkspaceReservationRepository {
   readonly selectExpiredHoldDotyposReservationIds: (input: {
     readonly now: Temporal.Instant;
   }) => Effect.Effect<readonly DotyposReservationId[], EffectDrizzleQueryError>;
+  readonly recordAmbiguousPassDayHolds: (
+    holds: readonly UnboundPassDayHold[]
+  ) => Effect.Effect<void, EffectDrizzleQueryError>;
   readonly selectPendingPassDayCapacity: (input: {
     readonly first: Temporal.PlainDate;
     readonly last: Temporal.PlainDate;
@@ -2294,6 +2306,8 @@ export class WorkspaceReservationRepository extends Context.Service<
             dotyposReservationId ? [dotyposReservationId] : []
           );
         }),
+        recordAmbiguousPassDayHolds: (holds) =>
+          recordAmbiguousPassDayHolds(db, holds),
         selectPendingPassDayCapacity: Effect.fn(
           "workspaceReservations.selectPendingPassDayCapacity"
         )(function* ({ first, last }) {
@@ -2304,6 +2318,10 @@ export class WorkspaceReservationRepository extends Context.Service<
               tableId: workspaceReservations.passDayTableId,
               customerId: workspaceReservations.dotyposCustomerId,
               tier: passPurchases.tier,
+              holdRequestedAt: workspaceReservations.passDayHoldRequestedAt,
+              holdAmbiguous: sql<boolean>`${workspaceReservations.failureCode} is not distinct from ${ambiguousPassDayHoldCode}`,
+              holdGeneration: workspaceReservations.passDayHoldGeneration,
+              providerReservationId: workspaceReservations.dotyposReservationId,
             })
             .from(workspaceReservations)
             .innerJoin(

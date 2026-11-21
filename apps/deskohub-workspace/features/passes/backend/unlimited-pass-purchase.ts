@@ -146,7 +146,7 @@ export const beginUnlimitedPassPurchase = Effect.fn(
           prior.order.activePaymentAttemptId
         )
           return;
-        yield* db
+        const [voided] = yield* db
           .update(passPurchases)
           .set({ status: "void" })
           .where(
@@ -154,8 +154,9 @@ export const beginUnlimitedPassPurchase = Effect.fn(
               eq(passPurchases.id, priorOrderId),
               eq(passPurchases.status, "pending_payment")
             )
-          );
-        yield* releaseUnlimitedPassDays(prior.purchase);
+          )
+          .returning();
+        if (voided) yield* releaseUnlimitedPassDays(voided);
       }),
       { passPurchaseOrderId: priorOrderId }
     );
@@ -312,7 +313,7 @@ export const beginUnlimitedPassPurchase = Effect.fn(
       yield* createUnlimitedPassHolds(purchase).pipe(
         Effect.catch(
           Effect.fnUntraced(function* (error) {
-            yield* db
+            const [voided] = yield* db
               .update(passPurchases)
               .set({ status: "void" })
               .where(
@@ -320,14 +321,17 @@ export const beginUnlimitedPassPurchase = Effect.fn(
                   eq(passPurchases.id, purchase.id),
                   eq(passPurchases.status, "pending_payment")
                 )
-              );
-            yield* releaseUnlimitedPassDays(purchase).pipe(
-              Effect.catch(() =>
-                Effect.logWarning(
-                  "Unlimited pass hold compensation needs reconciliation"
-                )
               )
-            );
+              .returning();
+            if (voided) {
+              yield* releaseUnlimitedPassDays(voided).pipe(
+                Effect.catch(() =>
+                  Effect.logWarning(
+                    "Unlimited pass hold compensation needs reconciliation"
+                  )
+                )
+              );
+            }
             return yield* error;
           })
         )

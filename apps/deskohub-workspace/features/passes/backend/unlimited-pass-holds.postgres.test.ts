@@ -1,17 +1,20 @@
 import "@/shared/testing/workspace-test-env";
 
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   DotyposCustomerIdSchema,
+  DotyposRejected,
+  type DotyposReservationId,
   DotyposService,
   DotyposTableIdSchema,
   DotyposTableSchema,
+  DotyposUnavailable,
   DotyposUncertain,
 } from "@deskohub/dotypos";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { eq } from "drizzle-orm";
-import { Effect, Layer, Result, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Result, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
@@ -19,9 +22,11 @@ import {
   orders,
   passPurchases,
   paymentAttempts,
+  workspaceReservations,
 } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
@@ -38,9 +43,14 @@ import {
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
+import {
+  ambiguousPassDayHoldCode,
+  formatPassDayMarker,
+} from "../pass-day-marker";
 import { unlimitedPassDays } from "../pass-offer";
 import { settlePassPurchase } from "./entry-pack-settlement";
 import { unlimitedConfirmationDeliveryReports } from "./unlimited-confirmation-delivery";
+import { getBookableUnlimitedStarts } from "./unlimited-pass-capacity";
 import {
   confirmUnlimitedPassDays,
   createUnlimitedPassHolds,
@@ -48,14 +58,17 @@ import {
   reconfirmUnlimitedPassHolds,
   releaseUnlimitedPassDays,
 } from "./unlimited-pass-holds";
-import { recordUnlimitedPassOrder } from "./unlimited-pass-orders";
+import {
+  recordReplacementUnlimitedPassHolds,
+  recordUnlimitedPassOrder,
+} from "./unlimited-pass-orders";
 import { prepareUnlimitedPassRecovery } from "./unlimited-pass-recovery";
 
 let database: WorkspacePostgresSuiteDatabase | null;
-beforeAll(async () => {
+beforeEach(async () => {
   database = await createWorkspacePostgresSuiteDatabase("unlimited_holds");
 });
-afterAll(async () => {
+afterEach(async () => {
   await database?.close();
 });
 
@@ -92,6 +105,30 @@ const record = (start: Temporal.PlainDate, buyer = newAccountId()) =>
       })
     );
   });
+
+const expirePass = Effect.fnUntraced(function* (
+  orderId: typeof orders.$inferSelect.id
+) {
+  const { db } = yield* WorkspaceDatabase;
+  const attemptId = paymentAttemptIdSchema.make(crypto.randomUUID());
+  yield* db.insert(paymentAttempts).values({
+    id: attemptId,
+    orderId,
+    provider: "mock",
+    providerOrderId: attemptId,
+    state: "expired",
+    failureCode: "fixture_expired",
+    amountValue: 599_000,
+    amountExponent: 2,
+    currency: "CZK",
+  });
+  yield* db
+    .update(orders)
+    .set({ paymentState: "expired", activePaymentAttemptId: attemptId })
+    .where(eq(orders.id, orderId));
+  yield* settlePassPurchase(orderId);
+  return attemptId;
+});
 
 it("serializes overlapping entitlement purchases for the same holder", async () => {
   const start = getCurrentWorkspaceDate().add({ days: 60 });
@@ -208,24 +245,7 @@ it("reacquires all provider holds on the original rows after terminal payment", 
         );
         yield* createUnlimitedPassHolds(purchase);
         const initial = yield* readUnlimitedPassDays(purchase.id);
-        const { db } = yield* WorkspaceDatabase;
-        const attemptId = paymentAttemptIdSchema.make(crypto.randomUUID());
-        yield* db.insert(paymentAttempts).values({
-          id: attemptId,
-          orderId: purchase.id,
-          provider: "mock",
-          providerOrderId: "fixture-unlimited-payment",
-          state: "expired",
-          failureCode: "fixture_expired",
-          amountValue: 599_000,
-          amountExponent: 2,
-          currency: "CZK",
-        });
-        yield* db
-          .update(orders)
-          .set({ paymentState: "expired", activePaymentAttemptId: attemptId })
-          .where(eq(orders.id, purchase.id));
-        yield* settlePassPurchase(purchase.id);
+        const attemptId = yield* expirePass(purchase.id);
 
         const restored = yield* prepareUnlimitedPassRecovery(
           purchase.id,
@@ -255,6 +275,392 @@ it("reacquires all provider holds on the original rows after terminal payment", 
     await testDatabase.close();
   }
 });
+
+it("releases a definitively rejected POST and retains an interrupted POST", async () => {
+  const provider = makeInMemoryDotypos({});
+  const start = getCurrentWorkspaceDate().add({ days: 200 });
+  const rejected = new DotyposRejected({
+    operation: "createReservation",
+    reason: "invalid-request",
+  });
+  const layer = database!.layer;
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(start);
+      const [first, second] = yield* readUnlimitedPassDays(purchase.id);
+      const createReservation: typeof provider.service.createReservation = (
+        input
+      ) =>
+        input.note?.includes(`/${first!.serviceDate}/`)
+          ? Effect.fail(rejected)
+          : provider.service.createReservation(input);
+      const failed = yield* Effect.result(
+        createUnlimitedPassHolds(purchase)
+      ).pipe(
+        Effect.provideService(DotyposService, {
+          ...provider.service,
+          createReservation,
+        })
+      );
+      expect(failed).toEqual(Result.fail(rejected));
+      const [released, held] = yield* readUnlimitedPassDays(purchase.id);
+      expect(released).toMatchObject({
+        id: first!.id,
+        reservationState: "hold_expired",
+        dotyposReservationId: null,
+        passDayHoldGeneration: expect.any(String),
+      });
+      expect(held).toMatchObject({ id: second!.id, reservationState: "held" });
+      yield* releaseUnlimitedPassDays(purchase);
+      expect(
+        (yield* readUnlimitedPassDays(purchase.id))[0]?.reservationState
+      ).toBe("hold_expired");
+
+      const interrupted = yield* record(start.add({ days: 40 }));
+      const attempted = yield* Effect.exit(
+        createUnlimitedPassHolds(interrupted)
+      ).pipe(
+        Effect.provideService(DotyposService, {
+          ...provider.service,
+          createReservation: () => Effect.interrupt,
+        })
+      );
+      expect(attempted._tag).toBe("Failure");
+      const requested = (yield* readUnlimitedPassDays(interrupted.id)).filter(
+        (row) => row.passDayHoldRequestedAt !== null
+      );
+      expect(requested.length).toBeGreaterThan(0);
+      yield* releaseUnlimitedPassDays(interrupted);
+      const remaining = (yield* readUnlimitedPassDays(interrupted.id)).filter(
+        (row) => row.reservationState === "creating_hold"
+      );
+      expect(
+        remaining.map(({ id, passDayHoldGeneration }) => ({
+          id,
+          passDayHoldGeneration,
+        }))
+      ).toEqual(
+        requested.map(({ id, passDayHoldGeneration }) => ({
+          id,
+          passDayHoldGeneration,
+        }))
+      );
+    }).pipe(Effect.provide(Layer.mergeAll(layer, provider.layer)))
+  );
+});
+
+it("keeps a timed-out replacement claimed while only the cancelled original is visible", async () => {
+  const provider = makeInMemoryDotypos({});
+  const start = getCurrentWorkspaceDate().add({ days: 290 });
+  let hidden: DotyposReservationId | undefined;
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const purchase = yield* record(start);
+      yield* createUnlimitedPassHolds(purchase);
+      const original = yield* readUnlimitedPassDays(purchase.id);
+      const first = original[0]!;
+
+      // One day represents a hold created by the previous deployment.
+      const { db, transaction } = yield* WorkspaceDatabase;
+      yield* db
+        .update(workspaceReservations)
+        .set({ passDayHoldGeneration: null })
+        .where(eq(workspaceReservations.id, first.id));
+      const originalRecord = provider.reservations.get(
+        first.dotyposReservationId!
+      )!;
+      provider.reservations.set(originalRecord.id, {
+        ...originalRecord,
+        note: formatPassDayMarker(purchase.id, start, null),
+      });
+      yield* reconfirmUnlimitedPassHolds(purchase);
+
+      const paidAttemptId = yield* expirePass(purchase.id);
+      const retired = { ...purchase, status: "void" } as const;
+      yield* releaseUnlimitedPassDays(retired);
+      const replacement = yield* transaction(
+        recordReplacementUnlimitedPassHolds({
+          purchase: retired,
+          paidAttemptId,
+          days: original.map(({ serviceDate, passDayTableId }) => ({
+            serviceDate,
+            tableId: passDayTableId,
+          })),
+          now: Temporal.Now.instant(),
+        })
+      );
+      const replacementService = {
+        ...provider.service,
+        createReservation: (
+          input: Parameters<typeof provider.service.createReservation>[0]
+        ) =>
+          Effect.gen(function* () {
+            if (!input.note?.includes(`/${first.serviceDate}/`)) {
+              return yield* provider.service.createReservation(input);
+            }
+            const [journaled] = yield* db
+              .select()
+              .from(workspaceReservations)
+              .where(eq(workspaceReservations.id, first.id))
+              .pipe(Effect.orDie);
+            expect(journaled?.passDayHoldRequestedAt).toBeDefined();
+            expect(journaled?.passDayHoldRequestedAt).not.toBeNull();
+            expect(input.note).toContain(journaled!.passDayHoldGeneration!);
+            const created = yield* provider.service.createReservation(input);
+            hidden = created.id;
+            return yield* new DotyposUncertain({
+              operation: "createReservation",
+              reason: "timeout",
+            });
+          }),
+        listReservations: (
+          ...args: Parameters<typeof provider.service.listReservations>
+        ) =>
+          provider.service
+            .listReservations(...args)
+            .pipe(
+              Effect.map((records) => records.filter(({ id }) => id !== hidden))
+            ),
+      };
+      const outcome = yield* Effect.result(
+        createUnlimitedPassHolds(replacement)
+      ).pipe(Effect.provideService(DotyposService, replacementService));
+      expect(outcome).toEqual(
+        Result.fail(expect.objectContaining({ _tag: "DotyposUncertain" }))
+      );
+      const [pending] = yield* readUnlimitedPassDays(purchase.id);
+      const replacementId = hidden!;
+      expect(provider.reservations.get(replacementId)?.note).toContain(
+        pending!.passDayHoldGeneration!
+      );
+      expect(provider.reservations.get(originalRecord.id)?.status).toBe(
+        "CANCELLED"
+      );
+      yield* releaseUnlimitedPassDays(replacement).pipe(
+        Effect.provideService(DotyposService, replacementService)
+      );
+      const [stillPending] = yield* readUnlimitedPassDays(purchase.id);
+      expect(stillPending).toMatchObject({
+        id: first.id,
+        reservationState: "creating_hold",
+        dotyposReservationId: null,
+        passDayHoldGeneration: pending!.passDayHoldGeneration,
+      });
+
+      hidden = undefined;
+      yield* releaseUnlimitedPassDays(replacement).pipe(
+        Effect.provideService(DotyposService, {
+          ...replacementService,
+          cancelReservation: (id) =>
+            provider.service.cancelReservation(id).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new DotyposUncertain({
+                    operation: "cancelReservation",
+                    reason: "timeout",
+                  })
+                )
+              )
+            ),
+        })
+      );
+      expect((yield* readUnlimitedPassDays(purchase.id))[0]).toMatchObject({
+        id: first.id,
+        reservationState: "cancelling",
+        dotyposReservationId: replacementId,
+      });
+      hidden = replacementId;
+      yield* releaseUnlimitedPassDays(replacement).pipe(
+        Effect.provideService(DotyposService, replacementService)
+      );
+      const [released] = yield* readUnlimitedPassDays(purchase.id);
+      expect(released).toMatchObject({
+        id: first.id,
+        reservationState: "cancelled",
+        dotyposReservationId: replacementId,
+      });
+      expect(provider.reservations.get(replacementId)?.status).toBe(
+        "CANCELLED"
+      );
+    }).pipe(Effect.provide(Layer.mergeAll(database!.layer, provider.layer)))
+  );
+});
+
+for (const firstObservation of [
+  "release",
+  "expired create",
+  "live capacity",
+  "missing assignment table",
+  "parallel lookup failure",
+  "repeated provider ID",
+] as const) {
+  it(`settles ownership evidence from ${firstObservation}`, async () => {
+    const provider = makeInMemoryDotypos({});
+    const start = getCurrentWorkspaceDate().add({ days: 340 });
+    let original: DotyposReservationId | undefined;
+    let copy: DotyposReservationId | undefined;
+    let omitOriginal = false;
+    const service: DotyposService["Service"] = {
+      ...provider.service,
+      createReservation: (input) =>
+        Effect.gen(function* () {
+          const created = yield* provider.service.createReservation(input);
+          if (!input.note?.includes(`/${start}/`)) return created;
+          original = created.id;
+          if (firstObservation !== "repeated provider ID") {
+            copy = (yield* provider.service.createReservation(input)).id;
+          }
+          return yield* new DotyposUncertain({
+            operation: "createReservation",
+            reason: "timeout",
+          });
+        }),
+      listReservations: (input) =>
+        provider.service.listReservations(input).pipe(
+          Effect.map((records) => {
+            if (omitOriginal)
+              return records.filter(({ id }) => id !== original);
+            const first = records.find(({ id }) => id === original);
+            return firstObservation === "repeated provider ID" && first
+              ? [...records, first]
+              : records;
+          })
+        ),
+    };
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const purchase = yield* record(start);
+        const timedOut = yield* Effect.result(
+          createUnlimitedPassHolds(purchase)
+        );
+        expect(timedOut).toEqual(
+          Result.fail(expect.objectContaining({ _tag: "DotyposUncertain" }))
+        );
+        if (firstObservation === "repeated provider ID") {
+          yield* releaseUnlimitedPassDays(purchase);
+          expect((yield* readUnlimitedPassDays(purchase.id))[0]).toMatchObject({
+            reservationState: "cancelled",
+            dotyposReservationId: original,
+            failureCode: null,
+          });
+          return;
+        }
+        if (firstObservation === "parallel lookup failure") {
+          const repository = yield* WorkspaceReservationRepository;
+          const recording = yield* Deferred.make<void>();
+          const tableFailed = yield* Deferred.make<void>();
+          const finishRecording = yield* Deferred.make<void>();
+          const tableError = new DotyposUnavailable({
+            operation: "getTables",
+            reason: "server",
+          });
+          const assignment = Effect.flatMap(
+            WorkspaceTableAssignmentService,
+            (service) =>
+              service.getAssignedTableAvailability({
+                reservation: provider.reservations.get(original!)!,
+                kind: "cowork",
+              })
+          ).pipe(
+            Effect.provide(WorkspaceTableAssignmentService.Default),
+            Effect.provideService(DotyposService, {
+              ...service,
+              getTables: () =>
+                Deferred.await(recording).pipe(
+                  Effect.andThen(Effect.fail(tableError)),
+                  Effect.ensuring(
+                    Deferred.succeed(tableFailed, undefined).pipe(Effect.asVoid)
+                  )
+                ),
+            }),
+            Effect.provideService(WorkspaceReservationRepository, {
+              ...repository,
+              recordAmbiguousPassDayHolds: (claims) =>
+                Deferred.succeed(recording, undefined).pipe(
+                  Effect.andThen(Deferred.await(finishRecording)),
+                  Effect.andThen(repository.recordAmbiguousPassDayHolds(claims))
+                ),
+            })
+          );
+          const fiber = yield* Effect.forkChild(Effect.result(assignment));
+          yield* Deferred.await(tableFailed);
+          yield* Effect.yieldNow;
+          yield* Deferred.succeed(finishRecording, undefined);
+          expect(yield* Fiber.join(fiber)).toEqual(Result.fail(tableError));
+        } else if (firstObservation === "missing assignment table") {
+          const unavailable = yield* Effect.flatMap(
+            WorkspaceTableAssignmentService,
+            (assignment) =>
+              assignment.getAssignedTableAvailability({
+                reservation: provider.reservations.get(original!)!,
+                kind: "cowork",
+              })
+          ).pipe(Effect.provide(WorkspaceTableAssignmentService.Default));
+          expect(unavailable).toBe("unavailable");
+        } else if (firstObservation === "live capacity") {
+          yield* getBookableUnlimitedStarts({
+            startsOn: start,
+            endsBefore: start.add({ days: 1 }),
+            selection: { tier: "reserved-desk" },
+          });
+        } else if (firstObservation === "expired create") {
+          const { db } = yield* WorkspaceDatabase;
+          yield* db
+            .update(workspaceReservations)
+            .set({
+              reservationHoldExpiresAt: Temporal.Now.instant().subtract({
+                minutes: 1,
+              }),
+            })
+            .where(eq(workspaceReservations.passId, purchase.id));
+          const expired = yield* Effect.result(
+            createUnlimitedPassHolds(purchase)
+          );
+          expect(expired).toEqual(
+            Result.fail(expect.objectContaining({ reason: "expired" }))
+          );
+        } else {
+          yield* releaseUnlimitedPassDays(purchase);
+        }
+        const [ambiguous] = yield* readUnlimitedPassDays(purchase.id);
+        expect(ambiguous).toMatchObject({
+          reservationState: "creating_hold",
+          dotyposReservationId: null,
+          failureCode: ambiguousPassDayHoldCode,
+        });
+        const genuine = original!;
+        const copied = copy!;
+        omitOriginal = true;
+        yield* releaseUnlimitedPassDays(purchase);
+        const retry = yield* Effect.result(createUnlimitedPassHolds(purchase));
+        expect(retry).toEqual(
+          Result.fail(expect.objectContaining({ reason: "unfinished" }))
+        );
+        expect((yield* readUnlimitedPassDays(purchase.id))[0]).toEqual(
+          ambiguous
+        );
+        expect(provider.reservations.get(genuine)?.status).toBe("NEW");
+        expect(provider.reservations.get(copied)?.status).toBe("NEW");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            database!.layer,
+            WorkspaceReservationRepository.Default.pipe(
+              Layer.provide(database!.layer)
+            ),
+            Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
+              listLimitations: () => Effect.succeed([]),
+            })
+          )
+        ),
+        Effect.provideService(DotyposService, service)
+      )
+    );
+  });
+}
 
 it("adopts an ambiguous POST, reconfirms all days, then retains today on release", async () => {
   const provider = makeInMemoryDotypos({});
@@ -290,6 +696,17 @@ it("adopts an ambiguous POST, reconfirms all days, then retains today on release
 
       yield* createUnlimitedPassHolds(purchase);
       yield* reconfirmUnlimitedPassHolds(purchase);
+      const missing = yield* Effect.result(
+        reconfirmUnlimitedPassHolds(purchase).pipe(
+          Effect.provideService(DotyposService, {
+            ...provider.service,
+            getReservationsByIds: () => Effect.succeed(new Map()),
+          })
+        )
+      );
+      expect(missing).toEqual(
+        Result.fail(expect.objectContaining({ reason: "unfinished" }))
+      );
       expect(provider.reservations.size).toBe(unlimitedPassDays);
       expect(
         (yield* readUnlimitedPassDays(purchase.id)).map(({ id }) => id)

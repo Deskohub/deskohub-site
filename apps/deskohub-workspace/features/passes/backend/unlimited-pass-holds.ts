@@ -1,7 +1,7 @@
 import "server-only";
 
 import { type DotyposReservation, DotyposService } from "@deskohub/dotypos";
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { Data, Effect, Array as EffectArray, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
@@ -12,7 +12,9 @@ import {
 import type { OrderId } from "@/features/order";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { currentInstant } from "@/shared/utils/temporal";
+import { ambiguousPassDayHoldCode } from "../pass-day-marker";
 import { type PassTier, unlimitedPassDays } from "../pass-offer";
+import { recordAmbiguousPassDayHolds } from "./pass-day-hold-ownership";
 import {
   createUnlimitedPassDayHold,
   listUnlimitedPassDayHolds,
@@ -55,6 +57,57 @@ const providerDay = (row: PassDay, tier: PassTier) => ({
     row.serviceDate
   ),
 });
+
+const passDayHold = (
+  purchase: Pick<Purchase, "id" | "tier">,
+  row: PassDay
+) => ({
+  passId: purchase.id,
+  customerId: row.dotyposCustomerId,
+  day: providerDay(row, purchase.tier),
+  generation: row.passDayHoldGeneration,
+});
+
+const matchesPassDayAttempt = (row: PassDay) =>
+  and(
+    eq(workspaceReservations.id, row.id),
+    eq(workspaceReservations.reservationState, row.reservationState),
+    row.passDayHoldGeneration === null
+      ? isNull(workspaceReservations.passDayHoldGeneration)
+      : eq(
+          workspaceReservations.passDayHoldGeneration,
+          row.passDayHoldGeneration
+        ),
+    row.passDayHoldRequestedAt === null
+      ? isNull(workspaceReservations.passDayHoldRequestedAt)
+      : eq(
+          workspaceReservations.passDayHoldRequestedAt,
+          row.passDayHoldRequestedAt
+        ),
+    row.dotyposReservationId === null
+      ? isNull(workspaceReservations.dotyposReservationId)
+      : eq(
+          workspaceReservations.dotyposReservationId,
+          row.dotyposReservationId
+        ),
+    row.failureCode === null
+      ? isNull(workspaceReservations.failureCode)
+      : eq(workspaceReservations.failureCode, row.failureCode)
+  );
+
+const findUnboundPassDayHolds = (
+  records: readonly DotyposReservation[],
+  hold: ReturnType<typeof passDayHold>
+) =>
+  EffectArray.dedupeWith(
+    records.filter(
+      (record) =>
+        // A legacy marker cannot associate a cancelled record with this attempt.
+        (hold.generation !== null || record.status !== "CANCELLED") &&
+        matchesUnlimitedPassDayHold(record, hold)
+    ),
+    (left, right) => left.id === right.id
+  );
 
 /** Check the issued day rows again in the payment admission transaction. */
 export const readPayableUnlimitedHolds = Effect.fn("readPayableUnlimitedHolds")(
@@ -104,35 +157,67 @@ export const reconfirmUnlimitedPassHolds = Effect.fn(
     holds.map((hold) => hold.dotyposReservationId),
     { concurrency: 1 }
   );
-  if (
-    holds.some((hold) => {
-      const reservation = provider.get(hold.dotyposReservationId);
-      return (
-        reservation?.status !== "NEW" ||
-        !matchesUnlimitedPassDayHold(reservation, {
-          passId: purchase.id,
-          customerId: hold.dotyposCustomerId,
-          day: providerDay(hold, purchase.tier),
-        })
-      );
-    })
-  ) {
-    return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+  for (const hold of holds) {
+    const reservation = provider.get(hold.dotyposReservationId);
+    if (
+      reservation &&
+      (reservation.status !== "NEW" ||
+        !matchesUnlimitedPassDayHold(reservation, passDayHold(purchase, hold)))
+    ) {
+      return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+    }
+  }
+  if (holds.some((hold) => !provider.has(hold.dotyposReservationId))) {
+    return yield* new UnlimitedPassHoldsUnavailable({ reason: "unfinished" });
   }
 });
 
-const readMarkedHolds = Effect.fnUntraced(function* (
-  purchase: Purchase,
-  rows: readonly WorkspaceReservationRow[]
-) {
-  const first = rows[0];
-  if (!first || !rows.some((day) => day.passDayHoldRequestedAt)) return [];
-  return yield* listUnlimitedPassDayHolds({
-    passId: purchase.id,
-    customerId: first.dotyposCustomerId,
-    startDate: Temporal.PlainDate.from(purchase.validFrom),
-  });
-});
+const observePassDayHolds = (purchase: Purchase, rows: readonly PassDay[]) =>
+  Effect.uninterruptibleMask(
+    Effect.fnUntraced(function* (restore) {
+      const first = rows.find((day) => day.passDayHoldRequestedAt);
+      const records = first
+        ? yield* restore(
+            listUnlimitedPassDayHolds({
+              passId: purchase.id,
+              customerId: first.dotyposCustomerId,
+              startDate: Temporal.PlainDate.from(purchase.validFrom),
+            })
+          )
+        : [];
+      const observed = rows
+        .filter(
+          (row) => row.passDayHoldRequestedAt && !row.dotyposReservationId
+        )
+        .map((row) => ({
+          row,
+          matches: findUnboundPassDayHolds(records, passDayHold(purchase, row)),
+        }));
+      // Record the full lookup before expiry or a failed day can end the batch.
+      const { db } = yield* WorkspaceDatabase;
+      yield* recordAmbiguousPassDayHolds(
+        db,
+        observed.flatMap(({ row, matches }) =>
+          row.passDayHoldRequestedAt && matches.length > 1
+            ? [
+                {
+                  passId: purchase.id,
+                  serviceDate: row.serviceDate,
+                  holdGeneration: row.passDayHoldGeneration,
+                  holdRequestedAt: row.passDayHoldRequestedAt,
+                },
+              ]
+            : []
+        )
+      );
+      return {
+        records,
+        matches: new Map(
+          observed.map(({ row, matches }) => [row.id, matches] as const)
+        ),
+      };
+    })
+  );
 
 /** Runs inside the pass-order section after the local intent transaction commits. */
 export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
@@ -145,11 +230,20 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
     ) {
       return yield* new UnlimitedPassHoldsUnavailable({ reason: "unfinished" });
     }
-    const remote = yield* readMarkedHolds(
+    const { matches } = yield* observePassDayHolds(
       purchase,
-      rows.filter((row) => !row.dotyposReservationId)
+      rows.filter(
+        (row) =>
+          !row.dotyposReservationId &&
+          row.failureCode !== ambiguousPassDayHoldCode
+      )
     );
     const attachHold = Effect.fnUntraced(function* (row: PassDay) {
+      if (row.failureCode === ambiguousPassDayHoldCode) {
+        return yield* new UnlimitedPassHoldsUnavailable({
+          reason: "unfinished",
+        });
+      }
       if (row.reservationState === "held" && row.dotyposReservationId) return;
       if (row.reservationState !== "creating_hold") {
         return yield* new UnlimitedPassHoldsUnavailable({
@@ -165,44 +259,60 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
           reason: "expired",
         });
       }
-      const hold = {
-        passId: purchase.id,
-        customerId: row.dotyposCustomerId,
-        day: providerDay(row, purchase.tier),
-      };
+      let attempt = row;
+      let hold = passDayHold(purchase, attempt);
       let attached: DotyposReservation;
       if (row.passDayHoldRequestedAt) {
-        const matches = remote.filter(
-          (record) =>
-            record.status === "NEW" && matchesUnlimitedPassDayHold(record, hold)
-        );
-        if (matches.length !== 1 || !matches[0]) {
+        const observed = matches.get(row.id);
+        if (observed?.length !== 1 || !observed[0]) {
           return yield* new UnlimitedPassHoldsUnavailable({
             reason: "unfinished",
           });
         }
-        attached = matches[0];
+        attached = observed[0];
       } else {
+        const generation = row.passDayHoldGeneration ?? crypto.randomUUID();
         const [claimed] = yield* db
           .update(workspaceReservations)
-          .set({ passDayHoldRequestedAt: now, updatedAt: now })
-          .where(
-            and(
-              eq(workspaceReservations.id, row.id),
-              eq(workspaceReservations.reservationState, "creating_hold"),
-              isNull(workspaceReservations.passDayHoldRequestedAt)
-            )
-          )
+          .set({
+            passDayHoldGeneration: generation,
+            passDayHoldRequestedAt: now,
+            updatedAt: now,
+          })
+          .where(matchesPassDayAttempt(row))
           .returning({ id: workspaceReservations.id });
         if (!claimed)
           return yield* new UnlimitedPassHoldsUnavailable({
             reason: "changed",
           });
+        attempt = {
+          ...row,
+          passDayHoldGeneration: generation,
+          passDayHoldRequestedAt: now,
+        };
+        hold = passDayHold(purchase, attempt);
         attached = yield* createUnlimitedPassDayHold({
           ...hold,
+          generation,
           coffee:
             purchase.tier !== "open-space" || purchase.unlimitedCoffee === true,
-        });
+        }).pipe(
+          Effect.tapError((error) =>
+            error._tag === "DotyposUncertain"
+              ? Effect.void
+              : Effect.gen(function* () {
+                  const failedAt = yield* currentInstant;
+                  yield* db
+                    .update(workspaceReservations)
+                    .set({
+                      reservationState: "hold_expired",
+                      reservationHoldExpiredAt: failedAt,
+                      updatedAt: failedAt,
+                    })
+                    .where(matchesPassDayAttempt(attempt));
+                })
+          )
+        );
       }
       if (
         attached.status !== "NEW" ||
@@ -212,7 +322,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
           reason: "changed",
         });
       }
-      yield* db
+      const [saved] = yield* db
         .update(workspaceReservations)
         .set({
           dotyposReservationId: attached.id,
@@ -220,12 +330,11 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
           reservationCreatedAt: now,
           updatedAt: now,
         })
-        .where(
-          and(
-            eq(workspaceReservations.id, row.id),
-            eq(workspaceReservations.reservationState, "creating_hold")
-          )
-        );
+        .where(matchesPassDayAttempt(attempt))
+        .returning({ id: workspaceReservations.id });
+      if (!saved) {
+        return yield* new UnlimitedPassHoldsUnavailable({ reason: "changed" });
+      }
     });
     for (const pair of EffectArray.chunksOf(rows, 2)) {
       const outcomes = yield* Effect.forEach(
@@ -239,7 +348,7 @@ export const createUnlimitedPassHolds = Effect.fn("createUnlimitedPassHolds")(
   }
 );
 
-/** Keeps uncertain POST claims allocated until a matching provider record is observed. */
+/** Under the pass fulfillment section, keeps uncertain POST claims allocated until observed. */
 export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
   function* (purchase: Purchase) {
     if (
@@ -254,39 +363,48 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
       (day) =>
         day.reservationState !== "cancelled" &&
         day.reservationState !== "hold_expired" &&
-        day.serviceDate !== null &&
+        day.failureCode !== ambiguousPassDayHoldCode &&
         (!purchase.accessEndsOn || day.serviceDate >= purchase.accessEndsOn)
     );
-    const remote = yield* readMarkedHolds(purchase, rows);
+    const lookup = yield* Effect.result(observePassDayHolds(purchase, rows));
+    const provider = Result.isSuccess(lookup) ? lookup.success : undefined;
     yield* Effect.forEach(
       rows,
       Effect.fnUntraced(
         function* (row: PassDay) {
           const now = yield* currentInstant;
-          const matches = remote.filter((record) =>
-            matchesUnlimitedPassDayHold(record, {
-              passId: purchase.id,
-              customerId: row.dotyposCustomerId,
-              day: providerDay(row, purchase.tier),
-            })
+          let released = provider?.records.find(
+            ({ id }) => id === row.dotyposReservationId
           );
-          const ids = [
-            ...new Set([
-              ...(row.dotyposReservationId ? [row.dotyposReservationId] : []),
-              ...matches.map(({ id }) => id),
-            ]),
-          ];
-          if (!ids.length && row.passDayHoldRequestedAt) return;
-          for (const id of ids) {
-            if (
-              matches.some(
-                (record) => record.id === id && record.status === "CANCELLED"
-              )
-            )
-              continue;
-            yield* dotypos.cancelReservation(id);
+          if (!row.dotyposReservationId && row.passDayHoldRequestedAt) {
+            const observed = provider?.matches.get(row.id);
+            if (observed?.length !== 1) return;
+            released = observed[0];
           }
-          const releasedId = ids[0];
+          const releasedId = row.dotyposReservationId ?? released?.id;
+          if (!releasedId && row.passDayHoldRequestedAt) return;
+          let attempt = row;
+          if (releasedId) {
+            // Fence provider cancellation and keep the id if the request is interrupted.
+            const [claimed] = yield* db
+              .update(workspaceReservations)
+              .set({
+                dotyposReservationId: releasedId,
+                reservationState: "cancelling",
+                updatedAt: now,
+              })
+              .where(matchesPassDayAttempt(row))
+              .returning({ id: workspaceReservations.id });
+            if (!claimed) return;
+            attempt = {
+              ...row,
+              dotyposReservationId: releasedId,
+              reservationState: "cancelling",
+            };
+            if (released?.status !== "CANCELLED") {
+              yield* dotypos.cancelReservation(releasedId);
+            }
+          }
           yield* db
             .update(workspaceReservations)
             .set({
@@ -298,19 +416,7 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
               reservationHoldExpiredAt: now,
               updatedAt: now,
             })
-            .where(
-              and(
-                eq(workspaceReservations.id, row.id),
-                inArray(workspaceReservations.reservationState, [
-                  "creating_hold",
-                  "held",
-                  "confirming",
-                  "confirmed",
-                  "cancelling",
-                  "cancellation_failed",
-                ])
-              )
-            );
+            .where(matchesPassDayAttempt(attempt));
         },
         Effect.catch(() =>
           Effect.logWarning("Unlimited pass day release needs reconciliation")
@@ -318,6 +424,7 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
       ),
       { concurrency: 2, discard: true }
     );
+    if (Result.isFailure(lookup)) return yield* lookup.failure;
   }
 );
 
@@ -354,11 +461,7 @@ export const confirmUnlimitedPassDays = Effect.fn("confirmUnlimitedPassDays")(
         );
         if (
           confirmed.status !== "CONFIRMED" ||
-          !matchesUnlimitedPassDayHold(confirmed, {
-            passId: purchase.id,
-            customerId: row.dotyposCustomerId,
-            day: providerDay(row, purchase.tier),
-          })
+          !matchesUnlimitedPassDayHold(confirmed, passDayHold(purchase, row))
         ) {
           return yield* new UnlimitedPassHoldsUnavailable({
             reason: "changed",

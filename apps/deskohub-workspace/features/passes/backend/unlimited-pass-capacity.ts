@@ -31,7 +31,10 @@ import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date
 import type { ReservationInterval } from "@/features/reservation/reservation-interval";
 import { getPlainDatesBetween } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
-import { getBookingsWithPassDayIntents } from "./pass-day-capacity-bookings";
+import {
+  getBookingsWithPassDayIntents,
+  observePassDayInventory,
+} from "./pass-day-capacity-bookings";
 
 export type UnlimitedPassCapacitySelection =
   | { readonly tier: "open-space" | "reserved-desk" }
@@ -92,21 +95,25 @@ const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
     last,
   });
 
-  const { tables, reservations, limitations, expiredIds } = yield* Effect.all(
+  const reads = yield* Effect.all(
     {
       tables: inventory.tables,
-      reservations: inventory.listActiveReservationsOverlapping({
-        startDate: new Date(
-          getOccupancyWindow(
-            getCoworkReservationInterval("reserved-desk", first.toString())
-          ).startsAt
-        ),
-        endDate: new Date(
-          getOccupancyWindow(
-            getCoworkReservationInterval("reserved-desk", last.toString())
-          ).endsAt
-        ),
-      }),
+      observations: observePassDayInventory(
+        workspaceReservations,
+        inventory.listActiveReservationsOverlapping({
+          startDate: new Date(
+            getOccupancyWindow(
+              getCoworkReservationInterval("reserved-desk", first.toString())
+            ).startsAt
+          ),
+          endDate: new Date(
+            getOccupancyWindow(
+              getCoworkReservationInterval("reserved-desk", last.toString())
+            ).endsAt
+          ),
+        }),
+        intents
+      ),
       limitations: inventory.listLimitations({
         from: first.toString(),
         to: last.toString(),
@@ -115,15 +122,19 @@ const loadUnlimitedInventory = Effect.fn("loadUnlimitedInventory")(function* (
         now,
       }),
     },
-    { concurrency: "unbounded" }
+    { concurrency: "unbounded", mode: "result" }
   );
+  const observations = yield* Effect.fromResult(reads.observations);
+  const expiredIds = yield* Effect.fromResult(reads.expiredIds);
 
   return {
-    tables,
-    closedDates: getFullyOccupiedCalendarDates(limitations),
+    tables: yield* Effect.fromResult(reads.tables),
+    closedDates: getFullyOccupiedCalendarDates(
+      yield* Effect.fromResult(reads.limitations)
+    ),
     bookings: getBookingsWithPassDayIntents(
-      excludeDotyposReservationsById(reservations, expiredIds),
-      intents,
+      excludeDotyposReservationsById(observations.reservations, expiredIds),
+      observations.passDayIntents,
       supersedeOrderId
     ),
   };
