@@ -23,9 +23,13 @@ import {
   orders,
   passPurchases,
   paymentAttempts,
+  unlimitedPassSupersessions,
   workspaceReservations,
 } from "@/db/schema";
-import { WorkspaceLockSections } from "@/db/workspace-locks";
+import {
+  holdCustomerAccountAndPassPurchase,
+  WorkspaceLockSections,
+} from "@/db/workspace-locks";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
 import {
@@ -79,7 +83,10 @@ import {
   recordReplacementUnlimitedPassHolds,
   recordUnlimitedPassOrder,
 } from "./unlimited-pass-orders";
-import { beginUnlimitedPassPurchase } from "./unlimited-pass-purchase";
+import {
+  beginUnlimitedPassPurchase,
+  loadUnlimitedCheckoutContinuation,
+} from "./unlimited-pass-purchase";
 import { prepareUnlimitedPassRecovery } from "./unlimited-pass-recovery";
 
 let database: WorkspacePostgresSuiteDatabase | null;
@@ -104,7 +111,10 @@ const record = (
 ) =>
   Effect.gen(function* () {
     const { db, transaction } = yield* WorkspaceDatabase;
-    yield* db.insert(customerAccounts).values({ id: buyer });
+    yield* db
+      .insert(customerAccounts)
+      .values({ id: buyer })
+      .onConflictDoNothing();
     return yield* transaction(
       recordUnlimitedPassOrder({
         orderId: orderIdSchema.make(crypto.randomUUID()),
@@ -786,6 +796,249 @@ it("preserves an uncertain Continue and replays both rejected dates after void",
   );
 });
 
+it("Continue releases each owned predecessor and leaves other buyers' drafts in place", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 100 });
+  const accountId = newAccountId();
+  const provider = makeInMemoryDotypos({});
+  const layer = unlimitedDraftLayer(accountId, provider.service);
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const first = yield* record(start, accountId, accountId);
+      const second = yield* record(
+        start.add({ days: 31 }),
+        accountId,
+        accountId
+      );
+      const foreign = yield* record(
+        start,
+        newAccountId(),
+        fixtureReservationAuthorId
+      );
+      const replacement = yield* record(
+        start.add({ days: 62 }),
+        accountId,
+        accountId
+      );
+      yield* createUnlimitedPassHolds(first);
+      yield* createUnlimitedPassHolds(second);
+
+      const result = yield* beginUnlimitedPassPurchase({
+        orderId: replacement.id,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: replacement.validFrom },
+        supersedeOrderId: first.id,
+        supersedeOrderIds: [foreign.id, second.id, first.id, replacement.id],
+      });
+      expect(result.id).toBe(replacement.id);
+      const { db } = yield* WorkspaceDatabase;
+      for (const prior of [first, second]) {
+        const [purchase] = yield* db
+          .select({ status: passPurchases.status })
+          .from(passPurchases)
+          .where(eq(passPurchases.id, prior.id));
+        expect(purchase?.status).toBe("void");
+        const rows = yield* readUnlimitedPassDays(prior.id);
+        expect(rows.every((day) => day.reservationState === "cancelled")).toBe(
+          true
+        );
+      }
+      const [foreignPurchase] = yield* db
+        .select({ status: passPurchases.status })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, foreign.id));
+      expect(foreignPurchase?.status).toBe("pending_payment");
+      expect(
+        [...provider.reservations.values()].filter(
+          (row) => row.status === "NEW"
+        )
+      ).toHaveLength(unlimitedPassDays);
+    }).pipe(Effect.provide(layer))
+  );
+});
+
+it("a late Continue cannot create a non-overlapping draft after replacement", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 2 });
+  const accountId = newAccountId();
+  const email = testEmailAddress("unlimited-late-continue");
+  const session = {
+    ...testSessionProfile,
+    accountId,
+    email,
+    deletionRequested: false,
+  };
+  const provider = makeInMemoryDotypos({
+    tables: [
+      Schema.decodeUnknownSync(DotyposTableSchema)({
+        id: tableId,
+        _cloudId: "1",
+        display: true,
+        enabled: true,
+        name: "Synthetic reserved desk",
+        seats: "1",
+        tags: ["cowork:reserved-desk"],
+      }),
+    ],
+  });
+  const testDatabase = database!;
+  const layer = Layer.mergeAll(
+    testDatabase.layer,
+    provider.layer,
+    WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase.databasePool),
+    WorkspaceReservationRepository.Default.pipe(
+      Layer.provide(testDatabase.layer)
+    ),
+    Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
+      listLimitations: () => Effect.succeed([]),
+    }),
+    Layer.mock(CurrentCustomerAccount, {
+      requireActive: Effect.succeed(session),
+      peek: Effect.succeed({
+        kind: "linked",
+        session,
+        account: { accountId, dotyposCustomerId: customerId },
+        autoLinked: false,
+      }),
+    }),
+    Layer.mock(CustomerAccountSections, {
+      withActiveAccount: (buyer, operation, options) => {
+        const hold = options?.passPurchaseOrderId
+          ? holdCustomerAccountAndPassPurchase(
+              buyer,
+              options.passPurchaseOrderId
+            )
+          : WorkspaceLockSections.customerAccount(buyer);
+        return hold(
+          Effect.provideService(operation, HeldCustomerAccount, {
+            accountId: buyer,
+            email,
+          })
+        );
+      },
+    }),
+    Layer.mock(CustomerAccountContactService, {}),
+    Layer.mock(WorkspaceFeatureFlagService, {
+      isEnabled: () => Effect.succeed(true),
+    }),
+    Layer.mock(DiscountService, {
+      quote: ({ product, discountableSubtotal }) =>
+        Effect.succeed({
+          product,
+          discountableSubtotal,
+          discountedSubtotal: discountableSubtotal,
+          totalDiscount: currencyCZK(0),
+          discounts: [],
+        }),
+    })
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      yield* db.insert(customerAccounts).values({ id: accountId });
+      const originalId = orderIdSchema.make(crypto.randomUUID());
+      const replacementId = orderIdSchema.make(crypto.randomUUID());
+      const entered = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      const delayed = yield* beginUnlimitedPassPurchase({
+        orderId: originalId,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      }).pipe(
+        Effect.provide(
+          Layer.mock(WorkspaceFeatureFlagService, {
+            isEnabled: () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(proceed)),
+                Effect.as(true)
+              ),
+          })
+        ),
+        Effect.forkChild
+      );
+      yield* Deferred.await(entered);
+      const selection = {
+        tier: "reserved-desk" as const,
+        startDate: date(start.add({ days: 31 })),
+      };
+      const replacement = yield* beginUnlimitedPassPurchase({
+        orderId: replacementId,
+        locale: "en-US",
+        selection,
+        supersedeOrderIds: [originalId],
+      });
+      expect(replacement.id).toBe(replacementId);
+      yield* Deferred.succeed(proceed, undefined);
+      expect(yield* Effect.result(Fiber.join(delayed))).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "UnlimitedPassDraftVoided",
+            blockingDates: [],
+          })
+        )
+      );
+      expect(yield* db.select().from(unlimitedPassSupersessions)).toEqual([
+        { buyerAccountId: accountId, orderId: originalId },
+      ]);
+      expect(yield* db.select({ id: orders.id }).from(orders)).toEqual([
+        { id: replacementId },
+      ]);
+      expect(provider.reservations.size).toBe(unlimitedPassDays);
+
+      expect(
+        yield* Effect.result(
+          beginUnlimitedPassPurchase({
+            orderId: replacementId,
+            locale: "en-US",
+            selection,
+            holderEmail: testEmailAddress("unlimited-different-holder"),
+          })
+        )
+      ).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "UnlimitedPassAdmissionError",
+            reason: "draft-changed",
+          })
+        )
+      );
+    }).pipe(Effect.provide(layer))
+  );
+});
+
+it("rejects a Continue replay when an attached day's deadline passed", async () => {
+  const provider = makeInMemoryDotypos({});
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const start = getCurrentWorkspaceDate().add({ days: 4000 });
+      const purchase = yield* record(start);
+      yield* createUnlimitedPassHolds(purchase);
+      const [first] = yield* readUnlimitedPassDays(purchase.id);
+      const { db } = yield* WorkspaceDatabase;
+      yield* db
+        .update(workspaceReservations)
+        .set({
+          reservationHoldExpiresAt: Temporal.Now.instant().subtract({
+            seconds: 1,
+          }),
+        })
+        .where(eq(workspaceReservations.id, first!.id));
+      const replay = yield* Effect.result(createUnlimitedPassHolds(purchase));
+      expect(replay).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            reason: "expired",
+            blockingDates: [first!.serviceDate],
+          })
+        )
+      );
+      expect(provider.reservations.size).toBe(unlimitedPassDays);
+    }).pipe(
+      Effect.provide(database!.layer),
+      Effect.provideService(DotyposService, provider.service)
+    )
+  );
+});
+
 it("replays expired service dates after losing the Continue response", async () => {
   const provider = makeInMemoryDotypos({});
   const accountId = newAccountId();
@@ -1107,6 +1360,9 @@ it("replays reconciled void drafts expired before payment and fences expired att
         activePaymentAttemptId: null,
         status: "void",
       });
+      expect(
+        yield* loadUnlimitedCheckoutContinuation(purchase.id, "submitted")
+      ).toMatchObject({ kind: "details" });
       const begin = beginUnlimitedPassPurchase({
         orderId: purchase.id,
         locale: "en-US",
@@ -1142,6 +1398,9 @@ it("replays reconciled void drafts expired before payment and fences expired att
         Result.fail(expect.objectContaining({ _tag: "SchemaError" }))
       );
       yield* expirePass(purchase.id);
+      expect(
+        yield* loadUnlimitedCheckoutContinuation(purchase.id, "submitted")
+      ).toEqual({ kind: "status", locale: purchase.locale });
       expect(yield* Effect.result(begin)).toEqual(
         Result.fail(
           expect.objectContaining({

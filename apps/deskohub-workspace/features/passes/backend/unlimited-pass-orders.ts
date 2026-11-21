@@ -40,6 +40,7 @@ export class UnlimitedPassAdmissionError extends Data.TaggedError(
   readonly reason:
     | "holder-unavailable"
     | "overlapping-pass"
+    | "draft-changed"
     | "purchase-conflict";
 }> {}
 

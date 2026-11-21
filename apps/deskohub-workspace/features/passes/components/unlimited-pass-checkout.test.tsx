@@ -1,12 +1,13 @@
 import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { orderIdSchema } from "@/features/order";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
+import { unlimitedCheckoutPredecessorLimit } from "../unlimited-pass-checkout";
 
 mock.module("next/image", () => ({ default: () => null }));
 
@@ -71,6 +72,19 @@ const base = {
   beginCheckout: async () => ({}),
   repriceCheckout: async () => ({}),
   payCheckout: async () => ({}),
+} as const;
+
+const readyCheckout = {
+  status: "ready",
+  validFrom: openSpaceStart,
+  lastUsableDate: "2026-11-30",
+  disclosure: { documents: [] },
+  price: {
+    fingerprint: "a".repeat(64),
+    subtotal: currencyCZK(349000),
+    total: currencyCZK(349000),
+    discounts: [],
+  },
 } as const;
 
 test("Continue uses the selected tier's full-window starts and discards irrelevant add-ons", async () => {
@@ -284,7 +298,10 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     const existingOrderId = orderIdSchema.make(
       "018f8000-0000-7000-8000-000000000001"
     );
-    const requests: Array<{ orderId: string; supersedeOrderId?: string }> = [];
+    const requests: Array<{
+      orderId: string;
+      supersedeOrderIds?: readonly string[];
+    }> = [];
     const view = render(
       <QueryProvider>
         <UnlimitedPassCheckout
@@ -325,7 +342,7 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     expect(requests).toEqual([
       expect.objectContaining({
         orderId: expect.not.stringMatching(existingOrderId),
-        supersedeOrderId: existingOrderId,
+        supersedeOrderIds: [existingOrderId],
         holderEmail,
       }),
     ]);
@@ -335,6 +352,8 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     ).toBe(true);
     const reopenedUrl = checkoutUrl();
     expect(reopenedUrl.searchParams.get("supersedeOrder")).toBeNull();
+    expect(reopenedUrl.searchParams.get("submittedOrder")).toBeNull();
+    expect(reopenedUrl.searchParams.getAll("predecessorOrder")).toEqual([]);
     expect(reopenedUrl.searchParams.get("order")).toBeNull();
     expect(reopenedUrl.searchParams.get("step")).toBeNull();
     expect(reopenedUrl.pathname).toBe("/en-US/passes/unlimited");
@@ -343,7 +362,7 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(requests).toHaveLength(2));
     expect(requests[1]?.orderId).not.toBe(requests[0]?.orderId);
-    expect(requests[1]?.supersedeOrderId).toBeUndefined();
+    expect(requests[1]?.supersedeOrderIds).toBeUndefined();
   }
 );
 
@@ -378,6 +397,260 @@ test("an unknown Continue outcome retries the same draft", async () => {
   await waitFor(() => expect(orderIds).toHaveLength(2));
   expect(orderIds[1]).toBe(orderIds[0]);
 });
+
+test("a reload during Continue retries the committed gift and a date change supersedes it", async () => {
+  const response = Promise.withResolvers<{ data: typeof readyCheckout }>();
+  const selection = { ...base.initialOptions, startDate: openSpaceStart };
+  const openDrafts = new Set<OrderId>();
+  const priorOrderId = orderIdSchema.make(crypto.randomUUID());
+  openDrafts.add(priorOrderId);
+  const beginCheckout = mock(
+    async (input: {
+      orderId: OrderId;
+      supersedeOrderIds?: readonly OrderId[];
+      selection: { startDate: string };
+      holderEmail?: string;
+    }) => {
+      expect(checkoutUrl().searchParams.get("submittedOrder")).toBe(
+        input.orderId
+      );
+      expect(checkoutUrl().search).not.toContain(
+        encodeURIComponent(holderEmail)
+      );
+      for (const id of input.supersedeOrderIds ?? []) openDrafts.delete(id);
+      if (!openDrafts.has(input.orderId)) {
+        if (openDrafts.size)
+          throw new Error("Fixture draft still holds capacity");
+        openDrafts.add(input.orderId);
+      }
+      if (beginCheckout.mock.calls.length === 1) return response.promise;
+      throw new Error("Synthetic network failure");
+    }
+  );
+  const renderCheckout = (
+    draft: Parameters<typeof UnlimitedPassCheckout>[0]["draft"]
+  ) =>
+    render(
+      <QueryProvider>
+        <UnlimitedPassCheckout
+          {...base}
+          draft={draft}
+          initialDetails={selection}
+          getAvailability={async () => ({
+            data: {
+              ...availability,
+              starts: {
+                ...availability.starts,
+                "open-space": [openSpaceStart, monitorStart],
+              },
+            },
+          })}
+          beginCheckout={beginCheckout}
+        />
+      </QueryProvider>
+    );
+  const original = renderCheckout({
+    kind: "replace",
+    orderId: priorOrderId,
+    holderEmail,
+  });
+  fireEvent.click(original.getByRole("button", { name: /continue/i }));
+  await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(1));
+  const submittedId = orderIdSchema.make(
+    checkoutUrl().searchParams.get("submittedOrder") ?? ""
+  );
+  expect(openDrafts).toEqual(new Set([submittedId]));
+  const predecessorOrderIds = checkoutUrl()
+    .searchParams.getAll("predecessorOrder")
+    .map((id) => orderIdSchema.make(id));
+  original.unmount();
+
+  const reloaded = renderCheckout({
+    kind: "submitted",
+    orderId: submittedId,
+    predecessorOrderIds,
+    holderEmail,
+  });
+  const submit = () =>
+    fireEvent.click(reloaded.getByRole("button", { name: /continue/i }));
+  expect(reloaded.getByDisplayValue(holderEmail)).toBeDefined();
+  submit();
+  await waitFor(() =>
+    expect(
+      reloaded.getByText(m.actionFailedUnexpectedly({}, { locale }))
+    ).toBeDefined()
+  );
+  expect(beginCheckout.mock.calls[1]?.[0]).toMatchObject({
+    orderId: submittedId,
+    holderEmail,
+    supersedeOrderIds: [priorOrderId],
+  });
+  expect(openDrafts).toEqual(new Set([submittedId]));
+
+  fireEvent.click(
+    reloaded.getByRole("button", {
+      name: m.reservationSelectionChange({}, { locale }),
+    })
+  );
+  const newDate = await reloaded.findByRole("button", {
+    name: /November 2nd, 2026/i,
+  });
+  fireEvent.click(newDate);
+  expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
+    submittedId,
+    priorOrderId,
+  ]);
+  submit();
+  submit();
+  await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(3));
+  const replacement = beginCheckout.mock.calls[2]?.[0];
+  expect(replacement).toMatchObject({
+    selection: { startDate: monitorStart },
+    holderEmail,
+    supersedeOrderIds: [submittedId, priorOrderId],
+  });
+  expect(replacement?.orderId).not.toBe(submittedId);
+  expect(openDrafts).toEqual(new Set([replacement?.orderId]));
+  expect(checkoutUrl().searchParams.get("step")).toBe("details");
+  await act(async () => response.resolve({ data: readyCheckout }));
+  expect(checkoutUrl().searchParams.get("submittedOrder")).toBe(
+    replacement?.orderId
+  );
+  expect(reloaded.queryByRole("button", { name: /pay/i })).toBeNull();
+});
+
+test("holder edits to a reloaded self-purchase retain every uncertain predecessor", async () => {
+  const originalId = orderIdSchema.make(crypto.randomUUID());
+  const beginCheckout = mock(
+    async (_input: {
+      orderId: OrderId;
+      supersedeOrderIds?: readonly OrderId[];
+    }) => {
+      throw new Error("Synthetic network failure");
+    }
+  );
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        draft={{
+          kind: "submitted",
+          orderId: originalId,
+          predecessorOrderIds: [],
+          holderEmail: null,
+        }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  fireEvent.click(
+    view.getByRole("checkbox", {
+      name: m.entryPackCheckoutGift({}, { locale }),
+    })
+  );
+  const input = view.getByLabelText(
+    m.entryPackCheckoutHolderEmail({}, { locale })
+  );
+  const submit = view.getByRole("button", { name: /continue/i });
+  fireEvent.change(input, {
+    target: { value: testEmailAddress("unlimited-replacement-holder") },
+  });
+  fireEvent.click(submit);
+  await waitFor(() =>
+    expect(
+      view.getByText(m.actionFailedUnexpectedly({}, { locale }))
+    ).toBeDefined()
+  );
+  const firstId = beginCheckout.mock.calls[0]?.[0].orderId;
+  expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
+    originalId,
+  ]);
+
+  fireEvent.change(input, {
+    target: { value: testEmailAddress("unlimited-second-holder") },
+  });
+  fireEvent.click(submit);
+  await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(2));
+  expect(beginCheckout.mock.calls[1]?.[0].supersedeOrderIds).toEqual([
+    firstId,
+    originalId,
+  ]);
+  expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
+    firstId,
+    originalId,
+  ]);
+});
+
+test.each([0, unlimitedCheckoutPredecessorLimit])(
+  "a holder change after pre-commit reload replaces the committed draft with %i predecessors",
+  async (predecessorCount) => {
+    const originalId = orderIdSchema.make(crypto.randomUUID());
+    const predecessorOrderIds = Array.from({ length: predecessorCount }, () =>
+      orderIdSchema.make(crypto.randomUUID())
+    );
+    const beginCheckout = mock(
+      async (input: {
+        orderId: OrderId;
+        holderEmail?: string;
+        supersedeOrderIds?: readonly OrderId[];
+      }) => {
+        expect(checkoutUrl().searchParams.get("submittedOrder")).toBe(
+          input.orderId
+        );
+        expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual(
+          input.supersedeOrderIds ?? []
+        );
+        return input.orderId === originalId
+          ? {
+              data: {
+                status: "purchase_error" as const,
+                reason: "draft-changed",
+              },
+            }
+          : { data: readyCheckout };
+      }
+    );
+    const view = render(
+      <QueryProvider>
+        <UnlimitedPassCheckout
+          {...base}
+          initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+          draft={{
+            kind: "submitted",
+            orderId: originalId,
+            predecessorOrderIds,
+          }}
+          beginCheckout={beginCheckout}
+        />
+      </QueryProvider>
+    );
+    fireEvent.click(
+      view.getByRole("checkbox", {
+        name: m.entryPackCheckoutGift({}, { locale }),
+      })
+    );
+    fireEvent.change(
+      view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
+      { target: { value: holderEmail } }
+    );
+    fireEvent.click(view.getByRole("button", { name: /continue/i }));
+    expect(await view.findByRole("button", { name: /pay/i })).toBeDefined();
+    expect(beginCheckout).toHaveBeenCalledTimes(2);
+    expect(beginCheckout.mock.calls[0]?.[0]).toMatchObject({
+      orderId: originalId,
+      holderEmail,
+    });
+    expect(beginCheckout.mock.calls[0]?.[0].supersedeOrderIds ?? []).toEqual(
+      predecessorOrderIds
+    );
+    expect(beginCheckout.mock.calls[1]?.[0]).toMatchObject({
+      holderEmail,
+      supersedeOrderIds: [originalId],
+    });
+    expect(beginCheckout.mock.calls[1]?.[0].orderId).not.toBe(originalId);
+  }
+);
 
 test("Details cannot hand off another selection while Begin is creating holds", async () => {
   const response = Promise.withResolvers<{
@@ -470,6 +743,50 @@ test("later calendar months load their own authoritative availability", async ()
   expect(
     view.getByRole<HTMLButtonElement>("button", { name: /continue/i }).disabled
   ).toBe(true);
+});
+
+test("Refresh quote from first Pay carries the existing order into the next Continue", async () => {
+  const selection = { ...base.initialOptions, startDate: openSpaceStart };
+  const beginCheckout = mock(
+    async (_input: {
+      orderId: OrderId;
+      supersedeOrderIds?: readonly OrderId[];
+    }) => ({
+      data: readyCheckout,
+    })
+  );
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={selection}
+        beginCheckout={beginCheckout}
+        payCheckout={async () => ({
+          data: { status: "purchase_error", reason: "quote-expired" },
+        })}
+      />
+    </QueryProvider>
+  );
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  const pay = await view.findByRole("button", { name: /pay/i });
+  fireEvent.click(view.getByRole("checkbox"));
+  fireEvent.click(pay);
+  fireEvent.click(
+    await view.findByRole("button", {
+      name: m.entryPackCheckoutRefreshQuote({}, { locale }),
+    })
+  );
+  const originalId = beginCheckout.mock.calls[0]?.[0].orderId;
+  expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
+    originalId,
+  ]);
+  expect(view.queryByRole("button", { name: /pay/i })).toBeNull();
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(2));
+  expect(beginCheckout.mock.calls[1]?.[0].orderId).not.toBe(originalId);
+  expect(beginCheckout.mock.calls[1]?.[0].supersedeOrderIds).toEqual([
+    originalId,
+  ]);
 });
 
 test("an expired status-originated payment retry returns to that same order", async () => {
