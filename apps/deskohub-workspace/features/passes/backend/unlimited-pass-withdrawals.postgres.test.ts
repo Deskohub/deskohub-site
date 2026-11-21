@@ -208,7 +208,7 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
 
   const find = (id: string, accountId: CustomerAccountId) =>
     run(
-      UnlimitedPassWithdrawals.use((family) =>
+      Effect.flatMap(UnlimitedPassWithdrawals, (family) =>
         family.find({ contractId: id, accountId, locale: "en-US" })
       )
     );
@@ -236,7 +236,9 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
 
   type Statement = Awaited<ReturnType<typeof statementFor>>;
   const recordWithdrawal = (statement: Statement) =>
-    WithdrawalRepository.use((repository) => repository.record(statement));
+    Effect.flatMap(WithdrawalRepository, (repository) =>
+      repository.record(statement)
+    );
   const record = (statement: Statement) => run(recordWithdrawal(statement));
   const expectRefused = async (statement: Statement) => {
     const error = await run(Effect.flip(recordWithdrawal(statement)));
@@ -244,7 +246,7 @@ describe.skipIf(!testDatabase)("Unlimited pass withdrawals on Postgres", () => {
   };
   const settleCancellation = (statement: Statement) =>
     run(
-      UnlimitedPassWithdrawals.use((family) =>
+      Effect.flatMap(UnlimitedPassWithdrawals, (family) =>
         family.cancel({
           contractId: statement.contract.id,
           refundAmount: statement.refundAmount,
