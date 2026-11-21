@@ -1,13 +1,7 @@
-import {
-  handleCallback,
-  type MessageMetadata,
-  type RetryDirective,
-} from "@vercel/queue";
-import { Cause, Data, Effect, Match, Predicate } from "effect";
+import { decodeStandardSchema } from "@deskohub/standard-schema";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { Cause, Data, Duration, Effect, Match } from "effect";
 import { isDatabaseUnavailable } from "@/db/database-unavailable";
-import { env } from "@/env";
-import { defineWorkspaceTask } from "@/shared/backend/workspace-effect";
-import { clamp, currentInstant } from "@/shared/utils";
 
 /** How a consumer wants the queue to treat one of its failures. */
 export type QueueRedelivery = Data.TaggedEnum<{
@@ -17,27 +11,28 @@ export type QueueRedelivery = Data.TaggedEnum<{
   WithBackoff: Record<never, never>;
   /** The work becomes due at a known instant: redeliver then. */
   At: { readonly instant: Temporal.Instant };
-  /** Unclassified: the queue trigger's retry delay applies. */
+  /** Unclassified: the configured retry delay applies. */
   Default: Record<never, never>;
 }>;
 
 export const QueueRedelivery = Data.taggedEnum<QueueRedelivery>();
 
-type VercelEnvironment = (typeof env)["VERCEL_ENV"];
+export type QueueDeliveryMode = "preview" | "durable";
 
-/**
- * Preview messages are synthetic and pinned to their deployment, so after this
- * many deliveries a failing one is abandoned instead of keeping the Preview
- * database awake until its retention ends.
- */
+export interface QueueDelivery {
+  readonly payload: unknown;
+  readonly topic: string;
+  readonly messageId: string;
+  readonly deliveryCount: number;
+}
+
+/** Preview messages are synthetic and pinned to their deployment. */
 export const previewQueueDeliveryLimit = 5;
 
 const backoffBaseSeconds = 60;
 const backoffMaxSeconds = 15 * 60;
-// Vercel Queues accepts visibility changes of up to one hour.
-const maxRedeliveryDelaySeconds = 60 * 60;
 
-type QueueRedeliveryReason =
+export type QueueDeliveryFailureReason =
   | "preview_database_unavailable"
   | "preview_delivery_limit"
   | "database_unavailable"
@@ -46,22 +41,42 @@ type QueueRedeliveryReason =
   | "scheduled"
   | "unclassified";
 
+export type QueueDeliveryAction = Data.TaggedEnum<{
+  Acknowledge: Record<never, never>;
+  RetryAfter: { readonly delay: Duration.Duration };
+  RetryAt: { readonly instant: Temporal.Instant };
+  RetryDefault: Record<never, never>;
+}>;
+
+const QueueDeliveryAction = Data.taggedEnum<QueueDeliveryAction>();
+
 interface QueueRedeliveryDecision {
-  readonly reason: QueueRedeliveryReason;
-  /** `undefined` rethrows, so the trigger's `retryAfterSeconds` applies. */
-  readonly directive: RetryDirective | undefined;
+  readonly reason: QueueDeliveryFailureReason;
+  readonly action: QueueDeliveryAction;
 }
 
-const acknowledge = { acknowledge: true } as const;
+export type QueueDeliveryOutcome = Data.TaggedEnum<{
+  Handled: Record<never, never>;
+  Invalid: Record<never, never>;
+  Failed: QueueRedeliveryDecision;
+}>;
 
-const backoffSeconds = (deliveryCount: number) =>
-  Math.min(
-    backoffBaseSeconds * 2 ** (Math.max(deliveryCount, 1) - 1),
-    backoffMaxSeconds
+const QueueDeliveryOutcome = Data.taggedEnum<QueueDeliveryOutcome>();
+
+export type QueueConsumer<R> = (
+  delivery: QueueDelivery,
+  mode: QueueDeliveryMode
+) => Effect.Effect<QueueDeliveryOutcome, never, R>;
+
+const backoff = (deliveryCount: number) =>
+  Duration.seconds(
+    Math.min(
+      backoffBaseSeconds * 2 ** (Math.max(deliveryCount, 1) - 1),
+      backoffMaxSeconds
+    )
   );
 
-// A consumer classifies only a lone typed failure. Defects, interruptions, and
-// concurrent failures keep the default redelivery.
+// Defects, interruptions, and concurrent failures keep the default redelivery.
 const classifyFailure = <E>(
   cause: Cause.Cause<E>,
   redelivery: (error: E) => QueueRedelivery
@@ -72,32 +87,32 @@ const classifyFailure = <E>(
     : QueueRedelivery.Default();
 };
 
-/**
- * Chooses what the queue does with a failed delivery. Only a Preview
- * (`VERCEL_ENV === "preview"`, never inferred) acknowledges a message because
- * its database is gone or because it reached the delivery limit; elsewhere a
- * database outage backs off and nothing is dropped without the consumer's
- * classification.
- */
 export const decideQueueRedelivery = <E>(input: {
   readonly cause: Cause.Cause<E>;
   readonly redelivery: (error: E) => QueueRedelivery;
   readonly deliveryCount: number;
-  readonly environment: VercelEnvironment;
-  readonly now: Temporal.Instant;
+  readonly mode: QueueDeliveryMode;
 }): QueueRedeliveryDecision => {
   const databaseUnavailable = isDatabaseUnavailable(input.cause);
-  if (input.environment === "preview") {
+  if (input.mode === "preview") {
     if (databaseUnavailable) {
-      return { reason: "preview_database_unavailable", directive: acknowledge };
+      return {
+        reason: "preview_database_unavailable",
+        action: QueueDeliveryAction.Acknowledge(),
+      };
     }
     if (input.deliveryCount >= previewQueueDeliveryLimit) {
-      return { reason: "preview_delivery_limit", directive: acknowledge };
+      return {
+        reason: "preview_delivery_limit",
+        action: QueueDeliveryAction.Acknowledge(),
+      };
     }
   } else if (databaseUnavailable) {
     return {
       reason: "database_unavailable",
-      directive: { afterSeconds: backoffSeconds(input.deliveryCount) },
+      action: QueueDeliveryAction.RetryAfter({
+        delay: backoff(input.deliveryCount),
+      }),
     };
   }
 
@@ -105,27 +120,21 @@ export const decideQueueRedelivery = <E>(input: {
     Match.tagsExhaustive({
       Never: (): QueueRedeliveryDecision => ({
         reason: "permanent_failure",
-        directive: acknowledge,
+        action: QueueDeliveryAction.Acknowledge(),
       }),
       WithBackoff: (): QueueRedeliveryDecision => ({
         reason: "transient_failure",
-        directive: { afterSeconds: backoffSeconds(input.deliveryCount) },
+        action: QueueDeliveryAction.RetryAfter({
+          delay: backoff(input.deliveryCount),
+        }),
       }),
       At: ({ instant }): QueueRedeliveryDecision => ({
         reason: "scheduled",
-        directive: {
-          afterSeconds: clamp(
-            Math.ceil(
-              (instant.epochMilliseconds - input.now.epochMilliseconds) / 1000
-            ),
-            1,
-            maxRedeliveryDelaySeconds
-          ),
-        },
+        action: QueueDeliveryAction.RetryAt({ instant }),
       }),
       Default: (): QueueRedeliveryDecision => ({
         reason: "unclassified",
-        directive: undefined,
+        action: QueueDeliveryAction.RetryDefault(),
       }),
     })
   );
@@ -161,113 +170,56 @@ const redeliveryLogs = {
     message: "Queue message failed; the queue redelivers it",
   },
 } as const satisfies Record<
-  QueueRedeliveryReason,
+  QueueDeliveryFailureReason,
   { readonly level: "Info" | "Warn" | "Error"; readonly message: string }
 >;
 
-/**
- * What escapes the task to the queue SDK. It carries only the directive: the
- * SDK prints a rethrown handler error with `console.error`, outside log
- * censorship, so the original cause is logged before this replaces it.
- */
-export class QueueDeliveryFailure extends Data.TaggedError(
-  "QueueDeliveryFailure"
-)<{
-  readonly message: string;
-  readonly reason: QueueRedeliveryReason;
-  readonly directive: RetryDirective | undefined;
-}> {}
+export const queueDeliveryFailureMessage = (
+  reason: QueueDeliveryFailureReason
+) => redeliveryLogs[reason].message;
 
-const logRedeliveryDecision = <E>(input: {
-  readonly cause: Cause.Cause<E>;
-  readonly decision: QueueRedeliveryDecision;
-}) => {
-  const log = redeliveryLogs[input.decision.reason];
-  return Effect.logWithLevel(log.level)(log.message, {
-    reason: input.decision.reason,
-    directive: input.decision.directive,
-    cause: input.cause,
-  });
-};
-
-const toQueueDeliveryFailure = (input: {
-  readonly decision: QueueRedeliveryDecision;
-}) =>
-  new QueueDeliveryFailure({
-    message: redeliveryLogs[input.decision.reason].message,
-    ...input.decision,
-  });
-
-/** Logs a failed delivery with its cause and fails with its directive. */
-const failQueueDelivery = <E>(input: {
-  readonly cause: Cause.Cause<E>;
-  readonly redelivery: (error: E) => QueueRedelivery;
-  readonly deliveryCount: number;
-  readonly environment: VercelEnvironment;
-}): Effect.Effect<never, QueueDeliveryFailure> =>
-  Effect.succeed(input).pipe(
-    Effect.bind("now", () => currentInstant),
-    Effect.let("decision", decideQueueRedelivery),
-    Effect.tap(logRedeliveryDecision),
-    Effect.let("failure", toQueueDeliveryFailure),
-    Effect.flatMap(({ failure }) => Effect.fail(failure))
-  );
-
-/**
- * Runs one delivery. A failure is logged with its cause and replaced by a
- * `QueueDeliveryFailure` that carries the redelivery directive.
- */
-export const deliverQueueMessage =
-  <Message, E>(input: {
-    readonly consume: (message: Message) => Effect.Effect<unknown, E, never>;
+export const defineQueueConsumer =
+  <Message, E, R>(input: {
+    readonly schema: StandardSchemaV1<unknown, Message>;
+    readonly label: string;
+    readonly handle: (message: Message) => Effect.Effect<unknown, E, R>;
     readonly redelivery: (error: E) => QueueRedelivery;
-    readonly environment: VercelEnvironment;
-  }) =>
-  (
-    message: Message,
-    metadata: MessageMetadata
-  ): Effect.Effect<void, E | QueueDeliveryFailure> =>
-    // Suspended so a consumer that throws while building its Effect is still
-    // logged and sanitized here.
-    Effect.suspend(() => input.consume(message)).pipe(
-      Effect.asVoid,
-      Effect.catchCauseIf(Predicate.not(Cause.hasInterruptsOnly), (cause) =>
-        failQueueDelivery({
+  }): QueueConsumer<R> =>
+  ({ payload, topic, messageId, deliveryCount }, mode) =>
+    // Decode and construct the handler inside the Effect so defects here
+    // receive the same treatment as defects while running the handler.
+    Effect.suspend((): Effect.Effect<QueueDeliveryOutcome, E, R> => {
+      const message = decodeStandardSchema(input.schema, payload);
+      return message === undefined
+        ? Effect.logWarning(
+            `${input.label} queue message ignored: invalid payload`
+          ).pipe(Effect.as(QueueDeliveryOutcome.Invalid()))
+        : input.handle(message).pipe(Effect.as(QueueDeliveryOutcome.Handled()));
+    }).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(
+            Cause.fromReasons<never>(
+              cause.reasons.filter(Cause.isInterruptReason)
+            )
+          );
+        }
+
+        const decision = decideQueueRedelivery({
           cause,
           redelivery: input.redelivery,
-          deliveryCount: metadata.deliveryCount,
-          environment: input.environment,
-        })
-      ),
+          deliveryCount,
+          mode,
+        });
+        const log = redeliveryLogs[decision.reason];
+        return Effect.logWithLevel(log.level)(log.message, {
+          ...decision,
+          cause,
+        }).pipe(Effect.as(QueueDeliveryOutcome.Failed(decision)));
+      }),
       Effect.annotateLogs({
-        queueTopic: metadata.topicName,
-        queueMessageId: metadata.messageId,
-        deliveryCount: metadata.deliveryCount,
+        queueTopic: topic,
+        queueMessageId: messageId,
+        deliveryCount,
       })
     );
-
-/** The SDK `retry` hook: applies the directive a delivery failed with. */
-export const queueRetryDirective = (cause: unknown) =>
-  cause instanceof QueueDeliveryFailure ? cause.directive : undefined;
-
-/**
- * Defines a Vercel Queue route handler. `redelivery` classifies the
- * consumer's own typed failures; anything it doesn't classify keeps the
- * trigger's default retry.
- */
-export const defineQueueConsumer = <Message, E>(
-  operation: string,
-  consume: (message: Message) => Effect.Effect<unknown, E, never>,
-  redelivery: (error: E) => QueueRedelivery = () => QueueRedelivery.Default()
-) =>
-  handleCallback(
-    defineWorkspaceTask(
-      operation,
-      deliverQueueMessage({
-        consume,
-        redelivery,
-        environment: env.VERCEL_ENV,
-      })
-    ),
-    { retry: queueRetryDirective }
-  );

@@ -1,5 +1,4 @@
-import { DuplicateMessageError, send } from "@vercel/queue";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, type Effect } from "effect";
 
 export class QueueMessageSendError extends Data.TaggedError(
   "QueueMessageSendError"
@@ -8,11 +7,7 @@ export class QueueMessageSendError extends Data.TaggedError(
   readonly cause?: unknown;
 }> {}
 
-class DuplicateQueueMessageError extends Data.TaggedError(
-  "DuplicateQueueMessageError"
-) {}
-
-/** One message as it is sent to a Vercel Queue topic. */
+/** One message to publish to a queue topic. */
 export type QueuePublication<Message = unknown> = {
   readonly topic: string;
   readonly message: Message;
@@ -35,28 +30,8 @@ interface IQueuePublisher {
   ) => Effect.Effect<QueuePublishOutcome, QueueMessageSendError>;
 }
 
-/** Sends messages to Vercel Queue topics. */
+/** Publishes messages to Workspace queue topics. */
 export class QueuePublisher extends Context.Service<
   QueuePublisher,
   IQueuePublisher
->()("@deskohub-workspace/QueuePublisher") {
-  /**
-   * Publishes through `@vercel/queue`. A duplicate idempotency key means the
-   * message is already published, so it succeeds as `duplicate`.
-   */
-  static Default = Layer.succeed(this, {
-    publish: ({ topic, message, options }) =>
-      Effect.tryPromise({
-        try: () => send(topic, message, options),
-        catch: (cause) =>
-          cause instanceof DuplicateMessageError
-            ? new DuplicateQueueMessageError()
-            : new QueueMessageSendError({ topic, cause }),
-      }).pipe(
-        Effect.as<QueuePublishOutcome>("published"),
-        Effect.catchTag("DuplicateQueueMessageError", () =>
-          Effect.succeed<QueuePublishOutcome>("duplicate")
-        )
-      ),
-  });
-}
+>()("@deskohub-workspace/QueuePublisher") {}

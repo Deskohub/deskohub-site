@@ -81,6 +81,4 @@ export class CampaignSendQueueService extends Context.Service<
       };
     })
   );
-
-  static Live = this.Default.pipe(Layer.provide(QueuePublisher.Default));
 }

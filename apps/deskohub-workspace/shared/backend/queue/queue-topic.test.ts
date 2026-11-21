@@ -3,6 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import * as vercelQueue from "@vercel/queue";
 import { Data, Duration, Effect, Schema } from "effect";
+import type { QueueRedelivery as Redelivery } from "./queue-consumer";
 
 type QueueRoute = {
   readonly handler: vercelQueue.MessageHandler;
@@ -25,6 +26,7 @@ mock.module("@vercel/queue", () => ({
 
 const { QueueRedelivery } = await import("./queue-consumer");
 const { defineQueueTopic } = await import("./queue-topic");
+const { defineVercelQueueRoute } = await import("./vercel-queue-consumer");
 const { makeMemoryQueue } = await import("./memory-queue.test-utils");
 
 class ParcelNotReadyError extends Data.TaggedError("ParcelNotReadyError") {}
@@ -60,10 +62,13 @@ const metadata: vercelQueue.MessageMetadata = {
 const routeFor = (
   handle: (message: {
     readonly parcelId: string;
-  }) => Effect.Effect<unknown, ParcelNotReadyError>
-): QueueRoute => {
-  parcelTopic.consume("parcelQueue", handle, () =>
+  }) => Effect.Effect<unknown, ParcelNotReadyError>,
+  redelivery: (error: ParcelNotReadyError) => Redelivery = () =>
     QueueRedelivery.WithBackoff()
+): QueueRoute => {
+  defineVercelQueueRoute(
+    "parcelQueue",
+    parcelTopic.consume(handle, redelivery)
   );
   if (defined === undefined) throw new Error("No queue route was defined");
   return defined;
@@ -173,5 +178,60 @@ describe("defineQueueTopic", () => {
     expect(route.options?.retry?.(failure, metadata)).toEqual({
       afterSeconds: 60,
     });
+  });
+
+  test.each([
+    { hoursFromNow: -3, afterSeconds: 1 },
+    { hoursFromNow: 3, afterSeconds: 3600 },
+  ])(
+    "bounds scheduled Vercel redelivery to $afterSeconds seconds",
+    async ({ hoursFromNow, afterSeconds }) => {
+      const route = routeFor(
+        () => Effect.fail(new ParcelNotReadyError()),
+        () =>
+          QueueRedelivery.At({
+            instant: Temporal.Now.instant().add({ hours: hoursFromNow }),
+          })
+      );
+
+      const failure = await Promise.resolve(
+        route.handler({ parcelId: "p-1" }, metadata)
+      ).then(
+        () => undefined,
+        (cause: unknown) => cause
+      );
+
+      expect(route.options?.retry?.(failure, metadata)).toEqual({
+        afterSeconds,
+      });
+    }
+  );
+
+  test("keeps the trigger default and excludes the original cause for defects", async () => {
+    const privateValue = "private-consumer-value";
+    const route = routeFor(
+      () => {
+        throw new Error(privateValue);
+      },
+      () => QueueRedelivery.Default()
+    );
+
+    const failure = await Promise.resolve(
+      route.handler({ parcelId: "p-1" }, metadata)
+    ).then(
+      () => undefined,
+      (cause: unknown) => cause
+    );
+
+    expect(failure).toMatchObject({
+      _tag: "QueueDeliveryFailure",
+      reason: "unclassified",
+      directive: undefined,
+    });
+    expect(JSON.stringify(failure)).not.toContain(privateValue);
+    expect(route.options?.retry?.(failure, metadata)).toBeUndefined();
+    expect(
+      route.options?.retry?.(new Error("runtime failed"), metadata)
+    ).toBeUndefined();
   });
 });

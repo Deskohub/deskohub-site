@@ -1,17 +1,18 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import type { MessageMetadata } from "@vercel/queue";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Cause, Data, Effect, Result } from "effect";
+import { Cause, Data, Duration, Effect, Schema } from "effect";
 import { SqlError } from "effect/sql";
+import { reservationHoldCleanupTopic } from "@/features/checkout/backend/holds/reservation-hold-cleanup-topic";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { makeMemoryQueue } from "./memory-queue.test-utils";
 import {
   decideQueueRedelivery,
-  deliverQueueMessage,
+  defineQueueConsumer,
   previewQueueDeliveryLimit,
-  QueueDeliveryFailure,
+  type QueueDeliveryMode,
   QueueRedelivery,
-  queueRetryDirective,
 } from "./queue-consumer";
 
 class PermanentTestFailure extends Data.TaggedError("PermanentTestFailure") {}
@@ -62,75 +63,55 @@ const unavailableDatabase = new UnclassifiedTestFailure({
 const decide = (input: {
   readonly failure: TestFailure;
   readonly deliveryCount?: number;
-  readonly environment?: "production" | "preview" | "development";
+  readonly mode?: QueueDeliveryMode;
 }) =>
   decideQueueRedelivery({
     cause: Cause.fail(input.failure),
     redelivery,
     deliveryCount: input.deliveryCount ?? 1,
-    environment: input.environment ?? "production",
-    now,
+    mode: input.mode ?? "durable",
   });
 
-const metadata = (deliveryCount: number): MessageMetadata => ({
+const metadata = (deliveryCount: number) => ({
   messageId: "message-id",
   deliveryCount,
-  createdAt: new Date(now.epochMilliseconds),
-  expiresAt: new Date(now.add({ hours: 24 }).epochMilliseconds),
-  topicName: "test-topic",
-  consumerGroup: "test-consumer",
-  region: "fra1",
+  topic: "test-topic",
 });
 
 describe("decideQueueRedelivery", () => {
   test("acknowledges a permanent failure", () => {
     expect(decide({ failure: new PermanentTestFailure() })).toEqual({
       reason: "permanent_failure",
-      directive: { acknowledge: true },
+      action: { _tag: "Acknowledge" },
     });
   });
 
   test("backs a transient failure off exponentially up to its cap", () => {
     const delays = [1, 2, 3, 4, 5, 6, 30].map(
       (deliveryCount) =>
-        decide({ failure: new TransientTestFailure(), deliveryCount }).directive
+        decide({ failure: new TransientTestFailure(), deliveryCount }).action
     );
 
-    expect(delays).toEqual([
-      { afterSeconds: 60 },
-      { afterSeconds: 120 },
-      { afterSeconds: 240 },
-      { afterSeconds: 480 },
-      { afterSeconds: 900 },
-      { afterSeconds: 900 },
-      { afterSeconds: 900 },
-    ]);
+    expect(delays).toEqual(
+      [60, 120, 240, 480, 900, 900, 900].map((seconds) => ({
+        _tag: "RetryAfter",
+        delay: Duration.seconds(seconds),
+      }))
+    );
   });
 
-  test("redelivers scheduled work when it becomes due, within the visibility limit", () => {
-    expect(
-      decide({
-        failure: new ScheduledTestFailure({
-          at: now.add({ minutes: 7, milliseconds: 1 }),
-        }),
-      }).directive
-    ).toEqual({ afterSeconds: 7 * 60 + 1 });
-    expect(
-      decide({
-        failure: new ScheduledTestFailure({ at: now.add({ hours: 3 }) }),
-      }).directive
-    ).toEqual({ afterSeconds: 60 * 60 });
-    expect(
-      decide({
-        failure: new ScheduledTestFailure({ at: now.subtract({ minutes: 1 }) }),
-      }).directive
-    ).toEqual({ afterSeconds: 1 });
+  test("preserves the scheduled instant for the delivery adapter", () => {
+    const at = now.add({ hours: 3, milliseconds: 1 });
+    expect(decide({ failure: new ScheduledTestFailure({ at }) })).toEqual({
+      reason: "scheduled",
+      action: { _tag: "RetryAt", instant: at },
+    });
   });
 
   test("leaves an unclassified failure to the trigger's retry delay", () => {
     expect(decide({ failure: new UnclassifiedTestFailure({}) })).toEqual({
       reason: "unclassified",
-      directive: undefined,
+      action: { _tag: "RetryDefault" },
     });
   });
 
@@ -143,32 +124,24 @@ describe("decideQueueRedelivery", () => {
         ),
         redelivery,
         deliveryCount: 1,
-        environment: "production",
-        now,
-      }).directive
-    ).toBeUndefined();
+        mode: "durable",
+      }).action
+    ).toEqual({ _tag: "RetryDefault" });
   });
 
   test("acknowledges a Preview message whose database is gone", () => {
-    expect(
-      decide({ failure: unavailableDatabase, environment: "preview" })
-    ).toEqual({
+    expect(decide({ failure: unavailableDatabase, mode: "preview" })).toEqual({
       reason: "preview_database_unavailable",
-      directive: { acknowledge: true },
+      action: { _tag: "Acknowledge" },
     });
   });
 
-  test.each(["production", "development"] as const)(
-    "keeps retrying an unavailable database in %s with backoff",
-    (environment) => {
-      expect(
-        decide({ failure: unavailableDatabase, environment, deliveryCount: 3 })
-      ).toEqual({
-        reason: "database_unavailable",
-        directive: { afterSeconds: 240 },
-      });
-    }
-  );
+  test("backs off an unavailable database for durable messages", () => {
+    expect(decide({ failure: unavailableDatabase, deliveryCount: 3 })).toEqual({
+      reason: "database_unavailable",
+      action: { _tag: "RetryAfter", delay: Duration.seconds(240) },
+    });
+  });
 
   test("never lets a consumer acknowledge an unavailable database outside Preview", () => {
     expect(
@@ -176,10 +149,9 @@ describe("decideQueueRedelivery", () => {
         cause: Cause.fail(unavailableDatabase),
         redelivery: () => QueueRedelivery.Never(),
         deliveryCount: 1,
-        environment: "production",
-        now,
-      }).directive
-    ).toEqual({ afterSeconds: 60 });
+        mode: "durable",
+      }).action
+    ).toEqual({ _tag: "RetryAfter", delay: Duration.seconds(60) });
   });
 
   test("abandons a failing Preview message at the delivery limit only", () => {
@@ -188,102 +160,103 @@ describe("decideQueueRedelivery", () => {
     expect(
       decide({
         failure,
-        environment: "preview",
+        mode: "preview",
         deliveryCount: previewQueueDeliveryLimit - 1,
-      }).directive
-    ).toBeUndefined();
+      }).action
+    ).toEqual({ _tag: "RetryDefault" });
     expect(
       decide({
         failure,
-        environment: "preview",
+        mode: "preview",
         deliveryCount: previewQueueDeliveryLimit,
       })
     ).toEqual({
       reason: "preview_delivery_limit",
-      directive: { acknowledge: true },
+      action: { _tag: "Acknowledge" },
     });
     expect(
       decide({
         failure,
-        environment: "production",
+        mode: "durable",
         deliveryCount: 500,
-      }).directive
-    ).toBeUndefined();
+      }).action
+    ).toEqual({ _tag: "RetryDefault" });
   });
 });
 
-describe("deliverQueueMessage", () => {
-  const deliver = (
-    consume: () => Effect.Effect<unknown, TestFailure>,
-    deliveryCount = 1
-  ) =>
-    deliverQueueMessage({ consume, redelivery, environment: "production" })(
-      { orderId: "order-id" },
-      metadata(deliveryCount)
-    ).pipe(Effect.result, Effect.runPromise);
+describe("queue delivery", () => {
+  const consumer = (handle: () => Effect.Effect<unknown, TestFailure>) =>
+    defineQueueConsumer({
+      label: "Test",
+      schema: Schema.toStandardSchemaV1(Schema.Struct({})),
+      handle,
+      redelivery,
+    });
 
-  test("completes a delivery the consumer handled", async () => {
-    expect(await deliver(() => Effect.succeed("processed"))).toEqual(
-      Result.succeed(undefined)
+  test("publishes and delivers a hold-cleanup command in process", async () => {
+    const queue = makeMemoryQueue();
+    const orderId = "order-id" as WorkspaceReservationId;
+    const expiresAt = now.add({ minutes: 10 });
+    const deliveries: unknown[] = [];
+    const consume = reservationHoldCleanupTopic.consume((message) =>
+      Effect.sync(() => deliveries.push(message))
     );
-  });
 
-  test("replaces a failure with its directive and drops the cause", async () => {
-    const result = await deliver(() => Effect.fail(unavailableDatabase), 2);
-
-    expect(result).toMatchObject({
-      failure: {
-        _tag: "QueueDeliveryFailure",
-        reason: "database_unavailable",
-        directive: { afterSeconds: 120 },
-      },
+    const publish = reservationHoldCleanupTopic.publish({
+      orderId,
+      reservationHoldExpiresAt: expiresAt,
+      now,
     });
-    expect(Result.isFailure(result) && "cause" in result.failure).toBe(false);
+    const outcomes = await Effect.all([publish, publish]).pipe(
+      Effect.provide(queue.layer),
+      Effect.runPromise
+    );
+    expect(outcomes).toEqual(["published", "duplicate"]);
+
+    const publication = queue.take();
+    if (!publication) throw new Error("No queued hold cleanup command");
+    const delivery = { ...metadata(1), topic: publication.topic };
     expect(
-      queueRetryDirective(Result.isFailure(result) ? result.failure : null)
-    ).toEqual({ afterSeconds: 120 });
+      await consume(
+        { ...delivery, payload: publication.message },
+        "durable"
+      ).pipe(Effect.runPromise)
+    ).toEqual({ _tag: "Handled" });
+    expect(
+      await consume({ ...delivery, payload: { orderId } }, "durable").pipe(
+        Effect.runPromise
+      )
+    ).toEqual({ _tag: "Invalid" });
+    expect(deliveries).toEqual([
+      {
+        schemaVersion: 1,
+        orderId,
+        reservationHoldExpiresAtIso: expiresAt.toString(),
+      },
+    ]);
   });
 
-  test("sanitizes a consumer that throws while building its Effect", async () => {
-    const privateValue = "private-consumer-value";
-    const result = await deliver(() => {
-      throw new Error(privateValue);
-    });
+  test("returns the redelivery decision without the cause", async () => {
+    const outcome = await consumer(() => Effect.fail(unavailableDatabase))(
+      { ...metadata(2), payload: {} },
+      "durable"
+    ).pipe(Effect.runPromise);
 
-    expect(result).toMatchObject({
-      failure: {
-        _tag: "QueueDeliveryFailure",
-        reason: "unclassified",
-        directive: undefined,
-      },
+    expect(outcome).toEqual({
+      _tag: "Failed",
+      reason: "database_unavailable",
+      action: { _tag: "RetryAfter", delay: Duration.seconds(120) },
     });
-    expect(JSON.stringify(result)).not.toContain(privateValue);
   });
 
   test("keeps an interruption unclassified", async () => {
-    const exit = await deliverQueueMessage({
-      consume: () => Effect.interrupt,
-      redelivery,
-      environment: "production",
-    })({}, metadata(1)).pipe(Effect.exit, Effect.runPromise);
+    const exit = await consumer(() => Effect.interrupt)(
+      { ...metadata(1), payload: {} },
+      "durable"
+    ).pipe(Effect.exit, Effect.runPromise);
 
     expect(exit._tag === "Failure" && Cause.hasInterruptsOnly(exit.cause)).toBe(
       true
     );
-  });
-});
-
-describe("queueRetryDirective", () => {
-  test("rethrows anything that is not a delivery failure", () => {
-    expect(queueRetryDirective(new Error("runtime failed"))).toBeUndefined();
-    expect(
-      queueRetryDirective(
-        new QueueDeliveryFailure({
-          message: "Queue message failed; the queue redelivers it",
-          reason: "unclassified",
-          directive: undefined,
-        })
-      )
-    ).toBeUndefined();
   });
 });
