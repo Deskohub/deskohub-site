@@ -95,14 +95,15 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
     holderEmail?: string;
     buyerProfile?: DetailsSchema["Type"]["buyerProfile"];
   }) => Promise<{
-    data?:
+    data?: (
       | (Omit<PassPurchasePayState, "billing"> & { status: "ready" })
       | { status: "signed_out" | "terms_changed" }
       | { status: "purchase_error"; reason: string }
       | {
           status: "capacity_unavailable" | "draft_voided";
           blockingDates: readonly string[];
-        };
+        }
+    ) & { readonly retiredPredecessorOrderIds?: readonly OrderId[] };
     serverError?: string;
   }>;
 };
@@ -335,14 +336,17 @@ export function UnlimitedPassCheckout({
     const revision = ++detailRevision.current;
     beginPending.current = true;
     setBeginning(true);
-    const beginSubmission = (attempt: SubmittedOrder) => {
+    const saveOrder = (order: UnlimitedPassOrderLink) => {
       window.history.replaceState(
         null,
         "",
-        getUnlimitedPassDetailsPath(locale, selection, attempt)
+        getUnlimitedPassDetailsPath(locale, selection, order)
       );
-      setOrder(attempt);
-      return beginCheckout({
+      setOrder(order);
+    };
+    const beginSubmission = async (attempt: SubmittedOrder) => {
+      saveOrder(attempt);
+      const result = await beginCheckout({
         orderId: attempt.orderId,
         locale,
         selection,
@@ -355,19 +359,34 @@ export function UnlimitedPassCheckout({
           buyerProfile: values.buyerProfile,
         }),
       });
+      const retired = result.data?.retiredPredecessorOrderIds;
+      if (detailRevision.current === revision && retired?.length) {
+        submission = {
+          ...attempt,
+          predecessorOrderIds: attempt.predecessorOrderIds.filter(
+            (orderId) => !retired.includes(orderId)
+          ),
+        };
+        saveOrder(submission);
+      }
+      return result;
     };
     try {
       let result = await beginSubmission(submission);
       if (detailRevision.current !== revision) return;
       if (
         result.data?.status === "purchase_error" &&
-        result.data.reason === "draft-changed"
+        result.data.reason === "draft-changed" &&
+        submission.predecessorOrderIds.length <
+          unlimitedCheckoutPredecessorLimit
       ) {
-        // Begin processes the submitted predecessors before checking the draft.
         submission = {
           kind: "submitted",
           orderId: orderIdSchema.make(crypto.randomUUID()),
-          predecessorOrderIds: [submission.orderId],
+          predecessorOrderIds: [
+            submission.orderId,
+            ...submission.predecessorOrderIds,
+          ],
         };
         result = await beginSubmission(submission);
       }
@@ -381,15 +400,9 @@ export function UnlimitedPassCheckout({
           )
         );
       } else if (result.data?.status === "ready") {
-        window.history.replaceState(
-          null,
-          "",
-          getUnlimitedPassDetailsPath(locale, selection, {
-            kind: "resume",
-            orderId,
-          })
-        );
-        setOrder({ kind: "resume", orderId });
+        if (submission.predecessorOrderIds.length === 0) {
+          saveOrder({ kind: "resume", orderId });
+        }
         setPaymentRequested(false);
         focusStep({
           kind: "pay",
@@ -405,15 +418,23 @@ export function UnlimitedPassCheckout({
         result.data?.status === "capacity_unavailable" ||
         result.data?.status === "draft_voided"
       ) {
-        // Both results come after the server has processed the predecessor IDs.
-        setOrder(undefined);
+        const remaining = submission.predecessorOrderIds;
+        const edit: UnlimitedPassOrderLink | undefined = remaining.length
+          ? { kind: "edit", predecessorOrderIds: remaining }
+          : undefined;
+        setOrder(edit);
         setStartDate(undefined);
         window.history.replaceState(
           null,
           "",
-          getUnlimitedPassChoosePath(locale, options)
+          getUnlimitedPassChoosePath(locale, options, undefined, edit)
         );
-        if (predecessorOrderIds.length === 0) void availability.refetch();
+        if (
+          predecessorOrderIds.length === remaining.length &&
+          remaining.every((id, index) => id === predecessorOrderIds[index])
+        ) {
+          void availability.refetch();
+        }
         const dates = new Intl.ListFormat(locale).format(
           result.data.blockingDates.map((date) => formatPassDate(date, locale))
         );

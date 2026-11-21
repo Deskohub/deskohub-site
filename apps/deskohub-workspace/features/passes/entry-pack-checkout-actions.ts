@@ -319,53 +319,74 @@ const beginUnlimitedAction = defineWorkspaceAction(
           return { status: "signed_out" as const };
         }
         const referralCode = yield* readReferralCode;
-        const purchase = yield* beginUnlimitedPassPurchase({
-          ...input,
-          ...(referralCode && { referralCode }),
-        });
-        const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
-          purchase.quote
-        );
-        return {
-          status: "ready" as const,
-          selection: input.selection,
-          price: displayPassPurchasePrice(quote),
-          validFrom: purchase.validFrom,
-          lastUsableDate: getEntryPackLastUsableDate(
-            purchase.validUntil
-          ).toString(),
-          disclosure: getUnlimitedPassPaymentDisclosure(
-            purchase.locale,
-            unlimitedPassRequiresEarlyStart(
-              purchase.validFrom,
-              getCurrentWorkspaceDate(yield* currentInstant)
+        const { outcome, retiredPredecessorOrderIds } =
+          yield* beginUnlimitedPassPurchase({
+            ...input,
+            ...(referralCode && { referralCode }),
+          });
+        const result = yield* purchaseFailure(
+          Effect.gen(function* () {
+            const purchase = yield* Effect.fromResult(outcome);
+            const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+              purchase.quote
+            );
+            return {
+              status: "ready" as const,
+              selection: input.selection,
+              price: displayPassPurchasePrice(quote),
+              validFrom: purchase.validFrom,
+              lastUsableDate: getEntryPackLastUsableDate(
+                purchase.validUntil
+              ).toString(),
+              disclosure: getUnlimitedPassPaymentDisclosure(
+                purchase.locale,
+                unlimitedPassRequiresEarlyStart(
+                  purchase.validFrom,
+                  getCurrentWorkspaceDate(yield* currentInstant)
+                )
+              ),
+            };
+          }).pipe(
+            Effect.catchTag(
+              "UnlimitedPassCapacityUnavailable",
+              ({ blockingDates }) =>
+                Effect.succeed({
+                  status: "capacity_unavailable" as const,
+                  blockingDates: blockingDates.map((date) =>
+                    plainDateStringSchema.make(date.toString())
+                  ),
+                })
+            ),
+            Effect.catchTag("UnlimitedPassDraftVoided", ({ blockingDates }) =>
+              Effect.succeed({
+                status: "draft_voided" as const,
+                blockingDates,
+              })
+            ),
+            Effect.catchTag("UnlimitedPassAdmissionError", ({ reason }) =>
+              Effect.succeed({ status: "purchase_error" as const, reason })
             )
           ),
-        };
-      }).pipe(
-        Effect.catchTag(
-          "UnlimitedPassCapacityUnavailable",
-          ({ blockingDates }) =>
-            Effect.succeed({
-              status: "capacity_unavailable" as const,
-              blockingDates: blockingDates.map((date) =>
-                plainDateStringSchema.make(date.toString())
-              ),
-            })
-        ),
-        Effect.catchTag("UnlimitedPassDraftVoided", ({ blockingDates }) =>
-          Effect.succeed({
-            status: "draft_voided" as const,
-            blockingDates,
-          })
-        ),
-        Effect.catchTag("UnlimitedPassAdmissionError", ({ reason }) =>
-          Effect.succeed({
-            status: "purchase_error" as const,
-            reason,
-          })
-        )
-      ),
+          "unlimited"
+        ).pipe(
+          Effect.catchIf(
+            () => retiredPredecessorOrderIds.length > 0,
+            (error) =>
+              Effect.logWarning(
+                "Unlimited pass Continue failed after retirement",
+                {
+                  error,
+                }
+              ).pipe(
+                Effect.as({
+                  status: "purchase_error" as const,
+                  reason: "unavailable" as const,
+                })
+              )
+          )
+        );
+        return { ...result, retiredPredecessorOrderIds };
+      }),
       "unlimited"
     ).pipe(Effect.provide(unlimitedPurchaseLayer))
 );

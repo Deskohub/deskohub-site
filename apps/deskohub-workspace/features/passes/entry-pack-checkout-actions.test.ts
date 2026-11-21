@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Result, Schema } from "effect";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import {
@@ -12,7 +12,7 @@ import { LatePaymentVerificationService } from "@/features/checkout/backend/paym
 import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
 import type { Locale } from "@/features/i18n";
 import { getLocale } from "@/features/i18n/paraglide/runtime.js";
-import type { OrderId } from "@/features/order";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId as accountId } from "@/shared/testing/workspace-fixtures.test-utils";
 import { passPurchaseQuoteCodec } from "./pass-purchase-quote";
@@ -100,9 +100,21 @@ mock.module("./backend/entry-pack-purchase", () => ({
     }),
 }));
 
-const { beginEntryPackCheckout, payEntryPackCheckout } = await import(
-  "./entry-pack-checkout-actions"
-);
+const unlimited = await import("./backend/unlimited-pass-purchase");
+const unlimitedFailures = new Map<OrderId, Error>();
+mock.module("./backend/unlimited-pass-purchase", () => ({
+  ...unlimited,
+  beginUnlimitedPassPurchase: (
+    input: Parameters<typeof unlimited.beginUnlimitedPassPurchase>[0]
+  ) =>
+    Effect.sync(() => ({
+      outcome: Result.fail(unlimitedFailures.get(input.orderId)!),
+      retiredPredecessorOrderIds: input.supersedeOrderIds?.slice(1) ?? [],
+    })),
+}));
+
+const { beginEntryPackCheckout, beginUnlimitedCheckout, payEntryPackCheckout } =
+  await import("./entry-pack-checkout-actions");
 
 const withoutReferer = <A>(action: () => A) =>
   requestHeaders.run(
@@ -167,3 +179,36 @@ test("Details issues an order and in-place Pay uses its verified locale without 
   expect(malformed.validationErrors?.fieldErrors.orderId).toBeDefined();
   expect(readOwnedLocale).toHaveBeenCalledTimes(lookups);
 });
+
+test.each([
+  {
+    error: new purchase.EntryPackPurchaseError({ reason: "holds-unavailable" }),
+    response: { status: "purchase_error", reason: "holds-unavailable" },
+  },
+  {
+    error: new Error("Synthetic late Continue failure"),
+    response: { status: "purchase_error", reason: "unavailable" },
+  },
+])(
+  "Unlimited Continue returns durable predecessor acknowledgements on $response.reason",
+  async ({ error, response }) => {
+    const orderId = orderIdSchema.make(crypto.randomUUID());
+    const predecessorOrderIds = Array.from({ length: 8 }, () =>
+      orderIdSchema.make(crypto.randomUUID())
+    );
+    unlimitedFailures.set(orderId, error);
+    const result = await withoutReferer(() =>
+      beginUnlimitedCheckout({
+        locale: "en-US",
+        orderId,
+        buyerEmail,
+        selection: { tier: "reserved-desk", startDate: "2026-11-20" },
+        supersedeOrderIds: predecessorOrderIds,
+      })
+    );
+    expect(result.data).toEqual({
+      ...response,
+      retiredPredecessorOrderIds: predecessorOrderIds.slice(1),
+    });
+  }
+);

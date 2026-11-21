@@ -64,6 +64,7 @@ import {
 } from "../pass-day-marker";
 import { unlimitedPassDays } from "../pass-offer";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
+import { unlimitedCheckoutPredecessorLimit } from "../unlimited-pass-checkout";
 import {
   getPassPurchasePriceFingerprint,
   repriceEntryPackPurchase,
@@ -84,7 +85,7 @@ import {
   recordUnlimitedPassOrder,
 } from "./unlimited-pass-orders";
 import {
-  beginUnlimitedPassPurchase,
+  beginUnlimitedPassPurchase as beginUnlimitedPassPurchaseWithDisposition,
   loadUnlimitedCheckoutContinuation,
 } from "./unlimited-pass-purchase";
 import { prepareUnlimitedPassRecovery } from "./unlimited-pass-recovery";
@@ -103,6 +104,13 @@ const tableId = DotyposTableIdSchema.make("42");
 const date = (value: Temporal.PlainDate) =>
   plainDateStringSchema.make(value.toString());
 const newAccountId = () => customerAccountIdSchema.make(crypto.randomUUID());
+
+const beginUnlimitedPassPurchase = (
+  ...input: Parameters<typeof beginUnlimitedPassPurchaseWithDisposition>
+) =>
+  beginUnlimitedPassPurchaseWithDisposition(...input).pipe(
+    Effect.flatMap(({ outcome }) => Effect.fromResult(outcome))
+  );
 
 const record = (
   start: Temporal.PlainDate,
@@ -857,7 +865,54 @@ it("Continue releases each owned predecessor and leaves other buyers' drafts in 
   );
 });
 
-it("a late Continue cannot create a non-overlapping draft after replacement", async () => {
+it("Continue acknowledges retired predecessors when a stale date prevents a draft", async () => {
+  const today = getCurrentWorkspaceDate();
+  const accountId = newAccountId();
+  const provider = makeInMemoryDotypos({});
+  const layer = unlimitedDraftLayer(accountId, provider.service);
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const protectedDraft = yield* record(today, accountId, accountId);
+      yield* expirePass(protectedDraft.id);
+      const retired = Array.from(
+        { length: unlimitedCheckoutPredecessorLimit - 1 },
+        () => orderIdSchema.make(crypto.randomUUID())
+      );
+      const orderId = orderIdSchema.make(crypto.randomUUID());
+      const result = yield* beginUnlimitedPassPurchaseWithDisposition({
+        orderId,
+        locale: "en-US",
+        selection: {
+          tier: "reserved-desk",
+          startDate: date(today.subtract({ days: 1 })),
+        },
+        supersedeOrderIds: [protectedDraft.id, ...retired],
+      });
+      expect(result).toEqual({
+        outcome: Result.fail(
+          expect.objectContaining({ reason: "holds-unavailable" })
+        ),
+        retiredPredecessorOrderIds: retired,
+      });
+      const { db } = yield* WorkspaceDatabase;
+      const markers = yield* db.select().from(unlimitedPassSupersessions);
+      expect(markers).toHaveLength(retired.length);
+      expect(markers).toEqual(
+        expect.arrayContaining(
+          retired.map((orderId) => ({ buyerAccountId: accountId, orderId }))
+        )
+      );
+      expect(yield* db.select({ id: orders.id }).from(orders)).toEqual([
+        { id: protectedDraft.id },
+      ]);
+    }).pipe(Effect.provide(layer))
+  );
+});
+
+async function checkDelayedContinue(
+  retirement: "replacement" | "capacity refusal"
+) {
   const start = getCurrentWorkspaceDate().add({ days: 2 });
   const accountId = newAccountId();
   const email = testEmailAddress("unlimited-late-continue");
@@ -956,6 +1011,38 @@ it("a late Continue cannot create a non-overlapping draft after replacement", as
         Effect.forkChild
       );
       yield* Deferred.await(entered);
+      if (retirement === "capacity refusal") {
+        const refused = yield* Effect.result(
+          beginUnlimitedPassPurchase({
+            orderId: originalId,
+            locale: "en-US",
+            selection: {
+              tier: "reserved-desk-workstation",
+              monitorOption: "2x27-qhd",
+              startDate: date(start),
+            },
+          })
+        );
+        expect(refused).toEqual(
+          Result.fail(
+            expect.objectContaining({
+              _tag: "UnlimitedPassCapacityUnavailable",
+            })
+          )
+        );
+        yield* Deferred.succeed(proceed, undefined);
+        expect(yield* Effect.result(Fiber.join(delayed))).toEqual(
+          Result.fail(
+            expect.objectContaining({ _tag: "UnlimitedPassDraftVoided" })
+          )
+        );
+        expect(yield* db.select().from(unlimitedPassSupersessions)).toEqual([
+          { buyerAccountId: accountId, orderId: originalId },
+        ]);
+        expect(yield* db.select({ id: orders.id }).from(orders)).toEqual([]);
+        expect(provider.reservations.size).toBe(0);
+        return;
+      }
       const selection = {
         tier: "reserved-desk" as const,
         startDate: date(start.add({ days: 31 })),
@@ -1003,7 +1090,13 @@ it("a late Continue cannot create a non-overlapping draft after replacement", as
       );
     }).pipe(Effect.provide(layer))
   );
-});
+}
+
+it("a late Continue cannot create a non-overlapping draft after replacement", () =>
+  checkDelayedContinue("replacement"));
+
+it("a late Continue cannot create a draft after capacity refusal", () =>
+  checkDelayedContinue("capacity refusal"));
 
 it("rejects a Continue replay when an attached day's deadline passed", async () => {
   const provider = makeInMemoryDotypos({});
@@ -1376,6 +1469,23 @@ it("replays reconciled void drafts expired before payment and fences expired att
           })
         )
       );
+      const editedBegin = beginUnlimitedPassPurchase({
+        orderId: purchase.id,
+        locale: "en-US",
+        holderEmail: testEmailAddress("unlimited-edited-void-holder"),
+        selection: {
+          tier: "reserved-desk",
+          startDate: date(start.add({ days: 1 })),
+        },
+      });
+      expect(yield* Effect.result(editedBegin)).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "UnlimitedPassDraftVoided",
+            blockingDates: [date(start), date(start.add({ days: 1 }))],
+          })
+        )
+      );
       const empty = { ...purchase.quote, voidBlockingDates: [] };
       yield* db
         .update(passPurchases)
@@ -1406,6 +1516,14 @@ it("replays reconciled void drafts expired before payment and fences expired att
           expect.objectContaining({
             _tag: "EntryPackPurchaseError",
             reason: "payment-in-progress",
+          })
+        )
+      );
+      expect(yield* Effect.result(editedBegin)).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "UnlimitedPassAdmissionError",
+            reason: "purchase-conflict",
           })
         )
       );

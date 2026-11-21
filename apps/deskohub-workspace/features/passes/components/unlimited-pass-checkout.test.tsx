@@ -318,6 +318,7 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
               data: {
                 status,
                 blockingDates: [monitorStart],
+                retiredPredecessorOrderIds: [existingOrderId],
               },
             };
           }}
@@ -606,6 +607,7 @@ test.each([0, unlimitedCheckoutPredecessorLimit])(
               data: {
                 status: "purchase_error" as const,
                 reason: "draft-changed",
+                retiredPredecessorOrderIds: predecessorOrderIds,
               },
             }
           : { data: readyCheckout };
@@ -651,6 +653,43 @@ test.each([0, unlimitedCheckoutPredecessorLimit])(
     expect(beginCheckout.mock.calls[1]?.[0].orderId).not.toBe(originalId);
   }
 );
+
+test("a failed Continue frees only acknowledged predecessor slots and preserves the current draft", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const predecessorOrderIds = Array.from(
+    { length: unlimitedCheckoutPredecessorLimit },
+    () => orderIdSchema.make(crypto.randomUUID())
+  );
+  const unresolved = predecessorOrderIds.at(-1)!;
+  const beginCheckout = mock(async (_input: { orderId: OrderId }) => ({
+    data: {
+      status: "purchase_error" as const,
+      reason: "holds-unavailable",
+      retiredPredecessorOrderIds: predecessorOrderIds.slice(0, -1),
+    },
+  }));
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        draft={{ kind: "submitted", orderId, predecessorOrderIds }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  await view.findByText(m.actionFailedUnexpectedly({}, { locale }));
+  expect(checkoutUrl().searchParams.get("submittedOrder")).toBe(orderId);
+  expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
+    unresolved,
+  ]);
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(2));
+  expect(beginCheckout).toHaveBeenLastCalledWith(
+    expect.objectContaining({ orderId, supersedeOrderIds: [unresolved] })
+  );
+});
 
 test("Details cannot hand off another selection while Begin is creating holds", async () => {
   const response = Promise.withResolvers<{

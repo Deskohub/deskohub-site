@@ -19,6 +19,7 @@ import {
 } from "@/features/account/backend/customer-account-by-email";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
 import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
+import type { CustomerAccountSession } from "@/features/account/backend/customer-authentication.service";
 import type { CustomerProfileSave } from "@/features/account/contracts";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
@@ -159,9 +160,17 @@ const resolveGiftCustomer = Effect.fn("resolveUnlimitedGiftCustomer")(
   }
 );
 
-export const beginUnlimitedPassPurchase = Effect.fn(
-  "beginUnlimitedPassPurchase"
-)(function* (input: {
+const retireUnrecordedUnlimitedDraft = Effect.fn(
+  "retireUnrecordedUnlimitedDraft"
+)(function* (buyerAccountId: CustomerAccountId, orderId: OrderId) {
+  const { db } = yield* WorkspaceDatabase;
+  yield* db
+    .insert(unlimitedPassSupersessions)
+    .values({ buyerAccountId, orderId })
+    .onConflictDoNothing();
+});
+
+type UnlimitedPassPurchaseInput = {
   readonly orderId: OrderId;
   readonly locale: Locale;
   readonly selection: UnlimitedPassSelection;
@@ -171,10 +180,78 @@ export const beginUnlimitedPassPurchase = Effect.fn(
   readonly referralCode?: CanonicalPromotionCode;
   readonly supersedeOrderId?: OrderId;
   readonly supersedeOrderIds?: readonly OrderId[];
-}) {
+};
+
+export const beginUnlimitedPassPurchase = Effect.fn(
+  "beginUnlimitedPassPurchase"
+)(function* (input: UnlimitedPassPurchaseInput) {
   yield* requirePassPurchasesEnabled();
   const current = yield* CurrentCustomerAccount;
   const session = yield* current.requireActive;
+  const accounts = yield* CustomerAccountSections;
+  const { db } = yield* WorkspaceDatabase;
+  const priorOrderIds = new Set(
+    [input.supersedeOrderId, ...(input.supersedeOrderIds ?? [])]
+      .filter((id) => id !== undefined)
+      .map((id) => orderIdSchema.make(id.toLowerCase()))
+  );
+  priorOrderIds.delete(orderIdSchema.make(input.orderId.toLowerCase()));
+  const retiredPredecessorOrderIds: OrderId[] = [];
+  const outcome = yield* Effect.result(
+    Effect.gen(function* () {
+      for (const priorOrderId of priorOrderIds) {
+        yield* accounts.withActiveAccount(
+          session.accountId,
+          Effect.gen(function* () {
+            const prior = yield* findOwnedPassPurchaseOrder(
+              priorOrderId,
+              session.accountId,
+              "unlimited"
+            );
+            if (!prior) {
+              yield* retireUnrecordedUnlimitedDraft(
+                session.accountId,
+                priorOrderId
+              );
+              retiredPredecessorOrderIds.push(priorOrderId);
+              return;
+            }
+            if (prior.order.activePaymentAttemptId) return;
+            let voided: Purchase | undefined;
+            if (isVoidedUnlimitedDraft(prior)) {
+              voided = prior.purchase;
+            } else if (prior.order.paymentState === "not_started") {
+              [voided] = yield* db
+                .update(passPurchases)
+                .set({ status: "void" })
+                .where(
+                  and(
+                    eq(passPurchases.id, priorOrderId),
+                    eq(passPurchases.status, "pending_payment")
+                  )
+                )
+                .returning();
+            }
+            if (!voided) return;
+            retiredPredecessorOrderIds.push(priorOrderId);
+            yield* releaseUnlimitedPassDays(voided);
+          }),
+          { passPurchaseOrderId: priorOrderId }
+        );
+      }
+      return yield* continueUnlimitedPassPurchase(input, session);
+    })
+  );
+  return { outcome, retiredPredecessorOrderIds };
+});
+
+const continueUnlimitedPassPurchase = Effect.fn(
+  "continueUnlimitedPassPurchase"
+)(function* (
+  input: UnlimitedPassPurchaseInput,
+  session: CustomerAccountSession
+) {
+  const current = yield* CurrentCustomerAccount;
   const accounts = yield* CustomerAccountSections;
   const { db, transaction } = yield* WorkspaceDatabase;
   const holderEmail = input.holderEmail?.trim().toLowerCase();
@@ -182,58 +259,6 @@ export const beginUnlimitedPassPurchase = Effect.fn(
     holderEmail && holderEmail !== session.email.toLowerCase()
       ? holderEmail
       : undefined;
-
-  const priorOrderIds = new Set(
-    [input.supersedeOrderId, ...(input.supersedeOrderIds ?? [])]
-      .filter((id) => id !== undefined)
-      .map((id) => orderIdSchema.make(id.toLowerCase()))
-  );
-  priorOrderIds.delete(orderIdSchema.make(input.orderId.toLowerCase()));
-  for (const priorOrderId of priorOrderIds) {
-    yield* accounts.withActiveAccount(
-      session.accountId,
-      Effect.gen(function* () {
-        const prior = yield* findOwnedPassPurchaseOrder(
-          priorOrderId,
-          session.accountId,
-          "unlimited"
-        );
-        if (!prior) {
-          // A delayed Continue takes the same account lock before creating this ID.
-          yield* db
-            .insert(unlimitedPassSupersessions)
-            .values({
-              buyerAccountId: session.accountId,
-              orderId: priorOrderId,
-            })
-            .onConflictDoNothing();
-          return;
-        }
-        if (prior.order.activePaymentAttemptId) return;
-        if (
-          prior.purchase.status === "void" &&
-          (prior.order.paymentState === "not_started" ||
-            prior.order.paymentState === "expired")
-        ) {
-          yield* releaseUnlimitedPassDays(prior.purchase);
-          return;
-        }
-        if (prior.order.paymentState !== "not_started") return;
-        const [voided] = yield* db
-          .update(passPurchases)
-          .set({ status: "void" })
-          .where(
-            and(
-              eq(passPurchases.id, priorOrderId),
-              eq(passPurchases.status, "pending_payment")
-            )
-          )
-          .returning();
-        if (voided) yield* releaseUnlimitedPassDays(voided);
-      }),
-      { passPurchaseOrderId: priorOrderId }
-    );
-  }
 
   yield* accounts.withActiveAccount(
     session.accountId,
@@ -245,6 +270,11 @@ export const beginUnlimitedPassPurchase = Effect.fn(
       );
       let purchase: Purchase;
       if (existing) {
+        if (isVoidedUnlimitedDraft(existing)) {
+          return yield* new UnlimitedPassDraftVoided({
+            blockingDates: yield* readVoidedDraftDates(existing.purchase),
+          });
+        }
         const selection = readUnlimitedPassSelection(existing.purchase);
         const holderId = giftEmail
           ? yield* findPassHolderAccount(giftEmail)
@@ -260,11 +290,6 @@ export const beginUnlimitedPassPurchase = Effect.fn(
             existing.purchase.status === "pending_payment";
           return yield* new UnlimitedPassAdmissionError({
             reason: replaceable ? "draft-changed" : "purchase-conflict",
-          });
-        }
-        if (isVoidedUnlimitedDraft(existing)) {
-          return yield* new UnlimitedPassDraftVoided({
-            blockingDates: yield* readVoidedDraftDates(existing.purchase),
           });
         }
         if (
@@ -384,6 +409,13 @@ export const beginUnlimitedPassPurchase = Effect.fn(
                 })),
               })
             )
+        ).pipe(
+          // A delayed Continue checks this retirement under the same buyer lock.
+          Effect.catchTag("UnlimitedPassCapacityUnavailable", (error) =>
+            retireUnrecordedUnlimitedDraft(session.accountId, orderId).pipe(
+              Effect.andThen(Effect.fail(error))
+            )
+          )
         );
       }
 
