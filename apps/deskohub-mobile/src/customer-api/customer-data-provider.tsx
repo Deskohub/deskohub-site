@@ -1,7 +1,11 @@
-import { RegistryProvider } from "@effect/atom-react";
+import { RegistryContext, RegistryProvider } from "@effect/atom-react";
 import type { Layer } from "effect";
 import { Atom } from "effect/reactivity";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useContext, useLayoutEffect, useState } from "react";
+import {
+  onboardingSessionIdAtom,
+  setOnboardingSession,
+} from "../account/onboarding/onboarding-edits";
 import type { AccountSession } from "./account-scoped-storage";
 import { liveCustomerDataLayer } from "./customer-data-live";
 import {
@@ -42,6 +46,7 @@ const sampleLayerFor:
 export function CustomerDataProvider({
   accountId,
   sessionStartedAt,
+  sessionId,
   children,
 }: AccountSession & { readonly children: ReactNode }) {
   const [sampleKind, setSampleKind] = useState<SampleAccountKind | undefined>(
@@ -50,7 +55,7 @@ export function CustomerDataProvider({
   return (
     <AccountRegistry
       key={`${accountId}/${sampleKind ?? "live"}`}
-      session={{ accountId, sessionStartedAt }}
+      session={{ accountId, sessionStartedAt, sessionId }}
       sampleKind={sampleKind}
     >
       {sampleKind === undefined ? (
@@ -78,6 +83,7 @@ function AccountRegistry({
   readonly children: ReactNode;
 }) {
   const [initialValues] = useState(() => [
+    Atom.initialValue(onboardingSessionIdAtom, session.sessionId),
     Atom.initialValue(
       customerDataLayer,
       sampleKind !== undefined && sampleLayerFor !== undefined
@@ -87,7 +93,17 @@ function AccountRegistry({
   ]);
   return (
     <RegistryProvider initialValues={initialValues}>
+      <OnboardingSession sessionId={session.sessionId} />
       {children}
     </RegistryProvider>
   );
+}
+
+function OnboardingSession({ sessionId }: Pick<AccountSession, "sessionId">) {
+  const registry = useContext(RegistryContext);
+  useLayoutEffect(
+    () => setOnboardingSession(registry, sessionId),
+    [registry, sessionId]
+  );
+  return null;
 }
