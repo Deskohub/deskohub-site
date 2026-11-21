@@ -7,6 +7,7 @@ import { orders, passPurchases, paymentAttempts } from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { OrderId } from "@/features/order";
+import { getPassPurchaseStatusPath } from "../routes";
 
 export const hasPassPurchasePaymentStarted = (
   order: Pick<
@@ -68,6 +69,23 @@ export const findOwnedEntryPackOrder = Effect.fn("findOwnedEntryPackOrder")(
     }
   }
 );
+
+export const readOwnedPassPurchaseStatusPath = Effect.fn(
+  "passes.readOwnedPurchaseStatusPath"
+)(function* (
+  orderId: OrderId,
+  buyerAccountId: CustomerAccountId,
+  productKind: typeof passPurchases.$inferSelect.product
+) {
+  const owned = yield* findOwnedPassPurchaseOrder(
+    orderId,
+    buyerAccountId,
+    productKind
+  );
+  if (owned && hasPassPurchasePaymentStarted(owned.order)) {
+    return getPassPurchaseStatusPath(owned.purchase.locale, owned.order.id);
+  }
+});
 
 /** The issued locale is visible only to the active, verified buyer. */
 export const readOwnedPassPurchaseOrderLocale = Effect.fn(

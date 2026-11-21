@@ -61,6 +61,12 @@ const readOwnedLocale = mock((orderId: OrderId) =>
 mock.module("./backend/entry-pack-order", () => ({
   ...entryPackOrders,
   readOwnedPassPurchaseOrderLocale: readOwnedLocale,
+  readOwnedPassPurchaseStatusPath: (orderId: OrderId) =>
+    Effect.succeed(
+      paidOrders.has(orderId)
+        ? `/en-US/reservation/status/${orderId}`
+        : undefined
+    ),
   findOwnedPassPurchaseOrder: (orderId: OrderId) =>
     Effect.sync(() => {
       const locale = issuedOrders.get(orderId);
@@ -75,6 +81,11 @@ mock.module("./backend/entry-pack-order", () => ({
         }
       );
     }),
+}));
+
+mock.module("@/features/order/backend/order-kind", () => ({
+  findOrderKind: (orderId: OrderId) =>
+    Effect.succeed(issuedOrders.has(orderId) ? "pass-purchase" : undefined),
 }));
 
 const amount = currencyCZK(115_000);
@@ -135,7 +146,7 @@ mock.module("./backend/unlimited-pass-purchase", () => ({
 
 const { beginEntryPackCheckout, beginUnlimitedCheckout, payEntryPackCheckout } =
   await import("./entry-pack-checkout-actions");
-const { sealPassCheckoutHandoff } = await import(
+const { readPassCheckoutHandoff, sealPassCheckoutHandoff } = await import(
   "./backend/pass-checkout-handoff"
 );
 
@@ -150,6 +161,15 @@ const withoutReferer = <A>(action: () => A) =>
 const sealHandoff = (value: Parameters<typeof sealPassCheckoutHandoff>[0]) =>
   Effect.runPromise(
     sealPassCheckoutHandoff(value).pipe(Effect.provide(SealedStateKeys.Default))
+  );
+
+const openHandoff = (token: string) =>
+  Effect.runPromise(
+    readPassCheckoutHandoff(token).pipe(
+      Effect.provide(
+        Layer.merge(SealedStateKeys.Default, CurrentCustomerAccount.Live)
+      )
+    )
   );
 
 test("Details issues an order and in-place Pay uses its verified locale without Referer", async () => {
@@ -250,7 +270,7 @@ test("Unlimited Continue applies the protected predecessor and referral from the
     orderId,
     product: { kind: "unlimited", selection },
     holderEmail,
-    supersedeOrderId,
+    predecessorOrderIds: [supersedeOrderId],
     referralCode,
   });
   unlimitedFailures.set(
@@ -272,10 +292,107 @@ test("Unlimited Continue applies the protected predecessor and referral from the
     expect.objectContaining({
       orderId,
       holderEmail,
-      supersedeOrderId,
+      supersedeOrderIds: [supersedeOrderId],
       referralCode,
     })
   );
+});
+
+test("Unlimited reissues gift context before replacement and after capacity rejection", async () => {
+  const priorHoldId = orderIdSchema.make(crypto.randomUUID());
+  const originalOrderId = orderIdSchema.make(crypto.randomUUID());
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const referralCode = canonicalPromotionCodeSchema.make("REFERRAL");
+  const holderEmail = testEmailAddress("replacement-gift-recipient");
+  const selection = {
+    tier: "reserved-desk",
+    startDate: plainDateStringSchema.make("2026-12-05"),
+  } as const;
+  const handoffToken = await sealHandoff({
+    buyerAccountId: accountId,
+    orderId: originalOrderId,
+    product: { kind: "unlimited", selection },
+    holderEmail: testEmailAddress("original-gift-recipient"),
+    predecessorOrderIds: [priorHoldId],
+    referralCode,
+  });
+  const input = {
+    locale: "en-US" as const,
+    orderId,
+    buyerEmail,
+    holderEmail,
+    selection,
+    recipientName: "Fixture Replacement",
+  };
+  const beginCalls = beginUnlimited.mock.calls.length;
+  const prepare = await withoutReferer(() =>
+    beginUnlimitedCheckout({ ...input, handoffToken })
+  );
+  expect(prepare.data?.status).toBe("handoff_updated");
+  expect(beginUnlimited.mock.calls).toHaveLength(beginCalls);
+  if (prepare.data?.status !== "handoff_updated")
+    throw new Error("Expected replacement handoff");
+  const replacement = prepare.data.handoff;
+  expect(await openHandoff(replacement.token)).toMatchObject({
+    orderId,
+    holderEmail,
+    referralCode,
+    predecessorOrderIds: [priorHoldId, originalOrderId],
+  });
+  unlimitedFailures.set(
+    orderId,
+    Object.assign(new Error("Synthetic capacity failure"), {
+      _tag: "UnlimitedPassCapacityUnavailable",
+      blockingDates: [],
+    })
+  );
+  const submit = await withoutReferer(() =>
+    beginUnlimitedCheckout({ ...input, handoffToken: replacement.token })
+  );
+  expect(beginUnlimited).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      orderId,
+      holderEmail,
+      referralCode,
+      supersedeOrderIds: [priorHoldId, originalOrderId],
+    })
+  );
+  expect(submit.data?.status).toBe("capacity_unavailable");
+  if (submit.data?.status !== "capacity_unavailable" || !submit.data.handoff) {
+    throw new Error("Expected a retry handoff");
+  }
+  const retry = submit.data.handoff;
+  expect(retry.orderId).not.toBe(orderId);
+  expect(await openHandoff(retry.token)).toMatchObject({
+    orderId: retry.orderId,
+    holderEmail,
+    referralCode,
+    predecessorOrderIds: [priorHoldId],
+  });
+});
+
+test("an open Unlimited Continue returns to the buyer's status after payment starts", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  paidOrders.add(orderId);
+  unlimitedFailures.set(
+    orderId,
+    new purchase.EntryPackPurchaseError({ reason: "payment-in-progress" })
+  );
+  const result = await withoutReferer(() =>
+    beginUnlimitedCheckout({
+      orderId,
+      buyerEmail,
+      locale: "en-US",
+      selection: {
+        tier: "reserved-desk",
+        startDate: plainDateStringSchema.make("2026-12-05"),
+      },
+    })
+  );
+  expect(result.data).toMatchObject({
+    status: "status",
+    statusPath: `/en-US/reservation/status/${orderId}`,
+  });
 });
 
 test.each([undefined, "", " \t "])(

@@ -56,7 +56,10 @@ import {
   unlimitedPassRequiresEarlyStart,
   unlimitedPassSelectionSchema,
 } from "../unlimited-pass";
-import { findOwnedPassPurchaseOrder } from "./entry-pack-order";
+import {
+  findOwnedPassPurchaseOrder,
+  hasPassPurchasePaymentStarted,
+} from "./entry-pack-order";
 import {
   displayPassPurchasePrice,
   EntryPackPurchaseError,
@@ -328,10 +331,7 @@ const continueUnlimitedPassPurchase = Effect.fn(
             reason: replaceable ? "draft-changed" : "purchase-conflict",
           });
         }
-        if (
-          existing.order.paymentState !== "not_started" ||
-          existing.order.activePaymentAttemptId
-        ) {
+        if (hasPassPurchasePaymentStarted(existing.order)) {
           return yield* new EntryPackPurchaseError({
             reason: "payment-in-progress",
           });
@@ -490,11 +490,12 @@ const continueUnlimitedPassPurchase = Effect.fn(
           blockingDates: yield* readVoidedDraftDates(prepared.purchase),
         });
       }
-      if (
-        prepared?.order.paymentState !== "not_started" ||
-        prepared.order.activePaymentAttemptId ||
-        prepared.purchase.status !== "pending_payment"
-      ) {
+      if (prepared && hasPassPurchasePaymentStarted(prepared.order)) {
+        return yield* new EntryPackPurchaseError({
+          reason: "payment-in-progress",
+        });
+      }
+      if (prepared?.purchase.status !== "pending_payment") {
         return yield* new EntryPackPurchaseError({
           reason: "holds-unavailable",
         });

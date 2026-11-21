@@ -1186,13 +1186,14 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
         orderId,
         holderEmail,
         product: requested.product,
-        supersedeOrderId,
+        predecessorOrderIds: [supersedeOrderId],
         referralCode,
       });
       if (!fields) throw new Error("Expected buyer-owned gift details");
       const begin = beginPurchase({
         ...fields,
         locale: "en-US",
+        supersedeOrderId: fields.predecessorOrderIds?.[0],
         recipientName: "Fixture Recipient",
       });
       const draft = yield* begin;
@@ -1238,6 +1239,10 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
       });
       if (continuation?.kind !== "pay") throw new Error("Expected fresh Pay");
       expect(continuation.payment).not.toHaveProperty("priorPaymentAttemptId");
+      yield* expirePass(orderId);
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(expect.objectContaining({ reason: "payment-in-progress" }))
+      );
     }).pipe(Effect.provide(Layer.merge(services, SealedStateKeys.Default)))
   );
 });

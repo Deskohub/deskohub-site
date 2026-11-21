@@ -386,7 +386,8 @@ async function UnlimitedPassPageContent({
           handoffToken && {
             initialHandoff: {
               token: handoffToken,
-              supersedeOrderId: handoff.supersedeOrderId,
+              orderId: handoff.orderId,
+              predecessorOrderIds: handoff.predecessorOrderIds ?? [],
             },
           })}
         renewsPassId={renewsPassId}

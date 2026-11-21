@@ -6,7 +6,7 @@ import type { CustomerAccountSession } from "@/features/account/backend/customer
 import type { CustomerProfileSave } from "@/features/account/contracts";
 import type { CanonicalPromotionCode } from "@/features/discounts/contracts";
 import type { Locale } from "@/features/i18n";
-import type { OrderId } from "@/features/order";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
 import { reservationCustomerEmailSchema } from "@/features/reservation/reservation-contact";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
@@ -214,7 +214,11 @@ const startPurchaseDetails = Effect.fn("passes.startPurchaseDetails")(
       orderId,
       product,
       ...(referralCode && { referralCode }),
-      ...(supersedeOrderId && { supersedeOrderId }),
+      ...(supersedeOrderId && {
+        predecessorOrderIds: [
+          orderIdSchema.make(supersedeOrderId.toLowerCase()),
+        ],
+      }),
       ...(giftRecipient &&
         giftRecipient !== email.toLowerCase() && {
           holderEmail: giftRecipient,

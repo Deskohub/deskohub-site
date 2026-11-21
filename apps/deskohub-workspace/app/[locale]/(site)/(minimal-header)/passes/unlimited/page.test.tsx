@@ -113,7 +113,7 @@ mock.module("@/features/passes/backend/pass-checkout-handoff", () => ({
         ? {
             orderId: submittedOrder,
             holderEmail,
-            supersedeOrderId: ownedOrder,
+            predecessorOrderIds: [ownedOrder],
             product: { kind: "unlimited", selection: renewalSelection },
           }
         : undefined
@@ -213,7 +213,11 @@ test("Choose and Details can reload before the gift handoff has an order", async
   };
   const choose = await renderContent(query);
   expect(choose.props.children.props).toMatchObject({
-    initialHandoff: { token: "opaque", supersedeOrderId: ownedOrder },
+    initialHandoff: {
+      token: "opaque",
+      orderId: submittedOrder,
+      predecessorOrderIds: [ownedOrder],
+    },
     initialDetails: undefined,
     initialStartDate: query.startDate,
     draft: { kind: "resume", orderId: submittedOrder, holderEmail },

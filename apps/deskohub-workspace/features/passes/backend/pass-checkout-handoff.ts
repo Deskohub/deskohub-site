@@ -9,12 +9,9 @@ import { reservationCustomerEmailSchema } from "@/features/reservation/reservati
 import { makeSealedState } from "@/shared/backend/sealed-state";
 import { passCheckoutHandoffTokenMaxLength } from "../entry-pack-checkout";
 import { entryPackProductSchema } from "../pass-offer";
-import { getPassPurchaseStatusPath } from "../routes";
 import { unlimitedPassSelectionSchema } from "../unlimited-pass";
-import {
-  findOwnedPassPurchaseOrder,
-  hasPassPurchasePaymentStarted,
-} from "./entry-pack-order";
+import { unlimitedCheckoutPredecessorLimit } from "../unlimited-pass-checkout";
+import { readOwnedPassPurchaseStatusPath } from "./entry-pack-order";
 
 const productSchema = Schema.Union([
   entryPackProductSchema,
@@ -36,11 +33,26 @@ const checkoutHandoff = makeSealedState({
     product: productSchema,
     holderEmail: Schema.optionalKey(reservationCustomerEmailSchema),
     referralCode: Schema.optionalKey(canonicalPromotionCodeSchema),
-    supersedeOrderId: Schema.optionalKey(orderIdSchema),
+    predecessorOrderIds: Schema.optionalKey(
+      Schema.Array(orderIdSchema).check(
+        Schema.isMaxLength(unlimitedCheckoutPredecessorLimit)
+      )
+    ),
   }),
 });
 
 export const sealPassCheckoutHandoff = checkoutHandoff.seal;
+export type PassCheckoutHandoff = Parameters<typeof sealPassCheckoutHandoff>[0];
+
+export const matchesPassCheckoutHandoff = (
+  handoff: PassCheckoutHandoff,
+  input: {
+    readonly orderId: typeof orderIdSchema.Type;
+    readonly holderEmail?: string;
+  }
+) =>
+  handoff.orderId.toLowerCase() === input.orderId.toLowerCase() &&
+  handoff.holderEmail === input.holderEmail?.toLowerCase();
 
 export const readPassCheckoutHandoff = Effect.fn("passes.readCheckoutHandoff")(
   function* (token: string) {
@@ -59,14 +71,10 @@ export const readPassCheckoutHandoffForPage = Effect.fn(
 )(function* (token: string, productKind: PassPurchaseProduct["kind"]) {
   const handoff = yield* readPassCheckoutHandoff(token);
   if (handoff?.product.kind !== productKind) return undefined;
-  const owned = yield* findOwnedPassPurchaseOrder(
+  const statusPath = yield* readOwnedPassPurchaseStatusPath(
     handoff.orderId,
     handoff.buyerAccountId,
     productKind
   );
-  const statusPath =
-    owned && hasPassPurchasePaymentStarted(owned.order)
-      ? getPassPurchaseStatusPath(owned.purchase.locale, owned.order.id)
-      : undefined;
   return { ...handoff, statusPath };
 });

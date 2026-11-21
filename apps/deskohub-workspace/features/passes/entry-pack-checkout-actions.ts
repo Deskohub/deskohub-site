@@ -21,6 +21,7 @@ import { normalizeSubmittedPromotionCode } from "@/features/discounts/promotion-
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { locales } from "@/features/i18n";
 import { type OrderId, orderIdSchema } from "@/features/order";
+import { findOrderKind } from "@/features/order/backend/order-kind";
 import { ReferralService } from "@/features/referrals";
 import { ReferralReleaseGateRequest } from "@/features/referrals/referral-release-gate.server";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
@@ -37,6 +38,7 @@ import {
   findOwnedPassPurchaseOrder,
   hasPassPurchasePaymentStarted,
   readOwnedPassPurchaseOrderLocale,
+  readOwnedPassPurchaseStatusPath,
 } from "./backend/entry-pack-order";
 import {
   beginEntryPackPurchase,
@@ -46,7 +48,12 @@ import {
   payForEntryPack,
   repriceEntryPackPurchase,
 } from "./backend/entry-pack-purchase";
-import { readPassCheckoutHandoff } from "./backend/pass-checkout-handoff";
+import {
+  matchesPassCheckoutHandoff,
+  type PassCheckoutHandoff,
+  readPassCheckoutHandoff,
+  sealPassCheckoutHandoff,
+} from "./backend/pass-checkout-handoff";
 import {
   beginUnlimitedPassPurchase,
   getUnlimitedPassPaymentDisclosure,
@@ -65,6 +72,7 @@ import {
 import { passPurchaseQuoteCodec } from "./pass-purchase-quote";
 import { getPassPurchaseStatusPath } from "./routes";
 import {
+  type UnlimitedPassSelection,
   unlimitedPassRequiresEarlyStart,
   unlimitedPassSelectionSchema,
 } from "./unlimited-pass";
@@ -140,25 +148,80 @@ const readReferralCode = Effect.gen(function* () {
 const readCheckoutSubmissionHandoff = Effect.fn(
   "passes.readCheckoutSubmissionHandoff"
 )(function* (
-  input: {
-    readonly handoffToken?: string;
-    readonly orderId: OrderId;
-    readonly holderEmail?: string;
-  },
+  handoffToken: string | undefined,
   productKind: "entry-pack" | "unlimited"
 ) {
-  if (!input.handoffToken) return undefined;
-  const handoff = yield* readPassCheckoutHandoff(input.handoffToken).pipe(
+  if (!handoffToken) return undefined;
+  const handoff = yield* readPassCheckoutHandoff(handoffToken).pipe(
     Effect.provide(SealedStateKeys.Default)
   );
-  if (
-    handoff?.product.kind !== productKind ||
-    handoff.orderId.toLowerCase() !== input.orderId.toLowerCase() ||
-    handoff.holderEmail !== input.holderEmail?.toLowerCase()
-  ) {
+  if (handoff?.product.kind !== productKind) {
     return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
   }
   return handoff;
+});
+
+const issueUnlimitedCheckoutHandoff = Effect.fn(
+  "passes.issueUnlimitedCheckoutHandoff"
+)(function* (input: {
+  readonly previous: PassCheckoutHandoff;
+  readonly orderId: OrderId;
+  readonly selection: UnlimitedPassSelection;
+  readonly holderEmail?: string;
+  readonly predecessorOrderIds: readonly OrderId[];
+}) {
+  const { buyerAccountId, referralCode } = input.previous;
+  const token = yield* sealPassCheckoutHandoff({
+    buyerAccountId,
+    ...(referralCode && { referralCode }),
+    orderId: input.orderId,
+    product: { kind: "unlimited", selection: input.selection },
+    predecessorOrderIds: input.predecessorOrderIds,
+    ...(input.holderEmail && { holderEmail: input.holderEmail.toLowerCase() }),
+  }).pipe(Effect.provide(SealedStateKeys.Default));
+  return {
+    token,
+    orderId: input.orderId,
+    predecessorOrderIds: input.predecessorOrderIds,
+  };
+});
+
+const prepareUnlimitedCheckoutReplacement = Effect.fn(
+  "passes.prepareUnlimitedCheckoutReplacement"
+)(function* (
+  input: Omit<
+    Parameters<typeof issueUnlimitedCheckoutHandoff>[0],
+    "predecessorOrderIds"
+  >
+) {
+  const { previous, orderId } = input;
+  const statusPath = yield* readOwnedPassPurchaseStatusPath(
+    previous.orderId,
+    previous.buyerAccountId,
+    "unlimited"
+  );
+  if (statusPath) return { status: "status" as const, statusPath };
+  if (
+    previous.orderId.toLowerCase() === orderId.toLowerCase() ||
+    (yield* findOrderKind(orderId))
+  ) {
+    return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
+  }
+  const predecessorOrderIds = [
+    ...new Set([
+      ...(previous.predecessorOrderIds ?? []),
+      orderIdSchema.make(previous.orderId.toLowerCase()),
+    ]),
+  ];
+  if (predecessorOrderIds.length > unlimitedCheckoutPredecessorLimit) {
+    return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
+  }
+  // The browser saves the updated link before a request can create or retire holds.
+  const handoff = yield* issueUnlimitedCheckoutHandoff({
+    ...input,
+    predecessorOrderIds,
+  });
+  return { status: "handoff_updated" as const, handoff };
 });
 
 const purchaseFailure = <A, E, R>(
@@ -209,9 +272,14 @@ const beginAction = defineWorkspaceAction(
           return { status: "signed_out" as const };
         }
         const handoff = yield* readCheckoutSubmissionHandoff(
-          input,
+          input.handoffToken,
           "entry-pack"
         );
+        if (handoff && !matchesPassCheckoutHandoff(handoff, input)) {
+          return yield* new EntryPackPurchaseError({
+            reason: "purchase-conflict",
+          });
+        }
         const referralCode = handoff?.referralCode ?? (yield* readReferralCode);
         const { handoffToken: _, ...details } = input;
         const purchase = yield* beginEntryPackPurchase({
@@ -377,17 +445,37 @@ const beginUnlimitedAction = defineWorkspaceAction(
           return { status: "signed_out" as const };
         }
         const handoff = yield* readCheckoutSubmissionHandoff(
-          input,
+          input.handoffToken,
           "unlimited"
         );
+        if (handoff && input.renewsPassId) {
+          return yield* new EntryPackPurchaseError({
+            reason: "purchase-conflict",
+          });
+        }
+        if (handoff && !matchesPassCheckoutHandoff(handoff, input)) {
+          return yield* prepareUnlimitedCheckoutReplacement({
+            ...input,
+            previous: handoff,
+          });
+        }
         const referralCode = handoff?.referralCode ?? (yield* readReferralCode);
-        const { handoffToken: _, ...details } = input;
+        const {
+          handoffToken: _,
+          supersedeOrderId,
+          supersedeOrderIds,
+          ...details
+        } = input;
+        const predecessorOrderIds = handoff
+          ? handoff.predecessorOrderIds
+          : supersedeOrderIds;
         const { outcome, retiredPredecessorOrderIds } =
           yield* beginUnlimitedPassPurchase({
             ...details,
             ...(referralCode && { referralCode }),
-            ...(handoff?.supersedeOrderId && {
-              supersedeOrderId: handoff.supersedeOrderId,
+            ...(!handoff && supersedeOrderId && { supersedeOrderId }),
+            ...(predecessorOrderIds && {
+              supersedeOrderIds: predecessorOrderIds,
             }),
           });
         const result = yield* purchaseFailure(
@@ -413,6 +501,19 @@ const beginUnlimitedAction = defineWorkspaceAction(
               ),
             };
           }).pipe(
+            Effect.catchTag(
+              "EntryPackPurchaseError",
+              Effect.fnUntraced(function* (error: EntryPackPurchaseError) {
+                if (error.reason !== "payment-in-progress") return yield* error;
+                const statusPath = yield* readOwnedPassPurchaseStatusPath(
+                  input.orderId,
+                  session.accountId,
+                  "unlimited"
+                );
+                if (!statusPath) return yield* error;
+                return { status: "status" as const, statusPath };
+              })
+            ),
             Effect.catchTag(
               "UnlimitedPassCapacityUnavailable",
               ({ blockingDates }) =>
@@ -451,6 +552,25 @@ const beginUnlimitedAction = defineWorkspaceAction(
               )
           )
         );
+        if (
+          handoff &&
+          (result.status === "capacity_unavailable" ||
+            result.status === "draft_voided")
+        ) {
+          const retryHandoff = yield* issueUnlimitedCheckoutHandoff({
+            ...input,
+            previous: handoff,
+            orderId: orderIdSchema.make(crypto.randomUUID()),
+            predecessorOrderIds: (handoff.predecessorOrderIds ?? []).filter(
+              (id) => !retiredPredecessorOrderIds.includes(id)
+            ),
+          });
+          return {
+            ...result,
+            handoff: retryHandoff,
+            retiredPredecessorOrderIds,
+          };
+        }
         return { ...result, retiredPredecessorOrderIds };
       }),
       "unlimited"
