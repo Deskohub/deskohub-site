@@ -11,7 +11,7 @@ import {
   workspaceMigrationsFolder,
 } from "../migration-scratch-database.test-utils";
 
-const migration = "20261120223910_unlimited_pass_days";
+const migration = "20261121010758_unlimited_pass_purchase";
 const testDatabaseUrl = process.env.WORKSPACE_TEST_DATABASE_URL;
 
 test.skipIf(!testDatabaseUrl)(

@@ -1,1 +1,0 @@
-ALTER TABLE "pass_purchases" ADD COLUMN "buyer_confirmation_delivered_at" timestamp with time zone;
