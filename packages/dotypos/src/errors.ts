@@ -7,6 +7,7 @@ export const DotyposOperation = Schema.Literals([
   "createReservation",
   "updateReservation",
   "cancelReservation",
+  "setReservationStatusIfMatches",
   "confirmReservation",
   "restoreCancelledReservation",
   "getReservation",

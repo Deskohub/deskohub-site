@@ -2992,6 +2992,178 @@ describe("DotyposService reservations", () => {
   });
 });
 
+describe("DotyposService marked reservation transitions", () => {
+  const noteLine = "Synthetic booking claim";
+  const booking = {
+    customerId: dotyposCustomerId("customer-id"),
+    tableId: dotyposTableId("table-id"),
+    startDate: new Date("2026-06-20T10:00:00.000Z"),
+    endDate: new Date("2026-06-20T12:00:00.000Z"),
+    seats: 2,
+  };
+
+  test.each(["empty", "missing-id"] as const)(
+    "sends a single journaled POST on a %s response",
+    async (response) => {
+      let posts = 0;
+      const fetchMock = mockDotyposFetch((request) => {
+        if (new URL(request.url).pathname === "/signin/token")
+          return tokenResponse();
+        expect(request.method).toBe("POST");
+        posts++;
+        if (response === "empty") return Response.json([]);
+        const { id: _id, ...withoutId } = reservation();
+        return Response.json([withoutId]);
+      });
+      const result = await runWithServiceRetryingInstantly(
+        Effect.flatMap(DotyposService, (dotypos) =>
+          dotypos.createReservation({
+            ...booking,
+            note: noteLine,
+            status: "NEW",
+            singleAttempt: true,
+          })
+        ).pipe(Effect.result),
+        fetchMock
+      );
+      expect(posts).toBe(1);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: "DotyposUncertain",
+          reason: "invalid-response",
+          operation: "createReservation",
+        },
+      });
+    }
+  );
+
+  test.each([
+    {
+      label: "cancels the matched version",
+      reads: ["owned"],
+      patches: ["success"],
+      expected: "Success",
+      etags: ['"version-1"'],
+    },
+    {
+      label: "reports a changed ETag",
+      reads: ["owned"],
+      patches: [412],
+      expected: "DotyposVersionConflict",
+      etags: ['"version-1"'],
+    },
+    {
+      label: "does not patch changed ownership",
+      reads: ["changed-note"],
+      patches: [],
+      expected: "DotyposVersionConflict",
+      etags: [],
+    },
+    {
+      label: "does not patch changed booking facts",
+      reads: ["changed-table"],
+      patches: [],
+      expected: "DotyposVersionConflict",
+      etags: [],
+    },
+    {
+      label: "does not patch without an ETag",
+      reads: ["no-etag"],
+      patches: [],
+      expected: "DotyposRejected",
+      etags: [],
+    },
+    {
+      label: "does not accept a PATCH reply with the prior status",
+      reads: ["owned"],
+      patches: ["unchanged"],
+      expected: "DotyposUncertain",
+      etags: ['"version-1"'],
+    },
+    {
+      label: "settles a lost reply by reading the cancelled version",
+      reads: ["owned", "cancelled"],
+      patches: ["transport", 412],
+      expected: "Success",
+      etags: ['"version-1"', '"version-1"'],
+    },
+    {
+      label: "keeps a lost reply uncertain after a booking change",
+      reads: ["owned", "changed-table"],
+      patches: ["transport", 412],
+      expected: "DotyposUncertain",
+      etags: ['"version-1"', '"version-1"'],
+    },
+  ])("$label", async ({ reads, patches, expected, etags }) => {
+    let readsSeen = 0;
+    const headers: Array<string | null> = [];
+    const fetchMock = mockDotyposFetch(async (request) => {
+      if (new URL(request.url).pathname === "/signin/token")
+        return tokenResponse();
+      if (request.method === "GET") {
+        const state = reads[readsSeen++];
+        expect(state).toBeDefined();
+        return Response.json(
+          reservation({
+            _tableId:
+              state === "changed-table"
+                ? dotyposTableId("other-table")
+                : booking.tableId,
+            note:
+              state === "changed-note"
+                ? "Unrelated note"
+                : `Another line\n${noteLine}`,
+            status: state === "cancelled" ? "CANCELLED" : "CONFIRMED",
+          }),
+          state === "no-etag"
+            ? undefined
+            : {
+                headers: { ETag: `"version-${readsSeen}"` },
+              }
+        );
+      }
+      expect(request.method).toBe("PATCH");
+      const patch = patches[headers.length];
+      headers.push(request.headers.get("If-Match"));
+      expect(await request.json()).toEqual({ status: "CANCELLED" });
+      if (patch === "transport") throw new TypeError("Synthetic lost response");
+      if (patch === 412) return new Response(null, { status: patch });
+      expect(patch).toBeOneOf(["success", "unchanged"]);
+      return Response.json(
+        reservation({
+          status: patch === "success" ? "CANCELLED" : "CONFIRMED",
+          note: noteLine,
+        })
+      );
+    });
+    const result = await runWithServiceRetryingInstantly(
+      Effect.flatMap(DotyposService, (dotypos) =>
+        dotypos.setReservationStatusIfMatches({
+          reservationId: dotyposReservationId("reservation-id"),
+          expectedBooking: booking,
+          expectedNoteLine: noteLine,
+          status: "CANCELLED",
+        })
+      ).pipe(Effect.result),
+      fetchMock
+    );
+    if (expected === "Success") {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "CANCELLED" },
+      });
+    } else {
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: expected },
+      });
+    }
+    expect(readsSeen).toBe(reads.length);
+    expect(headers).toEqual([...etags]);
+  });
+});
+
 describe("DotyposService reservation restore", () => {
   /** The booking `reservation()` holds by default. */
   const expectedBooking = {

@@ -387,6 +387,14 @@ describe.skipIf(!testDatabase)(
             '2026-03-15T10:00:00Z', '{}', 'en-US', $4, '2026-03-16', '9')`,
         [dotyposCustomerId, buyer, attachedDay, passId]
       );
+      await testDatabase!.pool.query(
+        `insert into unlimited_pass_day_moves
+           (generation, reservation_id, customer_id, source_reservation_id, source_table_id,
+            target_reservation_id, target_table_id, requested_at, checked_at, attached_at, settled_at)
+         select uuid_generate_v7(), id, $1, $2, '8', $3, '9', now(), now(), now(), now()
+         from workspace_reservations where pass_id = $4`,
+        [dotyposCustomerId, replacedDay, attachedDay, passId]
+      );
       const accountHistory = await Effect.runPromise(
         Effect.flatMap(CustomerReservationHistoryService, (service) =>
           service.load({ accountId: holder, dotyposCustomerId })
@@ -403,7 +411,7 @@ describe.skipIf(!testDatabase)(
               makeDotyposReservation({
                 id: replacedDay,
                 status: "CANCELLED",
-                note: `Deskohub Unlimited ${passId}/2026-03-16`,
+                note: "Synthetic staff note after the move",
               }),
             ])
           )

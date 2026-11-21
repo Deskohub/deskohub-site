@@ -4,12 +4,16 @@ import {
   DotyposService,
   getCustomerDisplayName,
 } from "@deskohub/dotypos";
-import { and, desc, eq, exists, or, sql } from "drizzle-orm";
+import { and, desc, eq, exists, inArray, or, sql } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Option } from "effect";
 import type { SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { passEntryClaims, workspaceReservations } from "@/db/schema";
+import {
+  passEntryClaims,
+  unlimitedPassDayMoves,
+  workspaceReservations,
+} from "@/db/schema";
 import { defaultLocale, type Locale } from "@/features/i18n";
 import { isEndedUnpaidPaymentState } from "@/features/order";
 import {
@@ -333,10 +337,12 @@ const relateReservations = ({
   account,
   rows,
   sources,
+  movedPassDayIds,
 }: {
   readonly account: ReservationHistoryAccount;
   readonly rows: readonly ReservationRow[];
   readonly sources: ReservationSources;
+  readonly movedPassDayIds: ReadonlySet<DotyposReservationId>;
 }): readonly HistoryEntry[] => {
   const rowsByReservationId = new Map(
     rows.flatMap((row) =>
@@ -348,7 +354,12 @@ const relateReservations = ({
       const row = rowsByReservationId.get(reservation.id);
       // A provider hold can exist before its ID is attached locally, or
       // outlive attachment when it is replaced or cancelled.
-      if (row?.unlimitedPassDay || reservation.unlimitedPassDay) return [];
+      if (
+        row?.unlimitedPassDay ||
+        reservation.unlimitedPassDay ||
+        movedPassDayIds.has(reservation.id)
+      )
+        return [];
       return [
         {
           reservation,
@@ -679,6 +690,36 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
       ? readPartyNamesOf(entries)
       : Effect.succeed(new Map<DotyposCustomerId, string>());
 
+  const readMovedPassDayIds = Effect.fnUntraced(function* ({
+    sources,
+  }: {
+    readonly sources: ReservationSources;
+  }) {
+    // A provider edit may remove a marker from a replaced or staged hold.
+    // Read the audit after the provider list so a concurrent move is visible.
+    const ids = mergeReservations(sources.own, sources.bookedForOthers).flatMap(
+      (record) => (record.unlimitedPassDay ? [] : [record.id])
+    );
+    if (ids.length === 0) return new Set<DotyposReservationId>();
+    const rows = yield* db
+      .select({
+        source: unlimitedPassDayMoves.sourceReservationId,
+        target: unlimitedPassDayMoves.targetReservationId,
+      })
+      .from(unlimitedPassDayMoves)
+      .where(
+        or(
+          inArray(unlimitedPassDayMoves.sourceReservationId, ids),
+          inArray(unlimitedPassDayMoves.targetReservationId, ids)
+        )
+      );
+    return new Set(
+      rows.flatMap(({ source, target }) =>
+        target ? [source, target] : [source]
+      )
+    );
+  });
+
   const readPartyNamesOf = (entries: readonly HistoryEntry[]) =>
     dotypos
       .getCustomersByIds(
@@ -756,6 +797,7 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
     }).pipe(
       Effect.bind("rows", selectReservationRows),
       Effect.bind("sources", readReservationSources),
+      Effect.bind("movedPassDayIds", readMovedPassDayIds),
       Effect.let("entries", relateReservations),
       Effect.bind("lookups", (input) =>
         Effect.all(

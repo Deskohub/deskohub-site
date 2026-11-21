@@ -32,9 +32,11 @@ export const createUnlimitedPassDayHold = Effect.fn(
   day,
   generation,
   coffee,
+  singleAttempt,
 }: Omit<PassDayHold, "generation"> & {
   readonly generation: string;
   readonly coffee?: boolean;
+  readonly singleAttempt?: true;
 }) {
   const dotypos = yield* DotyposService;
   return yield* dotypos.createReservation({
@@ -46,6 +48,7 @@ export const createUnlimitedPassDayHold = Effect.fn(
     endDate: temporalInstantToDate(Temporal.Instant.from(day.interval.endsAt)),
     seats: workspaceBookingSeatCount,
     status: "NEW",
+    ...(singleAttempt && { singleAttempt }),
     note: [
       formatPassDayMarker(passId, day.serviceDate, generation),
       `Káva: ${coffee ? "ano" : "ne"}`,
