@@ -1,9 +1,14 @@
 import { expect } from "@playwright/test";
 import { enablePreviewAccess } from "../preview-access";
 import { ariaSnapshotLocales, openSettledPage } from "./accessibility-audit";
-import { localFixtureSkipReason, sandboxSkipReason } from "./audit-target";
+import {
+  localFixtureSkipReason,
+  sandboxSkipReason,
+  seededAccountSkipReason,
+} from "./audit-target";
 import { accessibilityTest as test } from "./fixtures";
 import {
+  openMissingReservationStatus,
   openSignIn,
   reservationForm,
   reservationForms,
@@ -56,10 +61,7 @@ for (const locale of ariaSnapshotLocales) {
       localDatabase,
       page,
     }) => {
-      test.skip(
-        outcome !== "not_found" && localFixtureSkipReason !== undefined,
-        localFixtureSkipReason
-      );
+      test.skip(localFixtureSkipReason !== undefined, localFixtureSkipReason);
       await withStatusOutcome({ localDatabase, locale, outcome, page }, () =>
         expect(page.getByRole("main")).toMatchAriaSnapshot({
           name: `${locale}-status-${outcome}.aria.yml`,
@@ -68,3 +70,19 @@ for (const locale of ariaSnapshotLocales) {
     });
   }
 }
+
+test.describe("missing reservation", () => {
+  test.skip(seededAccountSkipReason !== undefined, seededAccountSkipReason);
+
+  for (const locale of ariaSnapshotLocales) {
+    test(`${locale} not_found reservation status`, async ({
+      page,
+      seededAccounts,
+    }) => {
+      await openMissingReservationStatus({ locale, page, seededAccounts });
+      await expect(page.getByRole("main")).toMatchAriaSnapshot({
+        name: `${locale}-status-not-found.aria.yml`,
+      });
+    });
+  }
+});

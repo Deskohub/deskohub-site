@@ -39,7 +39,7 @@ import {
   plainDateStringSchema,
   temporalInstantToPlainDate,
 } from "@/shared/utils/temporal";
-import { hasUnrefundedEntryPackPayment } from "./entry-pack-payment-eligibility";
+import { hasClaimablePassOrder } from "./entry-pack-payment-eligibility";
 
 type Purchase = typeof passPurchases.$inferSelect;
 type Invitation = typeof entryPackGiftInvitations.$inferSelect;
@@ -75,6 +75,10 @@ const readPaidGiftRows = Effect.fnUntraced(function* (
       holderDeletedAt: customerAccounts.deletedAt,
       refundState: paymentAttempts.refundState,
       paymentAttemptState: paymentAttempts.state,
+      paymentState: orders.paymentState,
+      refundTarget: paymentAttempts.refundTargetValue,
+      refundedAmount: paymentAttempts.refundedAmountValue,
+      paidAmount: paymentAttempts.amountValue,
     })
     .from(passPurchases)
     .innerJoin(orders, eq(orders.id, passPurchases.id))
@@ -104,8 +108,13 @@ const readPaidGiftRows = Effect.fnUntraced(function* (
         inArray(passPurchases.id, orderIds),
         ne(passPurchases.buyerAccountId, passPurchases.holderAccountId),
         eq(orders.kind, "pass-purchase"),
-        eq(orders.paymentState, "paid"),
-        isNotNull(orders.paidAt)
+        or(
+          and(eq(orders.paymentState, "paid"), isNotNull(orders.paidAt)),
+          and(
+            eq(orders.paymentState, "complimentary"),
+            eq(orders.fulfillmentState, "fulfilled")
+          )
+        )
       )
     );
 });
@@ -116,9 +125,14 @@ const canInvite = (row: PaidGift, now: Temporal.Instant) =>
   row.holderDeletedAt === null &&
   row.purchase.giftClaimedAt === null &&
   row.purchase.status === "active" &&
-  ((row.purchase.giftIssuedAt === null && row.refundState === null) ||
+  (row.paymentState === "complimentary" ||
+    (row.purchase.giftIssuedAt === null && row.refundState === null) ||
     (row.paymentAttemptState === "paid" &&
-      row.refundState === "not_required")) &&
+      (row.refundState === "not_required" ||
+        (row.refundTarget !== null &&
+          row.paidAmount !== null &&
+          Math.max(row.refundTarget, row.refundedAmount ?? 0) <
+            row.paidAmount)))) &&
   Temporal.PlainDate.compare(
     now
       .toZonedDateTimeISO(workspaceSiteConstants.location.timeZone)
@@ -130,7 +144,7 @@ const canResend = (row: PaidGift, now: Temporal.Instant) =>
   canInvite(row, now) &&
   (row.invitation === null ||
     (row.invitation.nextAttemptAt === null &&
-      row.invitation.generation < maxResends &&
+      row.invitation.generation - row.invitation.firstGeneration < maxResends &&
       Temporal.Instant.compare(
         now,
         (
@@ -283,10 +297,7 @@ export const claimEntryPackGifts = Effect.fn("claimEntryPackGifts")(function* (
         ne(passPurchases.buyerAccountId, accountId),
         isNull(passPurchases.giftClaimedAt),
         eq(passPurchases.status, "active"),
-        or(
-          isNull(passPurchases.giftIssuedAt),
-          hasUnrefundedEntryPackPayment(db)
-        ),
+        or(isNull(passPurchases.giftIssuedAt), hasClaimablePassOrder(db)),
         gt(passPurchases.validUntil, signedInOn),
         hasVerifiedActiveLogin(db, accountId),
         inArray(
@@ -297,7 +308,7 @@ export const claimEntryPackGifts = Effect.fn("claimEntryPackGifts")(function* (
             .where(
               and(
                 eq(orders.kind, "pass-purchase"),
-                eq(orders.paymentState, "paid"),
+                inArray(orders.paymentState, ["paid", "complimentary"]),
                 or(
                   lt(passPurchases.giftIssuedAt, signedInAt),
                   and(

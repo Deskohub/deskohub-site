@@ -1981,6 +1981,8 @@
   "unlimitedPassGiftMailTitle": "Du hast einen unbegrenzten Pass für Deskohub Workspace erhalten",
   "unlimitedPassGiftMailBody": "Löse deinen unbegrenzten Pass mit der unten angegebenen E-Mail-Adresse ein.",
   "entryPackStatusPaidTitle": "Dein Eintrittspaket ist bezahlt",
+  "passStatusGrantedTitle": "Kostenloser Pass vergeben",
+  "passStatusGrantCancelledTitle": "Kostenloser Pass storniert",
   "entryPackStatusGiftInvitationNotSent": "Einladung nicht gesendet",
   "entryPackStatusGiftInvitationPending": "Einladung wartet auf Versand",
   "entryPackStatusGiftInvitationSent": "Einladung gesendet",

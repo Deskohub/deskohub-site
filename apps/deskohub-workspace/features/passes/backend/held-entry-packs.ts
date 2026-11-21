@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
@@ -16,7 +16,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import type { PlainDate } from "@/shared/utils/temporal";
 import type { PassStatus } from "../pass";
 import type { EntryPackSize, PassTier } from "../pass-offer";
-import { hasUnrefundedEntryPackPayment } from "./entry-pack-payment-eligibility";
+import { hasClaimablePassOrder } from "./entry-pack-payment-eligibility";
 
 export type HeldEntryPack = {
   readonly id: OrderId;
@@ -24,6 +24,7 @@ export type HeldEntryPack = {
   readonly entryCount: EntryPackSize;
   readonly entriesLeft: number;
   readonly paidAt: Temporal.Instant;
+  readonly complimentary?: true;
   readonly validFrom: PlainDate;
   readonly validUntil: PlainDate;
   readonly status: PassStatus;
@@ -59,12 +60,14 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
       tier: passPurchases.tier,
       entryCount: passPurchases.entryCount,
       paidAt: orders.paidAt,
+      grantedAt: orders.fulfilledAt,
+      paymentState: orders.paymentState,
       validFrom: passPurchases.validFrom,
       validUntil: passPurchases.validUntil,
       status: passPurchases.status,
       giftIssuedAt: passPurchases.giftIssuedAt,
       giftClaimedAt: passPurchases.giftClaimedAt,
-      giftPaymentIsUsable: sql<boolean>`${passPurchases.giftIssuedAt} is null or ${hasUnrefundedEntryPackPayment(db)}`,
+      giftPaymentIsUsable: sql<boolean>`${passPurchases.giftIssuedAt} is null or ${hasClaimablePassOrder(db)}`,
       claimedDates: sql<PlainDate[]>`coalesce(
         array_agg(${passEntryClaims.date}::text order by ${passEntryClaims.date})
           filter (where ${passEntryClaims.date} is not null),
@@ -93,23 +96,33 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
       and(
         eq(passPurchases.holderAccountId, accountId),
         eq(passPurchases.product, "entry-pack"),
-        isNotNull(orders.paidAt),
+        or(isNotNull(orders.paidAt), eq(orders.paymentState, "complimentary")),
         ne(passPurchases.status, "void")
       )
     )
-    .groupBy(passPurchases.id, orders.paidAt)
+    .groupBy(passPurchases.id, orders.id)
     .orderBy(asc(passPurchases.validUntil), asc(passPurchases.id));
 
-  return rows.flatMap(({ paidAt, entryCount, ...pack }): HeldEntryPack[] =>
-    paidAt && entryCount !== null
-      ? [
-          {
-            ...pack,
-            entryCount,
-            paidAt,
-            entriesLeft: Math.max(0, entryCount - pack.claimedDates.length),
-          },
-        ]
-      : []
+  return rows.flatMap(
+    ({
+      paidAt,
+      grantedAt,
+      paymentState,
+      entryCount,
+      ...pack
+    }): HeldEntryPack[] => {
+      const acquiredAt = paymentState === "complimentary" ? grantedAt : paidAt;
+      return acquiredAt && entryCount !== null
+        ? [
+            {
+              ...pack,
+              entryCount,
+              paidAt: acquiredAt,
+              ...(paymentState === "complimentary" && { complimentary: true }),
+              entriesLeft: Math.max(0, entryCount - pack.claimedDates.length),
+            },
+          ]
+        : [];
+    }
   );
 });

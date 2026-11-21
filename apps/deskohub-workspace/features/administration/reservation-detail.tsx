@@ -1,6 +1,9 @@
 import { Suspense } from "react";
 import type { Locale } from "@/features/i18n";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
+import { loadReservationPassLinks } from "@/features/passes/admin/pass-page-data.server";
+import type { ReservationPassLink } from "@/features/passes/admin/pass-reads";
+import { ReservationPassBadge } from "@/features/passes/admin/reservation-pass-badge";
 import { reservationOrderId } from "@/features/reservation/persistence-contracts";
 import { formatMoney } from "@/shared/money/money";
 import { restoreAdministrationReservation } from "./actions";
@@ -80,6 +83,9 @@ async function ReservationDetailContent({
   const { reservationId } = await params;
   const detail = await loadAdministrationReservation(reservationId);
   const { reservation } = detail;
+  const pass = (await loadReservationPassLinks([reservation.id]))?.get(
+    reservation.id
+  );
   const fioMovements = loadAdministrationFioMovements(
     reservationOrderId(reservation.id)
   );
@@ -116,7 +122,11 @@ async function ReservationDetailContent({
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-6">
-          <ReservationSummarySection detail={detail} locale={locale} />
+          <ReservationSummarySection
+            detail={detail}
+            locale={locale}
+            pass={pass}
+          />
 
           <Suspense fallback={null}>
             <ReservationFioMovementEvidence
@@ -193,7 +203,8 @@ type ReservationDetailSectionProps = {
 function ReservationSummarySection({
   detail,
   locale,
-}: ReservationDetailSectionProps) {
+  pass,
+}: ReservationDetailSectionProps & { readonly pass?: ReservationPassLink }) {
   const { booking, reservation } = detail;
   const unavailable = m.administrationReservationUnavailable({}, { locale });
   return (
@@ -205,6 +216,7 @@ function ReservationSummarySection({
           </h2>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          {pass && <ReservationPassBadge link={pass} locale={locale} />}
           {booking && (
             <span className="rounded-full border border-navy-blue/12 bg-navy-blue/5 px-2.5 py-1 text-xs font-semibold text-navy-blue/65">
               {{

@@ -1,8 +1,42 @@
-import { type SQLWrapper, sql } from "drizzle-orm";
+import { and, eq, inArray, not, type SQLWrapper, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { Effect } from "effect";
+import type { WorkspaceDatabaseClient } from "@/db/database.service";
 import { passPurchases } from "@/db/schema";
 import type { PlainDate } from "@/shared/utils/temporal";
 import { unlimitedPassDays } from "../pass-offer";
+import { hasPendingPassChange } from "./pass-administration-pending";
+
+export const keepsUnlimitedRenewalSource = Effect.fn(
+  "keepsUnlimitedRenewalSource"
+)(function* (
+  db: WorkspaceDatabaseClient,
+  purchase: Pick<
+    typeof passPurchases.$inferSelect,
+    "renewsPassId" | "holderAccountId" | "validFrom"
+  >
+) {
+  if (!purchase.renewsPassId) return true;
+  const [source] = yield* db
+    .select({ id: passPurchases.id })
+    .from(passPurchases)
+    .where(
+      and(
+        eq(passPurchases.id, purchase.renewsPassId),
+        eq(passPurchases.product, "unlimited"),
+        eq(passPurchases.holderAccountId, purchase.holderAccountId),
+        eq(passPurchases.validUntil, purchase.validFrom),
+        inArray(passPurchases.status, [
+          "active",
+          "expired",
+          "withdrawn",
+          "cancelled",
+        ]),
+        not(hasPendingPassChange(db, passPurchases.id, "reassign"))
+      )
+    );
+  return source !== undefined;
+});
 
 export const overlapsUnlimitedPassWindow = (
   pass: {

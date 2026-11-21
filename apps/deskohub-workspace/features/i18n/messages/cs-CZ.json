@@ -2000,6 +2000,8 @@
   "unlimitedPassGiftMailTitle": "Dostali jste neomezené členství v Deskohub Workspace",
   "unlimitedPassGiftMailBody": "Přijměte neomezené členství pomocí níže uvedené e-mailové adresy.",
   "entryPackStatusPaidTitle": "Tvůj balíček vstupů je zaplacený",
+  "passStatusGrantedTitle": "Bezplatná permanentka byla vydána",
+  "passStatusGrantCancelledTitle": "Bezplatná permanentka byla zrušena",
   "entryPackStatusGiftInvitationNotSent": "Pozvánka neodeslána",
   "entryPackStatusGiftInvitationPending": "Pozvánka čeká na odeslání",
   "entryPackStatusGiftInvitationSent": "Pozvánka odeslána",

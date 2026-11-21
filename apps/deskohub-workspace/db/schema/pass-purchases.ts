@@ -45,6 +45,7 @@ export const passPurchases = pgTable(
       .notNull()
       .$type<CustomerAccountId>()
       .references(() => customerAccounts.id),
+    holderVersion: integer("holder_version").notNull().default(0),
     renewsPassId: text("renews_pass_id").$type<OrderId>(),
     product: text("product").notNull().$type<"entry-pack" | "unlimited">(),
     tier: text("tier").notNull().$type<PassTier>(),

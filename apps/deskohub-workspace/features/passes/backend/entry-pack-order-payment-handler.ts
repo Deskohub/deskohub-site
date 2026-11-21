@@ -2,13 +2,14 @@ import "server-only";
 
 import { DotyposService } from "@deskohub/dotypos";
 import { EmailConfigTag, EmailServiceTag } from "@deskohub/email";
-import { and, eq, lte, ne } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { Context, Data, Effect, Option, Result } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   entryPackGiftInvitations,
   orders,
+  passAdministrationChanges,
   passPurchases,
   paymentAttempts,
   workspaceReservations,
@@ -56,8 +57,9 @@ import { WorkspaceReservationRepository } from "@/features/reservation/backend/w
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { moneyEquals } from "@/shared/money/money";
 import { currentInstant } from "@/shared/utils/temporal";
-import { isEntryPackQuoteExpired } from "../pass-offer";
+import { getEntryPackEndDate, isEntryPackQuoteExpired } from "../pass-offer";
 import { withPassPurchaseAddons } from "../pass-purchase-quote";
+import { getUnlimitedPassEndDate } from "../unlimited-pass";
 import { recordConfirmationInvitationState } from "./entry-pack-gift";
 import { deliverPendingEntryPackInvitation } from "./entry-pack-gift-delivery";
 import { sendEntryPackPurchaseEmail } from "./entry-pack-purchase-email";
@@ -403,6 +405,35 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     return transition(attempt, true, now);
   });
 
+  const findReceiptHolder = Effect.fn("passPurchase.findReceiptHolder")(
+    function* (purchase: typeof passPurchases.$inferSelect) {
+      if (purchase.holderVersion === 0) return purchase.holderAccountId;
+      const [original] = yield* db
+        .select({ change: passAdministrationChanges.change })
+        .from(passAdministrationChanges)
+        .where(
+          and(
+            eq(passAdministrationChanges.passId, purchase.id),
+            isNotNull(passAdministrationChanges.completedAt),
+            sql`${passAdministrationChanges.change}->>'_tag' = 'reassign'`,
+            sql`${passAdministrationChanges.change}->>'expectedHolderVersion' = '0'`
+          )
+        )
+        .orderBy(
+          passAdministrationChanges.requestedAt,
+          passAdministrationChanges.requestId
+        )
+        .limit(1);
+      if (original?.change._tag !== "reassign") {
+        return yield* paymentError(
+          purchase.id,
+          "Pass purchase has no original holder change."
+        );
+      }
+      return original.change.expectedHolderAccountId;
+    }
+  );
+
   const fulfillBuyer = Effect.fn("entryPack.fulfillBuyer")(
     function* (orderId: OrderId) {
       const [paid] = yield* db
@@ -420,12 +451,19 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           orderId,
           "Paid Entry pack has no active payment attempt."
         );
-      const gift = purchase.buyerAccountId !== purchase.holderAccountId;
       if (
         fulfillmentState !== "not_started" &&
         fulfillmentState !== "awaiting_delivery"
       ) {
         return;
+      }
+      if (purchase.product === "unlimited" && purchase.status === "cancelled") {
+        const [attempt] = yield* readAttempt(orderId, activePaymentAttemptId);
+        if (attempt?.state !== "paid")
+          return yield* paymentError(
+            orderId,
+            "Cancelled Unlimited pass has no active paid attempt."
+          );
       }
       const attemptIsActive = and(
         eq(orders.id, orderId),
@@ -447,8 +485,10 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           purchase.buyerAccountId
         ).pipe(Effect.provide(services));
         if (buyer) {
+          const holderAccountId = yield* findReceiptHolder(purchase);
+          const gift = purchase.buyerAccountId !== holderAccountId;
           const holderEmail = gift
-            ? ((yield* findPurchaseLoginEmail(purchase.holderAccountId).pipe(
+            ? ((yield* findPurchaseLoginEmail(holderAccountId).pipe(
                 Effect.provide(services)
               )) ?? null)
             : null;
@@ -457,8 +497,13 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
                 Effect.provide(services)
               )
             : false;
+          const validFrom = snapshot.serviceDate;
+          const validUntil =
+            snapshot.product.kind === "unlimited"
+              ? getUnlimitedPassEndDate(validFrom)
+              : getEntryPackEndDate(validFrom, snapshot.product.size);
           yield* sendEntryPackPurchaseEmail({
-            purchase,
+            purchase: { ...purchase, holderAccountId, validFrom, validUntil },
             paymentAttemptId: activePaymentAttemptId,
             buyer: { email: buyer },
             holderEmail,
@@ -529,6 +574,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         generation: entryPackGiftInvitations.generation,
         holderAccountId: passPurchases.holderAccountId,
         paymentAttemptId: orders.activePaymentAttemptId,
+        paymentState: orders.paymentState,
       })
       .from(entryPackGiftInvitations)
       .innerJoin(
@@ -539,7 +585,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
       .where(
         and(
           eq(orders.id, orderId),
-          eq(orders.paymentState, "paid"),
+          inArray(orders.paymentState, ["paid", "complimentary"]),
           eq(
             entryPackGiftInvitations.holderAccountId,
             passPurchases.holderAccountId
@@ -548,17 +594,18 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           lte(entryPackGiftInvitations.nextAttemptAt, yield* currentInstant)
         )
       );
-    if (!target?.paymentAttemptId) return;
+    if (
+      !target ||
+      (!target.paymentAttemptId && target.paymentState !== "complimentary")
+    )
+      return;
 
     // Account deletion takes this same section. Acquire it before the order
     // section, and release it before the buyer's independent fulfillment.
     yield* customerAccounts
       .withActiveAccount(
         target.holderAccountId,
-        deliverPendingEntryPackInvitation(
-          orderId,
-          target.paymentAttemptId
-        ).pipe(
+        deliverPendingEntryPackInvitation(orderId, target).pipe(
           Effect.provide(sendingServices),
           Effect.provide(SealedStateKeys.Default),
           Effect.timeout("10 seconds")
@@ -599,13 +646,27 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
         purchase.status === "active" ||
         purchase.status === "withdrawn"
       )
-        return true;
-      if (purchase.status !== "pending_payment") return false;
+        return "buyer-and-gift" as const;
+      if (purchase.status === "cancelled") {
+        // Stop holder retries and keep the buyer's original receipt details.
+        yield* db
+          .update(entryPackGiftInvitations)
+          .set({ nextAttemptAt: null })
+          .where(
+            and(
+              eq(entryPackGiftInvitations.orderId, orderId),
+              isNotNull(entryPackGiftInvitations.nextAttemptAt)
+            )
+          );
+        return "buyer-only" as const;
+      }
+      if (purchase.status !== "pending_payment") return "blocked" as const;
       const [order] = yield* readOrder(orderId);
       if (order?.paymentState !== "paid" || !order.activePaymentAttemptId)
-        return false;
+        return "blocked" as const;
       const attemptId = order.activePaymentAttemptId;
-      if (!(yield* canConfirmUnlimitedPass(orderId, attemptId))) return false;
+      if (!(yield* canConfirmUnlimitedPass(orderId, attemptId)))
+        return "blocked" as const;
       if (Option.isNone(dotypos))
         return yield* paymentError(
           orderId,
@@ -623,13 +684,15 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
           (cause._tag === "UnlimitedPassHoldsUnavailable" &&
             cause.reason === "changed");
         if (!(yield* canConfirmUnlimitedPass(orderId, attemptId, rejected)))
-          return false;
+          return "blocked" as const;
         return yield* paymentError(
           orderId,
           "Unlimited pass day confirmation needs reconciliation."
         );
       }
-      return (yield* settlePassPurchase(orderId, attemptId)) !== undefined;
+      return (yield* settlePassPurchase(orderId, attemptId)) === undefined
+        ? ("blocked" as const)
+        : ("buyer-and-gift" as const);
     },
     (effect, orderId) =>
       effect.pipe(
@@ -642,8 +705,10 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
   const fulfill = Effect.fn("passPurchase.fulfill")(function* (
     orderId: OrderId
   ) {
-    if (!(yield* fulfillUnlimited(orderId))) return;
+    const next = yield* fulfillUnlimited(orderId);
+    if (next === "blocked") return;
     yield* fulfillGift(orderId).pipe(
+      Effect.when(Effect.succeed(next === "buyer-and-gift")),
       Effect.catch(() =>
         Effect.logWarning("Entry pack gift fulfillment could not complete")
       )

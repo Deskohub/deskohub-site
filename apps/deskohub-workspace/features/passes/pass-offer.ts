@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { currencyCZK } from "@/shared/money/currencies";
 import { workspaceSiteConstants } from "@/shared/utils";
 import {
+  type PlainDate,
   plainDateStringSchema,
   temporalInstantToPlainDate,
 } from "@/shared/utils/temporal";
@@ -99,16 +100,26 @@ export const isEntryPackQuoteExpired = (
   validUntil: typeof plainDateStringSchema.Type
 ) => Temporal.PlainDate.compare(entryPackLocalDate(now), validUntil) >= 0;
 
+export const getEntryPackEndDate = (
+  startDate: PlainDate,
+  size: EntryPackSize
+) =>
+  plainDateStringSchema.make(
+    Temporal.PlainDate.from(startDate)
+      .add({ months: entryPackMonths[size] })
+      .toString()
+  );
+
 export const getEntryPackValidity = (
   purchasedAt: Temporal.Instant,
   size: EntryPackSize
 ) => {
-  const date = entryPackLocalDate(purchasedAt);
+  const validFrom = plainDateStringSchema.make(
+    entryPackLocalDate(purchasedAt).toString()
+  );
   return {
-    validFrom: plainDateStringSchema.make(date.toString()),
-    validUntil: plainDateStringSchema.make(
-      date.add({ months: entryPackMonths[size] }).toString()
-    ),
+    validFrom,
+    validUntil: getEntryPackEndDate(validFrom, size),
   };
 };
 

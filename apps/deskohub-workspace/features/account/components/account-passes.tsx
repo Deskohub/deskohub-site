@@ -305,9 +305,11 @@ function AccountEntryPackCard({
                   : m.accountPassBoughtForYou({}, { locale })}
               </p>
             )}
-            <p className="text-slate-600">
-              {m.accountPassBoughtOn({ date: boughtOn }, { locale })}
-            </p>
+            {boughtOn && (
+              <p className="text-slate-600">
+                {m.accountPassBoughtOn({ date: boughtOn }, { locale })}
+              </p>
+            )}
           </div>
         </header>
         <EntryPackMeter
