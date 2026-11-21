@@ -1,6 +1,7 @@
 import type {
   DotyposCustomerId,
   DotyposReservationId,
+  DotyposTableId,
 } from "@deskohub/dotypos";
 import {
   and,
@@ -9,6 +10,7 @@ import {
   eq,
   exists,
   gt,
+  gte,
   inArray,
   isNotNull,
   isNull,
@@ -34,6 +36,7 @@ import {
   latePaymentRecoveries,
   type PaymentAttemptRow,
   passEntryClaims,
+  passPurchases,
   paymentAttempts,
   type ReservationCancellationCause,
   reservationAccessGrants,
@@ -56,7 +59,7 @@ import type {
 import type { PaymentReturnTarget } from "@/features/checkout/payment-return-target";
 import type { DiscountClaimError } from "@/features/discounts/errors";
 import { PromotionClaims } from "@/features/discounts/promotion-claims";
-import { endedUnpaidPaymentStates } from "@/features/order";
+import { endedUnpaidPaymentStates, type OrderId } from "@/features/order";
 import {
   checkEntryPackClaim,
   type EntryPackRedemption,
@@ -67,6 +70,12 @@ import {
   reserveEntryPackClaim,
   reserveReleasedEntryPackClaim,
 } from "@/features/passes/backend/entry-pack-redemption";
+import {
+  recordAmbiguousPassDayHolds,
+  type UnboundPassDayHold,
+} from "@/features/passes/backend/pass-day-hold-ownership";
+import { ambiguousPassDayHoldCode } from "@/features/passes/pass-day-marker";
+import type { PassTier } from "@/features/passes/pass-offer";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import type { AgentSelectionKey } from "@/features/reservation/backend/booking-agent";
 import { withCoworkProductFields } from "@/features/reservation/cowork-reservation-product";
@@ -88,6 +97,7 @@ import {
   readLimitSentinel,
   requireWithinReadLimit,
 } from "@/shared/backend/read-limit";
+import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
 import { supersedableReservationPaymentStates } from "./reservation-supersession";
 import {
   StoredReservationDetails,
@@ -243,6 +253,18 @@ export interface ExpectedReservationHold {
   readonly reservationHoldExpiresAt: Temporal.Instant;
 }
 
+export type PendingPassDayCapacity = {
+  readonly passId: OrderId;
+  readonly serviceDate: PlainDate;
+  readonly tableId: DotyposTableId;
+  readonly customerId: DotyposCustomerId;
+  readonly tier: PassTier;
+  readonly holdRequestedAt: Temporal.Instant | null;
+  readonly holdAmbiguous: boolean;
+  readonly holdGeneration: string | null;
+  readonly providerReservationId: DotyposReservationId | null;
+};
+
 export interface IWorkspaceReservationRepository {
   /**
    * Serializes draft creation per checkout session so workers with different
@@ -258,6 +280,7 @@ export interface IWorkspaceReservationRepository {
     | SqlError.SqlError
     | WorkspaceReservationDetailsMalformedError
   >;
+  /** Finds a reservation order. An Unlimited pass day belongs to its pass order. */
   readonly findById: (
     id: WorkspaceReservationId
   ) => Effect.Effect<
@@ -628,6 +651,16 @@ export interface IWorkspaceReservationRepository {
   readonly selectExpiredHoldDotyposReservationIds: (input: {
     readonly now: Temporal.Instant;
   }) => Effect.Effect<readonly DotyposReservationId[], EffectDrizzleQueryError>;
+  readonly recordAmbiguousPassDayHolds: (
+    holds: readonly UnboundPassDayHold[]
+  ) => Effect.Effect<void, EffectDrizzleQueryError>;
+  readonly selectPendingPassDayCapacity: (input: {
+    readonly first: Temporal.PlainDate;
+    readonly last: Temporal.PlainDate;
+  }) => Effect.Effect<
+    readonly PendingPassDayCapacity[],
+    EffectDrizzleQueryError
+  >;
   /**
    * The Workspace reservations made for one Dotypos customer, oldest first,
    * as the customer may read them. Only rows whose reservation customer is
@@ -1102,7 +1135,12 @@ export class WorkspaceReservationRepository extends Context.Service<
           const [reservation] = yield* db
             .select()
             .from(workspaceReservations)
-            .where(eq(workspaceReservations.id, id))
+            .where(
+              and(
+                eq(workspaceReservations.id, id),
+                isNull(workspaceReservations.passId)
+              )
+            )
             .limit(1);
           return yield* decodeOptionalWorkspaceReservation(reservation);
         },
@@ -1795,6 +1833,7 @@ export class WorkspaceReservationRepository extends Context.Service<
             .where(
               and(
                 eq(workspaceReservations.id, id),
+                isNull(workspaceReservations.passId),
                 eq(workspaceReservations.reservationState, "held"),
                 inArray(
                   workspaceReservations.paymentState,
@@ -2208,6 +2247,7 @@ export class WorkspaceReservationRepository extends Context.Service<
               .from(workspaceReservations)
               .where(
                 and(
+                  isNull(workspaceReservations.passId),
                   or(
                     eq(workspaceReservations.reservationState, "held"),
                     and(
@@ -2249,6 +2289,7 @@ export class WorkspaceReservationRepository extends Context.Service<
             .from(workspaceReservations)
             .where(
               and(
+                isNull(workspaceReservations.passId),
                 eq(workspaceReservations.reservationState, "held"),
                 inArray(workspaceReservations.paymentState, [
                   "not_started",
@@ -2263,6 +2304,53 @@ export class WorkspaceReservationRepository extends Context.Service<
 
           return rows.flatMap(({ dotyposReservationId }) =>
             dotyposReservationId ? [dotyposReservationId] : []
+          );
+        }),
+        recordAmbiguousPassDayHolds: (holds) =>
+          recordAmbiguousPassDayHolds(db, holds),
+        selectPendingPassDayCapacity: Effect.fn(
+          "workspaceReservations.selectPendingPassDayCapacity"
+        )(function* ({ first, last }) {
+          const rows = yield* db
+            .select({
+              passId: passPurchases.id,
+              serviceDate: workspaceReservations.serviceDate,
+              tableId: workspaceReservations.passDayTableId,
+              customerId: workspaceReservations.dotyposCustomerId,
+              tier: passPurchases.tier,
+              holdRequestedAt: workspaceReservations.passDayHoldRequestedAt,
+              holdAmbiguous: sql<boolean>`${workspaceReservations.failureCode} is not distinct from ${ambiguousPassDayHoldCode}`,
+              holdGeneration: workspaceReservations.passDayHoldGeneration,
+              providerReservationId: workspaceReservations.dotyposReservationId,
+            })
+            .from(workspaceReservations)
+            .innerJoin(
+              passPurchases,
+              eq(passPurchases.id, workspaceReservations.passId)
+            )
+            .where(
+              and(
+                inArray(workspaceReservations.reservationState, [
+                  "creating_hold",
+                  "held",
+                  "confirming",
+                  "confirmed",
+                  "cancelling",
+                  "cancellation_failed",
+                ]),
+                gte(
+                  workspaceReservations.serviceDate,
+                  plainDateStringSchema.make(first.toString())
+                ),
+                lte(
+                  workspaceReservations.serviceDate,
+                  plainDateStringSchema.make(last.toString())
+                )
+              )
+            );
+
+          return rows.flatMap(({ serviceDate, tableId, ...row }) =>
+            serviceDate && tableId ? [{ ...row, serviceDate, tableId }] : []
           );
         }),
         listForCustomer: Effect.fn("workspaceReservations.listForCustomer")(

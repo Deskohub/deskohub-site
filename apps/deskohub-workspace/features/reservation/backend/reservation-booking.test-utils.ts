@@ -1,4 +1,5 @@
 import { Effect, Layer } from "effect";
+import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
 import {
   type PayStateSubmission,
   prepareWorkspacePayState,
@@ -14,7 +15,10 @@ import { ReservationHolds } from "./reservation-holds.service";
 export const prepareOverProvidedServices = (submission: PayStateSubmission) =>
   prepareWorkspacePayState(submission).pipe(
     Effect.provide(
-      ReservationBooking.Default.pipe(Layer.provide(ReservationHolds.Default))
+      ReservationBooking.Default.pipe(
+        Layer.provide(ReservationHolds.Default),
+        Layer.provide(makeRecordingAdvisoryLock().layer)
+      )
     )
   );
 

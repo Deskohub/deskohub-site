@@ -65,6 +65,7 @@ export class WithdrawalEmails extends Context.Service<
           receiptEmail,
         }) {
           const props = {
+            contractKind: withdrawal.contract.kind,
             locale: withdrawal.locale,
             reference: withdrawal.contract.id,
             customerName: withdrawal.statementName,
@@ -93,6 +94,7 @@ export class WithdrawalEmails extends Context.Service<
         sendOperatorNotice: Effect.fn("WithdrawalEmails.sendOperatorNotice")(
           function* ({ withdrawal, customerEmail }) {
             const props = {
+              contractKind: withdrawal.contract.kind,
               contractLabel: withdrawal.contractLabel,
               contractId: withdrawal.contract.id,
               accountId: withdrawal.accountId,
@@ -102,9 +104,11 @@ export class WithdrawalEmails extends Context.Service<
               paidAmount: withdrawal.paidAmount,
               refundAmount: withdrawal.refundAmount,
               refundBasis: withdrawal.refundBasis,
-              adminUrl: getWorkspaceCanonicalUrl(
-                `/admin/reservations/${encodeURIComponent(withdrawal.contract.id)}`
-              ),
+              ...(withdrawal.contract.kind === "reservation" && {
+                adminUrl: getWorkspaceCanonicalUrl(
+                  `/admin/reservations/${encodeURIComponent(withdrawal.contract.id)}`
+                ),
+              }),
               cancelledAt: withdrawal.contractCancelledAt,
             };
             const rendered = yield* renderWorkspaceEmail(

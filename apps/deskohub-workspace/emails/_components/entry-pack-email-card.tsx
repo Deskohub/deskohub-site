@@ -13,7 +13,7 @@ export function EntryPackEmailCard({
 }: {
   readonly action: { readonly label: string; readonly url: string };
   readonly dates: string;
-  readonly entryCount: EntryPackSize;
+  readonly entryCount: EntryPackSize | null;
   readonly locale: Locale;
   readonly tier: PassTier;
 }) {
@@ -24,7 +24,9 @@ export function EntryPackEmailCard({
           {m.passEntryPack({}, { locale })} · {getPassTierName(tier, locale)}
         </WorkspaceEmailLabel>
         <Text className="m-0 mt-1 text-[38px] font-bold leading-[46px] text-navy">
-          {m.passEntryCount({ count: entryCount }, { locale })}
+          {entryCount === null
+            ? m.passUnlimited({}, { locale })
+            : m.passEntryCount({ count: entryCount }, { locale })}
         </Text>
         <Text className="m-0 mt-1 text-[14px] text-navy">{dates}</Text>
       </Section>

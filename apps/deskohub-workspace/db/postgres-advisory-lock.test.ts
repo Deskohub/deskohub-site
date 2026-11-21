@@ -738,6 +738,60 @@ describe("Postgres advisory lock helper", () => {
 });
 
 describe("Workspace lock sections", () => {
+  test("fails the outer section when a child savepoint fails during scope cleanup", async () => {
+    const cleanupFailure = "savepoint rollback failed";
+    const fake = makeFakeConnections({
+      query: () => async (statement) => {
+        if (statement === "rollback to savepoint workspace_advisory_locks") {
+          throw new Error(cleanupFailure);
+        }
+        return { rows: [] };
+      },
+    });
+    const layer = Layer.succeed(
+      WorkspaceDatabaseAdvisoryLock,
+      WorkspaceDatabaseAdvisoryLock.make({
+        client: fake.client,
+        maxConnections: 2,
+      })
+    );
+    const day = Temporal.PlainDate.from("2099-01-01");
+    const outer = "account-1" as CustomerAccountId;
+    const exit = await Effect.runPromise(
+      Effect.gen(function* () {
+        const childEntered = yield* Deferred.make<void>();
+        const outerReturned = yield* Deferred.make<void>();
+        const releaseChild = yield* Deferred.make<void>();
+        const section = yield* Effect.forkChild(
+          WorkspaceLockSections.customerAccount(outer)(
+            Effect.gen(function* () {
+              yield* Effect.forkChild(
+                WorkspaceLockSections.reservationCapacity([day])(
+                  Deferred.succeed(childEntered, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseChild))
+                  )
+                ).pipe(Effect.exit)
+              );
+              yield* Deferred.await(childEntered);
+              yield* Deferred.succeed(outerReturned, undefined);
+              return "outer succeeded";
+            })
+          )
+        );
+        yield* Deferred.await(outerReturned);
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(releaseChild, undefined);
+        return yield* Fiber.await(section);
+      }).pipe(Effect.provide(layer), Effect.timeout("2 seconds"))
+    );
+
+    expect(exit._tag).toBe("Failure");
+    if (Exit.isFailure(exit))
+      expect(Cause.pretty(exit.cause)).toContain(cleanupFailure);
+    expect(fake.connected).toBe(1);
+    expect(fake.released).toEqual([undefined]);
+  });
+
   test("a section holds its key for its effect only, and is not reentrant", async () => {
     const fake = makeLayerPool(4);
     const layer = fake.makeLayer();
@@ -753,7 +807,7 @@ describe("Workspace lock sections", () => {
         effect: Effect.Effect<A, E, WorkspaceDatabaseAdvisoryLock>
       ) => Effect.runPromiseExit(effect.pipe(Effect.provide(layer)));
 
-      // Another key nests, and leaves when its section ends.
+      // Another key nests on the same connection and leaves at its section end.
       expect(
         await run(
           enter(
@@ -764,7 +818,7 @@ describe("Workspace lock sections", () => {
           )
         )
       ).toStrictEqual(Exit.succeed("nested"));
-      expect(fake.connected).toBe(3);
+      expect(fake.connected).toBe(1);
 
       // The same key inside its own section dies before taking a connection.
       const reentered = await run(enter(first, enter(first, Effect.void)));
@@ -772,7 +826,7 @@ describe("Workspace lock sections", () => {
         Exit.isFailure(reentered) &&
           Cause.pretty(reentered.cause).includes("not reentrant")
       ).toBe(true);
-      expect(fake.connected).toBe(4);
+      expect(fake.connected).toBe(2);
 
       // The key leaves after a failed section too.
       expect(
@@ -782,8 +836,6 @@ describe("Workspace lock sections", () => {
         Exit.succeed("again")
       );
       expect(fake.released).toEqual([
-        undefined,
-        undefined,
         undefined,
         undefined,
         undefined,

@@ -45,11 +45,7 @@ export function getEntryPackPayPath(locale: Locale, orderId: OrderId) {
   return `/${locale}${entryPackCheckoutPath}?${query}`;
 }
 
-export type EntryPackBuyer =
-  | { readonly kind: "signed-out" }
-  | { readonly kind: "unavailable" }
-  | { readonly kind: "profile-required"; readonly email: string }
-  | { readonly kind: "linked"; readonly name: string; readonly email: string };
+export type { PassPurchaseBuyer as EntryPackBuyer } from "./pass-purchase-details";
 
 export type EntryPackCheckoutPrice = {
   readonly fingerprint: string;
@@ -62,13 +58,6 @@ export type EntryPackCheckoutPrice = {
     readonly amount: Money;
   }>;
 };
-
-export const entryPackDetailsSchema = (locale: Locale) =>
-  Schema.Struct({
-    holderEmail: Schema.optionalKey(reservationCustomerEmailSchema),
-    buyerProfile: Schema.optionalKey(updateCustomerProfileSchema(locale)),
-    billing: reservationBillingSelectionSchema,
-  });
 
 const entryPackOrderFields = {
   orderId: orderIdSchema,

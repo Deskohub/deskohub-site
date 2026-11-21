@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Result, Schema } from "effect";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import {
@@ -10,12 +10,12 @@ import {
 } from "@/features/account/backend/saved-locale-preference.test-utils";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
-import type { Locale } from "@/features/i18n";
+import { type Locale, m } from "@/features/i18n";
 import { getLocale } from "@/features/i18n/paraglide/runtime.js";
-import type { OrderId } from "@/features/order";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId as accountId } from "@/shared/testing/workspace-fixtures.test-utils";
-import { entryPackPurchaseQuoteCodec } from "./entry-pack-purchase-quote";
+import { passPurchaseQuoteCodec } from "./pass-purchase-quote";
 
 const requestHeaders = new AsyncLocalStorage<Headers>();
 mock.module("next/headers", () => ({
@@ -56,7 +56,7 @@ const readOwnedLocale = mock((orderId: OrderId) =>
 );
 mock.module("./backend/entry-pack-order", () => ({
   ...entryPackOrders,
-  readOwnedEntryPackOrderLocale: readOwnedLocale,
+  readOwnedPassPurchaseOrderLocale: readOwnedLocale,
 }));
 
 const amount = currencyCZK(115_000);
@@ -76,7 +76,7 @@ mock.module("./backend/entry-pack-purchase", () => ({
         entryCount: input.product.size,
         validFrom: Temporal.PlainDate.from("2026-11-20"),
         validUntil: Temporal.PlainDate.from("2027-01-19"),
-        quote: Schema.encodeSync(entryPackPurchaseQuoteCodec)({
+        quote: Schema.encodeSync(passPurchaseQuoteCodec)({
           product: input.product,
           discountableSubtotal: amount,
           discountedSubtotal: amount,
@@ -100,9 +100,22 @@ mock.module("./backend/entry-pack-purchase", () => ({
     }),
 }));
 
-const { beginEntryPackCheckout, payEntryPackCheckout } = await import(
-  "./entry-pack-checkout-actions"
+const unlimited = await import("./backend/unlimited-pass-purchase");
+const unlimitedFailures = new Map<OrderId, Error>();
+const beginUnlimited = mock(
+  (input: Parameters<typeof unlimited.beginUnlimitedPassPurchase>[0]) =>
+    Effect.sync(() => ({
+      outcome: Result.fail(unlimitedFailures.get(input.orderId)!),
+      retiredPredecessorOrderIds: input.supersedeOrderIds?.slice(1) ?? [],
+    }))
 );
+mock.module("./backend/unlimited-pass-purchase", () => ({
+  ...unlimited,
+  beginUnlimitedPassPurchase: beginUnlimited,
+}));
+
+const { beginEntryPackCheckout, beginUnlimitedCheckout, payEntryPackCheckout } =
+  await import("./entry-pack-checkout-actions");
 
 const withoutReferer = <A>(action: () => A) =>
   requestHeaders.run(
@@ -167,3 +180,91 @@ test("Details issues an order and in-place Pay uses its verified locale without 
   expect(malformed.validationErrors?.fieldErrors.orderId).toBeDefined();
   expect(readOwnedLocale).toHaveBeenCalledTimes(lookups);
 });
+
+test.each([undefined, "", " \t "])(
+  "Unlimited Continue rejects a missing or blank gift name before beginning checkout (%p)",
+  async (recipientName) => {
+    const calls = beginUnlimited.mock.calls.length;
+    const result = await withoutReferer(() =>
+      beginUnlimitedCheckout({
+        locale: "en-US",
+        orderId: orderIdSchema.make(crypto.randomUUID()),
+        buyerEmail,
+        holderEmail: testEmailAddress("unlimited-action-holder"),
+        selection: { tier: "reserved-desk", startDate: "2026-11-20" },
+        ...(recipientName !== undefined && { recipientName }),
+      })
+    );
+    expect(result.validationErrors?.fieldErrors.recipientName).toEqual([
+      m.unlimitedPassRecipientNameRequired({}, { locale: "cs-CZ" }),
+    ]);
+    expect(beginUnlimited).toHaveBeenCalledTimes(calls);
+  }
+);
+
+test("Unlimited Continue normalizes a gift name without returning it", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const recipientName = "李";
+  unlimitedFailures.set(
+    orderId,
+    new purchase.EntryPackPurchaseError({ reason: "holds-unavailable" })
+  );
+  const result = await withoutReferer(() =>
+    beginUnlimitedCheckout({
+      locale: "en-US",
+      orderId,
+      buyerEmail,
+      holderEmail: testEmailAddress("unlimited-action-holder"),
+      selection: { tier: "reserved-desk", startDate: "2026-11-20" },
+      recipientName: `  ${recipientName}  `,
+    })
+  );
+  expect(beginUnlimited.mock.calls.at(-1)?.[0].recipientName).toBe(
+    recipientName
+  );
+  expect(result.data).toMatchObject({
+    status: "purchase_error",
+    reason: "holds-unavailable",
+  });
+  expect(JSON.stringify(result)).not.toContain(recipientName);
+});
+
+test.each([
+  {
+    error: new purchase.EntryPackPurchaseError({ reason: "holds-unavailable" }),
+    response: { status: "purchase_error", reason: "holds-unavailable" },
+  },
+  {
+    error: new Error("Synthetic late Continue failure"),
+    response: { status: "purchase_error", reason: "unavailable" },
+  },
+  {
+    error: Object.assign(new Error("Synthetic cutoff void"), {
+      _tag: "UnlimitedPassDraftVoided",
+      blockingDates: ["2026-11-20"],
+    }),
+    response: { status: "draft_voided", blockingDates: ["2026-11-20"] },
+  },
+])(
+  "Unlimited Continue returns durable predecessor acknowledgements for $error.message",
+  async ({ error, response }) => {
+    const orderId = orderIdSchema.make(crypto.randomUUID());
+    const predecessorOrderIds = Array.from({ length: 8 }, () =>
+      orderIdSchema.make(crypto.randomUUID())
+    );
+    unlimitedFailures.set(orderId, error);
+    const result = await withoutReferer(() =>
+      beginUnlimitedCheckout({
+        locale: "en-US",
+        orderId,
+        buyerEmail,
+        selection: { tier: "reserved-desk", startDate: "2026-11-20" },
+        supersedeOrderIds: predecessorOrderIds,
+      })
+    );
+    expect(result.data).toEqual({
+      ...response,
+      retiredPredecessorOrderIds: predecessorOrderIds.slice(1),
+    });
+  }
+);

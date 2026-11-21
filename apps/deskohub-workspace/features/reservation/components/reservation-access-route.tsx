@@ -1,12 +1,19 @@
 import { Effect, Option, Schema } from "effect";
 import { cookies, headers } from "next/headers";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
+import { getAccountSignInPath } from "@/features/account/routes";
 import { CheckoutFlowPageSkeleton } from "@/features/checkout/components/checkout-flow-page-skeleton";
 import { type Locale, m } from "@/features/i18n";
 import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { loadOrderKind } from "@/features/order/backend/order-kind";
+import { orderIdSchema } from "@/features/order/order";
+import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import { loadUnlimitedAccessPage } from "@/features/passes/backend/unlimited-access";
+import { getUnlimitedAccessCookieName } from "@/features/passes/backend/unlimited-access-capability";
+import { UnlimitedAccessPage } from "@/features/passes/components/unlimited-access-page";
+import { getUnlimitedAccessPath } from "@/features/passes/routes";
 import { ReservationAccessService } from "@/features/reservation/backend/reservation-access.service";
 import { readReservationAccessCookie } from "@/features/reservation/backend/reservation-access-cookie";
 import { readReservationInvitationCookie } from "@/features/reservation/backend/reservation-invitation-capability";
@@ -62,8 +69,7 @@ async function ReservationAccessContent({
     await connection();
     switch (await loadOrderKind(orderId)) {
       case "pass-purchase":
-        // Pass purchase orders have no access page yet.
-        return notFound();
+        return renderUnlimitedAccess(locale, orderId);
       case "reservation":
       case undefined:
         // Without an order row the reservation page still answers, as it
@@ -71,6 +77,34 @@ async function ReservationAccessContent({
         return renderReservationAccess({ locale, orderId, presentation });
     }
   });
+}
+
+async function renderUnlimitedAccess(locale: Locale, rawOrderId: string) {
+  const orderId = Option.getOrElse(
+    Schema.decodeOption(orderIdSchema)(rawOrderId),
+    () => notFound()
+  );
+  if (!(await isCoworkPassesPageOpenAfterConnection())) notFound();
+
+  const cookieStore = await cookies();
+  const accessCookie = cookieStore.get(
+    getUnlimitedAccessCookieName(orderId)
+  )?.value;
+  const access = await loadUnlimitedAccessPage(
+    orderId,
+    await headers(),
+    accessCookie
+  );
+  if (access.state === "sign-in") {
+    redirect(
+      getAccountSignInPath(locale, getUnlimitedAccessPath(locale, orderId))
+    );
+  }
+  if (access.state === "not-found") notFound();
+
+  return (
+    <UnlimitedAccessPage access={access} locale={locale} orderId={orderId} />
+  );
 }
 
 async function renderReservationAccess({

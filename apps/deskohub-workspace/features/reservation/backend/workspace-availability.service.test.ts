@@ -190,6 +190,7 @@ const runWithInventory = async <A>(
               }),
             }),
             Layer.succeed(WorkspaceReservationRepository, {
+              selectPendingPassDayCapacity: () => Effect.succeed([]),
               selectExpiredHoldDotyposReservationIds: mock(() => {
                 if (input.expiredHoldDotyposReservationIdsError) {
                   return Effect.fail(

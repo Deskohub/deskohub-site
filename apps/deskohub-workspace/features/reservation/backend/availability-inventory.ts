@@ -21,6 +21,15 @@ export type AvailabilityInventoryError =
   | GoogleCalendarError
   | SharedSnapshotLoadFailure;
 
+export const getFullyOccupiedCalendarDates = (
+  limitations: readonly WorkspaceCalendarLimitation[]
+) =>
+  new Set(
+    limitations.flatMap((limitation) =>
+      limitation._tag === "FullyOccupied" ? [limitation.date] : []
+    )
+  );
+
 /** The provider reads that availability is computed from. */
 export interface AvailabilityInventory {
   readonly tables: Effect.Effect<

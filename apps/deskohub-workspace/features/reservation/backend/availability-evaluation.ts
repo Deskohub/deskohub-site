@@ -9,13 +9,13 @@ import {
   hasCandidateCapacity,
   type InvalidDotyposTableSeats,
   isWorkspaceCoworkTableCandidate,
-  toTableBookings,
   type WorkspaceCoworkTableCandidateQuery,
   type WorkspaceTableCandidate,
   workspaceBookingSeatCount,
   workspaceMeetingRoomReservationTableTag,
   workspaceOfficeReservationTableTag,
 } from "@/features/checkout/backend/reservation";
+import type { TableBooking } from "@/features/checkout/backend/reservation/workspace-table-occupancy";
 import {
   isWorkspaceCoworkCurrentProductTier,
   type WorkspaceCoworkProductTier,
@@ -41,7 +41,6 @@ import type {
   WorkspaceAvailability,
   WorkspaceAvailabilityQuery,
 } from "../workspace-availability";
-import type { ReservationRecord } from "./reservation-record";
 
 export type AvailabilityEvaluationInput = {
   readonly query: WorkspaceAvailabilityQuery;
@@ -50,7 +49,7 @@ export type AvailabilityEvaluationInput = {
   readonly reservation: ReservationInterval | undefined;
   readonly selectedDate: string | undefined;
   readonly tables: readonly DotyposTable[];
-  readonly reservations: readonly ReservationRecord[];
+  readonly bookings: readonly TableBooking[];
   readonly fullyOccupiedDates: ReadonlySet<string>;
 };
 
@@ -81,7 +80,7 @@ export const evaluateAvailability = (
     input.query.kind === coworkReservationKind ? input.query.stay : undefined;
   const inventory = createInventoryView(
     input.tables,
-    input.reservations,
+    input.bookings,
     coworkStay
   );
   const getDateOccupancy = createDateOccupancyLookup(inventory, input);
@@ -336,11 +335,11 @@ export type MeetingRoomIntervalEvaluator = (
  */
 export const createMeetingRoomIntervalEvaluator = ({
   tables,
-  reservations,
+  bookings,
   fullyOccupiedDates,
 }: Pick<
   AvailabilityEvaluationInput,
-  "tables" | "reservations" | "fullyOccupiedDates"
+  "tables" | "bookings" | "fullyOccupiedDates"
 >): MeetingRoomIntervalEvaluator => {
   // Capacity reads only meeting-room tables' occupancy, so other tables'
   // bookings need not be scanned for each interval.
@@ -351,10 +350,7 @@ export const createMeetingRoomIntervalEvaluator = ({
   );
   const inventory = createInventoryView(
     tables,
-    reservations.filter(
-      ({ _tableId }) =>
-        _tableId !== undefined && meetingRoomTableIds.has(_tableId)
-    ),
+    bookings.filter(({ tableId }) => meetingRoomTableIds.has(tableId)),
     undefined
   );
   const closedDates = [...fullyOccupiedDates];
@@ -383,11 +379,10 @@ type InventoryView = ReturnType<typeof createInventoryView>;
  */
 const createInventoryView = (
   tables: readonly DotyposTable[],
-  reservations: readonly ReservationRecord[],
+  bookings: readonly TableBooking[],
   /** The queried Reserved Desk stay; other tiers ignore it. */
   coworkStay: CoworkStay | undefined
 ) => {
-  const bookings = toTableBookings(reservations);
   const occupancyByInterval = new Map<string, Occupancy>();
   const coworkIntervals = new Map<string, ReservationInterval>();
   const candidatesByKey = new Map<string, readonly WorkspaceTableCandidate[]>();

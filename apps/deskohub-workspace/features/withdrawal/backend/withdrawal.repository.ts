@@ -12,6 +12,10 @@ import { WorkspaceLocks } from "@/db/workspace-locks";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { Locale } from "@/features/i18n";
 import {
+  lockUnlimitedPassOrderForWithdrawal,
+  recordUnlimitedPassWithdrawal,
+} from "@/features/passes/backend/unlimited-pass-withdrawals";
+import {
   type ReadLimitExceededError,
   readLimitSentinel,
   requireWithinReadLimit,
@@ -291,36 +295,71 @@ export class WithdrawalRepository extends Context.Service<
               Effect.gen(function* () {
                 // The operator claim takes the same row lock before reading
                 // the ledger. No network work runs while this lock is held.
-                const [reservation] = yield* db
-                  .select({
-                    id: workspaceReservations.id,
-                    state: workspaceReservations.reservationState,
-                    payment: workspaceReservations.paymentState,
-                    author: workspaceReservations.authorAccountId,
-                  })
-                  .from(workspaceReservations)
-                  .where(
-                    sql`${workspaceReservations.id} = ${withdrawal.contract.id}`
-                  )
-                  .for("update");
+                const [reservation] =
+                  withdrawal.contract.kind === "reservation"
+                    ? yield* db
+                        .select({
+                          id: workspaceReservations.id,
+                          state: workspaceReservations.reservationState,
+                          payment: workspaceReservations.paymentState,
+                          author: workspaceReservations.authorAccountId,
+                        })
+                        .from(workspaceReservations)
+                        .where(
+                          and(
+                            sql`${workspaceReservations.id} = ${withdrawal.contract.id}`,
+                            isNull(workspaceReservations.passId)
+                          )
+                        )
+                        .for("update")
+                    : [];
+                const passOrderId =
+                  withdrawal.contract.kind === "unlimited-pass"
+                    ? yield* lockUnlimitedPassOrderForWithdrawal(
+                        withdrawal.contract.id
+                      )
+                    : undefined;
                 const existing = yield* findByContract(withdrawal.contract);
                 if (Option.isSome(existing)) {
                   return { withdrawal: existing.value, recorded: false };
                 }
-                if (
-                  reservation?.state !== "confirmed" ||
-                  reservation.payment !== "paid" ||
-                  reservation.author !== withdrawal.accountId
-                ) {
-                  return yield* new WithdrawalContractChangedError();
+                let periodEndsAt = withdrawal.periodEndsAt;
+                if (withdrawal.contract.kind === "reservation") {
+                  if (
+                    reservation?.state !== "confirmed" ||
+                    reservation.payment !== "paid" ||
+                    reservation.author !== withdrawal.accountId
+                  ) {
+                    return yield* new WithdrawalContractChangedError();
+                  }
+                  // An explicit invitation resend holds this lock from its
+                  // withdrawal check through delivery. Hold it until commit.
+                  yield* WorkspaceLocks.reservationInviteeNotices(
+                    reservation.id
+                  );
+                } else {
+                  if (!passOrderId) {
+                    return yield* new WithdrawalContractChangedError();
+                  }
+                  const passPeriodEndsAt = yield* recordUnlimitedPassWithdrawal(
+                    {
+                      orderId: passOrderId,
+                      accountId: withdrawal.accountId,
+                      submittedAt: withdrawal.submittedAt,
+                      paidAmount: withdrawal.paidAmount,
+                      refundAmount: withdrawal.refundAmount,
+                    }
+                  );
+                  if (!passPeriodEndsAt) {
+                    return yield* new WithdrawalContractChangedError();
+                  }
+                  periodEndsAt = passPeriodEndsAt;
                 }
-                // An explicit invitation resend holds this lock from its
-                // withdrawal check through delivery. Hold it until commit.
-                yield* WorkspaceLocks.reservationInviteeNotices(reservation.id);
                 const [inserted] = yield* db
                   .insert(contractWithdrawals)
                   .values({
                     ...toNewRow(withdrawal),
+                    periodEndsAt,
                     settlementClaimedAt: withdrawal.submittedAt,
                     nextSettlementAt: withdrawal.submittedAt,
                   })
@@ -333,7 +372,7 @@ export class WithdrawalRepository extends Context.Service<
                 }
                 return yield* Effect.die(
                   new Error(
-                    "The locked reservation's withdrawal insert returned no row."
+                    "The locked contract's withdrawal insert returned no row."
                   )
                 );
               })

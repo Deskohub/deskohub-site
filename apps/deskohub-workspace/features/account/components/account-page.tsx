@@ -1,4 +1,5 @@
 import type { AccountPasses } from "@/features/account/account-passes.server";
+import type { AccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
 import { AccountPassesPanel } from "@/features/account/components/account-passes";
 import { AccountSignInRedirect } from "@/features/account/components/account-sign-in-redirect";
 import { InvoiceHistoryPanel } from "@/features/account/components/billing/invoice-history";
@@ -21,6 +22,7 @@ export function AccountPage({
   loadPasses,
   locale,
   state,
+  unlimitedPasses = [],
 }: {
   /**
    * Starts loading the account's invoice history. Only a linked or review
@@ -31,6 +33,7 @@ export function AccountPage({
   readonly loadPasses?: () => Promise<AccountPasses>;
   readonly locale: Locale;
   readonly state: CustomerAccountPageState;
+  readonly unlimitedPasses?: AccountUnlimitedPasses;
 }) {
   if (state.kind === "unauthenticated") {
     return <AccountSignInRedirect locale={locale} />;
@@ -54,10 +57,14 @@ export function AccountPage({
         locale={locale}
         passes={
           loadPasses && state.kind !== "deletion-pending" ? (
-            <AccountPassesPanel locale={locale} packs={loadPasses()} />
+            <AccountPassesPanel
+              locale={locale}
+              packs={loadPasses()}
+              unlimitedPasses={unlimitedPasses}
+            />
           ) : undefined
         }
-        state={withRenderedReservations(state, locale)}
+        state={withRenderedReservations(state, locale, unlimitedPasses)}
       />
     </>
   );
@@ -72,12 +79,27 @@ function withRenderedReservations(
     CustomerAccountPageState,
     { readonly kind: "unauthenticated" | "unavailable" }
   >,
-  locale: Locale
+  locale: Locale,
+  unlimitedPasses: AccountUnlimitedPasses
 ): SignedInAccountState {
-  const render = (history: CustomerReservationHistory) => ({
+  const currentPassCount =
+    unlimitedPasses === "unavailable"
+      ? undefined
+      : unlimitedPasses.filter(
+          (pass) => pass.status === "active" || pass.status === "upcoming"
+        ).length;
+  const render = (history?: CustomerReservationHistory) => ({
     count:
-      history.kind === "available" ? history.groups.current.length : undefined,
-    history: <ReservationHistory history={history} locale={locale} />,
+      history?.kind === "available" && currentPassCount !== undefined
+        ? history.groups.current.length + currentPassCount
+        : undefined,
+    history: (
+      <ReservationHistory
+        history={history}
+        locale={locale}
+        unlimitedPasses={unlimitedPasses}
+      />
+    ),
   });
   switch (state.kind) {
     case "linked":
@@ -88,11 +110,26 @@ function withRenderedReservations(
     case "completion-required":
     case "support-required": {
       const { history, ...rest } = state;
-      return history === undefined
-        ? rest
-        : { ...rest, reservations: render(history) };
+      if (history) return { ...rest, reservations: render(history) };
+      if (unlimitedPasses !== "unavailable" && unlimitedPasses.length === 0)
+        return rest;
+      return {
+        ...rest,
+        reservations: render({
+          kind: "available",
+          groups: { current: [], past: [], unavailable: [] },
+        }),
+      };
     }
-    case "authenticated-unavailable":
+    case "authenticated-unavailable": {
+      // The holder's pass periods can load independently of the profile.
+      if (unlimitedPasses === "unavailable" || unlimitedPasses.length === 0)
+        return state;
+      return {
+        ...state,
+        reservations: render(),
+      };
+    }
     case "deletion-pending":
       return state;
   }

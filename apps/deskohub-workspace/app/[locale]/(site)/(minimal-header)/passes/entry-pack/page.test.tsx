@@ -19,7 +19,7 @@ const entryPackOrders = await import(
 );
 mock.module("@/features/passes/backend/entry-pack-order", () => ({
   ...entryPackOrders,
-  readOwnedEntryPackOrderLocale: (orderId: OrderId) =>
+  readOwnedPassPurchaseOrderLocale: (orderId: OrderId) =>
     Effect.succeed(orderId === ownedOrder ? "en-US" : undefined),
 }));
 

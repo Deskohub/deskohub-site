@@ -17,7 +17,9 @@ import {
 } from "@/features/account";
 import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import { AccountingStorage } from "@/features/accounting/backend/accounting-storage";
 import type { Locale } from "@/features/i18n";
+import { UnlimitedPassWithdrawals } from "@/features/passes/backend/unlimited-pass-withdrawals";
 import { ReservationWithdrawals } from "@/features/reservation/backend/reservation-withdrawals";
 import type { Money } from "@/shared/money/money";
 import type {
@@ -707,7 +709,14 @@ export class WithdrawalService extends Context.Service<
         WithdrawalRepository.Default,
         WithdrawalEmails.Live,
         WithdrawableContractFamilies.Default.pipe(
-          Layer.provide(ReservationWithdrawals.Live)
+          Layer.provide(
+            Layer.mergeAll(
+              ReservationWithdrawals.Live,
+              UnlimitedPassWithdrawals.Default.pipe(
+                Layer.provide(AccountingStorage.Live)
+              )
+            )
+          )
         ),
         CustomerAccountSections.ForProvidedAuthentication,
         CustomerAccountContactService.ForProvidedAuthentication

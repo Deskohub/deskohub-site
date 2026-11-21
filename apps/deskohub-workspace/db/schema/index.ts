@@ -161,6 +161,7 @@ export {
   type StandaloneAccessCodeAttemptEventRow,
   standaloneAccessCodeAttemptEvents,
 } from "./standalone-access-code-attempt-events";
+export { unlimitedPassSupersessions } from "./unlimited-pass-supersessions";
 export {
   type WebhookEvent,
   type WebhookEventState,

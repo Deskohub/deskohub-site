@@ -47,6 +47,9 @@ mock.module("@/features/account/page-data.server", () => ({
 mock.module("@/features/account/account-passes.server", () => ({
   loadCustomerAccountPasses,
 }));
+mock.module("@/features/account/account-unlimited-passes.server", () => ({
+  loadCustomerAccountUnlimitedPasses: async () => [],
+}));
 mock.module("@/features/account/invoice-history.server", () => ({
   loadCustomerInvoiceHistory,
 }));

@@ -58,21 +58,27 @@ export function EntryPackStatusPage({
   readonly presentation: "page" | "modal";
 }) {
   const isPaid = status.status === "paid";
+  const unlimited = status.entryCount === null;
   const isPending = status.status === "pending";
   const retryPath =
     allowPurchaseContinuation && "retryPath" in status
       ? status.retryPath
       : undefined;
-  const draftPath =
-    allowPurchaseContinuation && status.status === "not_started"
-      ? getEntryPackDetailsPath(
+  const draftPath = (() => {
+    if (!allowPurchaseContinuation || status.status !== "not_started") return;
+    return status.entryCount === null
+      ? `/${locale}/passes/unlimited?order=${status.orderId}&step=details`
+      : getEntryPackDetailsPath(
           locale,
           { kind: "entry-pack", tier: status.tier, size: status.entryCount },
           status.orderId
-        )
-      : undefined;
+        );
+  })();
   const Icon = statusIcons[status.status];
-  const title = statusTitles[status.status]({}, { locale });
+  const title =
+    unlimited && isPaid
+      ? m.unlimitedPassStatusPaidTitle({}, { locale })
+      : statusTitles[status.status]({}, { locale });
   const lead = (() => {
     switch (status.status) {
       case "paid":
@@ -145,11 +151,14 @@ export function EntryPackStatusPage({
       </div>
       <div className="mt-8 rounded-2xl border border-navy-blue/10 bg-navy-blue/3 p-5 sm:p-6">
         <h2 className="text-xl font-semibold">
-          {m.passEntryPack({}, { locale })}
+          {unlimited
+            ? m.passUnlimited({}, { locale })
+            : m.passEntryPack({}, { locale })}
         </h2>
         <p className="mt-1 text-navy-blue/70">
-          {getPassTierName(status.tier, locale)} ·{" "}
-          {m.passEntryCount({ count: status.entryCount }, { locale })}
+          {getPassTierName(status.tier, locale)}
+          {status.entryCount !== null &&
+            ` · ${m.passEntryCount({ count: status.entryCount }, { locale })}`}
         </p>
         {isPaid && (
           <p className="mt-1 text-sm text-navy-blue/70">
@@ -197,6 +206,16 @@ export function EntryPackStatusPage({
         </dl>
       </div>
       <div className="mt-8 flex flex-wrap gap-3">
+        {isPaid && unlimited && !status.gift && (
+          <Button asChild size="lg">
+            <Link
+              href={`/${locale}/reservation/access/${status.orderId}`}
+              prefetch={false}
+            >
+              {m.unlimitedPassOpenAccess({}, { locale })}
+            </Link>
+          </Button>
+        )}
         {isPending && status.paymentPage && (
           <Button asChild size="lg">
             <a href={status.paymentPage}>

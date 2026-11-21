@@ -141,13 +141,19 @@ beforeEach(() => {
 });
 
 describe("PricingPage", () => {
-  test("keeps Entry pack offers out of the price page while the release is off", async () => {
+  test("keeps cowork pass offers out of the price page while the release is off", async () => {
     const html = await renderPage("en-US");
     expect(
       visibleDocument(html).getElementById("pricing-entry-packs")
     ).toBeNull();
     expect(
       visibleLinks(html).some((href) => href?.includes("/passes/entry-pack"))
+    ).toBe(false);
+    expect(
+      visibleDocument(html).getElementById("pricing-unlimited")
+    ).toBeNull();
+    expect(
+      visibleLinks(html).some((href) => href?.includes("/passes/unlimited"))
     ).toBe(false);
     expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();
   });
@@ -184,6 +190,46 @@ describe("PricingPage", () => {
     expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();
   });
 
+  test("shows the three Unlimited pass purchase options and their 30-day prices in the static price page", async () => {
+    passesRelease = "on";
+    const locale = "en-US";
+    const section = visibleDocument(await renderPage(locale)).getElementById(
+      "pricing-unlimited"
+    );
+    if (!section) throw new Error("Expected the Unlimited pass price section");
+
+    expect(section.previousElementSibling?.id).toBe("pricing-entry-packs");
+    expect(section.querySelector("h2")?.textContent).toBe("Unlimited pass");
+    const price = (amount: number) => formatMoney(currencyCZK(amount), locale);
+    const rows = [...section.querySelectorAll("li")];
+    expect(rows).toHaveLength(3);
+    for (const [index, row] of rows.entries()) {
+      const offer = [
+        { tier: "open-space", price: 349_000, perDay: 11_600 },
+        { tier: "reserved-desk", price: 599_000, perDay: 20_000 },
+        { tier: "reserved-desk-workstation", price: 849_000, perDay: 28_300 },
+      ][index];
+      expect(row.textContent).toContain(`${price(offer.price)} / 30 days`);
+      expect(row.textContent).toContain(`About ${price(offer.perDay)} a day`);
+      expect(row.textContent?.includes(price(69_000))).toBe(index === 0);
+      const link = row.querySelector("a");
+      expect(link?.getAttribute("href")).toBe(
+        `/en-US/passes/unlimited?tier=${offer.tier}`
+      );
+      expect(link?.getAttribute("aria-label")).toBe(
+        `Buy an Unlimited pass (${row.querySelector("h3")?.textContent})`
+      );
+    }
+    expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();
+  });
+
+  test("links to the Unlimited pass purchase in the visitor's locale", async () => {
+    passesRelease = "on";
+    expect(visibleLinks(await renderPage("cs-CZ"))).toContain(
+      "/cs-CZ/passes/unlimited?tier=open-space"
+    );
+  });
+
   test.each([false, true])(
     "asks for the visitor's flag when the global release is undecided (visitor open: %s)",
     async (visitorOpen) => {
@@ -193,6 +239,9 @@ describe("PricingPage", () => {
       const html = await renderPage("en-US");
 
       expect(html.includes("/en-US/passes/entry-pack?tier=open-space")).toBe(
+        visitorOpen
+      );
+      expect(html.includes("/en-US/passes/unlimited?tier=open-space")).toBe(
         visitorOpen
       );
       expect(isCoworkPassesPageOpenAfterConnection).toHaveBeenCalledTimes(1);

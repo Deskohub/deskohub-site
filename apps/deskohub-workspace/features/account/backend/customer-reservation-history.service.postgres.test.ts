@@ -20,6 +20,8 @@ import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { loadAccountPasses } from "@/features/account/account-passes.server";
+import { loadAccountUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
+import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { ReservationRecords } from "@/features/reservation/backend/reservation-records";
 import {
   type StoredWorkspaceReservationDetails,
@@ -346,6 +348,172 @@ describe.skipIf(!testDatabase)(
       }
     });
 
+    test("excludes Unlimited days from reservation history and shows the period to the claimed holder", async () => {
+      const buyer = customerAccountIdSchema.make(uniqueId());
+      const holder = customerAccountIdSchema.make(uniqueId());
+      const dotyposCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
+      const passId = uniqueId();
+      const attachedDay = DotyposReservationIdSchema.make(uniqueId());
+      const ordinary = DotyposReservationIdSchema.make(uniqueId());
+      const pendingDay = DotyposReservationIdSchema.make(uniqueId());
+      const replacedDay = DotyposReservationIdSchema.make(uniqueId());
+
+      for (const accountId of [buyer, holder]) {
+        await insertAuthUser(accountId, testEmailAddress(`h-${accountId}`));
+      }
+      await testDatabase!.pool.query(
+        "update customer_accounts set dotypos_customer_id = $2 where id = $1",
+        [holder, dotyposCustomerId]
+      );
+      await testDatabase!.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
+         values ($1, 'pass-purchase', $2, 'paid', 'not_started', '2026-03-15T10:00:00Z')`,
+        [passId, dotyposCustomerId]
+      );
+      await testDatabase!.pool.query(
+        `insert into pass_purchases
+           (id, buyer_account_id, holder_account_id, product, tier, unlimited_coffee,
+            status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $3, 'unlimited', 'open-space', false,
+            'active', '2026-03-16', '2026-04-15', '{}', 'en-US', now())`,
+        [passId, buyer, holder]
+      );
+      await testDatabase!.pool.query(
+        `insert into workspace_reservations
+           (checkout_attempt_key, dotypos_customer_id, author_account_id,
+            dotypos_reservation_id, reservation_state, payment_state, fulfillment_state, paid_at,
+            reservation_details, locale, pass_id, service_date, pass_day_table_id)
+         values (uuid_generate_v7(), $1, $2, $3, 'confirmed', 'paid', 'not_started',
+            '2026-03-15T10:00:00Z', '{}', 'en-US', $4, '2026-03-16', '9')`,
+        [dotyposCustomerId, buyer, attachedDay, passId]
+      );
+      const accountHistory = await Effect.runPromise(
+        Effect.flatMap(CustomerReservationHistoryService, (service) =>
+          service.load({ accountId: holder, dotyposCustomerId })
+        ).pipe(
+          Effect.provide(
+            makeHistoryLayer([
+              makeDotyposReservation({ id: ordinary }),
+              makeDotyposReservation({ id: attachedDay }),
+              makeDotyposReservation({
+                id: pendingDay,
+                status: "NEW",
+                note: `Deskohub Unlimited ${passId}/2026-03-17`,
+              }),
+              makeDotyposReservation({
+                id: replacedDay,
+                status: "CANCELLED",
+                note: `Deskohub Unlimited ${passId}/2026-03-16`,
+              }),
+            ])
+          )
+        )
+      );
+
+      expect(accountHistory.kind).toBe("available");
+      if (accountHistory.kind !== "available")
+        throw new Error("Missing history");
+      expect(
+        Object.values(accountHistory.groups)
+          .flat()
+          .map(({ id }) => id)
+      ).toEqual([ordinary]);
+      expect(JSON.stringify(accountHistory)).not.toContain(
+        "Deskohub Unlimited"
+      );
+
+      const readPassViews = (accountId: CustomerAccountId, now: string) =>
+        Effect.runPromise(
+          Effect.andThen(
+            TestClock.setTime(Temporal.Instant.from(now).epochMilliseconds),
+            Effect.all({
+              unlimited: loadAccountUnlimitedPasses("en-US"),
+              packs: loadAccountPasses("en-US"),
+            })
+          ).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                testDatabaseLayer(),
+                Layer.mock(AdvisoryAvailabilityInventory, {}),
+                Layer.mock(CurrentCustomerAccount, {
+                  peek: Effect.succeed({
+                    kind: "unlinked",
+                    reviewMarker: "absent",
+                    session: {
+                      accountId,
+                      email: reservationCustomerEmailSchema.make(
+                        testEmailAddress(`session-${accountId}`)
+                      ),
+                      displayName: null,
+                      deletionRequested: false,
+                      accountCreatedAt: Temporal.Instant.from(now),
+                      accountUpdatedAt: Temporal.Instant.from(now),
+                    },
+                  }),
+                })
+              )
+            ),
+            Effect.provide(TestClock.layer())
+          )
+        );
+      const firstDay = "2026-03-15T23:00:00Z";
+      const holderEmail = testEmailAddress(`h-${holder}`);
+      const buyerView = await readPassViews(buyer, firstDay);
+      expect(buyerView.unlimited).toEqual([]);
+      expect(buyerView.packs).toMatchObject({
+        held: [],
+        boughtForOthers: [
+          {
+            orderId: passId,
+            product: "unlimited",
+            statusPath: `/en-US/reservation/status/${passId}`,
+            maskedHolderEmail: maskEmailAddress(holderEmail),
+            claimed: false,
+          },
+        ],
+      });
+      expect(JSON.stringify(buyerView.packs)).not.toContain("canResend");
+      expect(JSON.stringify(buyerView.packs)).not.toContain(
+        "/reservation/access/"
+      );
+      expect(JSON.stringify(buyerView.packs)).not.toContain(holderEmail);
+      expect(await readPassViews(holder, firstDay)).toEqual({
+        unlimited: [],
+        packs: { held: [], boughtForOthers: [] },
+      });
+      await testDatabase!.pool.query(
+        "update pass_purchases set gift_claimed_at = $2 where id = $1",
+        [passId, firstDay]
+      );
+      expect(
+        (await readPassViews(holder, "2026-03-15T22:59:59Z")).unlimited
+      ).toMatchObject([{ status: "upcoming" }]);
+      expect(await readPassViews(holder, firstDay)).toMatchObject({
+        unlimited: [
+          {
+            status: "active",
+            day: 1,
+            daysLeft: 30,
+            accessPath: `/en-US/reservation/access/${passId}`,
+          },
+        ],
+        packs: { held: [], boughtForOthers: [] },
+      });
+      expect(
+        (await readPassViews(holder, "2026-04-14T22:00:00Z")).unlimited
+      ).toMatchObject([{ status: "expired" }]);
+      await testDatabase!.pool.query(
+        "update pass_purchases set status = 'withdrawn', access_ends_on = '2026-03-17' where id = $1",
+        [passId]
+      );
+      expect(
+        (await readPassViews(holder, "2026-03-16T22:59:59Z")).unlimited
+      ).toMatchObject([{ status: "active", day: 1, daysLeft: 1 }]);
+      expect(
+        (await readPassViews(holder, "2026-03-16T23:00:00Z")).unlimited
+      ).toMatchObject([{ status: "ended" }]);
+    });
+
     test("scopes Entry pack payment to an owner-matched reservation and booking to the pack's validity", async () => {
       const account = customerAccountIdSchema.make(uniqueId());
       const dotyposCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
@@ -614,6 +782,7 @@ describe.skipIf(!testDatabase)(
             orderId: giftId,
             statusPath: `/en-US/reservation/status/${giftId}`,
             tier: "Open Space",
+            product: "entry-pack",
             entryCount: 5,
             maskedHolderEmail: maskEmailAddress(holderEmail),
             invitation: "not_sent",

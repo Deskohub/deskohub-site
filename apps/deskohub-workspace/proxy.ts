@@ -30,6 +30,7 @@ import {
   getInAppLegalDocumentPath,
 } from "@/features/legal/legal-document-path";
 import { entryPackCheckoutPath } from "@/features/passes/routes";
+import { unlimitedAccessTokenQueryParam } from "@/features/passes/unlimited-access";
 import {
   findLocalizedPublicPage,
   getPageMarkdownRoutePath,
@@ -229,8 +230,19 @@ async function localizedPageResponse(
 ) {
   const localeFromUrl = getLocaleFromRequestPathname(request, locales);
 
-  // A reservation capability is bound to the locale it was issued in, so it is
-  // exchanged before any preference redirect moves the request elsewhere.
+  // An access capability is bound to its original locale. Exchange it before
+  // any preference redirect moves the request elsewhere.
+  if (
+    localeFromUrl &&
+    request.method === "GET" &&
+    isPrivateReservationPath(request.nextUrl.pathname) &&
+    request.nextUrl.searchParams.has(unlimitedAccessTokenQueryParam)
+  ) {
+    const { exchangeUnlimitedAccessCapability } = await import(
+      "./features/passes/backend/unlimited-access-capability-exchange"
+    );
+    return exchangeUnlimitedAccessCapability(request, localeFromUrl);
+  }
   if (localeFromUrl && hasReservationCapabilityToExchange(request)) {
     const { exchangeReservationCapability } = await import(
       "./features/reservation/backend/reservation-capability-exchange"

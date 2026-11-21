@@ -2,7 +2,15 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Effect } from "effect";
 import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { NextRequest } from "next/server";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { localeCookieName, locales } from "@/features/i18n/routing";
+import { orderIdSchema } from "@/features/order";
+import {
+  createUnlimitedAccessUrl,
+  getUnlimitedAccessCookieName,
+  openUnlimitedAccessCookie,
+} from "@/features/passes/backend/unlimited-access-capability";
+import { unlimitedAccessTokenQueryParam } from "@/features/passes/unlimited-access";
 import { indexNowKeyPathname } from "@/features/public-pages";
 import { referralCodeCookieName } from "@/features/referrals/referral-code-cookie";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
@@ -950,6 +958,98 @@ test("exchanges a valid reservation capability for a private cookie", async () =
   expect(
     response.cookies.get(getReservationAccessCookieName(orderId))?.value
   ).toEqual(expect.any(String));
+});
+
+test("exchanges a pass holder's link only on its own access page", async () => {
+  const orderId = orderIdSchema.make("01900000-0000-7000-8000-000000000014");
+  const holderAccountId = customerAccountIdSchema.make("synthetic-pass-holder");
+  const origin = new URL("https://workspace.example");
+  const locale = "en-US";
+  const link = Effect.runSync(
+    createUnlimitedAccessUrl({ orderId, holderAccountId, origin, locale })
+  );
+  const response = await proxy(new NextRequest(link));
+  const cookieName = getUnlimitedAccessCookieName(orderId);
+  const cookie = response.cookies.get(cookieName);
+  expect(response.status).toBe(307);
+  expect(response.headers.get("location")).toBe(
+    new URL(`/${locale}/reservation/access/${orderId}`, origin).href
+  );
+  expect(response.headers.get("cache-control")).toBe("private, no-store");
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(cookie).toMatchObject({
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 86400,
+  });
+  expect(
+    Effect.runSync(openUnlimitedAccessCookie(orderId, cookie!.value))(
+      holderAccountId
+    )
+  ).toBe(true);
+  expect(
+    response.cookies.get(getReservationAccessCookieName(orderId))
+  ).toBeUndefined();
+
+  const original = new URL(link);
+  const ordinaryToken = Effect.runSync(
+    createReservationAccessToken({
+      orderId: workspaceReservationIdSchema.make(orderId),
+      locale,
+    })
+  );
+  const passToken = original.searchParams.get(unlimitedAccessTokenQueryParam)!;
+  const wrongLocale = locales.find((candidate) => candidate !== locale)!;
+  const rejected = [
+    [
+      original.pathname.replace("/access/", "/status/"),
+      unlimitedAccessTokenQueryParam,
+      passToken,
+    ],
+    [
+      original.pathname.replace("/access/", "/invoice/"),
+      unlimitedAccessTokenQueryParam,
+      passToken,
+    ],
+    [
+      original.pathname.replace(
+        orderId,
+        "01900000-0000-7000-8000-000000000015"
+      ),
+      unlimitedAccessTokenQueryParam,
+      passToken,
+    ],
+    [
+      original.pathname.replace(locale, wrongLocale),
+      unlimitedAccessTokenQueryParam,
+      passToken,
+    ],
+    [original.pathname, reservationAccessTokenQueryParam, passToken],
+    [
+      original.pathname.replace("/access/", "/status/"),
+      reservationAccessTokenQueryParam,
+      passToken,
+    ],
+    [original.pathname, unlimitedAccessTokenQueryParam, ordinaryToken],
+  ] as const;
+  for (const [pathname, query, value] of rejected) {
+    const url = new URL(pathname, origin);
+    url.searchParams.set(query, value);
+    const response = await proxy(new NextRequest(url));
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.cookies.get(cookieName)).toBeUndefined();
+  }
+  for (const param of [
+    unlimitedAccessTokenQueryParam,
+    reservationAccessTokenQueryParam,
+  ]) {
+    const ambiguous = new URL(original);
+    ambiguous.searchParams.append(param, passToken);
+    expect((await proxy(new NextRequest(ambiguous))).status).toBe(404);
+  }
 });
 
 test("exchanges an invitation on the access page for its own cookie", async () => {

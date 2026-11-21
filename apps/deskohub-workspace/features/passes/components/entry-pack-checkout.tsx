@@ -15,13 +15,15 @@ import {
 } from "@/features/reservation/reservation-billing";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import {
-  type EntryPackBuyer,
-  type entryPackDetailsSchema,
   getEntryPackDetailsPath,
   getEntryPackPayPath,
 } from "../entry-pack-checkout";
 import { beginEntryPackCheckout } from "../entry-pack-checkout-actions";
 import type { EntryPackProduct, EntryPackSize } from "../pass-offer";
+import type {
+  PassPurchaseBuyer,
+  passPurchaseDetailsSchema,
+} from "../pass-purchase-details";
 import { EntryPackChoose } from "./entry-pack-choose";
 import { EntryPackDetails } from "./entry-pack-details";
 import { EntryPackPay } from "./entry-pack-pay";
@@ -32,7 +34,7 @@ const checkoutStage = {
   details: "contact",
   pay: "pay",
 } as const;
-type DetailsSchema = ReturnType<typeof entryPackDetailsSchema>;
+type DetailsSchema = ReturnType<typeof passPurchaseDetailsSchema>;
 type CheckoutResult = Awaited<
   ReturnType<typeof beginEntryPackCheckout>
 >["data"];
@@ -53,7 +55,7 @@ export function EntryPackCheckout({
   continuation,
   retryPayment,
 }: {
-  readonly buyer: EntryPackBuyer;
+  readonly buyer: PassPurchaseBuyer;
   readonly locale: Locale;
   readonly initialProduct: EntryPackProduct;
   readonly initialStep: Exclude<Step, "pay">;

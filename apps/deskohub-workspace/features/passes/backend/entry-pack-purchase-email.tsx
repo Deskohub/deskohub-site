@@ -11,17 +11,23 @@ import {
   EntryPackPurchaseEmail,
   entryPackPurchaseEmailSubject,
 } from "@/emails/entry-pack-purchase";
+import { env } from "@/env";
+import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
 import { discountQuoteCodec } from "@/features/discounts/contracts";
 import { getLegalDocumentPath } from "@/features/legal/legal-document-path";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
+import { emailKindTags } from "@/shared/backend/email/email-kind";
 import { renderWorkspaceEmail } from "@/shared/backend/email/render-react-email";
+import { createUnlimitedAccessUrl } from "./unlimited-access-capability";
+import { unlimitedConfirmationEmailKind } from "./unlimited-confirmation-email-kind";
 
 export const sendEntryPackPurchaseEmail = Effect.fn(
   "sendEntryPackPurchaseEmail"
 )(function* (input: {
   readonly purchase: typeof passPurchases.$inferSelect;
   readonly paidAt: Temporal.Instant;
+  readonly paymentAttemptId: PaymentAttemptId;
   readonly buyer: EmailRecipient;
   readonly holderEmail: string | null;
   readonly gift?: boolean;
@@ -36,6 +42,17 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
   const quote = yield* Schema.decodeUnknownEffect(discountQuoteCodec)(
     purchase.quote
   );
+  const accessUrl =
+    purchase.product === "unlimited" &&
+    !input.gift &&
+    purchase.holderAccountId === purchase.buyerAccountId
+      ? yield* createUnlimitedAccessUrl({
+          orderId: id,
+          holderAccountId: purchase.holderAccountId,
+          locale,
+          origin,
+        })
+      : undefined;
   const rendered = yield* renderWorkspaceEmail(
     <EntryPackPurchaseEmail
       {...purchase}
@@ -53,6 +70,8 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
           .href
       }
       invoiceRequested={input.invoiceRequested}
+      unlimitedCoffee={purchase.unlimitedCoffee === true}
+      accessUrl={accessUrl}
     />
   );
 
@@ -60,9 +79,18 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
     ...rendered,
     from: defaultFrom,
     to: buyer,
-    subject: entryPackPurchaseEmailSubject({ locale }),
+    subject: entryPackPurchaseEmailSubject({
+      locale,
+      entryCount: purchase.entryCount,
+    }),
     idempotencyKey: `entry-pack-purchase:${id}`,
-    tags: ["entry_pack_purchase"],
+    ...(purchase.product === "unlimited"
+      ? emailKindTags(unlimitedConfirmationEmailKind, {
+          orderId: id,
+          paymentAttemptId: input.paymentAttemptId,
+          deploymentEnvironment: env.VERCEL_ENV,
+        })
+      : { tags: ["entry_pack_purchase"] }),
     sensitiveContent: true,
   });
 });
