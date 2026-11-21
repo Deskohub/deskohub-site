@@ -985,6 +985,7 @@ describe("AccountPage states", () => {
           seating: { kind: "shared" },
           status: "active",
           day: 8,
+          totalDays: 30,
           daysLeft: 23,
           accessPath,
         },

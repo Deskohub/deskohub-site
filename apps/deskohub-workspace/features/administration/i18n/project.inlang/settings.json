@@ -12,6 +12,7 @@
     "pathPattern": [
       "./messages/shell/{languageTag}.json",
       "./messages/administration/{languageTag}.json",
+      "./messages/pass-actions/{languageTag}.json",
       "./messages/discounts/{languageTag}.json",
       "./messages/accounting/{languageTag}.json",
       "./messages/access-codes/{languageTag}.json",
@@ -22,7 +23,8 @@
       "./messages/email-automation-activation/{languageTag}.json",
       "./messages/email-automation-runs/{languageTag}.json",
       "./messages/admin-cli/{languageTag}.json",
-      "./messages/administrators/{languageTag}.json"
+      "./messages/administrators/{languageTag}.json",
+      "./messages/passes/{languageTag}.json"
     ]
   }
 }

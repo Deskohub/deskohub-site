@@ -29,6 +29,7 @@ export const entryPackGiftInvitations = pgTable(
       .references(() => customerAccounts.id),
     locale: text("locale").notNull().$type<Locale>(),
     generation: integer("generation").notNull(),
+    firstGeneration: integer("first_generation").notNull().default(0),
     contextId: uuid("context_id").notNull().defaultRandom().unique(),
     attempts: integer("attempts").notNull(),
     requestedAt: instant("requested_at").notNull(),
@@ -42,6 +43,10 @@ export const entryPackGiftInvitations = pgTable(
   },
   (t) => [
     check("entry_pack_gift_generation_check", sql`${t.generation} >= 0`),
+    check(
+      "entry_pack_gift_first_generation_check",
+      sql`${t.firstGeneration} between 0 and ${t.generation}`
+    ),
     check("entry_pack_gift_attempts_check", sql`${t.attempts} >= 0`),
     check(
       "entry_pack_gift_accepted_check",

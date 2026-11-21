@@ -1,6 +1,9 @@
 import { Suspense } from "react";
 import type { Locale } from "@/features/i18n";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
+import { loadReservationPassLinks } from "@/features/passes/admin/pass-page-data.server";
+import type { ReservationPassLink } from "@/features/passes/admin/pass-reads";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { AdministrationLink as Link } from "./admin-link";
 import { Pagination } from "./components";
 import { ReservationsAdministrationFilterForm } from "./filter-forms";
@@ -153,11 +156,15 @@ async function ReservationResultsContent({
   readonly result: Promise<ReservationsData["result"]>;
 }) {
   const [resolvedInput, resolvedResult] = await Promise.all([input, result]);
+  const passLinks = await loadReservationPassLinks(
+    resolvedResult.items.map(({ id }) => id)
+  );
   return (
     <ReservationResults
       input={resolvedInput}
       locale={locale}
       result={resolvedResult}
+      passLinks={passLinks}
     />
   );
 }
@@ -165,8 +172,12 @@ async function ReservationResultsContent({
 function ReservationResults({
   input,
   locale,
+  passLinks,
   result,
-}: ReservationsData & { readonly locale: Locale }) {
+}: ReservationsData & {
+  readonly locale: Locale;
+  readonly passLinks?: ReadonlyMap<WorkspaceReservationId, ReservationPassLink>;
+}) {
   return (
     <>
       {input.customerId && (
@@ -193,7 +204,11 @@ function ReservationResults({
           {m.administrationReservationListDateSortUnavailable({}, { locale })}
         </AdministrationAlert>
       )}
-      <ReservationTable query={input} reservations={result.items} />
+      <ReservationTable
+        passLinks={passLinks}
+        query={input}
+        reservations={result.items}
+      />
       <Pagination
         href={(page) => reservationListQuery.href(input, { page })}
         locale={locale}

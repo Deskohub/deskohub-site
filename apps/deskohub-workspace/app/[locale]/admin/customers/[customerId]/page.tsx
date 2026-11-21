@@ -1,6 +1,8 @@
 import { Match } from "effect";
 import { Suspense } from "react";
 import { AdministrationCustomerDetail } from "@/features/administration/customer-detail";
+import { getAdministrationCustomerName } from "@/features/administration/customer-presentation";
+import { m } from "@/features/administration/i18n";
 import { AdministrationRouteLoading } from "@/features/administration/loading";
 import {
   loadAdministrationCustomer,
@@ -15,6 +17,14 @@ import {
   loadDiscountCustomerSections,
 } from "@/features/discounts/admin/page-data.server";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
+import { AdminCustomerPasses } from "@/features/passes/admin/customer-passes";
+import { AdminGrantPass } from "@/features/passes/admin/pass-administration-actions.server";
+import {
+  loadAdminCustomerPasses,
+  loadReservationPassLinks,
+} from "@/features/passes/admin/pass-page-data.server";
+import { currencyCZK } from "@/shared/money/currencies";
+import { formatMoney } from "@/shared/money/money";
 
 export default function AdministrationCustomerDetailPage({
   params,
@@ -62,12 +72,51 @@ export async function AdministrationCustomerDetailContent({
     })
   );
 
+  const [passes, reservationPassLinks] = await Promise.all([
+    loadAdminCustomerPasses(customerId),
+    profile
+      ? loadReservationPassLinks(activity.reservations.map(({ id }) => id))
+      : undefined,
+  ]);
+  const customerName = profile
+    ? getAdministrationCustomerName(profile.customer, locale)
+    : customerId;
+
   return (
     <AdministrationCustomerDetail
       activity={activity}
       customerId={customerId}
       locale={locale}
       notice={discounts.notice}
+      passes={
+        passes &&
+        (profile || passes.held.length > 0 || passes.boughtForOthers.length > 0)
+          ? {
+              spent: {
+                label: m.passesSpent({}, { locale }),
+                value: (passes.spent.length ? passes.spent : [currencyCZK(0)])
+                  .map((total) => formatMoney(total, locale))
+                  .join(" + "),
+              },
+              content: (
+                <AdminCustomerPasses
+                  actions={
+                    profile && (
+                      <AdminGrantPass
+                        initialEmail={profile.customer.email ?? undefined}
+                        initialName={customerName}
+                      />
+                    )
+                  }
+                  boughtForOthers={passes.boughtForOthers}
+                  held={passes.held}
+                  locale={locale}
+                  name={customerName}
+                />
+              ),
+            }
+          : undefined
+      }
       profile={
         profile && {
           customer: profile.customer,
@@ -75,6 +124,7 @@ export async function AdministrationCustomerDetailContent({
         }
       }
       reservationActivity={reservationActivity}
+      reservationPassLinks={reservationPassLinks}
     />
   );
 }

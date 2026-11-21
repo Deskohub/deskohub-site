@@ -15,6 +15,7 @@ import {
   entryPackGiftInvitationSubject,
 } from "@/emails/entry-pack-gift-invitation";
 import { findEntryPackPurchasePartyContacts } from "@/features/account/backend/customer-account-by-email";
+import type { CustomerAccountId } from "@/features/account/customer-account";
 import { getAccountSignInPath } from "@/features/account/routes";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
@@ -40,12 +41,28 @@ const retryMinutes = [10, 30, 120, 120] as const;
 /** Uses the same order section as paid fulfillment and manual resend. */
 export const deliverPendingEntryPackInvitation = Effect.fn(
   "deliverPendingEntryPackInvitation"
-)(function* (orderId: OrderId, paymentAttemptId: PaymentAttemptId) {
+)(function* (
+  orderId: OrderId,
+  target: {
+    readonly holderAccountId: CustomerAccountId;
+    readonly generation: number;
+    readonly paymentAttemptId: PaymentAttemptId | null;
+  }
+) {
   const now = yield* currentInstant;
   const work = yield* readPendingEntryPackInvitation(orderId, now);
-  if (!work) return;
+  // Reassignment may have rotated the invitation before the order section
+  // was acquired. That generation must take the new holder's account lock.
+  if (
+    !work ||
+    work.purchase.holderAccountId !== target.holderAccountId ||
+    work.invitation.holderAccountId !== target.holderAccountId ||
+    work.invitation.generation !== target.generation
+  )
+    return;
 
   const { invitation, purchase, deliverable } = work;
+  const { paymentAttemptId } = target;
   const { db } = yield* WorkspaceDatabase;
   const { generation, attempts } = invitation;
   const currentGeneration = and(
@@ -102,7 +119,9 @@ export const deliverPendingEntryPackInvitation = Effect.fn(
 
   const sent = yield* Effect.gen(function* () {
     const snapshots = yield* AccountingDocumentSnapshots;
-    const snapshot = yield* snapshots.findPassPurchase(paymentAttemptId);
+    const snapshot = paymentAttemptId
+      ? yield* snapshots.findPassPurchase(paymentAttemptId)
+      : null;
     // Only the buyer's supplied personal name belongs in the invitation.
     // The frozen accounting identity keeps the body stable across attempts.
     const personalName =

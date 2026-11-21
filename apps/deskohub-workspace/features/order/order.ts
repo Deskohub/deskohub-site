@@ -13,13 +13,18 @@ export const orderKindSchema = Schema.Literals(orderKinds).annotate({
 
 export type OrderKind = typeof orderKindSchema.Type;
 
-export const orderPaymentStates = [
+export const reservationPaymentStates = [
   "not_started",
   "pending",
   "paid",
   "failed",
   "cancelled",
   "expired",
+] as const;
+
+export const orderPaymentStates = [
+  ...reservationPaymentStates,
+  "complimentary",
 ] as const;
 
 export type OrderPaymentState = (typeof orderPaymentStates)[number];
@@ -34,7 +39,9 @@ export const endedUnpaidPaymentStates = [
   "expired",
 ] as const satisfies readonly OrderPaymentState[];
 
-export const isEndedUnpaidPaymentState = (state: string): boolean =>
+export const isEndedUnpaidPaymentState = (
+  state: string
+): state is (typeof endedUnpaidPaymentStates)[number] =>
   endedUnpaidPaymentStates.some((ended) => ended === state);
 
 export const orderFulfillmentStates = [

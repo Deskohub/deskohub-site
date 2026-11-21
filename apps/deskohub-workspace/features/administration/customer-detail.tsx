@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import type { Locale } from "@/features/i18n";
+import type { ReservationPassLink } from "@/features/passes/admin/pass-reads";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { StatusBadge } from "@/shared/components/ui/status-badge";
 import { formatMoney, type Money } from "@/shared/money/money";
 import { formatCount } from "@/shared/utils/number";
@@ -60,14 +62,24 @@ export function AdministrationCustomerDetail({
   customerId,
   locale,
   notice,
+  passes,
   profile,
   reservationActivity,
+  reservationPassLinks,
 }: {
   readonly activity: AdministrationCustomerActivity;
   /** The decoded route id, for the unavailable layout's links. */
   readonly customerId: DotyposCustomerId;
   readonly locale: Locale;
   readonly notice?: AdministrationNotice;
+  readonly passes?: {
+    readonly spent: CustomerDetailFact;
+    readonly content: ReactNode;
+  };
+  readonly reservationPassLinks?: ReadonlyMap<
+    WorkspaceReservationId,
+    ReservationPassLink
+  >;
   /**
    * The Dotypos customer and the discount sections. Without both the page
    * shows only the customer's Workspace reservation history.
@@ -85,6 +97,7 @@ export function AdministrationCustomerDetail({
         customerId={customerId}
         locale={locale}
         notice={notice}
+        passes={passes}
       />
     );
   }
@@ -105,16 +118,19 @@ export function AdministrationCustomerDetail({
           activity={activity}
           availableCodes={discounts.availableCodes}
           locale={locale}
+          spentOnPasses={passes?.spent}
         />
         <CustomerConsents consent={activity.marketingConsent} locale={locale} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-7">
+          {passes?.content}
           <CustomerReservations
             activity={activity}
             customerId={customer.id}
             locale={locale}
+            passLinks={reservationPassLinks}
           />
 
           <section>
@@ -186,19 +202,24 @@ export function AdministrationCustomerDetail({
 }
 
 /**
- * The customer detail when Dotypos can't show the customer or the discount
- * sections can't load: the Workspace reservation history alone.
+ * Workspace activity remains available when the customer profile or discount
+ * sections cannot load.
  */
 function UnavailableCustomerDetail({
   activity,
   customerId,
   locale,
   notice,
+  passes,
 }: {
   readonly activity: AdministrationCustomerActivity;
   readonly customerId: DotyposCustomerId;
   readonly locale: Locale;
   readonly notice?: AdministrationNotice;
+  readonly passes?: {
+    readonly spent: CustomerDetailFact;
+    readonly content: ReactNode;
+  };
 }) {
   return (
     <AdministrationPage>
@@ -211,6 +232,14 @@ function UnavailableCustomerDetail({
         title={m.administrationCustomerDetailUnavailableTitle({}, { locale })}
       />
       <AdministrationNoticeBanner notice={notice} />
+      {passes && (
+        <div className="mb-7 space-y-5">
+          <div className="rounded-xl border border-navy-blue/10 bg-white p-4">
+            <CustomerStat {...passes.spent} />
+          </div>
+          {passes.content}
+        </div>
+      )}
       {activity.reservationHistoryTruncated && (
         <p className="mb-3 text-sm text-navy-blue/65">
           {m.administrationCustomerDetailReservationsTruncated({}, { locale })}{" "}
@@ -239,10 +268,12 @@ function CustomerReservations({
   activity,
   customerId,
   locale,
+  passLinks,
 }: {
   readonly activity: AdministrationCustomerActivity;
   readonly customerId: DotyposCustomerId;
   readonly locale: Locale;
+  readonly passLinks?: ReadonlyMap<WorkspaceReservationId, ReservationPassLink>;
 }) {
   const reservationGroups = groupCustomerReservations(activity.reservations);
   return (
@@ -280,6 +311,7 @@ function CustomerReservations({
                 { locale }
               )}
               reservations={reservationGroups.past}
+              passLinks={passLinks}
               showCustomer={false}
             />
           </div>
@@ -302,6 +334,7 @@ function CustomerReservations({
                   )
             }
             reservations={reservationGroups.currentAndFuture}
+            passLinks={passLinks}
             showCustomer={false}
           />
         </section>
@@ -322,6 +355,7 @@ function CustomerReservations({
             <div className="border-t border-navy-blue/10 p-3">
               <ReservationTable
                 reservations={reservationGroups.unavailable}
+                passLinks={passLinks}
                 showCustomer={false}
               />
             </div>
@@ -336,10 +370,12 @@ function CustomerStats({
   activity,
   availableCodes,
   locale,
+  spentOnPasses,
 }: {
   readonly activity: AdministrationCustomerActivity;
   readonly availableCodes: CustomerDetailFact;
   readonly locale: Locale;
+  readonly spentOnPasses?: CustomerDetailFact;
 }) {
   return (
     <section>
@@ -358,6 +394,7 @@ function CustomerStats({
           label={m.administrationCustomerProfileStatRevenue({}, { locale })}
           value={formatMoneyTotals(activity.stats.revenue, locale)}
         />
+        {spentOnPasses && <CustomerStat {...spentOnPasses} />}
         <CustomerStat
           label={m.administrationCustomerProfileStatFavoriteProduct(
             {},
