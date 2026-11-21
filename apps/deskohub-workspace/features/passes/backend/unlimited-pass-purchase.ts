@@ -4,7 +4,11 @@ import { type DotyposCustomerId, DotyposService } from "@deskohub/dotypos";
 import { and, eq, isNull } from "drizzle-orm";
 import { Data, Effect, Layer, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { customerAccounts, passPurchases } from "@/db/schema";
+import {
+  customerAccounts,
+  passPurchases,
+  unlimitedPassSupersessions,
+} from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
@@ -170,7 +174,18 @@ export const beginUnlimitedPassPurchase = Effect.fn(
           session.accountId,
           "unlimited"
         );
-        if (!prior || prior.order.activePaymentAttemptId) return;
+        if (!prior) {
+          // A delayed Continue takes the same account lock before creating this ID.
+          yield* db
+            .insert(unlimitedPassSupersessions)
+            .values({
+              buyerAccountId: session.accountId,
+              orderId: priorOrderId,
+            })
+            .onConflictDoNothing();
+          return;
+        }
+        if (prior.order.activePaymentAttemptId) return;
         if (
           prior.purchase.status === "void" &&
           (prior.order.paymentState === "not_started" ||
@@ -214,10 +229,15 @@ export const beginUnlimitedPassPurchase = Effect.fn(
           existing.purchase.holderAccountId !== holderId ||
           !selection ||
           !sameSelection(selection, input.selection)
-        )
+        ) {
+          const replaceable =
+            existing.order.paymentState === "not_started" &&
+            !existing.order.activePaymentAttemptId &&
+            existing.purchase.status === "pending_payment";
           return yield* new UnlimitedPassAdmissionError({
-            reason: "purchase-conflict",
+            reason: replaceable ? "draft-changed" : "purchase-conflict",
           });
+        }
         if (existing.order.paymentState !== "not_started") {
           return yield* new EntryPackPurchaseError({
             reason: "payment-in-progress",
@@ -225,6 +245,18 @@ export const beginUnlimitedPassPurchase = Effect.fn(
         }
         purchase = existing.purchase;
       } else {
+        const [superseded] = yield* db
+          .select({ orderId: unlimitedPassSupersessions.orderId })
+          .from(unlimitedPassSupersessions)
+          .where(
+            and(
+              eq(unlimitedPassSupersessions.buyerAccountId, session.accountId),
+              eq(unlimitedPassSupersessions.orderId, input.orderId)
+            )
+          );
+        if (superseded) {
+          return yield* new UnlimitedPassDraftVoided({ blockingDates: [] });
+        }
         const now = yield* currentInstant;
         const today = getCurrentWorkspaceDate(now);
         const startDate = Temporal.PlainDate.from(input.selection.startDate);
@@ -404,7 +436,6 @@ const readUnlimitedPassBuyerDraft = Effect.fn("readUnlimitedPassBuyerDraft")(
     if (!order) return undefined;
     const { purchase } = order;
     const selection = readUnlimitedPassSelection(purchase);
-    if (!selection) return undefined;
     return {
       ...order,
       selection,
@@ -435,6 +466,8 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
     );
     if (!draft) return undefined;
     const { order, purchase, selection, holderEmail, activeAttempt } = draft;
+    const status = { kind: "status" as const, locale: purchase.locale };
+    if (!selection) return status;
     const priorPaymentAttemptId = order.activePaymentAttemptId;
     const now = yield* currentInstant;
     const payable =
@@ -447,17 +480,19 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
         purchase.status === "pending_payment" &&
         order.paymentState === "not_started"
       )
-        return base;
+        return { ...base, kind: "details" as const };
       if (
         purchase.status === "void" &&
         (order.paymentState === "not_started" ||
           order.paymentState === "expired")
       )
-        return base;
+        return { ...base, kind: "details" as const };
     }
-    if (!payable) return undefined;
+    if (!payable) return status;
     if (mode !== "payment-retry") {
-      return order.paymentState === "not_started" ? base : undefined;
+      return order.paymentState === "not_started"
+        ? { ...base, kind: "details" as const }
+        : status;
     }
     if (
       !priorPaymentAttemptId ||
@@ -466,15 +501,16 @@ export const loadUnlimitedCheckoutContinuation = Effect.fn(
       activeAttempt.refundState !== "not_required" ||
       !isEndedUnpaidPaymentState(activeAttempt.state)
     )
-      return undefined;
+      return status;
     const documents = yield* AccountingDocumentSnapshots;
     const snapshot = yield* documents.findPassPurchase(priorPaymentAttemptId);
-    if (!snapshot) return undefined;
+    if (!snapshot) return status;
     const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
       purchase.quote
     );
     return {
       ...base,
+      kind: "pay" as const,
       retryPayment: {
         billing: snapshot.billing,
         price: displayPassPurchasePrice(quote),

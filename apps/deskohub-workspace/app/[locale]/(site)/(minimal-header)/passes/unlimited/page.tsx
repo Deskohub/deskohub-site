@@ -220,28 +220,21 @@ async function UnlimitedPassPageContent({
   if (order && checkout.buyer.kind === "signed-out") {
     redirect(getAccountSignInPath(locale, checkoutPath(locale)));
   }
-  if (orderId && !continuation) {
-    if (order?.kind !== "submitted") await leaveUnavailableOrder(orderId);
-    const ownedLocale = await readOwnedLocale(orderId);
-    if (ownedLocale)
-      redirect(`/${ownedLocale}${reservationStatusPath}/${orderId}`);
-  }
-
-  const selection =
-    order?.kind === "resume" || (order?.kind === "submitted" && continuation)
-      ? continuation?.selection
-      : requestedSelection;
-  const retryPayment =
-    continuation && "retryPayment" in continuation
-      ? continuation.retryPayment
-      : undefined;
-  if (orderId && continuation) {
-    if (isRetry && !retryPayment) {
+  if (orderId) {
+    if (continuation?.kind === "status") {
       redirect(`/${continuation.locale}${reservationStatusPath}/${orderId}`);
     }
-    if (continuation.locale !== locale) {
-      redirect(checkoutPath(continuation.locale, selection));
-    }
+    if (!continuation && order?.kind !== "submitted") notFound();
+  }
+
+  const draft = continuation?.kind !== "status" ? continuation : undefined;
+  const selection =
+    order?.kind === "resume" || (order?.kind === "submitted" && draft)
+      ? draft?.selection
+      : requestedSelection;
+  const retryPayment = draft?.kind === "pay" ? draft.retryPayment : undefined;
+  if (draft && draft.locale !== locale) {
+    redirect(checkoutPath(draft.locale, selection));
   }
 
   const { today } = checkout;
@@ -262,18 +255,18 @@ async function UnlimitedPassPageContent({
           ),
         }}
         draft={
-          order && continuation
-            ? { ...order, holderEmail: continuation.holderEmail ?? null }
+          order && draft
+            ? { ...order, holderEmail: draft.holderEmail ?? null }
             : order
         }
         retryPayment={
-          orderId && isRetry && continuation && retryPayment
+          orderId && draft && retryPayment
             ? {
                 orderId,
-                selection: continuation.selection,
+                selection: draft.selection,
                 state: {
                   ...retryPayment,
-                  holderEmail: continuation.holderEmail ?? undefined,
+                  holderEmail: draft.holderEmail,
                 },
               }
             : undefined

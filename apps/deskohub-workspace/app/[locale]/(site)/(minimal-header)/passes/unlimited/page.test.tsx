@@ -8,6 +8,8 @@ let enabled = false;
 let buyerSignedIn = true;
 let submittedOrderCommitted = false;
 let submittedGift = true;
+let commitAfterContinuationRead = false;
+let submittedStatusOnly = false;
 const ownedOrder = "5413f44e-80ef-430e-9663-ddd7242a2ed0";
 const submittedOrder = "5413f44e-80ef-430e-9663-ddd7242a2ed1";
 const holderEmail = testEmailAddress("unlimited-route-holder");
@@ -17,6 +19,8 @@ beforeEach(() => {
   buyerSignedIn = true;
   submittedOrderCommitted = false;
   submittedGift = true;
+  commitAfterContinuationRead = false;
+  submittedStatusOnly = false;
 });
 
 mock.module(
@@ -45,20 +49,26 @@ mock.module("@/features/discounts/discount-code-entry.server", () => ({
 }));
 mock.module("@/features/passes/backend/unlimited-pass-purchase", () => ({
   loadUnlimitedCheckoutContinuation: (orderId: OrderId) =>
-    Effect.succeed(
-      buyerSignedIn &&
+    Effect.sync(() => {
+      const owned =
+        buyerSignedIn &&
         (orderId === ownedOrder ||
-          (orderId === submittedOrder && submittedOrderCommitted))
-        ? {
-            locale: "cs-CZ",
-            selection: { tier: "reserved-desk", startDate: "2026-12-01" },
-            holderEmail:
-              orderId === submittedOrder && !submittedGift
-                ? undefined
-                : holderEmail,
-          }
-        : undefined
-    ),
+          (orderId === submittedOrder && submittedOrderCommitted));
+      if (orderId === submittedOrder && commitAfterContinuationRead)
+        submittedOrderCommitted = true;
+      if (!owned) return undefined;
+      if (orderId === submittedOrder && submittedStatusOnly)
+        return { kind: "status", locale: "en-US" };
+      return {
+        kind: "details",
+        locale: "cs-CZ",
+        selection: { tier: "reserved-desk", startDate: "2026-12-01" },
+        holderEmail:
+          orderId === submittedOrder && !submittedGift
+            ? undefined
+            : holderEmail,
+      };
+    }),
 }));
 mock.module("@/features/passes/unlimited-checkout-actions", () => ({
   beginUnlimitedCheckout: mock(),
@@ -215,6 +225,32 @@ test("reload distinguishes an owned self-purchase from a submission that has not
     orderId: submittedOrder,
     holderEmail: null,
   });
+});
+
+test("an order committed after the reload's owner read stays on Details", async () => {
+  commitAfterContinuationRead = true;
+  const content = await renderContent({ ...selectionQuery, submittedOrder });
+  expect(submittedOrderCommitted).toBe(true);
+  expect(content.props.children.props).toMatchObject({
+    draft: { kind: "submitted", orderId: submittedOrder },
+    initialDetails: {
+      tier: "open-space",
+      startDate: "2026-12-15",
+      coffee: true,
+    },
+    retryPayment: undefined,
+  });
+});
+
+test("an owned status-only submission continues to its issued status page", async () => {
+  submittedOrderCommitted = true;
+  submittedStatusOnly = true;
+  await expect(
+    renderContent({ ...selectionQuery, submittedOrder })
+  ).rejects.toHaveProperty(
+    "digest",
+    `NEXT_REDIRECT;replace;/en-US/reservation/status/${submittedOrder};307;`
+  );
 });
 
 test("an owned replacement survives reload with the edited selection", async () => {

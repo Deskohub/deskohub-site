@@ -581,6 +581,64 @@ test("holder edits to a reloaded self-purchase retain every uncertain predecesso
   ]);
 });
 
+test("a holder change after pre-commit reload replaces the draft that committed meanwhile", async () => {
+  const originalId = orderIdSchema.make(crypto.randomUUID());
+  const beginCheckout = mock(
+    async (input: {
+      orderId: OrderId;
+      holderEmail?: string;
+      supersedeOrderIds?: readonly OrderId[];
+    }) => {
+      expect(checkoutUrl().searchParams.get("submittedOrder")).toBe(
+        input.orderId
+      );
+      return input.orderId === originalId
+        ? {
+            data: {
+              status: "purchase_error" as const,
+              reason: "draft-changed",
+            },
+          }
+        : { data: readyCheckout };
+    }
+  );
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        draft={{
+          kind: "submitted",
+          orderId: originalId,
+          predecessorOrderIds: [],
+        }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  fireEvent.click(
+    view.getByRole("checkbox", {
+      name: m.entryPackCheckoutGift({}, { locale }),
+    })
+  );
+  fireEvent.change(
+    view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
+    { target: { value: holderEmail } }
+  );
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  expect(await view.findByRole("button", { name: /pay/i })).toBeDefined();
+  expect(beginCheckout).toHaveBeenCalledTimes(2);
+  expect(beginCheckout.mock.calls[0]?.[0]).toMatchObject({
+    orderId: originalId,
+    holderEmail,
+  });
+  expect(beginCheckout.mock.calls[1]?.[0]).toMatchObject({
+    holderEmail,
+    supersedeOrderIds: [originalId],
+  });
+  expect(beginCheckout.mock.calls[1]?.[0].orderId).not.toBe(originalId);
+});
+
 test("Details cannot hand off another selection while Begin is creating holds", async () => {
   const response = Promise.withResolvers<{
     data: { status: "purchase_error"; reason: "unavailable" };

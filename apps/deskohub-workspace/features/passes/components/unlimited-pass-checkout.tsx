@@ -331,24 +331,23 @@ export function UnlimitedPassCheckout({
         predecessorOrderIds,
       };
     }
-    const { orderId } = submission;
-    window.history.replaceState(
-      null,
-      "",
-      getUnlimitedPassDetailsPath(locale, selection, submission)
-    );
-    setOrder(submission);
     submittedHolder.current = { email: holderEmail };
     const revision = ++detailRevision.current;
     beginPending.current = true;
     setBeginning(true);
-    try {
-      const result = await beginCheckout({
-        orderId,
+    const beginSubmission = (attempt: SubmittedOrder) => {
+      window.history.replaceState(
+        null,
+        "",
+        getUnlimitedPassDetailsPath(locale, selection, attempt)
+      );
+      setOrder(attempt);
+      return beginCheckout({
+        orderId: attempt.orderId,
         locale,
         selection,
-        ...(submission.predecessorOrderIds.length > 0 && {
-          supersedeOrderIds: submission.predecessorOrderIds,
+        ...(attempt.predecessorOrderIds.length > 0 && {
+          supersedeOrderIds: attempt.predecessorOrderIds,
         }),
         buyerEmail: buyer.email,
         ...(holderEmail !== undefined && { holderEmail }),
@@ -356,7 +355,25 @@ export function UnlimitedPassCheckout({
           buyerProfile: values.buyerProfile,
         }),
       });
+    };
+    try {
+      let result = await beginSubmission(submission);
       if (detailRevision.current !== revision) return;
+      if (
+        result.data?.status === "purchase_error" &&
+        result.data.reason === "draft-changed" &&
+        submission.predecessorOrderIds.length <
+          unlimitedCheckoutPredecessorLimit
+      ) {
+        submission = {
+          kind: "submitted",
+          orderId: orderIdSchema.make(crypto.randomUUID()),
+          predecessorOrderIds: getUnlimitedCheckoutPredecessors(submission),
+        };
+        result = await beginSubmission(submission);
+      }
+      if (detailRevision.current !== revision) return;
+      const { orderId } = submission;
       if (result.data?.status === "signed_out") {
         window.location.assign(
           getAccountSignInPath(

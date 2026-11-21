@@ -23,9 +23,13 @@ import {
   orders,
   passPurchases,
   paymentAttempts,
+  unlimitedPassSupersessions,
   workspaceReservations,
 } from "@/db/schema";
-import { WorkspaceLockSections } from "@/db/workspace-locks";
+import {
+  holdCustomerAccountAndPassPurchase,
+  WorkspaceLockSections,
+} from "@/db/workspace-locks";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
 import {
@@ -857,6 +861,154 @@ it("Continue releases each owned predecessor and leaves other buyers' drafts in 
           (row) => row.status === "NEW"
         )
       ).toHaveLength(unlimitedPassDays);
+    }).pipe(Effect.provide(layer))
+  );
+});
+
+it("a late Continue cannot create a non-overlapping draft after replacement", async () => {
+  const start = getCurrentWorkspaceDate().add({ days: 2 });
+  const accountId = newAccountId();
+  const email = testEmailAddress("unlimited-late-continue");
+  const session = {
+    ...testSessionProfile,
+    accountId,
+    email,
+    deletionRequested: false,
+  };
+  const provider = makeInMemoryDotypos({
+    tables: [
+      Schema.decodeUnknownSync(DotyposTableSchema)({
+        id: tableId,
+        _cloudId: "1",
+        display: true,
+        enabled: true,
+        name: "Synthetic reserved desk",
+        seats: "1",
+        tags: ["cowork:reserved-desk"],
+      }),
+    ],
+  });
+  const testDatabase = database!;
+  const layer = Layer.mergeAll(
+    testDatabase.layer,
+    provider.layer,
+    WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase.databasePool),
+    WorkspaceReservationRepository.Default.pipe(
+      Layer.provide(testDatabase.layer)
+    ),
+    Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
+      listLimitations: () => Effect.succeed([]),
+    }),
+    Layer.mock(CurrentCustomerAccount, {
+      requireActive: Effect.succeed(session),
+      peek: Effect.succeed({
+        kind: "linked",
+        session,
+        account: { accountId, dotyposCustomerId: customerId },
+        autoLinked: false,
+      }),
+    }),
+    Layer.mock(CustomerAccountSections, {
+      withActiveAccount: (buyer, operation, options) => {
+        const hold = options?.passPurchaseOrderId
+          ? holdCustomerAccountAndPassPurchase(
+              buyer,
+              options.passPurchaseOrderId
+            )
+          : WorkspaceLockSections.customerAccount(buyer);
+        return hold(
+          Effect.provideService(operation, HeldCustomerAccount, {
+            accountId: buyer,
+            email,
+          })
+        );
+      },
+    }),
+    Layer.mock(CustomerAccountContactService, {}),
+    Layer.mock(WorkspaceFeatureFlagService, {
+      isEnabled: () => Effect.succeed(true),
+    }),
+    Layer.mock(DiscountService, {
+      quote: ({ product, discountableSubtotal }) =>
+        Effect.succeed({
+          product,
+          discountableSubtotal,
+          discountedSubtotal: discountableSubtotal,
+          totalDiscount: currencyCZK(0),
+          discounts: [],
+        }),
+    })
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      yield* db.insert(customerAccounts).values({ id: accountId });
+      const originalId = orderIdSchema.make(crypto.randomUUID());
+      const replacementId = orderIdSchema.make(crypto.randomUUID());
+      const entered = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      const delayed = yield* beginUnlimitedPassPurchase({
+        orderId: originalId,
+        locale: "en-US",
+        selection: { tier: "reserved-desk", startDate: date(start) },
+      }).pipe(
+        Effect.provide(
+          Layer.mock(WorkspaceFeatureFlagService, {
+            isEnabled: () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(proceed)),
+                Effect.as(true)
+              ),
+          })
+        ),
+        Effect.forkChild
+      );
+      yield* Deferred.await(entered);
+      const selection = {
+        tier: "reserved-desk" as const,
+        startDate: date(start.add({ days: 31 })),
+      };
+      const replacement = yield* beginUnlimitedPassPurchase({
+        orderId: replacementId,
+        locale: "en-US",
+        selection,
+        supersedeOrderIds: [originalId],
+      });
+      expect(replacement.id).toBe(replacementId);
+      yield* Deferred.succeed(proceed, undefined);
+      expect(yield* Effect.result(Fiber.join(delayed))).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "UnlimitedPassDraftVoided",
+            blockingDates: [],
+          })
+        )
+      );
+      expect(yield* db.select().from(unlimitedPassSupersessions)).toEqual([
+        { buyerAccountId: accountId, orderId: originalId },
+      ]);
+      expect(yield* db.select({ id: orders.id }).from(orders)).toEqual([
+        { id: replacementId },
+      ]);
+      expect(provider.reservations.size).toBe(unlimitedPassDays);
+
+      expect(
+        yield* Effect.result(
+          beginUnlimitedPassPurchase({
+            orderId: replacementId,
+            locale: "en-US",
+            selection,
+            holderEmail: testEmailAddress("unlimited-different-holder"),
+          })
+        )
+      ).toEqual(
+        Result.fail(
+          expect.objectContaining({
+            _tag: "UnlimitedPassAdmissionError",
+            reason: "draft-changed",
+          })
+        )
+      );
     }).pipe(Effect.provide(layer))
   );
 });
