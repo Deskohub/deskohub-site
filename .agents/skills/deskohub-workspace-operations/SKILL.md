@@ -1,6 +1,6 @@
 ---
 name: deskohub-workspace-operations
-description: Workspace production diagnostics, logs, redaction, PostHog, Cloudinary, or Dotypos incidents; PostHog incident dispatcher or worker; PostHog campaign email setup, webhook, status cron, or fallback; migrations, deployments, releases, preview databases.
+description: Workspace production diagnostics, logs, redaction, PostHog, Cloudinary, or Dotypos incidents; shared issue pool, incident dispatcher or worker; PostHog campaign email setup, webhook, status cron, or fallback; migrations, deployments, releases, preview databases.
 ---
 
 # Deskohub Workspace operations
@@ -12,5 +12,6 @@ Read the reference for the active operation:
 - PostHog campaign email: sender channel, DNS, secret key, webhook destination, status cron, sending limits, or fallback to Resend: [references/posthog-email-delivery.md](references/posthog-email-delivery.md).
 - A scheduled PostHog incident dispatcher pass: [references/posthog-agent-dispatcher.md](references/posthog-agent-dispatcher.md).
 - An incident worker assigned to a PostHog GitHub issue: [references/posthog-agent-worker.md](references/posthog-agent-worker.md).
+- Shared GitHub issue pool, deterministic collectors, T3 assignment recovery, or scheduler cutover: [references/issue-pool.md](references/issue-pool.md).
 
 Read both diagnostics and releases when an investigation crosses database and runtime-log boundaries.
