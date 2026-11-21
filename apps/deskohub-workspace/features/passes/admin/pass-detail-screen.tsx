@@ -111,14 +111,16 @@ export function AdminPassDetailView({
           <AdministrationDetailSection title={m.passesHolder({}, { locale })}>
             <div className="space-y-2">
               <PassPartyName party={pass.holder} locale={locale} />
-              <div>
-                <StatusBadge tone={pass.claimed ? "positive" : "progress"}>
-                  {(pass.claimed ? m.passesClaimed : m.passesUnclaimed)(
-                    {},
-                    { locale }
-                  )}
-                </StatusBadge>
-              </div>
+              {pass.claimed !== null && (
+                <div>
+                  <StatusBadge tone={pass.claimed ? "positive" : "progress"}>
+                    {(pass.claimed ? m.passesClaimed : m.passesUnclaimed)(
+                      {},
+                      { locale }
+                    )}
+                  </StatusBadge>
+                </div>
+              )}
             </div>
           </AdministrationDetailSection>
           {(detail.coffee || detail.monitor) && (

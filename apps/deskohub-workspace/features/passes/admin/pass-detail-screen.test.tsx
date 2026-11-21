@@ -28,7 +28,7 @@ const detail: AdminPassDetail & {
     status: "pending_payment",
     paid: null,
     complimentary: false,
-    claimed: true,
+    claimed: null,
     holder: { customerId: null, name: null, email: null, deleted: false },
     buyer: null,
     validFrom: plainDateStringSchema.make("2026-11-01"),
@@ -68,13 +68,34 @@ test("uses the shortened access period and shows an empty period for withdrawal 
   ).toBe("No access days");
 });
 
-test("shows the creation time and claimed holder on a pending order", () => {
+test("shows the creation time without a claim badge on a pending order", () => {
   const html = renderToStaticMarkup(
     <RouteLocaleProvider locale="en-US">
       <AdminPassDetailView detail={detail} locale="en-US" />
     </RouteLocaleProvider>
   );
   expect(html).toContain("Created");
-  expect(html).toContain("Claimed");
+  expect(html).not.toContain("Claimed");
+  expect(html).not.toContain("Not claimed yet");
   expect(html).not.toContain("Purchased");
+});
+
+test("shows the claim badge on an issued self-purchase", () => {
+  const html = renderToStaticMarkup(
+    <RouteLocaleProvider locale="en-US">
+      <AdminPassDetailView
+        detail={{
+          ...detail,
+          pass: { ...detail.pass, status: "active", claimed: true },
+          storedStatus: "active",
+          paymentState: "paid",
+          fulfillmentState: "fulfilled",
+          paidAt: detail.createdAt,
+        }}
+        locale="en-US"
+      />
+    </RouteLocaleProvider>
+  );
+  expect(html).toContain("Claimed");
+  expect(html).toContain("Purchased");
 });

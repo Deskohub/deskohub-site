@@ -57,7 +57,7 @@ const adminPassSummary = Schema.Struct({
   accessEndsOn: Schema.NullOr(plainDateStringSchema),
   day: Schema.NullOr(Schema.Int),
   complimentary: Schema.Boolean,
-  claimed: Schema.Boolean,
+  claimed: Schema.NullOr(Schema.Boolean),
   holder: adminPassParty,
   buyer: Schema.NullOr(adminPassParty),
   paid: Schema.NullOr(moneyCodec),

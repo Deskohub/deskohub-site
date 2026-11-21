@@ -97,7 +97,7 @@ function CustomerPassGroup({
                         )}
                       </p>
                     )}
-                    {!pass.claimed && (
+                    {pass.claimed === false && (
                       <p className="text-navy-blue/70">
                         {m.passesUnclaimed({}, { locale })}
                       </p>

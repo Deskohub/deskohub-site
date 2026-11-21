@@ -207,6 +207,9 @@ const passParties = Effect.fn("administration.passParties")(function* (
   };
 });
 
+const isIssuedPass = (status: PassRow["storedStatus"]) =>
+  status !== "pending_payment" && status !== "void";
+
 const toPassSummary = (
   row: PassRow,
   today: PassDate,
@@ -233,7 +236,7 @@ const toPassSummary = (
       ? Temporal.PlainDate.from(row.validFrom).until(today).days + 1
       : null,
   complimentary: row.complimentary,
-  claimed: !row.gifted || row.claimed,
+  claimed: isIssuedPass(row.storedStatus) ? !row.gifted || row.claimed : null,
   holder: party(
     row.holderCustomerId,
     row.holderEmail,
@@ -399,10 +402,7 @@ export const readAdminCustomerPasses = Effect.fn(
       )
     )
     .orderBy(desc(passPurchases.createdAt), desc(passPurchases.id));
-  const visible = rows.filter(
-    (row) =>
-      row.storedStatus !== "pending_payment" && row.storedStatus !== "void"
-  );
+  const visible = rows.filter((row) => isIssuedPass(row.storedStatus));
   const party = yield* passParties(visible);
   const purchases = visible.map((row) => ({
     row,

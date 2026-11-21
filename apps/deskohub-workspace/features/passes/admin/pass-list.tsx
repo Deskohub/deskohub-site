@@ -401,7 +401,7 @@ function Holder({
       <div className="font-medium">
         <PassPartyName party={pass.holder} locale={locale} />
       </div>
-      {!pass.claimed && (
+      {pass.claimed === false && (
         <StatusBadge tone="progress">
           {m.passesUnclaimed({}, { locale })}
         </StatusBadge>

@@ -265,7 +265,25 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(requests).toHaveLength(51);
       expect(answer.searchIncomplete).toBe(false);
       expect(answer.total).toBe(1);
-      expect(answer.passes).toMatchObject([{ id: match.id }]);
+      expect(answer.passes).toMatchObject([{ id: match.id, claimed: null }]);
+    });
+
+    test("requires issuance before treating a pass bought for oneself as claimed", async () => {
+      try {
+        for (const status of ["pending_payment", "void", "active"]) {
+          await database.pool.query(
+            "update pass_purchases set holder_account_id = buyer_account_id, status = $1 where id = $2",
+            [status, passId]
+          );
+          const detail = await run(readAdminPass(passId));
+          expect(detail?.pass.claimed).toBe(status === "active" ? true : null);
+        }
+      } finally {
+        await database.pool.query(
+          "update pass_purchases set holder_account_id = $1, status = 'active' where id = $2",
+          [holderAccount, passId]
+        );
+      }
     });
 
     test("uses current account links and counts only the winning payment less confirmed refunds", async () => {
