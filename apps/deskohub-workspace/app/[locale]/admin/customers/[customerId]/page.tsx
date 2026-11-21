@@ -1,6 +1,8 @@
 import { Match } from "effect";
 import { Suspense } from "react";
 import { AdministrationCustomerDetail } from "@/features/administration/customer-detail";
+import { getAdministrationCustomerName } from "@/features/administration/customer-presentation";
+import { m } from "@/features/administration/i18n";
 import { AdministrationRouteLoading } from "@/features/administration/loading";
 import {
   loadAdministrationCustomer,
@@ -15,6 +17,13 @@ import {
   loadDiscountCustomerSections,
 } from "@/features/discounts/admin/page-data.server";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
+import { AdminCustomerPasses } from "@/features/passes/admin/customer-passes";
+import {
+  loadAdminCustomerPasses,
+  loadReservationPassLinks,
+} from "@/features/passes/admin/pass-page-data.server";
+import { currencyCZK } from "@/shared/money/currencies";
+import { formatMoney } from "@/shared/money/money";
 
 export default function AdministrationCustomerDetailPage({
   params,
@@ -62,12 +71,39 @@ export async function AdministrationCustomerDetailContent({
     })
   );
 
+  const [passes, reservationPassLinks] = profile
+    ? await Promise.all([
+        loadAdminCustomerPasses(customerId),
+        loadReservationPassLinks(activity.reservations.map(({ id }) => id)),
+      ])
+    : [null, undefined];
+
   return (
     <AdministrationCustomerDetail
       activity={activity}
       customerId={customerId}
       locale={locale}
       notice={discounts.notice}
+      passes={
+        profile && passes
+          ? {
+              spent: {
+                label: m.passesSpent({}, { locale }),
+                value: (passes.spent.length ? passes.spent : [currencyCZK(0)])
+                  .map((total) => formatMoney(total, locale))
+                  .join(" + "),
+              },
+              content: (
+                <AdminCustomerPasses
+                  boughtForOthers={passes.boughtForOthers}
+                  held={passes.held}
+                  locale={locale}
+                  name={getAdministrationCustomerName(profile.customer, locale)}
+                />
+              ),
+            }
+          : undefined
+      }
       profile={
         profile && {
           customer: profile.customer,
@@ -75,6 +111,7 @@ export async function AdministrationCustomerDetailContent({
         }
       }
       reservationActivity={reservationActivity}
+      reservationPassLinks={reservationPassLinks}
     />
   );
 }

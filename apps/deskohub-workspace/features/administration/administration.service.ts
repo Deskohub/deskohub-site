@@ -229,6 +229,7 @@ export type AdministrationReservationListInput = {
 type AdministrationSortDirection = "asc" | "desc";
 
 type ReservationListInput = AdministrationReservationListInput & {
+  readonly includePassDays?: boolean;
   readonly pageSize?: number;
 };
 
@@ -236,7 +237,7 @@ type ReservationListInput = AdministrationReservationListInput & {
 export type AdministrationReservationExportInput = Omit<
   AdministrationReservationListInput,
   "page"
->;
+> & { readonly includePassDays?: boolean };
 
 /**
  * The customer list's criteria. `from` and `to` are inclusive Workspace
@@ -1425,9 +1426,7 @@ export class AdministrationService extends Context.Service<
       number,
       EffectDrizzleQueryError
     >;
-    readonly listReservations: (
-      input: AdministrationReservationListInput
-    ) => Effect.Effect<
+    readonly listReservations: (input: ReservationListInput) => Effect.Effect<
       AdministrationReservationPage & {
         readonly dateFilterUnavailable: boolean;
         readonly dateSortUnavailable: boolean;
@@ -2043,7 +2042,9 @@ export class AdministrationService extends Context.Service<
           dateRange,
           policy
         );
-        const conditions: SQL[] = [isNull(workspaceReservations.passId)];
+        const conditions: SQL[] = input.includePassDays
+          ? []
+          : [isNull(workspaceReservations.passId)];
         if (input.customerId) {
           conditions.push(
             eq(workspaceReservations.dotyposCustomerId, input.customerId)
@@ -2280,6 +2281,7 @@ export class AdministrationService extends Context.Service<
           .select({
             ...safeReservationSelection,
             authorAccountId: workspaceReservations.authorAccountId,
+            passId: workspaceReservations.passId,
             cancellationEmailSentAt:
               workspaceReservations.cancellationEmailSentAt,
             checkoutSessionKey: workspaceReservations.checkoutSessionKey,
@@ -2293,6 +2295,7 @@ export class AdministrationService extends Context.Service<
           authorAccountId,
           cancellationEmailSentAt,
           checkoutSessionKey,
+          passId,
           ...row
         } = reservationRow;
 
@@ -2435,14 +2438,16 @@ export class AdministrationService extends Context.Service<
           ? toContractWithdrawal(withdrawalRow)
           : null;
         const invoice = yield* readReservationInvoiceStanding(db, row.id);
-        const restoration = yield* loadRestoration({
-          accessGrant,
-          attemptRows,
-          cancellationEmailSentAt,
-          checkoutSessionKey,
-          live,
-          row,
-        });
+        const restoration = passId
+          ? null
+          : yield* loadRestoration({
+              accessGrant,
+              attemptRows,
+              cancellationEmailSentAt,
+              checkoutSessionKey,
+              live,
+              row,
+            });
 
         const now = yield* DateTime.nowAsDate;
         return {
@@ -2509,7 +2514,8 @@ export class AdministrationService extends Context.Service<
             dotyposReservationId: row.dotyposReservationId,
             customerId: row.dotyposCustomerId,
           },
-          canCancel: withdrawal === null && canCancelReservation(row),
+          canCancel:
+            passId === null && withdrawal === null && canCancelReservation(row),
           withdrawal: withdrawal && toAdministrationWithdrawal(withdrawal),
           canRestore: restoration !== null,
           restoration: restoration && {

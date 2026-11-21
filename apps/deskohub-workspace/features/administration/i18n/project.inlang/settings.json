@@ -22,7 +22,8 @@
       "./messages/email-automation-activation/{languageTag}.json",
       "./messages/email-automation-runs/{languageTag}.json",
       "./messages/admin-cli/{languageTag}.json",
-      "./messages/administrators/{languageTag}.json"
+      "./messages/administrators/{languageTag}.json",
+      "./messages/passes/{languageTag}.json"
     ]
   }
 }
