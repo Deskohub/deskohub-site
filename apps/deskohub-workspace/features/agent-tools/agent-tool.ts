@@ -3,7 +3,15 @@ import type {
   StandardJSONSchemaV1,
   StandardSchemaV1,
 } from "@standard-schema/spec";
-import { Context, Data, Effect, Layer, Option, Schema } from "effect";
+import {
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Schema,
+} from "effect";
 import type { CustomerAgentScope } from "@/features/account";
 import type { Locale } from "@/features/i18n";
 import { toClosedStandardJSONSchemaV1 } from "@/shared/utils/closed-json-schema";
@@ -30,14 +38,36 @@ import {
  * publishes it only to an agent whose account holds the administrator grant
  * at that moment.
  */
-export type AgentToolAuthorization =
+type ArgumentScope = {
+  readonly argument: string;
+  readonly scope: CustomerAgentScope;
+};
+
+export type AgentToolAuthorization = (
   | { readonly access: "public" }
   | {
       readonly access: "signed-in";
       readonly scope: CustomerAgentScope;
-      readonly accountBudget?: AgentToolAccountBudget;
     }
-  | { readonly access: "administration" };
+  | { readonly access: "administration" }
+) & { readonly scopeWhenArgument?: ArgumentScope };
+
+export const hasAgentToolArgument = (
+  args: Schema.Json | undefined,
+  argument: string
+) => Predicate.isObject(args) && Object.hasOwn(args, argument);
+
+/** The scopes needed for this call, including fields that opt into account data. */
+export const getCustomerToolScopes = (
+  tool: AgentToolAuthorization,
+  args?: Schema.Json
+): ReadonlyArray<CustomerAgentScope> => {
+  const scopes = tool.access === "signed-in" ? [tool.scope] : [];
+  const conditional = tool.scopeWhenArgument;
+  return conditional && hasAgentToolArgument(args, conditional.argument)
+    ? [...scopes, conditional.scope]
+    : scopes;
+};
 
 /** A schema that validates a value and describes it as JSON Schema. */
 type AgentToolSchema<Input, Output = Input> = StandardSchemaV1<Input, Output> &
@@ -100,6 +130,7 @@ export type AgentTool<R> = AgentToolAuthorization & {
    * Defaults to `readOnly`.
    */
   readonly idempotent?: boolean;
+  readonly accountBudget?: AgentToolAccountBudget;
   /** The code an unexpected failure is reported with. */
   readonly unavailableCode: AgentToolUnavailableCode;
   /** The MCP Apps view the tool's result renders in, if any. */
@@ -164,6 +195,7 @@ type AgentToolDefinition<
   readonly readOnly: boolean;
   readonly destructive?: boolean;
   readonly idempotent?: boolean;
+  readonly accountBudget?: AgentToolAccountBudget;
   /** The code an unexpected failure is reported with. */
   readonly unavailableCode: AgentToolUnavailableCode;
   /** The MCP Apps view the tool's result renders in, if any. */
@@ -185,7 +217,76 @@ export const defineAgentTool = <
     readonly access: "public";
   }
 ): AgentTool<R> =>
-  makeAgentTool({ access: "public" }, definition, (run) => run);
+  makeAgentTool({ access: "public" }, definition, definition.run);
+
+/** A public tool whose optional argument uses the customer's OAuth grant. */
+export const defineMixedAccessAgentTool = <
+  Input extends Schema.Top & { readonly DecodingServices: never },
+  Output extends Schema.Codec<AgentToolResult, AgentToolResult>,
+  R,
+  RWithGrant,
+>(
+  definition: AgentToolDefinition<Input, Output, R> & {
+    readonly scopeWhenArgument: ArgumentScope;
+    readonly run: (
+      input: Input["Type"]
+    ) => Effect.Effect<Output["Type"], AgentToolError, R>;
+    readonly runWithGrant: (
+      input: Input["Type"]
+    ) => Effect.Effect<Output["Type"], AgentToolError, RWithGrant>;
+  }
+): AgentTool<
+  | R
+  | Exclude<RWithGrant, SignedInAgentToolServices>
+  | SignedInAgentToolRequirements
+> => {
+  const authorization = {
+    access: "public",
+    scopeWhenArgument: definition.scopeWhenArgument,
+  } as const;
+  return makeAgentTool<
+    Input,
+    Output,
+    R,
+    | R
+    | Exclude<RWithGrant, SignedInAgentToolServices>
+    | SignedInAgentToolRequirements
+  >(authorization, definition, (input, caller, args) => {
+    const scopes = getCustomerToolScopes(authorization, args);
+    return scopes.length === 0
+      ? definition.run(input)
+      : provideAgentGrant(() => definition.runWithGrant(input), caller, scopes);
+  });
+};
+
+const provideAgentGrant = <A, R>(
+  run: () => Effect.Effect<A, AgentToolError, R>,
+  caller: Option.Option<CustomerAgentCaller>,
+  scopes: ReadonlyArray<CustomerAgentScope>
+): Effect.Effect<
+  A,
+  AgentToolError,
+  Exclude<R, SignedInAgentToolServices> | SignedInAgentToolRequirements
+> =>
+  Option.match(caller, {
+    // The route answers unauthorized calls with a challenge before execution.
+    onNone: () => Effect.fail(AgentToolError.serviceUnavailable()),
+    onSome: (signedIn) => {
+      if (!scopes.every((scope) => signedIn.grant.scopes.has(scope))) {
+        return Effect.fail(AgentToolError.serviceUnavailable());
+      }
+      return CustomerAgentCallServices.pipe(
+        Effect.flatMap(({ forCaller }) =>
+          // Never reuse account services built over the request's browser session.
+          Effect.suspend(run).pipe(
+            Effect.provide(forCaller(signedIn).pipe(Layer.orDie), {
+              local: true,
+            })
+          )
+        )
+      );
+    },
+  });
 
 /**
  * A tool only an agent the customer signed in through may call. The MCP
@@ -201,40 +302,26 @@ export const defineSignedInAgentTool = <
 >(
   definition: AgentToolDefinition<Input, Output, R> & {
     readonly scope: CustomerAgentScope;
-    readonly accountBudget?: AgentToolAccountBudget;
+    readonly scopeWhenArgument?: ArgumentScope;
   }
 ): AgentTool<
   Exclude<R, SignedInAgentToolServices> | SignedInAgentToolRequirements
-> =>
-  makeAgentTool(
-    {
-      access: "signed-in",
-      scope: definition.scope,
-      ...(definition.accountBudget && {
-        accountBudget: definition.accountBudget,
-      }),
-    },
-    definition,
-    (run, caller) =>
-      Option.match(caller, {
-        // The route answers a signed-in call without a token with a 401
-        // challenge before any tool runs.
-        onNone: () => Effect.fail(AgentToolError.serviceUnavailable()),
-        onSome: (signedIn) =>
-          CustomerAgentCallServices.pipe(
-            Effect.flatMap(({ forCaller }) =>
-              run.pipe(
-                // Built in the call's own memo map: the route's services may
-                // hold account services built over the browser session, which
-                // a token caller must never reuse.
-                Effect.provide(forCaller(signedIn).pipe(Layer.orDie), {
-                  local: true,
-                })
-              )
-            )
-          ),
-      })
+> => {
+  const authorization = {
+    access: "signed-in",
+    scope: definition.scope,
+    ...(definition.scopeWhenArgument && {
+      scopeWhenArgument: definition.scopeWhenArgument,
+    }),
+  } as const;
+  return makeAgentTool(authorization, definition, (input, caller, args) =>
+    provideAgentGrant(
+      () => definition.run(input),
+      caller,
+      getCustomerToolScopes(authorization, args)
+    )
   );
+};
 
 const makeAgentTool = <
   Input extends Schema.Top & { readonly DecodingServices: never },
@@ -244,9 +331,10 @@ const makeAgentTool = <
 >(
   authorization: AgentToolAuthorization,
   definition: AgentToolDefinition<Input, Output, R>,
-  provideCaller: (
-    run: Effect.Effect<AgentToolResult, AgentToolError, R>,
-    caller: Option.Option<CustomerAgentCaller>
+  run: (
+    input: Input["Type"],
+    caller: Option.Option<CustomerAgentCaller>,
+    args: Schema.Json
   ) => Effect.Effect<AgentToolResult, AgentToolError, RCall>
 ): AgentTool<RCall> => {
   const decodeInput = Schema.decodeUnknownEffect(definition.input);
@@ -263,6 +351,9 @@ const makeAgentTool = <
     ...(definition.idempotent !== undefined && {
       idempotent: definition.idempotent,
     }),
+    ...(definition.accountBudget && {
+      accountBudget: definition.accountBudget,
+    }),
     unavailableCode: definition.unavailableCode,
     ...(definition.view && { view: definition.view }),
     input: toClosedStandardJSONSchemaV1(definition.input),
@@ -277,15 +368,11 @@ const makeAgentTool = <
       )
     ),
     call: (args, caller = Option.none()) =>
-      provideCaller(
-        decodeInput(args).pipe(
-          Effect.mapError((error) =>
-            AgentToolError.invalidInput(getFirstInvalidFieldPath(error.issue))
-          ),
-          Effect.flatMap(definition.run)
+      decodeInput(args).pipe(
+        Effect.mapError((error) =>
+          AgentToolError.invalidInput(getFirstInvalidFieldPath(error.issue))
         ),
-        caller
-      ).pipe(
+        Effect.flatMap((input) => run(input, caller, args)),
         Effect.catchDefect((defect) =>
           Effect.fail(
             AgentToolError.unavailable(definition.unavailableCode)(defect)

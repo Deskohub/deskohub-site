@@ -54,9 +54,10 @@ const AUTH_BASE = `${ORIGIN}/api/auth`;
 const CONNECT_PATH = "/en-US/auth/connect";
 const AGENT_SCOPE =
   "offerings:read reservations:read reservations:create offline_access";
-/** Every scope a client may ask for, in the server's order. */
+/** The original agent scopes plus administration, in server order. */
 const ALL_SCOPES =
   "offerings:read reservations:read reservations:create administration offline_access";
+const PASS_SCOPES = `${AGENT_SCOPE} passes:manage`;
 const CLIENT_NAME = "Example Agent";
 
 /** A synthetic agent that publishes its Client ID Metadata Document. */
@@ -2788,6 +2789,84 @@ const refreshWith = (
 describe.skipIf(!testDatabase)(
   "Administration scope on the migrated disposable Postgres",
   () => {
+    test("requires new consent for pass access and revokes tokens when the consent drops it", async () => {
+      const agent = makeAgent();
+      const sentLinks: CapturedMagicLink[] = [];
+      const previous = makeTestAuth({
+        sentLinks,
+        clientMetadataTransport: agent.clientMetadataTransport,
+      });
+      const customer = await signIn(previous, sentLinks);
+      const ordinary = await connectAskingEverything(
+        previous,
+        customer.cookie,
+        agent,
+        AGENT_SCOPE
+      );
+      expect(ordinary.scope?.split(" ")).not.toContain("passes:manage");
+
+      // A client registered before pass permissions has the previous capabilities.
+      await testDatabase!.pool.query(
+        "update auth.oauth_client set scopes = $2 where client_id = $1",
+        [agent.clientId, ALL_SCOPES.split(" ")]
+      );
+      const auth = makeTestAuth({
+        sentLinks,
+        clientMetadataTransport: agent.clientMetadataTransport,
+      });
+
+      const { response, pkce } = await authorizeRequest(
+        auth,
+        customer.cookie,
+        agent,
+        { scope: PASS_SCOPES }
+      );
+      const consentPage = redirectOf(response);
+      expect(consentPage.pathname).toBe("/auth/consent");
+      expect(consentPage.searchParams.get("scope")?.split(" ")).toContain(
+        "passes:manage"
+      );
+      const upgraded = await exchangeCode(
+        auth,
+        receivedCode(
+          agent,
+          await answerConsent(
+            auth,
+            customer.cookie,
+            consentPage,
+            true,
+            PASS_SCOPES
+          ),
+          pkce
+        )
+      );
+      expect(upgraded.status).toBe(200);
+      const passToken = ((await upgraded.json()) as TokenResponse).access_token;
+      expect(
+        await authorizeToken(authorityOver(auth), passToken)
+      ).toMatchObject({
+        _tag: "Success",
+        success: {
+          grant: {
+            scopes: new Set([
+              "offerings:read",
+              "reservations:read",
+              "reservations:create",
+              "passes:manage",
+            ]),
+          },
+        },
+      });
+
+      await connectAskingEverything(auth, customer.cookie, agent, AGENT_SCOPE);
+      expect((await authorizeToken(authorityOver(auth), passToken))._tag).toBe(
+        "Failure"
+      );
+      expect(
+        (await authorizeToken(authorityOver(auth), ordinary.access_token))._tag
+      ).toBe("Success");
+    });
+
     test("refuses an accepted consent that names no scopes, or administration for a customer", async () => {
       const agent = makeAgent();
       const sentLinks: CapturedMagicLink[] = [];
@@ -3315,7 +3394,7 @@ describe.skipIf(!testDatabase)(
       ).toEqual([false]);
     });
 
-    test("never lets a client that skips consent ask for administration", async () => {
+    test("never lets a client that skips consent ask for administration or pass access", async () => {
       const sentLinks: CapturedMagicLink[] = [];
       const auth = makeTestAuth({ sentLinks });
       const administrator = await signIn(auth, sentLinks);
@@ -3335,7 +3414,7 @@ describe.skipIf(!testDatabase)(
       const client = { clientId: registered.client_id, redirectUri };
 
       // By name, or through an omitted scope that defaults to every scope.
-      for (const scope of [ALL_SCOPES, undefined]) {
+      for (const scope of [ALL_SCOPES, "passes:manage", undefined]) {
         const { response } = await authorizeRequest(
           auth,
           administrator.cookie,

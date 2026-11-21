@@ -12,6 +12,7 @@ import {
   checkoutAttemptIdSchema,
   checkoutSessionIdSchema,
 } from "@/features/checkout/checkout-identifiers";
+import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { SelectedReservation } from "./booking-selection";
 
@@ -56,9 +57,11 @@ export class BookingAgent extends Context.Service<
 export const deriveAgentCheckoutIdentifiers = ({
   grant,
   reservation,
+  entryPackId,
 }: {
   readonly grant: CustomerAgentGrant;
   readonly reservation: SelectedReservation;
+  readonly entryPackId?: OrderId;
 }): {
   readonly checkoutSessionId: CheckoutSessionId;
   readonly checkoutAttemptId: CheckoutAttemptId;
@@ -68,7 +71,12 @@ export const deriveAgentCheckoutIdentifiers = ({
     digest("session", grant.accountId, grant.clientId)
   );
   const selectionKey = agentSelectionKeySchema.make(
-    digest("selection", checkoutSessionId, JSON.stringify(reservation))
+    digest(
+      "selection",
+      checkoutSessionId,
+      JSON.stringify(reservation),
+      ...(entryPackId ? [entryPackId] : [])
+    )
   );
 
   return {

@@ -320,6 +320,17 @@ export function CoworkReservationForm({
     setPackSelection({ kind: "card" });
     updatePassInUrl();
   };
+  const applyEntryPack = (passId: OrderId) => {
+    if (
+      appliedPack?.id === passId ||
+      !bookingPasses?.packs.some(({ id }) => id === passId)
+    ) {
+      return false;
+    }
+    setPackSelection({ kind: "applied", packId: passId });
+    updatePassInUrl(passId);
+    return true;
+  };
   const changeUncoveredOption = (change: () => void) => {
     setCardChange(() => change);
   };
@@ -338,6 +349,7 @@ export function CoworkReservationForm({
 
   return (
     <ReservationCheckoutForm
+      applyEntryPack={applyEntryPack}
       checkoutCustomer={checkoutCustomer}
       advertisedPrice={
         appliedPack
@@ -388,14 +400,7 @@ export function CoworkReservationForm({
             <CoworkEntryPackBanner
               applying={Boolean(appliedPack)}
               locale={locale}
-              onAction={
-                appliedPack
-                  ? payByCard
-                  : () => {
-                      setPackSelection({ kind: "applied", packId: pack.id });
-                      updatePassInUrl(pack.id);
-                    }
-              }
+              onAction={appliedPack ? payByCard : () => applyEntryPack(pack.id)}
               pack={pack}
             />
           )

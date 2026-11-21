@@ -38,7 +38,14 @@ export const preparePayStateInputSchema = Schema.Union(
 ).check(marketingConsentSourceRequiresConsent);
 
 export const preparePayStateSchema = Schema.toStandardSchemaV1(
-  preparePayStateInputSchema,
+  Schema.Union(
+    locales.map((locale) =>
+      Schema.Struct({
+        ...reservationSubmissionFields(locale),
+        siteToolEntryPackQuote: Schema.optionalKey(Schema.Literal(true)),
+      })
+    )
+  ).check(marketingConsentSourceRequiresConsent),
   { parseOptions: { onExcessProperty: "error" } }
 );
 

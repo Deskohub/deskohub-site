@@ -185,7 +185,7 @@ export const memoryAuthHookServices = (
         overrides.captureLocalePreference ?? (() => Effect.void),
       recordEntryPackGiftSignIn:
         overrides.recordEntryPackGiftSignIn ?? (() => Effect.void),
-      revokeUnconsentedAdministrationTokens: () => Effect.void,
+      revokeUnconsentedAgentTokens: () => Effect.void,
     }),
     Layer.mock(ReviewAccounts, {
       isReviewAccount:

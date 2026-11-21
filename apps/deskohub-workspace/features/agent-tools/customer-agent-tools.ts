@@ -3,6 +3,8 @@ import { CustomerReservationHistoryService } from "@/features/account";
 import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { CheckoutStatusService } from "@/features/checkout/backend/checkout/checkout-status.service";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { CoworkPassesReleaseGateForRun } from "@/features/passes/backend/cowork-passes-release-gate";
+import { CustomerPasses } from "@/features/passes/backend/customer-passes.service";
 import { ReferralReleaseGateRequest } from "@/features/referrals/referral-release-gate.server";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
 import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
@@ -24,6 +26,8 @@ import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
  * tool call has no browser, so it remembers no referral code.
  */
 export const CustomerAgentToolsLive = Layer.mergeAll(
+  CoworkPassesReleaseGateForRun,
+  CustomerPasses.Default,
   WorkspaceAvailabilityService.Live,
   SharedAvailabilityInventoryLive,
   Layer.mergeAll(CheckoutPricingService.Live, ReservationBooking.Live).pipe(

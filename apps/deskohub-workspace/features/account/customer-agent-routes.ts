@@ -3,6 +3,7 @@ import { workspaceSiteOrigin } from "@/shared/utils/site-constants";
 import {
   administrationAgentScope,
   customerAgentScopes,
+  customerPassesAgentScope,
   offlineAccessAgentScope,
 } from "./agent-scopes";
 
@@ -173,8 +174,8 @@ const readConsentRedirect = (
  * request in `query` at `now` (epoch milliseconds). The OAuth server verifies
  * the signature when the customer answers; this only spots requests that
  * can't succeed, including one without a readable `redirect_uri`, which the
- * server always signs. Without `scope` the request asks for every scope;
- * scopes the page can't explain are left out.
+ * server always signs. A legacy request without `scope` uses the ordinary
+ * defaults. Scopes the page can't explain are left out.
  */
 export const readCustomerAgentConsentRequest = (
   query: URLSearchParams,
@@ -199,7 +200,9 @@ export const readCustomerAgentConsentRequest = (
     clientId,
     scopes: requested
       ? customerAgentConsentScopes.filter((scope) => requested.includes(scope))
-      : customerAgentConsentScopes,
+      : customerAgentConsentScopes.filter(
+          (scope) => scope !== customerPassesAgentScope
+        ),
     redirect,
     administration: requested?.includes(administrationAgentScope) ?? true,
   };

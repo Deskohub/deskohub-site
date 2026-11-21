@@ -7,7 +7,7 @@ import { claimEntryPackGifts } from "@/features/passes/backend/entry-pack-gift";
 import type { CustomerAccountId } from "../../customer-account";
 import { ensureCustomerAccount } from "../customer-account.repository";
 import { captureAccountLocalePreference } from "../customer-locale-preference";
-import { revokeUnconsentedAdministrationTokens } from "./administration-agent-access";
+import { revokeUnconsentedAgentTokens } from "./administration-agent-access";
 
 interface ILoginLifecycleRecords {
   /**
@@ -32,10 +32,10 @@ interface ILoginLifecycleRecords {
     signedInAt: Temporal.Instant
   ) => Effect.Effect<void, EffectDrizzleQueryError>;
   /**
-   * Deletes an agent's tokens that carry the administration scope although
+   * Deletes an agent's tokens that carry a protected scope although
    * its consent no longer names it, after every accepted consent.
    */
-  readonly revokeUnconsentedAdministrationTokens: (input: {
+  readonly revokeUnconsentedAgentTokens: (input: {
     readonly accountId: CustomerAccountId;
     readonly clientId: string;
   }) => Effect.Effect<unknown, EffectDrizzleQueryError | SqlError.SqlError>;
@@ -61,8 +61,8 @@ export class LoginLifecycleRecords extends Context.Service<
           captureAccountLocalePreference(accountId, locale).pipe(onDatabase),
         recordEntryPackGiftSignIn: (accountId, signedInAt) =>
           claimEntryPackGifts(accountId, signedInAt).pipe(onDatabase),
-        revokeUnconsentedAdministrationTokens: (input) =>
-          revokeUnconsentedAdministrationTokens(input).pipe(onDatabase),
+        revokeUnconsentedAgentTokens: (input) =>
+          revokeUnconsentedAgentTokens(input).pipe(onDatabase),
       };
     })
   );

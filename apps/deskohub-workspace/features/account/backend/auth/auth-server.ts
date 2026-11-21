@@ -70,8 +70,8 @@ import {
   type MagicLinkLocaleLookup,
 } from "../customer-locale-preference";
 import {
-  guardAdministrationScope,
-  narrowAdministrationOnConsent,
+  guardCustomerAgentScopes,
+  narrowCustomerAgentTokensOnConsent,
 } from "./administration-scope-guard";
 import type { PasskeyRelyingParty } from "./auth-hosts";
 import {
@@ -1249,7 +1249,7 @@ export const makeWorkspaceAuth = (config: WorkspaceAuthConfig) => {
     hooks: {
       before: createAuthMiddleware((ctx) =>
         runWorkspaceEffect("account.auth.guard", { boundary: "route" })(
-          guardAdministrationScope(ctx).pipe(
+          guardCustomerAgentScopes(ctx).pipe(
             Effect.andThen(
               guardAuthRequest({
                 config,
@@ -1276,7 +1276,7 @@ export const makeWorkspaceAuth = (config: WorkspaceAuthConfig) => {
           (await runWorkspaceEffect("account.agent-consent.narrow", {
             boundary: "route",
           })(
-            narrowAdministrationOnConsent(ctx).pipe(
+            narrowCustomerAgentTokensOnConsent(ctx).pipe(
               Effect.provide(config.services)
             )
           )) ??

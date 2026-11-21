@@ -2,7 +2,10 @@ import { APIError } from "better-auth";
 import { type createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { Effect, Match, Option, Schema } from "effect";
 import { AccountRoleGrants } from "@/features/administrators/backend/account-role-grants.service";
-import { administrationAgentScope } from "../../agent-scopes";
+import {
+  administrationAgentScope,
+  consentRequiredAgentScopes,
+} from "../../agent-scopes";
 import {
   type CustomerAccountId,
   customerAccountIdSchema,
@@ -73,11 +76,11 @@ const administrationRefused = () =>
     error_description: "Only an administrator can grant this scope.",
   });
 
-const skipConsentAdministrationRefused = () =>
+const skipConsentScopeRefused = () =>
   new APIError("BAD_REQUEST", {
     error: "invalid_scope",
     error_description:
-      "A client that skips consent can't ask for the administration scope.",
+      "A client that skips consent can't ask for a scope that requires consent.",
   });
 
 /** The account of the request's session, if it has one. */
@@ -125,10 +128,10 @@ const guardConsent = Effect.fn("WorkspaceAuth.guardAgentConsent")(function* (
 
 /**
  * Whether the client named by one source of authorization parameters skips
- * consent and asks for administration, by name or through an omitted scope
+ * consent and asks for a consent-required scope, by name or through an omitted scope
  * that defaults to its own or the server's list.
  */
-const asksForAdministrationWithoutConsent = (
+const asksForProtectedScopeWithoutConsent = (
   request: AuthRequest,
   parameters: typeof authorizationParametersSchema.Type
 ) =>
@@ -140,22 +143,25 @@ const asksForAdministrationWithoutConsent = (
   ).pipe(
     Effect.map((row) =>
       decodeStoredOAuthClient(row).pipe(
-        Option.exists(
-          (client) =>
+        Option.exists((client) => {
+          const requested =
+            parameters.scope === undefined
+              ? (client.scopes ?? consentRequiredAgentScopes)
+              : splitScopes(parameters.scope);
+          return (
             client.skipConsent === true &&
-            includesAdministration(
-              parameters.scope === undefined
-                ? (client.scopes ?? [administrationAgentScope])
-                : splitScopes(parameters.scope)
+            consentRequiredAgentScopes.some((scope) =>
+              requested.includes(scope)
             )
-        )
+          );
+        })
       )
     )
   );
 
 /**
  * A client that skips consent never reaches the consent check, so it can't
- * ask for the administration scope. Better Auth dispatches its own resumed
+ * ask for a protected scope. Better Auth dispatches its own resumed
  * authorizations through this hook too. Both the query and the body are
  * checked, though the provider reads only one of them: a conflicting
  * request is refused rather than resolved.
@@ -166,8 +172,8 @@ const guardSkipConsentAuthorization = (request: AuthRequest) =>
       Option.toArray(decodeAuthorizationParameters(source))
     ),
     (parameters) =>
-      asksForAdministrationWithoutConsent(request, parameters).pipe(
-        Effect.filterOrFail((asks) => !asks, skipConsentAdministrationRefused)
+      asksForProtectedScopeWithoutConsent(request, parameters).pipe(
+        Effect.filterOrFail((asks) => !asks, skipConsentScopeRefused)
       ),
     { discard: true }
   );
@@ -177,19 +183,19 @@ const guardSkipConsentAuthorization = (request: AuthRequest) =>
  * consent to. This is issuance policy: administration calls re-check the
  * live grant themselves.
  */
-export const guardAdministrationScope = (request: AuthRequest) =>
+export const guardCustomerAgentScopes = (request: AuthRequest) =>
   Match.value(request.path).pipe(
     Match.when("/oauth2/consent", () => guardConsent(request)),
     Match.when("/oauth2/authorize", () =>
       guardSkipConsentAuthorization(request)
     ),
     Match.orElse(() => Effect.void),
-    Effect.withSpan("WorkspaceAuth.guardAdministrationScope")
+    Effect.withSpan("WorkspaceAuth.guardCustomerAgentScopes")
   );
 
 /**
  * After an accepted consent, the agent's tokens that carry the
- * administration scope although its consent no longer names it go: Better
+ * a protected scope although its consent no longer names it go: Better
  * Auth rewrites the consent's scopes when the account consents again for
  * fewer, but tokens keep the scopes they were issued with. The stored
  * consent decides, since the step can end before it records the consent or
@@ -197,7 +203,7 @@ export const guardAdministrationScope = (request: AuthRequest) =>
  * so its client is the one the consent names, and only the session
  * account's tokens go.
  */
-export const narrowAdministrationOnConsent = (request: AuthRequest) =>
+export const narrowCustomerAgentTokensOnConsent = (request: AuthRequest) =>
   acceptedConsent(request).pipe(
     Option.filter(() => request.path === "/oauth2/consent"),
     Option.match({
@@ -213,12 +219,12 @@ export const narrowAdministrationOnConsent = (request: AuthRequest) =>
         }).pipe(
           Effect.flatMap((owner) =>
             Effect.flatMap(LoginLifecycleRecords, (records) =>
-              records.revokeUnconsentedAdministrationTokens(owner)
+              records.revokeUnconsentedAgentTokens(owner)
             )
           ),
           Effect.catchNoSuchElement,
           Effect.asVoid
         ),
     }),
-    Effect.withSpan("WorkspaceAuth.narrowAdministrationOnConsent")
+    Effect.withSpan("WorkspaceAuth.narrowCustomerAgentTokensOnConsent")
   );

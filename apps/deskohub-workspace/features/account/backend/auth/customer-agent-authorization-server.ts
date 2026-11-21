@@ -3,10 +3,14 @@ import { fetchClientMetadataResource } from "@better-auth/cimd/node";
 import { mcp } from "@better-auth/mcp";
 import { getOAuthProviderApi } from "@better-auth/oauth-provider";
 import type { BetterAuthPlugin } from "better-auth";
-import { createAuthEndpoint } from "better-auth/api";
-import { Schema } from "effect";
+import { createAuthEndpoint, createAuthMiddleware } from "better-auth/api";
+import { Option, Schema } from "effect";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
-import { agentScopes, offlineAccessAgentScope } from "../../agent-scopes";
+import {
+  agentScopes,
+  customerPassesAgentScope,
+  offlineAccessAgentScope,
+} from "../../agent-scopes";
 import {
   customerAgentConsentPath,
   customerAgentSignInPath,
@@ -99,6 +103,14 @@ const clientLookupBody = Schema.toStandardSchemaV1(
   Schema.Struct({ clientId: Schema.String })
 );
 
+const decodeAuthorizationParameters = Schema.decodeUnknownOption(
+  Schema.Struct({
+    client_id: Schema.String,
+    scope: Schema.optional(Schema.Unknown),
+    request_uri: Schema.optional(Schema.Unknown),
+  })
+);
+
 /**
  * The OAuth 2.1 authorization server that customers' AI agents sign in
  * through, for the customer MCP server at `resource`.
@@ -136,14 +148,15 @@ export const makeCustomerAgentAuthorizationPlugins = ({
    */
   readonly clientMetadataTransport?: CustomerAgentClientMetadataTransport;
 }) => {
+  const scopes = [...agentScopes, offlineAccessAgentScope];
   const mcpProvider = mcp({
     resource,
     loginPage: customerAgentSignInPath,
     consentPage: customerAgentConsentPath,
     disableJwtPlugin: true,
     refreshTokenReuseInterval: customerAgentRefreshTokenReuseSeconds,
-    scopes: [...agentScopes, offlineAccessAgentScope],
-    clientRegistrationDefaultScopes: [...agentScopes, offlineAccessAgentScope],
+    scopes,
+    clientRegistrationDefaultScopes: scopes,
   });
   const provider = {
     ...mcpProvider,
@@ -152,6 +165,40 @@ export const makeCustomerAgentAuthorizationPlugins = ({
 
   const accessTokenVerification = {
     id: "customer-agent-access-token",
+    hooks: {
+      before: [
+        {
+          matcher: (ctx) => ctx.path === "/oauth2/authorize",
+          handler: createAuthMiddleware(async (ctx) => {
+            const post = decodeAuthorizationParameters(ctx.body);
+            const source =
+              ctx.method === "POST" && Option.isSome(post) ? "body" : "query";
+            const parameters =
+              source === "body"
+                ? post
+                : decodeAuthorizationParameters(ctx.query);
+            if (
+              Option.isNone(parameters) ||
+              parameters.value.scope !== undefined ||
+              parameters.value.request_uri !== undefined
+            )
+              return;
+
+            // Requested scopes and client capabilities differ. Keep the client's
+            // existing defaults, with pass access available by explicit request.
+            const client = await getOAuthProviderApi(
+              ctx,
+              provider.options
+            ).getClient(parameters.value.client_id);
+            if (!client || client.disabled) return;
+            const scope = (client.scopes ?? scopes)
+              .filter((scope) => scope !== customerPassesAgentScope)
+              .join(" ");
+            return { context: { [source]: { scope } } };
+          }),
+        },
+      ],
+    },
     endpoints: {
       verifyCustomerAgentAccessToken: createAuthEndpoint(
         "/customer-agent/verify-access-token",
