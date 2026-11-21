@@ -263,6 +263,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       let failInvitationSend = false;
       let failInternalInvoice = false;
       let beforeAdmission = Effect.void;
+      let beforeGiftAccountLock = Effect.void;
       const rejectedConfirmations = new Set<string>();
       const inconclusiveProviderOrders = new Set<string>();
       let buyerName = "Fixture Buyer";
@@ -285,7 +286,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         ...db.databasePool,
         maxConnections: 2,
       });
-      const backgroundAccountSections = CustomerAccountSections.Default.pipe(
+      const actualAccountSections = CustomerAccountSections.Default.pipe(
         Layer.provide(
           Layer.mergeAll(
             CustomerAccountLinkRepository.Default.pipe(Layer.provide(db.layer)),
@@ -296,6 +297,23 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           )
         )
       );
+      const backgroundAccountSections = Layer.effect(
+        CustomerAccountSections,
+        Effect.map(CustomerAccountSections, (sections) => ({
+          ...sections,
+          withActiveAccount: (accountId, effect, options) =>
+            Effect.suspend(() => {
+              if (!options?.passPurchaseOrderId) return Effect.void;
+              const beforeLock = beforeGiftAccountLock;
+              beforeGiftAccountLock = Effect.void;
+              return beforeLock;
+            }).pipe(
+              Effect.andThen(
+                sections.withActiveAccount(accountId, effect, options)
+              )
+            ),
+        }))
+      ).pipe(Layer.provide(actualAccountSections));
       const emailLayer = Layer.merge(
         Layer.succeed(EmailConfigTag, {
           defaultFrom: { email: testEmailAddress("pass-sender") },
@@ -677,6 +695,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         },
         rejectNextInvitation: () => {
           failInvitationSend = true;
+        },
+        beforeInvitationAccountLock: (change: Effect.Effect<void>) => {
+          beforeGiftAccountLock = change;
         },
         resendAsBuyer: (at: Temporal.Instant, signal: AbortSignal) =>
           Effect.runPromise(
@@ -1799,6 +1820,60 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         }
       }
     );
+
+    test("keeps a replacement invitation queued until its own holder is locked", async () => {
+      const db = database!;
+      const payment = await integration(
+        db,
+        115_000,
+        undefined,
+        undefined,
+        undefined,
+        testEmailAddress("gift-holder-before-lock")
+      );
+      const replacementEmail = testEmailAddress("gift-holder-after-transfer");
+      const replacement = customerAccountIdSchema.make(crypto.randomUUID());
+      await db.pool.query("insert into customer_accounts (id) values ($1)", [
+        replacement,
+      ]);
+      await db.pool.query(
+        `insert into auth."user" (id,email,name,email_verified,created_at,updated_at)
+          values ($1,$2,'Fixture replacement holder',true,now(),now())`,
+        [replacement, replacementEmail]
+      );
+      payment.beforeInvitationAccountLock(
+        Effect.promise(async () => {
+          await db.pool.query(
+            `with reassigned as (
+               update pass_purchases
+                 set holder_account_id=$2, holder_version=holder_version+1
+                 where id=$1 returning id
+             )
+             update entry_pack_gift_invitations
+               set holder_account_id=$2, generation=generation+1, first_generation=generation+1
+               from reassigned where entry_pack_gift_invitations.order_id=reassigned.id`,
+            [payment.orderId, replacement]
+          );
+        })
+      );
+
+      expect(await payment.pay()).toMatchObject({ status: "paid" });
+      expect(payment.invitations).toHaveLength(0);
+      const pending = await db.pool.query(
+        `select holder_account_id, generation, attempts, next_attempt_at
+           from entry_pack_gift_invitations where order_id=$1`,
+        [payment.orderId]
+      );
+      expect(pending.rows[0]).toMatchObject({
+        holder_account_id: replacement,
+        generation: 1,
+        attempts: 0,
+      });
+      expect(pending.rows[0]?.next_attempt_at).not.toBeNull();
+      await payment.reconcile(Temporal.Now.instant().add({ minutes: 10 }));
+      expect(payment.invitations).toHaveLength(1);
+      expect(payment.invitations[0]?.to).toEqual({ email: replacementEmail });
+    });
 
     test("allows the paid buyer confirmation when holder deletion blocks the invitation", async () => {
       const db = database!;

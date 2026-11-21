@@ -568,10 +568,7 @@ export const makeEntryPackOrderPaymentHandler = Effect.gen(function* () {
     yield* customerAccounts
       .withActiveAccount(
         target.holderAccountId,
-        deliverPendingEntryPackInvitation(
-          orderId,
-          target.paymentAttemptId
-        ).pipe(
+        deliverPendingEntryPackInvitation(orderId, target).pipe(
           Effect.provide(sendingServices),
           Effect.provide(SealedStateKeys.Default),
           Effect.timeout("10 seconds")
