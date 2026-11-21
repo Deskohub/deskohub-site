@@ -365,6 +365,37 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
 });
 
 test.each(["capacity_unavailable", "draft_voided"] as const)(
+  "renewal reports the %s dates and keeps its fixed start",
+  async (status) => {
+    const renewsPassId = orderIdSchema.make(crypto.randomUUID());
+    const view = render(
+      <QueryProvider>
+        <UnlimitedPassCheckout
+          {...base}
+          renewsPassId={renewsPassId}
+          initialDetails={{
+            tier: "open-space",
+            coffee: false,
+            startDate: openSpaceStart,
+          }}
+          beginCheckout={async () => ({
+            data: { status, blockingDates: [monitorStart] },
+          })}
+        />
+      </QueryProvider>
+    );
+    fireEvent.click(view.getByRole("button", { name: /continue/i }));
+    const alert = await view.findByText(
+      "Your pass can’t cover Nov 2, 2026 in the renewal period."
+    );
+    expect(alert.getAttribute("role")).toBe("alert");
+    const { searchParams } = checkoutUrl();
+    expect(searchParams.get("renew")).toBe(renewsPassId);
+    expect(searchParams.get("startDate")).toBe(openSpaceStart);
+  }
+);
+
+test.each(["capacity_unavailable", "draft_voided"] as const)(
   "a %s result clears the owned draft and starts a fresh choice",
   async (status) => {
     const existingOrderId = orderIdSchema.make(

@@ -475,14 +475,17 @@ export function UnlimitedPassCheckout({
         const dates = new Intl.ListFormat(locale).format(
           result.data.blockingDates.map((date) => formatPassDate(date, locale))
         );
-        const unavailableMessage = dates
-          ? m.unlimitedPassCheckoutBlockingDates({ dates }, { locale })
-          : m.unlimitedPassCheckoutStartUnavailable({}, { locale });
+        const blockingDatesMessage = renewsPassId
+          ? m.unlimitedPassCheckoutRenewalBlockingDates
+          : m.unlimitedPassCheckoutBlockingDates;
+        const unavailableMessage = renewsPassId
+          ? m.unlimitedPassCheckoutNoStarts
+          : m.unlimitedPassCheckoutStartUnavailable;
         focusStep(
           { kind: "choose" },
-          renewsPassId
-            ? m.unlimitedPassCheckoutNoStarts({}, { locale })
-            : unavailableMessage
+          dates
+            ? blockingDatesMessage({ dates }, { locale })
+            : unavailableMessage({}, { locale })
         );
       } else {
         setError(
