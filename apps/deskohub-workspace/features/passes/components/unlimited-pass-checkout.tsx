@@ -93,6 +93,7 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
     supersedeOrderIds?: readonly OrderId[];
     buyerEmail: string;
     holderEmail?: string;
+    recipientName?: string;
     buyerProfile?: DetailsSchema["Type"]["buyerProfile"];
   }) => Promise<{
     data?: (
@@ -305,8 +306,9 @@ export function UnlimitedPassCheckout({
       return;
     const { selection } = step;
     setError(undefined);
-    setDetails(values);
-    const enteredHolder = values.holderEmail?.toLowerCase();
+    const { recipientName, ...draftDetails } = values;
+    setDetails(draftDetails);
+    const enteredHolder = draftDetails.holderEmail?.toLowerCase();
     const holderEmail =
       enteredHolder === buyer.email.toLowerCase() ? undefined : enteredHolder;
     let submission: SubmittedOrder;
@@ -355,6 +357,10 @@ export function UnlimitedPassCheckout({
         }),
         buyerEmail: buyer.email,
         ...(holderEmail !== undefined && { holderEmail }),
+        ...(holderEmail !== undefined &&
+          recipientName !== undefined && {
+            recipientName,
+          }),
         ...(values.buyerProfile !== undefined && {
           buyerProfile: values.buyerProfile,
         }),

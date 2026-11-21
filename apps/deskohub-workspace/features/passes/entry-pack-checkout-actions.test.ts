@@ -10,7 +10,7 @@ import {
 } from "@/features/account/backend/saved-locale-preference.test-utils";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { PaymentProviders } from "@/features/checkout/backend/payment/payment-provider";
-import type { Locale } from "@/features/i18n";
+import { type Locale, m } from "@/features/i18n";
 import { getLocale } from "@/features/i18n/paraglide/runtime.js";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -102,15 +102,16 @@ mock.module("./backend/entry-pack-purchase", () => ({
 
 const unlimited = await import("./backend/unlimited-pass-purchase");
 const unlimitedFailures = new Map<OrderId, Error>();
-mock.module("./backend/unlimited-pass-purchase", () => ({
-  ...unlimited,
-  beginUnlimitedPassPurchase: (
-    input: Parameters<typeof unlimited.beginUnlimitedPassPurchase>[0]
-  ) =>
+const beginUnlimited = mock(
+  (input: Parameters<typeof unlimited.beginUnlimitedPassPurchase>[0]) =>
     Effect.sync(() => ({
       outcome: Result.fail(unlimitedFailures.get(input.orderId)!),
       retiredPredecessorOrderIds: input.supersedeOrderIds?.slice(1) ?? [],
-    })),
+    }))
+);
+mock.module("./backend/unlimited-pass-purchase", () => ({
+  ...unlimited,
+  beginUnlimitedPassPurchase: beginUnlimited,
 }));
 
 const { beginEntryPackCheckout, beginUnlimitedCheckout, payEntryPackCheckout } =
@@ -178,6 +179,54 @@ test("Details issues an order and in-place Pay uses its verified locale without 
   );
   expect(malformed.validationErrors?.fieldErrors.orderId).toBeDefined();
   expect(readOwnedLocale).toHaveBeenCalledTimes(lookups);
+});
+
+test.each([undefined, "", " \t "])(
+  "Unlimited Continue rejects a missing or blank gift name before beginning checkout (%p)",
+  async (recipientName) => {
+    const calls = beginUnlimited.mock.calls.length;
+    const result = await withoutReferer(() =>
+      beginUnlimitedCheckout({
+        locale: "en-US",
+        orderId: orderIdSchema.make(crypto.randomUUID()),
+        buyerEmail,
+        holderEmail: testEmailAddress("unlimited-action-holder"),
+        selection: { tier: "reserved-desk", startDate: "2026-11-20" },
+        ...(recipientName !== undefined && { recipientName }),
+      })
+    );
+    expect(result.validationErrors?.fieldErrors.recipientName).toEqual([
+      m.unlimitedPassRecipientNameRequired({}, { locale: "cs-CZ" }),
+    ]);
+    expect(beginUnlimited).toHaveBeenCalledTimes(calls);
+  }
+);
+
+test("Unlimited Continue normalizes a gift name without returning it", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const recipientName = "李";
+  unlimitedFailures.set(
+    orderId,
+    new purchase.EntryPackPurchaseError({ reason: "holds-unavailable" })
+  );
+  const result = await withoutReferer(() =>
+    beginUnlimitedCheckout({
+      locale: "en-US",
+      orderId,
+      buyerEmail,
+      holderEmail: testEmailAddress("unlimited-action-holder"),
+      selection: { tier: "reserved-desk", startDate: "2026-11-20" },
+      recipientName: `  ${recipientName}  `,
+    })
+  );
+  expect(beginUnlimited.mock.calls.at(-1)?.[0].recipientName).toBe(
+    recipientName
+  );
+  expect(result.data).toMatchObject({
+    status: "purchase_error",
+    reason: "holds-unavailable",
+  });
+  expect(JSON.stringify(result)).not.toContain(recipientName);
 });
 
 test.each([

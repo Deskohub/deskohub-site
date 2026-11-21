@@ -3,6 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   DotyposCustomerIdSchema,
+  DotyposCustomerSchema,
   DotyposRejected,
   type DotyposReservationId,
   DotyposService,
@@ -27,6 +28,7 @@ import {
   unlimitedPassSupersessions,
   workspaceReservations,
 } from "@/db/schema";
+import { authUser } from "@/db/schema/auth";
 import {
   holdCustomerAccountAndPassPurchase,
   WorkspaceLockSections,
@@ -921,19 +923,8 @@ it("Continue acknowledges retired predecessors when a stale date prevents a draf
   );
 });
 
-async function checkDelayedContinue(
-  retirement: "replacement" | "capacity refusal"
-) {
-  const start = getCurrentWorkspaceDate().add({ days: 2 });
-  const accountId = newAccountId();
-  const email = testEmailAddress("unlimited-late-continue");
-  const session = {
-    ...testSessionProfile,
-    accountId,
-    email,
-    deletionRequested: false,
-  };
-  const provider = makeInMemoryDotypos({
+function makeUnlimitedDraftProvider() {
+  return makeInMemoryDotypos({
     tables: [
       Schema.decodeUnknownSync(DotyposTableSchema)({
         id: tableId,
@@ -946,10 +937,23 @@ async function checkDelayedContinue(
       }),
     ],
   });
+}
+
+function unlimitedNewDraftLayer(
+  accountId: ReturnType<typeof newAccountId>,
+  email: string,
+  dotypos: typeof DotyposService.Service
+) {
+  const session = {
+    ...testSessionProfile,
+    accountId,
+    email,
+    deletionRequested: false,
+  };
   const testDatabase = database!;
-  const layer = Layer.mergeAll(
+  return Layer.mergeAll(
     testDatabase.layer,
-    provider.layer,
+    Layer.succeed(DotyposService, dotypos),
     WorkspaceDatabaseAdvisoryLock.makeLayer(testDatabase.databasePool),
     WorkspaceReservationRepository.Default.pipe(
       Layer.provide(testDatabase.layer)
@@ -996,6 +1000,152 @@ async function checkDelayedContinue(
           discounts: [],
         }),
     })
+  );
+}
+
+it.each(["linked", "matched", "new", "uncertain create"] as const)(
+  "uses a supplied gift name only to create a missing Dotypos profile (%s)",
+  async (standing) => {
+    const accountId = newAccountId();
+    const holderEmail = testEmailAddress("unlimited-named-holder");
+    const recipientName = "Ája O’Connell-Svobodová";
+    const holderCustomerId = DotyposCustomerIdSchema.make("456");
+    const profile = Schema.decodeUnknownSync(DotyposCustomerSchema)({
+      id: holderCustomerId,
+      _cloudId: "1",
+      email: holderEmail,
+      firstName: "Existing holder",
+      points: "0",
+      flags: "0",
+      display: true,
+      deleted: false,
+    });
+    const provider = makeUnlimitedDraftProvider();
+    let present = standing === "matched";
+    let lookups = 0;
+    const creates: unknown[] = [];
+    const layer = unlimitedNewDraftLayer(
+      accountId,
+      testEmailAddress("unlimited-name-buyer"),
+      {
+        ...provider.service,
+        findCustomer: (input, options) =>
+          Effect.sync(() => {
+            lookups += 1;
+            expect(input).toEqual({ firstName: "", email: holderEmail });
+            expect(options?.lookupFields).toEqual(["email"]);
+            return present
+              ? { _tag: "Matched", customer: profile, matches: [profile] }
+              : { _tag: "NotFound", matches: [] };
+          }),
+        createCustomer: (input) =>
+          Effect.gen(function* () {
+            expect(provider.reservations.size).toBe(0);
+            creates.push(input);
+            present = true;
+            if (standing === "uncertain create")
+              return yield* new DotyposUncertain({
+                operation: "createCustomer",
+                reason: "timeout",
+              });
+            return profile;
+          }),
+      }
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* WorkspaceDatabase;
+        yield* db.insert(customerAccounts).values({ id: accountId });
+        if (standing === "linked") {
+          const holderId = newAccountId();
+          yield* db.insert(customerAccounts).values({
+            id: holderId,
+            dotyposCustomerId: holderCustomerId,
+          });
+          yield* db.insert(authUser).values({
+            id: holderId,
+            email: holderEmail,
+            name: "Existing holder login",
+          });
+        }
+        const input = {
+          orderId: orderIdSchema.make(crypto.randomUUID()),
+          locale: "en-US" as const,
+          selection: {
+            tier: "reserved-desk" as const,
+            startDate: date(getCurrentWorkspaceDate().add({ days: 2 })),
+          },
+          holderEmail,
+          recipientName,
+        };
+        const begin = beginUnlimitedPassPurchase(input);
+        if (standing === "uncertain create") {
+          expect(yield* Effect.result(begin)).toEqual(
+            Result.fail(expect.objectContaining({ _tag: "DotyposUncertain" }))
+          );
+          expect(provider.reservations.size).toBe(0);
+        }
+        const purchase = yield* begin;
+        expect(purchase.id).toBe(input.orderId);
+        expect(purchase.holderAccountId).not.toBe(accountId);
+        expect(
+          yield* beginUnlimitedPassPurchase({
+            ...input,
+            recipientName: "Changed on retry",
+          })
+        ).toEqual(purchase);
+        const days = yield* readUnlimitedPassDays(purchase.id);
+        expect(days).toHaveLength(unlimitedPassDays);
+        expect(
+          days.every((day) => day.dotyposCustomerId === holderCustomerId)
+        ).toBe(true);
+        expect(provider.reservations.size).toBe(unlimitedPassDays);
+        expect(lookups).toBe(
+          { linked: 0, matched: 1, new: 1, "uncertain create": 2 }[standing]
+        );
+        const [holder] = yield* db
+          .select()
+          .from(customerAccounts)
+          .where(eq(customerAccounts.id, purchase.holderAccountId));
+        expect(holder?.dotyposCustomerId).toBe(
+          standing === "linked" ? holderCustomerId : null
+        );
+        const [login] = yield* db
+          .select({ name: authUser.name })
+          .from(authUser)
+          .where(eq(authUser.id, purchase.holderAccountId));
+        expect(login?.name).toBe(
+          standing === "linked" ? "Existing holder login" : ""
+        );
+        expect(JSON.stringify({ purchase, holder, days })).not.toContain(
+          recipientName
+        );
+        expect(creates).toEqual(
+          standing === "linked" || standing === "matched"
+            ? []
+            : [
+                expect.objectContaining({
+                  email: holderEmail,
+                  firstName: "Ája",
+                  lastName: "O’Connell-Svobodová",
+                }),
+              ]
+        );
+      }).pipe(Effect.provide(layer))
+    );
+  }
+);
+
+async function checkDelayedContinue(
+  retirement: "replacement" | "capacity refusal"
+) {
+  const start = getCurrentWorkspaceDate().add({ days: 2 });
+  const accountId = newAccountId();
+  const provider = makeUnlimitedDraftProvider();
+  const layer = unlimitedNewDraftLayer(
+    accountId,
+    testEmailAddress("unlimited-late-continue"),
+    provider.service
   );
   await Effect.runPromise(
     Effect.gen(function* () {

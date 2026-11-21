@@ -44,6 +44,14 @@ const monitorStart = plainDateStringSchema.make("2026-11-02");
 const lastStartDate = plainDateStringSchema.make("2026-11-24");
 const buyerEmail = testEmailAddress("unlimited-pass-buyer");
 const holderEmail = testEmailAddress("unlimited-pass-holder");
+const recipientName = "Ája O’Connell-Svobodová";
+const recipientNameLabel = m.unlimitedPassRecipientName({}, { locale });
+const enterRecipientName = (view: {
+  getByRole: (role: string, options: { name: string }) => Element;
+}) =>
+  fireEvent.change(view.getByRole("textbox", { name: recipientNameLabel }), {
+    target: { value: recipientName },
+  });
 const earlyStart = m.unlimitedPassEarlyStartConsent({}, { locale });
 const availability = {
   status: "ready",
@@ -194,6 +202,7 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
       name: m.entryPackCheckoutGift({}, { locale }),
     })
   );
+  enterRecipientName(view);
   fireEvent.change(
     view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
     {
@@ -241,6 +250,7 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
     ).value
   ).toBe("Fixture Company");
 
+  enterRecipientName(view);
   fireEvent.click(view.getByRole("button", { name: /continue/i }));
   await waitFor(() =>
     expect(view.getByText(earlyStart, { exact: false })).toBeDefined()
@@ -250,6 +260,7 @@ test("gift Details preserves the buyer and billing, and Pay renders one combined
       locale,
       buyerEmail,
       holderEmail,
+      recipientName,
       selection: {
         tier: "open-space",
         startDate: openSpaceStart,
@@ -330,6 +341,7 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
         name: m.entryPackCheckoutGift({}, { locale }),
       })
     );
+    enterRecipientName(view);
     fireEvent.change(
       view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
       {
@@ -360,6 +372,7 @@ test.each(["capacity_unavailable", "draft_voided"] as const)(
     expect(reopenedUrl.pathname).toBe("/en-US/passes/unlimited");
     fireEvent.click(view.getByRole("button", { name: /November 1st, 2026/i }));
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
+    enterRecipientName(view);
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(requests).toHaveLength(2));
     expect(requests[1]?.orderId).not.toBe(requests[0]?.orderId);
@@ -411,12 +424,16 @@ test("a reload during Continue retries the committed gift and a date change supe
       supersedeOrderIds?: readonly OrderId[];
       selection: { startDate: string };
       holderEmail?: string;
+      recipientName?: string;
     }) => {
       expect(checkoutUrl().searchParams.get("submittedOrder")).toBe(
         input.orderId
       );
       expect(checkoutUrl().search).not.toContain(
         encodeURIComponent(holderEmail)
+      );
+      expect(decodeURIComponent(checkoutUrl().search)).not.toContain(
+        recipientName
       );
       for (const id of input.supersedeOrderIds ?? []) openDrafts.delete(id);
       if (!openDrafts.has(input.orderId)) {
@@ -455,6 +472,7 @@ test("a reload during Continue retries the committed gift and a date change supe
     orderId: priorOrderId,
     holderEmail,
   });
+  enterRecipientName(original);
   fireEvent.click(original.getByRole("button", { name: /continue/i }));
   await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(1));
   const submittedId = orderIdSchema.make(
@@ -475,6 +493,12 @@ test("a reload during Continue retries the committed gift and a date change supe
   const submit = () =>
     fireEvent.click(reloaded.getByRole("button", { name: /continue/i }));
   expect(reloaded.getByDisplayValue(holderEmail)).toBeDefined();
+  expect(
+    reloaded.getByRole<HTMLInputElement>("textbox", {
+      name: recipientNameLabel,
+    }).value
+  ).toBe("");
+  enterRecipientName(reloaded);
   submit();
   await waitFor(() =>
     expect(
@@ -484,6 +508,7 @@ test("a reload during Continue retries the committed gift and a date change supe
   expect(beginCheckout.mock.calls[1]?.[0]).toMatchObject({
     orderId: submittedId,
     holderEmail,
+    recipientName,
     supersedeOrderIds: [priorOrderId],
   });
   expect(openDrafts).toEqual(new Set([submittedId]));
@@ -502,6 +527,7 @@ test("a reload during Continue retries the committed gift and a date change supe
     priorOrderId,
   ]);
   submit();
+  enterRecipientName(reloaded);
   submit();
   await waitFor(() => expect(beginCheckout).toHaveBeenCalledTimes(3));
   const replacement = beginCheckout.mock.calls[2]?.[0];
@@ -518,6 +544,52 @@ test("a reload during Continue retries the committed gift and a date change supe
     replacement?.orderId
   );
   expect(reloaded.queryByRole("button", { name: /pay/i })).toBeNull();
+});
+
+test("Unlimited gift requires a private name and clears it when returning to self-purchase", async () => {
+  const beginCheckout = mock(async () => ({ data: readyCheckout }));
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  const gift = view.getByRole("checkbox", {
+    name: m.entryPackCheckoutGift({}, { locale }),
+  });
+  expect(view.queryByRole("textbox", { name: recipientNameLabel })).toBeNull();
+  fireEvent.click(gift);
+  const name = view.getByRole<HTMLInputElement>("textbox", {
+    name: recipientNameLabel,
+  });
+  expect(name.required).toBe(true);
+  expect(name.hasAttribute("data-ph-mask")).toBe(true);
+  expect(name.hasAttribute("data-ph-no-capture")).toBe(true);
+  fireEvent.change(
+    view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
+    { target: { value: holderEmail } }
+  );
+  fireEvent.change(name, { target: { value: "   " } });
+  fireEvent.submit(name.form!);
+  expect(await view.findByText("Enter the recipient’s name.")).toBeDefined();
+  expect(beginCheckout).not.toHaveBeenCalled();
+
+  enterRecipientName(view);
+  fireEvent.click(gift);
+  fireEvent.click(gift);
+  expect(
+    view.getByRole<HTMLInputElement>("textbox", { name: recipientNameLabel })
+      .value
+  ).toBe("");
+  fireEvent.click(gift);
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  expect(await view.findByRole("button", { name: /pay/i })).toBeDefined();
+  expect(beginCheckout).toHaveBeenCalledWith(
+    expect.not.objectContaining({ recipientName })
+  );
 });
 
 test("holder edits to a reloaded self-purchase retain every uncertain predecessor", async () => {
@@ -553,6 +625,7 @@ test("holder edits to a reloaded self-purchase retain every uncertain predecesso
   const input = view.getByLabelText(
     m.entryPackCheckoutHolderEmail({}, { locale })
   );
+  enterRecipientName(view);
   const submit = view.getByRole("button", { name: /continue/i });
   fireEvent.change(input, {
     target: { value: testEmailAddress("unlimited-replacement-holder") },
@@ -632,6 +705,7 @@ test.each([0, unlimitedCheckoutPredecessorLimit])(
         name: m.entryPackCheckoutGift({}, { locale }),
       })
     );
+    enterRecipientName(view);
     fireEvent.change(
       view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
       { target: { value: holderEmail } }

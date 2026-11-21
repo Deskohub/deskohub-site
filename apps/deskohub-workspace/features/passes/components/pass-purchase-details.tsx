@@ -21,6 +21,7 @@ import type { EntryPackProduct } from "../pass-offer";
 import {
   type PassPurchaseBuyer,
   passPurchaseDetailsSchema,
+  unlimitedGiftRecipientNameMaxLength,
 } from "../pass-purchase-details";
 import { PassCheckoutContinue } from "./pass-checkout-continue";
 
@@ -55,7 +56,7 @@ export function PassPurchaseDetails({
   readonly product: EntryPackProduct | { readonly kind: "unlimited" };
   readonly summary: ReactNode;
 }) {
-  const schema = passPurchaseDetailsSchema(locale);
+  const schema = passPurchaseDetailsSchema(locale, product.kind);
   const form = useForm<typeof schema.Encoded, unknown, typeof schema.Type>({
     resolver: effectSchemaResolver(schema),
     defaultValues: initialValues ?? {
@@ -70,7 +71,7 @@ export function PassPurchaseDetails({
   useImperativeHandle(
     draftRef,
     () => () => {
-      const values = getValues();
+      const { recipientName: _recipientName, ...values } = getValues();
       return gift
         ? { ...values, holderEmail: values.holderEmail ?? "" }
         : values;
@@ -122,7 +123,11 @@ export function PassPurchaseDetails({
         )}
         {(buyer.kind === "linked" || buyer.kind === "profile-required") && (
           <Form {...form}>
-            <form className="space-y-7" onSubmit={form.handleSubmit(onSubmit)}>
+            <form
+              className="space-y-7"
+              method={product.kind === "unlimited" ? "post" : undefined}
+              onSubmit={form.handleSubmit(onSubmit)}
+            >
               <fieldset disabled={pending} className="space-y-3">
                 <legend className="font-semibold text-sm uppercase tracking-widest text-navy-blue/75">
                   {m.entryPackCheckoutBuyer({}, { locale })}
@@ -195,13 +200,44 @@ export function PassPurchaseDetails({
                     onChange={(event) => {
                       setGift(event.currentTarget.checked);
                       if (!event.currentTarget.checked)
-                        form.unregister("holderEmail");
+                        form.unregister(["holderEmail", "recipientName"]);
                     }}
                   />
                   {m.entryPackCheckoutGift({}, { locale })}
                 </label>
                 {gift && (
                   <div className="space-y-3 rounded-3xl border border-aquamarine-green/40 bg-aquamarine-green/10 p-4">
+                    {product.kind === "unlimited" && (
+                      <FormField
+                        control={form.control}
+                        name="recipientName"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              {m.unlimitedPassRecipientName({}, { locale })}{" "}
+                              <span aria-hidden="true">*</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                {...field}
+                                value={field.value ?? ""}
+                                type="text"
+                                autoComplete="off"
+                                placeholder={m.unlimitedPassRecipientNamePlaceholder(
+                                  {},
+                                  { locale }
+                                )}
+                                required
+                                maxLength={unlimitedGiftRecipientNameMaxLength}
+                                data-ph-mask
+                                data-ph-no-capture
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
                     <FormField
                       control={form.control}
                       name="holderEmail"

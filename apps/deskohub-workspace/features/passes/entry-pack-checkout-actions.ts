@@ -26,7 +26,6 @@ import { ReferralReleaseGateRequest } from "@/features/referrals/referral-releas
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
-import { reservationCustomerNameSchema } from "@/features/reservation/reservation-contact";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
@@ -60,6 +59,10 @@ import {
   repriceEntryPackCheckoutSchema,
 } from "./entry-pack-checkout";
 import { getEntryPackLastUsableDate } from "./pass-offer";
+import {
+  missingUnlimitedGiftRecipientName,
+  unlimitedGiftRecipientNameSchema,
+} from "./pass-purchase-details";
 import { passPurchaseQuoteCodec } from "./pass-purchase-quote";
 import {
   unlimitedPassRequiresEarlyStart,
@@ -300,12 +303,20 @@ const beginUnlimitedAction = defineWorkspaceAction(
             "product",
           ]),
           selection: unlimitedPassSelectionSchema,
-          recipientName: Schema.optionalKey(reservationCustomerNameSchema),
+          recipientName: Schema.optionalKey(
+            unlimitedGiftRecipientNameSchema(locale)
+          ),
           supersedeOrderId: Schema.optionalKey(orderIdSchema),
           supersedeOrderIds: Schema.optionalKey(
             unlimitedCheckoutPredecessorsSchema
           ),
-        })
+        }).check(
+          Schema.makeFilter((input) =>
+            input.holderEmail?.toLowerCase() === input.buyerEmail.toLowerCase()
+              ? undefined
+              : missingUnlimitedGiftRecipientName(input, locale)
+          )
+        )
       ),
     deadline: Duration.seconds(180),
     logInput: false,
