@@ -4,6 +4,8 @@ import {
   Text as NativeText,
   // biome-ignore lint/style/noRestrictedImports: the app's TextInput wraps it
   TextInput as NativeTextInput,
+  Platform,
+  type TextStyle,
 } from "react-native";
 import type { AppLocale } from "../i18n/app-locale";
 import { useProvidedAppLocale } from "../i18n/locale-context";
@@ -44,7 +46,17 @@ type TextProps = ComponentProps<typeof NativeText> & {
   readonly tone?: TextTone;
   /** Tabular figures, so digits line up and don't shift as they change. */
   readonly numeric?: boolean;
+  /**
+   * Even out the lengths of wrapped lines, as headings, short captions and
+   * card text do: Android's balanced line breaking, the web's
+   * `text-wrap: balance`. iOS has no equivalent and wraps as usual.
+   */
+  readonly balanced?: boolean;
 };
+
+// React Native's style types don't know `textWrap`; react-native-web passes
+// it through to CSS.
+const webBalanced = { textWrap: "balance" } as TextStyle;
 
 const mutedByDefault: ReadonlySet<TypeVariant> = new Set(["bodySmall", "hint"]);
 
@@ -60,6 +72,7 @@ export function Text({
   variant,
   tone,
   numeric = false,
+  balanced = false,
   ...props
 }: TextProps) {
   const appLocale = useProvidedAppLocale();
@@ -71,17 +84,20 @@ export function Text({
     },
   ];
   const toned = !variant && tone && { color: toneColor[tone] };
+  const balancedOnWeb = balanced && Platform.OS === "web";
   const styled =
-    scaled || toned || numeric
+    scaled || toned || numeric || balancedOnWeb
       ? [
           scaled,
           toned,
           numeric && { fontVariant: ["tabular-nums" as const] },
+          balancedOnWeb && webBalanced,
           style,
         ]
       : style;
   return (
     <NativeText
+      {...(balanced && { textBreakStrategy: "balanced" as const })}
       {...props}
       style={localeTextStyle(styled, locale ?? appLocale)}
     />

@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { FlowGallerySection } from "./flow-section";
+import { PassOffersGallerySection } from "./pass-offers-section";
 import { PriceGallerySection } from "./price-section";
 
 /**
@@ -17,6 +18,11 @@ export const bookingGallerySections = [
     key: "price",
     title: "Booking bar and price breakdown",
     Section: PriceGallerySection,
+  },
+  {
+    key: "pass-offers",
+    title: "Entry pack and Unlimited pass offers",
+    Section: PassOffersGallerySection,
   },
 ] as const satisfies ReadonlyArray<{
   readonly key: string;
