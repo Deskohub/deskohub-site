@@ -19,6 +19,8 @@ type SegmentedControlProps<Value extends string> = {
   /** `sm` sits inline in dense rows, such as a filter sentence or a panel header. */
   readonly size?: "default" | "sm";
   readonly value: Value;
+  /** Breaks into rows where the options don't fit one, such as a list of languages. */
+  readonly wrap?: boolean;
 };
 
 /**
@@ -36,12 +38,14 @@ function SegmentedControl<Value extends string>({
   options,
   size = "default",
   value,
+  wrap = false,
 }: SegmentedControlProps<Value>) {
   return (
     <fieldset
       className={cn(
         "inline-flex bg-navy-blue/5 disabled:opacity-50",
         { default: "rounded-lg p-1", sm: "rounded-md p-0.5" }[size],
+        wrap && "flex-wrap",
         className
       )}
       disabled={disabled}

@@ -144,6 +144,19 @@ describe("AutomationPreviewPage activation gate", () => {
     });
   });
 
+  test("labels an expired pass forecast as past, with Activate disabled", async () => {
+    const asOf = "2020-10-05T08:00:00.000Z";
+    loadAutomationDryRun.mockImplementation(async () =>
+      automationDryRunFixture({ kind: "schedule", asOf, nextFires: [asOf] })
+    );
+    const view = await renderPage(automationDetailFixture());
+
+    expect(
+      view.getByText(m.emailAutomationActivationPastFireTitle({}, { locale }))
+    ).not.toBeNull();
+    expect(controls(view).activate?.hasAttribute("disabled")).toBe(true);
+  });
+
   test("follows the port's readiness rather than judging the flow itself", async () => {
     const withoutFlow = await renderPage(
       automationDetailFixture({ flow: null, trigger: null, activation: ready })

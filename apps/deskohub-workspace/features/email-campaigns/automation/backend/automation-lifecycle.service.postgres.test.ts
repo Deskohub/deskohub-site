@@ -201,8 +201,8 @@ describe.skipIf(!testDatabase)(
         await run(activateFirst);
         await run(await previewPassReminder(unlimited, "UnlimitedEnding"));
         expect(await failure(activateReplacement)).toMatchObject({
-          _tag: "AutomationFlowInvalid",
-          location: { _tag: "Trigger" },
+          _tag: "AutomationTriggerInUse",
+          campaignId: replacement,
         });
         expect((await automationRow(replacement)).status).toBe("draft");
         expect(await versionRows(replacement)).toEqual([]);
@@ -217,7 +217,10 @@ describe.skipIf(!testDatabase)(
         const resumeFirst = lifecycle((service) => service.resume(first)).pipe(
           permitPassReminders
         );
-        expect((await failure(resumeFirst))._tag).toBe("AutomationFlowInvalid");
+        expect(await failure(resumeFirst)).toMatchObject({
+          _tag: "AutomationTriggerInUse",
+          campaignId: first,
+        });
         expect((await automationRow(first)).status).toBe("paused");
         await run(lifecycle((service) => service.archive(replacement)));
         await run(resumeFirst);
@@ -228,7 +231,7 @@ describe.skipIf(!testDatabase)(
         );
         const beforeSwitch = await automationRow(first);
         expect((await failure(switchToUnlimited))._tag).toBe(
-          "AutomationFlowInvalid"
+          "AutomationTriggerInUse"
         );
         expect(await automationRow(first)).toEqual(beforeSwitch);
         expect(await versionRows(first)).toHaveLength(1);
@@ -236,7 +239,9 @@ describe.skipIf(!testDatabase)(
         await run(lifecycle((service) => service.pause(first)));
         await run(switchToUnlimited);
         expect(await versionRows(first)).toHaveLength(2);
-        expect((await failure(resumeFirst))._tag).toBe("AutomationFlowInvalid");
+        expect((await failure(resumeFirst))._tag).toBe(
+          "AutomationTriggerInUse"
+        );
         expect((await automationRow(first)).status).toBe("paused");
         await run(lifecycle((service) => service.archive(unlimited)));
       });
@@ -262,7 +267,9 @@ describe.skipIf(!testDatabase)(
         expect(outcomes).toContainEqual(
           expect.objectContaining({
             _tag: "Failure",
-            failure: expect.objectContaining({ _tag: "AutomationFlowInvalid" }),
+            failure: expect.objectContaining({
+              _tag: "AutomationTriggerInUse",
+            }),
           })
         );
         const campaigns = await Promise.all([

@@ -22,6 +22,7 @@ import {
   AutomationRunNotFound,
   AutomationScheduleMinutesNotAllowed,
   AutomationStatusConflict,
+  AutomationTriggerInUse,
   type AutomationVersionNotFound,
 } from "../automation/errors";
 import {
@@ -70,6 +71,7 @@ export type CampaignOperationCause =
   | AutomationRunNotFound
   | AutomationScheduleMinutesNotAllowed
   | AutomationStatusConflict
+  | AutomationTriggerInUse
   | AutomationVersionNotFound
   | CalendarExpressionNeverOccurs
   | AutomationConditionAudienceMissing
@@ -416,6 +418,16 @@ const toAutomationLifecycleOperationError = (
             operation === "pause"
               ? `Only an active automation can be paused, and this one is ${status}.`
               : `Only a paused automation can be resumed, and this one is ${status}.`,
+          cause,
+        })
+    ),
+    Match.tag(
+      "AutomationTriggerInUse",
+      () =>
+        new OperationConflict({
+          code: AutomationTriggerInUse.code,
+          message:
+            "Another active campaign already uses this pass reminder trigger. Pause that campaign first, then try again.",
           cause,
         })
     ),

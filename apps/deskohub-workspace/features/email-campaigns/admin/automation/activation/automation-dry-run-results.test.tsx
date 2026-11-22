@@ -31,16 +31,19 @@ const flow = automationFlowFixture();
 const named = testEmailAddress("dry-run-named");
 const unnamed = testEmailAddress("dry-run-unnamed");
 const asOf = "2026-10-05T08:00:00.000Z";
+const beforeFire = Temporal.Instant.from(asOf).subtract({ milliseconds: 1 });
 
 const renderResults = (
   dryRun: AutomationDryRunWithLifecycle,
   {
     content = {},
     cursor,
+    now = beforeFire,
     trigger = flow.trigger,
   }: {
     readonly content?: AdministrationCampaignContent;
     readonly cursor?: string;
+    readonly now?: Temporal.Instant;
     readonly trigger?: typeof flow.trigger;
   } = {}
 ) =>
@@ -52,6 +55,7 @@ const renderResults = (
         dryRun={dryRun}
         flow={{ ...flow, trigger }}
         locale={locale}
+        now={now}
       />
     </RouteLocaleProvider>
   );
@@ -137,6 +141,65 @@ describe("AutomationDryRunResults", () => {
         m.emailAutomationActivationPassForecastCounts({}, { locale })
       )
     ).toBeNull();
+  });
+
+  const forecastLabels = {
+    next: [
+      m.emailAutomationActivationNextFiresTitle({}, { locale }),
+      m.emailAutomationActivationEntrantsTitle(
+        { fire: date(asOf) },
+        { locale }
+      ),
+      m.emailAutomationActivationNoEntrants({}, { locale }),
+    ],
+    past: [
+      m.emailAutomationActivationPastFireTitle({}, { locale }),
+      m.emailAutomationActivationPastEntrantsTitle(
+        { fire: date(asOf) },
+        { locale }
+      ),
+      m.emailAutomationActivationNoPastEntrants({}, { locale }),
+    ],
+  };
+  const passForecast = { kind: "schedule", asOf, nextFires: [asOf] } as const;
+  const afterFire = Temporal.Instant.from(asOf).add({ hours: 1 });
+
+  test.each([
+    ["before its fire", passForecast, beforeFire, "next"],
+    // Activation takes the following day's fire from this instant on.
+    ["at its fire", passForecast, Temporal.Instant.from(asOf), "past"],
+    ["after its fire", passForecast, afterFire, "past"],
+    [
+      "of an ordinary schedule after its fire",
+      {
+        ...passForecast,
+        frequency: { maxFiresPerHour: 1, firesMoreThanHourly: false },
+      },
+      afterFire,
+      "next",
+    ],
+    [
+      "of a previous draft after its fire",
+      { ...passForecast, nextFires: [] },
+      afterFire,
+      "next",
+    ],
+  ] as const)("labels a forecast %s", (_, overrides, now, shown) => {
+    const view = renderResults(automationDryRunFixture(overrides), {
+      now,
+      trigger: { _tag: "EntryPackExpiring" },
+    });
+    const other = shown === "next" ? "past" : "next";
+
+    for (const text of forecastLabels[shown]) {
+      expect(view.getByText(text)).not.toBeNull();
+    }
+    for (const text of forecastLabels[other]) {
+      expect(view.queryByText(text)).toBeNull();
+    }
+    if (shown === "past") {
+      expect(view.getByRole("listitem").textContent).toBe(date(asOf));
+    }
   });
 
   test("dates a replay's window and says it read current profiles", () => {

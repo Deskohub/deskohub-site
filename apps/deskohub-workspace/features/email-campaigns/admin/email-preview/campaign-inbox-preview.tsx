@@ -47,42 +47,42 @@ export function CampaignInboxPreview({
       )}
       className="flex h-full flex-col overflow-hidden rounded-xl border border-navy-blue/10 bg-white"
     >
-      <div className="flex items-center justify-between gap-3 border-navy-blue/10 border-b px-4 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-navy-blue/10 border-b px-4 py-2.5">
         <h2 className="font-semibold text-navy-blue/65 text-xs uppercase tracking-[0.1em]">
           {m.emailCampaignsEmailPreviewHeading({}, { locale: routeLocale })}
         </h2>
-        <div className="flex items-center gap-2">
-          <span
-            className="inline-flex items-center gap-1 text-navy-blue/55 text-xs"
-            role="status"
-          >
-            {updating && (
-              <>
-                <Loader2 aria-hidden className="size-3.5 animate-spin" />
-                {m.emailCampaignsEmailPreviewUpdating(
-                  {},
-                  { locale: routeLocale }
-                )}
-              </>
-            )}
-          </span>
-          {locales.length > 1 && (
-            <SegmentedControl
-              label={m.emailCampaignsEmailPreviewLanguage(
+        {/* Takes only leftover space, so updating never rewraps the languages. */}
+        <span
+          className="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-hidden whitespace-nowrap text-navy-blue/55 text-xs"
+          role="status"
+        >
+          {updating && (
+            <>
+              <Loader2 aria-hidden className="size-3.5 animate-spin" />
+              {m.emailCampaignsEmailPreviewUpdating(
                 {},
                 { locale: routeLocale }
               )}
-              name={localeName}
-              onValueChange={onLocaleChange}
-              options={locales.map((option) => ({
-                label: campaignLocaleName(option),
-                value: option,
-              }))}
-              size="sm"
-              value={locale}
-            />
+            </>
           )}
-        </div>
+        </span>
+        {locales.length > 1 && (
+          <SegmentedControl
+            label={m.emailCampaignsEmailPreviewLanguage(
+              {},
+              { locale: routeLocale }
+            )}
+            name={localeName}
+            onValueChange={onLocaleChange}
+            options={locales.map((option) => ({
+              label: campaignLocaleName(option),
+              value: option,
+            }))}
+            size="sm"
+            value={locale}
+            wrap
+          />
+        )}
       </div>
       <div className="flex items-start gap-3 border-navy-blue/10 border-b bg-navy-blue/[0.02] px-4 py-3">
         <div

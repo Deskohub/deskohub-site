@@ -86,22 +86,26 @@ const outcomeCopy = {
 /** Why a page of the dry run has no rows: past the end, or none at all. */
 const noRowsLabel = ({
   cursor,
+  pastForecast,
   replay,
   locale,
 }: {
   readonly cursor: string | undefined;
+  readonly pastForecast: boolean;
   readonly replay: boolean;
   readonly locale: Locale;
 }) => {
   if (cursor) return m.emailAutomationActivationNoMoreRows({}, { locale });
-  return replay
-    ? m.emailAutomationActivationNoReplayRows({}, { locale })
+  if (replay) return m.emailAutomationActivationNoReplayRows({}, { locale });
+  return pastForecast
+    ? m.emailAutomationActivationNoPastEntrants({}, { locale })
     : m.emailAutomationActivationNoEntrants({}, { locale });
 };
 
 /**
  * What a dry run found: counts by outcome, the replayed events or the next
  * fire's entrants with their flags, and the rendered email per locale.
+ * A pass forecast whose fire passed by `now` reads as a past forecast.
  * Everything is formatted here on the server, in Prague time.
  */
 export function AutomationDryRunResults({
@@ -110,6 +114,7 @@ export function AutomationDryRunResults({
   dryRun,
   flow,
   locale,
+  now,
 }: {
   readonly content: AdministrationCampaignContent;
   readonly cursor: string | undefined;
@@ -117,16 +122,32 @@ export function AutomationDryRunResults({
   /** The working copy the dry run evaluated, which names its steps. */
   readonly flow: AutomationFlow | null;
   readonly locale: Locale;
+  readonly now: Temporal.Instant;
 }) {
   const replay = dryRun.kind === "replay";
+  // A matching pass draft supplies its forecast date without a schedule frequency.
+  const passForecast =
+    !replay &&
+    dryRun.frequency === null &&
+    dryRun.nextFires.length === 1 &&
+    dryRun.nextFires[0] === dryRun.asOf;
+  const pastForecast =
+    passForecast && Temporal.Instant.compare(dryRun.asOf, now) <= 0;
   return (
     <div className="space-y-6">
-      <DryRunSummary dryRun={dryRun} locale={locale} replay={replay} />
+      <DryRunSummary
+        dryRun={dryRun}
+        locale={locale}
+        passForecast={passForecast}
+        pastForecast={pastForecast}
+        replay={replay}
+      />
       <DryRunRowsSection
         cursor={cursor}
         dryRun={dryRun}
         flow={flow}
         locale={locale}
+        pastForecast={pastForecast}
         replay={replay}
       />
       <DryRunEmails
@@ -143,18 +164,16 @@ export function AutomationDryRunResults({
 function DryRunSummary({
   dryRun,
   locale,
+  passForecast,
+  pastForecast,
   replay,
 }: {
   readonly dryRun: AutomationDryRunWithLifecycle;
   readonly locale: Locale;
+  readonly passForecast: boolean;
+  readonly pastForecast: boolean;
   readonly replay: boolean;
 }) {
-  // A matching pass draft supplies its forecast date without a schedule frequency.
-  const passForecast =
-    !replay &&
-    dryRun.frequency === null &&
-    dryRun.nextFires.length === 1 &&
-    dryRun.nextFires[0] === dryRun.asOf;
   return (
     <AdministrationDetailSection
       title={m.emailAutomationActivationResultsTitle({}, { locale })}
@@ -178,7 +197,11 @@ function DryRunSummary({
         {replay ? (
           <ReplayScope dryRun={dryRun} locale={locale} />
         ) : (
-          <ScheduleFires dryRun={dryRun} locale={locale} />
+          <ScheduleFires
+            dryRun={dryRun}
+            locale={locale}
+            pastForecast={pastForecast}
+          />
         )}
         {dryRun.truncated && dryRun.eventsTotal !== null && (
           <AdministrationAlert status="warning">
@@ -220,9 +243,11 @@ function ReplayScope({
 function ScheduleFires({
   dryRun,
   locale,
+  pastForecast,
 }: {
   readonly dryRun: AutomationDryRunWithLifecycle;
   readonly locale: Locale;
+  readonly pastForecast: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -234,7 +259,9 @@ function ScheduleFires({
       )}
       <div>
         <h3 className="font-semibold text-sm">
-          {m.emailAutomationActivationNextFiresTitle({}, { locale })}
+          {pastForecast
+            ? m.emailAutomationActivationPastFireTitle({}, { locale })
+            : m.emailAutomationActivationNextFiresTitle({}, { locale })}
         </h3>
         <ol className="mt-2 flex flex-wrap gap-2">
           {dryRun.nextFires.map((fire, index) => (
@@ -259,20 +286,25 @@ function DryRunRowsSection({
   dryRun,
   flow,
   locale,
+  pastForecast,
   replay,
 }: {
   readonly cursor: string | undefined;
   readonly dryRun: AutomationDryRunWithLifecycle;
   readonly flow: AutomationFlow | null;
   readonly locale: Locale;
+  readonly pastForecast: boolean;
   readonly replay: boolean;
 }) {
+  const entrantsTitle = pastForecast
+    ? m.emailAutomationActivationPastEntrantsTitle
+    : m.emailAutomationActivationEntrantsTitle;
   return (
     <AdministrationDetailSection
       title={
         replay
           ? m.emailAutomationActivationReplayRowsTitle({}, { locale })
-          : m.emailAutomationActivationEntrantsTitle(
+          : entrantsTitle(
               {
                 fire: formatAdministrationDateTime(dryRun.asOf, locale),
               },
@@ -282,7 +314,7 @@ function DryRunRowsSection({
     >
       {dryRun.rows.length === 0 ? (
         <p className="text-navy-blue/65 text-sm">
-          {noRowsLabel({ cursor, replay, locale })}
+          {noRowsLabel({ cursor, pastForecast, replay, locale })}
         </p>
       ) : (
         <DryRunRows

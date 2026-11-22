@@ -122,6 +122,19 @@ export class AutomationStatusConflict extends Data.TaggedError(
   static readonly code = "automation-status-conflict";
 }
 
+/**
+ * Another active campaign holds the pass reminder trigger this one would
+ * publish or resume. Each trigger has one active campaign at a time.
+ */
+export class AutomationTriggerInUse extends Data.TaggedError(
+  "AutomationTriggerInUse"
+)<{
+  readonly campaignId: CampaignId;
+}> {
+  /** Stable across transports, so clients can tell this conflict apart. */
+  static readonly code = "automation-trigger-in-use";
+}
+
 /** The automation has no published version with this number. */
 export class AutomationVersionNotFound extends Data.TaggedError(
   "AutomationVersionNotFound"

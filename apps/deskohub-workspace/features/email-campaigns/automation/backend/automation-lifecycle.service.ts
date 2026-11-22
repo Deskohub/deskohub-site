@@ -74,6 +74,7 @@ import {
   AutomationPreviewRequired,
   type AutomationScheduleMinutesNotAllowed,
   AutomationStatusConflict,
+  AutomationTriggerInUse,
   AutomationVersionNotFound,
 } from "../errors";
 import { lockAutomationForLifecycle } from "./automation-lifecycle-lock";
@@ -105,6 +106,7 @@ type AutomationActivationError =
   | AutomationArchived
   | AutomationPreviewRequired
   | AutomationDraftChanged
+  | AutomationTriggerInUse
   | CampaignAudienceArchived
   | AudienceFilterContextInvalid
   | CampaignFallbackContentMissing;
@@ -357,7 +359,7 @@ const activateIn = (input: {
         preview,
       }): Effect.Effect<
         AutomationVersionId,
-        AutomationPreviewRequired | AutomationFlowInvalid | DatabaseQueryError,
+        AutomationPreviewRequired | AutomationTriggerInUse | DatabaseQueryError,
         WorkspaceTransaction
       > => {
         if (
@@ -382,7 +384,7 @@ const activateIn = (input: {
             ({ at }) => previewIsCurrent(flow, preview.asOf, at),
             () => new AutomationPreviewRequired(input)
           ),
-          Effect.flatMap(requirePassReminderOwnership),
+          Effect.flatMap(requirePassReminderOwnership(input.campaignId)),
           Effect.flatMap((activatedAt) =>
             publishVersion({
               copy,
@@ -466,19 +468,12 @@ const passReminderOwnership = Effect.fn(
   };
 });
 
-const requirePassReminderOwnership = (ownership: {
-  readonly at: Temporal.Instant;
-  readonly available: boolean;
-}) =>
-  ownership.available
-    ? Effect.succeed(ownership.at)
-    : Effect.fail(
-        new AutomationFlowInvalid({
-          location: { _tag: "Trigger" },
-          message:
-            "Another active campaign already uses this pass reminder trigger.",
-        })
-      );
+const requirePassReminderOwnership =
+  (campaignId: CampaignId) =>
+  (ownership: { readonly at: Temporal.Instant; readonly available: boolean }) =>
+    ownership.available
+      ? Effect.succeed(ownership.at)
+      : Effect.fail(new AutomationTriggerInUse({ campaignId }));
 
 /** The named dry run if it's a completed one for this campaign. */
 const completedPreview = (input: {
@@ -787,7 +782,8 @@ type TransitionError =
   | DatabaseQueryError
   | AutomationArchived
   | AutomationFlowInvalid
-  | AutomationStatusConflict;
+  | AutomationStatusConflict
+  | AutomationTriggerInUse;
 
 const ensureNotArchived = (copy: AutomationWorkingCopy) =>
   copy.campaign.status === "archived"
@@ -886,7 +882,7 @@ const resumeIn = ({
                     Effect.andThen(
                       passReminderOwnership(campaignId, active.trigger, now)
                     ),
-                    Effect.flatMap(requirePassReminderOwnership)
+                    Effect.flatMap(requirePassReminderOwnership(campaignId))
                   );
             }),
             Effect.flatMap(({ versions, resumedAt }) =>

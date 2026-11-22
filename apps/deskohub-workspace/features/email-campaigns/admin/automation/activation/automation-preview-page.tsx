@@ -51,6 +51,7 @@ export async function AutomationPreviewPage({
           dryRun={dryRun}
           flow={automation.flow}
           locale={locale}
+          now={Temporal.Now.instant()}
         />
       )}
     </div>

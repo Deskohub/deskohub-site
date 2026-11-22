@@ -107,6 +107,10 @@ describe("automation preview actions", () => {
 
     test.each([
       ["flow-invalid", m.emailAutomationActivationFailureFlowInvalid],
+      [
+        "automation-trigger-in-use",
+        m.emailAutomationActivationFailureTriggerInUse,
+      ],
       ["audience-archived", m.emailAutomationActivationFailureAudienceArchived],
       [
         "automation-preview-required",

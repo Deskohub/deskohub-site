@@ -168,6 +168,22 @@ describe("AutomationLifecycleActions", () => {
     expect(workspaceRouterRefresh).not.toHaveBeenCalled();
   });
 
+  test("tells a refused resume to free the trigger first", () => {
+    const view = renderActions(published({ status: "paused" }));
+
+    fireEvent.click(view.getByRole("button", { name: label.resume }));
+    operations.respond("resumeAutomation", {
+      _tag: "Failure",
+      code: "automation-trigger-in-use",
+      message: "Port message",
+    });
+
+    expect(view.getByRole("alert").textContent).toBe(
+      m.emailAutomationActivationFailureTriggerInUse({}, { locale })
+    );
+    expect(workspaceRouterRefresh).not.toHaveBeenCalled();
+  });
+
   test.each([
     {
       status: "draft",
