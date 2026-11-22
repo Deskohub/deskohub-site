@@ -9,6 +9,11 @@ import {
   isCampaignImageAlignment,
   isCampaignImageWidth,
 } from "./campaign-image";
+import {
+  campaignPassOfferText,
+  isCampaignPassOfferProduct,
+  isCampaignPassOfferSize,
+} from "./campaign-pass-offer";
 
 type IssuePath = ReadonlyArray<PropertyKey>;
 
@@ -29,6 +34,13 @@ export type CampaignBodyIssue = Data.TaggedEnum<{
   /** Markdown turns carriage returns into line breaks, losing them on export. */
   ButtonLabelLineBreaks: { readonly path: IssuePath };
   ButtonHrefInvalid: { readonly path: IssuePath };
+  /** A pass offer names no product a card can show. */
+  PassOfferProductInvalid: { readonly path: IssuePath };
+  /** The size isn't an Entry pack size, or the card isn't an Entry pack. */
+  PassOfferSizeInvalid: { readonly path: IssuePath };
+  /** A headline or detail isn't one short line of text. */
+  PassOfferTextInvalid: { readonly path: IssuePath };
+  PassOfferDetailWithoutHeadline: { readonly path: IssuePath };
 }>;
 
 export const CampaignBodyIssue = Data.taggedEnum<CampaignBodyIssue>();
@@ -54,6 +66,14 @@ export const englishCampaignBodyIssueMessage = (
     ButtonLabelLineBreaks: () =>
       "A button label must break lines with line feeds only.",
     ButtonHrefInvalid: () => "A button needs an https: or mailto: URL.",
+    PassOfferProductInvalid: () =>
+      'A pass offer must be "entry-pack" or "unlimited".',
+    PassOfferSizeInvalid: () =>
+      "Only an Entry pack offer takes a size, and it must be 5 or 10.",
+    PassOfferTextInvalid: () =>
+      `A pass offer's headline and detail must each be one line of at most ${campaignPassOfferTextMaxLength} characters.`,
+    PassOfferDetailWithoutHeadline: () =>
+      "A pass offer's detail needs a headline.",
   });
 
 const campaignLinkProtocols: ReadonlySet<string> = new Set([
@@ -186,6 +206,64 @@ const ctaButtonIssues = (
       ]),
 ];
 
+/** The longest headline or detail line a pass offer card takes. */
+export const campaignPassOfferTextMaxLength = 80;
+
+const isPassOfferTextValid = (
+  value: CampaignBodyAttributeValue | undefined
+): boolean =>
+  value === undefined ||
+  value === null ||
+  (Predicate.isString(value) &&
+    value.length <= campaignPassOfferTextMaxLength &&
+    !/[\r\n]/.test(value));
+
+/**
+ * What's wrong with a pass offer's attributes, if anything: a known product,
+ * a size only on an Entry pack, and optional one-line texts, where a detail
+ * needs a headline.
+ */
+export const campaignPassOfferIssues = (
+  attrs: Readonly<Record<string, CampaignBodyAttributeValue>> | undefined,
+  path: IssuePath
+): ReadonlyArray<CampaignBodyIssue> => {
+  const attributePath = (name: string) => [...path, "attrs", name];
+  const size = attrs?.size;
+  const hasSize = size !== undefined && size !== null;
+  const texts = (["headline", "detail"] as const).filter(
+    (name) => !isPassOfferTextValid(attrs?.[name])
+  );
+  return [
+    ...(isCampaignPassOfferProduct(attrs?.product)
+      ? []
+      : [
+          CampaignBodyIssue.PassOfferProductInvalid({
+            path: attributePath("product"),
+          }),
+        ]),
+    ...(hasSize &&
+    (attrs?.product !== "entry-pack" || !isCampaignPassOfferSize(size))
+      ? [
+          CampaignBodyIssue.PassOfferSizeInvalid({
+            path: attributePath("size"),
+          }),
+        ]
+      : []),
+    ...texts.map((name) =>
+      CampaignBodyIssue.PassOfferTextInvalid({ path: attributePath(name) })
+    ),
+    ...(texts.length === 0 &&
+    campaignPassOfferText(attrs?.detail) !== undefined &&
+    campaignPassOfferText(attrs?.headline) === undefined
+      ? [
+          CampaignBodyIssue.PassOfferDetailWithoutHeadline({
+            path: attributePath("detail"),
+          }),
+        ]
+      : []),
+  ];
+};
+
 const nodeIssues = (
   node: CampaignBodyNode,
   path: IssuePath,
@@ -194,6 +272,9 @@ const nodeIssues = (
   ...linkMarkIssues(node, path),
   ...(node.type === "image" ? imageIssues(node, path, imageCloudName) : []),
   ...(node.type === "ctaButton" ? ctaButtonIssues(node, path) : []),
+  ...(node.type === "passOffer"
+    ? campaignPassOfferIssues(node.attrs, path)
+    : []),
   ...(node.content ?? []).flatMap((child, index) =>
     nodeIssues(child, [...path, "content", index], imageCloudName)
   ),
@@ -240,6 +321,7 @@ export const campaignBodyIssues = (
 const contentNodeTypes: ReadonlySet<string> = new Set([
   "image",
   "ctaButton",
+  "passOffer",
   "horizontalRule",
 ]);
 
@@ -249,7 +331,7 @@ export const emptyCampaignBody: CampaignBodyNode = {
   content: [{ type: "paragraph" }],
 };
 
-/** The body has no text, image, button or rule: nothing to send. */
+/** The body has no text, image, button, pass offer or rule: nothing to send. */
 export const isCampaignBodyEmpty = (node: CampaignBodyNode): boolean =>
   !contentNodeTypes.has(node.type) &&
   (node.text ?? "").trim().length === 0 &&

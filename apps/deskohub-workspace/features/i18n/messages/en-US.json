@@ -1671,7 +1671,28 @@
   "faqQuestionRules": "What are the house rules?",
   "faqAnswerRules": "The <operatingRules>operating rules</operatingRules> set out the rules for using the space.",
   "emailContentOfferCodeLabel": "Your discount code",
-  "emailContentOfferValidUntil": "The code is valid until {date}.",
+  "emailContentOfferValidUntil": "Valid until {date}",
+  "emailContentOfferUses": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} use",
+        "countPlural=other": "{count} uses"
+      }
+    }
+  ],
+  "emailPassOfferEntryPackBenefit": "Pay less per visit",
+  "emailPassOfferUnlimitedBenefit": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Unlimited access for {count} day",
+        "countPlural=other": "Unlimited access for {count} days"
+      }
+    }
+  ],
   "emailContentYes": "Yes",
   "emailContentNo": "No",
   "androidPageMetadataTitle": "Deskohub app for Android",

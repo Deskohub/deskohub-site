@@ -13,6 +13,7 @@ import {
   Section,
   Text,
 } from "react-email";
+import { PassOfferEmailCard } from "@/emails/_components/pass-offer-email-card";
 import type {
   CampaignBodyAttributeValue,
   CampaignBodyNode,
@@ -28,6 +29,12 @@ import {
   isCampaignImageAlignment,
   isCampaignImageWidth,
 } from "@/features/email-campaigns/body/campaign-image";
+import {
+  campaignPassOfferText,
+  isCampaignPassOfferProduct,
+  isCampaignPassOfferSize,
+} from "@/features/email-campaigns/body/campaign-pass-offer";
+import type { Locale } from "@/features/i18n";
 
 const headingClassNames = {
   1: "m-0 mt-6 text-[26px] font-bold leading-[34px] text-navy sm:text-[30px] sm:leading-[38px]",
@@ -140,11 +147,13 @@ export const EmailCtaButton = ({
 
 /**
  * Renders email body rich text, a TipTap document of the campaign body
- * content set, as React Email components. Legacy campaign bodies and reusable
- * email text components both render through this one mapping.
+ * content set, as React Email components, in the email's `locale`. Legacy
+ * campaign bodies and reusable email text components both render through this
+ * one mapping.
  */
 export const renderEmailRichText = (
-  doc: JSONContent | CampaignBodyNode
+  doc: JSONContent | CampaignBodyNode,
+  { locale }: { readonly locale: Locale }
 ): ReactNode =>
   renderToReactElement({
     content: campaignBodySchema.nodeFromJSON(doc),
@@ -195,6 +204,22 @@ export const renderEmailRichText = (
         ctaButton: ({ node }) => (
           <EmailCtaButton href={node.attrs.href} label={node.attrs.label} />
         ),
+        // Validation keeps an unknown product out of saved bodies; a preview
+        // may still hold one, and shows nothing for it.
+        passOffer: ({ node }) =>
+          isCampaignPassOfferProduct(node.attrs.product) ? (
+            <PassOfferEmailCard
+              detail={campaignPassOfferText(node.attrs.detail)}
+              headline={campaignPassOfferText(node.attrs.headline)}
+              locale={locale}
+              product={node.attrs.product}
+              size={
+                isCampaignPassOfferSize(node.attrs.size)
+                  ? node.attrs.size
+                  : undefined
+              }
+            />
+          ) : null,
       },
       markMapping: {
         bold: ({ children }) => <strong>{children}</strong>,

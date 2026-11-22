@@ -1701,7 +1701,32 @@
   "faqQuestionRules": "Які у вас правила?",
   "faqAnswerRules": "Правила перебування в просторі описують <operatingRules>Правила внутрішнього розпорядку</operatingRules>.",
   "emailContentOfferCodeLabel": "Ваш код знижки",
-  "emailContentOfferValidUntil": "Код діє до {date}.",
+  "emailContentOfferValidUntil": "Діє до {date}",
+  "emailContentOfferUses": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} використання",
+        "countPlural=few": "{count} використання",
+        "countPlural=many": "{count} використань",
+        "countPlural=other": "{count} використання"
+      }
+    }
+  ],
+  "emailPassOfferEntryPackBenefit": "Платіть менше за кожне відвідування",
+  "emailPassOfferUnlimitedBenefit": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Безлімітний доступ на {count} день",
+        "countPlural=few": "Безлімітний доступ на {count} дні",
+        "countPlural=many": "Безлімітний доступ на {count} днів",
+        "countPlural=other": "Безлімітний доступ на {count} дня"
+      }
+    }
+  ],
   "emailContentYes": "Так",
   "emailContentNo": "Ні",
   "androidPageMetadataTitle": "Застосунок Deskohub для Android",

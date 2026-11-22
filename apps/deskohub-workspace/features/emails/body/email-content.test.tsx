@@ -146,14 +146,20 @@ describe("renderEmailContent", () => {
             : component
         ),
       });
-    const buttonUrl = async (prefill: boolean) => {
+    const buttonUrls = async (prefill: boolean) => {
       const html = await renderHtml(
         renderedContent("en-US", emailFixtureValues, document(prefill)).body
       );
-      const link = html.match(
-        /href="(https:\/\/workspace\.deskohub\.cz\/[^"]+)"/
-      );
-      return new URL(link?.[1]?.replaceAll("&amp;", "&") ?? "");
+      return [
+        ...html.matchAll(/href="(https:\/\/workspace\.deskohub\.cz\/[^"]+)"/g),
+      ].map((link) => new URL(link[1]?.replaceAll("&amp;", "&") ?? ""));
+    };
+    const buttonUrl = async (prefill: boolean) => {
+      const urls = await buttonUrls(prefill);
+      // The voucher and its cue both book with the same link.
+      expect(urls).toHaveLength(2);
+      expect(urls[1]?.href).toBe(urls[0]?.href);
+      return urls[0] ?? new URL("about:blank");
     };
     const prefilled = await buttonUrl(true);
     expect(prefilled.searchParams.getAll("discountCode")).toEqual([
@@ -171,6 +177,30 @@ describe("renderEmailContent", () => {
         )
       )
     ).toBe(true);
+  });
+
+  test("keeps the offer's code, validity and booking link readable as plain text", async () => {
+    const locale = "en-US";
+    const html = await renderHtml(renderedContent(locale).body);
+    const text = await render(renderedContent(locale).body, {
+      plainText: true,
+    });
+    const expiry = formatInstantDate({
+      instant: Temporal.Instant.from(fixtureOfferExpiry),
+      locale,
+      timeZone: WORKSPACE_SITE_TIME_ZONE,
+    });
+    const validity = `${m.emailContentOfferValidUntil({ date: expiry }, { locale })} · ${m.emailContentOfferUses({ count: 1 }, { locale })}`;
+
+    expect(text).toContain("SAMPLE CODE");
+    expect(text).toContain(validity);
+    expect(text).toContain(emailFixtureWords[locale].offer);
+    // The arrow badge is decoration, left out of plain text.
+    expect(text).not.toContain("\u2192");
+    // The hand-drawn arrow is a hosted decorative image.
+    expect(html).toMatch(
+      /<img[^>]*alt=""[^>]*src="https:\/\/[^"]+\/email\/offer-cue-arrow\.png"/
+    );
   });
 
   test("shows a fallback in place of the value or the whole component", async () => {
@@ -310,6 +340,7 @@ describe("rich text parity with campaign bodies", () => {
       await renderHtml(
         <CampaignBodyContent
           body={{ formatVersion: 1, doc: legacyRichTextBody }}
+          locale="en-US"
         />
       )
     );

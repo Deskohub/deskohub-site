@@ -4,6 +4,7 @@ import { testEmailAddress } from "@deskohub/test-email";
 import { Effect } from "effect";
 import { env } from "@/env";
 import { m } from "@/features/i18n";
+import { getWorkspacePageUrl } from "@/features/i18n/page-url";
 import { getRuntimeMarketingPreferencesPlaceholderUrl } from "@/features/legal/marketing-preferences-access-url";
 import type { CampaignBodyNode } from "./body/campaign-body-document";
 import type {
@@ -522,5 +523,94 @@ describe("campaign body images", () => {
     for (const align of ["left", "center", "right"]) {
       expect(await renderImage({ align, width: null })).toEqual(legacy);
     }
+  });
+});
+
+describe("campaign pass offer cards", () => {
+  const passOfferContent = (
+    ...offers: ReadonlyArray<CampaignBodyNode["attrs"]>
+  ): CampaignLocaleContent => ({
+    ...content,
+    body: {
+      formatVersion: 1,
+      doc: {
+        type: "doc",
+        content: offers.map((attrs) => ({ type: "passOffer", attrs })),
+      },
+    },
+  });
+  const entryPackUrl = getWorkspacePageUrl("/passes/entry-pack", { size: "5" });
+  const unlimitedUrl = getWorkspacePageUrl("/passes/unlimited");
+  const offers = passOfferContent(
+    {
+      product: "entry-pack",
+      size: 5,
+      headline: "Save CZK 460",
+      detail: "on 5 Reserved Desk visits",
+    },
+    {
+      product: "unlimited",
+      headline: "Save CZK 2,210",
+      detail: "across 20 Reserved Desk visits in 30 days",
+    }
+  );
+  const hrefsOf = (html: string) =>
+    [...html.matchAll(/href="([^"]+)"/g)].map((match) =>
+      (match[1] ?? "").replaceAll("&amp;", "&")
+    );
+
+  test("links each card, every part of it, to its product's page", async () => {
+    const email = await render("marketing", "en-US", offers);
+    const hrefs = hrefsOf(email.html);
+
+    expect(entryPackUrl).not.toMatch(/\/en-US\//);
+    expect(hrefs.filter((href) => href === entryPackUrl)).toHaveLength(2);
+    expect(hrefs.filter((href) => href === unlimitedUrl)).toHaveLength(4);
+    // Solid colours stand in where gradients don't render.
+    expect(email.html).toContain('bgcolor="#f9cb70"');
+    expect(email.html).toContain('bgcolor="#761730"');
+    // The portrait is decoration.
+    expect(email.html).toMatch(
+      /<img[^>]*alt=""[^>]*src="[^"]*\/email\/unlimited-pass-credential\.png"/
+    );
+  });
+
+  test("keeps each card's product, lines and one link in plain text", async () => {
+    const email = await render("marketing", "en-US", offers);
+    const locale = "en-US";
+
+    for (const line of [
+      m.passEntryPack({}, { locale }),
+      "Save CZK 460",
+      "on 5 Reserved Desk visits",
+      m.passUnlimited({}, { locale }),
+      "Save CZK 2,210",
+      "across 20 Reserved Desk visits in 30 days",
+    ]) {
+      expect(email.text).toContain(line);
+    }
+    expect(email.text.split(entryPackUrl)).toHaveLength(2);
+    expect(email.text.split(unlimitedUrl)).toHaveLength(2);
+    expect(email.text).not.toContain("→");
+  });
+
+  test("leads a card without a headline with its product's benefit in the email's language", async () => {
+    const locale = "cs-CZ";
+    const email = await render(
+      "marketing",
+      locale,
+      passOfferContent({ product: "entry-pack" }, { product: "unlimited" })
+    );
+
+    expect(email.text).toContain(m.passEntryPack({}, { locale }));
+    expect(email.text).toContain(
+      m.emailPassOfferEntryPackBenefit({}, { locale })
+    );
+    expect(email.text).toContain(
+      m.emailPassOfferUnlimitedBenefit({ count: 30 }, { locale })
+    );
+    expect(hrefsOf(email.html)).toContain(
+      getWorkspacePageUrl("/passes/entry-pack")
+    );
   });
 });

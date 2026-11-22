@@ -132,7 +132,10 @@ const renderCampaign = (
           {isValidElement(input.content.body) ? (
             input.content.body
           ) : (
-            <CampaignBodyContent body={input.content.body} />
+            <CampaignBodyContent
+              body={input.content.body}
+              locale={input.locale}
+            />
           )}
         </>
       }

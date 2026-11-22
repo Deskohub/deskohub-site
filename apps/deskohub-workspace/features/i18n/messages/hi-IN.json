@@ -1671,7 +1671,28 @@
   "faqQuestionRules": "आपके यहाँ कौन-से नियम लागू हैं?",
   "faqAnswerRules": "जगह के इस्तेमाल के नियम <operatingRules>परिसर नियमावली</operatingRules> में दिए गए हैं।",
   "emailContentOfferCodeLabel": "आपका छूट कोड",
-  "emailContentOfferValidUntil": "कोड {date} तक मान्य है।",
+  "emailContentOfferValidUntil": "{date} तक मान्य",
+  "emailContentOfferUses": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} बार उपयोग",
+        "countPlural=other": "{count} बार उपयोग"
+      }
+    }
+  ],
+  "emailPassOfferEntryPackBenefit": "हर विज़िट पर कम भुगतान करें",
+  "emailPassOfferUnlimitedBenefit": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} दिन के लिए असीमित प्रवेश",
+        "countPlural=other": "{count} दिनों के लिए असीमित प्रवेश"
+      }
+    }
+  ],
   "emailContentYes": "हाँ",
   "emailContentNo": "नहीं",
   "androidPageMetadataTitle": "Android के लिए Deskohub ऐप",

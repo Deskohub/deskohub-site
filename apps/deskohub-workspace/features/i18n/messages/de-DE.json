@@ -1671,7 +1671,28 @@
   "faqQuestionRules": "Welche Regeln gelten bei euch?",
   "faqAnswerRules": "Die Regeln für den Aufenthalt in den Räumen findest du in der <operatingRules>Hausordnung</operatingRules>.",
   "emailContentOfferCodeLabel": "Dein Rabattcode",
-  "emailContentOfferValidUntil": "Der Code ist bis {date} gültig.",
+  "emailContentOfferValidUntil": "Gültig bis {date}",
+  "emailContentOfferUses": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} Einlösung",
+        "countPlural=other": "{count} Einlösungen"
+      }
+    }
+  ],
+  "emailPassOfferEntryPackBenefit": "Weniger pro Besuch zahlen",
+  "emailPassOfferUnlimitedBenefit": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Unbegrenzter Zugang für {count} Tag",
+        "countPlural=other": "Unbegrenzter Zugang für {count} Tage"
+      }
+    }
+  ],
   "emailContentYes": "Ja",
   "emailContentNo": "Nein",
   "androidPageMetadataTitle": "Deskohub-App für Android",
