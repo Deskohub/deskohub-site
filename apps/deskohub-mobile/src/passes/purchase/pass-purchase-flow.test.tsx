@@ -49,6 +49,7 @@ const openHosted = mock(
 
 mock.module("expo-router", () => ({
   ...expoRouterStandIn({
+    useIsFocused: () => useContext(RouteFocus),
     useFocusEffect: (effect: () => undefined | (() => void)) => {
       const focused = useContext(RouteFocus);
       useEffect(() => (focused ? effect() : undefined), [effect, focused]);
@@ -244,6 +245,8 @@ for (const { language, kind } of [
     const codeUpdates: UpdateCustomerPassPurchasePrice[] = [];
     const beginCalls: BeginCustomerPassPurchase[] = [];
     const finishBegin = Promise.withResolvers<void>();
+    const finishAcceptedBegin = Promise.withResolvers<void>();
+    const startDateOrderIds: (string | null)[] = [];
     let catalogAvailable = true;
     let quote: CustomerPassPurchase | undefined;
     const fixture = Layer.effect(
@@ -262,6 +265,7 @@ for (const { language, kind } of [
               );
             }
             if (url.pathname === "/api/customer/passes/unlimited/start-dates") {
+              startDateOrderIds.push(url.searchParams.get("supersedeOrderId"));
               return HttpClientResponse.fromWeb(
                 request,
                 Response.json({
@@ -344,6 +348,9 @@ for (const { language, kind } of [
                     { status: 409 }
                   )
                 );
+              }
+              if (kind === "unlimited" && beginCalls.length === 3) {
+                yield* Effect.promise(() => finishAcceptedBegin.promise);
               }
               return HttpClientResponse.fromWeb(request, Response.json(quote));
             }
@@ -496,6 +503,27 @@ for (const { language, kind } of [
       await press("continue");
       expect(beginCalls).toHaveLength(3);
       expect(beginCalls[2]?.orderId).not.toBe(beginCalls[1]?.orderId);
+      const accepted = beginCalls[2];
+      if (!accepted) throw new Error("Expected the replacement purchase");
+
+      routeFocused = false;
+      await renderCheckout();
+      await act(async () => {
+        finishAcceptedBegin.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      expect((await button("continue")).disabled).toBe(false);
+      expect(startDateOrderIds).not.toContain(accepted.orderId);
+
+      routeFocused = true;
+      await renderCheckout();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      expect(startDateOrderIds).toContain(accepted.orderId);
+      await press("continue");
+      expect(beginCalls).toHaveLength(4);
+      expect(beginCalls[3]).toEqual(accepted);
     }
 
     expect((await button("continue")).disabled).toBe(true);

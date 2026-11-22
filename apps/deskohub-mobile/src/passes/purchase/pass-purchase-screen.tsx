@@ -12,6 +12,7 @@ import * as Crypto from "expo-crypto";
 import {
   Stack,
   useFocusEffect,
+  useIsFocused,
   useLocalSearchParams,
   useRouter,
 } from "expo-router";
@@ -242,8 +243,9 @@ function PassPurchaseFlow({
   const focused = useRef(false);
   const attempt = useRef<Attempt>(undefined);
   const ownsView = () => focused.current;
+  const isFocused = useIsFocused();
   const datesAtom = unlimitedStartDatesAtom(
-    kind === "unlimited" ? previousOrderId : false
+    kind === "unlimited" && isFocused ? previousOrderId : false
   );
   const datesResult = useAtomValue(datesAtom);
   const dates = AsyncResult.isSuccess(datesResult)
