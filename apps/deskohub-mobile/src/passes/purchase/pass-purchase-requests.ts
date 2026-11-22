@@ -1,9 +1,11 @@
 import {
   type BeginCustomerPassPurchase,
+  type CustomerPassPurchase,
   CustomerSessionRequired,
   type SubmitCustomerPassPurchase,
+  type UpdateCustomerPassPurchasePrice,
 } from "@deskohub/workspace-customer-api";
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 import { Atom } from "effect/reactivity";
 import { paymentBrowserLayer } from "../../booking/payment-browser";
 import { PaymentBrowser } from "../../booking/payment-browser.service";
@@ -51,7 +53,7 @@ export const unlimitedStartDatesAtom = Atom.family(
   (supersedeOrderId: string | undefined | false) =>
     customerDataRuntime.atom(
       supersedeOrderId === false
-        ? Effect.succeed(undefined)
+        ? Effect.undefined
         : passesApi.pipe(
             Effect.flatMap((api) =>
               api.getUnlimitedStartDates({
@@ -64,41 +66,73 @@ export const unlimitedStartDatesAtom = Atom.family(
     )
 );
 
+class PassPurchaseViewChanged extends Data.TaggedError(
+  "PassPurchaseViewChanged"
+) {}
+
+const confirmPurchaseAction = (owns?: () => boolean) =>
+  confirmPassPurchaseScope.pipe(
+    Effect.andThen(Effect.sync(() => owns?.() ?? true)),
+    Effect.filterOrFail(
+      (owned) => owned,
+      () => new PassPurchaseViewChanged()
+    ),
+    Effect.asVoid
+  );
+
+const writePass = <A, E, R>(
+  write: (passes: Effect.Success<typeof passesApi>) => Effect.Effect<A, E, R>,
+  owns?: () => boolean
+) =>
+  confirmPurchaseAction(owns).pipe(
+    Effect.andThen(passesApi.pipe(Effect.flatMap(write), customerWrite))
+  );
+
 export const beginPassPurchaseAtom = customerDataRuntime.fn(
   (payload: BeginCustomerPassPurchase) =>
-    confirmPassPurchaseScope.pipe(
-      Effect.andThen(
-        passesApi.pipe(
-          Effect.flatMap((api) => api.beginPassPurchase({ payload })),
-          customerWrite
-        )
-      )
-    )
+    writePass((passes) => passes.beginPassPurchase({ payload }))
 );
 
 export const submitPassPurchaseAtom = customerDataRuntime.fn(
   ({
     orderId,
     payload,
+    owns,
   }: {
     orderId: string;
     payload: SubmitCustomerPassPurchase;
+    owns?: () => boolean;
   }) =>
-    confirmPassPurchaseScope.pipe(
-      Effect.andThen(
-        passesApi.pipe(
-          Effect.flatMap((api) =>
-            api.submitPassPurchase({ params: { orderId }, payload })
-          ),
-          customerWrite
-        )
-      )
+    writePass(
+      (passes) => passes.submitPassPurchase({ params: { orderId }, payload }),
+      owns
+    )
+);
+
+export const updatePassPurchasePriceAtom = customerDataRuntime.fn(
+  ({
+    orderId,
+    payload,
+  }: {
+    orderId: string;
+    payload: UpdateCustomerPassPurchasePrice;
+  }) =>
+    writePass((passes) =>
+      passes.updatePassPurchasePrice({ params: { orderId }, payload })
     )
 );
 
 export const openPassPaymentAtom = customerDataRuntime.fn(
-  ({ orderId, redirectUrl }: { orderId: string; redirectUrl: string }) =>
-    confirmPassPurchaseScope.pipe(
+  ({
+    orderId,
+    redirectUrl,
+    owns,
+  }: {
+    orderId: string;
+    redirectUrl: string;
+    owns?: () => boolean;
+  }) =>
+    confirmPurchaseAction(owns).pipe(
       Effect.andThen(Effect.service(PaymentBrowser)),
       Effect.flatMap((browser) =>
         browser.open(redirectUrl, passPaymentReturnUrl(orderId))
@@ -115,3 +149,23 @@ export const passPurchaseStatusHref = (orderId: string) =>
     pathname: "/passes/purchases/[orderId]",
     params: { orderId, after: "payment" },
   }) as const;
+
+export const passPaymentPayload = (
+  quote: CustomerPassPurchase,
+  billing: NonNullable<SubmitCustomerPassPurchase["billing"]>,
+  returnTarget: NonNullable<SubmitCustomerPassPurchase["returnTarget"]>
+): SubmitCustomerPassPurchase => ({
+  productKind: quote.product.kind,
+  accepted: true,
+  acceptedDocuments: quote.disclosure.documents.map(({ key, hash }) => ({
+    key,
+    hash,
+  })),
+  ...(quote.product.kind === "unlimited" &&
+    quote.disclosure.earlyStartRequest !== undefined && {
+      unlimitedEarlyStartAccepted: true,
+    }),
+  displayedPriceFingerprint: quote.price.fingerprint,
+  billing,
+  returnTarget,
+});
