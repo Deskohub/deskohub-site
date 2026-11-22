@@ -8,6 +8,7 @@ import {
   DotyposService,
   RestoreCancelledReservationResult,
 } from "@deskohub/dotypos";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Logger, References } from "effect";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
@@ -268,7 +269,7 @@ const restoreWith = async (overrides: Partial<Fakes> = {}) => {
         source: "assistant",
         administrator: {
           accountId: "restore-operator" as never,
-          email: "operator@example.test",
+          email: testEmailAddress("restore-operator"),
         },
       },
       reservationId: id,
