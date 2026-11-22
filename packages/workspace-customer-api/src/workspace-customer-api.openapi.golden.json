@@ -4964,6 +4964,112 @@
           "required": true
         }
       }
+    },
+    "/api/customer/passes/purchases/{orderId}/price": {
+      "patch": {
+        "tags": ["passes"],
+        "operationId": "passes.updatePassPurchasePrice",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPassId"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerPassPurchasePriceUpdate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPassPurchasePriceUpdate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerPassesUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPassesUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerAccountLinkRequired | CustomerPassPurchaseRefused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomerAccountLinkRequiredEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerPassPurchaseRefusedEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCustomerPassPurchasePrice"
+              }
+            }
+          },
+          "required": true
+        }
+      }
     }
   },
   "components": {
@@ -5062,23 +5168,134 @@
         "required": ["_tag", "reason"],
         "additionalProperties": false
       },
-      "CustomerPassNotFoundEncoded": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["CustomerPassNotFound"]
-          }
-        },
-        "required": ["_tag"],
-        "additionalProperties": false
-      },
       "CustomerPassesUnavailableEncoded": {
         "type": "object",
         "properties": {
           "_tag": {
             "type": "string",
             "enum": ["CustomerPassesUnavailable"]
+          }
+        },
+        "required": ["_tag"],
+        "additionalProperties": false
+      },
+      "CustomerPassPurchasePriceUpdate": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["ready", "pricing_changed"]
+              },
+              "price": {
+                "$ref": "#/components/schemas/CustomerPassPurchasePrice"
+              }
+            },
+            "required": ["status", "price"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["code_unavailable"]
+              }
+            },
+            "required": ["status"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CustomerPassPurchasePrice": {
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": "string"
+          },
+          "subtotal": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "appliedDiscountCode": {
+            "type": "string"
+          },
+          "discounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "amount": {
+                  "$ref": "#/components/schemas/Money"
+                }
+              },
+              "required": ["id", "label", "amount"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["fingerprint", "subtotal", "total", "discounts"],
+        "additionalProperties": false
+      },
+      "Money": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "exponent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "currency": {
+            "type": "string"
+          }
+        },
+        "required": ["value", "exponent", "currency"],
+        "additionalProperties": false
+      },
+      "CustomerPassId": {
+        "type": "string",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+        "format": "uuid",
+        "description": "Opaque identifier of a pass purchase order."
+      },
+      "UpdateCustomerPassPurchasePrice": {
+        "type": "object",
+        "properties": {
+          "productKind": {
+            "type": "string",
+            "enum": ["entry-pack", "unlimited"]
+          },
+          "displayedPriceFingerprint": {
+            "type": "string"
+          },
+          "submittedCode": {
+            "type": "string",
+            "maxLength": 160
+          }
+        },
+        "required": ["productKind", "displayedPriceFingerprint"],
+        "additionalProperties": false
+      },
+      "CustomerPassNotFoundEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["CustomerPassNotFound"]
           }
         },
         "required": ["_tag"],
@@ -5183,70 +5400,6 @@
         },
         "required": ["key", "path", "hash", "hashAlgorithm"],
         "additionalProperties": false
-      },
-      "CustomerPassPurchasePrice": {
-        "type": "object",
-        "properties": {
-          "fingerprint": {
-            "type": "string"
-          },
-          "subtotal": {
-            "$ref": "#/components/schemas/Money"
-          },
-          "total": {
-            "$ref": "#/components/schemas/Money"
-          },
-          "appliedDiscountCode": {
-            "type": "string"
-          },
-          "discounts": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "label": {
-                  "type": "string"
-                },
-                "amount": {
-                  "$ref": "#/components/schemas/Money"
-                }
-              },
-              "required": ["id", "label", "amount"],
-              "additionalProperties": false
-            }
-          }
-        },
-        "required": ["fingerprint", "subtotal", "total", "discounts"],
-        "additionalProperties": false
-      },
-      "Money": {
-        "type": "object",
-        "properties": {
-          "value": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
-          },
-          "exponent": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "currency": {
-            "type": "string"
-          }
-        },
-        "required": ["value", "exponent", "currency"],
-        "additionalProperties": false
-      },
-      "CustomerPassId": {
-        "type": "string",
-        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
-        "format": "uuid",
-        "description": "Opaque identifier of a pass purchase order."
       },
       "SubmitCustomerPassPurchase": {
         "type": "object",
@@ -5439,6 +5592,12 @@
             "$ref": "#/components/schemas/CustomerPassTier"
           },
           "statusPath": {
+            "type": "string"
+          },
+          "resumePath": {
+            "type": "string"
+          },
+          "paymentUrl": {
             "type": "string"
           },
           "gift": {
@@ -8726,13 +8885,52 @@
         "type": "object",
         "properties": {
           "selection": {
-            "$ref": "#/components/schemas/CustomerBookingSelection"
+            "$ref": "#/components/schemas/CustomerReservationSelection"
           },
           "earlySetup": {
             "type": "boolean"
           }
         },
         "required": ["selection"],
+        "additionalProperties": false
+      },
+      "CustomerReservationSelection": {
+        "type": "object",
+        "properties": {
+          "family": {
+            "$ref": "#/components/schemas/CustomerReservationFamily"
+          },
+          "date": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "endDate": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/CustomerStartTime"
+          },
+          "duration": {
+            "$ref": "#/components/schemas/CustomerMeetingRoomDuration"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/CustomerBookableCoworkTier"
+          },
+          "monitorOption": {
+            "$ref": "#/components/schemas/CustomerMonitorOption"
+          },
+          "stay": {
+            "$ref": "#/components/schemas/CustomerCoworkStay"
+          },
+          "seats": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "coffee": {
+            "type": "boolean"
+          }
+        },
+        "required": ["family", "date"],
         "additionalProperties": false
       },
       "CustomerOrderFulfillmentStatus": {

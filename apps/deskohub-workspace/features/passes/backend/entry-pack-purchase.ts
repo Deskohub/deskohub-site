@@ -558,6 +558,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
     readonly productKind?: PassPurchase["product"];
     readonly submittedCode?: CanonicalPromotionCode;
     readonly referralCode?: CanonicalPromotionCode;
+    readonly preserveReferral?: true;
   }) {
     yield* requirePassPurchasesEnabled();
     const current = yield* CurrentCustomerAccount;
@@ -596,6 +597,11 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
         }
 
         const discounts = yield* DiscountService;
+        const referralCode =
+          input.referralCode ??
+          (input.preserveReferral
+            ? storedQuote.selection?.referralCode
+            : undefined);
         const discountInput = {
           product,
           discountableSubtotal,
@@ -604,9 +610,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
           bookedAt,
           dotyposCustomerId: order.dotyposCustomerId,
           locale: purchase.locale,
-          ...(input.referralCode !== undefined && {
-            referralCode: input.referralCode,
-          }),
+          ...(referralCode !== undefined && { referralCode }),
         };
         const baseQuote = yield* discounts.quote(discountInput);
         const appliedCode = input.submittedCode
@@ -630,9 +634,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
             ...(input.submittedCode !== undefined && {
               submittedCode: input.submittedCode,
             }),
-            ...(input.referralCode !== undefined && {
-              referralCode: input.referralCode,
-            }),
+            ...(referralCode !== undefined && { referralCode }),
           },
         };
         yield* requireOpenUnlimitedPassQuote(purchase);

@@ -15,8 +15,8 @@ import {
   CustomerCheckoutReturnTarget,
 } from "./customer-booking-checkout-api";
 import {
-  CustomerBookingSelection,
   CustomerCoworkStay,
+  CustomerReservationSelection,
 } from "./customer-booking-selection";
 import { CustomerLocale } from "./customer-locale";
 import { customerInputParseOptions } from "./customer-profile";
@@ -238,7 +238,7 @@ export type CustomerReservationAccess = typeof CustomerReservationAccess.Type;
  * and `earlySetup` beside it for a meeting room booked with early setup.
  */
 export const CustomerBookedSelection = Schema.Struct({
-  selection: CustomerBookingSelection,
+  selection: CustomerReservationSelection,
   earlySetup: Schema.optionalKey(Schema.Boolean),
 }).annotate({ identifier: "CustomerBookedSelection" });
 export type CustomerBookedSelection = typeof CustomerBookedSelection.Type;
