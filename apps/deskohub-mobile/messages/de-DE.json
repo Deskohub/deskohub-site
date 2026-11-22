@@ -432,7 +432,7 @@
   "passes_renew": "Pass verlängern",
   "passes_renew_failed": "Die Verlängerungsseite konnte nicht geöffnet werden.",
   "passes_resend": "Einladung erneut senden",
-  "passes_reservations_load_failed": "Die Passdetails konnten nicht geladen werden.",
+  "passes_load_failed": "Die Passdetails konnten nicht geladen werden.",
   "passes_reserved_desk": "Reservierter Schreibtisch",
   "passes_reserved_workstation": "Reservierter Schreibtisch mit Arbeitsplatz",
   "passes_same_desk": "Jeden Tag derselbe Schreibtisch",

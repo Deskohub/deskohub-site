@@ -437,7 +437,7 @@
   "passes_renew": "Prodloužit členství",
   "passes_renew_failed": "Stránku prodloužení se nepodařilo otevřít.",
   "passes_resend": "Poslat pozvánku znovu",
-  "passes_reservations_load_failed": "Podrobnosti k permanentkám se nepodařilo načíst.",
+  "passes_load_failed": "Podrobnosti k permanentkám se nepodařilo načíst.",
   "passes_reserved_desk": "Rezervovaný stůl",
   "passes_reserved_workstation": "Rezervovaný stůl s pracovní stanicí",
   "passes_same_desk": "Každý den stejný stůl",

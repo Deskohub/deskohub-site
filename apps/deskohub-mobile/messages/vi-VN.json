@@ -427,7 +427,7 @@
   "passes_renew": "Gia hạn thẻ",
   "passes_renew_failed": "Không mở được trang gia hạn.",
   "passes_resend": "Gửi lại lời mời",
-  "passes_reservations_load_failed": "Không tải được thông tin thẻ.",
+  "passes_load_failed": "Không tải được thông tin thẻ.",
   "passes_reserved_desk": "Bàn đặt riêng",
   "passes_reserved_workstation": "Bàn đặt riêng có trạm làm việc",
   "passes_same_desk": "Cùng một bàn mỗi ngày",

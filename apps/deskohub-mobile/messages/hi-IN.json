@@ -432,7 +432,7 @@
   "passes_renew": "पास का नवीनीकरण करें",
   "passes_renew_failed": "नवीनीकरण पेज नहीं खुल सका।",
   "passes_resend": "निमंत्रण फिर से भेजें",
-  "passes_reservations_load_failed": "पास की जानकारी लोड नहीं हो सकी। रीफ़्रेश करने के लिए नीचे खींचें।.",
+  "passes_load_failed": "पास की जानकारी लोड नहीं हो सकी। रीफ़्रेश करने के लिए नीचे खींचें।.",
   "passes_reserved_desk": "आरक्षित डेस्क",
   "passes_reserved_workstation": "वर्कस्टेशन के साथ आरक्षित डेस्क",
   "passes_same_desk": "हर दिन वही डेस्क",

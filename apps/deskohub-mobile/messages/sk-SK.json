@@ -442,7 +442,7 @@
   "passes_renew": "Predĺžiť pas",
   "passes_renew_failed": "Stránku predĺženia sa nepodarilo otvoriť.",
   "passes_resend": "Poslať pozvánku znova",
-  "passes_reservations_load_failed": "Podrobnosti o permanentkách sa nepodarilo načítať.",
+  "passes_load_failed": "Podrobnosti o permanentkách sa nepodarilo načítať.",
   "passes_reserved_desk": "Rezervovaný stôl",
   "passes_reserved_workstation": "Rezervovaný stôl s pracovnou stanicou",
   "passes_same_desk": "Každý deň ten istý stôl",

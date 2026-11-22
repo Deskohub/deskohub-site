@@ -442,7 +442,7 @@
   "passes_renew": "Продовжити абонемент",
   "passes_renew_failed": "Не вдалося відкрити сторінку продовження.",
   "passes_resend": "Надіслати запрошення ще раз",
-  "passes_reservations_load_failed": "Не вдалося завантажити відомості про абонементи.",
+  "passes_load_failed": "Не вдалося завантажити відомості про абонементи.",
   "passes_reserved_desk": "Зарезервований стіл",
   "passes_reserved_workstation": "Зарезервований стіл із робочою станцією",
   "passes_same_desk": "Те саме місце щодня",

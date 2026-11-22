@@ -37,6 +37,7 @@ import type { AppLocale } from "../../i18n/app-locale";
 import { formatInstant } from "../../i18n/date-time-format";
 import { useAppLocale } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
+import { passFeatureClosed } from "../../passes/pass-read-state";
 import {
   heldPassesAtom,
   passCatalogAtom,
@@ -544,7 +545,14 @@ function useReservationPasses(
   return {
     unlimited,
     funded: AsyncResult.isSuccess(funding) ? funding.value : undefined,
-    failed: AsyncResult.isFailure(list) || AsyncResult.isFailure(funding),
+    initial:
+      enabled &&
+      (AsyncResult.isInitial(catalog) ||
+        (passesReleased && AsyncResult.isInitial(list))),
+    failed:
+      (AsyncResult.isFailure(catalog) && !passFeatureClosed(catalog)) ||
+      (AsyncResult.isFailure(list) && !passFeatureClosed(list)) ||
+      (AsyncResult.isFailure(funding) && !passFeatureClosed(funding)),
     refreshing:
       (list.waiting && !AsyncResult.isInitial(list)) ||
       (funding.waiting && !AsyncResult.isInitial(funding)),
@@ -575,10 +583,7 @@ function ReservationGroupsView({
   );
   const passNotice = passes.failed && (
     <View>
-      <Notice
-        tone="error"
-        message={m.passes_reservations_load_failed({}, { locale })}
-      />
+      <Notice tone="error" message={m.passes_load_failed({}, { locale })} />
       <Button
         variant="text"
         label={m.account_retry({}, { locale })}
@@ -591,14 +596,17 @@ function ReservationGroupsView({
     return (
       <View style={styles.stack}>
         {passNotice}
-        <Card>
-          <EmptyState
-            icon={CalendarIcon}
-            title={m.reservations_none_yet({}, { locale })}
-          >
-            <BookButton />
-          </EmptyState>
-        </Card>
+        {passes.initial && <ReservationsListSkeleton />}
+        {!passes.initial && !passes.failed && (
+          <Card>
+            <EmptyState
+              icon={CalendarIcon}
+              title={m.reservations_none_yet({}, { locale })}
+            >
+              <BookButton />
+            </EmptyState>
+          </Card>
+        )}
         {savedNotice}
       </View>
     );

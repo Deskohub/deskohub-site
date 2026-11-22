@@ -432,7 +432,7 @@
   "passes_renew": "Renew pass",
   "passes_renew_failed": "We couldn’t open the renewal page.",
   "passes_resend": "Resend invitation",
-  "passes_reservations_load_failed": "Pass details could not be loaded.",
+  "passes_load_failed": "Pass details could not be loaded.",
   "passes_reserved_desk": "Reserved Desk",
   "passes_reserved_workstation": "Reserved Desk with workstation",
   "passes_same_desk": "The same desk every day",

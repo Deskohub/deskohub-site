@@ -30,6 +30,7 @@ import {
   packCoversDraft,
 } from "../../passes/entry-pack-booking";
 import { EntryPackOfferLink } from "../../passes/entry-pack-offer-link";
+import { cashBookingCoverage } from "../../passes/pass-read-state";
 import {
   heldPassesAtom,
   passBookingOptionsAtom,
@@ -261,7 +262,12 @@ function CoworkSelection({
     AsyncResult.isInitial(passList);
   const held = AsyncResult.isSuccess(passList) ? passList.value.held : [];
   const packs = held.filter((pass) => pass.kind === "entry-pack");
-  const unlimited = held.filter((pass) => pass.kind === "unlimited");
+  const hasUnlimited = held.some(
+    (pass) =>
+      pass.kind === "unlimited" &&
+      (pass.status === "active" || pass.status === "upcoming")
+  );
+  const refreshPassCatalog = useAtomRefresh(passCatalogAtom);
   const activePack = packs.find(({ passId }) => passId === entryPackId);
   const openingDraft = openingCoworkDraft({
     kept:
@@ -354,7 +360,7 @@ function CoworkSelection({
   const optionsAtom =
     chosenDate !== undefined &&
     (packs.some(({ bookFrom }) => bookFrom !== undefined) ||
-      unlimited.length > 0 ||
+      hasUnlimited ||
       entryPackId !== undefined)
       ? passBookingOptionsAtom({
           date: chosenDate,
@@ -378,13 +384,20 @@ function CoworkSelection({
             pack.tier === "reserved-desk" && allowedByOptions.has(pack.passId)
         )
       : undefined;
-  const coveredByUnlimited =
-    options?.unlimited?.tier === coworkPassTier(model.draft);
-  const checkingCoverage =
-    entryPackId === undefined &&
-    chosenDate !== undefined &&
-    ((AsyncResult.isSuccess(passCatalog) && AsyncResult.isInitial(passList)) ||
-      (unlimited.length > 0 && AsyncResult.isInitial(optionsResult)));
+  const coverage =
+    entryPackId === undefined && chosenDate !== undefined
+      ? cashBookingCoverage(
+          passCatalog,
+          passList,
+          optionsResult,
+          coworkPassTier(model.draft)
+        )
+      : "clear";
+  const retryPassReads = () => {
+    refreshPassCatalog();
+    refreshPassList();
+    refreshPassOptions();
+  };
   const offer =
     chosenDate === undefined
       ? packs
@@ -482,9 +495,10 @@ function CoworkSelection({
   const checkout = checkoutRequestOf({
     locale,
     selection: selectedBooking,
-    blockers: checkingCoverage
-      ? [...enablement.blockers, "pass-coverage"]
-      : enablement.blockers,
+    blockers:
+      coverage === "checking" || coverage === "unknown"
+        ? [...enablement.blockers, "pass-coverage"]
+        : enablement.blockers,
     quote: Option.flatMap(quote, freshValue),
     ...overnightTimes,
   });
@@ -611,12 +625,13 @@ function CoworkSelection({
                   }
             }
             action={
-              bar.action === "retry"
+              bar.action === "retry" || coverage === "unknown"
                 ? {
                     label: m.booking_checkout_retry({}, { locale }),
                     icon: RotateCcw,
-                    onPress: refreshQuote,
-                    disabled: bar.disabled,
+                    onPress:
+                      coverage === "unknown" ? retryPassReads : refreshQuote,
+                    disabled: coverage !== "unknown" && bar.disabled,
                   }
                 : {
                     label: m.booking_continue({}, { locale }),
@@ -628,7 +643,15 @@ function CoworkSelection({
                       }),
                   }
             }
-            reason={bar.reason}
+            reason={
+              {
+                clear: bar.reason,
+                checking: m.account_loading({}, { locale }),
+                unknown: m.passes_load_failed({}, { locale }),
+                covered: m.booking_pass_unlimited_covers({}, { locale }),
+              }[coverage]
+            }
+            reasonTone={coverage === "unknown" ? "error" : "info"}
           />
         )
       }
@@ -683,12 +706,6 @@ function CoworkSelection({
                 onPayByCard={() => storeDraft(model.draft, undefined)}
               />
             )}
-            {entryPackId === undefined && coveredByUnlimited && (
-              <Notice
-                tone="warning"
-                message={m.booking_pass_unlimited_covers({}, { locale })}
-              />
-            )}
             {packUnavailable && (
               <Notice
                 tone="error"
@@ -701,10 +718,7 @@ function CoworkSelection({
                 <Button
                   variant="text"
                   label={m.account_retry({}, { locale })}
-                  onPress={() => {
-                    refreshPassList();
-                    refreshPassOptions();
-                  }}
+                  onPress={retryPassReads}
                 />
               )}
             <View style={tracks && chooseStyles.row}>
