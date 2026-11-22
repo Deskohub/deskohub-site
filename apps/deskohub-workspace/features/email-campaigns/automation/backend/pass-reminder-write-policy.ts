@@ -27,14 +27,20 @@ export const ensurePassReminderWritesAllowed = (
         return Effect.fail(
           invalidTrigger("Pass reminder triggers are unavailable.")
         );
-      if (purpose !== "marketing")
-        return Effect.fail(
-          invalidTrigger("Pass reminders require a marketing campaign.")
-        );
-      return Effect.void;
+      return ensurePassReminderPurpose(trigger, purpose);
     })
   );
 };
+
+export const ensurePassReminderPurpose = (
+  trigger: AutomationTriggerType,
+  purpose: CampaignPurpose
+) =>
+  isPassReminderTrigger(trigger) && purpose !== "marketing"
+    ? Effect.fail(
+        invalidTrigger("Pass reminders require a marketing campaign.")
+      )
+    : Effect.void;
 
 const invalidTrigger = (message: string) =>
   new AutomationFlowInvalid({ location: { _tag: "Trigger" }, message });
