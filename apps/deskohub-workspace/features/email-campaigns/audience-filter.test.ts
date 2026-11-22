@@ -577,10 +577,64 @@ describe("audienceFilterSchema", () => {
       { attribute: "spend", _tag: "Condition", operator: "gt", value: 1 },
     ],
     ["a legacy condition", { _tag: "Locale", locales: ["cs-CZ"] }],
+    [
+      "a stay counted by booking date",
+      qualifiedReservationCount({ dateBasis: "booking", stay: "day" }),
+    ],
+    [
+      "a stay without the cowork product",
+      qualifiedReservationCount({ stay: "overnight", product: undefined }),
+    ],
+    [
+      "a stay of another product family",
+      qualifiedReservationCount({
+        stay: "day",
+        product: { family: "meeting-room", properties: [] },
+      }),
+    ],
   ])("rejects %s", (_, filter) => {
     expect(Result.isFailure(decode(filter))).toBe(true);
   });
+
+  test.each([
+    ["a cowork stay by visit end", qualifiedReservationCount({ stay: "day" })],
+    [
+      "an individual payment by booking date without a product",
+      qualifiedReservationCount({
+        dateBasis: "booking",
+        payment: "individual",
+        product: undefined,
+      }),
+    ],
+  ])("accepts %s", (_, filter) => {
+    expect(Result.isSuccess(decode(filter))).toBe(true);
+  });
 });
+
+/** A visit-end reservation count of cowork, with qualifiers. */
+function qualifiedReservationCount(params: {
+  readonly dateBasis?: "visit" | "visitEnd" | "booking";
+  readonly stay?: string;
+  readonly payment?: string;
+  readonly product?: unknown;
+}) {
+  const { product, ...rest } = {
+    dateBasis: "visitEnd",
+    product: { family: "cowork", properties: [] },
+    ...params,
+  };
+  return {
+    attribute: "reservationCount",
+    _tag: "Condition",
+    params: {
+      period: { _tag: "Last", count: 60, unit: "day" },
+      ...rest,
+      ...(product !== undefined && { product }),
+    },
+    operator: "gte",
+    value: 2,
+  };
+}
 
 describe("audienceLocales", () => {
   test("allows every locale without a locale condition", () => {
