@@ -1592,6 +1592,11 @@ const makeWorkspaceAdminApiClient = Effect.gen(function* () {
                   params: { templateKey },
                   payload,
                 }),
+              PublishedEmail: (payload) =>
+                authorized.campaigns.previewCampaignTemplate({
+                  params: { templateKey },
+                  payload,
+                }),
             })
           ),
           Effect.mapError(sanitizeCampaignError)
