@@ -27,19 +27,23 @@ describe.skipIf(!database)(
     /** Each test runs on its own days, so one test's visits never reach another's sweep. */
     const dayStart = (day: number) => start.add({ hours: 24 * day });
 
-    const finishedSend = (
-      trigger: Omit<
-        Extract<
-          AutomationFlowType["trigger"],
-          { readonly _tag: "ReservationFinished" }
-        >,
-        "_tag"
-      >
+    type ReservationTriggerFields = Omit<
+      Extract<
+        AutomationFlowType["trigger"],
+        { readonly _tag: "ReservationFinished" }
+      >,
+      "_tag"
+    >;
+    const reservationSend = (
+      tag: "ReservationFinished" | "ReservationCancelled",
+      trigger: ReservationTriggerFields
     ) =>
       automationFlowFixture({
-        trigger: { _tag: "ReservationFinished", ...trigger },
+        trigger: { _tag: tag, ...trigger },
         steps: [{ _tag: "Send", id: "send" }],
       });
+    const finishedSend = (trigger: ReservationTriggerFields) =>
+      reservationSend("ReservationFinished", trigger);
     const cowork = { family: "cowork", properties: [] } as const;
 
     const scenario = await makeAutomationEngineScenario({
@@ -188,16 +192,34 @@ describe.skipIf(!database)(
         endsAt: at.add({ hours: 28 }),
         reservedDesk: true,
       });
+      // Dotypos cancelled this overnight visit, yet its finish was recorded:
+      // the stay decides before the re-check, so no withdrawn receipt.
+      const goneCustomer = await fixtures.addCustomer("stay-gone");
+      const gone = await fixtures.book({
+        label: "stay-gone",
+        customer: goneCustomer,
+        startsAt: at.add({ hours: 4 }),
+        endsAt: at.add({ hours: 28 }),
+        reservedDesk: true,
+      });
+      fixtures.cancelVisit(gone);
+      await fixtures.recordEvent({
+        kind: "reservation-finished",
+        customer: goneCustomer,
+        occurredAt: at.add({ hours: 28 }),
+        reservationId: gone,
+      });
 
       await scenario.runUntil({ from: at, until: at.add({ hours: 30 }) });
 
-      expect(await unprocessedFinishes([day, overnight])).toEqual([]);
+      expect(await unprocessedFinishes([day, overnight, gone])).toEqual([]);
       expect(await dispositions(dayOnly)).toEqual({
         [finishedKey(day)]: "started",
       });
       expect(await dispositions(anyStay)).toEqual({
         [finishedKey(day)]: "started",
         [finishedKey(overnight)]: "started",
+        [finishedKey(gone)]: "withdrawn",
       });
     });
 
@@ -205,6 +227,10 @@ describe.skipIf(!database)(
       const at = await begin(3);
       const individual = await activate(
         finishedSend({ payment: "individual" }),
+        at
+      );
+      const coworkIndividual = await activate(
+        finishedSend({ product: cowork, payment: "individual" }),
         at
       );
       const anyPayment = await activate(finishedSend({}), at);
@@ -231,9 +257,71 @@ describe.skipIf(!database)(
       expect(await dispositions(individual)).toEqual({
         [finishedKey(paid)]: "started",
       });
+      expect(await dispositions(coworkIndividual)).toEqual({
+        [finishedKey(paid)]: "started",
+      });
       expect(await dispositions(anyPayment)).toEqual({
         [finishedKey(paid)]: "started",
         [finishedKey(pack)]: "started",
+      });
+    });
+
+    test("a cancellation trigger judges the stay of the visit Workspace cancelled", async () => {
+      const at = await begin(6);
+      const overnightOnly = await activate(
+        reservationSend("ReservationCancelled", {
+          product: cowork,
+          stay: "overnight",
+        }),
+        at
+      );
+      const anyStay = await activate(
+        reservationSend("ReservationCancelled", { product: cowork }),
+        at
+      );
+      const cancel = async (label: string, hours: number) => {
+        const customer = await fixtures.addCustomer(`cancel-${label}`);
+        // Booked for tomorrow, from the hour given in Prague.
+        const startsAt = at.add({ hours: 24 + hours });
+        const reservationId = await fixtures.book({
+          label: `cancel-${label}`,
+          customer,
+          startsAt,
+          endsAt:
+            label === "overnight"
+              ? startsAt.add({ hours: 24 })
+              : startsAt.add({ hours: 8 }),
+          reservedDesk: true,
+        });
+        const cancelledAt = at.add({ hours: 1 });
+        // Cancelled as a customer's cancellation leaves it: state and instant.
+        await pool.query(
+          "update workspace_reservations set reservation_state = 'cancelled', reservation_cancelled_at = $2 where id = $1",
+          [reservationId, cancelledAt.toString()]
+        );
+        fixtures.cancelVisit(reservationId);
+        await fixtures.recordEvent({
+          kind: "reservation-cancelled",
+          customer,
+          occurredAt: cancelledAt,
+          reservationId,
+        });
+        return reservationId;
+      };
+      // Noon to noon, and 09:00 to 17:00, in Prague.
+      const overnight = await cancel("overnight", 4);
+      const day = await cancel("day", 1);
+
+      await scenario.runUntil({ from: at, until: at.add({ hours: 3 }) });
+
+      const cancelledKey = (reservationId: WorkspaceReservationId) =>
+        `reservation-cancelled:${reservationId}`;
+      expect(await dispositions(overnightOnly)).toEqual({
+        [cancelledKey(overnight)]: "started",
+      });
+      expect(await dispositions(anyStay)).toEqual({
+        [cancelledKey(overnight)]: "started",
+        [cancelledKey(day)]: "started",
       });
     });
   }

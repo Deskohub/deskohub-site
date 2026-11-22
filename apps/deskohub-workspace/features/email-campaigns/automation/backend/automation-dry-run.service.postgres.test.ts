@@ -1302,7 +1302,8 @@ describe.skipIf(!testDatabase)(
     });
 
     test("a stay trigger replays only the visits of its stay", async () => {
-      const [ida, jack] = ["ida", "jack"].map(customerId) as [
+      const [ida, jack, lena] = ["ida", "jack", "lena"].map(customerId) as [
+        DotyposCustomerId,
         DotyposCustomerId,
         DotyposCustomerId,
       ];
@@ -1311,15 +1312,31 @@ describe.skipIf(!testDatabase)(
           .toPlainDate()
           .toZonedDateTime({ timeZone: "Europe/Prague", plainTime: "12:00" })
           .toInstant();
-      const overnight = { startsAt: noonDaysAgo(8), endsAt: noonDaysAgo(7) };
-      const day = {
-        startsAt: noonDaysAgo(6).subtract({ hours: 3 }),
-        endsAt: noonDaysAgo(6).add({ hours: 5 }),
+      /** 09:00 to 17:00 in Prague. */
+      const dayOf = (days: number) => ({
+        startsAt: noonDaysAgo(days).subtract({ hours: 3 }),
+        endsAt: noonDaysAgo(days).add({ hours: 5 }),
+      });
+      /** Noon to noon the next day in Prague. */
+      const overnightFrom = (days: number) => ({
+        startsAt: noonDaysAgo(days),
+        endsAt: noonDaysAgo(days - 1),
+      });
+      const visits = {
+        "ida-overnight": { customer: ida, ...overnightFrom(8) },
+        "jack-day": { customer: jack, ...dayOf(7) },
+        // Ends while jack's day run still waits.
+        "jack-overnight": { customer: jack, ...overnightFrom(6) },
+        "lena-day": { customer: lena, ...dayOf(10) },
       };
-      await seedReservations([
-        { label: "ida-overnight", customer: ida, ...overnight },
-        { label: "jack-day", customer: jack, ...day },
-      ]);
+      await seedReservations(
+        Object.entries(visits).map(([label, visit]) => ({
+          label,
+          ...visit,
+          // Workspace cancelled lena's visit after its email went out.
+          ...(label === "lena-day" && { workspaceCancelledAt: noonDaysAgo(2) }),
+        }))
+      );
       await query(
         db
           .update(workspaceReservations)
@@ -1331,26 +1348,20 @@ describe.skipIf(!testDatabase)(
             },
           })
           .where(
-            inArray(workspaceReservations.id, [
-              reservationIdOf("ida-overnight"),
-              reservationIdOf("jack-day"),
-            ])
+            inArray(
+              workspaceReservations.id,
+              Object.keys(visits).map(reservationIdOf)
+            )
           )
       );
-      const [overnightEvent, dayEvent] = await seedEvents([
-        {
-          kind: "reservation-finished",
-          reservation: "ida-overnight",
-          customer: ida,
-          occurredAt: overnight.endsAt,
-        },
-        {
-          kind: "reservation-finished",
-          reservation: "jack-day",
-          customer: jack,
-          occurredAt: day.endsAt,
-        },
-      ]);
+      const [idaEvent, jackDay, jackOvernight, lenaDay] = await seedEvents(
+        Object.entries(visits).map(([reservation, visit]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer: visit.customer,
+          occurredAt: visit.endsAt,
+        }))
+      );
       const campaignId = await seedAutomation({
         flow: decodeFlow({
           trigger: {
@@ -1358,6 +1369,69 @@ describe.skipIf(!testDatabase)(
             product: { family: "cowork", properties: [] },
             stay: "day",
           },
+          steps: [waitHours("hold", 72), send],
+        }),
+      });
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+
+      const outcomes = new Map(
+        (await rowsOf(started.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      expect(outcomes.has(idaEvent!)).toBe(false);
+      expect(outcomes.get(jackDay!)).toBe("would-send");
+      expect(outcomes.has(jackOvernight!)).toBe(false);
+      expect(outcomes.get(lenaDay!)).toBe("would-send");
+    });
+
+    test("a payment trigger replays only individually paid reservations", async () => {
+      const [mona, nina] = ["mona", "nina"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const finishedAt = ago({ hours: 24 * 4 });
+      await seedReservations(
+        [
+          { label: "mona-card", customer: mona },
+          { label: "nina-unpaid-attempt", customer: nina },
+        ].map((reservation) => ({
+          ...reservation,
+          startsAt: finishedAt.subtract({ hours: 2 }),
+          endsAt: finishedAt,
+        }))
+      );
+      // Only mona's order has a paid attempt that keeps its amount.
+      const attemptId = `dry-run-card-${runId}`;
+      await testDatabase.pool.query(
+        `insert into payment_attempts (id, order_id, workspace_reservation_id, provider,
+           provider_order_id, state, amount_value, amount_exponent, currency)
+         values ($1, $2, $2, 'nexi', $1, 'paid', 29000, 2, 'CZK')`,
+        [attemptId, reservationIdOf("mona-card")]
+      );
+      await testDatabase.pool.query(
+        "update workspace_reservations set active_payment_attempt_id = $2 where id = $1",
+        [reservationIdOf("mona-card"), attemptId]
+      );
+      const [monaEvent, ninaEvent] = await seedEvents([
+        {
+          kind: "reservation-finished",
+          reservation: "mona-card",
+          customer: mona,
+          occurredAt: finishedAt,
+        },
+        {
+          kind: "reservation-finished",
+          reservation: "nina-unpaid-attempt",
+          customer: nina,
+          occurredAt: finishedAt,
+        },
+      ]);
+      const campaignId = await seedAutomation({
+        flow: decodeFlow({
+          trigger: { _tag: "ReservationFinished", payment: "individual" },
           steps: [send],
         }),
       });
@@ -1370,8 +1444,8 @@ describe.skipIf(!testDatabase)(
           (row): [string | null, string] => [row.customerEventId, row.outcome]
         )
       );
-      expect(outcomes.has(overnightEvent!)).toBe(false);
-      expect(outcomes.get(dayEvent!)).toBe("would-send");
+      expect(outcomes.get(monaEvent!)).toBe("would-send");
+      expect(outcomes.has(ninaEvent!)).toBe(false);
     });
 
     test("a reschedule in Dotypos changes the next preview without local writes", async () => {

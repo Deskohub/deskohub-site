@@ -1,6 +1,10 @@
 import "@/shared/polyfills/temporal";
 
-import type { DotyposCustomerId, DotyposService } from "@deskohub/dotypos";
+import {
+  type DotyposCustomerId,
+  type DotyposService,
+  dotyposIdReadRequests,
+} from "@deskohub/dotypos";
 import type { AutomationFlowType as AutomationFlow } from "@deskohub/workspace-admin-api";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { Effect, Match, Option, Schema } from "effect";
@@ -50,7 +54,7 @@ import {
 } from "./automation-run-entry";
 import {
   isOfTriggerStay,
-  triggeringVisitTiers,
+  loadStayVisits,
 } from "./automation-trigger-qualification";
 import { lockTriggeringCustomerEvents } from "./automation-triggering-events";
 import { lockTriggeringReservations } from "./automation-triggering-reservations";
@@ -91,22 +95,45 @@ export const plannedIntakeUnit = (
   requestCost: unit.requestCost,
 });
 
-/**
- * The triggering reservations whose visits intake reads, each once: to
- * re-check them (D35) or to judge the trigger's stay (D1).
- */
-export const revisitedReservations = (
+/** The stay triggers' reservations, whose visits judge the stay (D1), each once. */
+const stayReservations = (
   matches: readonly IntakeMatch[]
 ): readonly WorkspaceReservationId[] => [
   ...new Set(
-    matches.flatMap(({ event: { kind, workspaceReservationId }, stay }) =>
-      (readsTriggeringVisit(kind) || Option.isSome(stay)) &&
-      workspaceReservationId !== null
+    matches.flatMap(({ event: { workspaceReservationId }, stay }) =>
+      Option.isSome(stay) && workspaceReservationId !== null
         ? [workspaceReservationId]
         : []
     )
   ),
 ];
+
+/** The triggering reservations whose visits intake re-checks (D35), each once. */
+const recheckedReservations = (
+  matches: readonly IntakeMatch[]
+): readonly WorkspaceReservationId[] => [
+  ...new Set(
+    matches.flatMap(({ event: { kind, workspaceReservationId } }) =>
+      readsTriggeringVisit(kind) && workspaceReservationId !== null
+        ? [workspaceReservationId]
+        : []
+    )
+  ),
+];
+
+/**
+ * The most Dotypos requests intake makes for the matches' triggering
+ * visits: the stay triggers' read (D1), and the re-checks' unless the
+ * gates read the customers' visits anyway (D35).
+ */
+export const triggeringVisitRequests = (
+  matches: readonly IntakeMatch[],
+  gatesReadVisits: boolean
+): number =>
+  dotyposIdReadRequests(stayReservations(matches).length) +
+  (gatesReadVisits
+    ? 0
+    : dotyposIdReadRequests(recheckedReservations(matches).length));
 
 /** What intake decided for one event and one automation. */
 type IntakeDecision = IntakeMatch & {
@@ -406,7 +433,7 @@ const commitIntakeDecisions = Effect.fn("automationIntake.commit")(
 
 /** The `intake` unit: re-checks triggering visits live and starts runs for matched events (§5.6). */
 export const makeIntakeHandler = Effect.gen(function* () {
-  const { db, transaction } = yield* WorkspaceDatabase;
+  const { transaction } = yield* WorkspaceDatabase;
   const facts = yield* AutomationEvaluationFacts;
   const recipients = yield* CampaignRecipientService;
   const context = yield* Effect.context<WorkspaceDatabase | DotyposService>();
@@ -414,12 +441,12 @@ export const makeIntakeHandler = Effect.gen(function* () {
   const databaseFailure = (cause: unknown) =>
     new AutomationUnitFetchFailure({ code: "database", cause });
 
-  /** Each triggering visit, from the gates' visits when they read them. */
+  /** Each re-checked triggering visit, from the gates' visits when they read them. */
   const triggeringVisits = (
     matches: readonly IntakeMatch[],
     fetched: AudienceFactSource
   ) => {
-    const reservations = revisitedReservations(matches);
+    const reservations = recheckedReservations(matches);
     const gateVisits = AudienceFactSource.$is("Fetched")(fetched)
       ? fetched.visits
       : Option.none();
@@ -523,18 +550,18 @@ export const makeIntakeHandler = Effect.gen(function* () {
       ].sort();
       const fetched = yield* facts.fetch({ reads, customers });
       const visits = yield* triggeringVisits(matches, fetched);
-      const visitOf = ({ event }: IntakeMatch) =>
-        Option.flatten(
-          Option.fromUndefinedOr(
-            event.workspaceReservationId === null
-              ? undefined
-              : visits.get(event.workspaceReservationId)
-          )
+      const stayVisits = yield* loadStayVisits(stayReservations(matches)).pipe(
+        Effect.provideContext(context)
+      );
+      const visitOf = <Visit>(
+        byReservation: ReadonlyMap<WorkspaceReservationId, Visit>,
+        { event }: IntakeMatch
+      ) =>
+        Option.fromUndefinedOr(
+          event.workspaceReservationId === null
+            ? undefined
+            : byReservation.get(event.workspaceReservationId)
         );
-      const tiers = yield* triggeringVisitTiers(
-        db,
-        matches.filter(({ stay }) => Option.isSome(stay)).map(visitOf)
-      ).pipe(Effect.mapError(databaseFailure));
       const now = yield* currentInstant;
 
       const decisions = yield* Effect.forEach(
@@ -545,6 +572,12 @@ export const makeIntakeHandler = Effect.gen(function* () {
           Option.Option<IntakeDecision>,
           AutomationUnitFetchFailure
         > => {
+          // A visit not of the trigger's stay takes no receipt, as a
+          // product mismatch (D1), before the re-check could record one;
+          // a finished visit's stay can't change.
+          if (!isOfTriggerStay(match.stay, visitOf(stayVisits, match))) {
+            return Effect.succeed(Option.none());
+          }
           const version = versions.get(match.versionId);
           const flow = Option.flatMap(
             Option.fromUndefinedOr(version),
@@ -555,17 +588,15 @@ export const makeIntakeHandler = Effect.gen(function* () {
               Option.some({ ...match, flow, outcome: "failed" })
             );
           }
-          const visit = visitOf(match);
-          const recheck = recheckVisit(match.event, visit, now);
+          const recheck = recheckVisit(
+            match.event,
+            Option.flatten(visitOf(visits, match)),
+            now
+          );
           if (recheck !== "current") {
             return Effect.succeed(
               Option.some({ ...match, flow, outcome: recheck })
             );
-          }
-          // A visit not of the trigger's stay takes no receipt, as a
-          // product mismatch (D1); a finished visit's stay can't change.
-          if (!isOfTriggerStay(match.stay, visit, tiers)) {
-            return Effect.succeed(Option.none());
           }
           const customer = match.event.dotyposCustomerId;
           return recipients

@@ -5,7 +5,6 @@ import type {
   AutomationTriggerType as AutomationTrigger,
   ReservationPayment,
   ReservationProductFilterType,
-  ReservationStay,
 } from "@deskohub/workspace-admin-api";
 import {
   and,
@@ -53,10 +52,7 @@ import {
   type AutomationPreviewOutcome,
   automationPreviewOutcomes,
 } from "../automation-states";
-import {
-  triggerPayment,
-  triggerStay,
-} from "./automation-trigger-qualification";
+import { triggerPayment } from "./automation-trigger-qualification";
 import { triggeringCustomerEvent } from "./automation-triggering-events";
 
 export type AutomationPreviewRow = typeof previews.$inferSelect;
@@ -80,11 +76,6 @@ export type ReplayEventScope = {
   readonly product: Option.Option<ReservationProductFilterType>;
   /** Reservation triggers only: how the reservation must be paid (D1). */
   readonly payment: Option.Option<ReservationPayment>;
-  /**
-   * Reservation triggers only: the stay the triggering visit must be of
-   * (D1), which the unit judges from the live visit.
-   */
-  readonly stay: Option.Option<ReservationStay>;
   /** Events in `[asOf − 30 days, asOf)`. */
   readonly asOf: Temporal.Instant;
   /**
@@ -104,8 +95,9 @@ export type ReplayEvent = {
 
 /**
  * The events an event trigger's dry run replays: its kind, with a
- * reservation trigger's product filter, payment and stay. None for a
- * schedule.
+ * reservation trigger's product filter and payment. A trigger's stay needs
+ * the live visit, so the units judge it, and `events_total` and the 1,000
+ * also count events of another stay. None for a schedule.
  */
 export const replayEventScope = (
   trigger: AutomationTrigger,
@@ -119,7 +111,6 @@ export const replayEventScope = (
       kind,
       product: Option.fromUndefinedOr(product),
       payment: triggerPayment(trigger),
-      stay: triggerStay(trigger),
       asOf: preview.asOf,
       recordedBy: preview.createdAt,
     });

@@ -86,7 +86,7 @@ import {
   replayEventScope,
   selectReplayEvents,
 } from "./automation-previews";
-import { readsTriggerVisit } from "./automation-trigger-qualification";
+import { triggerVisitReads } from "./automation-trigger-qualification";
 import { planAutomationUnits } from "./automation-unit-planning";
 import {
   type AutomationWorkingCopy,
@@ -482,9 +482,8 @@ export class AutomationDryRun extends Context.Service<
                     ...chunk,
                     requestCost:
                       chunk.requestCost +
-                      (readsTriggerVisit(input.flow.trigger)
-                        ? recheckCost(events, chunk.customers)
-                        : 0),
+                      triggerVisitReads(input.flow.trigger) *
+                        recheckCost(events, chunk.customers),
                   })),
                 }))
               ),
