@@ -59,7 +59,7 @@ export type PreparedPassReminder = {
 };
 
 export const passReminderWithdrawnCode = "pass-reminder-withdrawn";
-export const decodePassReminderContext =
+const decodePassReminderContext =
   Schema.decodeUnknownOption(passReminderContext);
 
 const snapshotOf = (candidate: PassReminderCandidate): PassReminderContext => {
