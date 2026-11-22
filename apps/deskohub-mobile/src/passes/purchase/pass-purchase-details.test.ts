@@ -112,3 +112,49 @@ describe("pass purchase Details", () => {
     ).toEqual({ ok: false, problems: { holderEmail: true } });
   });
 });
+
+const { elementTree, findAll, hostTree } = await import(
+  "../../ui/testing/element-tree"
+);
+const { PassPurchaseAgreement } = await import("./pass-purchase-agreement");
+
+test("uses one agreement for both policy documents and the actual early-start request", () => {
+  const earlyStartRequest = "The service starts on the selected date.";
+  const tree = hostTree(
+    elementTree(PassPurchaseAgreement, {
+      disclosure: {
+        documents: [
+          {
+            key: "terms-and-conditions",
+            hash: "terms",
+            hashAlgorithm: "sha256",
+            path: "/en-US/terms-and-conditions",
+          },
+          {
+            key: "operating-rules",
+            hash: "rules",
+            hashAlgorithm: "sha256",
+            path: "/en-US/operating-rules",
+          },
+        ],
+        earlyStartRequest,
+      },
+      checked: false,
+      disabled: false,
+      onToggle: () => undefined,
+      locale: "en-US",
+    })
+  );
+
+  const checkboxes = findAll(tree, "Pressable").filter(
+    ({ props }) => props.role === "checkbox"
+  );
+  expect(checkboxes).toHaveLength(1);
+  expect(checkboxes[0]?.props).toMatchObject({
+    "aria-checked": false,
+    "aria-label": expect.stringContaining(earlyStartRequest),
+  });
+  expect(
+    findAll(tree, "Text").filter(({ props }) => props.role === "link")
+  ).toHaveLength(2);
+});

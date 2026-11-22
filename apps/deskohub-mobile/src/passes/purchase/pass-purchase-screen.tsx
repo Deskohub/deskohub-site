@@ -111,7 +111,8 @@ const purchaseRefusal = (error: unknown) =>
 
 const needsStatus = (error: unknown) =>
   Predicate.isTagged(error, "CustomerWriteUnconfirmed") ||
-  purchaseRefusal(error) === "payment-in-progress";
+  purchaseRefusal(error) === "payment-in-progress" ||
+  purchaseRefusal(error) === "billing-changed";
 
 export function PassPurchaseScreen({ kind }: { readonly kind: PurchaseKind }) {
   const locale = useAppLocale();
@@ -275,16 +276,19 @@ function PassPurchaseFlow({
   );
   useFocusEffect(
     useCallback(() => {
+      if (Platform.OS !== "android") return;
       const subscription = BackHandler.addEventListener(
         "hardwareBackPress",
         () => {
-          if (step === "choose" && !working.current) return false;
+          if (step === "choose" && !working.current && router.canGoBack()) {
+            return false;
+          }
           goBack();
           return true;
         }
       );
       return () => subscription.remove();
-    }, [goBack, step])
+    }, [goBack, router, step])
   );
 
   const name = Option.getOrUndefined(profile.self.name);
@@ -433,10 +437,7 @@ function PassPurchaseFlow({
         showStatus(quote.orderId);
         return;
       }
-      if (
-        purchaseRefusal(error) === "quote-expired" ||
-        purchaseRefusal(error) === "billing-changed"
-      ) {
+      if (purchaseRefusal(error) === "quote-expired") {
         attempt.current = undefined;
         setStage("details");
       }
