@@ -6,7 +6,7 @@ import {
 import { Data, Duration, Effect, Match } from "effect";
 import { env } from "@/env";
 import { defineWorkspaceTask } from "@/shared/backend/workspace-effect";
-import { clamp } from "@/shared/utils/number";
+import { clamp } from "@/shared/utils";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
   type QueueConsumer,

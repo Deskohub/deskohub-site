@@ -20,7 +20,7 @@ export const QueueRedelivery = Data.taggedEnum<QueueRedelivery>();
 
 export type QueueDeliveryMode = "preview" | "durable";
 
-export interface QueueDelivery {
+interface QueueDelivery {
   readonly payload: unknown;
   readonly topic: string;
   readonly messageId: string;
