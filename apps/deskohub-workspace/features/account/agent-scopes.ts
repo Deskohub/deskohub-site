@@ -1,3 +1,5 @@
+export const customerPassesAgentScope = "passes:manage";
+
 /**
  * What a customer can let an AI agent do for them through the Workspace
  * OAuth server. Reading offerings needs no grant; the scope only lets agents
@@ -7,6 +9,7 @@ export const customerAgentScopes = [
   "offerings:read",
   "reservations:read",
   "reservations:create",
+  customerPassesAgentScope,
 ] as const;
 
 export type CustomerAgentScope = (typeof customerAgentScopes)[number];
@@ -17,6 +20,12 @@ export type CustomerAgentScope = (typeof customerAgentScopes)[number];
  * administration call re-reads the grant, so the scope alone grants nothing.
  */
 export const administrationAgentScope = "administration";
+
+/** These permissions require an explicit consent from the customer. */
+export const consentRequiredAgentScopes = [
+  administrationAgentScope,
+  customerPassesAgentScope,
+] as const;
 
 /** Every scope an agent's grant can carry. */
 export const agentScopes = [

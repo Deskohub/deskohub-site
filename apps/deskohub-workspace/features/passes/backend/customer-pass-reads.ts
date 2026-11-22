@@ -16,11 +16,6 @@ import { and, eq, inArray } from "drizzle-orm";
 import { Data, Effect, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { passEntryClaims, workspaceReservations } from "@/db/schema";
-import {
-  readBoughtPassGifts,
-  readHeldPassGiftBuyers,
-} from "@/features/account/account-passes.server";
-import { listHeldUnlimitedPasses } from "@/features/account/account-unlimited-passes.server";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import {
   type BookableEntryPack,
@@ -51,6 +46,8 @@ import { getUnlimitedPassAccessDay } from "../unlimited-pass-period";
 import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate";
 import { recoverEntryPackGiftClaims } from "./entry-pack-gift";
 import { getHeldEntryPackStatus, listHeldEntryPacks } from "./held-entry-packs";
+import { listHeldUnlimitedPasses } from "./held-unlimited-passes";
+import { readBoughtPassGifts, readHeldPassGiftBuyers } from "./pass-gift-reads";
 import { loadUnlimitedAccess } from "./unlimited-access";
 
 export class CustomerPassesClosed extends Data.TaggedError(

@@ -5,6 +5,12 @@ import {
 } from "../agent-tool-metadata";
 
 const agentToolEndpoint = "/api/mcp";
+const browserPassToolEndpoint = "/api/mcp/web";
+const browserPassToolNames = new Set([
+  "list_passes",
+  "start_pass_purchase",
+  "show_pass_access",
+]);
 
 /** A request to `/api/mcp` failed in transport, HTTP, or JSON-RPC. */
 export class AgentToolRequestError extends Data.TaggedError(
@@ -29,6 +35,9 @@ const publishedAgentToolSchema = Schema.Struct({
   title: Schema.optionalKey(Schema.String),
   description: Schema.String,
   inputSchema: publishedInputSchemaSchema,
+  annotations: Schema.optionalKey(
+    Schema.Struct({ readOnlyHint: Schema.optionalKey(Schema.Boolean) })
+  ),
   _meta: Schema.optionalKey(
     Schema.Struct({
       [agentToolAccessMetaKey]: Schema.optionalKey(Schema.String),
@@ -89,16 +98,76 @@ export const listAgentTools = postAgentToolRequest(
   {}
 ).pipe(Effect.map(({ result }) => result.tools));
 
+export const listBrowserPassTools = postAgentToolRequest(
+  toolsListResponseSchema,
+  "tools/list",
+  {},
+  browserPassToolEndpoint
+).pipe(
+  Effect.map(({ result }) =>
+    result.tools.filter(({ name }) => browserPassToolNames.has(name))
+  ),
+  Effect.orElseSucceed(() => [])
+);
+
 export const callAgentTool = (name: string, input: Schema.JsonObject) =>
-  postAgentToolRequest(toolCallResponseSchema, "tools/call", {
+  callTool(
     name,
-    arguments: input,
-  }).pipe(Effect.map(({ result }) => result));
+    input,
+    browserPassToolNames.has(name) ||
+      (name === "get_quote" && Object.hasOwn(input, "pass_id"))
+      ? browserPassToolEndpoint
+      : agentToolEndpoint
+  );
+
+const preparationQuoteResponse = Schema.Union([
+  Schema.Struct({ quote: Schema.Unknown }),
+  agentToolCallErrorSchema,
+]);
+
+/** The browser form consumes the signed quote before returning the public result. */
+export const quotePassForPreparation = (input: Schema.JsonObject) =>
+  postResponse(
+    preparationQuoteResponse,
+    `${browserPassToolEndpoint}/prepare-quote`,
+    input
+  ).pipe(
+    Effect.map((result) =>
+      "quote" in result
+        ? { isError: false as const, structuredContent: result.quote }
+        : { isError: true as const, structuredContent: result }
+    )
+  );
+
+const callTool = (name: string, input: Schema.JsonObject, endpoint: string) =>
+  postAgentToolRequest(
+    toolCallResponseSchema,
+    "tools/call",
+    {
+      name,
+      arguments: input,
+    },
+    endpoint
+  ).pipe(Effect.map(({ result }) => result));
 
 function postAgentToolRequest<S extends Schema.Top>(
   responseSchema: S,
   method: string,
-  params: Schema.JsonObject
+  params: Schema.JsonObject,
+  endpoint = agentToolEndpoint
+) {
+  return postResponse(responseSchema, endpoint, {
+    jsonrpc: "2.0",
+    id: 1,
+    method,
+    params,
+  });
+}
+
+function postResponse<S extends Schema.Top>(
+  responseSchema: S,
+  endpoint: string,
+  body: Schema.JsonObject
 ) {
   // One controller spans the headers and the body, so an interruption or
   // failure before the body is read aborts the request.
@@ -110,13 +179,13 @@ function postAgentToolRequest<S extends Schema.Top>(
     Effect.flatMap((request) =>
       Effect.tryPromise({
         try: () =>
-          fetch(agentToolEndpoint, {
+          fetch(endpoint, {
             method: "POST",
             headers: {
               Accept: "application/json, text/event-stream",
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+            body: JSON.stringify(body),
             credentials: "same-origin",
             signal: request.signal,
           }),

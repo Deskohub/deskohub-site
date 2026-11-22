@@ -1,7 +1,8 @@
 import "server-only";
 
-import { Duration, Effect, Match } from "effect";
+import { Context, Duration, Effect, Match } from "effect";
 import type { CustomerAgentGrant } from "@/features/account";
+import type { CustomerAccountId } from "@/features/account/customer-account";
 import {
   RequestBudget,
   type RequestBudgetPolicy,
@@ -33,6 +34,41 @@ const grantCallBudget = { limit: 10, window: Duration.minutes(10) };
  */
 const accountCallBudget = { limit: 20, window: Duration.minutes(30) };
 
+/** The account verified by the same-origin browser route. */
+export const BrowserAgentAccount = Context.Reference<
+  CustomerAccountId | undefined
+>("@deskohub-workspace/agent-tools/BrowserAgentAccount", {
+  defaultValue: () => undefined,
+});
+
+interface BudgetedTool {
+  readonly name: string;
+  readonly accountBudget?: AgentToolAccountBudget;
+}
+
+const accountPolicies = (
+  accountId: CustomerAccountId,
+  tool: BudgetedTool
+): ReadonlyArray<RequestBudgetPolicy> => {
+  const account = digest("account", accountId);
+  return [
+    { key: `agent-tool:account:${account}`, ...accountCallBudget },
+    ...(tool.accountBudget
+      ? [
+          {
+            key: `agent-tool:${tool.name}:account:${account}`,
+            ...tool.accountBudget,
+          },
+        ]
+      : []),
+  ];
+};
+
+export const spendBrowserCallBudget = (
+  accountId: CustomerAccountId,
+  tool: BudgetedTool
+) => spendAgentBudgets(accountPolicies(accountId, tool));
+
 /**
  * Spends the per-grant, per-account, and the tool's own account budgets of
  * one signed-in call. The per-IP limit stays the firewall rule every call
@@ -46,29 +82,22 @@ export const spendSignedInCallBudgets = Effect.fn(
   tool,
 }: {
   readonly grant: CustomerAgentGrant;
-  readonly tool: {
-    readonly name: string;
-    readonly accountBudget?: AgentToolAccountBudget;
-  };
+  readonly tool: BudgetedTool;
 }) {
-  const account = digest("account", grant.accountId);
   const policies: RequestBudgetPolicy[] = [
     {
       key: `agent-tool:grant:${digest("grant", grant.accountId, grant.clientId)}`,
       ...grantCallBudget,
     },
-    { key: `agent-tool:account:${account}`, ...accountCallBudget },
-    ...(tool.accountBudget
-      ? [
-          {
-            key: `agent-tool:${tool.name}:account:${account}`,
-            ...tool.accountBudget,
-          },
-        ]
-      : []),
+    ...accountPolicies(grant.accountId, tool),
   ];
-  const budget = yield* RequestBudget;
+  yield* spendAgentBudgets(policies);
+});
 
+const spendAgentBudgets = Effect.fn("agentTools.spendBudgets")(function* (
+  policies: ReadonlyArray<RequestBudgetPolicy>
+) {
+  const budget = yield* RequestBudget;
   yield* Effect.forEach(policies, (policy) =>
     budget.spend(policy).pipe(
       Effect.mapError(AgentToolError.unavailableService),

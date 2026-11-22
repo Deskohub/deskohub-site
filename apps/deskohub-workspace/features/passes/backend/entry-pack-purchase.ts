@@ -56,6 +56,7 @@ import {
   getEntryPackPrice,
   getUnlimitedPassPrice,
   isEntryPackQuoteExpired,
+  unlimitedPassCoffeePrice,
 } from "../pass-offer";
 import {
   type PassPurchaseQuote,
@@ -72,7 +73,10 @@ import {
   isUnlimitedPassFirstDayAdmissionExpired,
 } from "./entry-pack-order-payment-handler";
 import { quoteEntryPack } from "./entry-pack-quote";
-import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
+import {
+  hasPassQuoteExpired,
+  hasUnlimitedPassFirstDayEnded,
+} from "./entry-pack-settlement";
 import { reconfirmUnlimitedPassHolds } from "./unlimited-pass-holds";
 
 export class EntryPackPurchaseError extends Data.TaggedError(
@@ -91,6 +95,7 @@ export class EntryPackPurchaseError extends Data.TaggedError(
     | "billing-changed";
   readonly locale?: Locale;
   readonly earlyStartRequired?: boolean;
+  readonly orderId?: OrderId;
 }> {}
 
 const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
@@ -125,6 +130,7 @@ export const displayPassPurchasePrice = (
     quote.discountedSubtotal,
     quote.unlimitedCoffee
   ),
+  ...(quote.unlimitedCoffee && { coffeePrice: unlimitedPassCoffeePrice }),
   ...(quote.selection?.submittedCode !== undefined &&
     quote.discounts.some(
       ({ discount }) => discount.id === quote.submittedCodeDiscountId
@@ -372,13 +378,6 @@ const readOwnedPayablePass = Effect.fn("readOwnedPayablePass")(function* (
     discountableSubtotal: getEntryPackPrice(product),
   };
 });
-
-const hasPassQuoteExpired = (now: Temporal.Instant, purchase: PassPurchase) =>
-  purchase.product === "entry-pack"
-    ? isEntryPackQuoteExpired(now, purchase.validUntil)
-    : hasUnlimitedPassFirstDayEnded(purchase, now) ||
-      !purchase.holdsExpireAt ||
-      Temporal.Instant.compare(now, purchase.holdsExpireAt) >= 0;
 
 const requireOpenUnlimitedPassQuote = Effect.fnUntraced(function* (
   purchase: PassPurchase

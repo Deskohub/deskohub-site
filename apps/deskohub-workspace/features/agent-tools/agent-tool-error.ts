@@ -13,6 +13,7 @@ export type AgentToolErrorCode =
   | "availability_unavailable"
   | "quote_unavailable"
   | "offerings_unavailable"
+  | "passes_unavailable"
   | "rate_limited"
   | "service_unavailable"
   | "profile_incomplete"
@@ -30,6 +31,7 @@ export type AgentToolUnavailableCode =
   | "availability_unavailable"
   | "quote_unavailable"
   | "offerings_unavailable"
+  | "passes_unavailable"
   | "reservation_unavailable"
   | "reservations_unavailable"
   | "administration_unavailable";
@@ -80,6 +82,7 @@ const publicErrorCodes = [
   "availability_unavailable",
   "quote_unavailable",
   "offerings_unavailable",
+  "passes_unavailable",
   "rate_limited",
   "service_unavailable",
 ] as const;
@@ -229,6 +232,9 @@ export class AgentToolError extends Data.TaggedError("AgentToolError")<{
   static serviceUnavailable = () =>
     new AgentToolError({ details: { code: "service_unavailable" } });
 
+  static passesUnavailable = () =>
+    new AgentToolError({ details: { code: "passes_unavailable" } });
+
   /** Calls can't be admitted because a safeguard failed with this cause. */
   static unavailableService = (cause: unknown) =>
     new AgentToolError({ details: { code: "service_unavailable" }, cause });
@@ -288,6 +294,8 @@ export const getAgentToolErrorMessage = (
       quote_unavailable: () => m.agentToolErrorQuoteUnavailable({}, { locale }),
       offerings_unavailable: () =>
         m.agentToolErrorOfferingsUnavailable({}, { locale }),
+      passes_unavailable: () =>
+        m.agentToolErrorPassesUnavailable({}, { locale }),
       rate_limited: () => m.agentToolErrorRateLimited({}, { locale }),
       service_unavailable: () =>
         m.agentToolErrorServiceUnavailable({}, { locale }),

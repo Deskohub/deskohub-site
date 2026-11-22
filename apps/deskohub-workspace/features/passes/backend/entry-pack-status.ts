@@ -23,6 +23,7 @@ import { getEntryPackPayPath } from "../entry-pack-checkout";
 import { isEntryPackQuoteExpired } from "../pass-offer";
 import { getUnlimitedPassAccessDay } from "../unlimited-pass-period";
 import { readEntryPackGiftState } from "./entry-pack-gift";
+import { hasPassQuoteExpired } from "./entry-pack-settlement";
 
 const readOrderForViewer = Effect.fnUntraced(function* (
   orderId: OrderId,
@@ -32,6 +33,7 @@ const readOrderForViewer = Effect.fnUntraced(function* (
   const { db } = yield* WorkspaceDatabase;
   const [row] = yield* db
     .select({
+      product: passPurchases.product,
       tier: passPurchases.tier,
       locale: passPurchases.locale,
       entryCount: passPurchases.entryCount,
@@ -245,10 +247,7 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
   if (row.paymentState === "not_started") {
     const now = yield* currentInstant;
     const ended =
-      entryCount === null &&
-      (row.purchaseStatus === "void" ||
-        !row.holdsExpireAt ||
-        Temporal.Instant.compare(now, row.holdsExpireAt) >= 0);
+      row.purchaseStatus === "void" || hasPassQuoteExpired(now, row);
     return { ...details, status: ended ? "expired" : "not_started" } as const;
   }
   if (row.paymentState === "pending") {

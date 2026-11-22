@@ -12,7 +12,6 @@ import {
   Effect,
   Exit,
   FiberSet,
-  Match,
   Option,
   Schema,
   Scope,
@@ -30,10 +29,15 @@ import {
   type AgentToolDownload,
   AgentToolReply,
   CallableAgentTools,
+  getCustomerToolScopes,
   getRequestedAgentToolLocale,
 } from "./agent-tool";
 import { AgentToolAdmission } from "./agent-tool-admission.service";
-import { spendSignedInCallBudgets } from "./agent-tool-call-budget";
+import {
+  BrowserAgentAccount,
+  spendBrowserCallBudget,
+  spendSignedInCallBudgets,
+} from "./agent-tool-call-budget";
 import type { AgentToolClient } from "./agent-tool-client";
 import {
   AgentToolError,
@@ -171,6 +175,22 @@ const serveAgentToolMcpRequest = <R>(exchange: McpExchange<R>) =>
     ),
     Effect.flatMap(closeScopeAfterBody)
   );
+
+/** The browser transport is already authenticated by the WebMCP route. */
+export const serveBrowserAgentToolMcpRequest = <R>({
+  tools,
+  request,
+}: {
+  readonly tools: ReadonlyArray<AgentTool<R>>;
+  readonly request: Request;
+}) =>
+  serveAgentToolMcpRequest({
+    tools,
+    request,
+    instructions: "",
+    client: "other",
+    caller: Option.none(),
+  });
 
 /** One MCP request and the tools and caller it is served with. */
 type McpExchange<R> = {
@@ -421,7 +441,7 @@ const callAgentTool = <R>({
       (allowed) => allowed,
       () => AgentToolError.rateLimited()
     ),
-    Effect.andThen(spendCallBudgets({ tool, caller })),
+    Effect.andThen(spendCallBudgets({ tool, caller, args })),
     Effect.flatMap(() =>
       tool
         .call(args, caller)
@@ -446,23 +466,24 @@ const callAgentTool = <R>({
 const spendCallBudgets = <R>({
   tool,
   caller,
+  args,
 }: {
   readonly tool: AgentTool<R>;
   readonly caller: Option.Option<CustomerAgentCaller>;
-}) =>
-  Match.value(tool).pipe(
-    Match.discriminatorsExhaustive("access")({
-      public: () => Effect.void,
-      "signed-in": (signedInTool) =>
-        Option.match(caller, {
-          onNone: () => Effect.void,
-          onSome: ({ grant }) =>
-            spendSignedInCallBudgets({ grant, tool: signedInTool }),
-        }),
-      // Administration is staff work, not a customer's booking traffic.
-      administration: () => Effect.void,
-    })
+  readonly args: Schema.Json;
+}) => {
+  if (getCustomerToolScopes(tool, args).length > 0) {
+    return Option.match(caller, {
+      onNone: () => Effect.void,
+      onSome: ({ grant }) => spendSignedInCallBudgets({ grant, tool }),
+    });
+  }
+  return BrowserAgentAccount.pipe(
+    Effect.flatMap((accountId) =>
+      accountId ? spendBrowserCallBudget(accountId, tool) : Effect.void
+    )
   );
+};
 
 /** Counts the call by the caller's agent category, after the response. */
 const recordAgentToolCall = (

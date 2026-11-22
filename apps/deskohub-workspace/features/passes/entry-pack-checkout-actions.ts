@@ -503,27 +503,11 @@ const beginUnlimitedAction = defineWorkspaceAction(
             };
           }).pipe(
             Effect.catchTag(
-              "UnlimitedPassHandoffPaymentStarted",
-              Effect.fnUntraced(function* ({ orderId }) {
-                const statusPath = yield* readOwnedPassPurchaseStatusPath(
-                  orderId,
-                  session.accountId,
-                  "unlimited"
-                );
-                if (!statusPath) {
-                  return yield* new EntryPackPurchaseError({
-                    reason: "unavailable",
-                  });
-                }
-                return { status: "status" as const, statusPath };
-              })
-            ),
-            Effect.catchTag(
               "EntryPackPurchaseError",
               Effect.fnUntraced(function* (error: EntryPackPurchaseError) {
                 if (error.reason !== "payment-in-progress") return yield* error;
                 const statusPath = yield* readOwnedPassPurchaseStatusPath(
-                  input.orderId,
+                  error.orderId ?? input.orderId,
                   session.accountId,
                   "unlimited"
                 );

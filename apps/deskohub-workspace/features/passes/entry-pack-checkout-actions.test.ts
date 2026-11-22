@@ -401,7 +401,8 @@ test("a prepared recipient edit returns the original status when payment starts 
   paidOrders.add(originalOrderId);
   unlimitedFailures.set(
     orderId,
-    new unlimited.UnlimitedPassHandoffPaymentStarted({
+    new purchase.EntryPackPurchaseError({
+      reason: "payment-in-progress",
       orderId: originalOrderId,
     })
   );

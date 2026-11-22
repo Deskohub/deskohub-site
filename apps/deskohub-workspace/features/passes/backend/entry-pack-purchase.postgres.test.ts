@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import {
+  DotyposCustomerIdSchema,
+  DotyposService,
+  DotyposTableSchema,
+} from "@deskohub/dotypos";
+import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import {
   EmailConfigTag,
   EmailDeliveryIdSchema,
@@ -14,6 +19,7 @@ import {
   NexiService,
 } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
+import { CustomerPassPurchase } from "@deskohub/workspace-customer-api";
 import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -73,8 +79,10 @@ import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/wo
 import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
+import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
+import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId as accountId } from "@/shared/testing/workspace-fixtures.test-utils";
@@ -84,6 +92,7 @@ import {
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { applyPackAdjustment } from "../admin/apply-pass-adjustment";
+import { unlimitedPassCoffeePrice, unlimitedPassDays } from "../pass-offer";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate";
 import {
@@ -94,6 +103,7 @@ import {
   startPurchase,
 } from "./customer-pass-purchase";
 import { customerPassPurchaseLayers } from "./customer-pass-purchase-layers";
+import { CustomerPasses } from "./customer-passes.service";
 import {
   claimEntryPackGifts,
   queueEntryPackGiftResend,
@@ -386,7 +396,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       let failInvitationSend = false;
       let failInternalInvoice = false;
       let beforeAdmission = Effect.void;
-      let beforeGiftAccountLock = Effect.void;
+      let beforeProviderCreation = Effect.void;
+      let beforeOrderLock = Effect.void;
       const rejectedConfirmations = new Set<string>();
       const inconclusiveProviderOrders = new Set<string>();
       let buyerName = "Fixture Buyer";
@@ -427,8 +438,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           withActiveAccount: (accountId, effect, options) =>
             Effect.suspend(() => {
               if (!options?.passPurchaseOrderId) return Effect.void;
-              const beforeLock = beforeGiftAccountLock;
-              beforeGiftAccountLock = Effect.void;
+              const beforeLock = beforeOrderLock;
+              beforeOrderLock = Effect.void;
               return beforeLock;
             }).pipe(
               Effect.andThen(
@@ -630,22 +641,21 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Layer.provide(
             Layer.mock(NexiService, {
               createHostedPaymentPage: ({ orderId, resultUrl, cancelUrl }) =>
-                Effect.suspend(() => {
+                Effect.gen(function* () {
+                  yield* beforeProviderCreation;
                   providerOrders.push(orderId);
                   providerReturns.push({ resultUrl, cancelUrl });
                   if (failCreation) {
                     failCreation = false;
-                    return Effect.fail(
-                      new NetworkError({
-                        message: "Synthetic ambiguous Nexi creation",
-                      })
-                    );
+                    return yield* new NetworkError({
+                      message: "Synthetic ambiguous Nexi creation",
+                    });
                   }
-                  return Effect.succeed({
+                  return {
                     orderId,
                     hostedPage: "https://nexi.test/payment",
                     securityToken: "synthetic-session",
-                  });
+                  };
                 }),
               getOrder: () =>
                 Effect.fail(
@@ -822,8 +832,8 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         rejectNextInvitation: () => {
           failInvitationSend = true;
         },
-        beforeInvitationAccountLock: (change: Effect.Effect<void>) => {
-          beforeGiftAccountLock = change;
+        beforePassPurchaseOrderLock: (change: Effect.Effect<void>) => {
+          beforeOrderLock = change;
         },
         resendAsBuyer: (at: Temporal.Instant, signal: AbortSignal) =>
           Effect.runPromise(
@@ -843,24 +853,65 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         providerOrders,
         providerReturns,
         verifiedOrders,
-        customerApi: (viewer = session) => {
+        beforeProviderCreation: (before: Effect.Effect<void>) => {
+          beforeProviderCreation = before;
+        },
+        customerApi: (
+          viewer = session,
+          statusAt?: Temporal.Instant,
+          unlimitedProvider?: typeof DotyposService.Service
+        ) => {
+          const checkoutServices = unlimitedProvider
+            ? Layer.mergeAll(
+                services,
+                backgroundAccountSections,
+                fulfillmentLockLayer,
+                Layer.succeed(DotyposService, unlimitedProvider),
+                WorkspaceReservationRepository.Default.pipe(
+                  Layer.provide(db.layer)
+                ),
+                Layer.mock(GoogleCalendarWorkspaceLimitationsService, {
+                  listLimitations: () => Effect.succeed([]),
+                })
+              )
+            : services;
           const withoutActor = Layer.effectContext(
-            Layer.build(services).pipe(
+            Layer.build(checkoutServices).pipe(
               Effect.map(Context.omit(CurrentCustomerAccount))
             )
           );
           return makeCustomerApiTestServer({
             session: viewer,
             reservations: {
-              currentAccount: currentAccountResolving((active) => ({
-                kind: "profile-missing",
-                session: active,
-                reviewMarker: "absent",
-              })),
+              currentAccount: currentAccountResolving((active) =>
+                unlimitedProvider && active.accountId === accountId
+                  ? {
+                      kind: "linked",
+                      session: active,
+                      account: { accountId, dotyposCustomerId },
+                      autoLinked: false,
+                      reviewMarker: "absent",
+                    }
+                  : {
+                      kind: "profile-missing",
+                      session: active,
+                      reviewMarker: "absent",
+                    }
+              ),
             },
             passes: {
               release: CoworkPassesReleaseGate.fromDecision(true),
               database: db.layer,
+              ...(statusAt && {
+                passes: Layer.effect(
+                  CustomerPasses,
+                  Effect.map(CustomerPasses, (passes) => ({
+                    ...passes,
+                    purchaseStatus: (orderId) =>
+                      passes.purchaseStatus(orderId).pipe(atInstant(statusAt)),
+                  }))
+                ).pipe(Layer.provide(CustomerPasses.Default)),
+              }),
               purchases: {
                 ...customerPassPurchaseLayers,
                 begin: withoutActor,
@@ -1551,6 +1602,218 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         redirectUrl: "https://nexi.test/payment",
       });
       expect(purchase.providerOrders).toHaveLength(1);
+      purchase.abandonProviderOrder();
+      const pending = await api.handle(
+        customerApiRequest({ method: "GET", path })
+      );
+      expect(await pending.json()).toMatchObject({
+        status: "pending",
+        paymentUrl: "https://nexi.test/payment",
+      });
+      const privatePage = await otherBuyer.handle(
+        customerApiRequest({ method: "GET", path })
+      );
+      expect(await privatePage.json()).toEqual({
+        _tag: "CustomerPassNotFound",
+      });
+    });
+
+    test("Unlimited replacement reopens the buyer's payment when Pay wins the race", async () => {
+      const db = database!;
+      const payment = await integration(db, 2_000);
+      const dotypos = makeInMemoryDotypos({
+        tables: [
+          Schema.decodeUnknownSync(DotyposTableSchema)({
+            id: "42",
+            _cloudId: "1",
+            display: true,
+            enabled: true,
+            name: "Synthetic reserved desk",
+            seats: "1",
+            tags: ["cowork:reserved-desk", "cowork:open-space"],
+          }),
+        ],
+      });
+      const api = payment.customerApi(session, undefined, dotypos.service);
+      const startDate = getCurrentWorkspaceDate().add({ days: 15 });
+      const input = (offset: number) => ({
+        orderId: crypto.randomUUID(),
+        locale: "en-US",
+        product: {
+          kind: "unlimited",
+          selection: {
+            tier: "reserved-desk",
+            startDate: startDate.add({ days: offset }).toString(),
+          },
+        },
+      });
+      const begin = (
+        body: ReturnType<typeof input> & {
+          expectedBuyerAccountId?: string;
+          supersedeOrderId?: string;
+        }
+      ) =>
+        customerApiRequest({ method: "POST", path: "/passes/purchases", body });
+      const parsePurchase = async (response: Response) => {
+        const body = await response.json();
+        expect(response.status).toBe(200);
+        return Schema.decodeUnknownSync(CustomerPassPurchase)(body);
+      };
+      const withCoffee = {
+        ...input(0),
+        product: {
+          kind: "unlimited",
+          selection: {
+            tier: "open-space",
+            startDate: startDate.toString(),
+            coffee: true,
+          },
+        },
+      };
+      const mismatchedBuyer = await api.handle(
+        begin({
+          ...withCoffee,
+          expectedBuyerAccountId: crypto.randomUUID(),
+        })
+      );
+      expect(mismatchedBuyer.status).toBe(409);
+      expect(await mismatchedBuyer.json()).toEqual({
+        _tag: "CustomerPassPurchaseRefused",
+        reason: "purchase-conflict",
+      });
+      expect(dotypos.reservations.size).toBe(0);
+      const blockedOrder = await db.pool.query(
+        "select id from orders where id = $1",
+        [withCoffee.orderId]
+      );
+      expect(blockedOrder.rows).toEqual([]);
+      const first = await parsePurchase(
+        await api.handle(
+          begin({
+            ...withCoffee,
+            expectedBuyerAccountId: accountId,
+          })
+        )
+      );
+      expect(first.price.coffeePrice).toEqual(unlimitedPassCoffeePrice);
+      const replacement = { ...input(1), supersedeOrderId: first.orderId };
+      const draft = await parsePurchase(await api.handle(begin(replacement)));
+      expect(draft.price.coffeePrice).toBeUndefined();
+      expect(await parsePurchase(await api.handle(begin(replacement)))).toEqual(
+        draft
+      );
+      const holdsBeforePay = [...dotypos.reservations.values()];
+      expect(
+        holdsBeforePay.filter(({ status }) => status === "CANCELLED")
+      ).toHaveLength(unlimitedPassDays);
+      expect(
+        holdsBeforePay.filter(({ status }) => status === "NEW")
+      ).toHaveLength(unlimitedPassDays);
+
+      const editSameId = await api.handle(
+        begin({ ...input(2), orderId: draft.orderId })
+      );
+      expect(editSameId.status).toBe(409);
+      expect(await editSameId.json()).toEqual({
+        _tag: "CustomerPassPurchaseRefused",
+        reason: "purchase-conflict",
+      });
+
+      // Keep the next window disjoint so capacity/overlap cannot mask an extra order.
+      const later = { ...input(40), supersedeOrderId: draft.orderId };
+      const otherBuyer = payment.customerApi({
+        ...session,
+        accountId: customerAccountIdSchema.make(crypto.randomUUID()),
+      });
+      const foreignReplacement = await otherBuyer.handle(begin(later));
+      expect(foreignReplacement.status).toBe(409);
+      expect(await foreignReplacement.json()).toEqual({
+        _tag: "CustomerPassPurchaseRefused",
+        reason: "purchase-conflict",
+      });
+
+      const providerReady = Promise.withResolvers<void>();
+      const releaseProvider = Promise.withResolvers<void>();
+      payment.beforeProviderCreation(
+        Effect.promise(() => {
+          providerReady.resolve();
+          return releaseProvider.promise;
+        })
+      );
+      payment.abandonProviderOrder();
+      const path = `/passes/purchases/${draft.orderId}`;
+      const paying = api.handle(
+        customerApiRequest({
+          method: "POST",
+          path: `${path}/payment`,
+          body: {
+            productKind: "unlimited",
+            accepted: true,
+            acceptedDocuments: draft.disclosure.documents.map(
+              ({ key, hash }) => ({ key, hash })
+            ),
+            unlimitedEarlyStartAccepted: Boolean(
+              draft.disclosure.earlyStartRequest
+            ),
+            displayedPriceFingerprint: draft.price.fingerprint,
+            returnTarget: "native-app",
+          },
+        })
+      );
+      await Promise.race([
+        providerReady.promise,
+        paying.then((response) => {
+          throw new Error(
+            `Pay returned ${response.status} before provider creation`
+          );
+        }),
+      ]);
+      const replacementReady = Promise.withResolvers<void>();
+      payment.beforePassPurchaseOrderLock(
+        Effect.sync(replacementReady.resolve)
+      );
+      const replacing = api.handle(begin(later));
+      try {
+        await Promise.race([
+          replacementReady.promise,
+          replacing.then((response) => {
+            throw new Error(
+              `Replacement returned ${response.status} before reaching the order lock`
+            );
+          }),
+        ]);
+      } finally {
+        releaseProvider.resolve();
+      }
+      const [paid, refused] = await Promise.all([paying, replacing]);
+      expect(paid.status).toBe(200);
+      expect(await paid.json()).toMatchObject({ status: "hosted" });
+      expect(refused.status).toBe(409);
+      const recovery = {
+        _tag: "CustomerPassPurchaseRefused",
+        reason: "payment-in-progress",
+        orderId: draft.orderId,
+      };
+      expect(await refused.json()).toEqual(recovery);
+      expect(await (await api.handle(begin(later))).json()).toEqual(recovery);
+      const status = await api.handle(
+        customerApiRequest({ method: "GET", path })
+      );
+      expect(await status.json()).toMatchObject({
+        orderId: draft.orderId,
+        status: "pending",
+        paymentUrl: "https://nexi.test/payment",
+      });
+      expect(payment.providerOrders).toHaveLength(1);
+      expect([...dotypos.reservations.values()]).toEqual(holdsBeforePay);
+      const recorded = await db.pool.query(
+        "select id, status from pass_purchases where id in ($1, $2, $3) order by valid_from",
+        [first.orderId, draft.orderId, later.orderId]
+      );
+      expect(recorded.rows).toEqual([
+        { id: first.orderId, status: "void" },
+        { id: draft.orderId, status: "pending_payment" },
+      ]);
     });
 
     test("customer Pay verifies the buyer, current consent and price before opening Nexi", async () => {
@@ -1759,9 +2022,22 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Temporal.Instant.from("2026-11-19T12:00:00Z")
         );
 
-        await expect(
-          payment.pay(Temporal.Instant.from("2027-01-18T23:00:00Z"))
-        ).rejects.toMatchObject({
+        const cutoff = Temporal.Instant.from("2027-01-18T23:00:00Z");
+        const response = await payment.customerApi(session, cutoff).handle(
+          customerApiRequest({
+            method: "GET",
+            path: `/passes/purchases/${payment.orderId}`,
+          })
+        );
+        expect(response.status).toBe(200);
+        const status = await response.json();
+        expect(status).toMatchObject({
+          status: "expired",
+          productKind: "entry-pack",
+        });
+        expect(status).not.toHaveProperty("resumePath");
+
+        await expect(payment.pay(cutoff)).rejects.toMatchObject({
           _tag: "EntryPackPurchaseError",
           reason: "quote-expired",
         });
@@ -1773,6 +2049,48 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         expect(attempts.rows).toEqual([]);
       }
     );
+
+    test("an Unlimited draft loses its resume link when the first service day ends before its hold", async () => {
+      const db = database!;
+      const cutoff = Temporal.Instant.from("2030-01-15T16:00:00Z");
+      const purchase = await integration(
+        db,
+        2_000,
+        cutoff.subtract({ minutes: 2 })
+      );
+      await db.pool.query(
+        `update pass_purchases
+         set product = 'unlimited', entry_count = null, unlimited_coffee = false,
+             valid_from = '2030-01-15', valid_until = '2030-02-14',
+             holds_expire_at = '2030-01-15T16:10:00Z'
+         where id = $1`,
+        [purchase.orderId]
+      );
+      const request = () =>
+        customerApiRequest({
+          method: "GET",
+          path: `/passes/purchases/${purchase.orderId}`,
+        });
+      const open = await purchase
+        .customerApi(session, cutoff.subtract({ milliseconds: 1 }))
+        .handle(request());
+      expect(open.status).toBe(200);
+      expect(await open.json()).toMatchObject({
+        status: "not_started",
+        productKind: "unlimited",
+        resumePath: expect.stringContaining("step=pay"),
+      });
+      const expired = await purchase
+        .customerApi(session, cutoff)
+        .handle(request());
+      expect(expired.status).toBe(200);
+      const status = await expired.json();
+      expect(status).toMatchObject({
+        status: "expired",
+        productKind: "unlimited",
+      });
+      expect(status).not.toHaveProperty("resumePath");
+    });
 
     test.each([2_000, 115_000])(
       "refuses locked admission when Prague midnight crosses after Pay for voucher value %i",
@@ -2302,7 +2620,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           values ($1,$2,'Fixture replacement holder',true,now(),now())`,
         [replacement, replacementEmail]
       );
-      payment.beforeInvitationAccountLock(
+      payment.beforePassPurchaseOrderLock(
         Effect.gen(function* () {
           const { db: workspaceDb } = yield* WorkspaceDatabase;
           const [purchase] = yield* workspaceDb
