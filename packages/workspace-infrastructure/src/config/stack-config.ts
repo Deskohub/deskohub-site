@@ -1,0 +1,300 @@
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as SchemaIssue from "effect/SchemaIssue";
+
+/** The default region for every Workspace stack (#1452). */
+export const defaultWorkspaceRegion = "europe-west1";
+
+export const WorkspaceStage = Schema.Literals([
+  "sandbox",
+  "preview",
+  "production",
+]).annotate({
+  identifier: "WorkspaceStage",
+  description: "The isolated Google Cloud environment a stack deploys to.",
+});
+export type WorkspaceStage = typeof WorkspaceStage.Type;
+
+export const GcpProjectId = Schema.String.check(
+  Schema.isPattern(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/)
+).pipe(
+  Schema.brand("GcpProjectId"),
+  Schema.annotate({
+    identifier: "GcpProjectId",
+    description: "A Google Cloud project ID; each stage has its own project.",
+  })
+);
+export type GcpProjectId = typeof GcpProjectId.Type;
+
+export const GcpRegion = Schema.String.check(
+  Schema.isPattern(/^[a-z]+-[a-z]+[0-9]$/)
+).pipe(
+  Schema.brand("GcpRegion"),
+  Schema.annotate({
+    identifier: "GcpRegion",
+    description: "A Google Cloud region such as europe-west1.",
+  })
+);
+export type GcpRegion = typeof GcpRegion.Type;
+
+export const GcsBucketName = Schema.String.check(
+  Schema.isPattern(/^[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]$/)
+).pipe(
+  Schema.brand("GcsBucketName"),
+  Schema.annotate({
+    identifier: "GcsBucketName",
+    description: "A Cloud Storage bucket name without dots.",
+  })
+);
+export type GcsBucketName = typeof GcsBucketName.Type;
+
+export const ServiceAccountEmail = Schema.String.check(
+  Schema.isPattern(
+    /^[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com$/
+  )
+).pipe(
+  Schema.brand("ServiceAccountEmail"),
+  Schema.annotate({
+    identifier: "ServiceAccountEmail",
+    description: "A user-managed service account in a Workspace project.",
+  })
+);
+export type ServiceAccountEmail = typeof ServiceAccountEmail.Type;
+
+/**
+ * A Secret Manager reference. It names a secret and pins one numeric
+ * version; the value itself never enters configuration or Alchemy state.
+ */
+export const WorkspaceWorkload = Schema.Literals([
+  "web",
+  "tasks-worker",
+  "scheduler-worker",
+]).annotate({
+  identifier: "WorkspaceWorkload",
+  description: "One of the three Cloud Run services built from the image.",
+});
+export type WorkspaceWorkload = typeof WorkspaceWorkload.Type;
+
+export const SecretReference = Schema.Struct({
+  /** The workloads that receive the secret; each gets its own grant. */
+  consumers: Schema.Array(WorkspaceWorkload).check(Schema.isMinLength(1)),
+  environmentVariable: Schema.String.check(
+    Schema.isPattern(/^[A-Z][A-Z0-9_]*$/)
+  ),
+  secretId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,255}$/)),
+  version: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/)),
+}).annotate({
+  identifier: "SecretReference",
+  description:
+    "A Secret Manager secret ID and pinned version, never a secret value.",
+});
+export type SecretReference = typeof SecretReference.Type;
+
+export const WorkspaceServiceAccounts = Schema.Struct({
+  /** The GitHub Actions identity that applies the stack. */
+  deployer: ServiceAccountEmail,
+  /** Runtime identity of the public web service. */
+  webRuntime: ServiceAccountEmail,
+  /** Runtime identity of the private Cloud Tasks worker. */
+  tasksWorkerRuntime: ServiceAccountEmail,
+  /** Runtime identity of the private Cloud Scheduler worker. */
+  schedulerWorkerRuntime: ServiceAccountEmail,
+  /** OIDC identity Cloud Tasks presents to the tasks worker. */
+  tasksInvoker: ServiceAccountEmail,
+  /** OIDC identity Cloud Scheduler presents to the scheduler worker. */
+  schedulerInvoker: ServiceAccountEmail,
+}).annotate({ identifier: "WorkspaceServiceAccounts" });
+export type WorkspaceServiceAccounts = typeof WorkspaceServiceAccounts.Type;
+
+const positiveInt = (maximum: number) =>
+  Schema.Int.check(Schema.isBetween({ minimum: 1, maximum }));
+
+export const WorkspaceCapacity = Schema.Struct({
+  webMaxInstances: positiveInt(100),
+  workerMaxInstances: positiveInt(100),
+  queueMaxConcurrentDispatches: positiveInt(1000),
+  queueMaxDispatchesPerSecond: positiveInt(500),
+}).annotate({ identifier: "WorkspaceCapacity" });
+export type WorkspaceCapacity = typeof WorkspaceCapacity.Type;
+
+/** An image reference pinned by digest. Tags are rejected. */
+export const ImageDigest = Schema.String.check(
+  Schema.isPattern(/^sha256:[a-f0-9]{64}$/)
+).pipe(
+  Schema.brand("ImageDigest"),
+  Schema.annotate({
+    identifier: "ImageDigest",
+    description: "An immutable OCI image digest (sha256).",
+  })
+);
+export type ImageDigest = typeof ImageDigest.Type;
+
+const IsoDate = Schema.String.check(
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+);
+
+/** Approved spend and lifetime for a disposable sandbox (#1452). */
+export const SandboxBudget = Schema.Struct({
+  currency: Schema.String.check(Schema.isPattern(/^[A-Z]{3}$/)),
+  maximumSpend: Schema.Finite.check(Schema.isGreaterThan(0)),
+  teardownAt: IsoDate,
+}).annotate({ identifier: "SandboxBudget" });
+export type SandboxBudget = typeof SandboxBudget.Type;
+
+export const GcpProjectNumber = Schema.String.check(
+  Schema.isPattern(/^[1-9][0-9]{5,19}$/)
+).pipe(
+  Schema.brand("GcpProjectNumber"),
+  Schema.annotate({
+    identifier: "GcpProjectNumber",
+    description:
+      "The numeric project number; it fixes deterministic run.app URLs.",
+  })
+);
+export type GcpProjectNumber = typeof GcpProjectNumber.Type;
+
+const BaseStackConfig = Schema.Struct({
+  projectId: GcpProjectId,
+  projectNumber: GcpProjectNumber,
+  region: GcpRegion.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(defaultWorkspaceRegion))
+  ),
+  stateBucket: GcsBucketName,
+  mobileUpdatesBucket: GcsBucketName,
+  serviceAccounts: WorkspaceServiceAccounts,
+  secrets: Schema.Array(SecretReference),
+  capacity: WorkspaceCapacity,
+  /** Cloud Scheduler jobs stay paused unless the environment is authorized. */
+  schedulesEnabled: Schema.Boolean,
+  /** Cloud Monitoring notification channel resource names. */
+  alertNotificationChannels: Schema.Array(
+    Schema.String.check(
+      Schema.isPattern(/^projects\/[a-z0-9-]+\/notificationChannels\/[0-9]+$/)
+    )
+  ),
+});
+
+export const SandboxStackConfig = Schema.Struct({
+  ...BaseStackConfig.fields,
+  stage: Schema.Literal("sandbox"),
+  budget: SandboxBudget,
+}).annotate({ identifier: "SandboxStackConfig" });
+
+export const PreviewStackConfig = Schema.Struct({
+  ...BaseStackConfig.fields,
+  stage: Schema.Literal("preview"),
+}).annotate({ identifier: "PreviewStackConfig" });
+
+export const ProductionStackConfig = Schema.Struct({
+  ...BaseStackConfig.fields,
+  stage: Schema.Literal("production"),
+}).annotate({ identifier: "ProductionStackConfig" });
+
+export const WorkspaceStackConfig = Schema.Union([
+  SandboxStackConfig,
+  PreviewStackConfig,
+  ProductionStackConfig,
+]).annotate({ identifier: "WorkspaceStackConfig" });
+export type WorkspaceStackConfig = typeof WorkspaceStackConfig.Type;
+export type WorkspaceStackConfigInput = typeof WorkspaceStackConfig.Encoded;
+
+/**
+ * A rejected stack configuration. It carries only the paths that failed,
+ * never the rejected input, so logging it cannot leak a pasted secret.
+ */
+export class WorkspaceStackConfigInvalid extends Data.TaggedError(
+  "WorkspaceStackConfigInvalid"
+)<{
+  readonly paths: ReadonlyArray<string>;
+  readonly reason: "schema" | "secret-material";
+}> {
+  override get message() {
+    return `Workspace stack configuration is invalid (${this.reason}) at: ${this.paths.join(", ")}`;
+  }
+}
+
+/**
+ * Shapes that only appear in secret material. A value that matches is
+ * rejected even under an allowed key.
+ */
+const secretMaterialPatterns: ReadonlyArray<RegExp> = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /"private_key"\s*:/,
+  /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i,
+  /\bAIza[0-9A-Za-z_-]{20,}/,
+  /\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{8,}/,
+  /\bgh[pousr]_[0-9A-Za-z]{20,}/,
+  /\bya29\.[0-9A-Za-z_-]{10,}/,
+];
+
+const secretKeyPattern =
+  /^(?:value|secretValue|password|token|apiKey|privateKey|credentials?|connectionString)$/i;
+
+const findSecretMaterial = (
+  input: unknown,
+  path: ReadonlyArray<string> = []
+): ReadonlyArray<string> => {
+  if (typeof input === "string") {
+    return secretMaterialPatterns.some((pattern) => pattern.test(input))
+      ? [path.join(".") || "<root>"]
+      : [];
+  }
+  if (Array.isArray(input)) {
+    return input.flatMap((item, index) =>
+      findSecretMaterial(item, [...path, String(index)])
+    );
+  }
+  if (typeof input === "object" && input !== null) {
+    return Object.entries(input).flatMap(([key, value]) =>
+      secretKeyPattern.test(key)
+        ? [[...path, key].join(".")]
+        : findSecretMaterial(value, [...path, key])
+    );
+  }
+  return [];
+};
+
+const issuePaths = (issue: SchemaIssue.Issue): ReadonlyArray<string> => [
+  ...new Set(
+    SchemaIssue.makeFormatterStandardSchemaV1()(issue).issues.map(
+      (entry) => entry.path?.map(String).join(".") || "<root>"
+    )
+  ),
+];
+
+/**
+ * Decode untrusted stack configuration. Unknown keys fail, so a pasted
+ * `value` or credential field never reaches a resource; known secret
+ * shapes fail under any key.
+ */
+export const decodeWorkspaceStackConfig = (input: unknown) =>
+  Effect.gen(function* () {
+    const secretPaths = findSecretMaterial(input);
+    if (secretPaths.length > 0) {
+      return yield* new WorkspaceStackConfigInvalid({
+        paths: secretPaths,
+        reason: "secret-material",
+      });
+    }
+    return yield* Schema.decodeUnknownEffect(WorkspaceStackConfig)(input, {
+      onExcessProperty: "error",
+      errors: "all",
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceStackConfigInvalid({
+            paths: issuePaths(error.issue),
+            reason: "schema",
+          })
+      )
+    );
+  });
+
+/**
+ * The configuration as it may appear in logs, plans and stack outputs.
+ * Decoding already rejected secret material, so the encoded form holds
+ * only identifiers and pinned secret versions.
+ */
+export const serializeWorkspaceStackConfig = (config: WorkspaceStackConfig) =>
+  JSON.stringify(Schema.encodeSync(WorkspaceStackConfig)(config));
