@@ -73,7 +73,7 @@ import { campaignContentForRecipient } from "../recipient-locale";
 import { CampaignEmailConfig } from "./campaign-email.config";
 import {
   campaignOfferPreparationLayers,
-  canRequestRecipientOffer,
+  canRequestCampaignOffers,
   type FrozenCampaignEmail,
   readCampaignRecipientContent,
   recordCampaignOfferOutcome,
@@ -1042,36 +1042,11 @@ export class CampaignBatchDelivery extends Context.Service<
       ) => {
         const publication = send.campaign.publication;
         if (!publication) return Effect.void;
-        return loadConsenting({
-          campaign: send.campaign,
+        return canRequestCampaignOffers(db, {
+          sendId: send.sendId,
+          versionId: publication.versionId,
           customerIds: batch.dotyposCustomerIds,
-        }).pipe(
-          Effect.filterOrFail(
-            (consenting) =>
-              batch.dotyposCustomerIds.every((id) => consenting.has(id)),
-            payloadChanged
-          ),
-          Effect.andThen(loadBatchRecipients(batch)),
-          Effect.filterOrFail(
-            (recipients) =>
-              recipients.length === batch.dotyposCustomerIds.length,
-            payloadChanged
-          ),
-          Effect.flatMap((recipients) =>
-            Effect.forEach(recipients, (recipient) =>
-              canRequestRecipientOffer(db, {
-                ...publication,
-                sendId: send.sendId,
-                ...recipient,
-              })
-            )
-          ),
-          Effect.filterOrFail(
-            (allowed) => allowed.every(Boolean),
-            payloadChanged
-          ),
-          Effect.asVoid
-        );
+        }).pipe(Effect.filterOrFail(Boolean, payloadChanged), Effect.asVoid);
       };
 
       const renderPersonalizedReplay = (

@@ -23,6 +23,7 @@ import type { CustomerValues } from "@/features/emails/values/customer";
 import { EmailDiscountValues } from "@/features/emails/values/discount";
 import { EmailRecipientPreparation } from "@/features/emails/values/preparation";
 import type { Locale } from "@/features/i18n";
+import { marketingConsentState } from "@/features/legal/backend/marketing-consent-ledger";
 import type { CampaignTemplateKey } from "../body/campaign-content";
 import type { CampaignSendId } from "../campaign-identifiers";
 
@@ -46,7 +47,7 @@ const recipientPreparation = (input: PersonalizationRecipient) =>
   );
 
 /** A ready snapshot may outlive a code an operator disabled. */
-export const activeRecipientOffer = (db: WorkspaceDatabaseClient) =>
+const activeRecipientOffer = (db: WorkspaceDatabaseClient) =>
   notExists(
     db
       .select({ name: emailDiscountIssuances.valueName })
@@ -70,22 +71,38 @@ export const activeRecipientOffer = (db: WorkspaceDatabaseClient) =>
       )
   );
 
-export const canRequestRecipientOffer = (
+const requestableOffer = (db: WorkspaceDatabaseClient) =>
+  and(
+    eq(emailPreparations.state, "ready"),
+    inArray(emailPreparations.deliveryOutcome, ["delivering", "uncertain"]),
+    activeRecipientOffer(db)
+  );
+
+/** Checks the whole batch's current consent and usable codes in one database snapshot. */
+export const canRequestCampaignOffers = (
   db: WorkspaceDatabaseClient,
-  input: PersonalizationRecipient
+  input: {
+    readonly sendId: CampaignSendId;
+    readonly versionId: EmailVersionId;
+    readonly customerIds: readonly DotyposCustomerId[];
+  }
 ) =>
   db
     .select({ id: emailPreparations.id })
     .from(emailPreparations)
     .where(
       and(
-        recipientPreparation(input),
-        eq(emailPreparations.state, "ready"),
-        inArray(emailPreparations.deliveryOutcome, ["delivering", "uncertain"]),
-        activeRecipientOffer(db)
+        eq(emailPreparations.sendId, input.sendId),
+        eq(emailPreparations.emailVersionId, input.versionId),
+        inArray(emailPreparations.dotyposCustomerId, [...input.customerIds]),
+        eq(
+          marketingConsentState(emailPreparations.dotyposCustomerId),
+          "active"
+        ),
+        requestableOffer(db)
       )
     )
-    .pipe(Effect.map((rows) => rows.length > 0));
+    .pipe(Effect.map((rows) => rows.length === input.customerIds.length));
 
 /** A replay reads saved values. It never prepares or generates them again. */
 export const readCampaignRecipientContent = Effect.fn(
@@ -96,8 +113,11 @@ export const readCampaignRecipientContent = Effect.fn(
     readonly templateKey: CampaignTemplateKey;
   }
 ) {
-  const allowed = yield* canRequestRecipientOffer(db, input);
-  if (!allowed) return undefined;
+  const [preparation] = yield* db
+    .select({ id: emailPreparations.id })
+    .from(emailPreparations)
+    .where(and(recipientPreparation(input), requestableOffer(db)));
+  if (!preparation) return undefined;
   const emails = yield* EmailPersistence;
   const preparations = yield* EmailRecipientPersistence;
   const version = yield* emails.getVersion(input.versionId);
@@ -108,11 +128,6 @@ export const readCampaignRecipientContent = Effect.fn(
     version.document.templateKey !== input.templateKey
   )
     return undefined;
-  const [preparation] = yield* db
-    .select({ id: emailPreparations.id })
-    .from(emailPreparations)
-    .where(recipientPreparation(input));
-  if (!preparation) return undefined;
   const snapshots = yield* preparations.readSnapshots(preparation.id);
   return Result.getOrUndefined(
     renderEmailContent({

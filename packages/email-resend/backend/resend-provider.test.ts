@@ -770,7 +770,12 @@ describe("ResendEmailProvider", () => {
       [
         400,
         "Batch request failed",
-        { _tag: "EmailServiceError", failureKind: "message", code: "http-400" },
+        {
+          _tag: "EmailServiceError",
+          failureKind: "message",
+          code: "http-400",
+          definitivelyUnsent: true,
+        },
       ],
       [
         422,
@@ -820,6 +825,27 @@ describe("ResendEmailProvider", () => {
       expect(result).toMatchObject({ _tag: "Failure", failure: expected });
       expect(batchSend).toHaveBeenCalledTimes(1);
     }
+  });
+
+  test("a statusless batch error does not prove non-delivery", async () => {
+    batchSend = mock<BatchSendImplementation>(async () => ({
+      error: { message: "invalid response" },
+    }));
+    const result = await runProvider(
+      Effect.flatMap(resendProvider, (provider) =>
+        settle(
+          provider.sendBatch(batchMessages, {
+            idempotencyKey: "campaign-batch-key",
+          })
+        )
+      )
+    );
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "EmailServiceError", code: "resend-invalid" },
+    });
+    if (result._tag === "Failure")
+      expect(result.failure).not.toHaveProperty("definitivelyUnsent");
   });
 
   test("treats a batch response with fewer IDs than messages as unconfirmed", async () => {
