@@ -1,9 +1,12 @@
 import { Context, Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
+import { PassReminderReads } from "@/features/passes/backend/pass-reminder-reads.service";
+import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
 import { ReservationActivitySweep } from "@/features/reservation/backend/reservation-activity-sweep.service";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { CampaignBatchDelivery } from "../../backend/campaign-batch-delivery.service";
 import { CampaignCandidateRepository } from "../../backend/campaign-candidate.repository";
+import { CampaignEmailConfig } from "../../backend/campaign-email.config";
 import { CampaignRecipientService } from "../../backend/campaign-recipient.service";
 import type { AutomationWorkUnitKind } from "../automation-work-units";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
@@ -15,6 +18,8 @@ import { makeConditionHandler } from "./condition";
 import { makeDeliverHandler } from "./deliver";
 import { makeFireChunkHandler } from "./fire-chunk";
 import { makeIntakeHandler } from "./intake";
+import { makePassReminderIntakeHandler } from "./pass-reminder-intake";
+import { CoworkPassesReleaseGateForReminders } from "./pass-reminder-release";
 import { makeSweepPageHandler } from "./sweep-page";
 
 interface IAutomationUnitHandlers {
@@ -58,6 +63,7 @@ export class AutomationUnitHandlers extends Context.Service<
       makeSweepPageHandler,
       makePreviewUnitHandler,
       makeIntakeHandler,
+      makePassReminderIntakeHandler,
       makeFireChunkHandler,
       makeConditionHandler,
       makeDeliverHandler,
@@ -72,8 +78,22 @@ export class AutomationUnitHandlers extends Context.Service<
         AutomationEvaluationFacts.Live,
         AutomationConditionEvaluation.Live,
         CampaignCandidateRepository.Live,
+        CampaignEmailConfig.Default,
         CampaignBatchDelivery.Live,
         AutomationRunSettlement.Default
+      )
+    ),
+    Layer.provide(
+      Layer.mergeAll(
+        CoworkPassesReleaseGateForReminders,
+        PassReminderReads.Default.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              WorkspaceDatabase.Default,
+              SharedAvailabilityInventoryLive
+            )
+          )
+        )
       )
     )
   );

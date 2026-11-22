@@ -10,6 +10,7 @@ import type {
   AutomationVersionId,
 } from "../automation-identifiers";
 import type { AutomationTriggerKind } from "../automation-states";
+import { isPassReminderKind } from "../automation-triggers";
 import type { AutomationEvaluationFacts } from "./automation-evaluation-facts.service";
 import { AutomationRunTransitions } from "./automation-run-transitions";
 import { planAutomationRunUnits } from "./automation-run-units";
@@ -231,7 +232,17 @@ export const planConditionSteps = Effect.fn("automationConditionSteps.plan")(
       readonly chainedSteps: number;
     }
   ) {
-    const stepPlans = yield* Effect.forEach(input.steps, (step) =>
+    const steps = input.steps.flatMap((step) => {
+      // The normal packing maps one run to each customer. Pass reminders
+      // can reach the same condition independently for the same holder.
+      if (
+        step.runs.some(({ triggerKind }) => isPassReminderKind(triggerKind))
+      ) {
+        return step.runs.map((run) => ({ ...step, runs: [run] }));
+      }
+      return [step];
+    });
+    const stepPlans = yield* Effect.forEach(steps, (step) =>
       planStep(facts, {
         ...step,
         campaignId: input.campaignId,

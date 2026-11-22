@@ -35687,6 +35687,12 @@
                 "enum": [
                   "EntryPackExpiring"
                 ]
+              },
+              "copyVersion": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
               }
             },
             "required": [
@@ -35701,6 +35707,12 @@
                 "type": "string",
                 "enum": [
                   "UnlimitedEnding"
+                ]
+              },
+              "copyVersion": {
+                "type": "number",
+                "enum": [
+                  1
                 ]
               }
             },

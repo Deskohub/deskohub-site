@@ -45,6 +45,11 @@ const reservationTriggerFields = {
   product: Schema.optionalKey(ReservationProductFilter),
 };
 
+const passReminderTriggerFields = {
+  /** Stored on published flows so later copy revisions don't change a run. */
+  copyVersion: Schema.optionalKey(Schema.Literal(1)),
+};
+
 /** What starts a run: a calendar schedule, customer event, or pass reminder. */
 export const AutomationTrigger = Schema.Union([
   Schema.TaggedStruct("Schedule", { calendar: CalendarExpression }),
@@ -53,8 +58,8 @@ export const AutomationTrigger = Schema.Union([
   Schema.TaggedStruct("ReservationStarted", reservationTriggerFields),
   Schema.TaggedStruct("ReservationFinished", reservationTriggerFields),
   Schema.TaggedStruct("AccountCreated", {}),
-  Schema.TaggedStruct("EntryPackExpiring", {}),
-  Schema.TaggedStruct("UnlimitedEnding", {}),
+  Schema.TaggedStruct("EntryPackExpiring", passReminderTriggerFields),
+  Schema.TaggedStruct("UnlimitedEnding", passReminderTriggerFields),
 ]).annotate({
   identifier: "AutomationTrigger",
   description:
