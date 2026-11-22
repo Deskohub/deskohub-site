@@ -255,6 +255,21 @@ export const releaseReservedEntryPackClaim = Effect.fn(
     );
 });
 
+/** Payment admission and spending serialize with withdrawal on the pack row. */
+export const lockEntryPackForPayment = Effect.fn("lockEntryPackForPayment")(
+  function* (passId: OrderId) {
+    const { db } = yield* WorkspaceTransaction;
+    const [pack] = yield* db
+      .select({ status: passPurchases.status })
+      .from(passPurchases)
+      .where(eq(passPurchases.id, passId))
+      .for("no key update");
+    if (!pack || pack.status === "withdrawn") {
+      return yield* new EntryPackUnavailableError({});
+    }
+  }
+);
+
 /** A paid write and the reserved entry it spends commit together. */
 export const consumeEntryPackClaim = Effect.fn("consumeEntryPackClaim")(
   function* (reservationId: WorkspaceReservationId) {
@@ -264,12 +279,8 @@ export const consumeEntryPackClaim = Effect.fn("consumeEntryPackClaim")(
       return yield* new EntryPackUnavailableError({});
     }
     if (claim?.status !== "reserved") return;
-    yield* db
-      .select({ id: passPurchases.id })
-      .from(passPurchases)
-      .where(eq(passPurchases.id, claim.passId))
-      .for("no key update");
-    yield* db
+    yield* lockEntryPackForPayment(claim.passId);
+    const [consumed] = yield* db
       .update(passEntryClaims)
       .set({ status: "consumed" })
       .where(
@@ -277,7 +288,9 @@ export const consumeEntryPackClaim = Effect.fn("consumeEntryPackClaim")(
           eq(passEntryClaims.reservationId, reservationId),
           eq(passEntryClaims.status, "reserved")
         )
-      );
+      )
+      .returning({ reservationId: passEntryClaims.reservationId });
+    if (!consumed) return yield* new EntryPackUnavailableError({});
     yield* db
       .update(passPurchases)
       .set({ status: "depleted" })

@@ -6,7 +6,10 @@ import {
 } from "@/features/checkout/backend/fulfillment";
 import { campaignDeliveryReports } from "@/features/email-campaigns/backend/campaign-delivery-reports";
 import { CampaignDeliveryStatusService } from "@/features/email-campaigns/backend/campaign-delivery-status.service";
-import { unlimitedConfirmationDeliveryReports } from "@/features/passes/backend/unlimited-confirmation-delivery";
+import {
+  entryPackConfirmationDeliveryReports,
+  unlimitedConfirmationDeliveryReports,
+} from "@/features/passes/backend/pass-confirmation-delivery";
 import type { DeliveryReportHandler } from "./delivery-reports";
 
 /** The handlers of every email kind whose delivery reports Workspace applies. */
@@ -15,6 +18,7 @@ export const deliveryReportHandlers: readonly DeliveryReportHandler<
 >[] = [
   customerAccessDeliveryReports,
   campaignDeliveryReports,
+  entryPackConfirmationDeliveryReports,
   unlimitedConfirmationDeliveryReports,
 ];
 

@@ -210,7 +210,10 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
       canOpenAccess,
     } as const;
   }
-  if (row.purchaseStatus === "cancelled") {
+  if (
+    row.purchaseStatus === "cancelled" ||
+    row.purchaseStatus === "withdrawn"
+  ) {
     return { ...details, status: "cancelled" } as const;
   }
   if (row.paymentState === "paid" && paidAt) {

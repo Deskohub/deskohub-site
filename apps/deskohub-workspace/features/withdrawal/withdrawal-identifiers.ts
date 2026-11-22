@@ -12,4 +12,7 @@ export type WithdrawalId = typeof withdrawalIdSchema.Type;
  * offers withdrawal names itself here once; the withdrawal ledger stores it
  * with the family's own contract id.
  */
-export type WithdrawableContractKind = "reservation" | "unlimited-pass";
+export type WithdrawableContractKind =
+  | "reservation"
+  | "entry-pack"
+  | "unlimited-pass";

@@ -4,8 +4,8 @@ import type { WithdrawalRefundBasis } from "@/features/withdrawal/withdrawal-ass
 import { formatMoney, type Money } from "@/shared/money/money";
 
 /**
- * What a partial withdrawal refund keeps back: paid, the days or hours
- * already started, and the refund in bold. Nothing for a full refund.
+ * What a partial withdrawal refund keeps back: paid, the used service,
+ * and the refund in bold.
  */
 export function WithdrawalRefundBreakdown({
   locale,
@@ -23,17 +23,16 @@ export function WithdrawalRefundBreakdown({
 }) {
   if (refundBasis.kind !== "partial") return null;
   const kept = { ...paidAmount, value: paidAmount.value - refundAmount.value };
-  const started = (
-    refundBasis.unit === "hour"
-      ? m.withdrawalStartedHours
-      : m.withdrawalStartedDays
-  )(
-    {
-      started: refundBasis.total - refundBasis.unstarted,
-      total: refundBasis.total,
-    },
-    { locale }
-  );
+  const used = refundBasis.total - refundBasis.unstarted;
+  const started =
+    refundBasis.unit === "entry"
+      ? m.withdrawalStartedEntries({ count: used }, { locale })
+      : (refundBasis.unit === "hour"
+          ? m.withdrawalStartedHours
+          : m.withdrawalStartedDays)(
+          { started: used, total: refundBasis.total },
+          { locale }
+        );
   const line = (label: string, amount: string, muted: boolean) => (
     <Row>
       <Column className="py-1 align-top">

@@ -11,10 +11,9 @@ import {
 import { WorkspaceLocks } from "@/db/workspace-locks";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { Locale } from "@/features/i18n";
-import {
-  lockUnlimitedPassOrderForWithdrawal,
-  recordUnlimitedPassWithdrawal,
-} from "@/features/passes/backend/unlimited-pass-withdrawals";
+import { recordEntryPackWithdrawal } from "@/features/passes/backend/entry-pack-withdrawals";
+import { lockPassOrderForWithdrawal } from "@/features/passes/backend/pass-withdrawal-payment";
+import { recordUnlimitedPassWithdrawal } from "@/features/passes/backend/unlimited-pass-withdrawals";
 import {
   type ReadLimitExceededError,
   readLimitSentinel,
@@ -314,10 +313,8 @@ export class WithdrawalRepository extends Context.Service<
                         .for("update")
                     : [];
                 const passOrderId =
-                  withdrawal.contract.kind === "unlimited-pass"
-                    ? yield* lockUnlimitedPassOrderForWithdrawal(
-                        withdrawal.contract.id
-                      )
+                  withdrawal.contract.kind !== "reservation"
+                    ? yield* lockPassOrderForWithdrawal(withdrawal.contract.id)
                     : undefined;
                 const existing = yield* findByContract(withdrawal.contract);
                 if (Option.isSome(existing)) {
@@ -341,15 +338,18 @@ export class WithdrawalRepository extends Context.Service<
                   if (!passOrderId) {
                     return yield* new WithdrawalContractChangedError();
                   }
-                  const passPeriodEndsAt = yield* recordUnlimitedPassWithdrawal(
-                    {
-                      orderId: passOrderId,
-                      accountId: withdrawal.accountId,
-                      submittedAt: withdrawal.submittedAt,
-                      paidAmount: withdrawal.paidAmount,
-                      refundAmount: withdrawal.refundAmount,
-                    }
-                  );
+                  const passWithdrawal = {
+                    orderId: passOrderId,
+                    accountId: withdrawal.accountId,
+                    submittedAt: withdrawal.submittedAt,
+                    paidAmount: withdrawal.paidAmount,
+                    refundAmount: withdrawal.refundAmount,
+                    refundBasis: withdrawal.refundBasis,
+                  };
+                  const passPeriodEndsAt =
+                    withdrawal.contract.kind === "entry-pack"
+                      ? yield* recordEntryPackWithdrawal(passWithdrawal)
+                      : yield* recordUnlimitedPassWithdrawal(passWithdrawal);
                   if (!passPeriodEndsAt) {
                     return yield* new WithdrawalContractChangedError();
                   }

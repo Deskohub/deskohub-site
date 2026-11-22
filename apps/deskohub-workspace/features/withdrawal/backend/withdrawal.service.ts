@@ -19,7 +19,9 @@ import { CustomerAuthentication } from "@/features/account/backend/customer-auth
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { AccountingStorage } from "@/features/accounting/backend/accounting-storage";
 import type { Locale } from "@/features/i18n";
+import { EntryPackWithdrawals } from "@/features/passes/backend/entry-pack-withdrawals";
 import { UnlimitedPassWithdrawals } from "@/features/passes/backend/unlimited-pass-withdrawals";
+import { ReservationCancellation } from "@/features/reservation/backend/reservation-cancellation.service";
 import { ReservationWithdrawals } from "@/features/reservation/backend/reservation-withdrawals";
 import type { Money } from "@/shared/money/money";
 import type {
@@ -712,6 +714,10 @@ export class WithdrawalService extends Context.Service<
           Layer.provide(
             Layer.mergeAll(
               ReservationWithdrawals.Live,
+              EntryPackWithdrawals.Default.pipe(
+                Layer.provide(ReservationCancellation.Live),
+                Layer.provide(AccountingStorage.Live)
+              ),
               UnlimitedPassWithdrawals.Default.pipe(
                 Layer.provide(AccountingStorage.Live)
               )

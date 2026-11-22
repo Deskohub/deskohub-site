@@ -11,6 +11,7 @@ import {
 } from "@/features/withdrawal/backend/withdrawal.repository";
 import { WithdrawalService } from "@/features/withdrawal/backend/withdrawal.service";
 import { getWithdrawalSettlementStatus } from "@/features/withdrawal/backend/withdrawal-settlement-status";
+import { reservationWithdrawalRefundBasis } from "@/features/withdrawal/withdrawal-assessment";
 
 export const toAdministrationWithdrawal = (
   withdrawal: ContractWithdrawal
@@ -18,7 +19,7 @@ export const toAdministrationWithdrawal = (
   submittedAt: withdrawal.submittedAt.toString(),
   paidAmount: withdrawal.paidAmount,
   refundAmount: withdrawal.refundAmount,
-  refundBasis: withdrawal.refundBasis,
+  refundBasis: reservationWithdrawalRefundBasis(withdrawal.refundBasis),
   settlement: getWithdrawalSettlementStatus(withdrawal).settlement,
   steps: withdrawalSettlementSteps.map((step) => {
     const doneAt = withdrawalStepDoneAt(withdrawal, step);

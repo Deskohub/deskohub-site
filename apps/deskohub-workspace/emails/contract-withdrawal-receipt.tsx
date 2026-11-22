@@ -44,7 +44,9 @@ export function ContractWithdrawalReceiptEmail(
   props: ContractWithdrawalReceiptEmailProps
 ) {
   const { locale, refundBasis } = props;
-  const unlimited = props.contractKind === "unlimited-pass";
+  const pass =
+    props.contractKind === "unlimited-pass" ||
+    props.contractKind === "entry-pack";
 
   return (
     <WorkspaceEmailLayout
@@ -54,7 +56,7 @@ export function ContractWithdrawalReceiptEmail(
       <WorkspaceEmailHeading>
         {m.withdrawalReceivedTitle({}, { locale })}
       </WorkspaceEmailHeading>
-      {!unlimited && (
+      {!pass && (
         <WorkspaceEmailBody>
           {m.withdrawalReceiptEmailBody({}, { locale })}
         </WorkspaceEmailBody>
@@ -72,7 +74,7 @@ export function ContractWithdrawalReceiptEmail(
           refundLabel={m.withdrawalRefundAmount({}, { locale })}
         />
       )}
-      {unlimited && props.refundAmount.value > 0 && (
+      {pass && props.refundAmount.value > 0 && (
         <WorkspaceEmailBody>
           {m.withdrawalConfirmRefundNote({}, { locale })}
         </WorkspaceEmailBody>
@@ -98,14 +100,14 @@ export const contractWithdrawalReceiptDetails = ({
 }: ContractWithdrawalReceiptEmailProps): readonly WorkspaceEmailDetail[] => [
   {
     label:
-      contractKind === "unlimited-pass"
+      contractKind === "unlimited-pass" || contractKind === "entry-pack"
         ? m.checkoutStatusOrderIdLabel({}, { locale })
         : m.withdrawalReservationReference({}, { locale }),
     value: reference,
   },
   {
     label:
-      contractKind === "unlimited-pass"
+      contractKind === "unlimited-pass" || contractKind === "entry-pack"
         ? m.withdrawalEmailContractLabel({}, { locale })
         : m.withdrawalReservationLabel({}, { locale }),
     value: contractLabel,

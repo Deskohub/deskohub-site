@@ -4,6 +4,7 @@ import { CheckCircle2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { type Locale, m } from "@/features/i18n";
 import { formatReservationDisplayDateTime } from "@/features/reservation/reservation-date";
+import type { WithdrawableContractKind } from "@/features/withdrawal/withdrawal-identifiers";
 import type {
   WithdrawalQuoteData,
   WithdrawalReceiptData,
@@ -67,6 +68,38 @@ function ContractRow({
   );
 }
 
+function WithdrawalContractRows({
+  contractLabel,
+  isPass,
+  locale,
+  reference,
+}: {
+  readonly contractLabel: string;
+  readonly isPass: boolean;
+  readonly locale: Locale;
+  readonly reference: string;
+}) {
+  return (
+    <>
+      <ContractRow
+        label={(isPass
+          ? m.invoiceReservationReferenceLabel
+          : m.withdrawalReservationReference)({}, { locale })}
+      >
+        <span className="font-mono text-sm">{reference}</span>
+      </ContractRow>
+      <ContractRow
+        label={(isPass ? m.passGiftMailPass : m.withdrawalReservationLabel)(
+          {},
+          { locale }
+        )}
+      >
+        {contractLabel}
+      </ContractRow>
+    </>
+  );
+}
+
 /**
  * The withdrawal dialog (§1830a(3)–(5)): the statement with the contract,
  * the customer's name and receipt email, what they get back and a separate
@@ -74,6 +107,7 @@ function ContractRow({
  * signature.
  */
 export function WithdrawalConfirmDialog({
+  contractKind,
   locale,
   onConfirm,
   onOpenChange,
@@ -82,6 +116,7 @@ export function WithdrawalConfirmDialog({
   reference,
   view,
 }: {
+  readonly contractKind: WithdrawableContractKind;
   readonly locale: Locale;
   /** Submits the statement; `customerName` is the typed name, when asked. */
   readonly onConfirm: (customerName: string | undefined) => void;
@@ -89,7 +124,7 @@ export function WithdrawalConfirmDialog({
   /** Reads the quote again after it failed. */
   readonly onRetry: () => void;
   readonly open: boolean;
-  /** The reservation number as the surface shows it. */
+  /** The contract reference as the surface shows it. */
   readonly reference: string;
   readonly view: WithdrawalDialogView;
 }) {
@@ -126,6 +161,7 @@ export function WithdrawalConfirmDialog({
         }}
       >
         <WithdrawalDialogBody
+          isPass={contractKind !== "reservation"}
           locale={locale}
           onClose={close}
           onConfirm={onConfirm}
@@ -139,6 +175,7 @@ export function WithdrawalConfirmDialog({
 }
 
 function WithdrawalDialogBody({
+  isPass,
   locale,
   onClose,
   onConfirm,
@@ -146,6 +183,7 @@ function WithdrawalDialogBody({
   reference,
   view,
 }: {
+  readonly isPass: boolean;
   readonly locale: Locale;
   readonly onClose: () => void;
   readonly onConfirm: (customerName: string | undefined) => void;
@@ -160,9 +198,13 @@ function WithdrawalDialogBody({
       return (
         <WithdrawalNotice
           locale={locale}
-          message={refusalMessages[view.reason]({}, { locale })}
+          message={(isPass ? passRefusalMessages : refusalMessages)[
+            view.reason
+          ]({}, { locale })}
           onClose={onClose}
-          title={m.withdrawalUnavailableTitle({}, { locale })}
+          title={(isPass
+            ? m.withdrawalConfirmTitle
+            : m.withdrawalUnavailableTitle)({}, { locale })}
         />
       );
     case "failed":
@@ -178,6 +220,7 @@ function WithdrawalDialogBody({
     case "statement":
       return (
         <WithdrawalStatementForm
+          isPass={isPass}
           locale={locale}
           nameRequired={view.nameRequired}
           onConfirm={onConfirm}
@@ -192,6 +235,7 @@ function WithdrawalDialogBody({
     case "received":
       return (
         <WithdrawalReceived
+          isPass={isPass}
           locale={locale}
           onClose={onClose}
           quote={view.quote}
@@ -209,6 +253,15 @@ const refusalMessages = {
   performance_started: m.withdrawalRefusedPerformanceStarted,
   already_withdrawn: m.withdrawalRefusedAlreadyWithdrawn,
   not_found: m.withdrawalRefusedNotFound,
+} satisfies Record<WithdrawalRefusal, typeof m.withdrawalRefusedNotFound>;
+
+const passRefusalMessages = {
+  not_withdrawable: m.withdrawalPassRefusedNotWithdrawable,
+  business_purpose: m.withdrawalPassRefusedBusinessPurpose,
+  period_ended: m.withdrawalRefusedPeriodEnded,
+  performance_started: m.withdrawalPassRefusedPerformanceStarted,
+  already_withdrawn: m.withdrawalReceivedTitle,
+  not_found: m.withdrawalPassRefusedNotFound,
 } satisfies Record<WithdrawalRefusal, typeof m.withdrawalRefusedNotFound>;
 
 /** The quote is on its way: the statement's shape, announced once. */
@@ -279,6 +332,7 @@ function WithdrawalNotice({
 }
 
 function WithdrawalStatementForm({
+  isPass,
   locale,
   nameRequired,
   onConfirm,
@@ -289,6 +343,7 @@ function WithdrawalStatementForm({
   refundChanged,
   submitError,
 }: {
+  readonly isPass: boolean;
   readonly locale: Locale;
   readonly nameRequired: boolean;
   readonly onConfirm: (customerName: string | undefined) => void;
@@ -332,14 +387,12 @@ function WithdrawalStatementForm({
       <form className="mt-6 grid gap-6" noValidate onSubmit={submit}>
         <div className="grid gap-3">
           <dl className="m-0 grid gap-3">
-            <ContractRow
-              label={m.withdrawalReservationReference({}, { locale })}
-            >
-              <span className="font-mono text-sm">{reference}</span>
-            </ContractRow>
-            <ContractRow label={m.withdrawalReservationLabel({}, { locale })}>
-              {quote.contractLabel}
-            </ContractRow>
+            <WithdrawalContractRows
+              contractLabel={quote.contractLabel}
+              isPass={isPass}
+              locale={locale}
+              reference={reference}
+            />
             {knownName !== null && (
               <ContractRow label={m.withdrawalCustomerName({}, { locale })}>
                 {knownName}
@@ -395,16 +448,21 @@ function WithdrawalStatementForm({
             {basis.kind === "partial" && (
               <div className="flex items-baseline justify-between gap-4 text-navy-blue/60">
                 <dt>
-                  {{
-                    hour: m.withdrawalStartedHours,
-                    day: m.withdrawalStartedDays,
-                  }[basis.unit](
-                    {
-                      started: basis.total - basis.unstarted,
-                      total: basis.total,
-                    },
-                    { locale }
-                  )}
+                  {basis.unit === "entry"
+                    ? m.withdrawalStartedEntries(
+                        { count: basis.total - basis.unstarted },
+                        { locale }
+                      )
+                    : {
+                        hour: m.withdrawalStartedHours,
+                        day: m.withdrawalStartedDays,
+                      }[basis.unit](
+                        {
+                          started: basis.total - basis.unstarted,
+                          total: basis.total,
+                        },
+                        { locale }
+                      )}
                 </dt>
                 <dd className="m-0 shrink-0 text-right">
                   −{formatMoney(deduction, locale)}
@@ -462,12 +520,14 @@ function WithdrawalStatementForm({
 
 /** The receipt of a submitted withdrawal (§1830a(5)): what, when, and the refund. */
 function WithdrawalReceived({
+  isPass,
   locale,
   onClose,
   quote,
   receipt,
   reference,
 }: {
+  readonly isPass: boolean;
   readonly locale: Locale;
   readonly onClose: () => void;
   readonly quote: WithdrawalQuoteData;
@@ -492,12 +552,12 @@ function WithdrawalReceived({
         </DialogDescription>
       </DialogHeader>
       <dl className="m-0 grid gap-3">
-        <ContractRow label={m.withdrawalReservationReference({}, { locale })}>
-          <span className="font-mono text-sm">{reference}</span>
-        </ContractRow>
-        <ContractRow label={m.withdrawalReservationLabel({}, { locale })}>
-          {quote.contractLabel}
-        </ContractRow>
+        <WithdrawalContractRows
+          contractLabel={quote.contractLabel}
+          isPass={isPass}
+          locale={locale}
+          reference={reference}
+        />
         <ContractRow label={m.withdrawalSubmittedAt({}, { locale })}>
           {formatReservationDisplayDateTime(
             Temporal.Instant.from(receipt.submittedAt),

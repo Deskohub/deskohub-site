@@ -30,7 +30,7 @@ import {
 } from "@/features/reservation/routes";
 import { getSelectionPath } from "@/features/reservation/selection-path";
 import { ReservationWithdrawalLink } from "@/features/withdrawal/components/reservation-withdrawal-link";
-import type { ReservationWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
+import type { ContractWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
 import { Button } from "@/shared/components/ui/button";
 import { formatMoney } from "@/shared/money/money";
 import { cn } from "@/shared/utils";
@@ -63,7 +63,7 @@ type CheckoutStatusPageProps = {
    * The reservation's online withdrawal: once the customer withdrew it reads
    * as cancelled; while they can withdraw, it shows the withdrawal link.
    */
-  readonly withdrawal?: ReservationWithdrawalEntry;
+  readonly withdrawal?: ContractWithdrawalEntry;
 };
 
 const statusIconWrapperVariants = cva(

@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect";
+import { EntryPackWithdrawals } from "@/features/passes/backend/entry-pack-withdrawals";
 import { UnlimitedPassWithdrawals } from "@/features/passes/backend/unlimited-pass-withdrawals";
 import { ReservationWithdrawals } from "@/features/reservation/backend/reservation-withdrawals";
 import type { WithdrawableContractFamily } from "../withdrawable-contract";
@@ -22,6 +23,7 @@ export class WithdrawableContractFamilies extends Context.Service<
     Effect.gen(function* () {
       const families = {
         reservation: yield* ReservationWithdrawals,
+        "entry-pack": yield* EntryPackWithdrawals,
         "unlimited-pass": yield* UnlimitedPassWithdrawals,
       } satisfies Record<WithdrawableContractKind, WithdrawableContractFamily>;
       return { get: (kind) => families[kind] };

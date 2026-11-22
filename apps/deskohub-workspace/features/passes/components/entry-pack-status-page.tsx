@@ -1,7 +1,9 @@
-import { Check, CircleAlert, Clock } from "lucide-react";
+import { Check, CircleAlert, Clock, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { CheckoutFlowLayout } from "@/features/checkout/components/checkout-flow-layout";
 import { type Locale, m } from "@/features/i18n";
+import { WithdrawalLink } from "@/features/withdrawal/components/withdrawal-link";
+import type { ContractWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
 import { RouteAutoRefresh } from "@/shared/components/route-auto-refresh";
 import { Button } from "@/shared/components/ui/button";
 import { formatMoney } from "@/shared/money/money";
@@ -56,13 +58,16 @@ export function EntryPackStatusPage({
   locale,
   status,
   presentation,
+  withdrawal,
 }: {
   readonly allowPurchaseContinuation: boolean;
   readonly locale: Locale;
   readonly status: OrderStatus;
   readonly presentation: "page" | "modal";
+  readonly withdrawal?: ContractWithdrawalEntry;
 }) {
-  const isPaid = status.status === "paid";
+  const withdrawn = withdrawal?.status === "withdrawn" ? withdrawal : undefined;
+  const isPaid = status.status === "paid" && !withdrawn;
   const isGrant =
     status.status === "granted" || status.status === "grant_cancelled";
   const unlimited = status.entryCount === null;
@@ -81,15 +86,23 @@ export function EntryPackStatusPage({
           status.orderId
         );
   })();
-  const Icon = statusIcons[status.status];
-  const title =
+  const showWithdrawalTitle =
+    withdrawn !== undefined &&
+    (status.status === "paid" ||
+      status.status === "cancelled" ||
+      status.status === "refund_required");
+  const Icon = showWithdrawalTitle ? Undo2 : statusIcons[status.status];
+  const paymentTitle =
     unlimited && isPaid
-      ? m.unlimitedPassStatusPaidTitle({}, { locale })
-      : statusTitles[status.status]({}, { locale });
+      ? m.unlimitedPassStatusPaidTitle
+      : statusTitles[status.status];
+  const title = (
+    showWithdrawalTitle ? m.withdrawalReceivedTitle : paymentTitle
+  )({}, { locale });
   const lead = (() => {
     switch (status.status) {
       case "paid":
-        return status.gift
+        return isPaid && status.gift
           ? {
               not_sent: m.entryPackStatusGiftInvitationNotSent,
               pending: m.entryPackStatusGiftInvitationPending,
@@ -142,6 +155,17 @@ export function EntryPackStatusPage({
           {lead && (
             <p className="mt-4 text-lg leading-8 text-navy-blue/70">{lead}</p>
           )}
+          {withdrawn &&
+            (!showWithdrawalTitle || withdrawn.refundAmount.value > 0) && (
+              <p className="mt-2 text-navy-blue/70">
+                {showWithdrawalTitle
+                  ? m.passStatusWithdrawalRefund(
+                      { amount: formatMoney(withdrawn.refundAmount, locale) },
+                      { locale }
+                    )
+                  : m.withdrawalReceivedTitle({}, { locale })}
+              </p>
+            )}
           {isPaid && status.gift && (
             <p className="mt-2 text-navy-blue/70">
               {status.claimed
@@ -157,11 +181,24 @@ export function EntryPackStatusPage({
         </div>
       </div>
       <div className="mt-8 rounded-2xl border border-navy-blue/10 bg-navy-blue/3 p-5 sm:p-6">
-        <h2 className="text-xl font-semibold">
-          {unlimited
-            ? m.passUnlimited({}, { locale })
-            : m.passEntryPack({}, { locale })}
-        </h2>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-xl font-semibold">
+            {unlimited
+              ? m.passUnlimited({}, { locale })
+              : m.passEntryPack({}, { locale })}
+          </h2>
+          {withdrawal?.status === "offered" && (
+            <WithdrawalLink
+              className="underline"
+              contract={{
+                kind: unlimited ? "unlimited-pass" : "entry-pack",
+                orderId: status.orderId,
+              }}
+              locale={locale}
+              reference={status.orderId}
+            />
+          )}
+        </div>
         <p className="mt-1 text-navy-blue/70">
           {getPassTierName(status.tier, locale)}
           {status.entryCount !== null &&

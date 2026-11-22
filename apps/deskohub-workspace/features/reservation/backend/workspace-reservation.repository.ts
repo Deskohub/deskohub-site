@@ -502,6 +502,7 @@ export interface IWorkspaceReservationRepository {
   readonly claimRequestedCancellation: (input: {
     readonly id: WorkspaceReservationId;
     readonly cause: RequestedCancellationCause;
+    readonly entryPackWithdrawal?: OrderId;
     readonly pendingPaymentCancellation?: {
       readonly paymentAttemptId: PaymentAttemptId;
       readonly failureCode: string;
@@ -856,6 +857,31 @@ const recordRequestedCancellationClaim = Effect.fnUntraced(function* (
   now: Temporal.Instant
 ) {
   const { db } = yield* WorkspaceTransaction;
+  const entryPackClaim =
+    input.entryPackWithdrawal &&
+    exists(
+      db
+        .select({ id: contractWithdrawals.id })
+        .from(passEntryClaims)
+        .innerJoin(
+          contractWithdrawals,
+          eq(contractWithdrawals.contractId, passEntryClaims.passId)
+        )
+        .where(
+          and(
+            eq(passEntryClaims.reservationId, input.id),
+            eq(passEntryClaims.passId, input.entryPackWithdrawal),
+            eq(contractWithdrawals.contractKind, "entry-pack")
+          )
+        )
+    );
+  const reservationWithdrawalClaim =
+    input.cause === "customer_withdrawal"
+      ? or(
+          eq(workspaceReservations.reservationState, "confirmed"),
+          eq(workspaceReservations.cancellationCause, "customer_withdrawal")
+        )
+      : undefined;
   return yield* db
     .update(workspaceReservations)
     .set({
@@ -863,7 +889,9 @@ const recordRequestedCancellationClaim = Effect.fnUntraced(function* (
       // A requested cancellation is never the checkout's to retry. A
       // cancellation another claim started, now resumed, keeps the cause that
       // claim recorded (null when unknown).
-      cancellationCause: sql`case when ${workspaceReservations.reservationState} in ('held', 'hold_expired', 'confirmed') then ${input.cause} else ${workspaceReservations.cancellationCause} end`,
+      cancellationCause: input.entryPackWithdrawal
+        ? "customer_withdrawal"
+        : sql`case when ${workspaceReservations.reservationState} in ('held', 'hold_expired', 'confirmed') then ${input.cause} else ${workspaceReservations.cancellationCause} end`,
       ...(input.pendingPaymentCancellation && {
         paymentState: "cancelled" as const,
         failureCode: input.pendingPaymentCancellation.failureCode,
@@ -885,12 +913,7 @@ const recordRequestedCancellationClaim = Effect.fnUntraced(function* (
             lte(workspaceReservations.updatedAt, input.staleCancellingBefore)
           )
         ),
-        input.cause === "customer_withdrawal"
-          ? or(
-              eq(workspaceReservations.reservationState, "confirmed"),
-              eq(workspaceReservations.cancellationCause, "customer_withdrawal")
-            )
-          : undefined,
+        entryPackClaim ?? reservationWithdrawalClaim,
         input.pendingPaymentCancellation
           ? and(
               eq(workspaceReservations.paymentState, "pending"),
