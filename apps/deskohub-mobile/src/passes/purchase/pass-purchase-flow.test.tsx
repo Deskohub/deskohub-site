@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import {
   BeginCustomerPassPurchase,
   type CustomerPassCatalog,
@@ -58,7 +59,7 @@ mock.module("expo-router", () => ({
       tier: "reserved-desk",
       size: "10",
       startDate: "2026-12-01",
-      email: "ignored@example.test",
+      email: testEmailAddress("ignored"),
     }),
     useRouter: () => ({ replace: navigate, canGoBack: () => false }),
   }),
@@ -128,8 +129,8 @@ mock.module("./pass-purchase-details", () => ({
           ...details,
           gift: true,
           holderEmail: details.gift
-            ? "change@example.test"
-            : "gift@example.test",
+            ? testEmailAddress("change")
+            : testEmailAddress("gift"),
           recipientName: "Synthetic Holder",
           invoice: {
             ...details.invoice,
@@ -305,7 +306,7 @@ for (const { language, kind } of [
               expect(body).toMatchObject({
                 expectedBuyerAccountId: workspace.data.accountId,
               });
-              expect(payload.holderEmail).toBe("gift@example.test");
+              expect(payload.holderEmail).toBe(testEmailAddress("gift"));
               beginCalls.push(payload);
               quote = {
                 orderId: payload.orderId,

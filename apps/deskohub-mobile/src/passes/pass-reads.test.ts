@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import {
   type CustomerPassList,
   CustomerReservationOrderId,
@@ -54,7 +55,7 @@ const ownedPasses = {
       claimed: false,
       canResend: true,
       invitation: "sent",
-      maskedHolderEmail: "s***@example.test",
+      maskedHolderEmail: testEmailAddress("s***"),
     },
   ],
 } satisfies CustomerPassList;

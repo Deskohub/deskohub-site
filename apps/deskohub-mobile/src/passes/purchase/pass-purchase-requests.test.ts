@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import type {
   BeginCustomerPassPurchase,
   CustomerPassPurchase,
@@ -27,7 +28,7 @@ const initial: BeginCustomerPassPurchase = {
   orderId,
   locale: "en-US",
   product: { kind: "entry-pack", tier: "open-space", size: 5 },
-  holderEmail: "gift@example.test",
+  holderEmail: testEmailAddress("gift"),
 };
 
 describe("pass purchase requests", () => {

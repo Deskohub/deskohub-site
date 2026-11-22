@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import type {
   CustomerPassCatalog,
   CustomerUnlimitedStartDates,
@@ -69,7 +70,7 @@ describe("pass purchase prefill", () => {
       monitorOption: "2x27-4k",
       coffee: "1",
       startDate: today,
-      email: "example@example.test",
+      email: testEmailAddress("example"),
     };
     expect(readPassPurchasePrefill("unlimited", input)).toEqual({
       tier: "reserved-desk-workstation",

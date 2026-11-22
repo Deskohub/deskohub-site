@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Option } from "effect";
 import {
   type DetailsProfile,
@@ -12,7 +13,7 @@ const { validatePurchaseDetails } = await import("./pass-purchase-details");
 
 const profile: DetailsProfile = {
   self: {
-    email: "buyer@example.test",
+    email: testEmailAddress("buyer"),
     name: Option.some("Test Buyer"),
     phone: Option.none(),
   },
@@ -36,7 +37,7 @@ const initial: PurchaseDetails = {
   invoice: initialDetailsDraft(profile.saved, "CZ"),
   buyer: { firstName: "", lastName: "", phone: "" },
   gift: false,
-  holderEmail: "unused@example.test",
+  holderEmail: testEmailAddress("unused"),
   recipientName: "Unused",
 };
 
@@ -77,7 +78,7 @@ describe("pass purchase Details", () => {
       validatePurchaseDetails("entry-pack", details, profile, false)
     ).toMatchObject({
       ok: true,
-      input: { holderEmail: "unused@example.test" },
+      input: { holderEmail: testEmailAddress("unused") },
     });
     expect(
       validatePurchaseDetails("unlimited", details, profile, false)
@@ -95,7 +96,7 @@ describe("pass purchase Details", () => {
     ).toMatchObject({
       ok: true,
       input: {
-        holderEmail: "unused@example.test",
+        holderEmail: testEmailAddress("unused"),
         recipientName: "Test Holder",
       },
     });
@@ -105,7 +106,7 @@ describe("pass purchase Details", () => {
     expect(
       validatePurchaseDetails(
         "entry-pack",
-        { ...initial, gift: true, holderEmail: "BUYER@example.test" },
+        { ...initial, gift: true, holderEmail: testEmailAddress("BUYER") },
         profile,
         false
       )
