@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { m } from "@/features/administration/i18n";
+import { m as customerMessages } from "@/features/i18n";
 import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
@@ -57,6 +58,8 @@ const labels = {
   link: m.emailCampaignsLinkToggle({}, { locale }),
   ctaInsert: m.emailCampaignsCtaInsert({}, { locale }),
   ctaEdit: m.emailCampaignsCtaEdit({}, { locale }),
+  passOfferInsert: m.emailCampaignsPassOfferInsert({}, { locale }),
+  passOfferEdit: m.emailCampaignsPassOfferEdit({}, { locale }),
 };
 
 const textStyle = (rendered: Rendered) =>
@@ -115,6 +118,11 @@ const submitCta = async (
 const ctaButtons = (rendered: Rendered) =>
   (rendered.editor.getJSON().content ?? []).filter(
     ({ type }) => type === "ctaButton"
+  );
+
+const passOffers = (rendered: Rendered) =>
+  (rendered.editor.getJSON().content ?? []).filter(
+    ({ type }) => type === "passOffer"
   );
 
 describe("CampaignBodyToolbar", () => {
@@ -417,5 +425,157 @@ describe("CampaignBodyToolbar", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(ctaButtons(rendered)).toEqual([]);
+  });
+
+  // Waits compare with null: printing a happy-dom element for a failed check
+  // takes seconds, and polling waits often fail their first check.
+  test("inserts a pass offer card, then edits and removes the selected one", async () => {
+    const rendered = await renderEditor(campaignBodyOf("Podzim"));
+    select(rendered, 7);
+
+    await press(rendered, labels.passOfferInsert);
+    let dialog = within(screen.getByRole("dialog"));
+    expect(
+      dialog.getByRole<HTMLInputElement>("radio", {
+        name: customerMessages.passEntryPack({}, { locale }),
+      }).checked
+    ).toBe(true);
+    expect(
+      dialog.getByRole<HTMLInputElement>("radio", {
+        name: m.emailCampaignsPassOfferSizeDefault({}, { locale }),
+      }).checked
+    ).toBe(true);
+    expect(
+      dialog.queryByRole("button", {
+        name: m.emailCampaignsPassOfferRemove({}, { locale }),
+      })
+    ).toBeNull();
+    await act(async () => {
+      fireEvent.click(dialog.getByRole("radio", { name: "10" }));
+    });
+    fireEvent.input(
+      dialog.getByLabelText(
+        m.emailCampaignsPassOfferHeadlineLabel({}, { locale })
+      ),
+      { target: { value: " Save CZK 920 " } }
+    );
+    fireEvent.input(
+      dialog.getByLabelText(
+        m.emailCampaignsPassOfferDetailLabel({}, { locale })
+      ),
+      { target: { value: "on 10 visits" } }
+    );
+    await act(async () => {
+      fireEvent.click(
+        dialog.getByRole("button", { name: labels.passOfferInsert })
+      );
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog") === null).toBe(true)
+    );
+
+    expect(passOffers(rendered)).toEqual([
+      {
+        type: "passOffer",
+        attrs: {
+          product: "entry-pack",
+          size: 10,
+          headline: "Save CZK 920",
+          detail: "on 10 visits",
+        },
+      },
+    ]);
+
+    act(() => {
+      rendered.editor.commands.setNodeSelection(8);
+    });
+    await waitFor(() =>
+      expect(control(rendered, labels.passOfferEdit)).toBeTruthy()
+    );
+    await press(rendered, labels.passOfferEdit);
+    dialog = within(screen.getByRole("dialog"));
+    expect(
+      dialog.getByLabelText<HTMLInputElement>(
+        m.emailCampaignsPassOfferHeadlineLabel({}, { locale })
+      ).value
+    ).toBe("Save CZK 920");
+    await act(async () => {
+      fireEvent.click(
+        dialog.getByRole("radio", {
+          name: customerMessages.passUnlimited({}, { locale }),
+        })
+      );
+    });
+    fireEvent.input(
+      dialog.getByLabelText(
+        m.emailCampaignsPassOfferHeadlineLabel({}, { locale })
+      ),
+      { target: { value: "" } }
+    );
+    fireEvent.input(
+      dialog.getByLabelText(
+        m.emailCampaignsPassOfferDetailLabel({}, { locale })
+      ),
+      { target: { value: "" } }
+    );
+    await act(async () => {
+      fireEvent.click(
+        dialog.getByRole("button", {
+          name: m.emailCampaignsPassOfferUpdate({}, { locale }),
+        })
+      );
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog") === null).toBe(true)
+    );
+
+    expect(passOffers(rendered)).toEqual([
+      {
+        type: "passOffer",
+        attrs: {
+          product: "unlimited",
+          size: null,
+          headline: null,
+          detail: null,
+        },
+      },
+    ]);
+
+    await press(rendered, labels.passOfferEdit);
+    dialog = within(screen.getByRole("dialog"));
+    await act(async () => {
+      fireEvent.click(
+        dialog.getByRole("button", {
+          name: m.emailCampaignsPassOfferRemove({}, { locale }),
+        })
+      );
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog") === null).toBe(true)
+    );
+    expect(passOffers(rendered)).toEqual([]);
+  });
+
+  test("edits a pass offer card only when it alone is selected", async () => {
+    const card = {
+      type: "passOffer",
+      attrs: { product: "unlimited", size: null, headline: null, detail: null },
+    };
+    const rendered = await renderEditor(campaignBodyOf("Podzim", card, card));
+
+    // Both cards, after the 8-position paragraph.
+    act(() => {
+      rendered.editor.commands.setTextSelection({ from: 8, to: 10 });
+    });
+
+    await waitFor(() =>
+      expect(control(rendered, labels.passOfferInsert)).toBeTruthy()
+    );
+    expect(
+      toolbarOf(rendered).queryByRole("button", {
+        name: labels.passOfferEdit,
+      }) === null
+    ).toBe(true);
   });
 });

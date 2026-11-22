@@ -4,6 +4,7 @@ import { Placeholder, UndoRedo } from "@tiptap/extensions";
 import {
   EditorContent,
   type JSONContent,
+  type ReactNodeViewProps,
   ReactNodeViewRenderer,
   useEditor,
 } from "@tiptap/react";
@@ -16,19 +17,33 @@ import type { CampaignBodyNode } from "../../body/campaign-body-document";
 import { campaignBodyExtensions } from "../../body/campaign-body-extensions";
 import { CampaignCtaButton } from "../../body/campaign-cta-button";
 import { campaignBodyColumnWidth } from "../../body/campaign-image";
+import { CampaignPassOffer } from "../../body/campaign-pass-offer";
 import { CampaignBodyToolbar } from "./campaign-body-toolbar";
 import { CtaButtonNodeView } from "./cta-button-node-view";
+import { PassOfferNodeView } from "./pass-offer-node-view";
 
 /**
  * The shared content set plus editing-only behavior: history, hints, views.
- * `locale` is the admin's language for the empty-body hint.
+ * `locale` is the admin's language for the empty-body hint; `contentLocale`
+ * is the body's, for the customer copy its cards preview.
  */
-const campaignBodyEditorExtensions = (locale: Locale) => [
+const campaignBodyEditorExtensions = (
+  locale: Locale,
+  contentLocale: Locale
+) => [
   ...campaignBodyExtensions.filter(
-    (extension) => extension.name !== CampaignCtaButton.name
+    (extension) =>
+      extension.name !== CampaignCtaButton.name &&
+      extension.name !== CampaignPassOffer.name
   ),
   CampaignCtaButton.extend({
     addNodeView: () => ReactNodeViewRenderer(CtaButtonNodeView),
+  }),
+  CampaignPassOffer.extend({
+    addNodeView: () =>
+      ReactNodeViewRenderer((props: ReactNodeViewProps) => (
+        <PassOfferNodeView {...props} contentLocale={contentLocale} />
+      )),
   }),
   UndoRedo,
   Placeholder.configure({
@@ -56,8 +71,8 @@ export function CampaignBodyEditor({
 }) {
   const locale = useRouteLocale();
   const extensions = useMemo(
-    () => campaignBodyEditorExtensions(locale),
-    [locale]
+    () => campaignBodyEditorExtensions(locale, contentLocale),
+    [locale, contentLocale]
   );
   const editor = useEditor({
     extensions,
