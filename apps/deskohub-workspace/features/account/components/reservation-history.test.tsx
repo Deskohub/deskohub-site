@@ -1003,7 +1003,7 @@ describe("ReservationHistory", () => {
       expect(footer?.getAttribute("data-footer-layout")).toBe("edge-to-edge");
       expect(footer?.className).toContain("sticky");
       expect(footer?.className).toContain(
-        "bottom-[var(--install-bar-space,0px)]"
+        "bottom-[max(var(--install-bar-space,0px),env(safe-area-inset-bottom))]"
       );
       expect(footer?.contains(link)).toBe(true);
       expect(link.getAttribute("href")).toBe("/en-US/pricing");

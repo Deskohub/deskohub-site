@@ -618,9 +618,16 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
                         workspaceReservations.activePaymentAttemptId
                       ),
                       eq(paymentAttempts.state, "paid"),
-                      // Internal attempts settle a zero total, such as a
-                      // fully discounted or Entry pack funded booking.
-                      sql`${paymentAttempts.amountValue} > 0`
+                      // Money the customer kept paying: internal attempts
+                      // settle a zero total, such as a fully discounted or
+                      // Entry pack funded booking, and a refund made or owed
+                      // (in full when no target is set) gives money back.
+                      sql`${paymentAttempts.amountValue} > greatest(
+                        coalesce(${paymentAttempts.refundedAmountValue}, 0),
+                        case when ${paymentAttempts.refundState} = 'required'
+                          then coalesce(${paymentAttempts.refundTargetValue}, ${paymentAttempts.amountValue})
+                          else 0 end
+                      )`
                     )
                   )
               ),

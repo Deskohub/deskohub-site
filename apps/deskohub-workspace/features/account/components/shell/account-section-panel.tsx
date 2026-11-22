@@ -120,14 +120,17 @@ export function AccountSectionPanel({
       {footer !== undefined && (
         <div
           className={cn(
-            "sticky bottom-[var(--install-bar-space,0px)] z-10 min-w-0",
+            "sticky z-10 min-w-0",
             {
               inset: cn(
-                "mt-8 border-t bg-white pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]",
+                "bottom-[var(--install-bar-space,0px)] mt-8 border-t bg-white pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]",
                 tone.divider
               ),
-              // A footer whose content renders nothing leaves the panel as is.
-              "edge-to-edge": "mt-[18px] -mx-5 empty:hidden @xl:-mx-8",
+              // Docks above the install bar or the safe area, whichever is
+              // taller, since its tint would otherwise fill the safe area. A
+              // footer whose content renders nothing leaves the panel as is.
+              "edge-to-edge":
+                "bottom-[max(var(--install-bar-space,0px),env(safe-area-inset-bottom))] mt-[18px] -mx-5 empty:hidden @xl:-mx-8",
             }[footerLayout]
           )}
           data-footer-layout={footerLayout}

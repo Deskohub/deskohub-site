@@ -93,6 +93,9 @@ describe("offersPassSavings", () => {
             entryPack({ status: "depleted", entriesLeft: 0 }),
             entryPack({ status: "expired" }),
             entryPack({ status: "active", entriesLeft: 0 }),
+            // Active with entries left, but not usable yet: an unclaimed
+            // gift, or a gift whose payment can't be used.
+            entryPack(),
           ],
           boughtForOthers: [],
         },
@@ -129,9 +132,6 @@ describe("offersPassSavings", () => {
       "booked for another customer": [
         visit({ party: { kind: "booked-for", customerName: null } }),
       ],
-      "booked by another account": [
-        visit({ party: { kind: "booked-by", authorName: null } }),
-      ],
     } satisfies Record<string, readonly CustomerReservationSummary[]>;
 
     for (const [name, reservations] of Object.entries(cases)) {
@@ -139,6 +139,15 @@ describe("offersPassSavings", () => {
         name,
         offered: false,
       });
+    }
+  });
+
+  test("counts a paid visit another account booked for the customer", () => {
+    for (const party of [
+      { kind: "booked-by", authorName: null },
+      { kind: "booked-by-deleted-account" },
+    ] as const) {
+      expect(offers({ reservations: [visit({ party })] })).toBe(true);
     }
   });
 
@@ -158,7 +167,10 @@ describe("offersPassSavings", () => {
   test("hides the offer while the customer holds coverage", () => {
     const coverage = {
       "usable Entry pack": {
-        entryPacks: { held: [entryPack()], boughtForOthers: [] },
+        entryPacks: {
+          held: [entryPack({ bookPath: "/en-US/passes/entry-pack/book" })],
+          boughtForOthers: [],
+        },
       },
       "active Unlimited pass": { unlimitedPasses: [unlimitedPass("active")] },
       "upcoming Unlimited pass": {

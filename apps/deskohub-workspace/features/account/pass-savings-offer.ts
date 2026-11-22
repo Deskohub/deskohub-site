@@ -3,20 +3,21 @@ import type { AccountUnlimitedPasses } from "./account-unlimited-passes.server";
 import type { CustomerReservationSummary } from "./contracts";
 
 /**
- * A completed coworking visit the customer booked and paid for itself, one
- * visit at a time: confirmed, past, its own (no other party), and paid as a
- * single order rather than from an Entry pack or an Unlimited pass.
+ * A completed coworking visit of the customer's own, paid for one visit at a
+ * time: confirmed, past, and paid as a single order rather than from an Entry
+ * pack or an Unlimited pass. Another account may have booked it for the
+ * customer; a visit this account booked for another customer isn't its own.
  */
 const isPaidOwnCoworkVisit = (reservation: CustomerReservationSummary) =>
   reservation.product.kind === "cowork" &&
   reservation.status === "confirmed" &&
-  reservation.party === undefined &&
+  reservation.party?.kind !== "booked-for" &&
   reservation.paidIndividually === true;
 
 /**
  * Whether the Past reservations section offers Entry packs and Unlimited
  * passes: after a completed visit the customer paid for on its own, while it
- * holds no Entry pack with entries to use and no active or upcoming Unlimited
+ * holds no Entry pack it can book with and no active or upcoming Unlimited
  * pass. Coverage that couldn't be read keeps the offer hidden.
  *
  * `past` is the history's past group, whose rows already ended or were
@@ -34,9 +35,10 @@ export const offersPassSavings = ({
   entryPacks !== "unavailable" &&
   unlimitedPasses !== "unavailable" &&
   past.some(isPaidOwnCoworkVisit) &&
-  !entryPacks.held.some(
-    (pack) => pack.status === "active" && pack.entriesLeft > 0
-  ) &&
+  // An Entry pack covers the customer while it can book: active with entries
+  // left, claimed if it was a gift, and paid. Its account view sets
+  // `bookPath` exactly then.
+  !entryPacks.held.some((pack) => pack.bookPath !== undefined) &&
   !unlimitedPasses.some(
     (pass) => pass.status === "active" || pass.status === "upcoming"
   );

@@ -797,6 +797,9 @@ describe.skipIf(!testDatabase)(
       const packWithPaidAddOns = booking(3);
       const paidWithoutAttempt = booking(4);
       const unpaid = booking(5);
+      const fullyRefunded = booking(6);
+      const refundOwed = booking(7);
+      const partlyRefunded = booking(8);
       const providerOnly = DotyposReservationIdSchema.make(
         `dotypos-${uniqueId()}`
       );
@@ -806,6 +809,9 @@ describe.skipIf(!testDatabase)(
         fullyDiscounted,
         packWithPaidAddOns,
         paidWithoutAttempt,
+        fullyRefunded,
+        refundOwed,
+        partlyRefunded,
       ]) {
         await insertWorkspaceReservation({
           id: workspaceReservationId,
@@ -828,6 +834,9 @@ describe.skipIf(!testDatabase)(
         attempt: {
           readonly provider: "nexi" | "internal";
           readonly amount: number;
+          readonly refund?:
+            | { readonly state: "required"; readonly target?: number }
+            | { readonly state: "refunded"; readonly amount: number };
         }
       ) => {
         const attemptId = uniqueId();
@@ -847,6 +856,22 @@ describe.skipIf(!testDatabase)(
           `update workspace_reservations set active_payment_attempt_id = $1 where id = $2`,
           [attemptId, reservationId]
         );
+        const { refund } = attempt;
+        if (refund) {
+          await testDatabase!.pool.query(
+            `update payment_attempts
+               set refund_state = $2, refund_target_value = $3,
+                 refunded_amount_value = $4,
+                 refunded_at = case when $2 = 'refunded' then now() end
+             where id = $1`,
+            [
+              attemptId,
+              refund.state,
+              refund.state === "required" ? (refund.target ?? null) : null,
+              refund.state === "refunded" ? refund.amount : null,
+            ]
+          );
+        }
       };
       await settleAttempt(paidWithMoney.workspaceReservationId, {
         provider: "nexi",
@@ -859,6 +884,21 @@ describe.skipIf(!testDatabase)(
       await settleAttempt(packWithPaidAddOns.workspaceReservationId, {
         provider: "nexi",
         amount: 4000,
+      });
+      await settleAttempt(fullyRefunded.workspaceReservationId, {
+        provider: "nexi",
+        amount: 7000,
+        refund: { state: "refunded", amount: 7000 },
+      });
+      await settleAttempt(refundOwed.workspaceReservationId, {
+        provider: "nexi",
+        amount: 7000,
+        refund: { state: "required" },
+      });
+      await settleAttempt(partlyRefunded.workspaceReservationId, {
+        provider: "nexi",
+        amount: 7000,
+        refund: { state: "refunded", amount: 2000 },
       });
 
       const passId = uniqueId();
@@ -896,6 +936,9 @@ describe.skipIf(!testDatabase)(
                   packWithPaidAddOns,
                   paidWithoutAttempt,
                   unpaid,
+                  fullyRefunded,
+                  refundOwed,
+                  partlyRefunded,
                 ].map(({ dotyposReservationId, day }) =>
                   makeDotyposReservation({
                     id: dotyposReservationId,
@@ -905,8 +948,8 @@ describe.skipIf(!testDatabase)(
                 ),
                 makeDotyposReservation({
                   id: providerOnly,
-                  startDate: "2000-01-06T10:00:00.000Z",
-                  endDate: "2000-01-06T11:00:00.000Z",
+                  startDate: "2000-01-09T10:00:00.000Z",
+                  endDate: "2000-01-09T11:00:00.000Z",
                 }),
               ])
             )
@@ -930,6 +973,9 @@ describe.skipIf(!testDatabase)(
         [packWithPaidAddOns.workspaceReservationId]: undefined,
         [paidWithoutAttempt.workspaceReservationId]: undefined,
         [unpaid.workspaceReservationId]: undefined,
+        [fullyRefunded.workspaceReservationId]: undefined,
+        [refundOwed.workspaceReservationId]: undefined,
+        [partlyRefunded.workspaceReservationId]: true,
         [providerOnly]: undefined,
       });
       expect(
