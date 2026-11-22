@@ -94,6 +94,7 @@ import {
   startPurchase,
 } from "./customer-pass-purchase";
 import { customerPassPurchaseLayers } from "./customer-pass-purchase-layers";
+import { CustomerPasses } from "./customer-passes.service";
 import {
   claimEntryPackGifts,
   queueEntryPackGiftResend,
@@ -843,7 +844,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         providerOrders,
         providerReturns,
         verifiedOrders,
-        customerApi: (viewer = session) => {
+        customerApi: (viewer = session, statusAt?: Temporal.Instant) => {
           const withoutActor = Layer.effectContext(
             Layer.build(services).pipe(
               Effect.map(Context.omit(CurrentCustomerAccount))
@@ -861,6 +862,16 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             passes: {
               release: CoworkPassesReleaseGate.fromDecision(true),
               database: db.layer,
+              ...(statusAt && {
+                passes: Layer.effect(
+                  CustomerPasses,
+                  Effect.map(CustomerPasses, (passes) => ({
+                    ...passes,
+                    purchaseStatus: (orderId) =>
+                      passes.purchaseStatus(orderId).pipe(atInstant(statusAt)),
+                  }))
+                ).pipe(Layer.provide(CustomerPasses.Default)),
+              }),
               purchases: {
                 ...customerPassPurchaseLayers,
                 begin: withoutActor,
@@ -1773,9 +1784,22 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           Temporal.Instant.from("2026-11-19T12:00:00Z")
         );
 
-        await expect(
-          payment.pay(Temporal.Instant.from("2027-01-18T23:00:00Z"))
-        ).rejects.toMatchObject({
+        const cutoff = Temporal.Instant.from("2027-01-18T23:00:00Z");
+        const response = await payment.customerApi(session, cutoff).handle(
+          customerApiRequest({
+            method: "GET",
+            path: `/passes/purchases/${payment.orderId}`,
+          })
+        );
+        expect(response.status).toBe(200);
+        const status = await response.json();
+        expect(status).toMatchObject({
+          status: "expired",
+          productKind: "entry-pack",
+        });
+        expect(status).not.toHaveProperty("resumePath");
+
+        await expect(payment.pay(cutoff)).rejects.toMatchObject({
           _tag: "EntryPackPurchaseError",
           reason: "quote-expired",
         });
@@ -1787,6 +1811,48 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         expect(attempts.rows).toEqual([]);
       }
     );
+
+    test("an Unlimited draft loses its resume link when the first service day ends before its hold", async () => {
+      const db = database!;
+      const cutoff = Temporal.Instant.from("2030-01-15T16:00:00Z");
+      const purchase = await integration(
+        db,
+        2_000,
+        cutoff.subtract({ minutes: 2 })
+      );
+      await db.pool.query(
+        `update pass_purchases
+         set product = 'unlimited', entry_count = null, unlimited_coffee = false,
+             valid_from = '2030-01-15', valid_until = '2030-02-14',
+             holds_expire_at = '2030-01-15T16:10:00Z'
+         where id = $1`,
+        [purchase.orderId]
+      );
+      const request = () =>
+        customerApiRequest({
+          method: "GET",
+          path: `/passes/purchases/${purchase.orderId}`,
+        });
+      const open = await purchase
+        .customerApi(session, cutoff.subtract({ milliseconds: 1 }))
+        .handle(request());
+      expect(open.status).toBe(200);
+      expect(await open.json()).toMatchObject({
+        status: "not_started",
+        productKind: "unlimited",
+        resumePath: expect.stringContaining("step=pay"),
+      });
+      const expired = await purchase
+        .customerApi(session, cutoff)
+        .handle(request());
+      expect(expired.status).toBe(200);
+      const status = await expired.json();
+      expect(status).toMatchObject({
+        status: "expired",
+        productKind: "unlimited",
+      });
+      expect(status).not.toHaveProperty("resumePath");
+    });
 
     test.each([2_000, 115_000])(
       "refuses locked admission when Prague midnight crosses after Pay for voucher value %i",

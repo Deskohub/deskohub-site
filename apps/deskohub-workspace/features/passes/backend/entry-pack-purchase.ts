@@ -72,7 +72,10 @@ import {
   isUnlimitedPassFirstDayAdmissionExpired,
 } from "./entry-pack-order-payment-handler";
 import { quoteEntryPack } from "./entry-pack-quote";
-import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
+import {
+  hasPassQuoteExpired,
+  hasUnlimitedPassFirstDayEnded,
+} from "./entry-pack-settlement";
 import { reconfirmUnlimitedPassHolds } from "./unlimited-pass-holds";
 
 export class EntryPackPurchaseError extends Data.TaggedError(
@@ -372,13 +375,6 @@ const readOwnedPayablePass = Effect.fn("readOwnedPayablePass")(function* (
     discountableSubtotal: getEntryPackPrice(product),
   };
 });
-
-const hasPassQuoteExpired = (now: Temporal.Instant, purchase: PassPurchase) =>
-  purchase.product === "entry-pack"
-    ? isEntryPackQuoteExpired(now, purchase.validUntil)
-    : hasUnlimitedPassFirstDayEnded(purchase, now) ||
-      !purchase.holdsExpireAt ||
-      Temporal.Instant.compare(now, purchase.holdsExpireAt) >= 0;
 
 const requireOpenUnlimitedPassQuote = Effect.fnUntraced(function* (
   purchase: PassPurchase
