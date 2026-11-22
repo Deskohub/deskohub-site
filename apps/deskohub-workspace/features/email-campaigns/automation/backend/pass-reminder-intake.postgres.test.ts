@@ -124,6 +124,7 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
       [previewId, dueAt.toString()]
     );
     await kit.run(activate);
+    return campaignId;
   };
 
   test("plans each eligible pass independently at 10:00 and keeps its identity on replans", async () => {
@@ -136,8 +137,16 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     const otherPass = await seedPass(eligible, false, holder);
     await seedPass(noConsent);
     await seedPass(unclaimedGift, true);
+    const editedCampaign = await seedVersion();
     await seedVersion();
-    await seedVersion();
+    const resumedCampaign = await seedVersion();
+    const { rows: versionsAtFire } = await pool.query(
+      "select active_version_id from email_campaign_automations where campaign_id = $1",
+      [editedCampaign]
+    );
+    await kit.run(
+      kit.lifecycle((lifecycle) => lifecycle.pause(resumedCampaign))
+    );
     const queue = makeAutomationUnitQueueFake();
     const layer = await automationScenarioLayer({
       database,
@@ -166,13 +175,57 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     expect(
       (await runEngineAt(tick(false), layer, dueAt)).summary.intake.unitsPlanned
     ).toBe(0);
-    expect(
-      (await runEngineAt(tick(true), layer, dueAt)).summary.intake.unitsPlanned
-    ).toBe(2);
+    const afterFire = dueAt.add({ minutes: 5 });
+    const nextFlow = automationFlowFixture({
+      trigger: { _tag: "AccountCreated" },
+      steps: [{ _tag: "Send", id: "send" }],
+    });
+    await kit.run(
+      kit.lifecycle((lifecycle) =>
+        lifecycle.updateFlow({ campaignId: editedCampaign, flow: nextFlow })
+      ),
+      afterFire
+    );
+    const nextPreview = await kit.seedPreview(editedCampaign, {
+      status: "completed",
+    });
+    await kit.run(
+      kit.lifecycle((lifecycle) =>
+        lifecycle.activate({
+          campaignId: editedCampaign,
+          previewId: nextPreview,
+          activatedBy: null,
+        })
+      ),
+      afterFire
+    );
+    await kit.run(
+      kit
+        .lifecycle((lifecycle) => lifecycle.resume(resumedCampaign))
+        .pipe(
+          Effect.provideService(PassReminderWritesOpen, Effect.succeed(true))
+        ),
+      afterFire
+    );
     expect(
       (await runEngineAt(tick(true), layer, dueAt.add({ minutes: 15 }))).summary
         .intake.unitsPlanned
+    ).toBe(2);
+    expect(
+      (await runEngineAt(tick(true), layer, dueAt.add({ minutes: 30 }))).summary
+        .intake.unitsPlanned
     ).toBe(0);
+    const { rows: pages } = await pool.query(
+      `select campaign_id, subject->>'versionId' as version_id
+       from email_campaign_automation_work_units where kind = 'pass-reminder-intake' and subject->>'_tag' = 'Page'`
+    );
+    expect(
+      pages.find(({ campaign_id }) => campaign_id === editedCampaign)
+        ?.version_id
+    ).toBe(versionsAtFire[0].active_version_id);
+    expect(
+      pages.some(({ campaign_id }) => campaign_id === resumedCampaign)
+    ).toBe(false);
     const { rows } = await pool.query(
       `select trigger_pass_id, pass_reminder_context, dotypos_customer_id, step_id
        from email_campaign_automation_runs where trigger_pass_id is not null`
