@@ -71,6 +71,8 @@ import {
   type AdministrationReservationAccessGrantType,
   type AdministrationReservationAccessMutationType,
   type AdministrationReservationActivityType,
+  type AdministrationReservationAuditPage,
+  type AdministrationReservationAuditQuery,
   type AdministrationReservationCancellationInputType,
   type AdministrationReservationCancellationResultType,
   type AdministrationReservationDetailType,
@@ -201,6 +203,17 @@ interface IWorkspaceAdminApiClient {
     reservationId: AdministrationWorkspaceReservationIdType
   ) => Effect.Effect<
     AdministrationReservationDetailType,
+    | CliApiRequestError
+    | CliResourceNotFound
+    | CliSessionUnauthorized
+    | CliServiceUnavailable
+  >;
+  readonly getReservationAudit: (
+    accessToken: Redacted.Redacted<CliAccessTokenType>,
+    reservationId: AdministrationWorkspaceReservationIdType,
+    query: AdministrationReservationAuditQuery
+  ) => Effect.Effect<
+    AdministrationReservationAuditPage,
     | CliApiRequestError
     | CliResourceNotFound
     | CliSessionUnauthorized
@@ -877,6 +890,19 @@ const makeWorkspaceAdminApiClient = Effect.gen(function* () {
           ),
           Effect.mapError(sanitizeVersionedResourceError)
         )
+    ),
+    getReservationAudit: Effect.fn(
+      "WorkspaceAdminApiClient.getReservationAudit"
+    )((accessToken, reservationId, query) =>
+      makeClient(accessToken).pipe(
+        Effect.flatMap((authorized) =>
+          authorized.administration.getReservationAudit({
+            params: { reservationId },
+            query,
+          })
+        ),
+        Effect.mapError(sanitizeVersionedResourceError)
+      )
     ),
     mutateReservationAccess: Effect.fn(
       "WorkspaceAdminApiClient.mutateReservationAccess"

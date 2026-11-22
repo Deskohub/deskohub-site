@@ -10,35 +10,39 @@ import {
   customerInputParseOptions,
   customerProfileSchemas,
 } from "@deskohub/workspace-customer-api";
-import { Option, Result, SchemaIssue, SchemaParser } from "effect";
+import { Option, Result, Schema, SchemaIssue, SchemaParser } from "effect";
 
 /** Which billing details the customer keeps: none, personal or business. */
-export type BillingChoice = "none" | "personal" | "business";
+const BillingChoice = Schema.Literals(["none", "personal", "business"]);
+export type BillingChoice = typeof BillingChoice.Type;
 
 /**
  * The profile as the form edits it: every field as entered text. Profile and
  * Billing edit this one draft, and both save it whole, because the Workspace
  * clears every field a save leaves out.
  */
-export interface ProfileDraft {
-  readonly firstName: string;
-  readonly lastName: string;
-  readonly phone: string;
-  readonly billingKind: BillingChoice;
-  readonly companyName: string;
-  readonly companyId: string;
-  readonly vatId: string;
-  readonly addressLine1: string;
-  readonly addressLine2: string;
-  readonly city: string;
-  readonly zip: string;
-  readonly country: string;
-}
+const ProfileDraft = Schema.Struct({
+  firstName: Schema.String,
+  lastName: Schema.String,
+  phone: Schema.String,
+  billingKind: BillingChoice,
+  companyName: Schema.String,
+  companyId: Schema.String,
+  vatId: Schema.String,
+  addressLine1: Schema.String,
+  addressLine2: Schema.String,
+  city: Schema.String,
+  zip: Schema.String,
+  country: Schema.String,
+});
+export type ProfileDraft = typeof ProfileDraft.Type;
 
 /** First-time completion also takes the code the customer was invited with. */
-export interface CompletionDraft extends ProfileDraft {
-  readonly referralCode: string;
-}
+export const CompletionDraft = Schema.Struct({
+  ...ProfileDraft.fields,
+  referralCode: Schema.String,
+});
+export type CompletionDraft = typeof CompletionDraft.Type;
 
 export type ProfileTextField = Exclude<keyof ProfileDraft, "billingKind">;
 export type CompletionTextField = ProfileTextField | "referralCode";

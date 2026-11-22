@@ -27,6 +27,10 @@ import {
   MinimumDhwVersion,
   OutdatedDhwRefusal,
 } from "./dhw-version";
+import {
+  AdministrationReservationAuditPage,
+  AdministrationReservationAuditQuery,
+} from "./reservation-audit";
 import { fieldWithDefault, nullableField } from "./response-fields";
 import { WORKSPACE_SITE_TIME_ZONE } from "./site-time-zone";
 
@@ -2911,6 +2915,18 @@ export const AdminCliAdministrationApi = HttpApiGroup.make("administration")
       query: AdministrationReservationQuery,
       success: AdministrationReservationPage,
     }).annotate(AdministrationOperationBehavior, readOperation)
+  )
+  .add(
+    HttpApiEndpoint.get(
+      "getReservationAudit",
+      "/reservations/:reservationId/audit",
+      {
+        params: { reservationId: AdministrationWorkspaceReservationId },
+        query: AdministrationReservationAuditQuery,
+        success: AdministrationReservationAuditPage,
+        error: CliResourceNotFound.schema,
+      }
+    ).annotate(AdministrationOperationBehavior, readOperation)
   )
   .add(
     HttpApiEndpoint.get("getReservation", "/reservations/:reservationId", {

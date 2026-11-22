@@ -467,6 +467,12 @@ export {
   operationRequest,
 } from "./operation-endpoints";
 export {
+  AdministrationReservationAuditPage,
+  AdministrationReservationAuditQuery,
+  reservationAuditReasons,
+  reservationAuditStates,
+} from "./reservation-audit";
+export {
   WORKSPACE_SITE_TIME_ZONE,
   type WorkspaceSiteTimeZone,
 } from "./site-time-zone";

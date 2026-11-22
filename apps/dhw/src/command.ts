@@ -21,6 +21,7 @@ import {
   type AdministrationOverviewMetricType,
   type AdministrationReservationAccessGrantType,
   type AdministrationReservationAccessMutationType,
+  AdministrationReservationAuditQuery,
   type AdministrationReservationAuthorType,
   AdministrationReservationListStatusFilter,
   type AdministrationReservationProductDetailsBackfillBatchType,
@@ -683,12 +684,60 @@ const reservationsActivityCommand = Command.make("activity", {}, () =>
   Command.withDescription("Show linked reservations per day over the last year")
 );
 
+const reservationsAuditCommand = Command.make(
+  "audit",
+  {
+    reservationId: Argument.String("reservation-id").pipe(
+      Argument.withSchema(AdministrationWorkspaceReservationId)
+    ),
+    before: Flag.String("before").pipe(
+      Flag.withSchema(AdministrationReservationAuditQuery.fields.before.schema),
+      Flag.optional,
+      Flag.withDescription("Continue from the previous page's cursor")
+    ),
+  },
+  ({ reservationId, before }) =>
+    runAuthenticatedCommand((api, accessToken, json) =>
+      Effect.gen(function* () {
+        const page = yield* api.getReservationAudit(
+          accessToken,
+          reservationId,
+          presentFlagValues({ before })
+        );
+        if (json) {
+          yield* Console.log(JSON.stringify(page));
+          return;
+        }
+        if (page.events.length === 0) {
+          yield* Console.log("No recorded audit events for this reservation.");
+        }
+        for (const event of page.events) {
+          yield* Console.log(
+            [
+              event.occurredAt,
+              `${event.beforeState} → ${event.afterState}`,
+              event.reason,
+              `${event.source} ${event.actorAccountId}`,
+              event.id,
+            ].join("\t")
+          );
+        }
+        if (page.nextBefore) {
+          yield* Console.log(`Next page: --before ${page.nextBefore}`);
+        }
+      })
+    )
+).pipe(
+  Command.withDescription("Read the reservation's administration audit trail")
+);
+
 const reservationsCommand = Command.make("reservations").pipe(
   Command.withDescription("Inspect, cancel and restore Workspace reservations"),
   Command.withSubcommands([
     reservationsListCommand,
     reservationsActivityCommand,
     reservationsGetCommand,
+    reservationsAuditCommand,
     reservationsFindCommand,
     reservationsCancelCommand,
     reservationsRestoreCommand,

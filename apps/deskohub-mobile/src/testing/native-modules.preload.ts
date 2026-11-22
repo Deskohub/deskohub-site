@@ -236,6 +236,8 @@ mock.module("expo-network", () => ({
 mock.module("expo-web-browser", () => ({
   openAuthSessionAsync: async () => ({ type: "cancel" }),
   openBrowserAsync: async () => ({ type: "opened" }),
+  warmUpAsync: async () => ({}),
+  coolDownAsync: async () => ({}),
   getCustomTabsSupportingBrowsersAsync: async () => ({
     browserPackages: [],
     servicePackages: [],

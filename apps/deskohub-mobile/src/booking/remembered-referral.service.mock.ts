@@ -4,6 +4,12 @@ import { DeviceCapabilityFailed } from "../customer-api/device-capabilities";
 import type { RememberedReferralUpdate } from "./remembered-referral";
 import { RememberedReferralCode } from "./remembered-referral.service";
 
+const noOnboardingDraft = {
+  restoreOnboardingDraft: () => Effect.succeedNone,
+  saveOnboardingDraft: () => Effect.void,
+  completeOnboardingDraft: () => Effect.void,
+};
+
 /**
  * One account's storage kept in `entries` by entry name, which a test reads
  * and seeds. The real `AccountScopedStorage` adds the origin and account to
@@ -13,6 +19,7 @@ export const inMemoryAccountScopedStorage = (
   entries: Map<string, string>
 ): Layer.Layer<AccountScopedStorage> =>
   Layer.succeed(AccountScopedStorage, {
+    ...noOnboardingDraft,
     getItem: (name) =>
       Effect.sync(() => Option.fromUndefinedOr(entries.get(name))),
     setItem: (name, value) => Effect.sync(() => void entries.set(name, value)),
@@ -23,6 +30,7 @@ export const inMemoryAccountScopedStorage = (
 /** Account storage whose every read and write fails, as a broken disk does. */
 export const failingAccountScopedStorage: Layer.Layer<AccountScopedStorage> =
   Layer.succeed(AccountScopedStorage, {
+    ...noOnboardingDraft,
     getItem: () =>
       Effect.fail(new DeviceCapabilityFailed({ capability: "storage" })),
     setItem: () =>

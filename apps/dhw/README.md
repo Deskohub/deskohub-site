@@ -14,6 +14,7 @@ Operators may read:
 
 - the administration overview, including recent and new customers and reservations awaiting refund work;
 - reservations and their current lifecycle;
+- committed operator cancellation and restoration events for a reservation with `dhw reservations audit <reservation-id>`. Use `--before <event-id>` with the cursor returned for the next page. Each page read is recorded;
 - bookings, payment orders, and payment operations;
 - all linked reservations per day over the last year;
 - customers, their Workspace reservation history, and their reservations per day over the last year;

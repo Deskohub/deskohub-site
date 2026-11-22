@@ -6,11 +6,14 @@ import { expoRouterStandIn } from "../../testing/expo-router-stand-in";
 
 mock.module("expo-router", () => expoRouterStandIn({}));
 
-const { makeFakeCustomerData } = await import(
+const { makeFakeCustomerData, settle } = await import(
   "../../customer-api/testing/customer-data-test-registry"
 );
 const { FakeWorkspace } = await import(
   "../../customer-api/testing/fake-workspace"
+);
+const { accountAtom } = await import(
+  "../../customer-api/customer-data-runtime"
 );
 const { sampleCompanies, sampleProfile } = await import(
   "../../customer-api/testing/sample-fixtures"
@@ -131,13 +134,14 @@ describe("Account › Billing details: Apply reaches the profile draft", () => {
 });
 
 describe("Onboarding › Billing details: Apply reaches the completion draft", () => {
-  test("the found company fills the draft; no Save reminder", () => {
+  test("the found company fills the draft; no Save reminder", async () => {
     const workspace = FakeWorkspace.forKind("completion-required");
     const account = workspace.data.account;
     if (account.kind !== "completion-required") {
       throw new Error("The sample account needs a completion.");
     }
     const { registry } = makeFakeCustomerData("completion-required", workspace);
+    await settle(registry, accountAtom);
     const useDraft = () => useOnboardingDraft(account);
     current(registry, useDraft).change({
       billingKind: "business",

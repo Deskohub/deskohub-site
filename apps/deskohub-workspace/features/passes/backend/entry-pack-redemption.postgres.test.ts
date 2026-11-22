@@ -23,6 +23,7 @@ import {
 } from "@/features/customer-api/customer-api.test-utils";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { orderIdSchema } from "@/features/order";
+import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import {
   getStoredWorkspaceReservationDetails,
@@ -525,14 +526,17 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       const serviceDate = "2099-06-18";
       const reservation = await draft(serviceDate);
       await claim(reservation, await seedPack(), serviceDate);
+      const audit = makeTestReservationAuditAttempt();
       const cancellation = await runReservations((repository) =>
         repository.claimAdministrationCancellation({
+          audit,
           id: reservation.id,
           staleCancellingBefore: now().subtract({ minutes: 10 }),
         })
       );
       await runReservations((repository) =>
         repository.markAdministrationCancelled({
+          audit,
           id: reservation.id,
           claimedAt: cancellation!.updatedAt,
           cancelledAt: now(),

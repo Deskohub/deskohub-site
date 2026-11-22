@@ -14,6 +14,7 @@ import {
   ShareSheet,
   TemporaryFiles,
 } from "./device-capabilities";
+import { deviceOnboardingDraftLayer } from "./device-onboarding-draft-layer";
 
 const attempt = <A>(
   capability: DeviceCapabilityFailed["capability"],
@@ -119,4 +120,11 @@ const imageLibrary = Layer.succeed(ImageLibrary, {
 });
 
 export const deviceCapabilitiesLayer: Layer.Layer<DeviceCapabilities> =
-  Layer.mergeAll(storage, temporaryFiles, shareSheet, clipboard, imageLibrary);
+  Layer.mergeAll(
+    storage,
+    deviceOnboardingDraftLayer,
+    temporaryFiles,
+    shareSheet,
+    clipboard,
+    imageLibrary
+  );

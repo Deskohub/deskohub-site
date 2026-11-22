@@ -84,6 +84,7 @@ import { type Locale, m } from "@/features/i18n";
 import { ReferralService } from "@/features/referrals/referral.service";
 import { getReferralBenefitIds } from "@/features/referrals/referral-benefits";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
+import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
@@ -808,6 +809,7 @@ describe.skipIf(!testDatabase)(
         Effect.gen(function* () {
           const reservations = yield* WorkspaceReservationRepository;
           return yield* reservations.claimAdministrationCancellation({
+            audit: makeTestReservationAuditAttempt(),
             id: reservation.id,
             staleCancellingBefore: Temporal.Now.instant(),
             pendingPaymentCancellation: {

@@ -20,6 +20,7 @@ export type AuthSessionState =
       readonly status: "signed-in";
       readonly user: AuthUser;
       readonly signedInAt: Date;
+      readonly sessionId?: string;
       /**
        * The language the account saved, when the app is translated into it.
        * Absent when the account saved none or one this app version lacks.
@@ -35,7 +36,10 @@ export interface SessionSnapshot {
           /** The server sends any saved tag, also ones newer than the app. */
           readonly locale?: string | null | undefined;
         };
-        readonly session: { readonly createdAt: Date | string };
+        readonly session: {
+          readonly createdAt: Date | string;
+          readonly id?: string;
+        };
       }
     | null
     | undefined;
@@ -52,6 +56,7 @@ export const toAuthSessionState = ({
       status: "signed-in",
       user: { id: data.user.id, email: data.user.email },
       signedInAt: new Date(data.session.createdAt),
+      ...(data.session.id === undefined ? {} : { sessionId: data.session.id }),
       ...(typeof locale === "string" && isSupportedLocale(locale)
         ? { locale }
         : {}),

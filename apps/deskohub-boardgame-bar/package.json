@@ -6,7 +6,7 @@
   "scripts": {
     "build": "next build --turbo",
     "vercel-build": "turbo build",
-    "dev": "bun --parallel dev:next dev:i18n",
+    "dev": "bun i18n:compile && bun --parallel dev:next dev:i18n",
     "dev:next": "next dev --turbo",
     "dev:i18n": "chokidar \"features/i18n/messages/*.json\" -c \"bun i18n:compile\"",
     "i18n:compile": "bunx @inlang/paraglide-js compile --project ./project.inlang --outdir ./features/i18n/paraglide",
