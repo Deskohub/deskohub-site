@@ -1,6 +1,8 @@
 import type { DotyposService } from "@deskohub/dotypos";
 import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
+import { PassReminderReads } from "@/features/passes/backend/pass-reminder-reads.service";
+import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import type { WorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { AudienceFactsService } from "../../backend/audience-facts.service";
 import { CampaignCandidateRepository } from "../../backend/campaign-candidate.repository";
@@ -9,6 +11,22 @@ import type { CampaignId } from "../../campaign-identifiers";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
 import { AutomationDryRun } from "./automation-dry-run.service";
 import { AutomationEvaluationFacts } from "./automation-evaluation-facts.service";
+
+export const passReminderReadsTestLayer = (
+  database: WorkspacePostgresSuiteDatabase
+) =>
+  PassReminderReads.Default.pipe(
+    Layer.provide(
+      Layer.merge(
+        database.layer,
+        Layer.mock(AdvisoryAvailabilityInventory, {
+          tables: Effect.die(
+            new Error("An automation dry run must not read desk labels.")
+          ),
+        })
+      )
+    )
+  );
 
 /**
  * `AutomationDryRun` over `dotypos` and the suite's own database, since a
@@ -32,6 +50,7 @@ export const makeAutomationDryRunner = (input: {
         input.database.layer,
         input.dotypos,
         candidates,
+        passReminderReadsTestLayer(input.database),
         CampaignRecipientService.Default.pipe(
           Layer.provide(Layer.merge(candidates, audienceFacts))
         ),

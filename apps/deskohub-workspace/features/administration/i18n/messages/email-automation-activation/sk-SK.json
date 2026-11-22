@@ -14,6 +14,7 @@
   "emailAutomationActivationColumnTriggered": "Spustené",
   "emailAutomationActivationDryRunFailed": "Skúšobný beh sa nepodarilo spustiť. Skúste to znova.",
   "emailAutomationActivationEmailTitle": "E-mail",
+  "emailAutomationActivationExampleEmailTitle": "Ukážkový e-mail",
   "emailAutomationActivationEntrantsTitle": "Kto by vstúpil pri najbližšom spustení, {fire}",
   "emailAutomationActivationExplainReplay": "Skúšobný beh prehrá spúšťacie udalosti za posledných 30 dní na aktuálnej pracovnej verzii a ukáže, komu a kedy by bol e-mail odoslaný. Nič sa neodošle.",
   "emailAutomationActivationExplainSchedule": "Skúšobný beh ukáže, kto by vstúpil pri najbližšom plánovanom spustení a kto z nich teraz spĺňa podmienky. Nič sa neodošle.",

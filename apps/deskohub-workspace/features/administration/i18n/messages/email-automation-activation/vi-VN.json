@@ -14,6 +14,7 @@
   "emailAutomationActivationColumnTriggered": "Thời điểm khởi chạy",
   "emailAutomationActivationDryRunFailed": "Không thể bắt đầu chạy thử. Vui lòng thử lại.",
   "emailAutomationActivationEmailTitle": "Email",
+  "emailAutomationActivationExampleEmailTitle": "Email mẫu",
   "emailAutomationActivationEntrantsTitle": "Những ai sẽ tham gia ở lần khởi chạy tiếp theo, {fire}",
   "emailAutomationActivationExplainReplay": "Chạy thử sẽ phát lại các sự kiện kích hoạt trong 30 ngày qua trên bản nháp hiện tại và cho biết email sẽ được gửi cho ai và vào lúc nào. Không có gì được gửi đi.",
   "emailAutomationActivationExplainSchedule": "Chạy thử cho biết những ai sẽ tham gia ở lần khởi chạy theo lịch tiếp theo và ai trong số đó hiện đáp ứng các điều kiện. Không có gì được gửi đi.",

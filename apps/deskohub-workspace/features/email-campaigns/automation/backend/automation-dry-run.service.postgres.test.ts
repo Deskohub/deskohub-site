@@ -14,28 +14,35 @@ import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   type AutomationConditionFilter,
+  AutomationDryRun as AutomationDryRunWire,
   AutomationFlow,
   type AutomationFlowType,
   type DatePeriodType,
 } from "@deskohub/workspace-admin-api";
 import { and, asc, eq, inArray, like } from "drizzle-orm";
 import { Effect, Exit, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import {
   customerAccounts,
   customerEvents,
+  customerMarketingConsents,
   emailCampaignAudiences,
   emailCampaignAutomationPreviewRows,
   emailCampaignAutomationPreviews,
+  emailCampaignAutomationRuns,
   emailCampaignAutomations,
   emailCampaignAutomationWorkUnits,
   emailCampaignRecipients,
+  emailCampaignSends,
   emailCampaigns,
   workspaceReservations,
 } from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import { getPassReminderEndDates } from "@/features/passes/pass-reminder-schedule";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import type { AudienceCondition, AudienceFilter } from "../../audience-filter";
 import { AudienceFactsService } from "../../backend/audience-facts.service";
 import { CampaignCandidateRepository } from "../../backend/campaign-candidate.repository";
@@ -50,11 +57,15 @@ import type {
   CampaignAudienceId,
   CampaignId,
 } from "../../campaign-identifiers";
+import { campaignLocales } from "../../recipient-locale";
 import type { AutomationPreviewId } from "../automation-identifiers";
 import { automationTickAtOrAfter } from "../automation-ticks";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
 import { AutomationDryRun } from "./automation-dry-run.service";
-import { makeAutomationDryRunner } from "./automation-dry-run.test-utils";
+import {
+  makeAutomationDryRunner,
+  passReminderReadsTestLayer,
+} from "./automation-dry-run.test-utils";
 import { automationEngineTestLayer } from "./automation-engine.test-utils";
 import {
   databaseInstant,
@@ -65,7 +76,9 @@ import {
   automationFlowFixture,
   automationLifecycleTestKit,
 } from "./automation-lifecycle.test-utils";
+import { nextPassReminderPreviewOccurrence } from "./automation-pass-reminder-preview";
 import { makePreviewUnitHandler } from "./automation-preview-unit";
+import { seedKnownCustomers } from "./automation-steps.test-utils";
 import {
   comeBackOfferFlow,
   lapsedRegularsFilter,
@@ -73,6 +86,7 @@ import {
 } from "./automation-stories.test-utils";
 import { AutomationUnitProcessor } from "./automation-unit-processor.service";
 import { makeAutomationUnitQueueFake } from "./automation-unit-queue.test-utils";
+import { PassReminderWritesOpen } from "./pass-reminder-write-policy";
 
 /**
  * A dry run reads every active consent, so the suite runs on a database of
@@ -215,6 +229,7 @@ describe.skipIf(!testDatabase)(
       testDatabase.layer,
       dotypos,
       candidates,
+      passReminderReadsTestLayer(testDatabase),
       CampaignRecipientService.Default.pipe(
         Layer.provide(Layer.mergeAll(candidates, audienceFacts))
       ),
@@ -339,9 +354,10 @@ describe.skipIf(!testDatabase)(
     const seedAutomation = async (input: {
       readonly flow: AutomationFlowType;
       readonly filter?: AudienceFilter;
+      readonly purpose?: "marketing" | "operational";
     }) => {
       const campaignId = await seedAutomatedCampaign(db, {
-        purpose: "operational",
+        purpose: input.purpose ?? "operational",
         status: "draft",
       });
       campaignIds.push(campaignId);
@@ -1885,6 +1901,231 @@ describe.skipIf(!testDatabase)(
           cause: { reasons: [{ error: { _tag: "AutomationFlowInvalid" } }] },
         });
       });
+    });
+
+    describe("pass reminder triggers", () => {
+      const startReminder = (campaignId: CampaignId, at: Temporal.Instant) =>
+        Effect.runPromise(
+          TestClock.setTime(at.epochMilliseconds).pipe(
+            Effect.andThen(
+              Effect.flatMap(AutomationDryRun, (dryRun) =>
+                dryRun.start(campaignId)
+              )
+            ),
+            Effect.provideService(PassReminderWritesOpen, Effect.succeed(true)),
+            Effect.provide(Layer.merge(dryRunLayer, TestClock.layer()))
+          )
+        );
+
+      const seedPassHolder = async (
+        dotyposCustomerId: DotyposCustomerId,
+        options: Parameters<typeof profile>[1] = { tags: ["vip"] }
+      ) => {
+        const id = crypto.randomUUID();
+        await testDatabase.pool.query(
+          "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
+          [id, dotyposCustomerId]
+        );
+        await testDatabase.pool.query(
+          `insert into auth."user" (id, name, email, email_verified)
+           values ($1, 'Synthetic holder', $2, true)`,
+          [id, testEmailAddress(dotyposCustomerId)]
+        );
+        dotyposState.customers.push(profile(dotyposCustomerId, options));
+        return id;
+      };
+
+      const seedPass = async (input: {
+        readonly holder: string;
+        readonly kind: "entry-pack" | "unlimited";
+        readonly validUntil: string;
+      }) => {
+        const passId = crypto.randomUUID();
+        await testDatabase.pool.query(
+          `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, fulfilled_at)
+           values ($1, 'pass-purchase', 'synthetic-billing-id', 'complimentary', 'fulfilled', now())`,
+          [passId]
+        );
+        await testDatabase.pool.query(
+          `insert into pass_purchases (id, buyer_account_id, holder_account_id, product, tier,
+             entry_count, unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
+           values ($1, $2, $2, $3, 'open-space',
+             case when $3 = 'entry-pack' then 5 end,
+             case when $3 = 'unlimited' then false end, 'active',
+             $4::date - 30, $4, '{}', 'en-US', now())`,
+          [passId, input.holder, input.kind, input.validUntil]
+        );
+        return passId;
+      };
+
+      for (const _tag of ["EntryPackExpiring", "UnlimitedEnding"] as const) {
+        test(`${_tag} previews current recipients and synthetic emails without entering runs`, async () => {
+          const trigger = { _tag };
+          const campaignId = await seedAutomation({
+            flow: decodeFlow({ trigger, steps: [send] }),
+            purpose: "marketing",
+            filter: { ...everyoneFilter, filters: [taggedVip] },
+          });
+          const refusal = await runExit(
+            Effect.flatMap(AutomationDryRun, (dryRun) =>
+              dryRun.start(campaignId)
+            ).pipe(
+              Effect.provideService(
+                PassReminderWritesOpen,
+                Effect.succeed(false)
+              )
+            )
+          );
+          expect(Exit.isFailure(refusal)).toBe(true);
+
+          const occurrence = nextPassReminderPreviewOccurrence(trigger, now);
+          const { kind, dueDate, fireAt } = occurrence;
+          const { validUntil } = getPassReminderEndDates(kind, dueDate);
+          const eligible = customerId(`${kind}-due`);
+          const withdrawn = customerId(`${kind}-withdrawn`);
+          const unconsented = customerId(`${kind}-unconsented`);
+          const historic = customerId(`${kind}-historic`);
+          const otherHolder = customerId(`${kind}-shared-mailbox`);
+          const outsideAudience = customerId(`${kind}-outside-audience`);
+          const historicDate = plainDateStringSchema.make(
+            Temporal.PlainDate.from(dueDate).subtract({ days: 1 }).toString()
+          );
+          const historicEnd = getPassReminderEndDates(kind, historicDate);
+          const holder = await seedPassHolder(eligible);
+          const passId = await seedPass({ holder, kind, validUntil });
+          if (kind === "entry-pack") {
+            await seedPass({ holder, kind, validUntil });
+          }
+          await seedPass({
+            holder: await seedPassHolder(otherHolder, {
+              email: testEmailAddress(eligible),
+              tags: ["vip"],
+            }),
+            kind,
+            validUntil,
+          });
+          await seedPass({
+            holder: await seedPassHolder(outsideAudience, { tags: [] }),
+            kind,
+            validUntil,
+          });
+          for (const [id, end] of [
+            [withdrawn, validUntil],
+            [unconsented, validUntil],
+            [historic, historicEnd.validUntil],
+          ] as const) {
+            await seedPass({
+              holder: await seedPassHolder(id),
+              kind,
+              validUntil: end,
+            });
+          }
+          await seedKnownCustomers(db, [
+            eligible,
+            withdrawn,
+            historic,
+            otherHolder,
+            outsideAudience,
+          ]);
+
+          const started = await startReminder(campaignId, now);
+          expect(started).toMatchObject({
+            kind: "schedule",
+            asOf: fireAt.toString(),
+            status: "running",
+          });
+          expect(pragueOf(fireAt).hour).toBe(10);
+          expect((await startReminder(campaignId, now)).previewId).toBe(
+            started.previewId
+          );
+          await query(
+            db
+              .update(customerMarketingConsents)
+              .set({ withdrawnAt: now })
+              .where(eq(customerMarketingConsents.dotyposCustomerId, withdrawn))
+          );
+          await processAll(started.previewId);
+
+          const report = await read(started.previewId);
+          expect(report).toMatchObject({
+            status: "completed",
+            eventsTotal: null,
+            nextFires: [fireAt.toString()],
+          });
+          expect(report.rows).toEqual([
+            expect.objectContaining({
+              customerId: eligible,
+              outcome: "would-send",
+            }),
+            expect.objectContaining({
+              customerId: outsideAudience,
+              outcome: "not-in-audience",
+            }),
+            expect.objectContaining({
+              customerId: otherHolder,
+              outcome: "would-send",
+            }),
+            expect.objectContaining({
+              customerId: withdrawn,
+              outcome: "not-in-audience",
+            }),
+          ]);
+          expect(report.emails.map(({ locale }) => locale)).toEqual(
+            campaignLocales
+          );
+          for (const email of report.emails) {
+            expect(email.preheader).toBeTruthy();
+            expect(email.html).toContain("https://example.com/");
+            expect(email.html).not.toContain(passId);
+            expect(email.html).not.toContain(testEmailAddress(eligible));
+            expect(email.subject).not.toBe("Rozpracovaný koncept");
+          }
+          const wire = Schema.encodeSync(AutomationDryRunWire)(report);
+          expect(wire.emails).toHaveLength(campaignLocales.length);
+          expect(wire.emails[0]).not.toHaveProperty("preheader");
+          await query(
+            db
+              .update(customerMarketingConsents)
+              .set({ withdrawnAt: now })
+              .where(
+                eq(customerMarketingConsents.dotyposCustomerId, otherHolder)
+              )
+          );
+          const refreshed = await startReminder(campaignId, now);
+          expect(refreshed.previewId).not.toBe(started.previewId);
+          expect(refreshed.asOf).toBe(started.asOf);
+          await processAll(refreshed.previewId);
+          expect(
+            (await read(refreshed.previewId)).rows.map(
+              ({ customerId }) => customerId
+            )
+          ).toEqual([eligible, outsideAudience]);
+          expect((await read(started.previewId)).rows).toEqual(report.rows);
+          expect(
+            await query(
+              db
+                .select()
+                .from(emailCampaignAutomationRuns)
+                .where(eq(emailCampaignAutomationRuns.campaignId, campaignId))
+            )
+          ).toEqual([]);
+          expect(
+            await query(
+              db
+                .select()
+                .from(emailCampaignSends)
+                .where(eq(emailCampaignSends.campaignId, campaignId))
+            )
+          ).toEqual([]);
+
+          const next = await startReminder(
+            campaignId,
+            fireAt.add({ seconds: 1 })
+          );
+          expect(next.previewId).not.toBe(started.previewId);
+          expect(next.status).toBe("completed");
+        });
+      }
     });
   }
 );

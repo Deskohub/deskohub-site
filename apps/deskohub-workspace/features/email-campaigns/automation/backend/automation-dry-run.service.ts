@@ -25,6 +25,12 @@ import {
   emailCampaignAutomationPreviews as previews,
 } from "@/db/schema";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import {
+  type ListDuePassReminders,
+  PassReminderReads,
+  passReminderPageSize,
+} from "@/features/passes/backend/pass-reminder-reads.service";
+import { SharedAvailabilityInventoryLive } from "@/features/reservation/backend/availability-inventory-cache.server";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import {
   nextStart,
@@ -34,6 +40,7 @@ import { currentInstant, instantStringSchema } from "@/shared/utils/temporal";
 import type { AudienceFilter } from "../../audience-filter";
 import type { AudienceEvaluationContext } from "../../backend/audience-evaluation-context";
 import { CampaignCandidateRepository } from "../../backend/campaign-candidate.repository";
+import type { CampaignPurpose } from "../../body/campaign-content";
 import { renderCampaignEmailPreview } from "../../campaign-email";
 import type { CampaignId } from "../../campaign-identifiers";
 import {
@@ -49,6 +56,7 @@ import { readsTriggeringVisit } from "../automation-trigger-verification";
 import {
   automationTriggerKind,
   automationTriggerSummary,
+  isPassReminderTrigger,
 } from "../automation-triggers";
 import {
   AutomationArchived,
@@ -61,6 +69,10 @@ import {
 import { readAutomationCustomerContacts } from "./automation-customer-contacts";
 import { AutomationEvaluationFacts } from "./automation-evaluation-facts.service";
 import { lockAutomationForLifecycle } from "./automation-lifecycle-lock";
+import {
+  nextPassReminderPreviewOccurrence,
+  passReminderSampleContent,
+} from "./automation-pass-reminder-preview";
 import {
   conditionFilterOf,
   plannedPreviewUnit,
@@ -114,17 +126,23 @@ export type AutomationDryRunCustomerWithLifecycle = AutomationDryRunCustomer & {
 };
 
 /** A dry run whose page's customers carry their lifecycle. */
-export type AutomationDryRunWithLifecycle = Omit<DryRunReport, "customers"> & {
+export type AutomationDryRunWithLifecycle = Omit<
+  DryRunReport,
+  "customers" | "emails"
+> & {
   readonly customers: readonly AutomationDryRunCustomerWithLifecycle[];
+  readonly emails: readonly (DryRunReport["emails"][number] & {
+    readonly preheader?: string;
+  })[];
 };
 
 interface IAutomationDryRun {
   /**
    * Starts a dry run of the campaign's working copy (D6, D20), or returns
-   * the running or completed one of its current draft. Starting one
-   * supersedes the campaign's running dry run of an older draft. Units
-   * evaluate its customers asynchronously; a run with nobody to evaluate
-   * completes at once.
+   * its running job. A completed schedule or replay also remains reusable.
+   * Starting a new preview supersedes the campaign's older running preview.
+   * Units evaluate its customers asynchronously, and an empty job completes
+   * at once.
    */
   readonly start: (
     campaignId: CampaignId
@@ -160,6 +178,7 @@ export class AutomationDryRun extends Context.Service<
       const facts = yield* AutomationEvaluationFacts;
       const candidates = yield* CampaignCandidateRepository;
       const dotypos = yield* DotyposService;
+      const passes = yield* PassReminderReads;
 
       /** The draft a dry run evaluates: refused while it can't be activated as is. */
       const draftOf = (copy: AutomationWorkingCopy) =>
@@ -189,7 +208,9 @@ export class AutomationDryRun extends Context.Service<
             Option.match(copy.audience, {
               onNone: () =>
                 Effect.fail(
-                  new CampaignAudienceMissing({ campaignId: copy.campaign.id })
+                  new CampaignAudienceMissing({
+                    campaignId: copy.campaign.id,
+                  })
                 ),
               onSome: Effect.succeed,
             })
@@ -205,13 +226,17 @@ export class AutomationDryRun extends Context.Service<
         );
 
       /**
-       * The latest running or completed dry run of this draft, after
-       * failing a running one that stalled.
+       * The latest reusable dry run of this draft, after failing a running
+       * one that stalled. Starting a pass preview after completion refreshes
+       * the selected customers for the requested occurrence.
        */
       const reusablePreview = (input: {
         readonly campaignId: CampaignId;
         readonly draftHash: AutomationDraftHash;
         readonly now: Temporal.Instant;
+        readonly occurrence:
+          | ReturnType<typeof nextPassReminderPreviewOccurrence>
+          | undefined;
       }) =>
         db
           .select()
@@ -232,7 +257,10 @@ export class AutomationDryRun extends Context.Service<
                 rows,
                 (row) =>
                   row.draftHash === input.draftHash &&
-                  (row.status === "running" || row.status === "completed")
+                  (input.occurrence === undefined
+                    ? row.status === "running" || row.status === "completed"
+                    : row.status === "running" &&
+                      row.asOf.equals(input.occurrence.fireAt))
               )
             )
           );
@@ -302,7 +330,54 @@ export class AutomationDryRun extends Context.Service<
                 )
               )
           ),
-          Effect.bind("plan", ({ fireAt }) =>
+          Effect.flatMap(({ fireAt, pool }) =>
+            planUpcomingFire({ ...input, fireAt, pool })
+          )
+        );
+
+      const passReminderPool = Effect.fn("AutomationDryRun.passReminderPool")(
+        function* (
+          input: Omit<ListDuePassReminders, "afterPassId" | "preview"> & {
+            readonly purpose: CampaignPurpose;
+          }
+        ) {
+          const customers = new Set<DotyposCustomerId>();
+          let afterPassId: ListDuePassReminders["afterPassId"];
+          for (;;) {
+            const page = yield* passes.listDue({
+              kind: input.kind,
+              dueDate: input.dueDate,
+              now: input.now,
+              ...(afterPassId && { afterPassId }),
+              preview: true,
+            });
+            if (page.length === 0) break;
+            const eligible = yield* candidates.listCandidates({
+              purpose: input.purpose,
+              ids: [
+                ...new Set(
+                  page.map(({ dotyposCustomerId }) => dotyposCustomerId)
+                ),
+              ],
+            });
+            for (const { dotyposCustomerId } of eligible) {
+              customers.add(dotyposCustomerId);
+            }
+            if (page.length < passReminderPageSize) break;
+            afterPassId = page.at(-1)?.passId;
+          }
+          return [...customers].toSorted();
+        }
+      );
+
+      const planUpcomingFire = (
+        input: AutomationPlanInput & {
+          readonly fireAt: Temporal.Instant;
+          readonly pool: readonly DotyposCustomerId[];
+        }
+      ) =>
+        Effect.Do.pipe(
+          Effect.bind("plan", () =>
             facts.plan({
               filters: {
                 entryAudience: input.audienceFilter,
@@ -313,22 +388,37 @@ export class AutomationDryRun extends Context.Service<
                 now: input.now,
                 campaignId: Option.some(input.campaignId),
                 trigger: Option.some({
-                  kind: "schedule",
-                  at: fireAt,
+                  kind: automationTriggerKind(input.flow.trigger),
+                  at: input.fireAt,
                   reservationId: Option.none(),
                 }),
               },
             })
           ),
-          Effect.bind("chunks", ({ plan, pool }) =>
-            facts.pack({ reads: plan.reads, customers: pool })
+          Effect.bind("chunks", ({ plan }) =>
+            facts.pack({ reads: plan.reads, customers: input.pool })
           ),
-          Effect.map(({ fireAt, chunks }) => ({
+          Effect.map(({ chunks }) => ({
             kind: "schedule" as const,
-            asOf: fireAt,
+            asOf: input.fireAt,
             eventsTotal: null,
             chunks,
           }))
+        );
+
+      const planPassReminder = (
+        input: AutomationPlanInput,
+        occurrence: ReturnType<typeof nextPassReminderPreviewOccurrence>
+      ) =>
+        passReminderPool({
+          kind: occurrence.kind,
+          dueDate: occurrence.dueDate,
+          now: input.now,
+          purpose: input.copy.campaign.purpose,
+        }).pipe(
+          Effect.flatMap((pool) =>
+            planUpcomingFire({ ...input, fireAt: occurrence.fireAt, pool })
+          )
         );
 
       /**
@@ -402,7 +492,12 @@ export class AutomationDryRun extends Context.Service<
         );
       };
 
-      const createPreview = (input: AutomationPlanInput) =>
+      const createPreview = (
+        input: AutomationPlanInput,
+        occurrence:
+          | ReturnType<typeof nextPassReminderPreviewOccurrence>
+          | undefined
+      ) =>
         Effect.Do.pipe(
           Effect.bind(
             "planned",
@@ -410,13 +505,15 @@ export class AutomationDryRun extends Context.Service<
               PlannedPreview,
               AutomationDryRunStartError,
               WorkspaceTransaction
-            > =>
-              input.flow.trigger._tag === "Schedule"
-                ? planScheduleFire({
-                    ...input,
-                    calendar: input.flow.trigger.calendar,
-                  })
-                : planReplay(input)
+            > => {
+              if (occurrence !== undefined) {
+                return planPassReminder(input, occurrence);
+              }
+              const { trigger } = input.flow;
+              return trigger._tag === "Schedule"
+                ? planScheduleFire({ ...input, calendar: trigger.calendar })
+                : planReplay(input);
+            }
           ),
           Effect.tap(() =>
             supersedeRunning({
@@ -468,25 +565,40 @@ export class AutomationDryRun extends Context.Service<
             Effect.tap(() => lockAutomationForLifecycle(campaignId)),
             Effect.bind("copy", () => loadAutomationWorkingCopy(campaignId)),
             Effect.bind("draft", ({ copy }) => draftOf(copy)),
-            Effect.bind("reusable", ({ draft }) =>
+            Effect.let(
+              "occurrence",
+              ({
+                draft: {
+                  flow: { trigger },
+                },
+              }) =>
+                isPassReminderTrigger(trigger)
+                  ? nextPassReminderPreviewOccurrence(trigger, now)
+                  : undefined
+            ),
+            Effect.bind("reusable", ({ draft, occurrence }) =>
               reusablePreview({
                 campaignId,
                 draftHash: draft.draftHash,
                 now,
+                occurrence,
               })
             ),
-            Effect.flatMap(({ draft, reusable }) =>
+            Effect.flatMap(({ draft, reusable, occurrence }) =>
               Option.match(reusable, {
                 onSome: Effect.succeed,
                 onNone: () =>
-                  createPreview({
-                    campaignId,
-                    copy: draft.copy,
-                    flow: draft.flow,
-                    audienceFilter: draft.audienceFilter,
-                    draftHash: draft.draftHash,
-                    now,
-                  }),
+                  createPreview(
+                    {
+                      campaignId,
+                      copy: draft.copy,
+                      flow: draft.flow,
+                      audienceFilter: draft.audienceFilter,
+                      draftHash: draft.draftHash,
+                      now,
+                    },
+                    occurrence
+                  ),
               })
             ),
             Effect.map(previewStatus)
@@ -513,26 +625,46 @@ export class AutomationDryRun extends Context.Service<
           )
         );
 
-      /** The working copy's email in each locale it has content for, Czech first. */
+      /** A pass reminder uses synthetic copy inputs in every campaign locale. */
       const renderEmails = (
-        copy: Option.Option<AutomationWorkingCopy>
+        copy: Option.Option<AutomationWorkingCopy>,
+        preview: AutomationPreviewRow
       ): Effect.Effect<
-        DryRunReport["emails"],
+        AutomationDryRunWithLifecycle["emails"],
         Effect.Error<ReturnType<typeof renderCampaignEmailPreview>>
       > =>
         Option.match(copy, {
           onNone: () => Effect.succeed([]),
-          onSome: ({ campaign }) =>
-            Effect.forEach(
-              campaignLocaleEntries(campaign.content, campaignLocales),
-              ([locale, content]) =>
-                renderCampaignEmailPreview({
-                  templateKey: campaign.templateKey,
-                  purpose: campaign.purpose,
+          onSome: ({ campaign, draftHash, flow }) => {
+            const trigger = Option.getOrUndefined(flow)?.trigger;
+            const passTrigger =
+              trigger !== undefined && isPassReminderTrigger(trigger)
+                ? trigger
+                : undefined;
+            if (passTrigger && !Option.contains(draftHash, preview.draftHash)) {
+              return Effect.succeed([]);
+            }
+            const localizedContent = campaignLocaleEntries(
+              passTrigger
+                ? passReminderSampleContent(passTrigger, preview.asOf)
+                : campaign.content,
+              campaignLocales
+            );
+            return Effect.forEach(localizedContent, ([locale, content]) =>
+              renderCampaignEmailPreview({
+                templateKey: campaign.templateKey,
+                purpose: campaign.purpose,
+                locale,
+                content,
+              }).pipe(
+                Effect.map((email) => ({
                   locale,
-                  content,
-                }).pipe(Effect.map((email) => ({ locale, ...email })))
-            ),
+                  ...email,
+                  preheader: content.preheader,
+                }))
+              )
+            );
+          },
         });
 
       const get: IAutomationDryRun["get"] = Effect.fn("AutomationDryRun.get")(
@@ -610,7 +742,15 @@ export class AutomationDryRun extends Context.Service<
           const schedule = Option.flatMap(copy, ({ flow }) =>
             Option.filter(flow, ({ trigger }) => trigger._tag === "Schedule")
           );
-          const emails = yield* renderEmails(copy).pipe(
+          const passReminder = Option.exists(
+            copy,
+            ({ draftHash, flow }) =>
+              Option.contains(draftHash, preview.draftHash) &&
+              Option.exists(flow, ({ trigger }) =>
+                isPassReminderTrigger(trigger)
+              )
+          );
+          const emails = yield* renderEmails(copy, preview).pipe(
             Effect.tapError((error) =>
               Effect.logError("Dry run email failed to render", error)
             ),
@@ -622,7 +762,7 @@ export class AutomationDryRun extends Context.Service<
           const dryRun: AutomationDryRunWithLifecycle = {
             ...previewStatus(preview),
             nextFires: Option.match(schedule, {
-              onNone: () => [],
+              onNone: () => (passReminder ? [preview.asOf.toString()] : []),
               onSome: ({ trigger }) =>
                 trigger._tag === "Schedule"
                   ? nextFires(trigger.calendar, now).map(String)
@@ -676,7 +816,15 @@ export class AutomationDryRun extends Context.Service<
         WorkspaceDatabase.Default,
         AutomationEvaluationFacts.Live,
         CampaignCandidateRepository.Live,
-        WorkspaceDotyposLayer
+        WorkspaceDotyposLayer,
+        PassReminderReads.Default.pipe(
+          Layer.provide(
+            Layer.merge(
+              WorkspaceDatabase.Default,
+              SharedAvailabilityInventoryLive
+            )
+          )
+        )
       )
     )
   );
