@@ -42,10 +42,12 @@ export interface IWorkspaceFeatureFlagService {
   /**
    * The flag's value when it is the same for every visitor, read without the
    * request; none when the flag is decided per visitor. Fails when no
-   * classification could be read.
+   * classification could be read. An unattended side effect can require a
+   * live definition to avoid authorizing a write using a stale snapshot.
    */
   readonly constantValue: <Key extends PostHogFeatureFlagKey>(
-    key: Key
+    key: Key,
+    options?: { readonly requireLiveDefinition: true }
   ) => Effect.Effect<Option.Option<boolean>, PostHogFeatureFlagEvaluationError>;
 }
 
@@ -70,6 +72,7 @@ export class WorkspaceFeatureFlagService extends Context.Service<
           getGlobalWorkspaceFeatureFlagValue,
           getGlobalWorkspaceFeatureFlagValues,
           getWorkspaceFeatureFlagConstancy,
+          readLiveWorkspaceFeatureFlagConstantValue,
         },
         { evaluateRequestFlags, isFlagEnabled, makeRunEvaluations },
       ] = await Promise.all([
@@ -127,22 +130,26 @@ export class WorkspaceFeatureFlagService extends Context.Service<
           )
         ),
         constantValue: Effect.fn("WorkspaceFeatureFlagService.constantValue")(
-          (key) =>
-            constancyOf(key).pipe(
-              Effect.flatMap(
-                Match.type<WorkspaceFeatureFlagConstancy>().pipe(
-                  Match.discriminatorsExhaustive("kind")({
-                    constant: ({ value }) =>
-                      Effect.succeed<Option.Option<boolean>>(
-                        Option.some(value)
-                      ),
-                    "per-request": () =>
-                      Effect.succeed<Option.Option<boolean>>(Option.none()),
-                    unclassified: () => Effect.fail(unclassifiedFlag()),
-                  })
+          (key, options) =>
+            options?.requireLiveDefinition
+              ? readLiveWorkspaceFeatureFlagConstantValue(key).pipe(
+                  Effect.mapError(unclassifiedFlag)
                 )
-              )
-            )
+              : constancyOf(key).pipe(
+                  Effect.flatMap(
+                    Match.type<WorkspaceFeatureFlagConstancy>().pipe(
+                      Match.discriminatorsExhaustive("kind")({
+                        constant: ({ value }) =>
+                          Effect.succeed<Option.Option<boolean>>(
+                            Option.some(value)
+                          ),
+                        "per-request": () =>
+                          Effect.succeed<Option.Option<boolean>>(Option.none()),
+                        unclassified: () => Effect.fail(unclassifiedFlag()),
+                      })
+                    )
+                  )
+                )
         ),
       });
     })

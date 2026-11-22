@@ -15,11 +15,24 @@ export const CoworkPassesReleaseGateForReminders = Layer.unwrap(
         flags: [CoworkPassesReleaseGate.flag],
         message: "Pass reminder release gate unavailable.",
       });
-    const decision = flags.constantValue(CoworkPassesReleaseGate.flag).pipe(
-      Effect.map(Option.getOrElse(() => false)),
-      Effect.mapError(unavailable),
-      catchRecoverableCause(() => Effect.fail(unavailable()))
-    );
+    const decision = flags
+      .constantValue(CoworkPassesReleaseGate.flag, {
+        requireLiveDefinition: true,
+      })
+      .pipe(
+        Effect.match({
+          onSuccess: (value) =>
+            Option.some(Option.getOrElse(value, () => false)),
+          onFailure: () => Option.none<boolean>(),
+        }),
+        catchRecoverableCause(() => Effect.succeed(Option.none<boolean>())),
+        Effect.flatMap(
+          Option.match({
+            onSome: Effect.succeed,
+            onNone: () => Effect.fail(unavailable()),
+          })
+        )
+      );
     return CoworkPassesReleaseGate.fromEvaluation(
       decision.pipe(
         Effect.catchTag("ReleaseGateUnavailableError", ({ message }) =>

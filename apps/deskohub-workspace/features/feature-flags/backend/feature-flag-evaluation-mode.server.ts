@@ -1,7 +1,7 @@
 import "server-only";
 
 import { loadPostHogFeatureFlagDefinitions } from "@deskohub/analytics-posthog/feature-flags/management";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { cacheLife } from "next/cache";
 import { env } from "@/env";
 import { postHogRuntimeConfig } from "@/shared/backend/config/posthog.config";
@@ -47,6 +47,31 @@ export async function getWorkspaceFeatureFlagConstancy(
   if (value !== undefined) return { kind: "constant", value };
   return classified ? { kind: "per-request" } : { kind: "unclassified" };
 }
+
+/** A live constant for an unattended side effect, without snapshot fallback. */
+export const readLiveWorkspaceFeatureFlagConstantValue = Effect.fn(
+  "readLiveWorkspaceFeatureFlagConstantValue"
+)(function* (key: PostHogFeatureFlagKey) {
+  const override = postHogRuntimeConfig.featureFlagOverrides?.[key];
+  if (override !== undefined) return Option.some(override);
+  if (env.VERCEL_ENV !== "production") return Option.none<boolean>();
+
+  const {
+    POSTHOG_API_KEY: apiKey,
+    POSTHOG_API_HOST: host,
+    POSTHOG_PROJECT_ID: projectId,
+  } = env;
+  if (!(apiKey && host && projectId))
+    return yield* Effect.fail("configuration-unavailable" as const);
+  const definitions = yield* loadPostHogFeatureFlagDefinitions({
+    apiKey,
+    host: new URL(host),
+    projectId,
+  });
+  return Option.fromNullishOr(
+    definitions.find((flag) => flag.key === key)?.constantEnabledValue
+  );
+});
 
 /** Remembers this process's last complete classification across refreshes. */
 const classifyFeatureFlags = makeFeatureFlagClassifier({
