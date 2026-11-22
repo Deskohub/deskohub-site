@@ -848,6 +848,8 @@
   "reservations_people_change_message": "Dobrý den,\n\nchci změnit, kdo přijde na moji rezervaci soukromé kanceláře {reference} na {date}.\n\nPřidat:\n\nOdebrat:\n",
   "reservations_section_past": "Minulé",
   "reservations_show_all_past": "Zobrazit všechny minulé rezervace",
+  "reservations_save_with_passes": "Ušetři s balíčky a členstvími",
+  "reservations_pricing_open_failed": "Stránku se nepodařilo otevřít. Zkus to znovu.",
   "reservations_nothing_upcoming": "Nic tě nečeká",
   "reservations_none_yet": "Zatím žádné rezervace",
   "reservations_pin_after_payment": "PIN po zaplacení",

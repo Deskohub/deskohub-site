@@ -2,12 +2,25 @@ import {
   type ComponentRef,
   createContext,
   type ReactNode,
+  type RefObject,
   useCallback,
   useContext,
+  useEffect,
+  useId,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
+import {
+  type LayoutChangeEvent,
+  RefreshControl,
+  ScrollView,
+  type StyleProp,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+  type ViewStyle,
+} from "react-native";
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -49,6 +62,204 @@ export function MastheadClearance() {
   return <View aria-hidden style={styles.clearance} />;
 }
 
+/** A view's frame within the scrolled content. */
+export interface ContentBox {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** A sticky footer's copy, drawn over the bottom of the screen. */
+export interface PinnedFooter {
+  readonly node: ReactNode;
+  /** Its group's left edge and width within the content. */
+  readonly x: number;
+  readonly width: number;
+  readonly style?: StyleProp<ViewStyle>;
+}
+
+/** What a `StickyFooterGroup` reads from, and draws through, its screen. */
+export interface StickyFooterHost {
+  /** Reports `node`'s frame within the scrolled content, once laid out. */
+  readonly measure: (
+    node: ComponentRef<typeof View> | null,
+    onBox: (box: ContentBox) => void
+  ) => void;
+  /** The content line a pinned footer ends on: the visible bottom, less its gap. */
+  readonly pinLine: () => number;
+  /** How far below the screen's pinned footers the window ends. */
+  readonly belowPinned: () => number;
+  /** Calls back on each scroll, and with "layout" when frames may have moved. */
+  readonly subscribe: (
+    listener: (change: "scroll" | "layout") => void
+  ) => () => void;
+  /** Draws `footer` over the screen's bottom under `key`; undefined removes it. */
+  readonly pin: (key: string, footer: PinnedFooter | undefined) => void;
+}
+
+export const StickyFooterHostContext = createContext<
+  StickyFooterHost | undefined
+>(undefined);
+
+/** Whether a footer is drawn by its screen's pinned copy instead. */
+const PinnedCopyContext = createContext(false);
+
+/**
+ * Whether this is the pinned copy of a sticky footer, which assistive
+ * technology and keyboard focus skip: they reach the footer in its place.
+ */
+export const useIsPinnedCopy = () => useContext(PinnedCopyContext);
+
+/**
+ * Whether a group's footer pins to the bottom of the screen, as CSS
+ * `position: sticky; bottom: 0` would inside the group: while its place lies
+ * below `pinLine` and the group starts at least a footer's height above it.
+ */
+export const stickyFooterPinned = ({
+  pinLine,
+  group,
+  footer,
+}: {
+  readonly pinLine: number;
+  readonly group: ContentBox;
+  readonly footer: ContentBox;
+}): boolean =>
+  footer.y + footer.height > pinLine + 0.5 &&
+  group.y + footer.height <= pinLine;
+
+/**
+ * A group whose `footer` ends it, and sticks above the bottom of its
+ * `ScrollScreen` (clear of the tab bar's raised circle) while the group
+ * runs on below it; at the group's end the footer rests in place. The
+ * pinned copy takes `pinnedStyle` and stays hidden from assistive
+ * technology: the footer in place is the one it reads. `onObstruction`
+ * hears how much of the window's bottom the pinned copy covers, 0 while
+ * none shows, for the toast. Outside a `ScrollScreen` the footer never pins.
+ */
+export function StickyFooterGroup({
+  style,
+  footer,
+  pinnedStyle,
+  onObstruction,
+  children,
+}: {
+  readonly style?: StyleProp<ViewStyle>;
+  readonly footer?: ReactNode;
+  readonly pinnedStyle?: StyleProp<ViewStyle>;
+  readonly onObstruction?: (height: number) => void;
+  readonly children: ReactNode;
+}) {
+  const host = useContext(StickyFooterHostContext);
+  const key = useId();
+  const groupView = useRef<ComponentRef<typeof View>>(null);
+  const footerView = useRef<ComponentRef<typeof View>>(null);
+  const boxes = useRef<{ group?: ContentBox; footer?: ContentBox }>({});
+  const [pinned, setPinned] = useState(false);
+  const [frame, setFrame] = useState<ContentBox>();
+  const shown = footer !== undefined && footer !== null && footer !== false;
+  const update = useCallback(() => {
+    const { group, footer: place } = boxes.current;
+    setPinned(
+      host !== undefined &&
+        group !== undefined &&
+        place !== undefined &&
+        stickyFooterPinned({ pinLine: host.pinLine(), group, footer: place })
+    );
+  }, [host]);
+  const remeasure = useCallback(() => {
+    if (host === undefined) return;
+    host.measure(groupView.current, (box) => {
+      boxes.current.group = box;
+      setFrame((last) =>
+        last?.x === box.x &&
+        last.width === box.width &&
+        last.height === box.height
+          ? last
+          : box
+      );
+      update();
+    });
+    host.measure(footerView.current, (box) => {
+      boxes.current.footer = box;
+      update();
+    });
+  }, [host, update]);
+  // Only a group with a footer follows the scroll.
+  useEffect(() => {
+    if (!shown) return;
+    return host?.subscribe((change) =>
+      change === "layout" ? remeasure() : update()
+    );
+  }, [host, shown, remeasure, update]);
+  const pinning = shown && pinned && frame !== undefined;
+  useEffect(() => {
+    if (host === undefined || !pinning) return;
+    host.pin(key, {
+      node: footer,
+      x: frame.x,
+      width: frame.width,
+      style: pinnedStyle,
+    });
+    return () => host.pin(key, undefined);
+  }, [host, key, pinning, footer, frame, pinnedStyle]);
+  const footerHeight = boxes.current.footer?.height ?? 0;
+  const obstruction =
+    host !== undefined && pinning ? host.belowPinned() + footerHeight : 0;
+  useEffect(() => {
+    onObstruction?.(obstruction);
+  }, [onObstruction, obstruction]);
+  return (
+    <View
+      ref={groupView}
+      style={style}
+      onLayout={shown ? remeasure : undefined}
+    >
+      {children}
+      {shown && (
+        // While pinned, the copy covers this place; the place stays for
+        // assistive technology, which scrolls it into view and unpins it.
+        <View
+          ref={footerView}
+          onLayout={remeasure}
+          style={pinning ? styles.coveredFooter : undefined}
+        >
+          {footer}
+        </View>
+      )}
+    </View>
+  );
+}
+
+/** The pinned footers over the bottom of a `ScrollScreen`. */
+function PinnedFooters({
+  footers,
+  bottom,
+  left,
+}: {
+  readonly footers: ReadonlyMap<string, PinnedFooter>;
+  readonly bottom: number;
+  readonly left: number;
+}) {
+  return (
+    <PinnedCopyContext value={true}>
+      {Array.from(footers, ([key, pinned]) => (
+        <View
+          key={key}
+          aria-hidden
+          style={[
+            styles.pinned,
+            { bottom, left: left + pinned.x, width: pinned.width },
+            pinned.style,
+          ]}
+        >
+          {pinned.node}
+        </View>
+      ))}
+    </PinnedCopyContext>
+  );
+}
+
 /**
  * A scrolling screen under a navigation header (or its own `masthead`) and
  * above the tab bar, which own the top and bottom insets. Content sits on
@@ -61,7 +272,8 @@ export function MastheadClearance() {
  * top of the screen under the status bar once the masthead has scrolled
  * away. `overlap={false}` starts the content below a band that ends with
  * its own content, such as the access PIN's. A focused field scrolls whole
- * above whatever follows the screen, such as an `ActionFooter`.
+ * above whatever follows the screen, such as an `ActionFooter`. A
+ * `StickyFooterGroup` in the content pins its footer above the tab bar.
  */
 export function ScrollScreen({
   children,
@@ -95,69 +307,90 @@ export function ScrollScreen({
     []
   );
   const focusedField = useFocusedFieldScroll(scrollView);
+  const sticky = useStickyFooterHost(scrollView, isWide);
   const withMasthead = masthead !== undefined;
   const overlapping = withMasthead && overlap;
+  const collapsing =
+    collapsedHeader !== undefined && mastheadHeight !== undefined;
   return (
     <SafeAreaView edges={["left", "right"]} style={styles.screen}>
       <FocusedFieldContext value={focusedField.tracker}>
-        <ScrollView
-          ref={scrollView}
-          onLayout={focusedField.onLayout}
-          // A tap on a button, or on a row of a sheet opened from this screen,
-          // acts while the keyboard is up; elsewhere it closes the keyboard.
-          // The responder system follows the React tree, so a modal sheet's
-          // rows sit inside this ScrollView too.
-          keyboardShouldPersistTaps="handled"
-          scrollEventThrottle={collapsedHeader === undefined ? undefined : 16}
-          onScroll={
-            collapsedHeader === undefined || mastheadHeight === undefined
-              ? undefined
-              : (event) =>
-                  setCollapsed(
-                    event.nativeEvent.contentOffset.y >= mastheadHeight
-                  )
-          }
-          // A masthead clears the status bar itself.
-          contentInsetAdjustmentBehavior={withMasthead ? "never" : "automatic"}
-          refreshControl={
-            onRefresh && (
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                tintColor={hiddenSpinner}
-                colors={[hiddenSpinner]}
-                progressBackgroundColor={hiddenSpinner}
-              />
-            )
-          }
-        >
-          <ScrollScreenContext value={scrollToTop}>
-            {masthead !== undefined && (
-              <View
-                onLayout={(event) =>
-                  setMastheadHeight(event.nativeEvent.layout.height)
-                }
-              >
-                {masthead}
+        <StickyFooterHostContext value={sticky.host}>
+          <ScrollView
+            ref={scrollView}
+            onLayout={(event) => {
+              focusedField.onLayout(event);
+              sticky.onLayout(event);
+            }}
+            onContentSizeChange={sticky.onContentSizeChange}
+            // A tap on a button, or on a row of a sheet opened from this screen,
+            // acts while the keyboard is up; elsewhere it closes the keyboard.
+            // The responder system follows the React tree, so a modal sheet's
+            // rows sit inside this ScrollView too.
+            keyboardShouldPersistTaps="handled"
+            scrollEventThrottle={
+              collapsedHeader === undefined && !sticky.tracking ? undefined : 16
+            }
+            onScroll={
+              !collapsing && !sticky.tracking
+                ? undefined
+                : (event) => {
+                    const y = event.nativeEvent.contentOffset.y;
+                    if (collapsing) setCollapsed(y >= mastheadHeight);
+                    sticky.onScroll(y);
+                  }
+            }
+            // A masthead clears the status bar itself.
+            contentInsetAdjustmentBehavior={
+              withMasthead ? "never" : "automatic"
+            }
+            refreshControl={
+              onRefresh && (
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                  tintColor={hiddenSpinner}
+                  colors={[hiddenSpinner]}
+                  progressBackgroundColor={hiddenSpinner}
+                />
+              )
+            }
+          >
+            <ScrollScreenContext value={scrollToTop}>
+              {masthead !== undefined && (
+                <View
+                  onLayout={(event) =>
+                    setMastheadHeight(event.nativeEvent.layout.height)
+                  }
+                >
+                  {masthead}
+                </View>
+              )}
+              <View ref={sticky.content} style={styles.page}>
+                {overlapping && <View aria-hidden style={styles.overlap} />}
+                <View
+                  style={[
+                    styles.content,
+                    column,
+                    isWide && { paddingBottom: insets.bottom + space.xxl },
+                    overlapping && styles.overlapping,
+                    withMasthead && !overlap && styles.belowBand,
+                  ]}
+                >
+                  {children}
+                </View>
               </View>
-            )}
-            <View style={styles.page}>
-              {overlapping && <View aria-hidden style={styles.overlap} />}
-              <View
-                style={[
-                  styles.content,
-                  column,
-                  isWide && { paddingBottom: insets.bottom + space.xxl },
-                  overlapping && styles.overlapping,
-                  withMasthead && !overlap && styles.belowBand,
-                ]}
-              >
-                {children}
-              </View>
-            </View>
-          </ScrollScreenContext>
-        </ScrollView>
+            </ScrollScreenContext>
+          </ScrollView>
+        </StickyFooterHostContext>
       </FocusedFieldContext>
+      {sticky.pinned.size > 0 && (
+        <PinnedFooters
+          footers={sticky.pinned}
+          bottom={sticky.pinBottom}
+          left={insets.left}
+        />
+      )}
       {collapsed && collapsedHeader !== undefined && (
         <View style={[styles.collapsedHeader, { paddingTop: insets.top }]}>
           {collapsedHeader}
@@ -182,6 +415,92 @@ export function ScrollScreen({
     </SafeAreaView>
   );
 }
+
+/**
+ * The screen's side of its sticky footers: where the content scrolled to,
+ * the frames it measures them in, and the copies pinned over its bottom.
+ * It follows the scroll only while a footer listens.
+ */
+function useStickyFooterHost(
+  scrollView: RefObject<ComponentRef<typeof ScrollView> | null>,
+  isWide: boolean
+) {
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const content = useRef<ComponentRef<typeof View>>(null);
+  const frame = useRef({ scrollY: 0, viewportHeight: 0, belowScreen: 0 });
+  const listeners = useRef(new Set<(change: "scroll" | "layout") => void>());
+  const [tracking, setTracking] = useState(false);
+  const [pinned, setPinned] = useState<ReadonlyMap<string, PinnedFooter>>(
+    () => new Map()
+  );
+  // Clear of the tab bar's raised circle; with no tab bar, of the safe area.
+  const pinBottom =
+    (isWide ? insets.bottom : tabBarRaisedOverhang) + pinnedFooterGap;
+  const notify = useCallback((change: "scroll" | "layout") => {
+    for (const listener of listeners.current) listener(change);
+  }, []);
+  // How far the window runs on below this screen, such as over the tab bar.
+  const measureBelowScreen = useCallback(() => {
+    scrollView.current?.measureInWindow((_x, y, _width, height) => {
+      frame.current.belowScreen = Math.max(0, windowHeight - (y + height));
+      notify("layout");
+    });
+  }, [scrollView, windowHeight, notify]);
+  const host = useMemo<StickyFooterHost>(
+    () => ({
+      measure: (node, onBox) => {
+        const relativeTo = content.current;
+        if (node === null || relativeTo === null) return;
+        node.measureLayout(relativeTo, (x, y, width, height) =>
+          onBox({ x, y, width, height })
+        );
+      },
+      pinLine: () =>
+        frame.current.scrollY + frame.current.viewportHeight - pinBottom,
+      belowPinned: () => frame.current.belowScreen + pinBottom,
+      subscribe: (listener) => {
+        listeners.current.add(listener);
+        setTracking(true);
+        measureBelowScreen();
+        return () => {
+          listeners.current.delete(listener);
+          setTracking(listeners.current.size > 0);
+        };
+      },
+      pin: (key, footer) =>
+        setPinned((current) => {
+          if (footer === undefined && !current.has(key)) return current;
+          const next = new Map(current);
+          if (footer === undefined) next.delete(key);
+          else next.set(key, footer);
+          return next;
+        }),
+    }),
+    [pinBottom, measureBelowScreen]
+  );
+  return {
+    host,
+    content,
+    tracking,
+    pinned,
+    pinBottom,
+    onScroll: (y: number) => {
+      frame.current.scrollY = y;
+      notify("scroll");
+    },
+    onLayout: (event: LayoutChangeEvent) => {
+      frame.current.viewportHeight = event.nativeEvent.layout.height;
+      if (listeners.current.size > 0) measureBelowScreen();
+    },
+    onContentSizeChange: () => {
+      if (listeners.current.size > 0) notify("layout");
+    },
+  };
+}
+
+/** The space between a pinned footer and what it sticks above. */
+const pinnedFooterGap = space.md;
 
 /** The refresh indicator's white disc. */
 const refreshDiscSize = 40;
@@ -214,6 +533,8 @@ const styles = StyleSheet.create({
   },
   // The overlap less the gap the content's column adds after it.
   clearance: { height: mastheadOverlap - space.md },
+  coveredFooter: { opacity: 0 },
+  pinned: { position: "absolute" },
   refresh: {
     alignItems: "center",
     left: 0,

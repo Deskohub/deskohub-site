@@ -854,6 +854,8 @@
   "reservations_people_change_message": "Dobrý deň,\n\nchcem zmeniť, kto príde na moju rezerváciu súkromnej kancelárie {reference} na {date}.\n\nPridať:\n\nOdobrať:\n",
   "reservations_section_past": "Minulé",
   "reservations_show_all_past": "Zobraziť všetky minulé rezervácie",
+  "reservations_save_with_passes": "Ušetri s balíkmi a pasmi",
+  "reservations_pricing_open_failed": "Stránku sa nepodarilo otvoriť. Skús to znova.",
   "reservations_nothing_upcoming": "Nič ťa nečaká",
   "reservations_none_yet": "Zatiaľ žiadne rezervácie",
   "reservations_pin_after_payment": "PIN po zaplatení",

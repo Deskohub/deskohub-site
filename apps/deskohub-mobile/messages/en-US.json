@@ -842,6 +842,8 @@
   "reservations_people_change_message": "Hello,\n\nI'd like to change who is coming to my private office booking {reference} on {date}.\n\nAdd:\n\nRemove:\n",
   "reservations_section_past": "Past",
   "reservations_show_all_past": "Show all past bookings",
+  "reservations_save_with_passes": "Save with packs and passes",
+  "reservations_pricing_open_failed": "We couldn't open the page. Try again.",
   "reservations_nothing_upcoming": "Nothing coming up",
   "reservations_none_yet": "No reservations yet",
   "reservations_pin_after_payment": "PIN after payment",
