@@ -180,7 +180,7 @@ type WithPreparationLease = <A, E>(
   prepare: Effect.Effect<A, E>
 ) => Effect.Effect<A, E | CampaignDeliveryIncomplete | DatabaseQueryError>;
 
-export type WithCampaignDeliveryLease = <A, E>(
+type WithCampaignDeliveryLease = <A, E>(
   work: Effect.Effect<A, E, WorkspaceTransaction>
 ) => Effect.Effect<A, E | CampaignDeliveryIncomplete | DatabaseQueryError>;
 
