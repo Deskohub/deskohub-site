@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.39.0](https://github.com/totalolage/deskohub-site/compare/dhw-v1.38.0...dhw-v1.39.0) (2026-11-22)
+
+
+### Features
+
+* **dhw:** expose reservation audit history ([82a5f32](https://github.com/totalolage/deskohub-site/commit/82a5f3278f2498cffda578f25dbb49d26dc35355))
+* **workspace:** audit operator reservation lifecycle changes ([7176484](https://github.com/totalolage/deskohub-site/commit/7176484f4accd634c5bbe8618dc06f4e71a942b6))
+
 ## [1.38.0](https://github.com/totalolage/deskohub-site/compare/dhw-v1.37.0...dhw-v1.38.0) (2026-11-18)
 
 
