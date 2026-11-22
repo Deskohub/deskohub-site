@@ -123,12 +123,20 @@ test("operator cancellation cancels Dotypos, records the result, and optionally 
   });
   expect(cancelReservation).toHaveBeenCalledWith("dotypos-test");
   expect(markAdministrationCancelled).toHaveBeenCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: testActor.administrator.accountId,
+      source: testActor.source,
+    }),
     id,
     cancelledAt: expect.any(Temporal.Instant),
     claimedAt: current.updatedAt,
     failureCode: null,
   });
   expect(claimAdministrationCancellation).toHaveBeenCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: testActor.administrator.accountId,
+      source: testActor.source,
+    }),
     id,
     staleCancellingBefore: expect.any(Temporal.Instant),
   });
@@ -187,8 +195,7 @@ const cancelAndEmail = async ({
   const result = await Effect.gen(function* () {
     const service = yield* ReservationAdministrationService;
     return yield* service.cancel({
-      accessGrantUpdatedAt: null,
-      providerCredentialRemoved: false,
+      actor: testActor,
       reservationId: id,
       sendCancellationEmail: send,
     });
@@ -327,6 +334,10 @@ test("forced operator cancellation terminalizes a pending payment before cancell
     invoice: null,
   });
   expect(claimAdministrationCancellation).toHaveBeenCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: testActor.administrator.accountId,
+      source: testActor.source,
+    }),
     id,
     pendingPaymentCancellation: {
       paymentAttemptId: activePaymentAttemptId,
@@ -336,6 +347,10 @@ test("forced operator cancellation terminalizes a pending payment before cancell
   });
   expect(cancelReservation).toHaveBeenCalledWith("dotypos-pending");
   expect(markAdministrationCancelled).toHaveBeenCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: testActor.administrator.accountId,
+      source: testActor.source,
+    }),
     id,
     cancelledAt: expect.any(Temporal.Instant),
     claimedAt: current.updatedAt,
@@ -627,10 +642,18 @@ test("resumes a stale cancellation after an interrupted request", async () => {
     invoice: null,
   });
   expect(claimAdministrationCancellation).toHaveBeenCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: testActor.administrator.accountId,
+      source: testActor.source,
+    }),
     id,
     staleCancellingBefore: expect.any(Temporal.Instant),
   });
   expect(markAdministrationCancelled).toHaveBeenCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: testActor.administrator.accountId,
+      source: testActor.source,
+    }),
     id,
     cancelledAt: expect.any(Temporal.Instant),
     claimedAt: current.updatedAt,
@@ -908,9 +931,14 @@ test("marks the claim failed when Dotypos or the local record fails", async () =
   });
   expect(markAdministrationCancelled).not.toHaveBeenCalled();
   expect(markAdministrationCancellationFailed).toHaveBeenLastCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: testActor.administrator.accountId,
+      source: testActor.source,
+    }),
     id: cancellableReservation.id,
     claimedAt: cancellableReservation.updatedAt,
     failureCode: "admin_dotypos_cancel_failed",
+    reason: "provider_cancellation_failed",
   });
 
   const recordFailed = await cancelWith({
@@ -927,9 +955,14 @@ test("marks the claim failed when Dotypos or the local record fails", async () =
     cause: "write conflict",
   });
   expect(markAdministrationCancellationFailed).toHaveBeenLastCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: testActor.administrator.accountId,
+      source: testActor.source,
+    }),
     id: cancellableReservation.id,
     claimedAt: cancellableReservation.updatedAt,
     failureCode: "admin_forced_payment_cancellation",
+    reason: "local_cancellation_failed",
   });
 
   await cancelWith({
@@ -938,8 +971,13 @@ test("marks the claim failed when Dotypos or the local record fails", async () =
     markAdministrationCancellationFailed,
   });
   expect(markAdministrationCancellationFailed).toHaveBeenLastCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: testActor.administrator.accountId,
+      source: testActor.source,
+    }),
     id: cancellableReservation.id,
     claimedAt: cancellableReservation.updatedAt,
     failureCode: "admin_local_cancel_failed",
+    reason: "local_cancellation_failed",
   });
 });

@@ -12,9 +12,11 @@ import { makeInvoiceCancellationTestKit } from "@/features/accounting/backend/in
 import { InvoiceCancellationNotices } from "@/features/accounting/backend/invoice-cancellation-notices";
 import { InvoiceEmailDeliveryService } from "@/features/accounting/backend/invoice-email-delivery.service";
 import { ReservationInvoiceService } from "@/features/accounting/backend/reservation-invoice.service";
+import { CurrentAdministrationAction } from "@/features/admin-cli/administration-action";
 import { PaidFulfillmentQueueService } from "@/features/checkout/backend/fulfillment/paid-fulfillment-queue.service";
 import { WorkspaceReservationEmailService } from "@/features/checkout/backend/fulfillment/workspace-reservation-email.service";
 import { FioPaymentSettlementRepository } from "@/features/checkout/backend/repositories/fio-payment-settlement.repository";
+import { startReservationAudit } from "@/features/reservation/backend/reservation-audit";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
@@ -142,10 +144,17 @@ const makeCancellation = (
       )
     )
   );
-  const cancel = (input: ReservationCancellationInput) =>
+  const cancel = (
+    input: ReservationCancellationInput,
+    actionId = crypto.randomUUID()
+  ) =>
     Effect.runPromise(
       ReservationAdministrationService.pipe(
         Effect.flatMap((service) => service.cancel(input)),
+        Effect.provideService(CurrentAdministrationAction, {
+          id: actionId,
+          markReplayed: Effect.void,
+        }),
         Effect.provide(layer)
       )
     );
@@ -156,7 +165,18 @@ const makeCancellation = (
         Effect.provide(layer)
       )
     );
-  return { cancel, cancelFailure, cancelReservation, deliver };
+  const readAudit = (
+    input: Parameters<
+      ReservationAdministrationService["Service"]["readAudit"]
+    >[0]
+  ) =>
+    Effect.runPromise(
+      ReservationAdministrationService.pipe(
+        Effect.flatMap((service) => service.readAudit(input)),
+        Effect.provide(layer)
+      )
+    );
+  return { cancel, cancelFailure, cancelReservation, deliver, readAudit };
 };
 
 /**
@@ -194,17 +214,22 @@ const makeRestoration = (
       const repository = yield* WorkspaceReservationRepository;
       const { transaction } = yield* WorkspaceDatabase;
       return ReservationRestorationService.of({
-        restore: ({ reservationId }) =>
+        restore: ({ actor, reservationId }) =>
           repository.findById(reservationId).pipe(
             Effect.flatMap((current) =>
               current?.reservationState === "cancelled" &&
               current.reservationCancelledAt
                 ? transaction(
-                    repository.markAdministrationRestored({
-                      id: reservationId,
-                      cancelledAt: current.reservationCancelledAt,
-                      restoredAt: Temporal.Now.instant(),
-                    })
+                    startReservationAudit(actor).pipe(
+                      Effect.flatMap((audit) =>
+                        repository.markAdministrationRestored({
+                          audit,
+                          id: reservationId,
+                          cancelledAt: current.reservationCancelledAt!,
+                          restoredAt: Temporal.Now.instant(),
+                        })
+                      )
+                    )
                   ).pipe(Effect.as("restored" as const))
                 : Effect.succeed("already_confirmed" as const)
             ),
@@ -254,11 +279,15 @@ const makeRestoration = (
     ReservationAdministrationService.Default.pipe(Layer.provide(services)),
     reservationInvoices
   );
-  const restore = (reservationId: WorkspaceReservationId) =>
-    Effect.runPromise(
+  const restore = async (reservationId: WorkspaceReservationId) => {
+    const actor = await kit.makeActor(
+      `reservation-restore-${crypto.randomUUID()}`
+    );
+    return Effect.runPromise(
       ReservationAdministrationService.pipe(
         Effect.flatMap((service) =>
           service.restore({
+            actor,
             reservationId,
             acknowledgeRefundedPayment: false,
             sendRestorationEmail: false,
@@ -267,6 +296,7 @@ const makeRestoration = (
         Effect.provide(layer)
       )
     );
+  };
   /** What the restore preview reads. */
   const plan = (reservationId: WorkspaceReservationId) =>
     Effect.runPromise(
@@ -468,6 +498,205 @@ describe.skipIf(!testDatabase)(
         cancellations: [],
       });
       expect(deliver).not.toHaveBeenCalled();
+    });
+
+    test("records a failed cancellation and its retry once per guarded commit", async () => {
+      const { reservation } = await kit.issueReservationInvoice();
+      const input = await cancellationInput(reservation.id);
+      const first = makeCancellation({ encryptionKeyFails: true });
+      expect((await first.cancelFailure(input)).reason).toBe("record_failed");
+
+      const replay = makeCancellation();
+      const actionId = crypto.randomUUID();
+      expect((await replay.cancel(input, actionId)).outcome).toBe("cancelled");
+      expect((await replay.cancel(input)).outcome).toBe("already_cancelled");
+      expect(replay.cancelReservation).toHaveBeenCalledTimes(1);
+
+      const page = await replay.readAudit({
+        actor: input.actor,
+        reservationId: reservation.id,
+      });
+      expect(
+        page?.events.map(({ beforeState, afterState, reason }) => [
+          beforeState,
+          afterState,
+          reason,
+        ])
+      ).toEqual([
+        ["cancelling", "cancelled", "cancellation_completed"],
+        ["cancellation_failed", "cancelling", "cancellation_reclaimed"],
+        ["cancelling", "cancellation_failed", "local_cancellation_failed"],
+        ["confirmed", "cancelling", "operator_cancellation"],
+      ]);
+      const [completed, reclaimed, failed, claimed] = page!.events;
+      expect(completed).toMatchObject({
+        causedByEventId: reclaimed!.id,
+        correlationId: reclaimed!.correlationId,
+        administrationActionId: actionId,
+        actorAccountId: input.actor.administrator.accountId,
+        source: "dhw-cli",
+        schemaVersion: 1,
+      });
+      expect(failed).toMatchObject({
+        causedByEventId: claimed!.id,
+        correlationId: claimed!.correlationId,
+      });
+      expect(reclaimed!.correlationId).not.toBe(claimed!.correlationId);
+      expect(JSON.stringify(page)).not.toContain(
+        input.actor.administrator.email
+      );
+      const older = await replay.readAudit({
+        actor: input.actor,
+        reservationId: reservation.id,
+        before: reclaimed!.id,
+      });
+      expect(older?.events.map(({ id }) => id)).toEqual([
+        failed!.id,
+        claimed!.id,
+      ]);
+      expect(
+        await kit.query(
+          "select actor_account_id, source, before_event_id, returned_count from reservation_audit_accesses where reservation_id = $1 order by occurred_at",
+          [reservation.id]
+        )
+      ).toEqual([
+        {
+          actor_account_id: input.actor.administrator.accountId,
+          source: "dhw-cli",
+          before_event_id: null,
+          returned_count: 4,
+        },
+        {
+          actor_account_id: input.actor.administrator.accountId,
+          source: "dhw-cli",
+          before_event_id: reclaimed!.id,
+          returned_count: 2,
+        },
+      ]);
+    });
+
+    test("rolls back a claim when audit append fails and refuses reads when access logging fails", async () => {
+      const { reservation, invoice } = await kit.issueReservationInvoice();
+      const input = await cancellationInput(reservation.id);
+      const { cancelFailure, cancelReservation, readAudit } =
+        makeCancellation();
+      await kit.query(
+        "alter table reservation_audit_events add constraint reject_test_claim check (false) not valid"
+      );
+      try {
+        expect((await cancelFailure(input)).reason).toBe("claim_failed");
+        expect(cancelReservation).not.toHaveBeenCalled();
+        expect(await readState(reservation.id, invoice.id)).toEqual({
+          reservation: "confirmed",
+          cancellations: [],
+        });
+      } finally {
+        await kit.query(
+          "alter table reservation_audit_events drop constraint reject_test_claim"
+        );
+      }
+
+      await kit.query(
+        "alter table reservation_audit_accesses add constraint reject_test_access check (false) not valid"
+      );
+      try {
+        await expect(
+          readAudit({ actor: input.actor, reservationId: reservation.id })
+        ).rejects.toThrow();
+      } finally {
+        await kit.query(
+          "alter table reservation_audit_accesses drop constraint reject_test_access"
+        );
+      }
+    });
+
+    test("rolls back the completed cancellation and its invoice when the completion event cannot append", async () => {
+      const { reservation, invoice } = await kit.issueReservationInvoice();
+      const input = await cancellationInput(reservation.id);
+      const { cancelFailure, readAudit } = makeCancellation();
+      await kit.query(
+        "alter table reservation_audit_events add constraint reject_test_completion check (reason <> 'cancellation_completed') not valid"
+      );
+      try {
+        expect((await cancelFailure(input)).reason).toBe("record_failed");
+        expect(await readState(reservation.id, invoice.id)).toEqual({
+          reservation: "cancellation_failed",
+          cancellations: [],
+        });
+        const page = await readAudit({
+          actor: input.actor,
+          reservationId: reservation.id,
+        });
+        expect(page?.events.map(({ reason }) => reason)).toEqual([
+          "local_cancellation_failed",
+          "operator_cancellation",
+        ]);
+      } finally {
+        await kit.query(
+          "alter table reservation_audit_events drop constraint reject_test_completion"
+        );
+      }
+    });
+
+    test("PostgreSQL rejects updates, deletions, and truncation of both audit records", async () => {
+      for (const table of [
+        "reservation_audit_events",
+        "reservation_audit_accesses",
+      ]) {
+        for (const statement of [
+          `update ${table} set source = 'admin-ui' where false`,
+          `delete from ${table} where false`,
+          `truncate ${table} cascade`,
+        ]) {
+          await expect(kit.query(statement)).rejects.toMatchObject({
+            code: "23514",
+          });
+        }
+      }
+    });
+
+    test("bounds reads to 100 events and continues with the next event", async () => {
+      const { reservation } = await kit.createPaidReservation();
+      const { actor } = await cancellationInput(reservation.id);
+      await kit.query(
+        `insert into reservation_audit_events (
+          id, reservation_id, actor_account_id, source, before_state, after_state,
+          reason, occurred_at, correlation_id
+        )
+        select gen_random_uuid(), $1, $2, 'dhw-cli', 'cancelled', 'confirmed',
+          'operator_restoration', now() - sequence * interval '1 second', gen_random_uuid()
+        from generate_series(1, 101) as sequence`,
+        [reservation.id, actor.administrator.accountId]
+      );
+      const { readAudit } = makeCancellation();
+      const first = await readAudit({ actor, reservationId: reservation.id });
+      expect(first?.events).toHaveLength(100);
+      expect(first?.nextBefore).toBe(first?.events.at(-1)?.id);
+      const next = await readAudit({
+        actor,
+        reservationId: reservation.id,
+        before: first!.nextBefore!,
+      });
+      expect(next?.events).toHaveLength(1);
+      expect(next?.nextBefore).toBeNull();
+      expect(
+        new Set([...first!.events, ...next!.events].map(({ id }) => id)).size
+      ).toBe(101);
+
+      const other = await kit.createPaidReservation();
+      expect(
+        await readAudit({
+          actor,
+          reservationId: other.reservation.id,
+          before: first!.nextBefore!,
+        })
+      ).toBeNull();
+      expect(
+        await kit.query(
+          "select id from reservation_audit_accesses where reservation_id = $1",
+          [other.reservation.id]
+        )
+      ).toEqual([]);
     });
 
     test("an unreadable invoice stops the cancellation before the provider call", async () => {

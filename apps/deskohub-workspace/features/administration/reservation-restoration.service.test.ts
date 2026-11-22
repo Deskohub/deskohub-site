@@ -8,6 +8,7 @@ import {
   DotyposService,
   RestoreCancelledReservationResult,
 } from "@deskohub/dotypos";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Logger, References } from "effect";
 import { makeRecordingAdvisoryLock } from "@/db/postgres-advisory-lock.test-utils";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
@@ -264,6 +265,13 @@ const restoreWith = async (overrides: Partial<Fakes> = {}) => {
   const result = await Effect.gen(function* () {
     const service = yield* ReservationRestorationService;
     return yield* service.restore({
+      actor: {
+        source: "assistant",
+        administrator: {
+          accountId: "restore-operator" as never,
+          email: testEmailAddress("restore-operator"),
+        },
+      },
       reservationId: id,
       acknowledgeRefundedPayment: overrides.acknowledgeRefundedPayment ?? false,
       sendRestorationEmail: overrides.sendRestorationEmailRequested ?? true,
@@ -404,6 +412,10 @@ test("restores an upcoming reservation: checks the table, confirms Dotypos, reco
     expectedBooking: booking,
   });
   expect(run.calls.markAdministrationRestored).toHaveBeenCalledWith({
+    audit: expect.objectContaining({
+      actorAccountId: "restore-operator",
+      source: "assistant",
+    }),
     id,
     cancelledAt,
     restoredAt: expect.any(Temporal.Instant),

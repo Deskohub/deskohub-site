@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -344,6 +344,25 @@ describe("dhw mutation commands", () => {
 
     expect(requestedCustomerIds).toEqual([decodedCustomerId]);
     expect(JSON.parse(output.join(""))).toEqual(activity);
+  });
+
+  test("requests one reservation audit page and prints its cursor in JSON", async () => {
+    const reservationId = "01980000-0000-7000-8000-000000000001";
+    const before = crypto.randomUUID();
+    const page = { reservationId, events: [], nextBefore: crypto.randomUUID() };
+    const getReservationAudit = mock(() => Effect.succeed(page));
+    const { layer, output } = makeCommandLayer({ getReservationAudit });
+    await runCommand(
+      ["--json", "reservations", "audit", reservationId, "--before", before],
+      layer
+    ).pipe(Effect.runPromise);
+
+    expect(getReservationAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      reservationId,
+      { before }
+    );
+    expect(JSON.parse(output.join(""))).toEqual(page);
   });
 
   test("prints global reservation activity as JSON", async () => {
@@ -2248,6 +2267,7 @@ const makeCommandLayer = ({
   createStandaloneAccessCode = () => Effect.die("not used"),
   getCustomerReservationActivity = () => Effect.die("not used"),
   getReservationActivity = () => Effect.die("not used"),
+  getReservationAudit = () => Effect.die("not used"),
   getInvoiceCreationDefaults = () => Effect.die("not used"),
   getInvoice = () => Effect.die("not used"),
   cancelInvoice = () => Effect.die("not used"),
@@ -2276,6 +2296,7 @@ const makeCommandLayer = ({
   readonly createStandaloneAccessCode?: WorkspaceAdminApiClient["Service"]["createStandaloneAccessCode"];
   readonly getCustomerReservationActivity?: WorkspaceAdminApiClient["Service"]["getCustomerReservationActivity"];
   readonly getReservationActivity?: WorkspaceAdminApiClient["Service"]["getReservationActivity"];
+  readonly getReservationAudit?: WorkspaceAdminApiClient["Service"]["getReservationAudit"];
   readonly getInvoiceCreationDefaults?: WorkspaceAdminApiClient["Service"]["getInvoiceCreationDefaults"];
   readonly getInvoice?: WorkspaceAdminApiClient["Service"]["getInvoice"];
   readonly cancelInvoice?: WorkspaceAdminApiClient["Service"]["cancelInvoice"];
@@ -2331,6 +2352,7 @@ const makeCommandLayer = ({
       }),
     getCustomerReservationActivity,
     getReservationActivity,
+    getReservationAudit,
     getInvoiceCreationDefaults,
     getInvoice,
     cancelInvoice,
