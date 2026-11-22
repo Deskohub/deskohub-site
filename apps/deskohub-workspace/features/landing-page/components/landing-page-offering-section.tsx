@@ -82,7 +82,7 @@ export async function LandingPageOfferingSection({
                     {m.coworkReservationLink({}, { locale })}
                   </Link>
                 </Button>
-                <div className="flex grow flex-col items-start gap-x-3 gap-y-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <div className="flex grow flex-col items-start gap-x-3 gap-y-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between lg:has-[>a+a]:text-[0.9375rem]">
                   <Link href={`${localePath}/coworking`} className={textLink()}>
                     {m.landingOfferingCoworkPageLink({}, { locale })}
                   </Link>
@@ -93,7 +93,7 @@ export async function LandingPageOfferingSection({
                     <Link
                       href={`${localePath}/pricing`}
                       className={textLink({
-                        className: "inline-flex items-center gap-[0.45em]",
+                        className: "inline-flex items-center gap-[0.4em]",
                       })}
                     >
                       <PassProductMarks />
