@@ -93,7 +93,8 @@ const balancedWeb =
         textWrap: "balance",
         flexBasis: 0,
         flexGrow: 1,
-        minWidth: "9.5em",
+        // Never wider than the column, where it already sits alone.
+        minWidth: "min(9.5em, 100%)",
       } as TextStyle)
     : undefined;
 const wrappingWeb =
