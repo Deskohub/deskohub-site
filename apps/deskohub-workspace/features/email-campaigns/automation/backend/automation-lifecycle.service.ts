@@ -372,13 +372,14 @@ const activateIn = (input: {
         const activationTime =
           copy.campaign.status === "paused"
             ? Effect.succeed(now)
-            : passReminderOwnershipTime(input.campaignId, flow.trigger, now);
+            : passReminderOwnership(input.campaignId, flow.trigger, now).pipe(
+                Effect.filterOrFail(
+                  ({ at }) => previewIsCurrent(flow, preview.asOf, at),
+                  () => new AutomationPreviewRequired(input)
+                ),
+                Effect.flatMap(requirePassReminderOwnership)
+              );
         return activationTime.pipe(
-          Effect.filterOrFail(
-            (effectiveTime) =>
-              previewIsCurrent(flow, preview.asOf, effectiveTime),
-            () => new AutomationPreviewRequired(input)
-          ),
           Effect.flatMap((effectiveTime) =>
             publishVersion({
               copy,
@@ -417,14 +418,14 @@ const previewIsCurrent = (
   nextPassReminderPreviewOccurrence(flow.trigger, now).fireAt.equals(asOf);
 
 /** Check the published owner after the lock wait, in a fresh statement snapshot. */
-const passReminderOwnershipTime = Effect.fn(
-  "AutomationLifecycle.passReminderOwnershipTime"
+const passReminderOwnership = Effect.fn(
+  "AutomationLifecycle.passReminderOwnership"
 )(function* (
   campaignId: CampaignId,
   trigger: AutomationTrigger,
   now: Temporal.Instant
 ) {
-  if (!isPassReminderTrigger(trigger)) return now;
+  if (!isPassReminderTrigger(trigger)) return { at: now, available: true };
   const { db } = yield* WorkspaceTransaction;
   yield* WorkspaceLocks.passReminderCampaign(trigger._tag);
   const [owner] = yield* db
@@ -450,24 +451,31 @@ const passReminderOwnershipTime = Effect.fn(
       )
     )
     .limit(1);
-  if (owner !== undefined) {
-    return yield* Effect.fail(
-      new AutomationFlowInvalid({
-        location: { _tag: "Trigger" },
-        message:
-          "Another active campaign already uses this pass reminder trigger.",
-      })
-    );
-  }
-
   // Read the time after the wait. At the exact cutoff the previous owner
   // may already have planned that occurrence.
   const at = yield* lifecycleInstant;
   const dueAt = getPassReminderDueAt(
     plainDateStringSchema.make(getWorkspaceDate(at).toString())
   );
-  return at.equals(dueAt) ? at.add({ microseconds: 1 }) : at;
+  return {
+    at: at.equals(dueAt) ? at.add({ microseconds: 1 }) : at,
+    available: owner === undefined,
+  };
 });
+
+const requirePassReminderOwnership = (ownership: {
+  readonly at: Temporal.Instant;
+  readonly available: boolean;
+}) =>
+  ownership.available
+    ? Effect.succeed(ownership.at)
+    : Effect.fail(
+        new AutomationFlowInvalid({
+          location: { _tag: "Trigger" },
+          message:
+            "Another active campaign already uses this pass reminder trigger.",
+        })
+      );
 
 /** The named dry run if it's a completed one for this campaign. */
 const completedPreview = (input: {
@@ -868,8 +876,9 @@ const resumeIn = ({
                     "marketing"
                   ).pipe(
                     Effect.andThen(
-                      passReminderOwnershipTime(campaignId, active.trigger, now)
-                    )
+                      passReminderOwnership(campaignId, active.trigger, now)
+                    ),
+                    Effect.flatMap(requirePassReminderOwnership)
                   );
             }),
             Effect.flatMap(({ versions, resumedAt }) =>

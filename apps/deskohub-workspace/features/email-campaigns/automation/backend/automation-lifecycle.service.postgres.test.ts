@@ -277,76 +277,84 @@ describe.skipIf(!testDatabase)(
         await run(lifecycle((service) => service.archive(second)));
       });
 
-      test("rechecks the preview cutoff when ownership changes during an activation wait", async () => {
-        const owner = (await seedDraft()).campaignId;
-        const replacement = (await seedDraft()).campaignId;
-        const beforeCutoff = Temporal.Instant.from("2026-10-19T07:59:00Z");
-        const afterCutoff = beforeCutoff.add({ minutes: 2 });
-        await run(
-          await previewPassReminder(owner, "EntryPackExpiring", beforeCutoff),
-          beforeCutoff
-        );
-        const activateReplacement = await previewPassReminder(
-          replacement,
-          "EntryPackExpiring",
-          beforeCutoff
-        );
-        await run(
-          lifecycle((service) =>
-            service.updateFlow({ campaignId: owner, flow: bookedSendFlow })
-          ),
-          beforeCutoff
-        );
-        const editedPreview = await seedPreview(owner, { status: "completed" });
-        const lockKey = [
-          "email-pass-reminder-campaign",
-          "EntryPackExpiring",
-        ] as const;
+      test.each(["changes trigger", "stays active"] as const)(
+        "rechecks the preview cutoff when the owner %s during an activation wait",
+        async (ownerBehavior) => {
+          const owner = (await seedDraft()).campaignId;
+          const replacement = (await seedDraft()).campaignId;
+          const beforeCutoff = Temporal.Instant.from("2026-10-19T07:59:00Z");
+          const afterCutoff = beforeCutoff.add({ minutes: 2 });
+          await run(
+            await previewPassReminder(owner, "EntryPackExpiring", beforeCutoff),
+            beforeCutoff
+          );
+          const activateReplacement = await previewPassReminder(
+            replacement,
+            "EntryPackExpiring",
+            beforeCutoff
+          );
+          await run(
+            lifecycle((service) =>
+              service.updateFlow({ campaignId: owner, flow: bookedSendFlow })
+            ),
+            beforeCutoff
+          );
+          const editedPreview = await seedPreview(owner, {
+            status: "completed",
+          });
+          const lockKey = [
+            "email-pass-reminder-campaign",
+            "EntryPackExpiring",
+          ] as const;
 
-        const result = await run(
-          Effect.gen(function* () {
-            const held = yield* Deferred.make<void>();
-            const release = yield* Deferred.make<void>();
-            const holder = yield* Effect.forkChild(
-              withPostgresAdvisoryLock(
-                Context.get(
-                  testDatabase.databasePool.postgres,
-                  SqlClient.SqlClient
-                ),
-                lockKey,
-                Deferred.succeed(held, undefined).pipe(
-                  Effect.andThen(Deferred.await(release))
+          const result = await run(
+            Effect.gen(function* () {
+              const held = yield* Deferred.make<void>();
+              const release = yield* Deferred.make<void>();
+              const holder = yield* Effect.forkChild(
+                withPostgresAdvisoryLock(
+                  Context.get(
+                    testDatabase.databasePool.postgres,
+                    SqlClient.SqlClient
+                  ),
+                  lockKey,
+                  Deferred.succeed(held, undefined).pipe(
+                    Effect.andThen(Deferred.await(release))
+                  )
                 )
-              )
-            );
-            yield* Deferred.await(held);
-            const contender = yield* Effect.forkChild(
-              Effect.result(activateReplacement)
-            );
-            yield* Effect.promise(() =>
-              waitForAdvisoryLockWaiter(pool, lockKey)
-            );
-            yield* TestClock.setTime(afterCutoff.epochMilliseconds);
-            yield* lifecycle((service) =>
-              service.activate({
-                campaignId: owner,
-                previewId: editedPreview,
-                activatedBy: null,
-              })
-            );
-            yield* Deferred.succeed(release, undefined);
-            yield* Fiber.join(holder);
-            return yield* Fiber.join(contender);
-          }),
-          beforeCutoff
-        );
-        expect(result).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "AutomationPreviewRequired" },
-        });
-        expect((await automationRow(replacement)).status).toBe("draft");
-        expect(await versionRows(replacement)).toEqual([]);
-      });
+              );
+              yield* Deferred.await(held);
+              const contender = yield* Effect.forkChild(
+                Effect.result(activateReplacement)
+              );
+              yield* Effect.promise(() =>
+                waitForAdvisoryLockWaiter(pool, lockKey)
+              );
+              yield* TestClock.setTime(afterCutoff.epochMilliseconds);
+              if (ownerBehavior === "changes trigger") {
+                yield* lifecycle((service) =>
+                  service.activate({
+                    campaignId: owner,
+                    previewId: editedPreview,
+                    activatedBy: null,
+                  })
+                );
+              }
+              yield* Deferred.succeed(release, undefined);
+              yield* Fiber.join(holder);
+              return yield* Fiber.join(contender);
+            }),
+            beforeCutoff
+          );
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { _tag: "AutomationPreviewRequired" },
+          });
+          expect((await automationRow(replacement)).status).toBe("draft");
+          expect(await versionRows(replacement)).toEqual([]);
+          await run(lifecycle((service) => service.archive(owner)));
+        }
+      );
 
       test("a replacement resumed at 10:00 cannot take the departing owner's occurrence", async () => {
         const owner = (await seedDraft()).campaignId;
@@ -381,10 +389,14 @@ describe.skipIf(!testDatabase)(
           cutoff
         );
         const { rows } = await pool.query(
-          "select accepting_since > $2 as starts_after_cutoff from email_campaign_automations where campaign_id = $1",
-          [replacement, cutoff.toString()]
+          `select accepting_since = $2 as accepts_next_instant,
+                  resumed_at = $2 as resumes_next_instant
+             from email_campaign_automations where campaign_id = $1`,
+          [replacement, cutoff.add({ microseconds: 1 }).toString()]
         );
-        expect(rows).toEqual([{ starts_after_cutoff: true }]);
+        expect(rows).toEqual([
+          { accepts_next_instant: true, resumes_next_instant: true },
+        ]);
         await run(lifecycle((service) => service.archive(replacement)));
       });
     });
