@@ -162,7 +162,7 @@ const getServerInstructions = (
       : []),
     ...(listsEvery(tools, [startPassPurchaseTool.name])
       ? [
-          "Use an entry pack's pass_id to quote or start a cowork booking with an entry. Use start_pass_purchase to prepare a pass checkout and give the customer the pay_url, where they accept the terms and pay.",
+          "Use an entry pack's pass_id to quote or start a cowork booking with an entry. Use start_pass_purchase to prepare a pass checkout. Give the customer the pay_url to accept the terms and pay on the website, or the status_url if payment has already started.",
         ]
       : []),
   ].join(" ");

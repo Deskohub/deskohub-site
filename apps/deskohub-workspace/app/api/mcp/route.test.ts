@@ -91,7 +91,10 @@ mock.module("@/features/account/server/auth.server", () => ({
             body.token === "other-holder-grant"
               ? "other-account"
               : agentAccountId,
-          client_id: agentClientId,
+          client_id:
+            body.token === "other-client-pass-grant"
+              ? "https://another-agent.example/oauth-client.json"
+              : agentClientId,
           scope,
           aud: mcpResource,
         };
@@ -241,6 +244,7 @@ const readPassAccount = CurrentCustomerAccount.pipe(
 const passOperations: string[] = [];
 const signedFundedQuote = "synthetic-advertised-funding-proof";
 let purchaseNeedsDetails = false;
+let passToolSessionAccountId: string | undefined;
 const testPassLayer = Layer.mock(CustomerPasses, {
   list: () =>
     readPassAccount.pipe(
@@ -417,7 +421,7 @@ mock.module("@/features/agent-tools/customer-agent-tools", () => ({
     inMemoryCustomerAgentCallServices((grant) => ({
       currentAccount: {
         requireActive: decodeCustomerAccountSession({
-          user: fakeAccountUser(grant.accountId),
+          user: fakeAccountUser(passToolSessionAccountId ?? grant.accountId),
         }).pipe(
           Effect.flatMap((session) =>
             session
@@ -538,6 +542,7 @@ describe("cowork passes through agent transports", () => {
   const packProduct = {
     product: { kind: "entry-pack", tier: "open-space", size: 5 },
     locale: "en-US",
+    purchase_request_id: "abcdef01-0000-4000-8000-000000000001",
   };
   const browser = { cookie: browserSession };
 
@@ -553,6 +558,8 @@ describe("cowork passes through agent transports", () => {
     authorizationServerReachable = true;
     accessTokens.clear();
     accessTokens.set("pass-grant", "passes:manage");
+    accessTokens.set("renewed-pass-grant", "passes:manage");
+    accessTokens.set("other-client-pass-grant", "passes:manage");
     accessTokens.set("other-holder-grant", "passes:manage");
     accessTokens.set("reservation-grant", "reservations:create");
     accessTokens.set(
@@ -562,6 +569,7 @@ describe("cowork passes through agent transports", () => {
   });
   afterEach(() => {
     passRelease = "off";
+    passToolSessionAccountId = undefined;
   });
 
   test("keeps ordinary quotes public and challenges a funded quote before reading account data", async () => {
@@ -694,6 +702,105 @@ describe("cowork passes through agent transports", () => {
     expect(passOperations).toHaveLength(5);
   });
 
+  test("scopes an OAuth purchase retry to the verified buyer and client", async () => {
+    const purchase = async (token: string, input = packProduct) => {
+      const response = await postRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: input },
+        { authorization: `Bearer ${token}` }
+      );
+      return (await readJsonRpc(response)).result.structuredContent;
+    };
+    const initial = await purchase("pass-grant");
+    expect(new URL(initial.pay_url).searchParams.get("order")).toBe(
+      "852b4cf8-765c-8f98-b368-82fd84c5e101"
+    );
+    expect(
+      await purchase("renewed-pass-grant", {
+        ...packProduct,
+        locale: "cs-CZ",
+        purchase_request_id: packProduct.purchase_request_id.toUpperCase(),
+      })
+    ).toEqual(initial);
+    for (const token of ["other-client-pass-grant", "other-holder-grant"]) {
+      const ownPurchase = await purchase(token);
+      expect(ownPurchase.pay_url).toContain("/passes/entry-pack?order=");
+      expect(ownPurchase).not.toEqual(initial);
+    }
+    passToolSessionAccountId = "other-account";
+    expect(await purchase("pass-grant")).toEqual({
+      error: expect.objectContaining({ code: "passes_unavailable" }),
+    });
+    expect(passOperations).toHaveLength(4);
+  });
+
+  test("requires a purchase request UUID before starting a pass purchase", async () => {
+    const listing = await readJsonRpc(await postRpc("tools/list"));
+    const purchase = listing.result.tools.find(
+      ({ name }: { name: string }) => name === "start_pass_purchase"
+    );
+    expect(purchase).toMatchObject({
+      inputSchema: {
+        required: expect.arrayContaining(["purchase_request_id"]),
+      },
+      annotations: { idempotentHint: true, readOnlyHint: false },
+    });
+    const { purchase_request_id: _, ...selection } = packProduct;
+    const argumentsToReject = [
+      selection,
+      { ...selection, purchase_request_id: "unscoped-client-order" },
+    ];
+    for (const args of argumentsToReject) {
+      const response = await postRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: args },
+        { authorization: "Bearer pass-grant" }
+      );
+      expect((await readJsonRpc(response)).result.structuredContent).toEqual({
+        error: expect.objectContaining({ code: "invalid_input" }),
+      });
+    }
+    expect(passOperations).toEqual([]);
+  });
+
+  test("recovers a same-origin browser purchase and keeps deliberate changes distinct", async () => {
+    const purchase = async (input = packProduct) => {
+      const response = await webRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: input },
+        browser
+      );
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      return (await readJsonRpc(response)).result.structuredContent;
+    };
+    const initial = await purchase();
+    expect(initial.pay_url).toContain("/passes/entry-pack?order=");
+    expect(await purchase()).toEqual(initial);
+    const differentPack = await purchase({
+      ...packProduct,
+      product: { ...packProduct.product, size: 10 },
+    });
+    expect(differentPack.pay_url).toContain("/passes/entry-pack?order=");
+    expect(differentPack).not.toEqual(initial);
+    const newPurchase = await purchase({
+      ...packProduct,
+      purchase_request_id: "abcdef01-0000-4000-8000-000000000002",
+    });
+    expect(newPurchase.pay_url).toContain("/passes/entry-pack?order=");
+    expect(newPurchase).not.toEqual(initial);
+    const remote = await readJsonRpc(
+      await postRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: packProduct },
+        { authorization: "Bearer pass-grant" }
+      )
+    );
+    expect(remote.result.structuredContent.pay_url).toContain(
+      "/passes/entry-pack?order="
+    );
+    expect(remote.result.structuredContent).not.toEqual(initial);
+  });
+
   test("projects held pass and purchase data without buyer information or access credentials", async () => {
     const headers = { authorization: "Bearer pass-grant" };
     const list = await readJsonRpc(
@@ -800,6 +907,9 @@ describe("cowork passes through agent transports", () => {
       "show_pass_access",
       "start_pass_purchase",
     ]);
+    expect(discovery.result.tools[3].inputSchema.required).toContain(
+      "purchase_request_id"
+    );
     const holder = await webRpc("tools/call", access, browser);
     expect(holder.headers.get("cache-control")).toBe("no-store");
     expect((await readJsonRpc(holder)).result.structuredContent).toEqual({
