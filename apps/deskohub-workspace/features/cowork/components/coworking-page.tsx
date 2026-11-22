@@ -1,11 +1,14 @@
 import { CloudinaryImage } from "@deskohub/cloudinary-image";
 import Interpolate from "@doist/react-interpolate";
-import { ArrowDown, ArrowUpRight } from "lucide-react";
+import { ArrowDown, ArrowUpRight, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { getWorkspaceProductTierTitle } from "@/features/checkout/product-catalog.i18n";
 import type { PublicPriceListOffering } from "@/features/checkout/public-offerings";
+import { GlobalReleaseGate } from "@/features/feature-flags/components/global-release-gate";
 import type { VenuePhoto } from "@/features/gallery/types/venue-photo";
 import { type Locale, m } from "@/features/i18n";
+import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import { PassProductMarks } from "@/features/passes/components/pass-product-marks";
 import { getOfferingSale } from "@/features/pricing/offering-sale";
 import { PublicPageBreadcrumbs } from "@/features/public-pages/components/public-page-breadcrumbs";
 import {
@@ -313,21 +316,42 @@ function CoworkingDesks({
           })}
         </div>
 
-        <p className="mt-10 text-silver/76">
-          <Interpolate
-            string={m.coworkingPricesNote({}, { locale })}
-            mapping={{
-              pricing: (content) => (
-                <Link
-                  href={`/${locale}/pricing`}
-                  className={textLink({ tone: "inverse" })}
-                >
-                  {content}
-                </Link>
-              ),
-            }}
-          />
-        </p>
+        <div className="mt-10 flex flex-wrap items-center gap-x-[1.125rem] gap-y-3">
+          <p className="flex-[1_1_16rem] text-silver/76">
+            <Interpolate
+              string={m.coworkingPricesNote({}, { locale })}
+              mapping={{
+                pricing: (content) => (
+                  <Link
+                    href={`/${locale}/pricing`}
+                    className={textLink({ tone: "inverse" })}
+                  >
+                    {content}
+                  </Link>
+                ),
+              }}
+            />
+          </p>
+          <GlobalReleaseGate
+            flag="cowork_passes"
+            isEnabled={isCoworkPassesPageOpenAfterConnection}
+          >
+            <Link
+              href={`/${locale}/pricing`}
+              className="group ms-auto flex min-h-[3.125rem] w-fit max-w-full items-center gap-3 rounded-[0.625rem] border border-[#56588b] bg-[#10115a] px-[0.8125rem] py-[0.5625rem] leading-[1.35] font-semibold text-white transition-colors hover:bg-[#1c1e66] focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-sunset-yellow"
+            >
+              <PassProductMarks surface="dark" className="text-lg" />
+              <span className="text-balance underline-offset-[0.18em] group-hover:underline">
+                {m.coworkingComparePassesLink({}, { locale })}
+              </span>
+              <ChevronRight
+                aria-hidden="true"
+                className="ms-auto size-4 flex-none text-sunset-yellow"
+                strokeWidth={2}
+              />
+            </Link>
+          </GlobalReleaseGate>
+        </div>
       </div>
     </section>
   );
