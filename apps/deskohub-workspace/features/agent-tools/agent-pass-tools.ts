@@ -217,8 +217,7 @@ const startPassPurchase = Effect.fn("agentTools.startPassPurchase")(function* (
       product: input.product,
     }),
     (error) =>
-      (error._tag === "EntryPackPurchaseError" ||
-        error._tag === "UnlimitedPassAdmissionError") &&
+      error._tag === "EntryPackPurchaseError" &&
       error.reason === "purchase-conflict",
     // The buyer can edit a Details handoff before its order is recorded.
     (error) =>
