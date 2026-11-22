@@ -824,20 +824,23 @@ export class CampaignBatchDelivery extends Context.Service<
               )
             )
           ),
-          Effect.catchTag("UnreplayableBatch", ({ reason }) => {
-            if (input.mode === "first" && input.failureCodeOnStalePayload) {
-              return Effect.succeed(
-                BatchOutcome.Refused({
-                  request: "first",
-                  failureCode: input.failureCodeOnStalePayload,
-                })
-              );
+          Effect.catchTag(
+            "UnreplayableBatch",
+            ({ reason }): Effect.Effect<BatchOutcome> => {
+              if (input.mode === "first" && input.failureCodeOnStalePayload) {
+                return Effect.succeed(
+                  BatchOutcome.Refused({
+                    request: "first",
+                    failureCode: input.failureCodeOnStalePayload,
+                  })
+                );
+              }
+              return Effect.logWarning("Campaign delivery batch unconfirmed", {
+                batchIndex: input.batch.batchIndex,
+                reason,
+              }).pipe(Effect.as(BatchOutcome.Unconfirmed({ reason })));
             }
-            return Effect.logWarning("Campaign delivery batch unconfirmed", {
-              batchIndex: input.batch.batchIndex,
-              reason,
-            }).pipe(Effect.as(BatchOutcome.Unconfirmed({ reason })));
-          })
+          )
         );
 
       const ensureReplayWindow = (batch: PersistedBatch) =>
