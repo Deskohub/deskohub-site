@@ -38,21 +38,32 @@ describe("openSitePage", () => {
   });
 
   test("opens a new tab on the web, cut off from the app", async () => {
+    // A caller that reports a blocked tab.
     const tab: { opener?: unknown } = { opener: "app" };
     const opened: Array<string> = [];
     onTheWeb((url) => {
       opened.push(url);
       return tab;
     });
-    await openSitePage("https://example.test/en-US/pricing");
+    await openSitePage("https://example.test/en-US/pricing", {
+      failIfBlocked: true,
+    });
     expect(opened).toEqual(["https://example.test/en-US/pricing"]);
     expect(tab.opener).toBeNull();
   });
 
-  test("fails on the web when the browser blocks the tab", async () => {
+  test("fails on the web when the browser blocks the tab, if asked", async () => {
     onTheWeb(() => null);
     await expect(
-      openSitePage("https://example.test/en-US/pricing")
+      openSitePage("https://example.test/en-US/pricing", {
+        failIfBlocked: true,
+      })
     ).rejects.toThrow();
+  });
+
+  test("otherwise keeps Expo's web opener, which never fails", async () => {
+    onTheWeb(() => null);
+    await openSitePage("https://example.test/en-US/terms");
+    expect(browserTabs).toEqual(["https://example.test/en-US/terms"]);
   });
 });

@@ -18,15 +18,18 @@ export const appBrowserTabColors = {
 
 /**
  * Opens a site page in the in-app browser tab, coloured like the app, with
- * the page's title above its host in the toolbar (board 16b); on the web, in
- * a new tab. It fails where no browser is available or the browser blocks
- * the tab.
+ * the page's title above its host in the toolbar (board 16b); on the web,
+ * in a new tab. It fails where no browser is available. A caller that tells
+ * the customer when the page didn't open passes `failIfBlocked`, and it
+ * also fails when a web browser blocks the tab, which Expo's web opener
+ * reports as opened.
  */
-export const openSitePage = async (url: string): Promise<WebBrowserResult> => {
-  if (Platform.OS !== "web")
+export const openSitePage = async (
+  url: string,
+  { failIfBlocked = false }: { readonly failIfBlocked?: boolean } = {}
+): Promise<WebBrowserResult> => {
+  if (Platform.OS !== "web" || !failIfBlocked)
     return openBrowserAsync(url, { ...appBrowserTabColors, showTitle: true });
-  // A new tab. Expo's web opener reports it opened even when the browser
-  // blocked it, so the caller's failure handling would never run.
   const page = window.open(url, "_blank");
   if (page === null) throw new Error("The browser blocked the page.");
   page.opener = null;

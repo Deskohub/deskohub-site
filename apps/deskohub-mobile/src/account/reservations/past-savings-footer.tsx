@@ -38,7 +38,9 @@ export function PastSavingsFooter() {
   const stacked = width !== undefined && width / fontScale < stackedBelowWidth;
   const label = m.reservations_save_with_passes({}, { locale });
   const open = () =>
-    openSitePage(sitePageUrl("/pricing", apiOrigin, locale)).catch(() =>
+    openSitePage(sitePageUrl("/pricing", apiOrigin, locale), {
+      failIfBlocked: true,
+    }).catch(() =>
       toast.show({
         message: m.reservations_pricing_open_failed({}, { locale }),
         tone: "neutral",
@@ -56,7 +58,9 @@ export function PastSavingsFooter() {
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
       style={({ pressed }) => [styles.footer, pressed && styles.pressed]}
     >
-      <View style={stacked ? styles.stackedText : styles.inlineText}>
+      <View
+        style={stacked ? styles.stackedText : [styles.inlineText, wrappingWeb]}
+      >
         <PassProductMarks />
         <Text
           variant="bodyStrong"
@@ -78,10 +82,24 @@ export function PastSavingsFooter() {
  */
 const stackedBelowWidth = 260;
 
-// Balanced lines, as the board's text-wrap: balance; Android balances
-// through textBreakStrategy.
+// Balanced lines, as the board's text-wrap: balance (Android balances
+// through textBreakStrategy). A web browser can enlarge text without a
+// font scale or a narrower page, so there the row also wraps the label
+// under the marks once it would get less than 9.5 of its ems (from about
+// 135% text at 360 dp).
 const balancedWeb =
-  Platform.OS === "web" ? ({ textWrap: "balance" } as TextStyle) : undefined;
+  Platform.OS === "web"
+    ? ({
+        textWrap: "balance",
+        flexBasis: 0,
+        flexGrow: 1,
+        minWidth: "9.5em",
+      } as TextStyle)
+    : undefined;
+const wrappingWeb =
+  Platform.OS === "web"
+    ? ({ columnGap: 10, flexWrap: "wrap", rowGap: 5 } as const)
+    : undefined;
 
 const styles = StyleSheet.create({
   footer: {
