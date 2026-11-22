@@ -176,6 +176,8 @@
   "pass_purchase_holder_invalid": "Nhập địa chỉ email hợp lệ của người khác.",
   "pass_purchase_billing_changed": "Thông tin xuất hóa đơn đã thay đổi. Hãy kiểm tra trước khi tiếp tục.",
   "pass_purchase_product_summary": "{title}, {units}",
+  "pass_purchase_monitors": "Màn hình",
+  "pass_purchase_daily_code": "Không cần đặt chỗ. Mã mở cửa hiển thị trong ứng dụng mỗi ngày gói còn hiệu lực.",
   "pass_purchase_period_range": "{start} – {end}",
   "booking_checkout_legal_consent": "Tôi đồng ý với <terms>Điều kiện Giao dịch Chung</terms> và <operatingRules>Nội quy</operatingRules>.",
   "booking_checkout_legal_consent_early_performance": "Tôi đồng ý với <terms>Điều kiện Giao dịch Chung</terms> và <operatingRules>Nội quy</operatingRules>. Tôi yêu cầu được cung cấp dịch vụ vào ngày đã đặt, trong thời hạn rút khỏi hợp đồng, và xác nhận rằng quyền rút khỏi hợp đồng của tôi chấm dứt khi dịch vụ đã được cung cấp đầy đủ.",

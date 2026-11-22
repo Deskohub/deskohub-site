@@ -182,6 +182,8 @@
   "pass_purchase_holder_invalid": "Zadaj platný e-mail inej osoby.",
   "pass_purchase_billing_changed": "Fakturačné údaje sa zmenili. Pred pokračovaním ich skontroluj.",
   "pass_purchase_product_summary": "{title}, {units}",
+  "pass_purchase_monitors": "Monitory",
+  "pass_purchase_daily_code": "Rezervácia nie je potrebná. Kód k dverám sa zobrazí v aplikácii každý deň platnosti pasu.",
   "pass_purchase_period_range": "{start} – {end}",
   "booking_checkout_legal_consent": "Súhlasím s dokumentmi <terms>Všeobecné obchodné podmienky</terms> a <operatingRules>Prevádzkový poriadok</operatingRules>.",
   "booking_checkout_legal_consent_early_performance": "Súhlasím s dokumentmi <terms>Všeobecné obchodné podmienky</terms> a <operatingRules>Prevádzkový poriadok</operatingRules>. Žiadam o poskytnutie služby v rezervovanom termíne, počas lehoty na odstúpenie od zmluvy, a beriem na vedomie, že po jej úplnom poskytnutí moje právo odstúpiť od zmluvy zaniká.",

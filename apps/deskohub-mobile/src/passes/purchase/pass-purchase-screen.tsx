@@ -41,7 +41,10 @@ import {
   type BookingBarSummary,
 } from "../../booking/ui/booking-bar";
 import { type BookingStep, BookingSteps } from "../../booking/ui/booking-steps";
-import { accountAtom } from "../../customer-api/customer-data-runtime";
+import {
+  accountAtom,
+  customerDataRuntime,
+} from "../../customer-api/customer-data-runtime";
 import type { AppLocale } from "../../i18n/app-locale";
 import { useDeviceCountry } from "../../i18n/device-locale";
 import { useAppLocale } from "../../i18n/locale-context";
@@ -87,14 +90,23 @@ import {
   readPassPurchasePrefill,
   selectedPassProduct,
 } from "./pass-purchase-selection";
+import { readPassPurchaseStatus } from "./status/pass-purchase-status-state";
+
+const reconcilePassOrder = customerDataRuntime.fn(
+  ({ orderId, locale }: { orderId: string; locale: AppLocale }) =>
+    readPassPurchaseStatus(orderId, locale)
+);
+
+type PurchaseBilling = NonNullable<SubmitCustomerPassPurchase["billing"]>;
 
 type PurchaseQuote = {
   readonly quote: CustomerPassPurchase;
-  readonly billing: NonNullable<SubmitCustomerPassPurchase["billing"]>;
+  readonly billing: PurchaseBilling;
 };
 
 type Attempt = {
   readonly input: BeginCustomerPassPurchase;
+  readonly billing: PurchaseBilling;
   readonly unconfirmed: boolean;
 };
 
@@ -244,6 +256,9 @@ function PassPurchaseFlow({
   const updatePrice = useAtomSet(updatePassPurchasePriceAtom, {
     mode: "promiseExit",
   });
+  const reconcileOrder = useAtomSet(reconcilePassOrder, {
+    mode: "promiseExit",
+  });
   usePaymentBrowserWarmUp();
 
   const setStage = useCallback((next: BookingStep) => {
@@ -318,12 +333,19 @@ function PassPurchaseFlow({
       await action();
     } finally {
       working.current = false;
-      if (focused.current) setBusy(false);
+      setBusy(false);
     }
   };
 
-  const prepare = async () => {
-    if (product === undefined) return;
+  const prepareAttempt = (): Attempt | undefined => {
+    const current = attempt.current;
+    if (current?.unconfirmed) return current;
+    if (product === undefined) {
+      setStage("choose");
+      refreshDates();
+      setNotice(m.booking_cowork_offer_unavailable({}, { locale }));
+      return;
+    }
     const validated = validatePurchaseDetails(
       kind,
       details,
@@ -334,7 +356,6 @@ function PassPurchaseFlow({
       setProblems(validated.problems);
       return;
     }
-    const current = attempt.current;
     const content = { locale, product, ...validated.input };
     const input =
       current !== undefined &&
@@ -349,29 +370,61 @@ function PassPurchaseFlow({
                 supersedeOrderId: previousOrderId,
               }),
           };
-    attempt.current = { input, unconfirmed: false };
+    return { input, billing: validated.billing, unconfirmed: false };
+  };
+
+  const prepare = async () => {
+    const pending = prepareAttempt();
+    if (pending === undefined) return;
+    attempt.current = pending;
+    const { input, billing } = pending;
     const exit = await begin({ payload: input, owns: ownsView });
     if (!focused.current) return;
     if (Exit.isSuccess(exit)) {
-      setPurchase({ quote: exit.value, billing: validated.billing });
+      attempt.current = { ...pending, unconfirmed: false };
+      setPurchase({ quote: exit.value, billing });
       if (kind === "unlimited") setPreviousOrderId(exit.value.orderId);
       setApprovedQuote(undefined);
       setStage("pay");
       return;
     }
     const error = errorOf(exit);
-    if (purchaseRefusal(error) === "payment-in-progress") {
-      showStatus(input.supersedeOrderId ?? input.orderId);
+    const reason = purchaseRefusal(error);
+    if (reason === "payment-in-progress") {
+      const orderId =
+        Predicate.hasProperty(error, "orderId") &&
+        typeof error.orderId === "string"
+          ? error.orderId
+          : input.orderId;
+      showStatus(orderId);
       return;
     }
     if (Predicate.isTagged(error, "CustomerWriteUnconfirmed")) {
-      attempt.current = { input, unconfirmed: true };
+      attempt.current = { ...pending, unconfirmed: true };
     }
-    if (purchaseRefusal(error) === "quote-expired") attempt.current = undefined;
+    if (reason === "quote-expired") attempt.current = undefined;
     if (
-      purchaseRefusal(error) === "holds-unavailable" ||
-      purchaseRefusal(error) === "invalid-selection"
+      reason === "holds-unavailable" &&
+      !(
+        Predicate.hasProperty(error, "blockingDates") &&
+        Array.isArray(error.blockingDates)
+      )
     ) {
+      // A bare hold refusal does not tell us whether the old order is live.
+      const status = await reconcileOrder({ orderId: input.orderId, locale });
+      if (!ownsView()) return;
+      if (Exit.isSuccess(status)) {
+        showStatus(status.value.orderId);
+        return;
+      }
+      if (!Predicate.isTagged(errorOf(status), "CustomerPassNotFound")) {
+        attempt.current = { ...pending, unconfirmed: true };
+        setNotice(m.booking_checkout_unconfirmed({}, { locale }));
+        return;
+      }
+    }
+    if (reason === "holds-unavailable" || reason === "invalid-selection") {
+      attempt.current = undefined;
       setStage("choose");
       refreshDates();
     }
@@ -512,7 +565,7 @@ function PassPurchaseFlow({
   const action = {
     choose: {
       label: m.booking_continue({}, { locale }),
-      disabled: product === undefined,
+      disabled: product === undefined && !attempt.current?.unconfirmed,
       onPress: () => {
         setEdited(choice);
         setStage("details");
@@ -643,6 +696,9 @@ const purchaseInputContent = ({
 }: BeginCustomerPassPurchase) => content;
 
 const purchaseErrorMessage = (error: unknown, locale: AppLocale) => {
+  if (Predicate.isTagged(error, "CustomerWriteUnconfirmed")) {
+    return m.booking_checkout_unconfirmed({}, { locale });
+  }
   switch (purchaseRefusal(error)) {
     case "holder-unavailable":
       return m.pass_purchase_holder_invalid({}, { locale });

@@ -180,6 +180,8 @@
   "pass_purchase_holder_invalid": "Zadej platný e-mail jiné osoby.",
   "pass_purchase_billing_changed": "Fakturační údaje se změnily. Před pokračováním je zkontroluj.",
   "pass_purchase_product_summary": "{title}, {units}",
+  "pass_purchase_monitors": "Monitory",
+  "pass_purchase_daily_code": "Rezervace není potřeba. Kód ke dveřím se v aplikaci zobrazí každý den členství.",
   "pass_purchase_period_range": "{start} – {end}",
   "booking_checkout_legal_consent": "Souhlasím s dokumenty <terms>Všeobecné obchodní podmínky</terms> a <operatingRules>Provozní řád</operatingRules>.",
   "booking_checkout_legal_consent_early_performance": "Souhlasím s dokumenty <terms>Všeobecné obchodní podmínky</terms> a <operatingRules>Provozní řád</operatingRules>. Žádám o poskytnutí služby v rezervovaném termínu, během lhůty pro odstoupení od smlouvy, a beru na vědomí, že po jejím úplném poskytnutí mé právo odstoupit od smlouvy zaniká.",

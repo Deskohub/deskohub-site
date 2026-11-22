@@ -182,6 +182,8 @@
   "pass_purchase_holder_invalid": "Введіть дійсну електронну адресу іншої людини.",
   "pass_purchase_billing_changed": "Реквізити для рахунку змінилися. Перевірте їх перед продовженням.",
   "pass_purchase_product_summary": "{title}, {units}",
+  "pass_purchase_monitors": "Монітори",
+  "pass_purchase_daily_code": "Бронювати не потрібно. Код від дверей з’являється в застосунку щодня протягом дії абонемента.",
   "pass_purchase_period_range": "{start} – {end}",
   "booking_checkout_legal_consent": "Я погоджуюся з документами «<terms>Загальні умови надання послуг</terms>» і «<operatingRules>Правила внутрішнього розпорядку</operatingRules>».",
   "booking_checkout_legal_consent_early_performance": "Я погоджуюся з документами «<terms>Загальні умови надання послуг</terms>» і «<operatingRules>Правила внутрішнього розпорядку</operatingRules>». Я прошу надати послугу в заброньовану дату, протягом строку для відмови від договору, і беру до відома, що моє право на відмову від договору припиняється після її повного надання.",

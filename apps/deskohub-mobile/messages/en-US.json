@@ -178,6 +178,8 @@
   "pass_purchase_holder_invalid": "Enter a valid email address for another person.",
   "pass_purchase_billing_changed": "The billing details changed. Review them before continuing.",
   "pass_purchase_product_summary": "{title}, {units}",
+  "pass_purchase_monitors": "Monitors",
+  "pass_purchase_daily_code": "No booking needed. The door code appears in the app each day of the pass.",
   "pass_purchase_period_range": "{start} – {end}",
   "booking_checkout_legal_consent": "I agree to the <terms>General Terms and Conditions</terms> and the <operatingRules>Operating Rules</operatingRules>.",
   "booking_checkout_legal_consent_early_performance": "I agree to the <terms>General Terms and Conditions</terms> and the <operatingRules>Operating Rules</operatingRules>. I request the service on the reserved date, within the withdrawal period, and acknowledge my right to withdraw ends once it is fully provided.",

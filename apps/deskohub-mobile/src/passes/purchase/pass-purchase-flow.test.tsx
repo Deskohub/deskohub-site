@@ -46,6 +46,7 @@ mock.module("expo-router", () => ({
     useLocalSearchParams: () => ({
       tier: "reserved-desk",
       size: "10",
+      startDate: "2026-12-01",
       email: "ignored@example.test",
     }),
     useRouter: () => ({ replace: navigate, canGoBack: () => false }),
@@ -116,6 +117,7 @@ mock.module("./pass-purchase-details", () => ({
           ...details,
           gift: true,
           holderEmail: "gift@example.test",
+          recipientName: "Synthetic Holder",
           invoice: {
             ...details.invoice,
             billing: "business",
@@ -189,7 +191,13 @@ const catalog: CustomerPassCatalog = {
       validityMonths: 6,
     },
   ],
-  unlimited: [],
+  unlimited: [
+    {
+      product: { kind: "unlimited", tier: "reserved-desk" },
+      price: money(309000),
+      validityDays: 30,
+    },
+  ],
   unlimitedCoffeePrice: money(0),
 };
 
@@ -210,7 +218,10 @@ const press = async (id: string) => {
   });
 };
 
-for (const language of ["en-US", "cs-CZ"] as const) {
+for (const { language, kind } of [
+  { language: "en-US", kind: "entry-pack" },
+  { language: "cs-CZ", kind: "unlimited" },
+] as const) {
   test(`pass purchase repricing and hosted return in ${language}`, async () => {
     locale = language;
     navigate.mockClear();
@@ -218,6 +229,8 @@ for (const language of ["en-US", "cs-CZ"] as const) {
     const workspace = FakeWorkspace.forKind("linked");
     const submitCalls: SubmitCustomerPassPurchase[] = [];
     const codeUpdates: UpdateCustomerPassPurchasePrice[] = [];
+    const beginCalls: BeginCustomerPassPurchase[] = [];
+    let catalogAvailable = true;
     let quote: CustomerPassPurchase | undefined;
     const fixture = Layer.effect(
       HttpClient.HttpClient,
@@ -227,7 +240,30 @@ for (const language of ["en-US", "cs-CZ"] as const) {
             if (url.pathname === "/api/customer/passes/catalog") {
               return HttpClientResponse.fromWeb(
                 request,
-                Response.json(catalog)
+                Response.json(
+                  catalogAvailable
+                    ? catalog
+                    : { ...catalog, entryPacks: [], unlimited: [] }
+                )
+              );
+            }
+            if (url.pathname === "/api/customer/passes/unlimited/start-dates") {
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  today: "2026-12-01",
+                  lastStartDate: "2026-12-01",
+                  starts: {
+                    "open-space": [],
+                    "reserved-desk": ["2026-12-01"],
+                    "reserved-desk-workstation": {
+                      "2x27-qhd": [],
+                      "2x32-qhd": [],
+                      "2x27-4k": [],
+                      "2x32-4k": [],
+                    },
+                  },
+                })
               );
             }
             if (url.pathname === "/api/customer/passes/purchases") {
@@ -236,9 +272,20 @@ for (const language of ["en-US", "cs-CZ"] as const) {
               const payload = yield* Schema.decodeUnknownEffect(
                 BeginCustomerPassPurchase
               )(body);
-              expect(payload.product).toEqual(offeredPack);
+              expect(payload.product).toEqual(
+                kind === "entry-pack"
+                  ? offeredPack
+                  : {
+                      kind,
+                      selection: {
+                        tier: "reserved-desk",
+                        startDate: "2026-12-01",
+                      },
+                    }
+              );
               expect(payload.locale).toBe(language);
               expect(payload.holderEmail).toBe("gift@example.test");
+              beginCalls.push(payload);
               quote = {
                 orderId: payload.orderId,
                 product: payload.product,
@@ -264,6 +311,22 @@ for (const language of ["en-US", "cs-CZ"] as const) {
                   ],
                 },
               };
+              if (beginCalls.length === 1) {
+                return HttpClientResponse.fromWeb(request, Response.json({}));
+              }
+              if (kind === "unlimited" && beginCalls.length === 2) {
+                return HttpClientResponse.fromWeb(
+                  request,
+                  Response.json(
+                    {
+                      _tag: "CustomerPassPurchaseRefused",
+                      reason: "holds-unavailable",
+                      blockingDates: ["2026-12-01"],
+                    },
+                    { status: 409 }
+                  )
+                );
+              }
               return HttpClientResponse.fromWeb(request, Response.json(quote));
             }
             if (
@@ -360,7 +423,7 @@ for (const language of ["en-US", "cs-CZ"] as const) {
     });
     await render(
       <RegistryContext.Provider value={registry}>
-        <PassPurchaseScreen key={language} kind="entry-pack" />
+        <PassPurchaseScreen key={language} kind={kind} />
       </RegistryContext.Provider>
     );
     await button("continue");
@@ -370,13 +433,44 @@ for (const language of ["en-US", "cs-CZ"] as const) {
     await press("continue");
     await press("gift");
     await press("continue");
+    expect(beginCalls).toHaveLength(1);
+
+    workspace.signedIn = false;
+    await press("continue");
+    expect(beginCalls).toHaveLength(1);
+    workspace.signedIn = true;
+
+    catalogAvailable = false;
+    await act(async () => {
+      registry.refresh(passOffersAtom);
+      expect(await settle(registry, passOffersAtom)).toMatchObject({
+        _tag: "Success",
+        success: { entryPacks: [] },
+      });
+    });
+    await press("continue");
+    expect(beginCalls).toHaveLength(2);
+    expect(beginCalls[0]).toEqual(beginCalls[1]);
+
+    if (kind === "unlimited") {
+      expect(container().querySelector("#choice")).not.toBeNull();
+      catalogAvailable = true;
+      await act(async () => {
+        registry.refresh(passOffersAtom);
+        await settle(registry, passOffersAtom);
+      });
+      await press("continue");
+      await press("continue");
+      expect(beginCalls).toHaveLength(3);
+      expect(beginCalls[2]?.orderId).not.toBe(beginCalls[1]?.orderId);
+    }
 
     expect((await button("continue")).disabled).toBe(true);
     await press("agreement");
     await press("apply-code");
     expect(codeUpdates).toEqual([
       {
-        productKind: "entry-pack",
+        productKind: kind,
         displayedPriceFingerprint: "a".repeat(64),
         submittedCode: "DEMO",
       },

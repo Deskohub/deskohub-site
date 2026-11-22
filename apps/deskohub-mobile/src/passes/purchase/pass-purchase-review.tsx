@@ -2,14 +2,17 @@ import type {
   CustomerPassPurchase,
   CustomerPassTier,
 } from "@deskohub/workspace-customer-api";
+import KeyRound from "lucide-react-native/icons/key-round";
 import { StyleSheet, View } from "react-native";
 import { daysBetween } from "../../booking/selection/prague-date";
 import { BookingSectionHeading } from "../../booking/ui/booking-section-heading";
 import { formatPragueDate } from "../../booking/ui/prague-date-format";
+import { monitorOptionName } from "../../booking/ui/price-line-description";
 import type { AppLocale } from "../../i18n/app-locale";
 import { m } from "../../i18n/messages";
 import { formatMoney, formatMoneyReduction } from "../../i18n/money-format";
 import { Card } from "../../ui/card";
+import { Icon } from "../../ui/icon";
 import { Text } from "../../ui/text";
 import { color, space } from "../../ui/tokens";
 import { PassPurchaseAgreement } from "./pass-purchase-agreement";
@@ -86,6 +89,16 @@ export function PassPurchaseReview({
         { count: String(daysBetween(validFrom, lastUsableDate) + 1) },
         { locale }
       );
+  const monitors =
+    product.kind === "unlimited" &&
+    product.selection.tier === "reserved-desk-workstation"
+      ? monitorOptionName(product.selection.monitorOption)
+      : undefined;
+  const coffee = price.coffeePrice;
+  const basePrice =
+    coffee === undefined
+      ? price.subtotal
+      : { ...price.subtotal, value: price.subtotal.value - coffee.value };
   return (
     <>
       <BookingSectionHeading
@@ -120,6 +133,12 @@ export function PassPurchaseReview({
               : passPeriodLabel(validFrom, lastUsableDate, locale, true)
           }
         />
+        {monitors !== undefined && (
+          <ReviewRow
+            label={m.pass_purchase_monitors({}, { locale })}
+            value={monitors}
+          />
+        )}
         <ReviewRow
           label={m.pass_purchase_for({}, { locale })}
           value={recipient ?? m.pass_purchase_self({ name: buyer }, { locale })}
@@ -134,8 +153,15 @@ export function PassPurchaseReview({
             { locale }
           )}
           detail={units}
-          value={formatMoney(price.subtotal, locale)}
+          value={formatMoney(basePrice, locale)}
         />
+        {coffee !== undefined && (
+          <ReviewRow
+            label={m.booking_checkout_line_coffee({}, { locale })}
+            detail={units}
+            value={formatMoney(coffee, locale)}
+          />
+        )}
         {price.discounts.map(({ id, label, amount }) => (
           <ReviewRow
             key={id}
@@ -163,6 +189,14 @@ export function PassPurchaseReview({
         onToggle={onToggle}
         locale={locale}
       />
+      {product.kind === "unlimited" && (
+        <View style={styles.note}>
+          <Icon icon={KeyRound} size={18} color={color.action} />
+          <Text variant="bodySmall" tone="muted" style={styles.noteText}>
+            {m.pass_purchase_daily_code({}, { locale })}
+          </Text>
+        </View>
+      )}
     </>
   );
 }
@@ -203,6 +237,8 @@ function ReviewRow({
 }
 
 const styles = StyleSheet.create({
+  note: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
+  noteText: { flex: 1, minWidth: 0 },
   row: {
     padding: space.lg,
     flexDirection: "row",

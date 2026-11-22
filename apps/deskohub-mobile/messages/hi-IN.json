@@ -178,6 +178,8 @@
   "pass_purchase_holder_invalid": "किसी दूसरे व्यक्ति का मान्य ईमेल पता डालें।",
   "pass_purchase_billing_changed": "बिलिंग की जानकारी बदल गई है। आगे बढ़ने से पहले उसे जाँचें।",
   "pass_purchase_product_summary": "{title}, {units}",
+  "pass_purchase_monitors": "मॉनिटर",
+  "pass_purchase_daily_code": "बुकिंग की ज़रूरत नहीं है। पास की अवधि में हर दिन दरवाज़े का कोड ऐप में दिखता है।",
   "pass_purchase_period_range": "{start} – {end}",
   "booking_checkout_legal_consent": "मैं <terms>सामान्य नियम और शर्तें</terms> और <operatingRules>परिसर नियमावली</operatingRules> से सहमत हूँ।",
   "booking_checkout_legal_consent_early_performance": "मैं <terms>सामान्य नियम और शर्तें</terms> और <operatingRules>परिसर नियमावली</operatingRules> से सहमत हूँ। मेरा अनुरोध है कि सेवा बुक की गई तारीख पर, अनुबंध से हटने की अवधि के भीतर, दी जाए, और मुझे जानकारी है कि सेवा पूरी तरह दिए जाने के बाद अनुबंध से हटने का मेरा अधिकार समाप्त हो जाता है।",

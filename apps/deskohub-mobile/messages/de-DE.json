@@ -178,6 +178,8 @@
   "pass_purchase_holder_invalid": "Gib eine gültige E-Mail-Adresse einer anderen Person ein.",
   "pass_purchase_billing_changed": "Die Rechnungsdaten haben sich geändert. Prüfe sie, bevor du fortfährst.",
   "pass_purchase_product_summary": "{title}, {units}",
+  "pass_purchase_monitors": "Monitore",
+  "pass_purchase_daily_code": "Eine Buchung ist nicht nötig. Der Türcode erscheint an jedem Tag des Passes in der App.",
   "pass_purchase_period_range": "{start} – {end}",
   "booking_checkout_legal_consent": "Ich stimme den <terms>Allgemeinen Geschäftsbedingungen</terms> und der <operatingRules>Hausordnung</operatingRules> zu.",
   "booking_checkout_legal_consent_early_performance": "Ich stimme den <terms>Allgemeinen Geschäftsbedingungen</terms> und der <operatingRules>Hausordnung</operatingRules> zu. Ich verlange die Leistung zum reservierten Termin, innerhalb der Widerrufsfrist, und nehme zur Kenntnis, dass mein Widerrufsrecht mit ihrer vollständigen Erbringung erlischt.",
