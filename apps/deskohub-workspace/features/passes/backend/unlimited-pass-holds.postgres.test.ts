@@ -2746,9 +2746,10 @@ const readPassDayEvents = Effect.fnUntraced(function* (orderId: OrderId) {
     );
 });
 
-const reconcileCustomerEvents = CustomerEventReconciler.use(
-  (reconciler) => reconciler.reconcile
-);
+const reconcileCustomerEvents = Effect.gen(function* () {
+  const reconciler = yield* CustomerEventReconciler;
+  return yield* reconciler.reconcile;
+});
 
 it("records each pass day's booking and booked cancellation as the reconciler would", async () => {
   const provider = makeInMemoryDotypos({});
