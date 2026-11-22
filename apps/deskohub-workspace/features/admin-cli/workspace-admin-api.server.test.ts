@@ -340,6 +340,54 @@ describe("Workspace Admin API", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
 
+  test("requires authentication to read a reservation audit trail", async () => {
+    const response = await handleWorkspaceAdminApiRequest(
+      new Request(
+        "https://workspace.deskohub.test/api/v1/cli/reservations/01980000-0000-7000-8000-000000000001/audit"
+      )
+    );
+    expect(response.status).toBe(401);
+  });
+
+  test("reads audit events only for an explicit subject and the authenticated caller", async () => {
+    const reservationId = AdministrationWorkspaceReservationId.make(
+      "01980000-0000-7000-8000-000000000001"
+    );
+    const before = crypto.randomUUID();
+    const requests: unknown[] = [];
+    const reservations = Layer.mock(ReservationAdministrationService, {
+      readAudit: (input) =>
+        Effect.sync(() => {
+          requests.push(input);
+          return { reservationId, events: [], nextBefore: null };
+        }),
+    });
+    for (const channel of [sessionChannel, assistantChannel]) {
+      expect(
+        await callAdministrationApi(
+          (client) =>
+            client.getReservationAudit({
+              params: { reservationId },
+              query: { before },
+            }),
+          { reservations, channel }
+        )
+      ).toEqual({ reservationId, events: [], nextBefore: null });
+    }
+    expect(requests).toEqual([
+      {
+        reservationId,
+        before,
+        actor: { source: "dhw-cli", administrator: cliAdministrator },
+      },
+      {
+        reservationId,
+        before,
+        actor: { source: "assistant", administrator: cliAdministrator },
+      },
+    ]);
+  });
+
   test("returns refund attention and customer metrics in the overview", async () => {
     const source = {};
     const sourceInputs: unknown[] = [];
@@ -2199,6 +2247,12 @@ describe("customer and reservation administration endpoints", () => {
 
     expect(restorations).toEqual([
       {
+        actor: {
+          source: "dhw-cli",
+          administrator: expect.objectContaining({
+            accountId: expect.any(String),
+          }),
+        },
         acknowledgeRefundedPayment: true,
         reservationId,
         sendRestorationEmail: true,

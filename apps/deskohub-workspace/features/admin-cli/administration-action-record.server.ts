@@ -77,6 +77,7 @@ export const recordAdministrationAction = Effect.fn(
   const replayed = yield* Ref.make(false);
   return yield* effect.pipe(
     Effect.provideService(CurrentAdministrationAction, {
+      id,
       markReplayed: Ref.set(replayed, true),
     }),
     Effect.onExit((exit) =>

@@ -58,7 +58,7 @@ Compile after every catalog edit:
 - Inside `apps/deskohub-workspace`, `bun run i18n:compile` compiles the customer project and `bun run i18n:compile:administration` the administration one.
 - Mobile compiles with `bun run i18n:compile` in `apps/deskohub-mobile`.
 
-`bun dev` in the Workspace watches both catalog folders and recompiles. Nothing else does: `bun test` and `typecheck` read whatever generated output is on disk. A stale runtime makes message tests and copy assertions pass or fail against old copy, and a missing one fails module resolution. `build:compile`, `lint:knip`, and `test:e2e` depend on the Turbo compile task.
+`bun run dev` in Workspace, Portal, Boardgame Bar, or mobile compiles the catalogs with Paraglide before starting the app and its i18n watchers. Workspace compiles both the customer and administration projects. Direct `bun test` and `typecheck` commands read the generated output on disk. Stale output makes tests use old copy, and missing output fails module resolution. `build:compile`, `lint:knip`, and `test:e2e` depend on the Turbo compile task.
 
 ## Message tests
 

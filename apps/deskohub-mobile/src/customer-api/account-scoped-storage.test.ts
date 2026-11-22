@@ -9,8 +9,12 @@ import {
   makeAccountExitFence,
 } from "./account-scoped-storage";
 import { CustomerAccountScope } from "./customer-api.service";
-import { type DeviceCapabilities, DeviceStorage } from "./device-capabilities";
-import { customerDataExitCleanup } from "./exit-cleanup";
+import {
+  type DeviceCapabilities,
+  DeviceOnboardingDraft,
+  DeviceStorage,
+} from "./device-capabilities";
+import { customerDataExitCleanup, eraseDraftForSignOut } from "./exit-cleanup";
 import {
   type FakeDevice,
   fakeDeviceCapabilities,
@@ -45,14 +49,20 @@ type Setup = ReturnType<typeof deviceWithFence>;
 const openStorage = (
   setup: Setup,
   session: AccountSession,
-  capabilities: Layer.Layer<DeviceCapabilities> = setup.capabilities
+  capabilities: Layer.Layer<DeviceCapabilities> = setup.capabilities,
+  origin = apiOrigin,
+  onboardingSession?: CustomerAccountScope["Service"]["onboardingSession"]
 ) =>
   run(
     Effect.service(AccountScopedStorage).pipe(
       Effect.provide(
         accountDeviceLayer(capabilities, setup.fence).pipe(
           Layer.provide(
-            Layer.succeed(CustomerAccountScope, { ...session, apiOrigin })
+            Layer.succeed(CustomerAccountScope, {
+              ...session,
+              apiOrigin: origin,
+              ...(onboardingSession === undefined ? {} : { onboardingSession }),
+            })
           )
         )
       )
@@ -130,6 +140,112 @@ describe("AccountScopedStorage", () => {
     await run(Fiber.join(exit));
 
     expect(setup.device.storage.has(cacheKeyOf("a"))).toBe(false);
+  });
+
+  test("sign-out erases an in-flight onboarding save and retires its writer", async () => {
+    const setup = deviceWithFence();
+    const inFlight = await run(Deferred.make<void>());
+    const landed = await run(Deferred.make<void>());
+    const slowDraft = Layer.effect(
+      DeviceOnboardingDraft,
+      Effect.map(Effect.service(DeviceOnboardingDraft), (draft) => ({
+        ...draft,
+        write: (entry) =>
+          Deferred.succeed(inFlight, undefined).pipe(
+            Effect.andThen(Deferred.await(landed)),
+            Effect.andThen(draft.write(entry))
+          ),
+      }))
+    ).pipe(Layer.provide(setup.capabilities));
+    const storage = await openStorage(
+      setup,
+      sessionA1,
+      Layer.merge(setup.capabilities, slowDraft)
+    );
+
+    const write = Effect.runFork(storage.saveOnboardingDraft("in flight"));
+    await run(Deferred.await(inFlight));
+    const exit = Effect.runFork(setup.exit(sessionA1));
+    await run(Deferred.succeed(landed, undefined));
+    await run(Fiber.join(write));
+    await run(Fiber.join(exit));
+    await run(storage.saveOnboardingDraft("stale"));
+
+    expect(setup.device.onboardingDraft).toEqual(Option.none());
+  });
+
+  test("a draft never restores for the same account on another origin", async () => {
+    const setup = deviceWithFence();
+    const before = await openStorage(setup, sessionA1);
+    await run(before.saveOnboardingDraft("draft"));
+
+    const after = await openStorage(
+      setup,
+      sessionA1,
+      setup.capabilities,
+      "https://other.example"
+    );
+
+    expect(await run(after.restoreOnboardingDraft())).toEqual(Option.none());
+    expect(setup.device.onboardingDraft).toEqual(Option.none());
+  });
+
+  test("two sessions opened at the same time have different drafts", async () => {
+    const setup = deviceWithFence();
+    let active = "first";
+    const storage = await openStorage(
+      setup,
+      sessionA1,
+      setup.capabilities,
+      apiOrigin,
+      Effect.sync(() => active)
+    );
+    await run(storage.saveOnboardingDraft("previous draft", "first"));
+    active = "second";
+
+    expect(await run(storage.restoreOnboardingDraft("second"))).toEqual(
+      Option.none()
+    );
+    expect(setup.device.onboardingDraft).toEqual(Option.none());
+    await run(storage.saveOnboardingDraft("current draft", "second"));
+    await run(storage.saveOnboardingDraft("late edit", "first"));
+    await run(setup.exit({ ...sessionA1, sessionId: "first" }));
+    expect(Option.getOrThrow(setup.device.onboardingDraft).draft).toBe(
+      "current draft"
+    );
+  });
+
+  test("a failed cookie read during sign-out leaves account storage usable", async () => {
+    const setup = deviceWithFence();
+    const storage = await openStorage(
+      setup,
+      sessionA1,
+      setup.capabilities,
+      apiOrigin,
+      Effect.succeed("first")
+    );
+    await run(storage.saveOnboardingDraft("draft before signing out", "first"));
+    const failed = await Effect.runPromiseExit(
+      eraseDraftForSignOut(
+        "first",
+        storage
+          .saveOnboardingDraft("queued draft", "first")
+          .pipe(Effect.andThen(Effect.fail("cookie read failed")))
+      ).pipe(Effect.provide(Layer.merge(setup.capabilities, setup.fence)))
+    );
+    expect(Exit.findErrorOption(failed)).toEqual(
+      Option.some("cookie read failed")
+    );
+    expect(setup.device.onboardingDraft).toEqual(Option.none());
+
+    await run(storage.setItem(cache, "new reservations"));
+    expect(await run(storage.getItem(cache))).toEqual(
+      Option.some("new reservations")
+    );
+    await run(storage.saveOnboardingDraft("new draft", "first"));
+    expect(await run(storage.restoreOnboardingDraft("first"))).toEqual(
+      Option.some("new draft")
+    );
   });
 
   test("an exited session reads, writes and shares nothing", async () => {

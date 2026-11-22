@@ -79,6 +79,11 @@ interface ICustomerAccountScope {
   readonly sessionStartedAt: number;
   /** The Workspace origin, for keys that must not mix deployments. */
   readonly apiOrigin: string;
+  /** The Better Auth session currently open for this account. */
+  readonly onboardingSession?: Effect.Effect<string | undefined>;
+  readonly confirmOnboardingSession?: (
+    id: string | undefined
+  ) => Effect.Effect<boolean>;
 }
 
 /** The account a data runtime belongs to. */

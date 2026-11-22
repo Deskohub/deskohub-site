@@ -93,7 +93,17 @@ describe("restoreAdministrationReservation action", () => {
         invoice: null,
       },
     });
-    expect(restoreCalls).toEqual([restoration]);
+    expect(restoreCalls).toEqual([
+      {
+        ...restoration,
+        actor: {
+          source: "admin-ui",
+          administrator: expect.objectContaining({
+            accountId: expect.any(String),
+          }),
+        },
+      },
+    ]);
     expect(revalidatedPaths).toEqual([
       administrationHref("/[locale]/admin/reservations/[reservationId]", {
         reservationId,

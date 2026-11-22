@@ -29,5 +29,5 @@ export type AdministrationActionOutcome =
  */
 export class CurrentAdministrationAction extends Context.Service<
   CurrentAdministrationAction,
-  { readonly markReplayed: Effect.Effect<void> }
+  { readonly id: string; readonly markReplayed: Effect.Effect<void> }
 >()("@deskohub-workspace/admin-cli/CurrentAdministrationAction") {}

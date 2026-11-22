@@ -9,6 +9,7 @@ import {
   type AccountExit,
   type AccountPresence,
   accountExitOf,
+  confirmsSignOut,
   customerDataExitCleanup,
 } from "./exit-cleanup";
 import {
@@ -27,12 +28,20 @@ const signedInA2: AccountPresence = { status: "signed-in", ...sessionA2 };
 const signedInB: AccountPresence = { status: "signed-in", ...sessionB };
 const exitOfA1: AccountExit = { scope: "account", ...sessionA1 };
 
+test("a session rejection confirms sign-out while transient failures do not", () => {
+  expect(confirmsSignOut(null)).toBe(true);
+  expect(confirmsSignOut({ status: 401 })).toBe(true);
+  expect(confirmsSignOut({ status: 503 })).toBe(false);
+  expect(confirmsSignOut({})).toBe(false);
+});
+
 describe("accountExitOf", () => {
   // biome-ignore format: the case table stays one row per line on purpose.
   const cases: ReadonlyArray<readonly [string, AccountPresence, AccountPresence, AccountExit | undefined]> = [
     ["sign-out", signedInA1, signedOut, exitOfA1],
     ["account switch", signedInA1, signedInB, exitOfA1],
     ["reauthentication of the same account", signedInA1, signedInA2, undefined],
+    ["reauthentication retires the previous draft", { ...signedInA1, sessionId: "first" }, { ...signedInA2, sessionId: "second" }, { scope: "onboarding-session", sessionId: "first" }],
     ["a launch that finds no session", restoring, signedOut, { scope: "device" }],
     ["a launch that restores a session", restoring, signedInA1, { scope: "shared-files" }],
     ["a session refetch", signedInA1, signedInA1, undefined],

@@ -21,12 +21,17 @@ import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { passEntryClaims, passPurchases } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
+import type { AdministrationActor } from "@/features/administrators/administration-source";
 import { WorkspaceReservationEmailService } from "@/features/checkout/backend/fulfillment/workspace-reservation-email.service";
 import { PaymentRefundService } from "@/features/checkout/backend/payment/payment-refund.service";
 import { getRestorationBooking } from "@/features/checkout/backend/reservation/restoration-booking";
 import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
 import { baseLocale } from "@/features/i18n";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
+import {
+  type ReservationAuditAttempt,
+  startReservationAudit,
+} from "@/features/reservation/backend/reservation-audit";
 import {
   type ReservationRecord,
   toReservationRecord,
@@ -62,6 +67,7 @@ import {
 import { canRestoreReservation } from "./reservation-status";
 
 export type ReservationRestorationInput = {
+  readonly actor: AdministrationActor;
   readonly reservationId: WorkspaceReservationId;
   /** The administrator saw the recorded refund and restores anyway. */
   readonly acknowledgeRefundedPayment: boolean;
@@ -484,16 +490,19 @@ export class ReservationRestorationService extends Context.Service<
 
       /** Confirms the reservation while it is still the cancellation the restore read. */
       const confirmReservation = ({
+        audit,
         reservationId,
         cancelledAt,
         now,
       }: {
+        readonly audit: ReservationAuditAttempt;
         readonly reservationId: WorkspaceReservationId;
         readonly cancelledAt: Temporal.Instant;
         readonly now: Temporal.Instant;
       }) =>
         reservations
           .markAdministrationRestored({
+            audit,
             id: reservationId,
             cancelledAt,
             restoredAt: now,
@@ -538,6 +547,7 @@ export class ReservationRestorationService extends Context.Service<
        * the cancellation's event.
        */
       const recordRestoration = (input: {
+        readonly audit: ReservationAuditAttempt;
         readonly reservationId: WorkspaceReservationId;
         readonly cancelledAt: Temporal.Instant;
         readonly reservedFrom: Temporal.Instant;
@@ -742,6 +752,7 @@ export class ReservationRestorationService extends Context.Service<
         );
 
       const finalizeRestoration = ({
+        audit,
         reservation,
         cancellation,
         span,
@@ -749,6 +760,7 @@ export class ReservationRestorationService extends Context.Service<
         now,
         dotyposRestore,
       }: {
+        readonly audit: ReservationAuditAttempt;
         readonly reservation: WorkspaceReservation;
         readonly cancellation: RestorableCancellation;
         readonly span: HeldSpan;
@@ -757,6 +769,7 @@ export class ReservationRestorationService extends Context.Service<
         readonly dotyposRestore: RestoreCancelledReservationResult;
       }) =>
         recordRestoration({
+          audit,
           reservationId: reservation.id,
           cancelledAt: cancellation.cancelledAt,
           reservedFrom: span.reservedFrom,
@@ -883,6 +896,7 @@ export class ReservationRestorationService extends Context.Service<
                 readRestorablePackFunding(reservation.id)
               ),
               Effect.tap(requireTableAvailable),
+              Effect.bind("audit", ({ actor }) => startReservationAudit(actor)),
               Effect.bind("dotyposRestore", restoreInDotypos),
               Effect.bind("recording", finalizeRestoration)
             );

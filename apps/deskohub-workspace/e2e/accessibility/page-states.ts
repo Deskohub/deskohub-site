@@ -16,6 +16,8 @@ import { waitForReactSubmitHandler } from "../react-handlers";
 import type { E2EEffectRunner } from "../runtime-fixture";
 import { workspaceE2ETimeouts } from "../timeouts";
 import { type AuditedLocale, openSettledPage } from "./accessibility-audit";
+import { signInAccessibilityAccount } from "./account-session";
+import type { SeededAccountRuntime } from "./audit-target";
 
 export const reservationForms = [
   { family: "cowork", path: "/reservation/cowork" },
@@ -65,24 +67,41 @@ export async function submitInvalidSignInEmail(
   ).toBeVisible();
 }
 
-/**
- * Status outcomes the audit reaches through the real route: an order the
- * visitor may not see, and seeded checkouts whose hold expired after the
- * payment expired, failed, or was cancelled.
- */
 export const statusOutcomes = [
-  "not_found",
   "expired",
   "failed",
   "cancelled",
-] as const satisfies readonly (
-  | "not_found"
-  | WorkspaceE2ELocalReservationPaymentState
-)[];
-export type StatusOutcome = (typeof statusOutcomes)[number];
+] as const satisfies readonly WorkspaceE2ELocalReservationPaymentState[];
+type StatusOutcome = (typeof statusOutcomes)[number];
 
 const statusPath = (locale: AuditedLocale, orderId: string) =>
   `/${locale}${reservationStatusPath}/${orderId}`;
+
+/** An anonymous visitor would be redirected to sign-in for a missing order. */
+export async function openMissingReservationStatus({
+  locale,
+  page,
+  seededAccounts,
+}: {
+  readonly locale: AuditedLocale;
+  readonly page: Page;
+  readonly seededAccounts: SeededAccountRuntime;
+}) {
+  await signInAccessibilityAccount(page.context(), seededAccounts);
+  const path = statusPath(
+    locale,
+    workspaceReservationIdSchema.make("accessibility-audit-missing-order")
+  );
+  await openSettledPage(page, path);
+  await expect(page).toHaveURL((url) => url.pathname === path && !url.search);
+  await expect(
+    page.getByRole("main").getByRole("heading", {
+      exact: true,
+      level: 1,
+      name: m.checkoutStatusNotFoundTitle({}, { locale }),
+    })
+  ).toBeVisible();
+}
 
 /**
  * Opens the status page in one outcome while `use` runs. A seeded checkout is
@@ -104,17 +123,6 @@ export async function withStatusOutcome(
   },
   use: () => Promise<void>
 ) {
-  if (outcome === "not_found") {
-    await openSettledPage(
-      page,
-      statusPath(
-        locale,
-        workspaceReservationIdSchema.make("accessibility-audit-missing-order")
-      )
-    );
-    await use();
-    return;
-  }
   const fixture = await localDatabase(
     seedWorkspaceE2ELocalReservation({}, outcome)
   );
