@@ -137,6 +137,10 @@ const allowedColumns = new Map([
     "public.administration_actions.actor_account_email",
     "administrator login-email snapshot",
   ],
+  [
+    "public.pass_administration_changes.actor_account_email",
+    "administrator login-email snapshot",
+  ],
   // Operator-side labels, not customer data.
   ["public.cli_sessions.client_name", "dhw CLI client label"],
   ["public.cli_authentication_requests.client_name", "dhw CLI client label"],

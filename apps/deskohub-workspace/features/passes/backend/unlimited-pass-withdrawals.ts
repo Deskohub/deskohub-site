@@ -7,6 +7,7 @@ import {
   isNotNull,
   isNull,
   ne,
+  not,
   notInArray,
   or,
   sql,
@@ -50,6 +51,7 @@ import {
   getUnlimitedPassEndDate,
   getUnlimitedPassWithdrawal,
 } from "../unlimited-pass";
+import { hasPendingPassChange } from "./pass-administration-pending";
 
 const kind = "unlimited-pass" as const;
 const decodeOrderId = Schema.decodeOption(orderIdSchema);
@@ -196,7 +198,13 @@ export const lockUnlimitedPassOrderForWithdrawal = Effect.fn(
   const [order] = yield* db
     .select({ id: orders.id })
     .from(orders)
-    .where(and(eq(orders.id, id.value), eq(orders.kind, "pass-purchase")))
+    .where(
+      and(
+        eq(orders.id, id.value),
+        eq(orders.kind, "pass-purchase"),
+        not(hasPendingPassChange(db, orders.id))
+      )
+    )
     .for("no key update");
   return order?.id;
 });
@@ -212,6 +220,16 @@ export const recordUnlimitedPassWithdrawal = Effect.fn(
   readonly refundAmount: Money;
 }) {
   const { db } = yield* WorkspaceTransaction;
+  const [pending] = yield* db
+    .select({ id: passPurchases.id })
+    .from(passPurchases)
+    .where(
+      and(
+        eq(passPurchases.id, input.orderId),
+        hasPendingPassChange(db, input.orderId)
+      )
+    );
+  if (pending) return;
   const [pass] = yield* readPaidUnlimitedPass(
     db,
     input.orderId,

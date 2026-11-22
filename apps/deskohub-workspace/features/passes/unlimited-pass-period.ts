@@ -18,10 +18,14 @@ const getUnlimitedPassDay = ({
     return undefined;
   }
 
-  return date.since(validFrom, { largestUnit: "day" }).days + 1;
+  const start = Temporal.PlainDate.from(validFrom);
+  return {
+    day: date.since(start, { largestUnit: "day" }).days + 1,
+    totalDays: start.until(validUntil, { largestUnit: "day" }).days,
+  };
 };
 
-/** A paid pass keeps access through the last included day of a cancellation. */
+/** A pass keeps access through the last included day of a cancellation. */
 export const getUnlimitedPassAccessDay = ({
   status,
   accessEndsOn,

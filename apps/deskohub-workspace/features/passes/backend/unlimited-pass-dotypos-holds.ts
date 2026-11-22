@@ -90,10 +90,12 @@ export const listUnlimitedPassDayHolds = Effect.fn("listUnlimitedPassDayHolds")(
     readonly passId: OrderId;
     readonly customerId: DotyposCustomerId;
     readonly startDate: Temporal.PlainDate;
+    readonly endsBefore?: Temporal.PlainDate;
   }) {
     const dotypos = yield* DotyposService;
     const timeZone = workspaceSiteConstants.location.timeZone;
-    const endsBefore = input.startDate.add({ days: unlimitedPassDays });
+    const endsBefore =
+      input.endsBefore ?? input.startDate.add({ days: unlimitedPassDays });
     const records = yield* dotypos.listReservations({
       customerId: input.customerId,
       startsAtOrAfter: input.startDate

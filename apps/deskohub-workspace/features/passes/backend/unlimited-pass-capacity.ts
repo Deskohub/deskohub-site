@@ -384,13 +384,30 @@ export const withUnlimitedPassCapacity = <A, E, R>(
   },
   save: (plan: UnlimitedPassCapacityPlan) => Effect.Effect<A, E, R>
 ) => {
-  const dates = getPassDates(input.startDate);
-  return allocateUnlimitedPass(
-    input.selection,
+  return withUnlimitedPassCapacityForDates(
+    {
+      selection: input.selection,
+      dates: getPassDates(input.startDate),
+      preferredDeskId: input.preferredDeskId,
+    },
+    save
+  );
+};
+
+/** Reserves all dates in the change using the same locks as ordinary booking. */
+export const withUnlimitedPassCapacityForDates = <A, E, R>(
+  {
+    selection,
     dates,
-    input.preferredDeskId
-  ).pipe(
+    preferredDeskId,
+  }: {
+    readonly selection: UnlimitedPassCapacitySelection;
+    readonly dates: readonly Temporal.PlainDate[];
+    readonly preferredDeskId?: DotyposTableId;
+  },
+  save: (plan: UnlimitedPassCapacityPlan) => Effect.Effect<A, E, R>
+) =>
+  allocateUnlimitedPass(selection, dates, preferredDeskId).pipe(
     Effect.flatMap(save),
     WorkspaceLockSections.reservationCapacity(dates)
   );
-};

@@ -2,13 +2,15 @@ import { useAtomSet } from "@effect/atom-react";
 import { Layer } from "effect";
 import { Atom } from "effect/reactivity";
 import { type ReactNode, useEffect, useRef } from "react";
-import { useAuthSession } from "../auth/use-auth-session";
+import { authClient } from "../auth/auth-client";
+import { toAuthSessionState } from "../auth/auth-session-state";
 import { AccountExitFence } from "./account-scoped-storage";
 import { deviceCapabilitiesLayer } from "./device-capabilities-layer";
 import {
   type AccountExit,
   type AccountPresence,
   accountExitOf,
+  confirmsSignOut,
   customerDataExitCleanup,
 } from "./exit-cleanup";
 
@@ -36,23 +38,44 @@ export function CustomerDataExitCleanup({
 }: {
   readonly children: ReactNode;
 }) {
-  const session = useAuthSession();
+  const snapshot = authClient.useSession();
+  const session = toAuthSessionState(snapshot);
   const cleanUp = useAtomSet(exitCleanupAtom);
   const previous = useRef<AccountPresence>({ status: "restoring" });
   const status = session.status;
+  const signedOutConfirmed = confirmsSignOut(snapshot.error);
   const accountId = session.status === "signed-in" ? session.user.id : "";
+  const sessionId = snapshot.data?.session.id;
   const sessionStartedAt =
     session.status === "signed-in" ? session.signedInAt.getTime() : 0;
 
   useEffect(() => {
+    // A failed launch read does not establish that the stored session ended.
+    if (
+      status === "restoring" ||
+      (status === "signed-out" && !signedOutConfirmed)
+    )
+      return;
     const next: AccountPresence =
       status === "signed-in"
-        ? { status, accountId, sessionStartedAt }
+        ? {
+            status,
+            accountId,
+            sessionStartedAt,
+            ...(sessionId === undefined ? {} : { sessionId }),
+          }
         : { status };
     const exit = accountExitOf(previous.current, next);
     if (exit !== undefined) cleanUp(exit);
     previous.current = next;
-  }, [status, accountId, sessionStartedAt, cleanUp]);
+  }, [
+    status,
+    accountId,
+    sessionId,
+    sessionStartedAt,
+    signedOutConfirmed,
+    cleanUp,
+  ]);
 
   return children;
 }

@@ -134,7 +134,7 @@ const isVoidedUnlimitedDraft = ({
   order.activePaymentAttemptId === null &&
   (order.paymentState === "not_started" || order.paymentState === "expired");
 
-const resolveGiftCustomer = Effect.fn("resolveUnlimitedGiftCustomer")(
+export const resolvePassHolderCustomer = Effect.fn("resolvePassHolderCustomer")(
   function* (input: {
     readonly accountId: CustomerAccountId;
     readonly email: string;
@@ -408,7 +408,7 @@ const continueUnlimitedPassPurchase = Effect.fn(
         const holder = giftEmail
           ? {
               accountId: holderAccountId,
-              customerId: yield* resolveGiftCustomer({
+              customerId: yield* resolvePassHolderCustomer({
                 accountId: holderAccountId,
                 email: giftEmail,
                 ...(input.recipientName && {

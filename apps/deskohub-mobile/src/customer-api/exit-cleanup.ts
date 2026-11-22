@@ -3,10 +3,15 @@ import type { AuthSessionState } from "../auth/auth-session-state";
 import {
   AccountExitFence,
   type AccountSession,
+  clearDeviceOnboardingDraft,
   isAccountStorageKey,
   isExitClearedKey,
 } from "./account-scoped-storage";
-import { DeviceStorage, TemporaryFiles } from "./device-capabilities";
+import {
+  DeviceOnboardingDraft,
+  DeviceStorage,
+  TemporaryFiles,
+} from "./device-capabilities";
 
 /**
  * What an exit cleans up: one session's account data, on a launch that
@@ -15,6 +20,7 @@ import { DeviceStorage, TemporaryFiles } from "./device-capabilities";
  */
 export type AccountExit =
   | ({ readonly scope: "account" } & AccountSession)
+  | { readonly scope: "onboarding-session"; readonly sessionId: string }
   | { readonly scope: "device" }
   | { readonly scope: "shared-files" };
 
@@ -32,6 +38,8 @@ export const customerDataExitCleanup = (exit: AccountExit) =>
   Match.value(exit).pipe(
     Match.discriminatorsExhaustive("scope")({
       account: accountExitCleanup,
+      "onboarding-session": ({ sessionId }) =>
+        discardDraft((owner) => Effect.succeed(owner.sessionId === sessionId)),
       device: () => deviceExitCleanup,
       "shared-files": () => sweepUnheldFiles(Option.none()),
     }),
@@ -43,11 +51,60 @@ export const customerDataExitCleanup = (exit: AccountExit) =>
     Effect.withSpan("CustomerData.exitCleanup")
   );
 
+/** Explicit sign-out erases the native draft and pauses its writes until the cookie operation settles. */
+export const eraseDraftForSignOut = <A, E, R>(
+  sessionId: string | undefined,
+  signOut: Effect.Effect<A, E, R>
+) =>
+  Effect.flatMap(Effect.service(AccountExitFence), (fence) =>
+    Effect.acquireUseRelease(
+      fence.exclusive(
+        Effect.flatMap(
+          Effect.service(DeviceOnboardingDraft),
+          (storage) => storage.clear
+        ).pipe(
+          Effect.andThen(
+            sessionId === undefined
+              ? Effect.void
+              : fence.pauseOnboarding(sessionId)
+          )
+        )
+      ),
+      () => signOut,
+      () =>
+        sessionId === undefined
+          ? Effect.void
+          : fence.exclusive(fence.resumeOnboarding(sessionId))
+    )
+  );
+
+export const confirmsSignOut = (
+  error: { readonly status?: number } | null | undefined
+) => error == null || error.status === 401;
+
+const discardDraft = (
+  shouldClear: Parameters<typeof clearDeviceOnboardingDraft>[1]
+) =>
+  Effect.flatMap(Effect.service(DeviceOnboardingDraft), (storage) =>
+    clearDeviceOnboardingDraft(storage, shouldClear)
+  );
+
 // Removes the account's data unless a later session of it has opened.
 const accountExitCleanup = (session: AccountSession) =>
-  removeAccountData(session).pipe(
-    Effect.when(closeForExit(session)),
-    Effect.asVoid
+  closeForExit(session).pipe(
+    Effect.tap(() =>
+      discardDraft((owner) =>
+        Effect.succeed(
+          owner.accountId === session.accountId &&
+            (session.sessionId === undefined
+              ? owner.sessionStartedAt <= session.sessionStartedAt
+              : owner.sessionId === session.sessionId)
+        )
+      )
+    ),
+    Effect.flatMap((closed) =>
+      closed ? removeAccountData(session) : Effect.void
+    )
   );
 
 const closeForExit = (session: AccountSession) =>
@@ -64,6 +121,15 @@ const removeAccountData = ({ accountId }: AccountSession) =>
 // owns. Its live files are held, so the sweep spares them.
 const deviceExitCleanup = Effect.Do.pipe(
   Effect.bind("open", () => openAccounts),
+  Effect.tap(() =>
+    Effect.flatMap(Effect.service(DeviceOnboardingDraft), (storage) =>
+      Effect.flatMap(Effect.service(AccountExitFence), (fence) =>
+        clearDeviceOnboardingDraft(storage, (owner) =>
+          fence.isCurrent(owner).pipe(Effect.map((current) => !current))
+        )
+      )
+    )
+  ),
   Effect.tap(({ open }) => removeStorageKeys(isUnownedKey(open))),
   Effect.tap(() => sweepUnheldFiles(Option.none())),
   Effect.asVoid
@@ -121,9 +187,10 @@ export const accountPresenceOf = (
 
 /**
  * The exit that moving from `previous` to `next` means: the previous account
- * signed out or was replaced by another. Signing in again as the same account
- * (reauthentication) is no exit. A launch that finds no session cleans the
- * device, in case the last exit's cleanup didn't finish or the session
+ * signed out or was replaced by another. Reauthentication of the same
+ * account retires only the previous session's protected draft. A launch
+ * that finds no session cleans the device, in case the last exit's cleanup
+ * didn't finish or the session
  * expired while the app was closed; one that restores a session removes the
  * shared files a run that ended mid-share left.
  */
@@ -133,13 +200,23 @@ export const accountExitOf = (
 ): AccountExit | undefined => {
   if (next.status === "restoring") return undefined;
   if (previous.status === "signed-in") {
-    return next.status === "signed-out" || previous.accountId !== next.accountId
-      ? {
-          scope: "account",
-          accountId: previous.accountId,
-          sessionStartedAt: previous.sessionStartedAt,
-        }
-      : undefined;
+    if (next.status === "signed-out" || previous.accountId !== next.accountId) {
+      return {
+        scope: "account",
+        accountId: previous.accountId,
+        sessionStartedAt: previous.sessionStartedAt,
+        ...(previous.sessionId === undefined
+          ? {}
+          : { sessionId: previous.sessionId }),
+      };
+    }
+    if (
+      previous.sessionId !== undefined &&
+      next.sessionId !== undefined &&
+      previous.sessionId !== next.sessionId
+    )
+      return { scope: "onboarding-session", sessionId: previous.sessionId };
+    return undefined;
   }
   if (previous.status !== "restoring") return undefined;
   return next.status === "signed-out"

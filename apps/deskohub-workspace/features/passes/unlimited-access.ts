@@ -13,6 +13,7 @@ type UnlimitedAccessPeriod = {
 type UnlimitedAccessDay = UnlimitedAccessPeriod & {
   readonly date: Temporal.PlainDate;
   readonly day: number;
+  readonly totalDays: number;
   readonly continuesTomorrow: boolean;
 };
 

@@ -15,10 +15,10 @@ import {
   sampleInvitationCode,
   sampleProfile,
 } from "../../customer-api/testing/sample-fixtures";
+import { completionEditsAtom } from "../onboarding/onboarding-edits";
 import { completionDraftOf, profileDraftOf } from "./profile-draft";
 import {
   completeProfileAtom,
-  completionEditsAtom,
   currentDraft,
   type EditedProfile,
   editedDraft,

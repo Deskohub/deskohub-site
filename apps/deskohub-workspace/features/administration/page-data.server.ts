@@ -9,6 +9,7 @@ import {
   runAdministrationPage,
 } from "@/features/administrators/server/administration-request.server";
 import type { Locale } from "@/features/i18n";
+import { isAdminPassViewsOpen } from "@/features/passes/admin/pass-admin-access.server";
 import {
   getSearchParamsDecoder,
   type SearchParamsRecord,
@@ -114,12 +115,18 @@ const getAdministrationReservationListInput = (
 const loadAdministrationReservationList = async (
   input: Promise<AdministrationReservationListInput>
 ) => {
-  const resolvedInput = await input;
+  const [resolvedInput, includePassDays] = await Promise.all([
+    input,
+    isAdminPassViewsOpen(),
+  ]);
   return runAdministration(
     "administration.reservations",
     Effect.gen(function* () {
       const administration = yield* AdministrationService;
-      return yield* administration.listReservations(resolvedInput);
+      return yield* administration.listReservations({
+        ...resolvedInput,
+        ...(includePassDays && { includePassDays: true }),
+      });
     })
   );
 };

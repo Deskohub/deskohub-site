@@ -20,7 +20,7 @@ import {
 import { ReservationAnalyticsPerson } from "./reservation-analytics-person";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
-const fixtures = workspaceFixtures(testDatabase!.db);
+const describePostgres = describe.skipIf(!testDatabase);
 const timestamp = Temporal.Instant.from("2099-06-17T12:00:00.000Z");
 
 /**
@@ -59,6 +59,7 @@ const captureRun = async (
 
 /** A reservation authored by a fresh account with a login. */
 const authoredReservation = async () => {
+  const fixtures = workspaceFixtures(testDatabase!.db);
   const { accountId } = await Effect.runPromise(
     fixtures.account("lifecycle-person")
   );
@@ -85,7 +86,7 @@ const decide = (
     })
   );
 
-describe("Lifecycle events and the author's analytics consent", () => {
+describePostgres("Lifecycle events and the author's analytics consent", () => {
   test("links a consenting author's events to the author's person", async () => {
     const { accountId, reservation } = await authoredReservation();
     await decide(accountId, "grant", "2026-11-01T10:00:00Z");

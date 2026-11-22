@@ -36,6 +36,32 @@ export class DeviceStorage extends Context.Service<
   IDeviceStorage
 >()("DeviceStorage") {}
 
+export interface OnboardingDraftOwner {
+  readonly accountId: string;
+  readonly apiOrigin: string;
+  readonly sessionStartedAt: number;
+  readonly sessionId: string;
+}
+
+interface StoredOnboardingDraft extends OnboardingDraftOwner {
+  readonly draft: string;
+}
+
+/** One protected draft on the device, including the session that owns it. */
+export class DeviceOnboardingDraft extends Context.Service<
+  DeviceOnboardingDraft,
+  {
+    readonly read: Effect.Effect<
+      Option.Option<StoredOnboardingDraft>,
+      DeviceCapabilityFailed
+    >;
+    readonly write: (
+      entry: StoredOnboardingDraft
+    ) => Effect.Effect<void, DeviceCapabilityFailed>;
+    readonly clear: Effect.Effect<void, DeviceCapabilityFailed>;
+  }
+>()("DeviceOnboardingDraft") {}
+
 interface ITemporaryFiles {
   /**
    * Writes `bytes` to a new temporary file of `owner` and answers its URI,
@@ -108,6 +134,7 @@ export class ImageLibrary extends Context.Service<
 
 export type DeviceCapabilities =
   | DeviceStorage
+  | DeviceOnboardingDraft
   | TemporaryFiles
   | ShareSheet
   | Clipboard
