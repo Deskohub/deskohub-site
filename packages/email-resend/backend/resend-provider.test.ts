@@ -8,7 +8,7 @@ import {
   test,
 } from "bun:test";
 import { createHash } from "node:crypto";
-import { continuesEmailChain } from "@deskohub/email";
+import { continuesEmailChain, EmailServiceError } from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   ConfigProvider,
@@ -654,6 +654,38 @@ describe("ResendEmailProvider", () => {
     expect(sentKeys[2]).toMatch(/^sha256-[0-9a-f]{64}$/);
     expect(sentKeys[2]).not.toBe(sentKeys[3]);
     expect(batchSend.mock.calls[0]?.[1]?.idempotencyKey).toBe(sha256(longKey));
+  });
+
+  test("a guarded replay cannot dispatch after the effective Resend credential changes", async () => {
+    batchSend = mock<BatchSendImplementation>(async () => ({
+      data: { data: [{ id: "resend-id" }] },
+    }));
+    let pinned: string | undefined;
+    const refused = new EmailServiceError("Guarded request changed");
+    const options = {
+      idempotencyKey: "same-guarded-key",
+      beforeRequest: (fingerprint: string) =>
+        Effect.suspend(() => {
+          pinned ??= fingerprint;
+          return fingerprint === pinned ? Effect.void : Effect.fail(refused);
+        }),
+    };
+
+    const error = await runProvider(
+      Effect.gen(function* () {
+        const original = yield* resendProvider;
+        yield* original.sendBatch([message], options);
+        const timeouts = yield* deploymentResendRequestTimeouts;
+        const rotated = makeResendEmailProvider({
+          apiKey: "rotated-test-key",
+          timeouts,
+        });
+        return yield* rotated.sendBatch([message], options).pipe(Effect.flip);
+      })
+    );
+
+    expect(error).toBe(refused);
+    expect(batchSend).toHaveBeenCalledTimes(1);
   });
 
   for (const row of [

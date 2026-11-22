@@ -173,6 +173,7 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
             send: input.content
               ? {
                   ...send,
+                  guarded: true,
                   campaign: { ...send.campaign, content: input.content },
                 }
               : send,

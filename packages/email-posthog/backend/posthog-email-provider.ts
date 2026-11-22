@@ -325,6 +325,11 @@ const isRetryableAnswer = (failure: PostHogSendAttemptFailure) =>
   (failure.status === 409 && failure.code === "idempotency_key_in_flight") ||
   (failure.status !== undefined && failure.status >= 500);
 
+const attemptMayHaveQueued = (failure: PostHogSendAttemptFailure) =>
+  failure.kind !== "answered" ||
+  (failure.status !== undefined && failure.status >= 500) ||
+  (failure.status === 409 && failure.code === "idempotency_key_in_flight");
+
 const SendAnswerSchema = Schema.Struct({ message_id: EmailDeliveryIdSchema });
 
 const requestSend = ({
@@ -408,6 +413,7 @@ const requestSend = ({
 
     // Once PostHog answered 2xx, a body that fails or times out leaves the
     // email possibly queued, so the attempt is not retried or handed on.
+    let mayHaveQueued = false;
     const attempt = Effect.gen(function* () {
       const accepted = yield* Ref.make(false);
       yield* admit;
@@ -423,6 +429,11 @@ const requestSend = ({
                 : failure
             )
           )
+        ),
+        Effect.tapError((failure) =>
+          Effect.sync(() => {
+            if (beforeRequest) mayHaveQueued ||= attemptMayHaveQueued(failure);
+          })
         )
       );
     });
@@ -442,11 +453,20 @@ const requestSend = ({
           maxRequestedDelay: postHogEmailMaxRetryAfter,
         }
       ),
-      Effect.mapError((failure) =>
-        failure._tag === "PostHogSendAttemptFailure"
-          ? toEmailSendError(failure)
-          : failure
-      )
+      Effect.mapError((failure) => {
+        const error =
+          failure._tag === "PostHogSendAttemptFailure"
+            ? toEmailSendError(failure)
+            : failure;
+        return mayHaveQueued && error.failureKind !== "unknown-outcome"
+          ? new NetworkError({
+              message:
+                "An earlier guarded PostHog request may have queued the email",
+              code: error.code,
+              failureKind: "unknown-outcome",
+            })
+          : error;
+      })
     );
 
     const answer = yield* Schema.decodeEffect(

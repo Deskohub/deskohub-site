@@ -85,6 +85,17 @@ const snapshotOf = (candidate: PassReminderCandidate): PassReminderContext => {
       };
 };
 
+const decodeCurrentSnapshot = (candidate: PassReminderCandidate) => {
+  const snapshot = snapshotOf(candidate);
+  if (snapshot.product === "entry-pack") {
+    return decodePassReminderContext(snapshot);
+  }
+  const { deskLabel, ...withoutDeskLabel } = snapshot;
+  return Option.orElse(decodePassReminderContext(snapshot), () =>
+    decodePassReminderContext(withoutDeskLabel)
+  );
+};
+
 const firstNameOf = (profile: DotyposCustomer | undefined) =>
   profile?.firstName?.trim() || undefined;
 
@@ -127,7 +138,7 @@ export const makePassReminderDelivery = Effect.gen(function* () {
       (context.value.product === "entry-pack"
         ? run.triggerKind !== "entry-pack-expiring"
         : run.triggerKind !== "unlimited-ending") ||
-      !(yield* gate.isOpen)
+      !(yield* gate.decision)
     ) {
       return Option.none<PassReminderCandidate>();
     }
@@ -155,7 +166,7 @@ export const makePassReminderDelivery = Effect.gen(function* () {
       Effect.map(
         Option.flatMap((candidate) =>
           Option.map(
-            decodePassReminderContext(snapshotOf(candidate)),
+            decodeCurrentSnapshot(candidate),
             (snapshot): PreparedPassReminder => ({
               passId: candidate.passId,
               snapshot,
@@ -168,15 +179,7 @@ export const makePassReminderDelivery = Effect.gen(function* () {
   const profilesFor = (batch: PersistedBatch) =>
     dotypos
       .getCustomersByIds(batch.dotyposCustomerIds, { concurrency: 1 })
-      .pipe(
-        Effect.mapError(
-          () =>
-            new CampaignDeliveryIncomplete({
-              sendId: batch.sendId,
-              deliveryAttempt: batch.deliveryAttempt,
-            })
-        )
-      );
+      .pipe(Effect.mapError(() => incompleteRequest(batch)));
 
   const guard = (input: {
     readonly run: PassReminderRun;
@@ -188,7 +191,11 @@ export const makePassReminderDelivery = Effect.gen(function* () {
       const id = input.run.dotyposCustomerId;
       const expected = input.profiles.get(id);
       const profiles = yield* profilesFor(input.batch);
-      const candidate = yield* readCurrent(input.run);
+      const candidate = yield* readCurrent(input.run).pipe(
+        Effect.catchTag("ReleaseGateUnavailableError", () =>
+          incompleteRequest(input.batch)
+        )
+      );
       if (Option.isNone(candidate)) return withdrawn;
       const consenting = yield* consentingCampaignCustomers({
         db,
@@ -230,7 +237,7 @@ export const makePassReminderDelivery = Effect.gen(function* () {
         BatchRequest.Guarded({
           batch,
           claim: input.claim,
-          mode: Option.isSome(input.profiles) ? "first" : "replay",
+          failureCodeOnStalePayload: passReminderWithdrawnCode,
           prepare: Effect.gen(function* () {
             const { triggerPassId, locale, dotyposCustomerId } = input.run;
             const snapshot = decodePassReminderContext(
@@ -266,3 +273,6 @@ export const makePassReminderDelivery = Effect.gen(function* () {
 
   return { prepare, request };
 });
+
+const incompleteRequest = ({ sendId, deliveryAttempt }: PersistedBatch) =>
+  new CampaignDeliveryIncomplete({ sendId, deliveryAttempt });

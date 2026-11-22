@@ -700,6 +700,48 @@ describe("PostHog email batches", () => {
     });
   });
 
+  test("keeps a guarded request unknown when a retry refuses an earlier ambiguous POST", async () => {
+    const fake = makeFakePostHog((index) =>
+      index === 0 ? { fails: "network" } : refused(422, "recipient_suppressed")
+    );
+    const { exit } = await runAgainst(
+      fake,
+      provider.sendBatch([batchMessage(0)], {
+        idempotencyKey: "guarded-uncertain",
+        beforeRequest: () => Effect.void,
+      }),
+      production
+    );
+    expect(fake.requests).toHaveLength(2);
+    expect(successOf(exit)[0]).toMatchObject({
+      status: "failed",
+      error: { _tag: "NetworkError", failureKind: "unknown-outcome" },
+    });
+  });
+
+  test("interrupts an admission check at the batch deadline before any POST", async () => {
+    const fake = makeFakePostHog(() => accepted("unexpected-id"));
+    let interrupted = false;
+    const { exit } = await runAgainst(
+      fake,
+      provider.sendBatch([batchMessage(0)], {
+        idempotencyKey: "guarded-deadline",
+        beforeRequest: () =>
+          Effect.never.pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                interrupted = true;
+              })
+            )
+          ),
+      }),
+      production
+    );
+    expect(fake.requests).toHaveLength(0);
+    expect(interrupted).toBe(true);
+    expect(successOf(exit)[0]).toMatchObject({ status: "failed" });
+  });
+
   test("the request fingerprint covers the actual PostHog recipient identity", async () => {
     const fingerprints: string[] = [];
     const fake = makeFakePostHog(() => accepted("accepted-id"));

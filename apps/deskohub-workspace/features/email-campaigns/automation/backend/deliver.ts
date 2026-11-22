@@ -309,6 +309,13 @@ export const makeDeliverHandler = Effect.gen(function* () {
       ),
       Effect.catchIf(isDatabaseQueryError, (cause) =>
         Effect.fail(new AutomationUnitFetchFailure({ code: "database", cause }))
+      ),
+      Effect.catchTag(
+        "ReleaseGateUnavailableError",
+        () =>
+          new AutomationUnitFetchFailure({
+            code: "pass-reminder-gate-unavailable",
+          })
       )
     );
 

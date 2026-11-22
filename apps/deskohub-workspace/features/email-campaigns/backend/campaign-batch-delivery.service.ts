@@ -102,6 +102,7 @@ export type DeliveredCampaign = {
 /** An attempt with the campaign email it mails. */
 export type DeliveredAttempt = CampaignDeliveryAttempt & {
   readonly campaign: DeliveredCampaign;
+  readonly guarded?: true;
 };
 
 /** A frozen recipient a batch may carry. */
@@ -121,6 +122,8 @@ export type BatchRequestClaim = {
 type BatchRequestAdmission = {
   readonly guard: BatchRequestGuard;
   readonly claim: BatchRequestClaim;
+  readonly preparedHash: string;
+  readonly failureCodeOnStalePayload: string;
 };
 
 /** A rejected admission check proves nothing was attempted at that boundary. */
@@ -199,8 +202,8 @@ export type BatchRequest = Data.TaggedEnum<{
   };
   Guarded: {
     readonly batch: PersistedBatch;
-    readonly mode: BatchRequestMode;
     readonly claim: BatchRequestClaim;
+    readonly failureCodeOnStalePayload: string;
     readonly prepare: Effect.Effect<
       Option.Option<{
         readonly send: DeliveredAttempt;
@@ -541,7 +544,7 @@ export class CampaignBatchDelivery extends Context.Service<
             insertBatch({
               attempt: send,
               reachable,
-              payloadHash: campaignDeliveryPayloadHash(messages),
+              payloadHash: `${send.guarded ? guardedPayloadPrefix : ""}${campaignDeliveryPayloadHash(messages)}`,
               at,
             }).pipe(Effect.when(Effect.succeed(reachable.length > 0))),
           Unrendered: ({ send, reachable }) =>
@@ -747,10 +750,20 @@ export class CampaignBatchDelivery extends Context.Service<
                 Effect.as({ send, profiles: Option.none<BatchProfiles>() })
               ),
             }),
-          Guarded: ({ batch, mode, claim, prepare }) =>
-            requestReproduced({
+          Guarded: ({ batch, claim, prepare, failureCodeOnStalePayload }) => {
+            const [, preparedHash, providerHash] =
+              /^guarded-v1:([a-f0-9]{64})(?::([a-f0-9]{64}))?$/.exec(
+                batch.payloadHash
+              ) ?? [];
+            if (preparedHash === undefined) {
+              return Effect.succeed(
+                BatchOutcome.Unconfirmed({ reason: "payload-changed" })
+              );
+            }
+            return requestReproduced({
               batch,
-              mode,
+              mode: providerHash === undefined ? "first" : "replay",
+              failureCodeOnStalePayload,
               prepare: prepare.pipe(
                 Effect.flatMap(
                   Option.match({
@@ -759,12 +772,18 @@ export class CampaignBatchDelivery extends Context.Service<
                       Effect.succeed({
                         send,
                         profiles: Option.some(profiles),
-                        admission: { guard, claim },
+                        admission: {
+                          guard,
+                          claim,
+                          preparedHash,
+                          failureCodeOnStalePayload,
+                        },
                       }),
                   })
                 )
               ),
-            }),
+            });
+          },
         });
       });
 
@@ -776,6 +795,7 @@ export class CampaignBatchDelivery extends Context.Service<
       const requestReproduced = (input: {
         readonly batch: PersistedBatch;
         readonly mode: BatchRequestMode;
+        readonly failureCodeOnStalePayload?: string;
         readonly prepare: Effect.Effect<
           {
             readonly send: DeliveredAttempt;
@@ -792,9 +812,7 @@ export class CampaignBatchDelivery extends Context.Service<
               send,
               batch: input.batch,
               profiles,
-              payloadHash: admission
-                ? preparedPayloadHash(input.batch)
-                : input.batch.payloadHash,
+              payloadHash: admission?.preparedHash ?? input.batch.payloadHash,
             }).pipe(
               Effect.flatMap((messages) =>
                 sendBatch({
@@ -806,12 +824,20 @@ export class CampaignBatchDelivery extends Context.Service<
               )
             )
           ),
-          Effect.catchTag("UnreplayableBatch", ({ reason }) =>
-            Effect.logWarning("Campaign delivery batch unconfirmed", {
+          Effect.catchTag("UnreplayableBatch", ({ reason }) => {
+            if (input.mode === "first" && input.failureCodeOnStalePayload) {
+              return Effect.succeed(
+                BatchOutcome.Refused({
+                  request: "first",
+                  failureCode: input.failureCodeOnStalePayload,
+                })
+              );
+            }
+            return Effect.logWarning("Campaign delivery batch unconfirmed", {
               batchIndex: input.batch.batchIndex,
               reason,
-            }).pipe(Effect.as(BatchOutcome.Unconfirmed({ reason })))
-          )
+            }).pipe(Effect.as(BatchOutcome.Unconfirmed({ reason })));
+          })
         );
 
       const ensureReplayWindow = (batch: PersistedBatch) =>
@@ -925,6 +951,28 @@ export class CampaignBatchDelivery extends Context.Service<
           )
         );
 
+      const checkGuardedRecipientIdentity = Effect.fn(
+        "CampaignBatchDelivery.checkGuardedRecipientIdentity"
+      )(function* (
+        input: {
+          readonly batch: PersistedBatch;
+          readonly messages: readonly EmailMessage[];
+        },
+        prepared: readonly EmailMessage[],
+        admission: BatchRequestAdmission
+      ) {
+        const eligibility = yield* admission.guard;
+        if (eligibility !== true) return eligibility;
+
+        const current = yield* withRecipientIdentities(input);
+        return current.every(
+          (message, index) =>
+            message.recipientIdentity === prepared[index]?.recipientIdentity
+        )
+          ? (true as const)
+          : { failureCode: admission.failureCodeOnStalePayload };
+      });
+
       /**
        * Sends a persisted batch under its key, once. An unknown outcome
        * fails, leaving the batch `requested` for a replay.
@@ -967,13 +1015,19 @@ export class CampaignBatchDelivery extends Context.Service<
             Effect.flatMap((messages) =>
               admission
                 ? requestGuardedBatch({
+                    batch: input.batch,
                     mode: input.request,
-                    guard: admission.guard,
+                    guard: checkGuardedRecipientIdentity(
+                      input,
+                      messages,
+                      admission
+                    ),
                     pin: (fingerprint) =>
                       pinProviderRequest({
                         batch: input.batch,
                         mode: input.request,
                         claim: admission.claim,
+                        preparedHash: admission.preparedHash,
                         fingerprint,
                       }),
                     request: (beforeRequest) =>
@@ -1018,10 +1072,11 @@ export class CampaignBatchDelivery extends Context.Service<
         readonly batch: PersistedBatch;
         readonly mode: BatchRequestMode;
         readonly claim: BatchRequestClaim;
+        readonly preparedHash: string;
         readonly fingerprint: string;
       }) {
         const { batch, claim, fingerprint, mode } = input;
-        const prepared = preparedPayloadHash(batch);
+        const prepared = `${guardedPayloadPrefix}${input.preparedHash}`;
         const pinned = `${prepared}:${fingerprint}`;
         const acceptedHashes = mode === "first" ? [prepared, pinned] : [pinned];
         if (!acceptedHashes.includes(batch.payloadHash)) return false;
@@ -1219,8 +1274,7 @@ export class CampaignBatchDelivery extends Context.Service<
   );
 }
 
-const preparedPayloadHash = (batch: PersistedBatch) =>
-  batch.payloadHash.split(":", 1)[0] ?? "";
+const guardedPayloadPrefix = "guarded-v1:";
 
 /**
  * The guard runs again for provider retries. Once any attempt
@@ -1228,6 +1282,7 @@ const preparedPayloadHash = (batch: PersistedBatch) =>
  */
 const requestGuardedBatch = Effect.fn("CampaignBatchDelivery.requestGuarded")(
   function* (input: {
+    readonly batch: PersistedBatch;
     readonly mode: BatchRequestMode;
     readonly guard: BatchRequestGuard;
     readonly pin: (
@@ -1247,44 +1302,60 @@ const requestGuardedBatch = Effect.fn("CampaignBatchDelivery.requestGuarded")(
     >(undefined);
     const beforeRequest = Effect.fn(
       "CampaignBatchDelivery.beforeProviderRequest"
-    )(function* (fingerprint: string) {
-      const verdict = yield* Effect.result(
-        Effect.gen(function* () {
-          const current = yield* input.guard;
-          if (current !== true) return current;
-          const pinned = yield* input.pin(fingerprint);
-          return pinned ? (true as const) : ("request-changed" as const);
-        })
-      );
-      if (Result.isFailure(verdict)) {
-        yield* Ref.set(denial, Result.fail(verdict.failure));
-      } else if (verdict.success === true) {
-        yield* Ref.set(admitted, true);
-        return;
-      } else if (verdict.success === "request-changed") {
-        yield* Ref.set(
-          denial,
-          Result.succeed(
-            BatchOutcome.Unconfirmed({ reason: "payload-changed" })
-          )
+    )(
+      function* (fingerprint: string) {
+        const verdict = yield* Effect.result(
+          Effect.gen(function* () {
+            const current = yield* input.guard;
+            if (current !== true) return current;
+            const pinned = yield* input.pin(fingerprint);
+            return pinned ? (true as const) : ("request-changed" as const);
+          })
         );
-      } else {
-        const attempted = yield* Ref.get(admitted);
-        const refusal =
-          "skipReason" in verdict.success
-            ? BatchOutcome.Skipped({ reason: verdict.success.skipReason })
-            : BatchOutcome.Refused({
-                request: "first",
-                failureCode: verdict.success.failureCode,
-              });
-        const outcome =
-          input.mode === "replay" || attempted
-            ? BatchOutcome.Unconfirmed({ reason: "payload-changed" })
-            : refusal;
-        yield* Ref.set(denial, Result.succeed(outcome));
-      }
-      return yield* new EmailServiceError("Email request admission failed");
-    });
+        if (Result.isFailure(verdict)) {
+          yield* Ref.set(denial, Result.fail(verdict.failure));
+        } else if (verdict.success === true) {
+          yield* Ref.set(admitted, true);
+          return;
+        } else if (verdict.success === "request-changed") {
+          yield* Ref.set(
+            denial,
+            Result.succeed(
+              BatchOutcome.Unconfirmed({ reason: "payload-changed" })
+            )
+          );
+        } else {
+          const attempted = yield* Ref.get(admitted);
+          const refusal =
+            "skipReason" in verdict.success
+              ? BatchOutcome.Skipped({ reason: verdict.success.skipReason })
+              : BatchOutcome.Refused({
+                  request: "first",
+                  failureCode: verdict.success.failureCode,
+                });
+          const outcome =
+            input.mode === "replay" || attempted
+              ? BatchOutcome.Unconfirmed({ reason: "payload-changed" })
+              : refusal;
+          yield* Ref.set(denial, Result.succeed(outcome));
+        }
+        return yield* new EmailServiceError("Email request admission failed");
+      },
+      (effect) =>
+        effect.pipe(
+          Effect.onInterrupt(() =>
+            Ref.set(
+              denial,
+              Result.fail(
+                new CampaignDeliveryIncomplete({
+                  sendId: input.batch.sendId,
+                  deliveryAttempt: input.batch.deliveryAttempt,
+                })
+              )
+            )
+          )
+        )
+    );
     const outcome = yield* Effect.result(input.request(beforeRequest));
     const denied = yield* Ref.get(denial);
     if (denied !== undefined) return yield* Effect.fromResult(denied);

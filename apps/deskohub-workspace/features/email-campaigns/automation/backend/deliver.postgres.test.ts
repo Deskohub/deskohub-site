@@ -1,10 +1,11 @@
 import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import { DotyposCustomerIdSchema, DotyposUnavailable } from "@deskohub/dotypos";
 import type { EmailProviderFakeResponse } from "@deskohub/email/testing";
 import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
+import { TestClock } from "effect/testing";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { orderIdSchema } from "@/features/order";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
@@ -97,7 +98,8 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
 
   const seedPassReminder = async (
     kind: "entry-pack" | "unlimited" = "entry-pack",
-    count = 1
+    count = 1,
+    deskLabel?: string
   ) => {
     const customer = customerId(crypto.randomUUID());
     const account = customerAccountIdSchema.make(crypto.randomUUID());
@@ -174,24 +176,48 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
       }))
     );
     let gateOpen = true;
+    const passReads = PassReminderReads.Default.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          database.layer,
+          Layer.mock(AdvisoryAvailabilityInventory, {
+            tables: Effect.succeed([]),
+          })
+        )
+      )
+    );
+    const passReadsWithLabel = Layer.effect(
+      PassReminderReads,
+      Effect.map(PassReminderReads, (reads) =>
+        PassReminderReads.of({
+          ...reads,
+          readDue: (input) =>
+            reads
+              .readDue(input)
+              .pipe(
+                Effect.map(
+                  Option.map((candidate) =>
+                    deskLabel !== undefined &&
+                    candidate.kind === "unlimited" &&
+                    input.includeDeskLabel
+                      ? { ...candidate, deskLabel }
+                      : candidate
+                  )
+                )
+              ),
+        })
+      )
+    ).pipe(Layer.provide(passReads));
     const engine = await setUp({
       customers: [deliverProfile(customer, { firstName: "Synthetic Holder" })],
-      passReminderReads: PassReminderReads.Default.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            database.layer,
-            Layer.mock(AdvisoryAvailabilityInventory, {
-              tables: Effect.succeed([]),
-            })
-          )
-        )
-      ),
+      passReminderReads: passReadsWithLabel,
       passReminderGate: CoworkPassesReleaseGate.fromEvaluation(
         Effect.sync(() => gateOpen)
       ),
     });
     return {
       ...seeded,
+      account,
       customer,
       email,
       passIds,
@@ -245,16 +271,86 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
     }
   });
 
-  test("Unlimited reminders link back to the pass renewal checkout", async () => {
+  test("Unlimited reminders budget the advisory read and omit an overlong desk label", async () => {
+    const deskLabel = "x".repeat(121);
     const {
+      campaignId,
       engine,
       passIds: [passId],
-    } = await seedPassReminder("unlimited");
-    await engine.tick(startedAt);
+    } = await seedPassReminder("unlimited", 1, deskLabel);
+    await engine.planOnly(startedAt);
+    const {
+      rows: [planned],
+    } = await pool.query(
+      "select request_cost from email_campaign_automation_work_units where campaign_id = $1",
+      [campaignId]
+    );
+    expect(planned?.request_cost).toBe(2);
+    await engine.drain(startedAt);
     const [request] = engine.resend.requests();
     expect(request?.payload).toContain(
       getWorkspaceCanonicalUrl(getUnlimitedRenewalPath("en-US", passId!))
     );
+    expect(request?.payload).not.toContain(deskLabel);
+  });
+
+  test("resumes a first provider request after a temporary admission read failure", async () => {
+    const { campaignId, customer, engine } = await seedPassReminder();
+    engine.dotypos.onRequest(({ method }) =>
+      method === "getCustomersByIds" &&
+      engine.dotypos.calls.getCustomersByIds === 2
+        ? new DotyposUnavailable({
+            operation: method,
+            reason: "server",
+            httpStatus: 503,
+          })
+        : Effect.void
+    );
+    await engine.tick(startedAt);
+    expect(engine.dotypos.calls.getCustomersByIds).toBeGreaterThanOrEqual(4);
+    expect(engine.resend.requests()).toHaveLength(1);
+    expect(outcomesOf(await runsOf(campaignId))).toEqual({
+      [customer]: ["ended", "sent", null],
+    });
+  });
+
+  test("stops a prepared provider request when its analytics identity is withdrawn", async () => {
+    const { account, campaignId, customer, engine } = await seedPassReminder();
+    const recordAnalyticsDecision = (
+      decision: "grant" | "withdraw",
+      decidedAt: string
+    ) =>
+      pool.query(
+        `insert into account_analytics_consent_decisions
+           (account_id, decision, document_hash, locale, decided_at, source)
+         values ($1, $2, 'hash', 'en-US', $3, 'preference')`,
+        [account, decision, decidedAt]
+      );
+    await recordAnalyticsDecision("grant", "2026-10-19T09:00:00Z");
+    engine.resend.beforeEachRequest(async () => {
+      await recordAnalyticsDecision("withdraw", "2026-10-19T10:00:00Z");
+    });
+    await engine.tick(startedAt);
+    expect(engine.resend.requests()).toEqual([]);
+    expect(outcomesOf(await runsOf(campaignId))).toEqual({
+      [customer]: ["ended", "withdrawn", null],
+    });
+  });
+
+  test("withdraws an Entry Pack that expires while its first request is being checked", async () => {
+    const { campaignId, customer, engine } = await seedPassReminder();
+    engine.dotypos.onRequest(({ method }) =>
+      method === "getCustomersByIds" &&
+      engine.dotypos.calls.getCustomersByIds === 2
+        ? TestClock.adjust("2 seconds")
+        : Effect.void
+    );
+    // One second before midnight in Prague, after the change back to CET.
+    await engine.tick(Temporal.Instant.from("2026-10-26T22:59:59Z"));
+    expect(engine.resend.requests()).toEqual([]);
+    expect(outcomesOf(await runsOf(campaignId))).toEqual({
+      [customer]: ["ended", "withdrawn", null],
+    });
   });
 
   test.each(["holder", "consent", "gate", "test-domain"] as const)(
@@ -331,7 +427,8 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
         const [unit] = await unitsOf(campaignId);
         await pool.query(
           `update email_campaign_delivery_batches
-             set payload_hash = split_part(payload_hash, ':', 1) || ':' || repeat('0', 64)
+             set payload_hash = split_part(payload_hash, ':', 1) || ':' ||
+               split_part(payload_hash, ':', 2) || ':' || repeat('0', 64)
            where send_id = $1`,
           [unit?.send_id]
         );
