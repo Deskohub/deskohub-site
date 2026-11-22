@@ -1,5 +1,8 @@
 import { handleWorkspaceAdminApiRequest } from "@/features/admin-cli/workspace-admin-api.server";
-import { defineWorkspaceHttpApiRoute } from "@/shared/backend/workspace-http-api-route";
+import {
+  continueMutationsAfterDisconnect,
+  defineWorkspaceHttpApiRoute,
+} from "@/shared/backend/workspace-http-api-route";
 
 export const GET = defineWorkspaceHttpApiRoute(
   {
@@ -8,7 +11,7 @@ export const GET = defineWorkspaceHttpApiRoute(
     caller: "client",
     failureMessage: "The administration API request could not be completed.",
   },
-  (request) => handleWorkspaceAdminApiRequest(request)
+  handleWorkspaceAdminApiRequest
 );
 
 const workspaceAdminApiMutationRoute = defineWorkspaceHttpApiRoute(
@@ -18,7 +21,7 @@ const workspaceAdminApiMutationRoute = defineWorkspaceHttpApiRoute(
     caller: "client",
     failureMessage: "The administration API request could not be completed.",
   },
-  (request) => handleWorkspaceAdminApiRequest(request)
+  continueMutationsAfterDisconnect(handleWorkspaceAdminApiRequest)
 );
 
 export {

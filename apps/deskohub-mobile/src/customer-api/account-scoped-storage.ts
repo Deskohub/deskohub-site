@@ -2,8 +2,10 @@ import { Context, Effect, Layer, Option, type Scope, Semaphore } from "effect";
 import { CustomerAccountScope } from "./customer-api.service";
 import {
   type DeviceCapabilities,
-  type DeviceCapabilityFailed,
+  DeviceCapabilityFailed,
+  DeviceOnboardingDraft,
   DeviceStorage,
+  type OnboardingDraftOwner,
   TemporaryFiles,
 } from "./device-capabilities";
 
@@ -37,7 +39,33 @@ export const isAccountStorageKey = (key: string, accountId: string) =>
 export interface AccountSession {
   readonly accountId: string;
   readonly sessionStartedAt: number;
+  readonly sessionId?: string | undefined;
 }
+
+const sameDraftOwner = (
+  left: OnboardingDraftOwner,
+  right: OnboardingDraftOwner
+) =>
+  left.accountId === right.accountId &&
+  left.apiOrigin === right.apiOrigin &&
+  left.sessionId === right.sessionId;
+
+// Called with the account exit lock held.
+export const clearDeviceOnboardingDraft = (
+  storage: DeviceOnboardingDraft["Service"],
+  shouldClear: (owner: OnboardingDraftOwner) => Effect.Effect<boolean>
+) =>
+  storage.read.pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: (owner) =>
+          storage.clear.pipe(Effect.when(shouldClear(owner)), Effect.asVoid),
+      })
+    ),
+    Effect.retry({ times: 1 }),
+    Effect.ignore({ log: "Warn", message: "Couldn't erase onboarding draft" })
+  );
 
 interface IAccountExitFence {
   /**
@@ -60,6 +88,9 @@ interface IAccountExitFence {
    * session of the account has opened.
    */
   readonly close: (session: AccountSession) => Effect.Effect<boolean>;
+  readonly pauseOnboarding: (sessionId: string) => Effect.Effect<void>;
+  readonly resumeOnboarding: (sessionId: string) => Effect.Effect<void>;
+  readonly onboardingPaused: (sessionId: string) => Effect.Effect<boolean>;
   /** Accounts with a session whose storage is open. */
   readonly openAccounts: Effect.Effect<ReadonlySet<string>>;
   /**
@@ -115,6 +146,7 @@ export const makeAccountExitFence = (): IAccountExitFence => {
   // them. Every live temporary file is held from its write to its removal,
   // so with none held, anything left is a leftover any sweep may remove.
   const heldFiles = new Set<string>();
+  const pausedDrafts = new Set<string>();
   let sweepWaiting = false;
   const lock = Semaphore.makeUnsafe(1);
   return {
@@ -145,6 +177,15 @@ export const makeAccountExitFence = (): IAccountExitFence => {
         state.open = undefined;
         return true;
       }),
+    pauseOnboarding: (id) =>
+      Effect.sync(() => {
+        pausedDrafts.add(id);
+      }),
+    resumeOnboarding: (id) =>
+      Effect.sync(() => {
+        pausedDrafts.delete(id);
+      }),
+    onboardingPaused: (id) => Effect.sync(() => pausedDrafts.has(id)),
     openAccounts: Effect.sync(
       () =>
         new Set(
@@ -187,6 +228,14 @@ interface IAccountScopedStorage {
   readonly removeItem: (
     name: string
   ) => Effect.Effect<void, DeviceCapabilityFailed>;
+  readonly restoreOnboardingDraft: (
+    sessionId?: string
+  ) => Effect.Effect<Option.Option<string>, DeviceCapabilityFailed>;
+  readonly saveOnboardingDraft: (
+    draft: string,
+    sessionId?: string
+  ) => Effect.Effect<void>;
+  readonly completeOnboardingDraft: (sessionId?: string) => Effect.Effect<void>;
   /**
    * A new temporary file for the share sheet, in the account's own folder,
    * for the scope's lifetime: no exit removes it before the scope closes,
@@ -217,6 +266,9 @@ export class AccountScopedStorage extends Context.Service<
     this,
     Effect.Do.pipe(
       Effect.bind("storage", () => Effect.service(DeviceStorage)),
+      Effect.bind("onboardingDraft", () =>
+        Effect.service(DeviceOnboardingDraft)
+      ),
       Effect.bind("temporaryFiles", () => Effect.service(TemporaryFiles)),
       Effect.bind("fence", () => Effect.service(AccountExitFence)),
       Effect.bind("scope", () => Effect.service(CustomerAccountScope)),
@@ -228,6 +280,7 @@ export class AccountScopedStorage extends Context.Service<
 
 interface FencedStorageInput {
   readonly storage: DeviceStorage["Service"];
+  readonly onboardingDraft: DeviceOnboardingDraft["Service"];
   readonly temporaryFiles: TemporaryFiles["Service"];
   readonly fence: AccountExitFence["Service"];
   readonly scope: CustomerAccountScope["Service"];
@@ -235,10 +288,14 @@ interface FencedStorageInput {
 
 const fencedStorageOf = ({
   storage,
+  onboardingDraft,
   temporaryFiles,
   fence,
   scope,
 }: FencedStorageInput): IAccountScopedStorage => {
+  let onboardingCompleted = false;
+  const currentDraftId =
+    scope.onboardingSession ?? Effect.succeed(String(scope.sessionStartedAt));
   // Runs alone and uninterruptibly (a device write lands either way), and
   // only while this session is current.
   const whileCurrent = <A, E>(
@@ -275,7 +332,117 @@ const fencedStorageOf = ({
       ),
       Effect.map((prefixed) => accountStorageKey(prefixed, scope))
     );
+  const withDraftOwner = <A, E>(
+    operation: (owner: OnboardingDraftOwner) => Effect.Effect<A, E>,
+    otherwise: A
+  ) =>
+    whileCurrent(
+      currentDraftId.pipe(
+        Effect.flatMap((id) =>
+          id === undefined
+            ? Effect.succeed(otherwise)
+            : operation({
+                accountId: scope.accountId,
+                apiOrigin: scope.apiOrigin,
+                sessionStartedAt: scope.sessionStartedAt,
+                sessionId: id,
+              }).pipe(
+                Effect.when(
+                  fence
+                    .onboardingPaused(id)
+                    .pipe(Effect.map((paused) => !paused))
+                ),
+                Effect.map(Option.getOrElse(() => otherwise))
+              )
+        )
+      ),
+      otherwise
+    );
+  const matchesSession = (
+    owner: OnboardingDraftOwner,
+    expected: string | undefined
+  ) => scope.onboardingSession === undefined || owner.sessionId === expected;
+
+  const staleDraftOwner = (owner: OnboardingDraftOwner) =>
+    owner.apiOrigin !== scope.apiOrigin || owner.accountId === scope.accountId
+      ? Effect.succeed(true)
+      : fence.isCurrent(owner).pipe(Effect.map((current) => !current));
+
   return {
+    restoreOnboardingDraft: (id) =>
+      withDraftOwner(
+        (draftOwner) =>
+          matchesSession(draftOwner, id)
+            ? onboardingDraft.read.pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.succeedNone,
+                    onSome: (
+                      entry
+                    ): Effect.Effect<
+                      Option.Option<string>,
+                      DeviceCapabilityFailed
+                    > =>
+                      sameDraftOwner(entry, draftOwner)
+                        ? Effect.succeed(
+                            onboardingCompleted
+                              ? Option.none()
+                              : Option.some(entry.draft)
+                          )
+                        : onboardingDraft.clear.pipe(
+                            Effect.when(staleDraftOwner(entry)),
+                            Effect.as(Option.none())
+                          ),
+                  })
+                ),
+                Effect.asSome
+              )
+            : Effect.succeedNone,
+        Option.none()
+      ).pipe(
+        Effect.flatMap(
+          Option.match({
+            // A session that cannot read the slot has not found it empty.
+            onNone: () =>
+              Effect.fail(
+                new DeviceCapabilityFailed({ capability: "storage" })
+              ),
+            onSome: Effect.succeed,
+          })
+        )
+      ),
+    saveOnboardingDraft: (draft, id) =>
+      withDraftOwner(
+        (draftOwner) =>
+          onboardingCompleted || !matchesSession(draftOwner, id)
+            ? Effect.void
+            : onboardingDraft.write({ ...draftOwner, draft }).pipe(
+                Effect.retry({ times: 1 }),
+                Effect.ignore({
+                  log: "Warn",
+                  message: "Couldn't save onboarding draft",
+                })
+              ),
+        undefined
+      ),
+    completeOnboardingDraft: (id) =>
+      withDraftOwner(
+        (draftOwner) =>
+          matchesSession(draftOwner, id)
+            ? Effect.sync(() => {
+                onboardingCompleted = true;
+              }).pipe(
+                Effect.andThen(
+                  clearDeviceOnboardingDraft(onboardingDraft, (owner) =>
+                    sameDraftOwner(owner, draftOwner)
+                      ? Effect.succeed(true)
+                      : staleDraftOwner(owner)
+                  )
+                )
+              )
+            : Effect.void,
+        undefined
+      ),
     getItem: (name) =>
       Effect.flatMap(keyOf(name), (key) =>
         whileCurrent(storage.getItem(key), Option.none())

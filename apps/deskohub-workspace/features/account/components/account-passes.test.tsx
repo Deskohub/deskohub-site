@@ -121,6 +121,7 @@ test("renders a held Unlimited pass with its assigned desk and purchase date", a
     seating: { kind: "assigned", name: "Desk 14" },
     status: "active",
     day: 8,
+    totalDays: 30,
     daysLeft: 23,
     accessPath: `/en-US/reservation/access/${orderId}`,
   };
@@ -141,6 +142,38 @@ test("renders a held Unlimited pass with its assigned desk and purchase date", a
   expect(markup).toContain("Desk 14");
   expect(markup).toContain("Bought Oct 31, 2026");
   expect(markup).toContain(`href="${pass.accessPath}"`);
+});
+
+test("uses the adjusted Unlimited term for the day label and remaining meter segments", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const markup = await new Response(
+    await renderToReadableStream(
+      <UnsavedChangesProvider>
+        <AccountPassesPanel
+          locale="en-US"
+          packs={Promise.resolve({ held: [], boughtForOthers: [] })}
+          unlimitedPasses={[
+            {
+              orderId,
+              tier: "Open Space",
+              boughtForYou: false,
+              period: "Nov 1 – Dec 2, 2026",
+              seating: { kind: "shared" },
+              status: "active",
+              day: 31,
+              totalDays: 32,
+              daysLeft: 2,
+              accessPath: `/en-US/reservation/access/${orderId}`,
+            },
+          ]}
+        />
+      </UnsavedChangesProvider>
+    )
+  ).text();
+
+  expect(markup).toContain("Day 31 of 32");
+  expect(markup).toContain("2 days left, including today");
+  expect(markup.match(/min-w-0 flex-1 rounded-full/g)).toHaveLength(32);
 });
 
 test("shows a lookup failure when Entry Packs loaded empty and Unlimited did not load", async () => {

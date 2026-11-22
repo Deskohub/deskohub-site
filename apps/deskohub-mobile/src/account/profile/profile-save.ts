@@ -20,6 +20,11 @@ import {
   toCustomerViewError,
 } from "../../customer-api/customer-view-error";
 import {
+  clearStoredCompletionEdits,
+  completionEditsAtom,
+  onboardingSessionIdAtom,
+} from "../onboarding/onboarding-edits";
+import {
   type CompletionDraft,
   type CompletionTextField,
   completionDraftOf,
@@ -187,11 +192,6 @@ export const saveProfileAtom = customerDataRuntime
   )
   .pipe(Atom.keepAlive);
 
-/** The completion form's own draft; the account has no profile yet. */
-export const completionEditsAtom = Atom.make(
-  Option.none<CompletionDraft>()
-).pipe(Atom.keepAlive);
-
 /**
  * What a completion submits: the draft, the code it was prefilled with, and
  * the region its phone is read in.
@@ -208,8 +208,9 @@ export interface ProfileCompletion {
  * code's outcome when one was submitted.
  */
 export const completeProfileAtom = customerDataRuntime
-  .fn(({ draft, invitationCode, phoneRegion }: ProfileCompletion, get) =>
-    Effect.fromResult(
+  .fn(({ draft, invitationCode, phoneRegion }: ProfileCompletion, get) => {
+    const sessionId = get.registry.get(onboardingSessionIdAtom);
+    return Effect.fromResult(
       validateCompletionDraft(draft, invitationCode, phoneRegion)
     ).pipe(
       Effect.mapError(
@@ -231,6 +232,7 @@ export const completeProfileAtom = customerDataRuntime
               })
             )
           ),
+          Effect.tap(() => clearStoredCompletionEdits(sessionId)),
           refreshAfterWrite(get, [accountAtom]),
           waitForReread(get)
         )
@@ -242,8 +244,8 @@ export const completeProfileAtom = customerDataRuntime
           shown: (account) => account.kind === "linked",
         })
       )
-    )
-  )
+    );
+  })
   .pipe(Atom.keepAlive);
 
 /**

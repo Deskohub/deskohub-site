@@ -36,7 +36,7 @@ import { currentInstant } from "@/shared/utils/temporal";
 export type AccountUnlimitedPass = {
   readonly orderId: OrderId;
   readonly tier: string;
-  readonly boughtOn: string;
+  readonly boughtOn?: string;
   readonly boughtForYou: boolean;
   readonly period: string;
   readonly renewalPath?: string;
@@ -48,6 +48,7 @@ export type AccountUnlimitedPass = {
   | {
       readonly status: "active";
       readonly day: number;
+      readonly totalDays: number;
       readonly daysLeft: number;
       readonly accessPath: string;
     }
@@ -71,6 +72,7 @@ const readHolderPasses = Effect.fn("account.readHolderUnlimitedPasses")(
         accessEndsOn: passPurchases.accessEndsOn,
         status: passPurchases.status,
         paidAt: orders.paidAt,
+        grantedAt: orders.fulfilledAt,
         paymentState: orders.paymentState,
         renewalOverlaps: hasUnlimitedRenewalOverlap,
         deskId: workspaceReservations.passDayTableId,
@@ -94,7 +96,13 @@ const readHolderPasses = Effect.fn("account.readHolderUnlimitedPasses")(
             isNotNull(passPurchases.giftClaimedAt)
           ),
           eq(orders.kind, "pass-purchase"),
-          isNotNull(orders.paidAt),
+          or(
+            isNotNull(orders.paidAt),
+            and(
+              eq(orders.paymentState, "complimentary"),
+              eq(orders.fulfillmentState, "fulfilled")
+            )
+          ),
           notInArray(passPurchases.status, ["pending_payment", "void"])
         )
       )
@@ -133,7 +141,9 @@ export const loadAccountUnlimitedPasses = Effect.fn(
   );
 
   return passes.flatMap((pass): AccountUnlimitedPass[] => {
-    if (pass.paidAt === null) return [];
+    const acquiredAt =
+      pass.paymentState === "complimentary" ? pass.grantedAt : pass.paidAt;
+    if (acquiredAt === null) return [];
 
     const start = Temporal.PlainDate.from(pass.validFrom);
     const validUntil = pass.accessEndsOn ?? pass.validUntil;
@@ -153,8 +163,11 @@ export const loadAccountUnlimitedPasses = Effect.fn(
     const summary = {
       orderId: pass.orderId,
       tier: getPassTierName(pass.tier, locale),
-      boughtOn: formatInstantDate({ instant: pass.paidAt, locale, timeZone }),
-      boughtForYou: pass.buyerAccountId !== accountId,
+      ...(pass.paymentState === "paid" && {
+        boughtOn: formatInstantDate({ instant: acquiredAt, locale, timeZone }),
+      }),
+      boughtForYou:
+        pass.paymentState === "paid" && pass.buyerAccountId !== accountId,
       period,
       seating,
       ...(pass.paymentState === "paid" &&
@@ -163,18 +176,17 @@ export const loadAccountUnlimitedPasses = Effect.fn(
           renewalPath: getUnlimitedRenewalPath(locale, pass.orderId),
         }),
     };
-    const day = getUnlimitedPassAccessDay({ ...pass, date: today });
+    const accessDay = getUnlimitedPassAccessDay({ ...pass, date: today });
+    const issued =
+      pass.paymentState === "paid" || pass.paymentState === "complimentary";
 
-    if (
-      day !== undefined &&
-      (pass.status !== "active" || pass.paymentState === "paid")
-    ) {
+    if (accessDay && (pass.status !== "active" || issued)) {
       return [
         {
           ...summary,
           status: "active",
-          day,
-          daysLeft: today.until(end, { largestUnit: "day" }).days,
+          ...accessDay,
+          daysLeft: accessDay.totalDays - accessDay.day + 1,
           accessPath: getUnlimitedAccessPath(locale, pass.orderId),
         },
       ];
@@ -182,7 +194,7 @@ export const loadAccountUnlimitedPasses = Effect.fn(
 
     if (
       pass.status === "active" &&
-      pass.paymentState === "paid" &&
+      issued &&
       Temporal.PlainDate.compare(today, start) < 0
     ) {
       return [

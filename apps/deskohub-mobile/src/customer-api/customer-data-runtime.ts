@@ -1,12 +1,19 @@
 import { Effect, Layer } from "effect";
 import { Atom } from "effect/reactivity";
+import {
+  clearStoredCompletionEdits,
+  deferCompletionEdits,
+  onboardingSessionIdAtom,
+  restoreCompletionEdits,
+} from "../account/onboarding/onboarding-edits";
+import { withSessionWriteLock } from "../auth/session-write-lock";
 import type { AccountReadBudget } from "./account-read-budget";
-import type {
-  AccountExitFence,
+import {
+  type AccountExitFence,
   AccountScopedStorage,
 } from "./account-scoped-storage";
 import {
-  type CustomerAccountScope,
+  CustomerAccountScope,
   CustomerApi,
   type CustomerAuthApi,
   type CustomerSessionCheck,
@@ -67,9 +74,49 @@ export const customerDataRuntime = Atom.runtime((get) =>
  * alive for the account's registry; mutations that change it refresh it.
  */
 export const accountAtom = customerDataRuntime
-  .atom(
-    Effect.flatMap(Effect.service(CustomerApi), (api) =>
+  .atom((get) => {
+    const sessionId = get.once(onboardingSessionIdAtom);
+    const read = Effect.flatMap(Effect.service(CustomerApi), (api) =>
       api.account.getAccount({ headers: {} })
-    ).pipe(customerRead({ accountRead: true }))
-  )
+    ).pipe(customerRead({ accountRead: true }));
+    return Effect.flatMap(Effect.service(CustomerAccountScope), (scope) => {
+      const reconcile = read.pipe(
+        Effect.tap((account) => {
+          if (get.once(onboardingSessionIdAtom) !== sessionId)
+            return Effect.void;
+          if (account.kind === "completion-required")
+            return restoreCompletionEdits(get, sessionId);
+          // A previous process may have stopped after the server created the profile.
+          if (account.kind === "linked")
+            return clearStoredCompletionEdits(sessionId);
+          return Effect.flatMap(
+            Effect.service(AccountScopedStorage),
+            (storage) =>
+              storage.restoreOnboardingDraft(sessionId).pipe(Effect.ignore)
+          );
+        })
+      );
+      // Keep the confirmed owner and the cookie used by this account read
+      // together while native sign-in and sign-out can replace the cookie.
+      return scope.confirmOnboardingSession === undefined
+        ? reconcile
+        : withSessionWriteLock(
+            scope
+              .confirmOnboardingSession(sessionId)
+              .pipe(
+                Effect.flatMap((verified) =>
+                  verified
+                    ? reconcile
+                    : read.pipe(
+                        Effect.tap((account) =>
+                          account.kind === "completion-required"
+                            ? deferCompletionEdits(get, sessionId)
+                            : Effect.void
+                        )
+                      )
+                )
+              )
+          );
+    });
+  })
   .pipe(Atom.keepAlive);

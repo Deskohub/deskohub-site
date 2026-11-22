@@ -15,6 +15,7 @@ import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { currentInstant } from "@/shared/utils/temporal";
 import { queueInitialEntryPackGift } from "./entry-pack-gift";
+import { keepsUnlimitedRenewalSource } from "./unlimited-pass-window";
 
 type UnlimitedServiceDate = Pick<
   typeof passPurchases.$inferSelect,
@@ -93,6 +94,7 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
         tier: passPurchases.tier,
         validFrom: passPurchases.validFrom,
         holderAccountId: passPurchases.holderAccountId,
+        renewsPassId: passPurchases.renewsPassId,
       })
       .from(passPurchases)
       .where(
@@ -117,7 +119,8 @@ const checkUnlimitedActivation = Effect.fn("checkUnlimitedActivation")(
     const unavailable =
       !holder ||
       confirmationRejected ||
-      hasUnlimitedPassFirstDayEnded(purchase, now);
+      hasUnlimitedPassFirstDayEnded(purchase, now) ||
+      !(yield* keepsUnlimitedRenewalSource(db, purchase));
     if (!unavailable && attempt.refundState === "not_required") return true;
     if (!unavailable && isUnsolicitedPartialPassRefund(attempt)) {
       yield* Effect.logWarning(

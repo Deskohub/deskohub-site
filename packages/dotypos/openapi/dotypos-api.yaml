@@ -1544,6 +1544,9 @@ components:
     UpdateReservationRequest:
       type: object
       properties:
+        _customerId:
+          type: string
+          description: Customer ID (long as string)
         startDate:
           type: integer
           description: Start date/time as Unix timestamp in milliseconds

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull, or } from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { orders, passPurchases, paymentAttempts } from "@/db/schema";
@@ -14,17 +14,19 @@ import {
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { ProviderPaymentFinalizationService } from "@/features/checkout/backend/payment/provider-payment-finalization.service";
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
+import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { runWorkspaceEffect } from "@/shared/backend/workspace-effect";
 import { withWorkspaceRequestContext } from "@/shared/backend/workspace-request-context";
 import { maskEmailAddress } from "@/shared/utils";
 import { currentInstant } from "@/shared/utils/temporal";
 import { getEntryPackPayPath } from "../entry-pack-checkout";
 import { isEntryPackQuoteExpired } from "../pass-offer";
+import { getUnlimitedPassAccessDay } from "../unlimited-pass-period";
 import { readEntryPackGiftState } from "./entry-pack-gift";
 
-const readBuyerOrder = Effect.fnUntraced(function* (
+const readOrderForViewer = Effect.fnUntraced(function* (
   orderId: OrderId,
-  buyerAccountId: CustomerAccountId
+  accountId: CustomerAccountId
 ) {
   const { db } = yield* WorkspaceDatabase;
   const [row] = yield* db
@@ -35,10 +37,12 @@ const readBuyerOrder = Effect.fnUntraced(function* (
       holderAccountId: passPurchases.holderAccountId,
       validFrom: passPurchases.validFrom,
       validUntil: passPurchases.validUntil,
+      accessEndsOn: passPurchases.accessEndsOn,
       purchaseStatus: passPurchases.status,
       holdsExpireAt: passPurchases.holdsExpireAt,
       paidAt: orders.paidAt,
       paymentState: orders.paymentState,
+      fulfillmentState: orders.fulfillmentState,
       attempt: {
         id: paymentAttempts.id,
         provider: paymentAttempts.provider,
@@ -67,7 +71,15 @@ const readBuyerOrder = Effect.fnUntraced(function* (
       and(
         eq(orders.kind, "pass-purchase"),
         eq(passPurchases.id, orderId),
-        eq(passPurchases.buyerAccountId, buyerAccountId)
+        or(
+          eq(passPurchases.buyerAccountId, accountId),
+          and(
+            eq(orders.paymentState, "complimentary"),
+            eq(orders.fulfillmentState, "fulfilled"),
+            eq(passPurchases.holderAccountId, accountId),
+            isNotNull(passPurchases.giftClaimedAt)
+          )
+        )
       )
     );
   return row;
@@ -89,7 +101,7 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
   }
 
   const { accountId } = session.value;
-  const stored = yield* readBuyerOrder(orderId, accountId);
+  const stored = yield* readOrderForViewer(orderId, accountId);
   if (!stored) return { status: "not_found" } as const;
 
   const { paymentState, attempt } = stored;
@@ -130,7 +142,7 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
   }
 
   const row = checkedPayment
-    ? yield* readBuyerOrder(orderId, accountId)
+    ? yield* readOrderForViewer(orderId, accountId)
     : stored;
   if (!row) return { status: "not_found" } as const;
 
@@ -162,6 +174,38 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
       status: "refund_required",
       lateCapture: row.paymentState !== "paid",
     } as const;
+  }
+  if (row.paymentState === "complimentary") {
+    if (
+      row.fulfillmentState !== "fulfilled" ||
+      row.purchaseStatus === "pending_payment" ||
+      row.purchaseStatus === "void"
+    ) {
+      return { status: "not_found" } as const;
+    }
+    const cancelled = row.purchaseStatus === "cancelled";
+    const canOpenAccess =
+      entryCount === null &&
+      row.holderAccountId === accountId &&
+      (row.purchaseStatus === "active" ||
+        (cancelled &&
+          getUnlimitedPassAccessDay({
+            validFrom,
+            validUntil,
+            accessEndsOn: row.accessEndsOn,
+            status: row.purchaseStatus,
+            date: getCurrentWorkspaceDate(yield* currentInstant),
+          }) !== undefined));
+    return {
+      ...details,
+      status: cancelled ? "grant_cancelled" : "granted",
+      validFrom,
+      validUntil: row.accessEndsOn ?? (cancelled ? validFrom : validUntil),
+      canOpenAccess,
+    } as const;
+  }
+  if (row.purchaseStatus === "cancelled") {
+    return { ...details, status: "cancelled" } as const;
   }
   if (row.paymentState === "paid" && paidAt) {
     if (entryCount === null && row.purchaseStatus === "void") {

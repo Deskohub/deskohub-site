@@ -9,11 +9,13 @@ import type {
   Resource,
 } from "@modelcontextprotocol/client";
 import { Effect, Layer, Option, Schema } from "effect";
+import { HttpRouter, HttpServerResponse } from "effect/http";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import type { AgentToolClient } from "@/features/agent-tools/agent-tool-client";
 import { m } from "@/features/i18n";
 import type { AgentTrafficEvent } from "@/shared/backend/agent-traffic/agent-traffic-events";
+import { toWorkspaceWebHandler } from "@/shared/backend/workspace-effect";
 import { captureWorkspaceLogs } from "@/shared/testing/workspace-telemetry.test-utils";
 
 const workspaceLogs = captureWorkspaceLogs();
@@ -158,7 +160,8 @@ mock.module(
 );
 
 /** What the administration API built for agents answers. */
-let administrationResponse = () => Response.json([]);
+let administrationResponse: (request: Request) => Response | Promise<Response> =
+  () => Response.json([]);
 
 /** The requests the administration API built for agents received. */
 const administrationRequests: Array<{
@@ -175,7 +178,7 @@ mock.module(
         path: new URL(request.url).pathname,
         authorization: request.headers.get("authorization"),
       });
-      return administrationResponse();
+      return administrationResponse(request);
     },
   })
 );
@@ -1290,6 +1293,55 @@ describe("customer MCP route for administration tools", () => {
     ]);
     expect(memoryBudget.spends()).toEqual([]);
   });
+
+  test.each([
+    ["admin_list_sessions", "GET", "interrupted"],
+    ["admin_revoke_session", "DELETE", "finished"],
+  ] as const)(
+    "%s work over %s is %s after the MCP response stream disconnects",
+    async (name, method, expected) => {
+      accessTokens.set("administrator", "administration");
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const outcome = Promise.withResolvers<"finished" | "interrupted">();
+      const sessionId = "0190a5c4-0000-7000-8000-000000000001";
+      const sessionsPath = "/api/v1/cli/sessions";
+      administrationResponse = toWorkspaceWebHandler(
+        HttpRouter.add(
+          method,
+          method === "GET" ? sessionsPath : `${sessionsPath}/${sessionId}`,
+          Effect.gen(function* () {
+            started.resolve();
+            yield* Effect.promise(() => release.promise);
+            outcome.resolve("finished");
+            return HttpServerResponse.empty();
+          }).pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => outcome.resolve("interrupted"))
+            )
+          )
+        )
+      );
+
+      const response = await postRpc(
+        "tools/call",
+        {
+          name,
+          arguments: method === "GET" ? {} : { sessionId, confirm: true },
+        },
+        bearer("administrator")
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain(
+        "text/event-stream"
+      );
+      await started.promise;
+      await response.body?.cancel();
+      release.resolve();
+
+      expect(await outcome.promise).toBe(expected);
+    }
+  );
 
   test("answers a destructive call without confirm with a preview and changes nothing", async () => {
     accessTokens.set("administrator", "administration");

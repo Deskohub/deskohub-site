@@ -23,6 +23,7 @@ import {
   readUnlimitedPassSelection,
   recordReplacementUnlimitedPassHolds,
 } from "./unlimited-pass-orders";
+import { keepsUnlimitedRenewalSource } from "./unlimited-pass-window";
 
 /** No provider writes run in the transaction that settles the verified payment. */
 export const prepareUnlimitedPassRecovery = Effect.fn(
@@ -54,6 +55,7 @@ export const prepareUnlimitedPassRecovery = Effect.fn(
     )
       return undefined;
     if (hasUnlimitedPassFirstDayEnded(purchase, now)) return undefined;
+    if (!(yield* keepsUnlimitedRenewalSource(db, purchase))) return undefined;
     let releasing = purchase;
     if (
       purchase.status === "pending_payment" &&

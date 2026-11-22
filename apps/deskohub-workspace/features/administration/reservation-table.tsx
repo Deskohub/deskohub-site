@@ -4,6 +4,9 @@ import type { NexiOrderId } from "@deskohub/nexi";
 import { useMemo } from "react";
 import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
+import type { ReservationPassLink } from "@/features/passes/admin/pass-reads";
+import { ReservationPassBadge } from "@/features/passes/admin/reservation-pass-badge";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { StatusBadge } from "@/shared/components/ui/status-badge";
 import { formatMoney } from "@/shared/money/money";
 import { AdministrationLink as Link } from "./admin-link";
@@ -63,11 +66,13 @@ function ReservationStatusBadge({
 
 export function ReservationTable({
   emptyMessage,
+  passLinks,
   query,
   reservations,
   showCustomer = true,
 }: {
   readonly emptyMessage?: string;
+  readonly passLinks?: ReadonlyMap<WorkspaceReservationId, ReservationPassLink>;
   /** The list's query, whose order the table shows and its headers change. */
   readonly query?: ReservationListQuery;
   readonly reservations: readonly AdministrationReservationSummary[];
@@ -122,7 +127,11 @@ export function ReservationTable({
         accessorFn: (reservation) =>
           getAdministrationReservationProductTitle(reservation.product, locale),
         cell: ({ row }) => (
-          <ReservationReference locale={locale} reservation={row.original} />
+          <ReservationReference
+            locale={locale}
+            pass={passLinks?.get(row.original.id)}
+            reservation={row.original}
+          />
         ),
         header: m.administrationReservationTableReservation({}, { locale }),
         id: "reservation",
@@ -147,7 +156,7 @@ export function ReservationTable({
         id: "payment",
       },
     ],
-    [locale, showCustomer]
+    [locale, passLinks, showCustomer]
   );
 
   if (reservations.length === 0) {
@@ -204,6 +213,10 @@ export function ReservationTable({
                           { locale }
                         )}
                     </p>
+                    <ReservationPassIndicator
+                      link={passLinks?.get(reservation.id)}
+                      locale={locale}
+                    />
                     <ReservationEarlySetup
                       locale={locale}
                       reservation={reservation}
@@ -379,9 +392,11 @@ function ReservationCustomer({
 
 function ReservationReference({
   locale,
+  pass,
   reservation,
 }: {
   readonly locale: Locale;
+  readonly pass?: ReservationPassLink;
   readonly reservation: AdministrationReservationSummary;
 }) {
   return (
@@ -392,8 +407,23 @@ function ReservationReference({
       <p className="mt-1 font-mono text-xs text-navy-blue/65">
         {reservation.id.slice(0, 12)}…
       </p>
+      <ReservationPassIndicator link={pass} locale={locale} />
     </>
   );
+}
+
+function ReservationPassIndicator({
+  link,
+  locale,
+}: {
+  readonly link?: ReservationPassLink;
+  readonly locale: Locale;
+}) {
+  return link ? (
+    <div className="mt-1">
+      <ReservationPassBadge link={link} locale={locale} />
+    </div>
+  ) : null;
 }
 
 function ReservationPayment({
