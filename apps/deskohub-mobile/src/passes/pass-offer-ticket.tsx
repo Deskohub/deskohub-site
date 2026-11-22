@@ -58,18 +58,10 @@ export function EntryPackTicket({
       )}
       <View style={styles.body}>
         <View>
-          <Text
-            variant="offerTitle"
-            style={styles.title}
-            textBreakStrategy="balanced"
-          >
+          <Text variant="offerTitle" style={styles.title} balanced>
             {m.passes_entry_pack({}, { locale })}
           </Text>
-          <Text
-            variant="bodySmall"
-            style={styles.tagline}
-            textBreakStrategy="balanced"
-          >
+          <Text variant="bodySmall" style={styles.tagline} balanced>
             {m.passes_offer_entry_pack_tagline({}, { locale })}
           </Text>
         </View>
@@ -88,7 +80,7 @@ export function EntryPackTicket({
         <Text
           variant="offerCount"
           style={[styles.count, { maxWidth: stubWidth - 2 * stub.padding }]}
-          textBreakStrategy="balanced"
+          balanced
         >
           {count}
         </Text>

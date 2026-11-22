@@ -16,11 +16,7 @@ export function PassOfferAction({
 }) {
   return (
     <View style={[styles.action, style]}>
-      <Text
-        variant="buttonSmall"
-        style={[styles.label, { color }]}
-        textBreakStrategy="balanced"
-      >
+      <Text variant="buttonSmall" style={[styles.label, { color }]} balanced>
         {label}
       </Text>
       <Icon icon={ChevronRight} size={14} color={color} />

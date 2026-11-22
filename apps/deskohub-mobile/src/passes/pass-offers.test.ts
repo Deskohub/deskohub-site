@@ -140,6 +140,13 @@ test("the offers show only while both pass reads succeed and no pack is applied 
     coworkPassOfferCatalog({
       appliedPackId: "642ef6b9-48aa-495f-83a8-9a53f4791692",
       catalog: offered,
+      heldPasses: held(),
+    })
+  ).toBe(undefined);
+  expect(
+    coworkPassOfferCatalog({
+      appliedPackId: "642ef6b9-48aa-495f-83a8-9a53f4791692",
+      catalog: offered,
       heldPasses: held(heldPack("2026-11-21")),
     })
   ).toBe(undefined);

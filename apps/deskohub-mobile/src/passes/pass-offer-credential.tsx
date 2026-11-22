@@ -66,24 +66,16 @@ export function UnlimitedCredential({
       <View style={[styles.identity, large && styles.identityLarge]}>
         <CredentialMark size={large ? 30 : 38} />
         <View style={styles.names}>
-          <Text
-            variant="offerTitle"
-            style={styles.title}
-            textBreakStrategy="balanced"
-          >
+          <Text variant="offerTitle" style={styles.title} balanced>
             {m.passes_unlimited({}, { locale })}
           </Text>
-          <Text
-            variant="bodySmall"
-            style={styles.quiet}
-            textBreakStrategy="balanced"
-          >
+          <Text variant="bodySmall" style={styles.quiet} balanced>
             {tagline}
           </Text>
         </View>
       </View>
       <View style={styles.footer}>
-        <Text variant="offerExpiry" style={styles.expiry}>
+        <Text variant="offerExpiry" style={styles.expiry} balanced>
           {m.passes_offer_unlimited_expiry({ date: expiry }, { locale })}
         </Text>
         <PassOfferAction

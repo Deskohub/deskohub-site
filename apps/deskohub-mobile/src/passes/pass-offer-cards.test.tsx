@@ -13,6 +13,7 @@ import { AppLocaleProvider } from "../i18n/locale-context";
 import { expoRouterStandIn } from "../testing/expo-router-stand-in";
 import {
   findAll,
+  flatStyle,
   type HostProps,
   hostTree,
   textOf,
@@ -225,6 +226,11 @@ test("at 200% text the stub widens and the ticket keeps every label", () => {
         )
     );
     expect(stub).toBeDefined();
+    // The credential's photo area moves to the top of its row.
+    const topAligned = findAll(tree, "View").filter(
+      ({ props }) => flatStyle(props.style).alignItems === "flex-start"
+    );
+    expect(topAligned.length).toBeGreaterThan(0);
   } finally {
     dimensions.mockRestore();
   }
