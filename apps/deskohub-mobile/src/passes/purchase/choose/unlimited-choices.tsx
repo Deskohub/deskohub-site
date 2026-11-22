@@ -7,17 +7,16 @@ import type {
 import Coffee from "lucide-react-native/icons/coffee";
 import { StyleSheet, View } from "react-native";
 import { addDays } from "../../../booking/selection/prague-date";
+import { AddonToggle } from "../../../booking/ui/addon-toggle";
 import { BookingSectionHeading } from "../../../booking/ui/booking-section-heading";
 import { MonthCalendar } from "../../../booking/ui/month-calendar";
 import type { AppLocale } from "../../../i18n/app-locale";
 import { m } from "../../../i18n/messages";
 import { formatMoney } from "../../../i18n/money-format";
-import { Icon } from "../../../ui/icon";
 import { LoadingIndicator } from "../../../ui/loading-indicator";
 import { Notice } from "../../../ui/notice";
-import { Switch } from "../../../ui/switch";
 import { Text } from "../../../ui/text";
-import { color, radius, space, touchTarget } from "../../../ui/tokens";
+import { space } from "../../../ui/tokens";
 import { ChooseCards, ChooseNote } from "./choose-cards";
 import type { PassOptionProps } from "./pass-choose";
 
@@ -239,19 +238,13 @@ function CoffeeChoice({
   return (
     <>
       <BookingSectionHeading title={label} />
-      <View style={styles.coffeeCard}>
-        <View style={styles.coffeeSwitch}>
-          <Icon icon={Coffee} size={24} color={color.navy} />
-          <Switch
-            accessibilityLabel={`${label}, ${addedPrice}`}
-            value={checked}
-            onValueChange={onToggle}
-          />
-        </View>
-        <Text variant="subhead" numeric style={styles.coffeePrice}>
-          {addedPrice}
-        </Text>
-      </View>
+      <AddonToggle
+        label={`${label}, ${addedPrice}`}
+        icon={Coffee}
+        checked={checked}
+        onToggle={onToggle}
+        price={addedPrice}
+      />
       <ChooseNote icon={Coffee}>
         {m.pass_choose_coffee_note({}, { locale })}
       </ChooseNote>
@@ -260,20 +253,5 @@ function CoffeeChoice({
 }
 
 const styles = StyleSheet.create({
-  coffeeCard: {
-    alignItems: "center",
-    backgroundColor: color.surface,
-    borderColor: color.line,
-    borderRadius: radius.group,
-    borderWidth: 1,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: space.md,
-    justifyContent: "space-between",
-    minHeight: touchTarget,
-    padding: space.md,
-  },
-  coffeeSwitch: { alignItems: "center", flexDirection: "row", gap: space.md },
-  coffeePrice: { flexShrink: 1 },
   loading: { alignItems: "center", padding: space.xl },
 });

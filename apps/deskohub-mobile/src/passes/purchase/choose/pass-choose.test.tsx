@@ -16,6 +16,7 @@ import {
   find,
   findAll,
   hostTree,
+  textOf,
 } from "../../../ui/testing/element-tree";
 import { ChooseCards } from "./choose-cards";
 import { PassChoose, type PassChooseSelection } from "./pass-choose";
@@ -281,12 +282,22 @@ describe("PassChoose", () => {
     expect(indicators(failed)).toHaveLength(0);
   });
 
-  test("only Open Space shows the coffee switch and forwards changes", () => {
+  test("the Open Space coffee card is one switch containing the icon and price", () => {
     const { tree, patches } = render();
-    const toggle = findAll<PressableProps>(hostTree(tree), "Pressable").find(
-      ({ props }) => props.role === "switch"
-    );
+    const switches = findAll<PressableProps>(
+      hostTree(tree),
+      "Pressable"
+    ).filter(({ props }) => props.role === "switch");
+    expect(switches).toHaveLength(1);
+    const [toggle] = switches;
     expect(toggle?.props["aria-checked"]).toBe(false);
+    expect(findAll(toggle, "Svg")).toHaveLength(1);
+    expect(findAll(toggle, "Text").map(textOf)).toContain(
+      m.booking_addon_price(
+        { price: formatMoney(catalog.unlimitedCoffeePrice, "en-US") },
+        { locale: "en-US" }
+      )
+    );
     toggle?.props.onPress?.(
       {} as Parameters<NonNullable<PressableProps["onPress"]>>[0]
     );
