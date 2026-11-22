@@ -23,11 +23,12 @@ import { m } from "../../i18n/messages";
 import { formatMoney } from "../../i18n/money-format";
 import { EntryPackBanner } from "../../passes/entry-pack-banner";
 import {
-  applyEntryPack,
+  coworkPassTier,
   entryPackDates,
   fundWithEntryPack,
   openEntryPackDraft,
   packCoversDraft,
+  unlimitedCoversDraft,
 } from "../../passes/entry-pack-booking";
 import { EntryPackOfferLink } from "../../passes/entry-pack-offer-link";
 import {
@@ -243,9 +244,9 @@ function CoworkSelection({
   const passListAtom = heldPassesAtom(locale);
   const passList = useAtomValue(passListAtom);
   const refreshPassList = useAtomRefresh(passListAtom);
-  const packs = AsyncResult.isSuccess(passList)
-    ? passList.value.held.filter((pass) => pass.kind === "entry-pack")
-    : [];
+  const held = AsyncResult.isSuccess(passList) ? passList.value.held : [];
+  const packs = held.filter((pass) => pass.kind === "entry-pack");
+  const unlimited = held.filter((pass) => pass.kind === "unlimited");
   const activePack = packs.find(({ passId }) => passId === entryPackId);
   const openingDraft = openingCoworkDraft({
     kept:
@@ -326,7 +327,10 @@ function CoworkSelection({
   const chosenDate = Option.getOrUndefined(model.draft.date);
   const chosenWorkstation = Option.getOrUndefined(model.draft.workstation);
   const optionsAtom =
-    chosenDate !== undefined && (packs.length > 0 || entryPackId !== undefined)
+    chosenDate !== undefined &&
+    (packs.some(({ bookFrom }) => bookFrom !== undefined) ||
+      unlimited.length > 0 ||
+      entryPackId !== undefined)
       ? passBookingOptionsAtom({
           date: chosenDate,
           tier: model.draft.tier,
@@ -339,6 +343,22 @@ function CoworkSelection({
   const options = AsyncResult.isSuccess(optionsResult)
     ? optionsResult.value
     : undefined;
+  const allowedByOptions = new Set(
+    options?.entryPacks.map(({ passId }) => passId)
+  );
+  const requiredWorkstationOffer =
+    enablement.workstationRequired && options !== undefined
+      ? packs.find(
+          (pack) =>
+            pack.tier === "reserved-desk" && allowedByOptions.has(pack.passId)
+        )
+      : undefined;
+  const coveredByUnlimited =
+    chosenDate !== undefined &&
+    (options?.unlimited?.tier === coworkPassTier(model.draft) ||
+      unlimited.some((pass) =>
+        unlimitedCoversDraft(pass, model.draft, chosenDate)
+      ));
   const offer =
     chosenDate === undefined
       ? packs
@@ -353,7 +373,8 @@ function CoworkSelection({
                 : first,
             undefined
           )
-      : packs.find(({ passId }) => passId === options?.suggestedPackId);
+      : (packs.find(({ passId }) => passId === options?.suggestedPackId) ??
+        requiredWorkstationOffer);
   const packPending =
     entryPackId !== undefined &&
     (AsyncResult.isInitial(passList) ||
@@ -369,8 +390,13 @@ function CoworkSelection({
     (activePack?.bookFrom === undefined ||
       (chosenDate !== undefined &&
         options !== undefined &&
-        (!options.entryPacks.some(({ passId }) => passId === entryPackId) ||
-          (!awaitingMonitor && !packCoversDraft(activePack, model.draft)))) ||
+        (!allowedByOptions.has(entryPackId) ||
+          (!awaitingMonitor &&
+            !packCoversDraft(
+              activePack,
+              model.draft,
+              enablement.workstationRequired
+            )))) ||
       (chosenDate !== undefined && AsyncResult.isFailure(optionsResult)));
   const selectedBooking = fundWithEntryPack(model.selection, entryPackId);
   const quotable =
@@ -616,9 +642,15 @@ function CoworkSelection({
                 applied={entryPackId !== undefined}
                 onApply={() => {
                   if (offer !== undefined)
-                    storeDraft(applyEntryPack(model.draft), offer.passId);
+                    storeDraft(model.draft, offer.passId);
                 }}
                 onPayByCard={() => storeDraft(model.draft, undefined)}
+              />
+            )}
+            {entryPackId === undefined && coveredByUnlimited && (
+              <Notice
+                tone="warning"
+                message={m.booking_pass_unlimited_covers({}, { locale })}
               />
             )}
             {packUnavailable && (
@@ -781,7 +813,6 @@ function CoworkSelection({
                         label={coffee.name}
                         icon={Coffee}
                         checked={model.draft.coffee}
-                        disabled={entryPackId !== undefined}
                         onToggle={(checked) =>
                           setDraft({ ...model.draft, coffee: checked })
                         }

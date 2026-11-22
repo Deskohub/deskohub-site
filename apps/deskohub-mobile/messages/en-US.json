@@ -685,6 +685,7 @@
   "booking_pass_one_entry": "1 entry",
   "booking_pass_pay_card": "Pay by card",
   "booking_pass_redeem": "Book with 1 entry",
+  "booking_pass_unlimited_covers": "Your Unlimited pass already covers this desk type on the selected date. You can still book and pay by card.",
   "booking_pass_unavailable": "Your Entry pack can’t cover this booking. Choose another date or pay by card.",
   "booking_pass_use": "Use pass",
   "booking_cowork_tier_heading": "Desk type",

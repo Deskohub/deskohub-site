@@ -685,6 +685,7 @@
   "booking_pass_one_entry": "1 Eintritt",
   "booking_pass_pay_card": "Mit Karte zahlen",
   "booking_pass_redeem": "Mit 1 Eintritt buchen",
+  "booking_pass_unlimited_covers": "Dein Unlimited-Pass deckt diesen Tischtyp am gewählten Tag bereits ab. Du kannst trotzdem buchen und mit Karte zahlen.",
   "booking_pass_unavailable": "Dein Eintrittspaket deckt diese Buchung nicht ab. Wähle einen anderen Tag oder zahle mit Karte.",
   "booking_pass_use": "Paket nutzen",
   "booking_cowork_tier_heading": "Platzart",

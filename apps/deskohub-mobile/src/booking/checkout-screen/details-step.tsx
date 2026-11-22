@@ -78,6 +78,7 @@ export interface DetailsStepProps extends Locale {
   /** Opens Account › Profile, where the name and phone are edited. */
   readonly onEditProfile: Option.Option<() => void>;
   readonly draft: DetailsDraft;
+  readonly holderOnly?: boolean;
   readonly onDraftChange: (draft: DetailsDraft) => void;
   readonly notice: Option.Option<DetailsNotice>;
   /** The hold is being created: the form holds still, readable. */
@@ -109,7 +110,8 @@ export interface DetailsStepProps extends Locale {
 export function DetailsStep(props: DetailsStepProps) {
   const {
     profile,
-    draft,
+    draft: storedDraft,
+    holderOnly = false,
     onDraftChange,
     notice,
     busy,
@@ -119,6 +121,10 @@ export function DetailsStep(props: DetailsStepProps) {
     locale,
     initialProblems = {},
   } = props;
+  const draft =
+    holderOnly && storedDraft.bookingFor !== "self"
+      ? { ...storedDraft, bookingFor: "self" as const }
+      : storedDraft;
   const [problems, setProblems] =
     useState<DetailsFieldProblems>(initialProblems);
   const [raised, setRaised] = useState(false);
@@ -175,7 +181,9 @@ export function DetailsStep(props: DetailsStepProps) {
   }, [scrollTo]);
 
   const change = (next: DetailsDraft, what: DetailsChange) => {
-    onDraftChange(next);
+    onDraftChange(
+      holderOnly ? { ...next, bookingFor: storedDraft.bookingFor } : next
+    );
     setProblems((current) => problemsAfterChange(current, what));
   };
   const field = (name: DetailsField) => ({
@@ -243,14 +251,16 @@ export function DetailsStep(props: DetailsStepProps) {
                 title={m.booking_details_who_heading({}, { locale })}
                 first
               />
-              <WhoChoice
-                selected={draft.bookingFor}
-                onSelect={(bookingFor) =>
-                  change({ ...draft, bookingFor }, { _tag: "BookingFor" })
-                }
-                disabled={busy}
-                locale={locale}
-              />
+              {!holderOnly && (
+                <WhoChoice
+                  selected={draft.bookingFor}
+                  onSelect={(bookingFor) =>
+                    change({ ...draft, bookingFor }, { _tag: "BookingFor" })
+                  }
+                  disabled={busy}
+                  locale={locale}
+                />
+              )}
               {draft.bookingFor === "self" ? (
                 <SelfSection
                   {...props}

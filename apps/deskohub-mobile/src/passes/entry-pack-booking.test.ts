@@ -9,6 +9,7 @@ import {
   entryPackDates,
   openEntryPackDraft,
   packCoversDraft,
+  unlimitedCoversDraft,
 } from "./entry-pack-booking";
 import { entryPackHrefForDraft } from "./pass-routes";
 
@@ -82,4 +83,33 @@ test("the buy link uses the current compatible choices, including clearing a wor
   expect(entryPackHrefForDraft(previous).params).toEqual({
     tier: "open-space",
   });
+});
+
+test("a regular Reserved Desk pack covers a required paid workstation and keeps voluntary upgrades uncovered", () => {
+  const deskPack: CustomerHeldEntryPack = { ...pack, tier: "reserved-desk" };
+  const draft = openEntryPackDraft(previous, deskPack);
+  const workstation = selectCoworkWorkstation(draft, Option.some("2x27-qhd"));
+  expect(packCoversDraft(deskPack, workstation)).toBe(false);
+  expect(packCoversDraft(deskPack, workstation, true)).toBe(true);
+});
+
+test("an Unlimited-only holder has coverage for its own desk type and inclusive dates", () => {
+  const unlimited = {
+    kind: "unlimited",
+    tier: "open-space",
+    status: "active",
+    passId: pack.passId,
+    validFrom: "2026-11-21",
+    lastUsableDate: "2026-12-20",
+  } as const;
+  expect(unlimitedCoversDraft(unlimited, previous, "2026-11-21")).toBe(true);
+  expect(unlimitedCoversDraft(unlimited, previous, "2026-12-20")).toBe(true);
+  expect(unlimitedCoversDraft(unlimited, previous, "2026-12-21")).toBe(false);
+  expect(
+    unlimitedCoversDraft(
+      unlimited,
+      { ...previous, tier: "reserved-desk" },
+      "2026-11-21"
+    )
+  ).toBe(false);
 });

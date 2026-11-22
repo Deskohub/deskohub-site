@@ -273,7 +273,7 @@ export const pricedLines = (
         ? [
             {
               key: "addon:workstation",
-              crowns: packFunded ? 0 : samplePrices.workstation,
+              crowns: samplePrices.workstation,
               monitorOption: selection.monitorOption,
             },
           ]

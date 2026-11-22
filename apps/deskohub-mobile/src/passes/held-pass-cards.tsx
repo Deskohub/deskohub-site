@@ -6,7 +6,7 @@ import { useAtomValue } from "@effect/atom-react";
 import CalendarPlus from "lucide-react-native/icons/calendar-plus";
 import Gift from "lucide-react-native/icons/gift";
 import KeyRound from "lucide-react-native/icons/key-round";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { bookingClockAtom } from "../booking/family/booking-clock";
 import { daysBetween, pragueToday } from "../booking/selection/prague-date";
@@ -203,12 +203,6 @@ export function HeldUnlimitedPassCard({
               : m.passes_ends_in({ count: left - 1 }, { locale })
           }
         />
-        {day !== undefined && (
-          <Fact
-            title={m.passes_today({}, { locale })}
-            value={m.passes_door_code({}, { locale })}
-          />
-        )}
         <Fact
           title={m.passes_where({}, { locale })}
           value={pass.seatLabel ?? m.passes_any_free_desk({}, { locale })}
@@ -298,13 +292,7 @@ function PassCard({
             </View>
           )}
           <View style={styles.heading}>
-            <View style={styles.productLabel}>
-              {[product, size].map((label) => (
-                <Text key={label} variant="caption" style={styles.eyebrow}>
-                  {label}
-                </Text>
-              ))}
-            </View>
+            <PassProductLabel product={product} size={size} stacked={stacked} />
             <Text variant="title">{passTierName(pass.tier, locale)}</Text>
             <View style={styles.badge}>
               <Badge label={badge} tone="positive" />
@@ -315,6 +303,42 @@ function PassCard({
       </View>
       {actions !== undefined && <View style={styles.footer}>{actions}</View>}
     </View>
+  );
+}
+
+function PassProductLabel({
+  product,
+  size,
+  stacked,
+}: {
+  readonly product: string;
+  readonly size: string;
+  readonly stacked: boolean;
+}) {
+  const { availableWidth } = useViewport();
+  const [wrappedAt, setWrappedAt] = useState<number>();
+  if (stacked || wrappedAt === availableWidth) {
+    return (
+      <View>
+        <Text variant="caption" style={styles.eyebrow}>
+          {product}
+        </Text>
+        <Text variant="caption" style={styles.eyebrow}>
+          {size}
+        </Text>
+      </View>
+    );
+  }
+  return (
+    <Text
+      variant="caption"
+      style={styles.eyebrow}
+      onTextLayout={({ nativeEvent }) => {
+        if (nativeEvent.lines.length > 1) setWrappedAt(availableWidth);
+      }}
+    >
+      {product} · {size}
+    </Text>
   );
 }
 
@@ -377,7 +401,6 @@ const styles = StyleSheet.create({
   },
   stackedHead: { flexDirection: "column" },
   heading: { flexShrink: 1, flexGrow: 1, gap: space.xs },
-  productLabel: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs },
   eyebrow: {
     color: color.positiveInk,
     letterSpacing: 1,

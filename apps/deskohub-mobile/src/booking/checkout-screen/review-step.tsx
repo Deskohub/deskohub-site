@@ -218,7 +218,7 @@ export function ReviewStep({
                   />
                 </View>
               </Card>
-              {!view.retry && (
+              {!view.retry && selection.funding?.kind !== "entry" && (
                 <View style={styles.code}>
                   <CodeRow code={view.code} send={send} locale={locale} />
                 </View>

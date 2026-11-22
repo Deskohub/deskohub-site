@@ -1,6 +1,7 @@
 import type {
   CustomerBookingSelection,
   CustomerHeldEntryPack,
+  CustomerHeldUnlimitedPass,
   CustomerPassTier,
 } from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
@@ -18,8 +19,23 @@ export const coworkPassTier = (draft: CoworkDraft): CustomerPassTier =>
 
 export const packCoversDraft = (
   pack: CustomerHeldEntryPack,
-  draft: CoworkDraft
-) => pack.tier === coworkPassTier(draft);
+  draft: CoworkDraft,
+  workstationRequired = false
+) =>
+  pack.tier === coworkPassTier(draft) ||
+  (workstationRequired &&
+    pack.tier === "reserved-desk" &&
+    draft.tier === "reserved-desk");
+
+export const unlimitedCoversDraft = (
+  pass: CustomerHeldUnlimitedPass,
+  draft: CoworkDraft,
+  date: PragueDate
+) =>
+  (pass.status === "active" || pass.status === "upcoming") &&
+  pass.tier === coworkPassTier(draft) &&
+  pass.validFrom <= date &&
+  date <= pass.lastUsableDate;
 
 // A pack opened from Account chooses the desk type, then lets the customer
 // choose a date and, for workstation packs, an available monitor.
@@ -47,9 +63,6 @@ export const entryPackDates = (
     dates.latest > pack.lastUsableDate ? pack.lastUsableDate : dates.latest,
   unavailable: new Set([...dates.unavailable, ...claimedDates]),
 });
-
-export const applyEntryPack = (draft: CoworkDraft): CoworkDraft =>
-  draft.coffee ? { ...draft, coffee: false } : draft;
 
 export const fundWithEntryPack = (
   selection: Option.Option<CustomerBookingSelection>,
