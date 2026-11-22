@@ -17,6 +17,7 @@ import {
   Minus,
   MousePointerClick,
   Redo2,
+  Ticket,
   Undo2,
 } from "lucide-react";
 import {
@@ -64,6 +65,11 @@ import {
 } from "../../body/campaign-image";
 import { normalizeCampaignLinkHref } from "./campaign-link-href";
 import { CtaButtonDialog, type CtaButtonValues } from "./cta-button-dialog";
+import {
+  type PassOfferAttributes,
+  PassOfferDialog,
+  type PassOfferValues,
+} from "./pass-offer-dialog";
 
 type BlockType = "paragraph" | "h1" | "h2" | "h3";
 
@@ -93,6 +99,10 @@ const selectToolbarState = ({ editor }: { editor: Editor | null }) => {
     ctaButton: editor.isActive("ctaButton"),
     ctaLabel: String(editor.getAttributes("ctaButton").label ?? ""),
     ctaHref: String(editor.getAttributes("ctaButton").href ?? ""),
+    passOffer: editor.isActive("passOffer"),
+    passOfferAttributes: editor.getAttributes(
+      "passOffer"
+    ) as PassOfferAttributes,
     image: editor.isActive("image"),
     imageAlign: selectedImageAlignment(editor),
     imageWidth: editor.getAttributes("image").width,
@@ -117,6 +127,8 @@ const idleToolbarState: ToolbarState = {
   ctaButton: false,
   ctaLabel: "",
   ctaHref: "",
+  passOffer: false,
+  passOfferAttributes: {},
   image: false,
   imageAlign: defaultCampaignImageAlignment,
   imageWidth: undefined,
@@ -142,6 +154,7 @@ export function CampaignBodyToolbar({
     useEditorState({ editor, selector: selectToolbarState }) ??
     selectToolbarState({ editor });
   const [ctaDialogOpen, setCtaDialogOpen] = useState(false);
+  const [passOfferDialogOpen, setPassOfferDialogOpen] = useState(false);
   const imageRoundedCornersId = useId();
   const disabled = !editor || !state;
   const toolbar = state ?? idleToolbarState;
@@ -260,6 +273,17 @@ export function CampaignBodyToolbar({
           </ToolbarButton>
           <ToolbarButton
             disabled={disabled}
+            label={
+              toolbar.passOffer
+                ? m.emailCampaignsPassOfferEdit({}, { locale })
+                : m.emailCampaignsPassOfferInsert({}, { locale })
+            }
+            onClick={() => setPassOfferDialogOpen(true)}
+          >
+            <Ticket aria-hidden className="size-4" />
+          </ToolbarButton>
+          <ToolbarButton
+            disabled={disabled}
             label={m.emailCampaignsEditorDivider({}, { locale })}
             onClick={() => focusedChain(editor)?.setHorizontalRule().run()}
           >
@@ -287,6 +311,12 @@ export function CampaignBodyToolbar({
         editor={editor}
         onOpenChange={setCtaDialogOpen}
         open={ctaDialogOpen}
+        toolbar={toolbar}
+      />
+      <PassOfferToolbarDialog
+        editor={editor}
+        onOpenChange={setPassOfferDialogOpen}
+        open={passOfferDialogOpen}
         toolbar={toolbar}
       />
     </>
@@ -384,6 +414,48 @@ function CtaButtonToolbarDialog({
           : undefined
       }
       onSubmit={submitCtaButton}
+      open={open}
+    />
+  );
+}
+
+/** Inserts a pass offer card, or edits or removes the selected one. */
+function PassOfferToolbarDialog({
+  editor,
+  onOpenChange,
+  open,
+  toolbar,
+}: {
+  readonly editor: Editor | null;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly open: boolean;
+  readonly toolbar: ToolbarState;
+}) {
+  const submitPassOffer = (values: PassOfferValues) => {
+    if (toolbar.passOffer) {
+      focusedChain(editor)?.updateAttributes("passOffer", values).run();
+    } else {
+      focusedChain(editor)
+        ?.insertContent({ type: "passOffer", attrs: values })
+        .run();
+    }
+  };
+
+  return (
+    <PassOfferDialog
+      initialAttributes={
+        toolbar.passOffer ? toolbar.passOfferAttributes : undefined
+      }
+      onOpenChange={onOpenChange}
+      onRemove={
+        toolbar.passOffer
+          ? () => {
+              onOpenChange(false);
+              focusedChain(editor)?.deleteSelection().run();
+            }
+          : undefined
+      }
+      onSubmit={submitPassOffer}
       open={open}
     />
   );
