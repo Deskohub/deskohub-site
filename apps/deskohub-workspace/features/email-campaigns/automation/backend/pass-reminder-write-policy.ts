@@ -1,13 +1,19 @@
 import type { AutomationTriggerType } from "@deskohub/workspace-admin-api";
 import { Context, Effect } from "effect";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import type { CampaignPurpose } from "../../body/campaign-content";
 import { isPassReminderTrigger } from "../automation-triggers";
 import { AutomationFlowInvalid } from "../errors";
+import { CoworkPassesReleaseGateForReminders } from "./pass-reminder-release";
 
-/** Publish and verify the trigger readers before opening writes in production. */
 export const PassReminderWritesOpen = Context.Reference<Effect.Effect<boolean>>(
   "@deskohub-workspace/email-campaigns/PassReminderWritesOpen",
-  { defaultValue: () => Effect.succeed(false) }
+  {
+    defaultValue: () =>
+      CoworkPassesReleaseGate.isOpen.pipe(
+        Effect.provide(CoworkPassesReleaseGateForReminders)
+      ),
+  }
 );
 
 export const ensurePassReminderWritesAllowed = (

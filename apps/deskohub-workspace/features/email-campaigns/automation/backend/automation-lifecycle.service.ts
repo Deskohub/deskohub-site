@@ -4,6 +4,7 @@ import {
   type AutomationActivationType as AutomationActivation,
   type AutomationDetailType as AutomationDetail,
   type AutomationFlowType as AutomationFlow,
+  type AutomationTriggerType as AutomationTrigger,
   type AutomationVersionDetailType as AutomationVersionDetail,
   type AutomationVersionSummaryType as AutomationVersionSummary,
   AutomationFlow as automationFlowContractSchema,
@@ -25,8 +26,11 @@ import {
 } from "@/db/schema";
 import { authUser } from "@/db/schema/auth";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import { WorkspaceLocks } from "@/db/workspace-locks";
 import type { CustomerAccountId } from "@/features/account/customer-account";
-import { currentInstant } from "@/shared/utils/temporal";
+import { getPassReminderDueAt } from "@/features/passes/pass-reminder-schedule";
+import { getWorkspaceDate } from "@/features/reservation/reservation-date";
+import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import type { AudienceFilter } from "../../audience-filter";
 import { ensureSavedAudienceFilter } from "../../audience-filter-usage";
 import type {
@@ -57,7 +61,10 @@ import type {
   AutomationPreviewId,
   AutomationVersionId,
 } from "../automation-identifiers";
-import { automationTriggerSummary } from "../automation-triggers";
+import {
+  automationTriggerSummary,
+  isPassReminderTrigger,
+} from "../automation-triggers";
 import { nextFireAfter } from "../automation-versions";
 import {
   AutomationArchived,
@@ -67,9 +74,11 @@ import {
   AutomationPreviewRequired,
   type AutomationScheduleMinutesNotAllowed,
   AutomationStatusConflict,
+  AutomationTriggerInUse,
   AutomationVersionNotFound,
 } from "../errors";
 import { lockAutomationForLifecycle } from "./automation-lifecycle-lock";
+import { nextPassReminderPreviewOccurrence } from "./automation-pass-reminder-preview";
 import { closePreview } from "./automation-previews";
 import { AutomationRunTransitions } from "./automation-run-transitions";
 import { releaseAutomationUnitSubjects } from "./automation-unit-planning";
@@ -97,6 +106,7 @@ type AutomationActivationError =
   | AutomationArchived
   | AutomationPreviewRequired
   | AutomationDraftChanged
+  | AutomationTriggerInUse
   | CampaignAudienceArchived
   | AudienceFilterContextInvalid
   | CampaignFallbackContentMissing;
@@ -139,7 +149,10 @@ export interface IAutomationLifecycle {
     campaignId: CampaignId
   ) => Effect.Effect<
     AutomationDetail,
-    WorkingCopyError | AutomationArchived | AutomationStatusConflict
+    | WorkingCopyError
+    | AutomationArchived
+    | AutomationStatusConflict
+    | AutomationTriggerInUse
   >;
   /**
    * Any status → archived, for good (D12); active runs end `archived`.
@@ -316,11 +329,11 @@ const activateIn = (input: {
     Effect.bind("copy", () => loadAutomationWorkingCopy(input.campaignId)),
     Effect.tap(({ copy }) => ensureNotArchived(copy)),
     // 2. A completed dry run of this campaign.
-    Effect.bind("previewHash", () => completedPreviewHash(input)),
+    Effect.bind("preview", () => completedPreview(input)),
     // 3. Of the current draft.
-    Effect.bind("publishable", ({ copy, previewHash }) =>
+    Effect.bind("publishable", ({ copy, preview }) =>
       currentPublishable(copy).pipe(
-        Option.filter(({ draftHash }) => draftHash === previewHash),
+        Option.filter(({ draftHash }) => draftHash === preview.draftHash),
         Option.match({
           onNone: () =>
             Effect.fail(
@@ -339,22 +352,54 @@ const activateIn = (input: {
     ),
     // 5. A retry returns the version it published.
     Effect.bind("latest", () => latestVersion(input.campaignId)),
-    Effect.flatMap(({ copy, publishable, flow, latest, now }) =>
-      latest.pipe(
-        Option.filter(({ draftHash }) => draftHash === publishable.draftHash),
-        Option.match({
-          onSome: ({ id }) => Effect.succeed(id),
-          onNone: () =>
+    Effect.flatMap(
+      ({
+        copy,
+        publishable,
+        flow,
+        latest,
+        now,
+        preview,
+      }): Effect.Effect<
+        AutomationVersionId,
+        AutomationPreviewRequired | AutomationTriggerInUse | DatabaseQueryError,
+        WorkspaceTransaction
+      > => {
+        if (
+          Option.isSome(latest) &&
+          latest.value.draftHash === publishable.draftHash
+        ) {
+          return Effect.succeed(latest.value.id);
+        }
+        if (!previewIsCurrent(flow, preview.asOf, now)) {
+          return Effect.fail(new AutomationPreviewRequired(input));
+        }
+        const ownership =
+          copy.campaign.status === "paused"
+            ? Effect.succeed({ at: now, available: true })
+            : passReminderOwnership(input.campaignId, flow.trigger, now);
+        return ownership.pipe(
+          Effect.map(({ at, available }) => ({
+            at: nextVersionActivationTime(latest, at),
+            available,
+          })),
+          Effect.filterOrFail(
+            ({ at }) => previewIsCurrent(flow, preview.asOf, at),
+            () => new AutomationPreviewRequired(input)
+          ),
+          Effect.flatMap(requirePassReminderOwnership(input.campaignId)),
+          Effect.flatMap((activatedAt) =>
             publishVersion({
               copy,
               publishable,
               flow,
               latest,
               activatedBy: input.activatedBy,
-              now,
-            }),
-        })
-      )
+              activatedAt,
+            })
+          )
+        );
+      }
     ),
     Effect.flatMap((versionId) =>
       selectVersions({
@@ -372,14 +417,78 @@ const activateIn = (input: {
     )
   );
 
-/** The draft hash of the named dry run, if it's a completed one of this campaign. */
-const completedPreviewHash = (input: {
+const previewIsCurrent = (
+  flow: AutomationFlow,
+  asOf: Temporal.Instant,
+  now: Temporal.Instant
+) =>
+  !isPassReminderTrigger(flow.trigger) ||
+  nextPassReminderPreviewOccurrence(flow.trigger, now).fireAt.equals(asOf);
+
+/** Check the published owner after the lock wait, in a fresh statement snapshot. */
+const passReminderOwnership = Effect.fn(
+  "AutomationLifecycle.passReminderOwnership"
+)(function* (
+  campaignId: CampaignId,
+  trigger: AutomationTrigger,
+  now: Temporal.Instant
+) {
+  if (!isPassReminderTrigger(trigger)) return { at: now, available: true };
+  const { db } = yield* WorkspaceTransaction;
+  yield* WorkspaceLocks.passReminderCampaign(trigger._tag);
+  const [owner] = yield* db
+    .select({ id: emailCampaignAutomations.campaignId })
+    .from(emailCampaignAutomations)
+    .innerJoin(
+      emailCampaigns,
+      eq(emailCampaigns.id, emailCampaignAutomations.campaignId)
+    )
+    .innerJoin(
+      emailCampaignAutomationVersions,
+      eq(
+        emailCampaignAutomationVersions.id,
+        emailCampaignAutomations.activeVersionId
+      )
+    )
+    .where(
+      and(
+        ne(emailCampaignAutomations.campaignId, campaignId),
+        eq(emailCampaigns.status, "active"),
+        eq(emailCampaignAutomationVersions.purpose, "marketing"),
+        eq(emailCampaignAutomationVersions.triggerKind, trigger._tag)
+      )
+    )
+    .limit(1);
+  // Read the time after the wait. A campaign must start accepting before
+  // 10:00 Prague time to enter that day's fire.
+  const at = yield* lifecycleInstant;
+  const dueAt = getPassReminderDueAt(
+    plainDateStringSchema.make(getWorkspaceDate(at).toString())
+  );
+  return {
+    at: at.equals(dueAt) ? at.add({ microseconds: 1 }) : at,
+    available: owner === undefined,
+  };
+});
+
+const requirePassReminderOwnership =
+  (campaignId: CampaignId) =>
+  (ownership: { readonly at: Temporal.Instant; readonly available: boolean }) =>
+    ownership.available
+      ? Effect.succeed(ownership.at)
+      : Effect.fail(new AutomationTriggerInUse({ campaignId }));
+
+/** The named dry run if it's a completed one for this campaign. */
+const completedPreview = (input: {
   readonly campaignId: CampaignId;
   readonly previewId: AutomationPreviewId;
 }) =>
   Effect.flatMap(WorkspaceTransaction, ({ db }) =>
     db
-      .select({ draftHash: emailCampaignAutomationPreviews.draftHash })
+      .select({
+        draftHash: emailCampaignAutomationPreviews.draftHash,
+        asOf: emailCampaignAutomationPreviews.asOf,
+      })
       .from(emailCampaignAutomationPreviews)
       .where(
         and(
@@ -392,7 +501,7 @@ const completedPreviewHash = (input: {
         Effect.flatMap(([preview]) =>
           preview === undefined
             ? Effect.fail(new AutomationPreviewRequired(input))
-            : Effect.succeed(preview.draftHash)
+            : Effect.succeed(preview)
         )
       )
   );
@@ -533,6 +642,21 @@ const latestVersion = (campaignId: CampaignId) =>
       .pipe(Effect.map(([version]) => Option.fromNullishOr(version)))
   );
 
+/** Activation time orders published versions, including across clock changes. */
+const nextVersionActivationTime = (
+  latest: Option.Option<{ readonly activatedAt: Temporal.Instant }>,
+  now: Temporal.Instant
+) =>
+  latest.pipe(
+    Option.filter(
+      ({ activatedAt }) => Temporal.Instant.compare(activatedAt, now) >= 0
+    ),
+    Option.match({
+      onNone: () => now,
+      onSome: ({ activatedAt }) => activatedAt.add({ microseconds: 1 }),
+    })
+  );
+
 /**
  * Steps 6 and 7: inserts version n + 1 with its provenance, points the
  * automation at it, and applies the status and schedule rules.
@@ -545,21 +669,11 @@ const publishVersion = (input: {
     Option.Option.Value<Effect.Success<ReturnType<typeof latestVersion>>>
   >;
   readonly activatedBy: CustomerAccountId | null;
-  readonly now: Temporal.Instant;
+  readonly activatedAt: Temporal.Instant;
 }) =>
   Effect.flatMap(WorkspaceTransaction, ({ db }) => {
+    const { activatedAt } = input;
     const { campaign, automation } = input.copy;
-    // `activated_at` orders versions, so it's strictly after the previous one's.
-    const activatedAt = input.latest.pipe(
-      Option.filter(
-        ({ activatedAt }) =>
-          Temporal.Instant.compare(activatedAt, input.now) >= 0
-      ),
-      Option.match({
-        onNone: () => input.now,
-        onSome: ({ activatedAt }) => activatedAt.add({ microseconds: 1 }),
-      })
-    );
     return Effect.Do.pipe(
       Effect.bind("versionId", () =>
         db
@@ -673,6 +787,8 @@ type TransitionError =
   | AutomationFlowInvalid
   | AutomationStatusConflict;
 
+type ResumeError = TransitionError | AutomationTriggerInUse;
+
 const ensureNotArchived = (copy: AutomationWorkingCopy) =>
   copy.campaign.status === "archived"
     ? Effect.fail(new AutomationArchived({ campaignId: copy.campaign.id }))
@@ -736,14 +852,10 @@ const pauseIn = ({
 const resumeIn = ({
   copy,
   now,
-}: TransitionInput): Effect.Effect<
-  void,
-  TransitionError,
-  WorkspaceTransaction
-> =>
+}: TransitionInput): Effect.Effect<void, ResumeError, WorkspaceTransaction> =>
   Effect.flatMap(
     WorkspaceTransaction,
-    ({ db }): Effect.Effect<void, TransitionError, WorkspaceTransaction> => {
+    ({ db }): Effect.Effect<void, ResumeError, WorkspaceTransaction> => {
       const campaignId = copy.campaign.id;
       switch (copy.campaign.status) {
         case "active":
@@ -753,16 +865,27 @@ const resumeIn = ({
         case "draft":
           return Effect.fail(statusConflict(copy, "resume"));
         case "paused":
-          return loadAutomationVersionActivations(campaignId).pipe(
-            Effect.tap((versions) => {
+          return Effect.Do.pipe(
+            Effect.bind("versions", () =>
+              loadAutomationVersionActivations(campaignId)
+            ),
+            Effect.bind("resumedAt", ({ versions }) => {
               const active = versions.find(
                 ({ id }) => id === copy.automation.activeVersionId
               );
-              return active
-                ? ensurePassReminderWritesAllowed(active.trigger, "marketing")
-                : Effect.void;
+              return active === undefined
+                ? Effect.succeed(now)
+                : ensurePassReminderWritesAllowed(
+                    active.trigger,
+                    "marketing"
+                  ).pipe(
+                    Effect.andThen(
+                      passReminderOwnership(campaignId, active.trigger, now)
+                    ),
+                    Effect.flatMap(requirePassReminderOwnership(campaignId))
+                  );
             }),
-            Effect.flatMap((versions) =>
+            Effect.flatMap(({ versions, resumedAt }) =>
               Effect.all(
                 [
                   db
@@ -772,11 +895,11 @@ const resumeIn = ({
                   db
                     .update(emailCampaignAutomations)
                     .set({
-                      resumedAt: now,
-                      acceptingSince: now,
+                      resumedAt,
+                      acceptingSince: resumedAt,
                       // Fires that fell due while paused are never entered (D12).
                       nextFireAt: Option.getOrNull(
-                        nextFireAfter(versions, now)
+                        nextFireAfter(versions, resumedAt)
                       ),
                       updatedAt: sql`now()`,
                     })
@@ -1066,6 +1189,7 @@ const activationOf = (input: {
       .select({
         id: emailCampaignAutomationPreviews.id,
         status: emailCampaignAutomationPreviews.status,
+        asOf: emailCampaignAutomationPreviews.asOf,
         unitsDone: emailCampaignAutomationPreviews.unitsDone,
         unitsTotal: emailCampaignAutomationPreviews.unitsTotal,
       })
@@ -1086,21 +1210,33 @@ const activationOf = (input: {
       .orderBy(desc(emailCampaignAutomationPreviews.createdAt))
       .limit(1)
       .pipe(
-        Effect.map(([preview]): AutomationActivation => {
-          if (preview === undefined) return { _tag: "PreviewRequired" };
-          return preview.status === "completed"
-            ? {
-                _tag: "Ready",
-                previewId: preview.id,
-                draftHash: draftHash.value,
+        Effect.flatMap(([preview]) =>
+          lifecycleInstant.pipe(
+            Effect.map((now): AutomationActivation => {
+              if (preview === undefined) return { _tag: "PreviewRequired" };
+              if (
+                Option.exists(
+                  input.copy.flow,
+                  (flow) => !previewIsCurrent(flow, preview.asOf, now)
+                )
+              ) {
+                return { _tag: "PreviewRequired" };
               }
-            : {
-                _tag: "PreviewRunning",
-                previewId: preview.id,
-                unitsDone: preview.unitsDone,
-                unitsTotal: preview.unitsTotal,
-              };
-        })
+              return preview.status === "completed"
+                ? {
+                    _tag: "Ready",
+                    previewId: preview.id,
+                    draftHash: draftHash.value,
+                  }
+                : {
+                    _tag: "PreviewRunning",
+                    previewId: preview.id,
+                    unitsDone: preview.unitsDone,
+                    unitsTotal: preview.unitsTotal,
+                  };
+            })
+          )
+        )
       );
   });
 

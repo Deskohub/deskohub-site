@@ -3,7 +3,10 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, describe, expect, test } from "bun:test";
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import type { AutomationFlowType } from "@deskohub/workspace-admin-api";
-import { Effect } from "effect";
+import { Context, Deferred, Effect, Fiber } from "effect";
+import { SqlClient } from "effect/sql";
+import { TestClock } from "effect/testing";
+import { withPostgresAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   campaignContentFixture,
   seedAutomatedSend,
@@ -14,6 +17,7 @@ import type {
 } from "@/features/email-campaigns/campaign-identifiers";
 import {
   holdPostgresTransaction,
+  waitForAdvisoryLockWaiter,
   waitForPostgresLockWaiter,
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
@@ -145,6 +149,303 @@ describe.skipIf(!testDatabase)(
         [campaignId]
       );
       expect(rows).toEqual([{ flow: null }]);
+    });
+
+    describe("pass reminder campaign ownership", () => {
+      const permitPassReminders = Effect.provideService(
+        PassReminderWritesOpen,
+        Effect.succeed(true)
+      );
+
+      const previewPassReminder = async (
+        campaignId: CampaignId,
+        tag: "EntryPackExpiring" | "UnlimitedEnding",
+        at = now
+      ) => {
+        const trigger = { _tag: tag };
+        const flow = automationFlowFixture({
+          trigger,
+          steps: [{ _tag: "Send", id: "send" }],
+        });
+        await run(
+          lifecycle((service) => service.updateFlow({ campaignId, flow })).pipe(
+            permitPassReminders
+          ),
+          at
+        );
+        const previewId = await seedPreview(campaignId, {
+          status: "completed",
+        });
+        const { fireAt } = nextPassReminderPreviewOccurrence(trigger, at);
+        await pool.query(
+          "update email_campaign_automation_previews set as_of = $2 where id = $1",
+          [previewId, fireAt.toString()]
+        );
+        return lifecycle((service) =>
+          service.activate({ campaignId, previewId, activatedBy: null })
+        ).pipe(permitPassReminders);
+      };
+
+      test("allows one active campaign per kind and transfers ownership through pause and archive", async () => {
+        const first = (await seedDraft()).campaignId;
+        const replacement = (await seedDraft()).campaignId;
+        const unlimited = (await seedDraft()).campaignId;
+        const activateFirst = await previewPassReminder(
+          first,
+          "EntryPackExpiring"
+        );
+        const activateReplacement = await previewPassReminder(
+          replacement,
+          "EntryPackExpiring"
+        );
+        await run(activateFirst);
+        await run(await previewPassReminder(unlimited, "UnlimitedEnding"));
+        expect(await failure(activateReplacement)).toMatchObject({
+          _tag: "AutomationTriggerInUse",
+          campaignId: replacement,
+        });
+        expect((await automationRow(replacement)).status).toBe("draft");
+        expect(await versionRows(replacement)).toEqual([]);
+
+        await run(lifecycle((service) => service.pause(first)));
+        await run(activateReplacement);
+        await run(
+          lifecycle((service) =>
+            service.updateFlow({ campaignId: first, flow: bookedSendFlow })
+          )
+        );
+        const resumeFirst = lifecycle((service) => service.resume(first)).pipe(
+          permitPassReminders
+        );
+        expect(await failure(resumeFirst)).toMatchObject({
+          _tag: "AutomationTriggerInUse",
+          campaignId: first,
+        });
+        expect((await automationRow(first)).status).toBe("paused");
+        await run(lifecycle((service) => service.archive(replacement)));
+        await run(resumeFirst);
+
+        const switchToUnlimited = await previewPassReminder(
+          first,
+          "UnlimitedEnding"
+        );
+        const beforeSwitch = await automationRow(first);
+        expect((await failure(switchToUnlimited))._tag).toBe(
+          "AutomationTriggerInUse"
+        );
+        expect(await automationRow(first)).toEqual(beforeSwitch);
+        expect(await versionRows(first)).toHaveLength(1);
+
+        await run(lifecycle((service) => service.pause(first)));
+        await run(switchToUnlimited);
+        expect(await versionRows(first)).toHaveLength(2);
+        expect((await failure(resumeFirst))._tag).toBe(
+          "AutomationTriggerInUse"
+        );
+        expect((await automationRow(first)).status).toBe("paused");
+        await run(lifecycle((service) => service.archive(unlimited)));
+      });
+
+      test("serializes competing activation transactions for the same kind", async () => {
+        const first = (await seedDraft()).campaignId;
+        const second = (await seedDraft()).campaignId;
+        const activateFirst = await previewPassReminder(
+          first,
+          "EntryPackExpiring"
+        );
+        const activateSecond = await previewPassReminder(
+          second,
+          "EntryPackExpiring"
+        );
+        const outcomes = await Promise.all([
+          run(Effect.result(activateFirst)),
+          run(Effect.result(activateSecond)),
+        ]);
+        expect(outcomes).toContainEqual(
+          expect.objectContaining({ _tag: "Success" })
+        );
+        expect(outcomes).toContainEqual(
+          expect.objectContaining({
+            _tag: "Failure",
+            failure: expect.objectContaining({
+              _tag: "AutomationTriggerInUse",
+            }),
+          })
+        );
+        const campaigns = await Promise.all([
+          automationRow(first),
+          automationRow(second),
+        ]);
+        expect(campaigns.map(({ status }) => status).sort()).toEqual([
+          "active",
+          "draft",
+        ]);
+        await run(lifecycle((service) => service.archive(first)));
+        await run(lifecycle((service) => service.archive(second)));
+      });
+
+      test.each(["changes trigger", "stays active"] as const)(
+        "rechecks the preview cutoff when the owner %s during an activation wait",
+        async (ownerBehavior) => {
+          const owner = (await seedDraft()).campaignId;
+          const replacement = (await seedDraft()).campaignId;
+          const beforeCutoff = Temporal.Instant.from("2026-10-19T07:59:00Z");
+          const afterCutoff = beforeCutoff.add({ minutes: 2 });
+          await run(
+            await previewPassReminder(owner, "EntryPackExpiring", beforeCutoff),
+            beforeCutoff
+          );
+          const activateReplacement = await previewPassReminder(
+            replacement,
+            "EntryPackExpiring",
+            beforeCutoff
+          );
+          await run(
+            lifecycle((service) =>
+              service.updateFlow({ campaignId: owner, flow: bookedSendFlow })
+            ),
+            beforeCutoff
+          );
+          const editedPreview = await seedPreview(owner, {
+            status: "completed",
+          });
+          const lockKey = [
+            "email-pass-reminder-campaign",
+            "EntryPackExpiring",
+          ] as const;
+
+          const result = await run(
+            Effect.gen(function* () {
+              const held = yield* Deferred.make<void>();
+              const release = yield* Deferred.make<void>();
+              const holder = yield* Effect.forkChild(
+                withPostgresAdvisoryLock(
+                  Context.get(
+                    testDatabase.databasePool.postgres,
+                    SqlClient.SqlClient
+                  ),
+                  lockKey,
+                  Deferred.succeed(held, undefined).pipe(
+                    Effect.andThen(Deferred.await(release))
+                  )
+                )
+              );
+              yield* Deferred.await(held);
+              const contender = yield* Effect.forkChild(
+                Effect.result(activateReplacement)
+              );
+              yield* Effect.promise(() =>
+                waitForAdvisoryLockWaiter(pool, lockKey)
+              );
+              yield* TestClock.setTime(afterCutoff.epochMilliseconds);
+              if (ownerBehavior === "changes trigger") {
+                yield* lifecycle((service) =>
+                  service.activate({
+                    campaignId: owner,
+                    previewId: editedPreview,
+                    activatedBy: null,
+                  })
+                );
+              }
+              yield* Deferred.succeed(release, undefined);
+              yield* Fiber.join(holder);
+              return yield* Fiber.join(contender);
+            }),
+            beforeCutoff
+          );
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { _tag: "AutomationPreviewRequired" },
+          });
+          expect((await automationRow(replacement)).status).toBe("draft");
+          expect(await versionRows(replacement)).toEqual([]);
+          await run(lifecycle((service) => service.archive(owner)));
+        }
+      );
+
+      test("a replacement resumed at 10:00 cannot take the departing owner's occurrence", async () => {
+        const owner = (await seedDraft()).campaignId;
+        const replacement = (await seedDraft()).campaignId;
+        const cutoff = Temporal.Instant.from("2026-10-19T08:00:00Z");
+        const beforeCutoff = cutoff.subtract({ minutes: 1 });
+        await run(
+          await previewPassReminder(
+            replacement,
+            "EntryPackExpiring",
+            beforeCutoff
+          ),
+          beforeCutoff
+        );
+        await run(
+          lifecycle((service) => service.pause(replacement)),
+          beforeCutoff
+        );
+        await run(
+          await previewPassReminder(owner, "EntryPackExpiring", beforeCutoff),
+          beforeCutoff
+        );
+
+        await run(
+          lifecycle((service) => service.pause(owner)),
+          cutoff
+        );
+        await run(
+          lifecycle((service) => service.resume(replacement)).pipe(
+            permitPassReminders
+          ),
+          cutoff
+        );
+        const { rows } = await pool.query(
+          `select accepting_since = $2 as accepts_next_instant,
+                  resumed_at = $2 as resumes_next_instant
+             from email_campaign_automations where campaign_id = $1`,
+          [replacement, cutoff.add({ microseconds: 1 }).toString()]
+        );
+        expect(rows).toEqual([
+          { accepts_next_instant: true, resumes_next_instant: true },
+        ]);
+        await run(lifecycle((service) => service.archive(replacement)));
+      });
+
+      test("first activation at 10:00 starts after that day's occurrence even when the kind is vacant", async () => {
+        const { campaignId } = await seedDraft();
+        const cutoff = Temporal.Instant.from("2026-10-19T08:00:00Z");
+        await run(
+          await previewPassReminder(campaignId, "EntryPackExpiring", cutoff),
+          cutoff
+        );
+        const { rows } = await pool.query(
+          `select a.accepting_since = $2 as accepts_next_instant,
+                  v.activated_at = $2 as activates_next_instant
+             from email_campaign_automations a
+             join email_campaign_automation_versions v on v.id = a.active_version_id
+            where a.campaign_id = $1`,
+          [campaignId, cutoff.add({ microseconds: 1 }).toString()]
+        );
+        expect(rows).toEqual([
+          { accepts_next_instant: true, activates_next_instant: true },
+        ]);
+        await run(lifecycle((service) => service.archive(campaignId)));
+      });
+
+      test("checks the preview against the version timestamp when a previous publication is newer than the clock", async () => {
+        const cutoff = Temporal.Instant.from("2026-10-19T08:00:00Z");
+        const beforeCutoff = cutoff.subtract({ minutes: 1 });
+        const { campaignId } = await seedActive(bookedSendFlow, {
+          at: cutoff.add({ minutes: 1 }),
+        });
+        const before = await automationRow(campaignId);
+        const activate = await previewPassReminder(
+          campaignId,
+          "EntryPackExpiring",
+          beforeCutoff
+        );
+        expect((await failure(activate, beforeCutoff))._tag).toBe(
+          "AutomationPreviewRequired"
+        );
+        expect(await automationRow(campaignId)).toEqual(before);
+        expect(await versionRows(campaignId)).toHaveLength(1);
+      });
     });
 
     describe("the preview gate (§7.5)", () => {

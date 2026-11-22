@@ -9,6 +9,12 @@ const lifecycleCodes: CampaignOperationFailureCopy["codes"] = {
     m.emailAutomationActivationFailureStatusConflict({}, { locale }),
 };
 
+/** Codes of a change that makes a campaign the active one of its trigger. */
+const triggerCodes: CampaignOperationFailureCopy["codes"] = {
+  "automation-trigger-in-use": (locale) =>
+    m.emailAutomationActivationFailureTriggerInUse({}, { locale }),
+};
+
 export const dryRunFailureCopy: CampaignOperationFailureCopy = {
   fallback: (locale) => m.emailAutomationActivationDryRunFailed({}, { locale }),
   codes: {
@@ -23,6 +29,7 @@ export const activateFailureCopy: CampaignOperationFailureCopy = {
     m.emailAutomationActivationActivateFailed({}, { locale }),
   codes: {
     ...lifecycleCodes,
+    ...triggerCodes,
     "automation-preview-required": (locale) =>
       m.emailAutomationActivationFailurePreviewRequired({}, { locale }),
     "automation-draft-changed": (locale) =>
@@ -43,7 +50,7 @@ export const pauseFailureCopy: CampaignOperationFailureCopy = {
 
 export const resumeFailureCopy: CampaignOperationFailureCopy = {
   fallback: (locale) => m.emailAutomationActivationResumeFailed({}, { locale }),
-  codes: lifecycleCodes,
+  codes: { ...lifecycleCodes, ...triggerCodes },
 };
 
 export const archiveFailureCopy: CampaignOperationFailureCopy = {
