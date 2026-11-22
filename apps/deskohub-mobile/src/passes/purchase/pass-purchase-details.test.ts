@@ -116,10 +116,17 @@ describe("pass purchase Details", () => {
 const { elementTree, findAll, hostTree } = await import(
   "../../ui/testing/element-tree"
 );
+const siteNavigation = { ...(await import("../../routing/open-site-page")) };
+const openDocument = mock(async (_url: string) => undefined);
+mock.module("../../routing/open-site-page", () => ({
+  ...siteNavigation,
+  openSitePage: openDocument,
+}));
 const { PassPurchaseAgreement } = await import("./pass-purchase-agreement");
 
 test("uses one agreement for both policy documents and the actual early-start request", () => {
   const earlyStartRequest = "The service starts on the selected date.";
+  const toggle = mock(() => undefined);
   const tree = hostTree(
     elementTree(PassPurchaseAgreement, {
       disclosure: {
@@ -141,7 +148,7 @@ test("uses one agreement for both policy documents and the actual early-start re
       },
       checked: false,
       disabled: false,
-      onToggle: () => undefined,
+      onToggle: toggle,
       locale: "en-US",
     })
   );
@@ -154,7 +161,16 @@ test("uses one agreement for both policy documents and the actual early-start re
     "aria-checked": false,
     "aria-label": expect.stringContaining(earlyStartRequest),
   });
-  expect(
-    findAll(tree, "Text").filter(({ props }) => props.role === "link")
-  ).toHaveLength(2);
+  const links = findAll(tree, "Text").filter(
+    ({ props }) => props.role === "link"
+  );
+  expect(links).toHaveLength(2);
+  const pressLink = links[0]?.props.onPress;
+  if (typeof pressLink !== "function") throw new Error("Missing legal link");
+  const stopPropagation = mock(() => undefined);
+
+  pressLink({ stopPropagation });
+  expect(stopPropagation).toHaveBeenCalledTimes(1);
+  expect(openDocument).toHaveBeenCalledTimes(1);
+  expect(toggle).toHaveBeenCalledTimes(0);
 });
