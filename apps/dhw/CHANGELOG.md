@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.40.0](https://github.com/totalolage/deskohub-site/compare/dhw-v1.39.0...dhw-v1.40.0) (2026-11-22)
+
+
+### Features
+
+* **dhw:** decode cowork pass reminder triggers ([9c5f414](https://github.com/totalolage/deskohub-site/commit/9c5f414b0932bb0d83a3ed1b6ad90cde872a1b1d))
+
 ## [1.39.0](https://github.com/totalolage/deskohub-site/compare/dhw-v1.38.0...dhw-v1.39.0) (2026-11-22)
 
 
