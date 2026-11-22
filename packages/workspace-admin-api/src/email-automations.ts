@@ -132,13 +132,45 @@ export const AutomationWait = Schema.Union([
 ]).annotate({ identifier: "AutomationWait" });
 export type AutomationWait = typeof AutomationWait.Type;
 
+export const automationOneOffCampaignGapMaxDays = 90;
+
+/** How long a Send waits after a one-off marketing campaign email. */
+export const AutomationOneOffCampaignGap = Schema.Struct({
+  days: Schema.Int.check(
+    Schema.isBetween({
+      minimum: 1,
+      maximum: automationOneOffCampaignGapMaxDays,
+    })
+  ),
+}).annotate({ identifier: "AutomationOneOffCampaignGap" });
+export type AutomationOneOffCampaignGap =
+  typeof AutomationOneOffCampaignGap.Type;
+
 export const AutomationStep = Schema.Union([
   Schema.TaggedStruct("Condition", {
     id: AutomationStepId,
     filter: AutomationConditionFilter,
   }),
   Schema.TaggedStruct("Wait", { id: AutomationStepId, wait: AutomationWait }),
-  Schema.TaggedStruct("Send", { id: AutomationStepId }),
+  Schema.TaggedStruct("Send", {
+    id: AutomationStepId,
+    /**
+     * The campaign emails each customer at most once ever. A send that may
+     * have reached the provider keeps the customer's claim; a skipped or
+     * refused one releases it.
+     */
+    oncePerCustomer: Schema.optionalKey(Schema.Literal(true)),
+    /**
+     * Hold the email until this many Prague calendar days after the
+     * customer's latest one-off marketing campaign email.
+     */
+    oneOffCampaignGap: Schema.optionalKey(AutomationOneOffCampaignGap),
+    /**
+     * Skip customers who hold a usable Entry pack or an active or upcoming
+     * Unlimited pass when the email is about to go out.
+     */
+    skipPassHolders: Schema.optionalKey(Schema.Literal(true)),
+  }),
 ]).annotate({ identifier: "AutomationStep" });
 export type AutomationStep = typeof AutomationStep.Type;
 
@@ -351,12 +383,37 @@ export const AutomationPreviewState = Schema.Literals(
 );
 export type AutomationPreviewState = typeof AutomationPreviewState.Type;
 
+/**
+ * Why a run ended `skipped`: its recipient's skip reason, or
+ * `already-sent-once` when a once-per-customer send found the customer
+ * already claimed by another run of the campaign.
+ */
+export const automationRunSkipReasons = [
+  ...AdministrationCampaignRecipientSkipReason.literals,
+  "already-sent-once",
+] as const;
+export const AutomationRunSkipReason = Schema.Literals(
+  automationRunSkipReasons
+);
+export type AutomationRunSkipReason = typeof AutomationRunSkipReason.Type;
+
+export const automationSendDeferralCauses = [
+  "trigger-not-reached",
+  "one-off-campaign-gap",
+] as const;
+export const AutomationSendDeferralCause = Schema.Literals(
+  automationSendDeferralCauses
+);
+export type AutomationSendDeferralCause =
+  typeof AutomationSendDeferralCause.Type;
+
 export const automationPreviewOutcomes = [
   "would-send",
   "condition-failed",
   "not-in-audience",
   "already-active",
   "withdrawn",
+  "skipped",
   "unavailable",
 ] as const;
 export const AutomationPreviewOutcome = Schema.Literals(
@@ -404,6 +461,8 @@ export const AutomationDryRunRow = Schema.Struct({
    * engine ticks every 15 minutes, so a send waits for the next one.
    */
   sendAt: nullableField(Instant),
+  /** Why the send step would skip the customer, for `skipped`. */
+  skipReason: nullableField(AutomationRunSkipReason),
   /** Evaluated after now, from facts as they are now. */
   projected: fieldWithDefault(Schema.Boolean, false),
   /**
@@ -454,6 +513,7 @@ export const AutomationDryRun = Schema.Struct({
     "not-in-audience": 0,
     "already-active": 0,
     withdrawn: 0,
+    skipped: 0,
     unavailable: 0,
   }),
   /** Replay only: the events in the window, before truncation. */
@@ -548,7 +608,9 @@ const zeroSkipReasonCounts = {
   "invalid-email": 0,
   "consent-withdrawn": 0,
   "outside-test-domain": 0,
-};
+  "pass-holder": 0,
+  "already-sent-once": 0,
+} satisfies Record<AutomationRunSkipReason, 0>;
 
 /** Run counts of all versions, or of one. */
 export const AutomationRunStats = Schema.Struct({
@@ -569,7 +631,7 @@ export const AutomationRunStats = Schema.Struct({
    * it may not add up to `byOutcome.skipped`.
    */
   bySkipReason: fieldWithDefault(
-    Schema.Record(AdministrationCampaignRecipientSkipReason, count),
+    Schema.Record(AutomationRunSkipReason, count),
     zeroSkipReasonCounts
   ),
 });
@@ -582,7 +644,7 @@ export const AutomationRunListInput = Schema.Struct({
   stepId: Schema.optionalKey(AutomationStepId),
   outcome: Schema.optionalKey(AutomationRunOutcome),
   /** Skipped runs with this reason only. */
-  skipReason: Schema.optionalKey(AdministrationCampaignRecipientSkipReason),
+  skipReason: Schema.optionalKey(AutomationRunSkipReason),
   versionNumber: Schema.optionalKey(AutomationVersionNumber),
   customerId: Schema.optionalKey(AdministrationDotyposCustomerId),
   cursor: Schema.optionalKey(AutomationPageCursor),
@@ -691,15 +753,19 @@ export const automationRunEventDetails = {
   }),
   waiting: Schema.Struct({ dueAt: Instant }),
   woke: noDetail,
-  /** The triggering visit moved later; the send waits for it. */
+  /**
+   * The send waits: the triggering visit moved later
+   * (`trigger-not-reached`), or the customer got a one-off marketing
+   * campaign email too recently (`one-off-campaign-gap`).
+   */
   deferred: Schema.Struct({
-    cause: Schema.Literal("trigger-not-reached"),
+    cause: AutomationSendDeferralCause,
     recheckAt: Instant,
   }),
   "send-queued": Schema.Struct({ sendId: AdministrationCampaignSendId }),
   sent: noDetail,
   unconfirmed: noDetail,
-  skipped: Schema.Struct({ reason: AdministrationCampaignRecipientSkipReason }),
+  skipped: Schema.Struct({ reason: AutomationRunSkipReason }),
   failed: Schema.Struct({ reason: AutomationRunFailureReason }),
   withdrawn: noDetail,
   archived: noDetail,

@@ -230,6 +230,8 @@ describe("automation responses", () => {
       "invalid-email": 0,
       "consent-withdrawn": 0,
       "outside-test-domain": 0,
+      "pass-holder": 0,
+      "already-sent-once": 0,
     });
   });
 
@@ -271,6 +273,8 @@ describe("automation responses", () => {
           "invalid-email": 0,
           "consent-withdrawn": 1,
           "outside-test-domain": 0,
+          "pass-holder": 1,
+          "already-sent-once": 3,
         },
       })
     );

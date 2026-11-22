@@ -34,6 +34,7 @@ import {
   type AutomationRunFailureReason,
   type AutomationRunOutcome,
   type AutomationRunPhase,
+  type AutomationRunSkipReason,
   type AutomationRunState,
   type AutomationScheduleFireStatus,
   type AutomationTriggerDisposition,
@@ -43,6 +44,7 @@ import {
   automationPreviewStatuses,
   automationRunEventKinds,
   automationRunOutcomes,
+  automationRunSkipReasons,
   automationScheduleFireStatuses,
   automationTriggerDispositions,
   automationTriggerKinds,
@@ -333,7 +335,9 @@ export const emailCampaignAutomationRuns = pgTable(
     sendId: text("send_id").$type<CampaignSendId>(),
     outcome: text("outcome").$type<AutomationRunOutcome>(),
     outcomeReason: text("outcome_reason").$type<
-      CampaignRecipientSkipReason | AutomationRunFailureReason
+      | CampaignRecipientSkipReason
+      | AutomationRunSkipReason
+      | AutomationRunFailureReason
     >(),
     startedAt: instant("started_at").notNull().default(sql`now()`),
     endedAt: instant("ended_at"),
@@ -410,6 +414,37 @@ export const emailCampaignAutomationRuns = pgTable(
     check(
       "email_campaign_automation_runs_pass_trigger_check",
       sql`(${t.triggerKind} in ('entry-pack-expiring', 'unlimited-ending')) = (${t.triggerPassId} is not null) and (${t.triggerPassId} is null) = (${t.passReminderContext} is null)`
+    ),
+  ]
+);
+
+/**
+ * A once-per-customer send's claim on a customer: at most one run of the
+ * campaign holds it. Delivery inserts it, before the provider request, in
+ * the transaction that moves the run to `sending`; it stays once the email
+ * may have reached the provider. A run that ends `skipped` or `failed`
+ * releases it (`AutomationRunTransitions.end`).
+ */
+export const emailCampaignAutomationCustomerClaims = pgTable(
+  "email_campaign_automation_customer_claims",
+  {
+    campaignId: text("campaign_id")
+      .notNull()
+      .references(() => emailCampaigns.id)
+      .$type<CampaignId>(),
+    dotyposCustomerId: text("dotypos_customer_id")
+      .notNull()
+      .$type<DotyposCustomerId>(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => emailCampaignAutomationRuns.id)
+      .$type<AutomationRunId>(),
+    claimedAt: instant("claimed_at").notNull().default(sql`now()`),
+  },
+  (t) => [
+    primaryKey({ columns: [t.campaignId, t.dotyposCustomerId] }),
+    uniqueIndex("email_campaign_automation_customer_claims_run_idx").on(
+      t.runId
     ),
   ]
 );
@@ -618,6 +653,8 @@ export const emailCampaignAutomationPreviewRows = pgTable(
     outcome: text("outcome").notNull().$type<AutomationPreviewOutcome>(),
     stepId: text("step_id").$type<AutomationStepId>(),
     sendAt: instant("send_at"),
+    /** Set for `skipped`. */
+    skipReason: text("skip_reason").$type<AutomationRunSkipReason>(),
     projected: boolean("projected").notNull(),
     /** Read a reservation status the replay couldn't date then. */
     reservationStatusesApproximate: boolean("reservation_statuses_approximate")
@@ -629,6 +666,10 @@ export const emailCampaignAutomationPreviewRows = pgTable(
     check(
       "email_campaign_automation_preview_rows_outcome_check",
       sql`${t.outcome} in (${quotedSqlList(automationPreviewOutcomes)})`
+    ),
+    check(
+      "email_campaign_automation_preview_rows_skip_reason_check",
+      sql`(${t.outcome} = 'skipped') = (${t.skipReason} is not null) and (${t.skipReason} is null or ${t.skipReason} in (${quotedSqlList(automationRunSkipReasons)}))`
     ),
   ]
 );

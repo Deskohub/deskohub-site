@@ -51,6 +51,7 @@ export {
   invoiceNumberCounters,
 } from "./document-number-counters";
 export {
+  emailCampaignAutomationCustomerClaims,
   emailCampaignAutomationEngine,
   emailCampaignAutomationPreviewRows,
   emailCampaignAutomationPreviews,
