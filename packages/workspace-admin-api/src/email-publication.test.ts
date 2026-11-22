@@ -228,6 +228,35 @@ describe("rich multilingual structure", () => {
     ]);
     expect(Result.isFailure(publish(insecure))).toBe(true);
   });
+
+  test.each([
+    [
+      "https://workspace.deskohub.cz/cs-CZ/reservation/cowork?discountCode=old",
+      true,
+    ],
+    ["https://workspace.deskohub.cz/reservation/cowork", true],
+    ["https://workspace.deskohub.cz.evil.test/reservation/cowork", false],
+    ["https://workspace.deskohub.cz/reservation/meeting-room", false],
+  ])(
+    "validates the destination of an Offer with code prefill (%s)",
+    (href, valid) => {
+      const document = {
+        ...richDocument,
+        structure: richDocument.structure.map((component) =>
+          component._tag === "Offer"
+            ? { ...component, href, prefillDiscountCode: true }
+            : component
+        ),
+      };
+      const result = publish(document);
+      expect(Result.isSuccess(result)).toBe(valid);
+      if (Result.isSuccess(result)) {
+        expect(result.success.structure).toContainEqual(
+          expect.objectContaining({ href, prefillDiscountCode: true })
+        );
+      }
+    }
+  );
 });
 
 describe("drafts and publication", () => {

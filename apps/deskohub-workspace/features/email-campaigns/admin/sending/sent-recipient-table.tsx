@@ -40,6 +40,7 @@ const skipReasonMessages = {
   "invalid-email": m.emailCampaignsSentSkipReasonInvalidEmail,
   "consent-withdrawn": m.emailCampaignsSentSkipReasonConsentWithdrawn,
   "outside-test-domain": m.emailCampaignsSentSkipReasonOutsideTestDomain,
+  "missing-email-language": m.emailCampaignsSentSkipReasonMissingEmailLanguage,
 } as const satisfies Record<
   CampaignRecipientSkipReason,
   typeof m.emailCampaignsSentSkipReasonMissingFromDotypos

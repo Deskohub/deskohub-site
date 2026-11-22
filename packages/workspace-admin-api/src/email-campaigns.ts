@@ -10,6 +10,7 @@ import {
   AdministrationCampaignPurpose,
 } from "./campaign-locale-and-purpose";
 import { DhwVersion } from "./dhw-version";
+import { EmailId } from "./email-identifiers";
 import {
   AdministrationDotyposCustomerId,
   CliInputInvalid,
@@ -217,6 +218,7 @@ export const AdministrationCampaignSummary = Schema.Struct({
   ),
   status: AdministrationCampaignStatus,
   audienceId: Schema.NullOr(AdministrationCampaignAudienceId),
+  emailId: Schema.optionalKey(EmailId),
   locales: Schema.Array(AdministrationCampaignLocale),
   createdAt: Schema.String,
   updatedAt: Schema.String,
@@ -249,6 +251,7 @@ export const AdministrationCampaignCreateInput = Schema.Struct({
   /** `once` when omitted. */
   delivery: Schema.optionalKey(AdministrationCampaignDelivery),
   audienceId: Schema.NullOr(AdministrationCampaignAudienceId),
+  emailId: Schema.optionalKey(EmailId),
   content: AdministrationCampaignContentInput,
 });
 export type AdministrationCampaignCreateInput =
@@ -315,6 +318,7 @@ export const AdministrationCampaignUpdateInput = Schema.Struct({
   audienceId: Schema.optionalKey(
     Schema.NullOr(AdministrationCampaignAudienceId)
   ),
+  emailId: Schema.optionalKey(Schema.NullOr(EmailId)),
   content: Schema.optionalKey(
     Schema.Record(
       AdministrationCampaignLocale,
@@ -348,12 +352,17 @@ export const AdministrationCampaignTemplatePreviewInput = Schema.Union([
     campaignId: AdministrationCampaignId,
     locale: AdministrationCampaignLocale,
   }),
+  Schema.TaggedStruct("PublishedEmail", {
+    emailId: EmailId,
+    locale: AdministrationCampaignLocale,
+  }),
 ]);
 export type AdministrationCampaignTemplatePreviewInput =
   typeof AdministrationCampaignTemplatePreviewInput.Type;
 
 export const AdministrationCampaignEmailPreview = Schema.Struct({
   subject: Schema.String,
+  preheader: Schema.optionalKey(Schema.String),
   html: Schema.String,
   text: Schema.String,
 });
@@ -472,7 +481,12 @@ export const AdministrationCampaignSendStatus = Schema.Struct({
       locale: AdministrationCampaignLocale,
       status: AdministrationCampaignRecipientStatus,
       /** Set exactly when the status is `skipped`. */
-      skipReason: Schema.NullOr(AdministrationCampaignRecipientSkipReason),
+      skipReason: Schema.NullOr(
+        Schema.Union([
+          AdministrationCampaignRecipientSkipReason,
+          Schema.Literal("missing-email-language"),
+        ])
+      ),
       statusUpdatedAt: Schema.String,
     })
   ),

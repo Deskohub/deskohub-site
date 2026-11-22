@@ -113,6 +113,7 @@ export const campaignRecipientSkipReasons = [
   "invalid-email",
   "consent-withdrawn",
   "outside-test-domain",
+  "missing-email-language",
 ] as const;
 const campaignRecipientSkipReasonSchema = Schema.Literals(
   campaignRecipientSkipReasons

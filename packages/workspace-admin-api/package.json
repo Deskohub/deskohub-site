@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./cowork-booking-link": "./src/cowork-booking-link.ts",
     "./site-time-zone": "./src/site-time-zone.ts"
   },
   "scripts": {

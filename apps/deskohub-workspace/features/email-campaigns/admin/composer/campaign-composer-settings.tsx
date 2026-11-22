@@ -1,5 +1,8 @@
 "use client";
 
+import { EmailId } from "@deskohub/workspace-admin-api";
+import { AdministrationLink } from "@/features/administration/admin-link";
+import { administrationHref } from "@/features/administration/administration-href";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { ChoiceCard } from "@/shared/components/ui/choice-card";
@@ -18,10 +21,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/shared/components/ui/select";
+import { textLink } from "@/shared/components/ui/text-link";
 import type { CampaignPurpose } from "../../body/campaign-content";
 import type { CampaignDelivery } from "../../campaign-states";
 import type { AudienceOption } from "../audiences/audience-page-data.server";
-import type { CampaignComposerTemplate } from "./campaign-composer";
+import type {
+  CampaignComposerPublishedEmail,
+  CampaignComposerTemplate,
+} from "./campaign-composer";
 import type { CampaignComposerControl } from "./campaign-composer-form";
 import { CampaignTemplatePreview } from "./campaign-template-preview";
 
@@ -325,6 +332,68 @@ function AudienceField({
   );
 }
 
+function PublishedEmailField({
+  control,
+  locale,
+  publishedEmails,
+}: {
+  readonly control: CampaignComposerControl;
+  readonly locale: Locale;
+  readonly publishedEmails: readonly CampaignComposerPublishedEmail[];
+}) {
+  return (
+    <FormField
+      control={control}
+      name="emailId"
+      render={({ field }) => (
+        <FormItem>
+          <FormLabel>
+            {m.emailCampaignsComposerPublishedEmailLabel({}, { locale })}
+          </FormLabel>
+          <Select
+            onValueChange={(value) =>
+              field.onChange(value === "inline" ? "" : EmailId.make(value))
+            }
+            value={field.value || "inline"}
+          >
+            <FormControl>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+            </FormControl>
+            <SelectContent>
+              <SelectItem value="inline">
+                {m.emailCampaignsComposerInlineEmail({}, { locale })}
+              </SelectItem>
+              {field.value &&
+                !publishedEmails.some(
+                  ({ emailId }) => emailId === field.value
+                ) && (
+                  <SelectItem disabled value={field.value}>
+                    {m.emailCampaignsComposerPublishedEmailInvalid(
+                      {},
+                      { locale }
+                    )}
+                  </SelectItem>
+                )}
+              {publishedEmails.map(({ emailId, title }) => (
+                <SelectItem key={emailId} value={emailId}>
+                  {title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {field.value && (
+            <p className="text-navy-blue/55 text-xs">
+              {m.emailCampaignsComposerPublishedEmailConsent({}, { locale })}
+            </p>
+          )}
+        </FormItem>
+      )}
+    />
+  );
+}
+
 /**
  * The campaign section's fields: a new campaign's delivery, then title,
  * purpose, template, and audience.
@@ -335,9 +404,11 @@ export function CampaignSettingsFields({
   control,
   delivery,
   isNew,
+  linkedEmailId,
   locale,
   onDeliveryChange,
   template,
+  publishedEmails,
   templates,
 }: {
   readonly audience: AudienceOption | undefined;
@@ -346,9 +417,11 @@ export function CampaignSettingsFields({
   readonly delivery: CampaignDelivery;
   /** Whether the composer creates a new campaign, whose delivery it picks. */
   readonly isNew: boolean;
+  readonly linkedEmailId?: string | undefined;
   readonly locale: Locale;
   readonly onDeliveryChange: (delivery: CampaignDelivery) => void;
   readonly template: CampaignComposerTemplate | undefined;
+  readonly publishedEmails: readonly CampaignComposerPublishedEmail[];
   readonly templates: readonly CampaignComposerTemplate[];
 }) {
   return (
@@ -361,13 +434,32 @@ export function CampaignSettingsFields({
         />
       )}
       <TitleField control={control} locale={locale} />
-      <PurposeField control={control} locale={locale} />
-      <TemplateField
-        control={control}
-        locale={locale}
-        template={template}
-        templates={templates}
-      />
+      {delivery === "once" && (publishedEmails.length > 0 || linkedEmailId) && (
+        <PublishedEmailField
+          control={control}
+          locale={locale}
+          publishedEmails={publishedEmails}
+        />
+      )}
+      {delivery === "once" && (
+        <AdministrationLink
+          className={textLink({ className: "text-sm" })}
+          href={administrationHref("/[locale]/admin/email-campaigns/library")}
+        >
+          {m.emailsLibraryHeading({}, { locale })}
+        </AdministrationLink>
+      )}
+      {!linkedEmailId && (
+        <>
+          <PurposeField control={control} locale={locale} />
+          <TemplateField
+            control={control}
+            locale={locale}
+            template={template}
+            templates={templates}
+          />
+        </>
+      )}
       <AudienceField
         audience={audience}
         audiences={audiences}

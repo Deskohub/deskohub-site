@@ -1,5 +1,6 @@
 import type { SupportedLocale } from "@deskohub/i18n/locale-registry";
 import { Data, Option, Schema, SchemaGetter } from "effect";
+import { parseCoworkBookingLink } from "./cowork-booking-link";
 import {
   type EmailCustomerField,
   type EmailCustomerSelectionInvalid,
@@ -57,6 +58,7 @@ export type EmailDocumentProblem = Data.TaggedEnum<{
   };
   /** A link, button, linked image or offer leads somewhere other than https: or mailto:. */
   DestinationInvalid: { readonly componentId: string; readonly field: string };
+  OfferBookingLinkInvalid: { readonly componentId: string };
   ImageSourceInvalid: { readonly componentId: string };
   ValueNameDuplicate: { readonly name: string };
   ValueNameInvalid: { readonly index: number; readonly name: string };
@@ -137,6 +139,8 @@ export const englishEmailDocumentProblem = (
       `Component ${componentId ?? `#${index + 1}`} needs ${field}.`,
     DestinationInvalid: ({ componentId, field }) =>
       `${componentId} ${field} must use an https: or mailto: URL.`,
+    OfferBookingLinkInvalid: ({ componentId }) =>
+      `Offer ${componentId} needs a Workspace cowork booking link to prefill a discount code.`,
     ImageSourceInvalid: ({ componentId }) =>
       `Image ${componentId} must use an https: URL.`,
     ValueNameDuplicate: ({ name }) => `Duplicate value name: ${name}.`,
@@ -681,9 +685,7 @@ const destinationProblems = (
   component: DraftComponent,
   componentId: string
 ): EmailDocumentProblem[] => [
-  ...(component.href && !isDestination(component.href)
-    ? [P.DestinationInvalid({ componentId, field: "href" })]
-    : []),
+  ...componentDestinationProblems(component, componentId),
   ...Object.entries(component.links ?? {})
     .filter(([, href]) => !isDestination(href))
     .map(([link]) =>
@@ -691,6 +693,20 @@ const destinationProblems = (
     ),
   ...imageSourceProblems(component, componentId),
 ];
+
+const componentDestinationProblems = (
+  { _tag, href, prefillDiscountCode }: DraftComponent,
+  componentId: string
+): EmailDocumentProblem[] => {
+  if (!href) return [];
+  if (_tag === "Offer" && prefillDiscountCode)
+    return parseCoworkBookingLink(href)
+      ? []
+      : [P.OfferBookingLinkInvalid({ componentId })];
+  return isDestination(href)
+    ? []
+    : [P.DestinationInvalid({ componentId, field: "href" })];
+};
 
 const imageSourceProblems = (
   component: DraftComponent,

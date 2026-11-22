@@ -10,6 +10,10 @@ import {
   matchesEmailCustomerField,
   WORKSPACE_SITE_TIME_ZONE,
 } from "@deskohub/workspace-admin-api";
+import {
+  discountCodeQueryParam,
+  parseCoworkBookingLink,
+} from "@deskohub/workspace-admin-api/cowork-booking-link";
 import type { JSONContent } from "@tiptap/core";
 import { Array as Arr, Match, Option, Predicate, Result, Schema } from "effect";
 import { Fragment, type ReactElement, type ReactNode } from "react";
@@ -22,6 +26,7 @@ import { isLocale, type Locale, m } from "@/features/i18n";
 import { formatInstantDate } from "@/shared/utils/date-time-format";
 import {
   EmailLanguageMissing,
+  EmailOfferBookingLinkInvalid,
   type EmailRenderFailure,
   EmailValueMismatch,
   EmailValueMissing,
@@ -455,38 +460,52 @@ const listComponent = (
 const offerComponent = (
   rendering: Rendering,
   component: Extract<EmailBodyComponent, { readonly _tag: "Offer" }>
-) =>
-  valueComponent(rendering, component.value, (value) =>
+) => {
+  const bookingLink = component.prefillDiscountCode
+    ? parseCoworkBookingLink(component.href)
+    : undefined;
+  if (bookingLink === null)
+    return Result.fail(
+      new EmailOfferBookingLinkInvalid({ componentId: component.id })
+    );
+  return valueComponent(rendering, component.value, (value) =>
     Result.all({
       discount: discountValue(component.value, value),
       label: plainText(rendering, textOf(rendering, component.labelKey)),
     }).pipe(
-      Result.map(({ discount, label }) => (
-        <>
-          <Section className="mt-6 rounded-2xl border border-[#e6ded2] border-dashed px-6 py-5 text-center">
-            <Text className="m-0 text-[14px] leading-[20px] text-[#6b6e8a]">
-              {m.emailContentOfferCodeLabel({}, { locale: rendering.locale })}
-            </Text>
-            <Text className="m-0 mt-2 text-[24px] font-bold leading-[32px] tracking-[2px] text-navy">
-              {discount.code}
-            </Text>
-            <Text className="m-0 mt-2 text-[14px] leading-[20px] text-[#6b6e8a]">
-              {m.emailContentOfferValidUntil(
-                { date: expiryDate(discount, rendering.locale) },
-                { locale: rendering.locale }
-              )}
-            </Text>
-          </Section>
-          <EmailCtaButton href={component.href} label={label} />
-        </>
-      ))
+      Result.map(({ discount, label }) => {
+        bookingLink?.searchParams.set(discountCodeQueryParam, discount.code);
+        return (
+          <>
+            <Section className="mt-6 rounded-2xl border border-[#e6ded2] border-dashed px-6 py-5 text-center">
+              <Text className="m-0 text-[14px] leading-[20px] text-[#6b6e8a]">
+                {m.emailContentOfferCodeLabel({}, { locale: rendering.locale })}
+              </Text>
+              <Text className="m-0 mt-2 text-[24px] font-bold leading-[32px] tracking-[2px] text-navy">
+                {discount.code}
+              </Text>
+              <Text className="m-0 mt-2 text-[14px] leading-[20px] text-[#6b6e8a]">
+                {m.emailContentOfferValidUntil(
+                  { date: expiryDate(discount, rendering.locale) },
+                  { locale: rendering.locale }
+                )}
+              </Text>
+            </Section>
+            <EmailCtaButton
+              href={bookingLink?.href ?? component.href}
+              label={label}
+            />
+          </>
+        );
+      })
     )
   );
+};
 
 const componentElement = (
   rendering: Rendering,
   component: EmailBodyComponent
-): Result.Result<ReactNode, ValueFailure> =>
+): Result.Result<ReactNode, ValueFailure | EmailOfferBookingLinkInvalid> =>
   Match.valueTags(component, {
     Paragraph: ({ textKey, links }) =>
       richTextNodes(rendering, textOf(rendering, textKey), links).pipe(

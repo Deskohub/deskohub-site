@@ -1,5 +1,10 @@
 "use client";
 
+import type {
+  AdministrationCampaignEmailPreviewType,
+  CampaignTemplatePreviewInputType,
+  EmailId,
+} from "@deskohub/workspace-admin-api";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
@@ -40,28 +45,43 @@ const previewFailureCopy: CampaignOperationFailureCopy = {
  */
 export function CampaignEmailPreview({
   fields,
+  linkedEmailId,
   locale,
   locales,
   onLocaleChange,
   purpose,
   templateKey,
+  unavailablePublication = false,
 }: {
   readonly fields: CampaignComposerLocaleFields;
+  readonly linkedEmailId?: EmailId | undefined;
   readonly locale: Locale;
   readonly locales: readonly Locale[];
   readonly onLocaleChange: (locale: Locale) => void;
   readonly purpose: CampaignPurpose;
   readonly templateKey: CampaignTemplateKey;
+  readonly unavailablePublication?: boolean;
 }) {
   const routeLocale = useRouteLocale();
-  const [html, setHtml] = useState<string>();
+  const [rendered, setRendered] = useState<{
+    readonly requestKey: string;
+    readonly output: AdministrationCampaignEmailPreviewType;
+  }>();
   const [error, setError] = useState<string>();
-  const hasContent = hasLocaleContent(fields);
+  const hasContent =
+    !unavailablePublication &&
+    (Boolean(linkedEmailId) || hasLocaleContent(fields));
   // Exporting the body to Markdown walks the whole document, so only an edit
   // redoes it, not the renders the pending state causes.
-  const request = useMemo(
-    () => toCampaignPreviewInput({ templateKey, purpose, locale, fields }),
-    [templateKey, purpose, locale, fields]
+  const request = useMemo<CampaignTemplatePreviewInputType>(
+    () =>
+      linkedEmailId
+        ? {
+            templateKey,
+            preview: { _tag: "PublishedEmail", emailId: linkedEmailId, locale },
+          }
+        : toCampaignPreviewInput({ templateKey, purpose, locale, fields }),
+    [templateKey, purpose, locale, fields, linkedEmailId]
   );
   const requestKey = JSON.stringify(request);
   // Responses can arrive out of order; only the latest request's applies.
@@ -75,7 +95,7 @@ export function CampaignEmailPreview({
     onSuccess: (output, input) => {
       if (JSON.stringify(input) !== latestRequestKey.current) return;
       setError(undefined);
-      setHtml(output.html);
+      setRendered({ requestKey: JSON.stringify(input), output });
     },
     onFailure: setError,
   });
@@ -91,20 +111,31 @@ export function CampaignEmailPreview({
     return () => clearTimeout(timer);
   }, [requestKey, hasContent]);
 
+  const output =
+    !linkedEmailId || rendered?.requestKey === requestKey
+      ? rendered?.output
+      : undefined;
+  const contentPlaceholder = hasContent
+    ? m.emailCampaignsEmailPreviewRendering({}, { locale: routeLocale })
+    : missingContentMessages[locale]({}, { locale: routeLocale });
+
   return (
     <CampaignInboxPreview
       error={error}
-      html={hasContent ? html : undefined}
+      html={hasContent ? output?.html : undefined}
       locale={locale}
       locales={locales}
       onLocaleChange={onLocaleChange}
       placeholder={
-        hasContent
-          ? m.emailCampaignsEmailPreviewRendering({}, { locale: routeLocale })
-          : missingContentMessages[locale]({}, { locale: routeLocale })
+        unavailablePublication
+          ? m.emailCampaignsComposerPublishedEmailInvalid(
+              {},
+              { locale: routeLocale }
+            )
+          : contentPlaceholder
       }
-      preheader={fields.preheader}
-      subject={fields.subject}
+      preheader={linkedEmailId ? (output?.preheader ?? "") : fields.preheader}
+      subject={linkedEmailId ? (output?.subject ?? "") : fields.subject}
       updating={render.isExecuting}
     />
   );

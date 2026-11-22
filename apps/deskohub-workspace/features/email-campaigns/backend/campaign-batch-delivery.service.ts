@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHmac } from "node:crypto";
 import {
   type DotyposCustomer,
   type DotyposCustomerId,
@@ -14,7 +15,7 @@ import {
   EmailServiceError,
   EmailServiceTag,
 } from "@deskohub/email";
-import { and, asc, eq, exists, gt, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, exists, gt, inArray, isNull, sql } from "drizzle-orm";
 import {
   Array as Arr,
   Context,
@@ -26,17 +27,27 @@ import {
   Option,
   Ref,
   Result,
+  Semaphore,
 } from "effect";
-import {
-  WorkspaceDatabase,
-  type WorkspaceTransaction,
-} from "@/db/database.service";
+import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
   emailCampaignAutomationWorkUnits,
   emailCampaignDeliveryBatches,
   emailCampaignRecipients,
 } from "@/db/schema";
+import { emailPreparations } from "@/db/schema/emails";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import {
+  EmailPersistence,
+  EmailRecipientPersistence,
+} from "@/features/emails/backend";
+import {
+  type RenderedEmailContent,
+  renderEmailContent,
+} from "@/features/emails/body/email-content";
+import { CustomerValues } from "@/features/emails/values/customer";
+import { EmailDiscountValues } from "@/features/emails/values/discount";
+import { EmailRecipientPreparation } from "@/features/emails/values/preparation";
 import type { Locale } from "@/features/i18n";
 import { AnalyticsConsentLedger } from "@/features/legal/backend/analytics-consent-ledger";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
@@ -66,12 +77,20 @@ import {
 import { campaignContentForRecipient } from "../recipient-locale";
 import { CampaignEmailConfig } from "./campaign-email.config";
 import {
+  campaignOfferPreparationLayers,
+  type FrozenCampaignEmail,
+  readCampaignOfferEligibility,
+  readCampaignRecipientContent,
+  recordCampaignOfferOutcome,
+} from "./campaign-personalized-delivery";
+import {
   CampaignEligibilityStage,
   campaignEligibility,
   consentingCampaignCustomers,
 } from "./campaign-reachability";
 import { CampaignRecipientAnalyticsIdentity } from "./campaign-recipient-analytics-identity.service";
 import type { CampaignDeliveryAttempt } from "./campaign-send-queue.service";
+import { loadCampaignSigningKeys } from "./campaign-signing-keys";
 import { CampaignUnsubscribeService } from "./campaign-unsubscribe.service";
 
 /**
@@ -97,6 +116,7 @@ export type DeliveredCampaign = {
   readonly purpose: CampaignPurpose;
   readonly templateKey: CampaignTemplateKey;
   readonly content: CampaignLocalizedContent;
+  readonly publication?: FrozenCampaignEmail;
 };
 
 /** An attempt with the campaign email it mails. */
@@ -141,6 +161,29 @@ type SkippedRecipient = {
   readonly reason: CampaignRecipientSkipReason;
 };
 
+type PreparationFailure = {
+  readonly dotyposCustomerId: DotyposCustomerId;
+  readonly reason: "preparation-unavailable" | "preparation-failed";
+  readonly priorUncertainty: boolean;
+};
+
+type RecipientRequestDenial = {
+  readonly customerId: DotyposCustomerId;
+  readonly reason:
+    | "consent-withdrawn"
+    | "offer-unavailable"
+    | "recipient-payload-changed";
+  readonly priorUncertainty: boolean;
+};
+
+type WithPreparationLease = <A, E>(
+  prepare: Effect.Effect<A, E>
+) => Effect.Effect<A, E | CampaignDeliveryIncomplete | DatabaseQueryError>;
+
+type WithCampaignDeliveryLease = <A, E>(
+  work: Effect.Effect<A, E, WorkspaceTransaction>
+) => Effect.Effect<A, E | CampaignDeliveryIncomplete | DatabaseQueryError>;
+
 /**
  * A batch persisted `requested` before any request: its key's identity, its
  * recipients in message order, the hash of its exact payload and its first
@@ -165,6 +208,7 @@ export type PreparedBatch = Data.TaggedEnum<{
     readonly skipped: readonly SkippedRecipient[];
     readonly reachable: readonly ReachableRecipient[];
     readonly messages: readonly EmailMessage[];
+    readonly preparationFailures?: readonly PreparationFailure[];
   };
   Unrendered: {
     readonly send: DeliveredAttempt;
@@ -175,6 +219,11 @@ export type PreparedBatch = Data.TaggedEnum<{
 }>;
 
 export const PreparedBatch = Data.taggedEnum<PreparedBatch>();
+
+type PersonalizedBatchRequest = {
+  readonly send: DeliveredAttempt;
+  readonly withLease: WithCampaignDeliveryLease;
+};
 
 /**
  * One request of a persisted batch under its key. `First`: its first
@@ -189,6 +238,7 @@ export type BatchRequest = Data.TaggedEnum<{
   First: {
     readonly batch: PersistedBatch;
     readonly messages: readonly EmailMessage[];
+    readonly personalized?: PersonalizedBatchRequest;
   };
   Reproduced: {
     readonly send: DeliveredAttempt;
@@ -198,7 +248,11 @@ export type BatchRequest = Data.TaggedEnum<{
   Replay: {
     readonly send: DeliveredAttempt;
     readonly batch: PersistedBatch;
-    readonly admit: Effect.Effect<void, CampaignDeliveryIncomplete>;
+    readonly admit: Effect.Effect<
+      void,
+      CampaignDeliveryIncomplete | DatabaseQueryError
+    >;
+    readonly personalized?: PersonalizedBatchRequest;
   };
   Guarded: {
     readonly batch: PersistedBatch;
@@ -247,11 +301,15 @@ export type BatchOutcome = Data.TaggedEnum<{
   Refused: {
     readonly request: BatchRequestMode;
     readonly failureCode: string | undefined;
+    readonly definitivelyUnsent?: true;
   };
   Unconfirmed: { readonly reason: "key-expired" | "payload-changed" };
+  Replanned: Record<never, never>;
 }>;
 
 export const BatchOutcome = Data.taggedEnum<BatchOutcome>();
+
+type SettledBatchOutcome = Exclude<BatchOutcome, { _tag: "Replanned" }>;
 
 /**
  * A batch whose outcome is unknown can't be replayed: its key's replay
@@ -276,7 +334,11 @@ export interface ICampaignBatchDelivery {
     readonly send: DeliveredAttempt;
     readonly recipients: readonly BatchRecipient[];
     readonly profiles: Option.Option<BatchProfiles>;
-  }) => Effect.Effect<PreparedBatch, DotyposReadFailure | DatabaseQueryError>;
+    readonly withPreparationLease?: WithPreparationLease;
+  }) => Effect.Effect<
+    PreparedBatch,
+    DotyposReadFailure | DatabaseQueryError | CampaignDeliveryIncomplete
+  >;
   /**
    * In the caller's transaction, before any request: marks the skipped
    * recipients and persists the reachable ones as the attempt's next
@@ -289,7 +351,7 @@ export interface ICampaignBatchDelivery {
     readonly at: Temporal.Instant;
   }) => Effect.Effect<
     Option.Option<PersistedBatch>,
-    DatabaseQueryError,
+    CampaignDeliveryIncomplete | DatabaseQueryError,
     WorkspaceTransaction
   >;
   /**
@@ -329,6 +391,7 @@ export interface ICampaignBatchDelivery {
     readonly batch: PersistedBatch;
     readonly outcome: BatchOutcome;
     readonly at: Temporal.Instant;
+    readonly personalized?: boolean;
   }) => Effect.Effect<void, DatabaseQueryError, WorkspaceTransaction>;
 }
 
@@ -351,6 +414,10 @@ export class CampaignBatchDelivery extends Context.Service<
       const config = yield* CampaignEmailConfig;
       const unsubscribe = yield* CampaignUnsubscribeService;
       const analyticsIdentity = yield* CampaignRecipientAnalyticsIdentity;
+      const preparations = yield* EmailRecipientPreparation;
+      const emailPersistence = yield* EmailPersistence;
+      const recipientPersistence = yield* EmailRecipientPersistence;
+      const discounts = yield* EmailDiscountValues;
 
       const prepare: ICampaignBatchDelivery["prepare"] = Effect.fn(
         "CampaignBatchDelivery.prepare"
@@ -374,6 +441,16 @@ export class CampaignBatchDelivery extends Context.Service<
             ),
         });
         const [reachable, skipped] = Arr.separate(classified);
+        if (input.send.campaign.publication) {
+          if (!input.withPreparationLease) return yield* incomplete(input.send);
+          return yield* preparePersonalized(
+            input.send,
+            input.send.campaign.publication,
+            reachable,
+            skipped,
+            input.withPreparationLease
+          );
+        }
         return yield* renderMessages({
           send: input.send,
           recipients: reachable,
@@ -471,6 +548,7 @@ export class CampaignBatchDelivery extends Context.Service<
         readonly send: DeliveredAttempt;
         readonly recipient: ReachableRecipient;
         readonly showHeaderArtwork?: boolean | undefined;
+        readonly personalizedContent?: RenderedEmailContent;
       }) =>
         Effect.succeed(input).pipe(
           Effect.let("recipientTags", ({ send, recipient }) => ({
@@ -494,8 +572,13 @@ export class CampaignBatchDelivery extends Context.Service<
               Match.exhaustive
             )
           ),
-          Effect.let("localized", ({ send, recipient }) =>
-            campaignContentForRecipient(send.campaign.content, recipient.locale)
+          Effect.let("localized", ({ send, recipient, personalizedContent }) =>
+            personalizedContent
+              ? { locale: recipient.locale, content: personalizedContent }
+              : campaignContentForRecipient(
+                  send.campaign.content,
+                  recipient.locale
+                )
           ),
           Effect.flatMap(
             ({
@@ -518,7 +601,13 @@ export class CampaignBatchDelivery extends Context.Service<
                 }),
                 sender: config,
                 deploymentEnvironment: config.deploymentEnvironment,
-              })
+              }).pipe(
+                Effect.map((message) =>
+                  input.personalizedContent
+                    ? { ...message, sensitiveContent: true }
+                    : message
+                )
+              )
           ),
           Effect.withSpan("CampaignBatchDelivery.renderMessage")
         );
@@ -532,6 +621,270 @@ export class CampaignBatchDelivery extends Context.Service<
           renderMessage({ ...input, recipient })
         );
 
+      const preparePersonalized = Effect.fn(
+        "CampaignBatchDelivery.preparePersonalized"
+      )(function* (
+        send: DeliveredAttempt,
+        publication: FrozenCampaignEmail,
+        eligible: readonly ReachableRecipient[],
+        skipped: readonly SkippedRecipient[],
+        withPreparationLease: WithPreparationLease
+      ) {
+        const version = yield* emailPersistence
+          .getVersion(publication.versionId)
+          .pipe(Effect.catchTag("EmailVersionInvalid", () => incomplete(send)));
+        if (
+          !version ||
+          version.emailId !== publication.emailId ||
+          version.document.purpose !== "marketing" ||
+          version.document.templateKey !== send.campaign.templateKey
+        )
+          return yield* incomplete(send);
+        const reachable: ReachableRecipient[] = [];
+        const messages: EmailMessage[] = [];
+        const preparationFailures: PreparationFailure[] = [];
+        const allSkipped = [...skipped];
+        for (const recipient of eligible) {
+          const { dotyposCustomerId, locale } = recipient;
+          const prepared = yield* withPreparationLease(
+            preparations.prepare({
+              sendId: send.sendId,
+              dotyposCustomerId,
+              locale,
+              emailVersionId: publication.versionId,
+            })
+          ).pipe(
+            Effect.catchTags({
+              EmailPreparationConflict: () => incomplete(send),
+              EmailVersionInvalid: () => incomplete(send),
+            })
+          );
+          const priorUncertainty =
+            prepared.preparation.deliveryOutcome === "uncertain";
+          if (
+            prepared._tag === "Skipped" &&
+            prepared.reason === "missing-language"
+          ) {
+            allSkipped.push({
+              dotyposCustomerId,
+              reason: "missing-email-language",
+            });
+            continue;
+          }
+          if (prepared._tag !== "Ready") {
+            preparationFailures.push({
+              dotyposCustomerId,
+              priorUncertainty,
+              reason:
+                prepared._tag === "Unavailable"
+                  ? "preparation-unavailable"
+                  : "preparation-failed",
+            });
+            continue;
+          }
+          const { version, preparation, values } = prepared;
+          if (
+            version.id !== publication.versionId ||
+            version.emailId !== publication.emailId ||
+            version.document.purpose !== "marketing" ||
+            version.document.templateKey !== send.campaign.templateKey ||
+            (preparation.deliveryOutcome !== "pending" &&
+              // A known unrequested batch may have been removed by admission.
+              preparation.deliveryOutcome !== "delivering" &&
+              preparation.deliveryOutcome !== "uncertain")
+          ) {
+            preparationFailures.push({
+              dotyposCustomerId,
+              priorUncertainty,
+              reason: "preparation-failed",
+            });
+            continue;
+          }
+          const content = renderEmailContent({
+            document: version.document,
+            locale,
+            values: Object.fromEntries(values),
+          });
+          const message = yield* Result.isSuccess(content)
+            ? renderMessage({
+                send,
+                recipient,
+                personalizedContent: content.success,
+              }).pipe(
+                Effect.catchTags({
+                  EmailServiceError: () => Effect.undefined,
+                  WorkspaceUrlConfigError: () => incomplete(send),
+                })
+              )
+            : Effect.undefined;
+          if (message) {
+            reachable.push(recipient);
+            messages.push(message);
+          } else {
+            preparationFailures.push({
+              dotyposCustomerId,
+              priorUncertainty,
+              reason: "preparation-failed",
+            });
+          }
+        }
+        const customerIds = reachable.map(
+          ({ dotyposCustomerId }) => dotyposCustomerId
+        );
+        return PreparedBatch.Rendered({
+          send,
+          reachable,
+          skipped: allSkipped,
+          messages: messagesWithIdentities(
+            messages,
+            customerIds,
+            yield* analyticsIdentity.forRecipients(customerIds)
+          ),
+          preparationFailures,
+        });
+      });
+
+      const offerOutcome = (
+        input: Parameters<typeof recordCampaignOfferOutcome>[0]
+      ) =>
+        recordCampaignOfferOutcome(input).pipe(
+          Effect.provideService(EmailDiscountValues, discounts)
+        );
+
+      const pinRecipientPayloads = Effect.fn(
+        "CampaignBatchDelivery.pinRecipientPayloads"
+      )(function* (
+        prepared: Extract<PreparedBatch, { _tag: "Rendered" }>,
+        at: Temporal.Instant
+      ) {
+        const { db } = yield* WorkspaceTransaction;
+        const { send, reachable, messages } = prepared;
+        if (reachable.length === 0) return { prepared, payload: messages };
+        const customerIds = reachable.map(
+          ({ dotyposCustomerId }) => dotyposCustomerId
+        );
+        const keys = yield* loadCampaignSigningKeys("recipient-payload").pipe(
+          Effect.catch(() => incomplete(send))
+        );
+        const rows = yield* db
+          .select({
+            id: emailCampaignRecipients.dotyposCustomerId,
+            fingerprint: emailCampaignRecipients.payloadFingerprint,
+            outcome: emailPreparations.deliveryOutcome,
+          })
+          .from(emailCampaignRecipients)
+          .innerJoin(
+            emailPreparations,
+            and(
+              eq(emailPreparations.sendId, emailCampaignRecipients.sendId),
+              eq(
+                emailPreparations.dotyposCustomerId,
+                emailCampaignRecipients.dotyposCustomerId
+              )
+            )
+          )
+          .where(
+            and(
+              eq(emailCampaignRecipients.sendId, send.sendId),
+              eq(emailCampaignRecipients.deliveryAttempt, send.deliveryAttempt),
+              eq(emailCampaignRecipients.status, "pending"),
+              inArray(emailCampaignRecipients.dotyposCustomerId, customerIds)
+            )
+          );
+        const byId = new Map(rows.map((row) => [row.id, row]));
+        const pinned: ReachableRecipient[] = [];
+        const matchingPayload: EmailMessage[] = [];
+        for (const [recipient, message] of Arr.zip(reachable, messages)) {
+          const id = recipient.dotyposCustomerId;
+          const row = byId.get(id);
+          if (!row) return yield* incomplete(send);
+          const digests = Arr.map(keys, (key) =>
+            createHmac("sha256", key)
+              .update(JSON.stringify([send.sendId, id, message]))
+              .digest("hex")
+          );
+          if (row.fingerprint === null && row.outcome === "pending") {
+            const [written] = yield* db
+              .update(emailCampaignRecipients)
+              .set({ payloadFingerprint: digests[0] })
+              .where(
+                and(
+                  eq(emailCampaignRecipients.sendId, send.sendId),
+                  eq(emailCampaignRecipients.dotyposCustomerId, id),
+                  isNull(emailCampaignRecipients.payloadFingerprint)
+                )
+              )
+              .returning({ id: emailCampaignRecipients.dotyposCustomerId });
+            if (!written) return yield* incomplete(send);
+          } else if (
+            row.fingerprint === null ||
+            !digests.includes(row.fingerprint)
+          ) {
+            yield* settlePendingRecipients({
+              sendId: send.sendId,
+              customerIds: [id],
+              status: row.outcome === "uncertain" ? "unconfirmed" : "failed",
+              failureCode: "recipient-payload-changed",
+              at,
+            });
+            yield* offerOutcome({
+              sendId: send.sendId,
+              customerIds: [id],
+              outcome: "definitively-unsent",
+            });
+            continue;
+          }
+          pinned.push(recipient);
+          matchingPayload.push(message);
+        }
+        return {
+          prepared: { ...prepared, reachable: pinned },
+          payload: matchingPayload,
+        };
+      });
+
+      const persistPersonalization = Effect.fn(
+        "CampaignBatchDelivery.persistPersonalization"
+      )(function* (
+        {
+          send,
+          reachable,
+          skipped,
+          preparationFailures = [],
+        }: Extract<PreparedBatch, { _tag: "Rendered" }>,
+        at: Temporal.Instant
+      ) {
+        yield* Effect.forEach(
+          preparationFailures,
+          ({ dotyposCustomerId, reason, priorUncertainty }) =>
+            settlePendingRecipients({
+              sendId: send.sendId,
+              customerIds: [dotyposCustomerId],
+              status: priorUncertainty ? "unconfirmed" : "failed",
+              failureCode: reason,
+              at,
+            }),
+          { discard: true }
+        );
+        yield* offerOutcome({
+          sendId: send.sendId,
+          customerIds: [
+            ...skipped.map(({ dotyposCustomerId }) => dotyposCustomerId),
+            ...preparationFailures
+              .filter(({ reason }) => reason === "preparation-failed")
+              .map(({ dotyposCustomerId }) => dotyposCustomerId),
+          ],
+          outcome: "definitively-unsent",
+        });
+        yield* offerOutcome({
+          sendId: send.sendId,
+          customerIds: reachable.map(
+            ({ dotyposCustomerId }) => dotyposCustomerId
+          ),
+          outcome: "delivering",
+        });
+      });
+
       const persist: ICampaignBatchDelivery["persist"] = Effect.fn(
         "CampaignBatchDelivery.persist"
       )(function* ({ prepared, at }) {
@@ -541,13 +894,22 @@ export class CampaignBatchDelivery extends Context.Service<
           at,
         });
         return yield* PreparedBatch.$match(prepared, {
-          Rendered: ({ send, reachable, messages }) =>
-            insertBatch({
+          Rendered: Effect.fnUntraced(function* (rendered) {
+            const { send } = rendered;
+            const personalized = send.campaign.publication;
+            const plan = personalized
+              ? yield* pinRecipientPayloads(rendered, at)
+              : { prepared: rendered, payload: rendered.messages };
+            if (personalized) yield* persistPersonalization(plan.prepared, at);
+            if (plan.prepared.reachable.length === 0)
+              return Option.none<PersistedBatch>();
+            return yield* insertBatch({
               attempt: send,
-              reachable,
-              payloadHash: `${send.guarded ? guardedPayloadPrefix : ""}${campaignDeliveryPayloadHash(messages)}`,
+              reachable: plan.prepared.reachable,
+              payloadHash: `${send.guarded ? guardedPayloadPrefix : ""}${campaignDeliveryPayloadHash(plan.payload)}`,
               at,
-            }).pipe(Effect.when(Effect.succeed(reachable.length > 0))),
+            }).pipe(Effect.asSome);
+          }),
           Unrendered: ({ send, reachable }) =>
             settlePendingRecipients({
               sendId: send.sendId,
@@ -732,8 +1094,8 @@ export class CampaignBatchDelivery extends Context.Service<
         "CampaignBatchDelivery.request"
       )(function* (input) {
         return yield* BatchRequest.$match(input, {
-          First: ({ batch, messages }) =>
-            sendBatch({ batch, messages, request: "first" }),
+          First: ({ batch, messages, personalized }) =>
+            sendBatch({ batch, messages, request: "first", personalized }),
           Reproduced: ({ batch, send, profiles }) =>
             requestReproduced({
               batch,
@@ -743,12 +1105,16 @@ export class CampaignBatchDelivery extends Context.Service<
                 profiles: Option.some(profiles),
               }),
             }),
-          Replay: ({ batch, send, admit }) =>
+          Replay: ({ batch, send, admit, personalized }) =>
             requestReproduced({
               batch,
               mode: "replay",
               prepare: admit.pipe(
-                Effect.as({ send, profiles: Option.none<BatchProfiles>() })
+                Effect.as({
+                  send,
+                  profiles: Option.none<BatchProfiles>(),
+                  ...(personalized && { personalized }),
+                })
               ),
             }),
           Guarded: ({ batch, claim, prepare, failureCodeOnStalePayload }) => {
@@ -802,13 +1168,14 @@ export class CampaignBatchDelivery extends Context.Service<
             readonly send: DeliveredAttempt;
             readonly profiles: Option.Option<BatchProfiles>;
             readonly admission?: BatchRequestAdmission;
+            readonly personalized?: PersonalizedBatchRequest;
           },
           CampaignDeliveryIncomplete | DatabaseQueryError | UnreplayableBatch
         >;
       }) =>
         ensureReplayWindow(input.batch).pipe(
           Effect.andThen(input.prepare),
-          Effect.flatMap(({ send, profiles, admission }) =>
+          Effect.flatMap(({ send, profiles, admission, personalized }) =>
             reproducePayload({
               send,
               batch: input.batch,
@@ -822,6 +1189,7 @@ export class CampaignBatchDelivery extends Context.Service<
                   messages,
                   request: input.mode,
                   admission,
+                  personalized,
                 })
               )
             )
@@ -859,6 +1227,215 @@ export class CampaignBatchDelivery extends Context.Service<
             () => new UnreplayableBatch({ reason: "key-expired" })
           ),
           Effect.asVoid
+        );
+
+      const replanPersonalizedBatch = Effect.fn(
+        "CampaignBatchDelivery.replanPersonalizedBatch"
+      )(function* (
+        batch: PersistedBatch,
+        ineligible: readonly RecipientRequestDenial[]
+      ) {
+        const { db } = yield* WorkspaceTransaction;
+        const [removed] = yield* db
+          .delete(emailCampaignDeliveryBatches)
+          .where(
+            and(
+              eq(emailCampaignDeliveryBatches.sendId, batch.sendId),
+              eq(
+                emailCampaignDeliveryBatches.deliveryAttempt,
+                batch.deliveryAttempt
+              ),
+              eq(emailCampaignDeliveryBatches.batchIndex, batch.batchIndex),
+              eq(emailCampaignDeliveryBatches.status, "requested"),
+              eq(emailCampaignDeliveryBatches.payloadHash, batch.payloadHash)
+            )
+          )
+          .returning({ batchIndex: emailCampaignDeliveryBatches.batchIndex });
+        if (!removed) return yield* incomplete(batch);
+        const at = yield* currentInstant;
+        for (const { customerId, reason, priorUncertainty } of ineligible) {
+          if (reason === "consent-withdrawn" && !priorUncertainty) {
+            yield* markSkipped({
+              sendId: batch.sendId,
+              skipped: [{ dotyposCustomerId: customerId, reason }],
+              at,
+            });
+          } else {
+            yield* settlePendingRecipients({
+              sendId: batch.sendId,
+              customerIds: [customerId],
+              status: priorUncertainty ? "unconfirmed" : "failed",
+              failureCode: reason,
+              at,
+            });
+          }
+        }
+        yield* offerOutcome({
+          sendId: batch.sendId,
+          customerIds: ineligible.map(({ customerId }) => customerId),
+          outcome: "definitively-unsent",
+        });
+      });
+
+      const requestPersonalized = Effect.fn(
+        "CampaignBatchDelivery.requestPersonalized"
+      )(function* (
+        batch: PersistedBatch,
+        mode: BatchRequestMode,
+        personalized: PersonalizedBatchRequest,
+        messages: readonly EmailMessage[],
+        request: (
+          beforeRequest: NonNullable<EmailBatchOptions["beforeRequest"]>
+        ) => Effect.Effect<BatchOutcome, EmailSendError>
+      ) {
+        const publication = personalized.send.campaign.publication;
+        if (!publication) return yield* incomplete(batch);
+        const gate = yield* Semaphore.make(1);
+        type Decision =
+          | "unrequested"
+          | "admitted"
+          | Extract<BatchOutcome, { _tag: "Replanned" | "Unconfirmed" }>;
+        const state = yield* Ref.make<
+          Result.Result<
+            Decision,
+            CampaignDeliveryIncomplete | DatabaseQueryError
+          >
+        >(Result.succeed("unrequested"));
+        const denialMessage = "Campaign offer request admission failed";
+        const denied = new EmailServiceError(denialMessage);
+        const beforeRequest: NonNullable<EmailBatchOptions["beforeRequest"]> = (
+          _fingerprint,
+          requestPositions
+        ) =>
+          gate.withPermit(
+            Effect.gen(function* () {
+              const result = yield* Ref.get(state);
+              if (Result.isFailure(result)) return yield* denied;
+              const previous = result.success;
+              if (previous !== "unrequested" && previous !== "admitted")
+                return yield* denied;
+              const canReplan = mode === "first" && previous === "unrequested";
+              // Before any request, validate the whole persisted batch. Once
+              // dispatch starts, check only the recipients this request can reach.
+              const positions =
+                previous === "unrequested"
+                  ? [...batch.dotyposCustomerIds.keys()]
+                  : requestPositions;
+              const customerIds = positions.map(
+                (position) => batch.dotyposCustomerIds[position]
+              );
+              if (
+                !customerIds.length ||
+                !customerIds.every((id) => id !== undefined)
+              )
+                return yield* denied;
+              const identities =
+                yield* analyticsIdentity.forRecipients(customerIds);
+              const eligibility = readCampaignOfferEligibility(db, {
+                sendId: batch.sendId,
+                versionId: publication.versionId,
+                customerIds,
+              });
+              const decision = yield* Effect.result(
+                personalized.withLease(
+                  Effect.gen(function* () {
+                    const byId = new Map(
+                      (yield* eligibility).map((row) => [row.customerId, row])
+                    );
+                    const ineligible = customerIds.flatMap(
+                      (customerId, index): RecipientRequestDenial[] => {
+                        const row = byId.get(customerId);
+                        let reason:
+                          | RecipientRequestDenial["reason"]
+                          | undefined;
+                        if (row?.consenting === false)
+                          reason = "consent-withdrawn";
+                        else if (!row?.requestable)
+                          reason = "offer-unavailable";
+                        else if (
+                          identities.get(customerId) !==
+                          messages[positions[index]!]?.recipientIdentity
+                        )
+                          reason = "recipient-payload-changed";
+                        if (!reason) return [];
+                        return [
+                          {
+                            customerId,
+                            reason,
+                            priorUncertainty:
+                              row?.deliveryOutcome === "uncertain",
+                          },
+                        ];
+                      }
+                    );
+                    if (ineligible.length === 0) return "admitted" as const;
+                    if (canReplan) {
+                      yield* replanPersonalizedBatch(batch, ineligible);
+                      return BatchOutcome.Replanned();
+                    }
+                    return previous === "admitted"
+                      ? ({
+                          _tag: "Denied",
+                          positions: ineligible.map(({ customerId }) =>
+                            customerIds.indexOf(customerId)
+                          ),
+                        } as const)
+                      : BatchOutcome.Unconfirmed({ reason: "payload-changed" });
+                  })
+                )
+              );
+              if (Result.isFailure(decision)) {
+                yield* Ref.set(state, Result.fail(decision.failure));
+                return yield* denied;
+              }
+              const verdict = decision.success;
+              if (verdict !== "admitted" && verdict._tag === "Denied")
+                return yield* new EmailServiceError(
+                  denialMessage,
+                  undefined,
+                  undefined,
+                  { deniedPositions: verdict.positions }
+                );
+              yield* Ref.set(state, Result.succeed(verdict));
+              if (verdict !== "admitted") return yield* denied;
+            })
+          );
+        const result = yield* Effect.result(request(beforeRequest));
+        const admission = yield* Effect.fromResult(yield* Ref.get(state));
+        if (admission !== "unrequested" && admission !== "admitted")
+          return admission;
+        return yield* Effect.fromResult(result);
+      });
+
+      const renderPersonalizedReplay = (
+        send: DeliveredAttempt,
+        publication: FrozenCampaignEmail,
+        recipients: readonly ReachableRecipient[]
+      ) =>
+        Effect.forEach(recipients, (recipient) =>
+          readCampaignRecipientContent(db, {
+            ...publication,
+            sendId: send.sendId,
+            ...recipient,
+            templateKey: send.campaign.templateKey,
+          }).pipe(
+            Effect.provideService(EmailPersistence, emailPersistence),
+            Effect.provideService(
+              EmailRecipientPersistence,
+              recipientPersistence
+            ),
+            Effect.catchTags({
+              EmailPreparationConflict: () => Effect.fail(payloadChanged()),
+              EmailVersionInvalid: () => Effect.fail(payloadChanged()),
+            }),
+            Effect.filterOrFail(
+              (content) => content !== undefined,
+              payloadChanged
+            ),
+            Effect.flatMap((personalizedContent) =>
+              renderMessage({ send, recipient, personalizedContent })
+            )
+          )
         );
 
       /**
@@ -912,6 +1489,12 @@ export class CampaignBatchDelivery extends Context.Service<
             const rendering = { send: input.send, recipients };
             const matches = (messages: readonly EmailMessage[]) =>
               campaignDeliveryPayloadHash(messages) === input.payloadHash;
+            if (input.send.campaign.publication)
+              return renderPersonalizedReplay(
+                input.send,
+                input.send.campaign.publication,
+                recipients
+              );
             return renderMessages(rendering).pipe(
               Effect.filterOrFail(matches, payloadChanged),
               Effect.catchTag("UnreplayableBatch", (error) =>
@@ -961,22 +1544,30 @@ export class CampaignBatchDelivery extends Context.Service<
           : analyticsIdentity.forRecipients(input.batch.dotyposCustomerIds)
         ).pipe(
           Effect.map((identities) =>
-            Arr.zipWith(
+            messagesWithIdentities(
               input.messages,
               input.batch.dotyposCustomerIds,
-              (message, dotyposCustomerId): EmailMessage =>
-                Option.match(
-                  Option.fromUndefinedOr(identities.get(dotyposCustomerId)),
-                  {
-                    onNone: () => message,
-                    onSome: (recipientIdentity) => ({
-                      ...message,
-                      recipientIdentity,
-                    }),
-                  }
-                )
+              identities
             )
           )
+        );
+
+      const messagesWithIdentities = (
+        messages: readonly EmailMessage[],
+        customerIds: readonly DotyposCustomerId[],
+        identities: Effect.Success<
+          ReturnType<typeof analyticsIdentity.forRecipients>
+        >
+      ) =>
+        Arr.zipWith(
+          messages,
+          customerIds,
+          (message, customerId): EmailMessage => {
+            const recipientIdentity = identities.get(customerId);
+            return recipientIdentity === undefined
+              ? message
+              : { ...message, recipientIdentity };
+          }
         );
 
       const checkGuardedRecipientIdentity = Effect.fn(
@@ -1011,8 +1602,9 @@ export class CampaignBatchDelivery extends Context.Service<
           readonly messages: readonly EmailMessage[];
           readonly request: BatchRequestMode;
           readonly admission?: BatchRequestAdmission | undefined;
+          readonly personalized?: PersonalizedBatchRequest | undefined;
         }) {
-          const { admission } = input;
+          const { admission, personalized } = input;
           const request = (
             messages: readonly EmailMessage[],
             beforeRequest?: EmailBatchOptions["beforeRequest"]
@@ -1020,6 +1612,10 @@ export class CampaignBatchDelivery extends Context.Service<
             email
               .sendBatch(messages, {
                 ...(beforeRequest && { beforeRequest }),
+                ...(personalized &&
+                  input.request === "first" && {
+                    allowFallbackWithAdmission: true,
+                  }),
                 idempotencyKey: campaignDeliveryBatchIdempotencyKey(
                   input.batch
                 ),
@@ -1031,7 +1627,10 @@ export class CampaignBatchDelivery extends Context.Service<
                 Effect.map((results) =>
                   BatchOutcome.Accepted({
                     recipients: results.map((result) =>
-                      recipientOutcome(result, input.request)
+                      recipientOutcome(
+                        result,
+                        personalized ? "replay" : input.request
+                      )
                     ),
                   })
                 ),
@@ -1039,34 +1638,64 @@ export class CampaignBatchDelivery extends Context.Service<
                   logUnsentEmails(unsentEmails(recipients))
                 )
               );
-          return yield* withRecipientIdentities(
-            input,
-            admission !== undefined
-          ).pipe(
-            Effect.flatMap((messages) =>
-              admission
-                ? requestGuardedBatch({
-                    batch: input.batch,
-                    mode: input.request,
-                    guard: checkGuardedRecipientIdentity(
-                      input,
-                      messages,
-                      admission
-                    ),
-                    pin: (fingerprint) =>
-                      pinProviderRequest({
-                        batch: input.batch,
-                        mode: input.request,
-                        claim: admission.claim,
-                        preparedHash: admission.preparedHash,
-                        fingerprint,
-                      }),
-                    request: (beforeRequest) =>
-                      request(messages, beforeRequest),
-                  })
-                : request(messages)
+          const payload: Effect.Effect<
+            readonly EmailMessage[],
+            CampaignDeliveryIncomplete
+          > =
+            personalized && input.request === "first"
+              ? Effect.succeed(input.messages)
+              : withRecipientIdentities(input, admission !== undefined);
+          return yield* payload.pipe(
+            Effect.flatMap(
+              Effect.fnUntraced(function* (messages) {
+                if (personalized) {
+                  if (
+                    campaignDeliveryPayloadHash(messages) !==
+                    input.batch.payloadHash
+                  )
+                    return yield* payloadChanged();
+                  return yield* requestPersonalized(
+                    input.batch,
+                    input.request,
+                    personalized,
+                    messages,
+                    (beforeRequest) => request(messages, beforeRequest)
+                  );
+                }
+                return yield* admission
+                  ? requestGuardedBatch({
+                      batch: input.batch,
+                      mode: input.request,
+                      guard: checkGuardedRecipientIdentity(
+                        input,
+                        messages,
+                        admission
+                      ),
+                      pin: (fingerprint) =>
+                        pinProviderRequest({
+                          batch: input.batch,
+                          mode: input.request,
+                          claim: admission.claim,
+                          preparedHash: admission.preparedHash,
+                          fingerprint,
+                        }),
+                      request: (beforeRequest) =>
+                        request(messages, beforeRequest),
+                    })
+                  : request(messages);
+              })
             ),
             Effect.catchTags({
+              UnreplayableBatch: ({ reason }) =>
+                input.request === "first"
+                  ? Effect.succeed(
+                      BatchOutcome.Refused({
+                        request: "first",
+                        failureCode: "payload-changed-before-request",
+                        definitivelyUnsent: true,
+                      })
+                    )
+                  : Effect.succeed(BatchOutcome.Unconfirmed({ reason })),
               EmailServiceError: (error) =>
                 Effect.logError("Campaign delivery batch refused", {
                   replay: input.request === "replay",
@@ -1075,6 +1704,10 @@ export class CampaignBatchDelivery extends Context.Service<
                     BatchOutcome.Refused({
                       request: input.request,
                       failureCode: error.code,
+                      ...(personalized &&
+                        error.definitivelyUnsent && {
+                          definitivelyUnsent: true,
+                        }),
                     })
                   )
                 ),
@@ -1152,18 +1785,109 @@ export class CampaignBatchDelivery extends Context.Service<
       const settle: ICampaignBatchDelivery["settle"] = Effect.fn(
         "CampaignBatchDelivery.settle"
       )(function* (input) {
-        yield* recordBatchStatus(input);
-        yield* recordRecipientsOutcome(input);
+        const { outcome } = input;
+        if (outcome._tag === "Replanned") return;
+        const settled = { ...input, outcome };
+        yield* recordBatchStatus(settled);
+        if (!input.personalized) {
+          yield* recordRecipientsOutcome(settled);
+          return;
+        }
+        yield* settlePersonalization(input);
+      });
+
+      const settlePersonalization = Effect.fn(
+        "CampaignBatchDelivery.settlePersonalization"
+      )(function* (input: {
+        readonly batch: PersistedBatch;
+        readonly outcome: BatchOutcome;
+        readonly at: Temporal.Instant;
+      }) {
+        const { batch, outcome } = input;
+        if (outcome._tag === "Accepted") {
+          yield* settleRecipients({ ...input, recipients: outcome.recipients });
+          const outcomes = Arr.zip(
+            batch.dotyposCustomerIds,
+            outcome.recipients
+          );
+          yield* offerOutcome({
+            sendId: batch.sendId,
+            customerIds: outcomes
+              .filter(([, result]) => result.status === "sent")
+              .map(([id]) => id),
+            outcome: "accepted",
+          });
+          yield* offerOutcome({
+            sendId: batch.sendId,
+            customerIds: outcomes
+              .filter(([, result]) => result.status !== "sent")
+              .map(([id]) => id),
+            outcome: "uncertain",
+          });
+          return;
+        }
+        const definitive =
+          outcome._tag === "Refused" &&
+          outcome.request === "first" &&
+          outcome.definitivelyUnsent;
+        // A manual retry may contain preparations whose earlier delivery stayed uncertain.
+        const previous = yield* db
+          .select({ id: emailPreparations.dotyposCustomerId })
+          .from(emailPreparations)
+          .where(
+            and(
+              eq(emailPreparations.sendId, batch.sendId),
+              inArray(emailPreparations.dotyposCustomerId, [
+                ...batch.dotyposCustomerIds,
+              ]),
+              eq(emailPreparations.deliveryOutcome, "uncertain")
+            )
+          );
+        const uncertain = new Set(previous.map(({ id }) => id));
+        const noSend = definitive
+          ? batch.dotyposCustomerIds.filter((id) => !uncertain.has(id))
+          : [];
+        const unclear = definitive
+          ? batch.dotyposCustomerIds.filter((id) => uncertain.has(id))
+          : batch.dotyposCustomerIds;
+        for (const [customerIds, status, deliveryOutcome] of [
+          [noSend, "failed", "definitively-unsent"],
+          [unclear, "unconfirmed", "uncertain"],
+        ] as const) {
+          if (customerIds.length === 0) continue;
+          yield* settlePendingRecipients({
+            sendId: batch.sendId,
+            customerIds,
+            status,
+            at: input.at,
+            failureCode:
+              outcome._tag === "Refused" ? outcome.failureCode : undefined,
+          });
+          yield* offerOutcome({
+            sendId: batch.sendId,
+            customerIds,
+            outcome: deliveryOutcome,
+          });
+        }
       });
 
       const recordBatchStatus = (input: {
         readonly batch: PersistedBatch;
-        readonly outcome: BatchOutcome;
+        readonly outcome: SettledBatchOutcome;
         readonly at: Temporal.Instant;
+        readonly personalized?: boolean;
       }) =>
         db
           .update(emailCampaignDeliveryBatches)
-          .set({ status: batchStatusOf(input.outcome), settledAt: input.at })
+          .set({
+            status:
+              input.personalized &&
+              input.outcome._tag === "Refused" &&
+              !input.outcome.definitivelyUnsent
+                ? "unconfirmed"
+                : batchStatusOf(input.outcome),
+            settledAt: input.at,
+          })
           .where(
             and(
               eq(emailCampaignDeliveryBatches.sendId, input.batch.sendId),
@@ -1181,32 +1905,34 @@ export class CampaignBatchDelivery extends Context.Service<
       /** Moves a settled batch's recipients to what its outcome means. */
       const recordRecipientsOutcome = (input: {
         readonly batch: PersistedBatch;
-        readonly outcome: BatchOutcome;
+        readonly outcome: SettledBatchOutcome;
         readonly at: Temporal.Instant;
       }): Effect.Effect<void, DatabaseQueryError> =>
-        BatchOutcome.$match(input.outcome, {
-          Accepted: ({ recipients }) =>
-            settleRecipients({ ...input, recipients }),
-          Skipped: ({ reason }) =>
-            markSkipped({
-              sendId: input.batch.sendId,
-              at: input.at,
-              skipped: input.batch.dotyposCustomerIds.map(
-                (dotyposCustomerId) => ({
-                  dotyposCustomerId,
-                  reason,
-                })
-              ),
-            }).pipe(Effect.asVoid),
-          Refused: ({ request: refused, failureCode }) =>
-            settleBatchRecipients({
-              ...input,
-              status: refused === "first" ? "failed" : "unconfirmed",
-              failureCode,
-            }),
-          Unconfirmed: () =>
-            settleBatchRecipients({ ...input, status: "unconfirmed" }),
-        });
+        Match.value(input.outcome).pipe(
+          Match.tagsExhaustive({
+            Accepted: ({ recipients }) =>
+              settleRecipients({ ...input, recipients }),
+            Skipped: ({ reason }) =>
+              markSkipped({
+                sendId: input.batch.sendId,
+                at: input.at,
+                skipped: input.batch.dotyposCustomerIds.map(
+                  (dotyposCustomerId) => ({
+                    dotyposCustomerId,
+                    reason,
+                  })
+                ),
+              }).pipe(Effect.asVoid),
+            Refused: ({ request: refused, failureCode }) =>
+              settleBatchRecipients({
+                ...input,
+                status: refused === "first" ? "failed" : "unconfirmed",
+                failureCode,
+              }),
+            Unconfirmed: () =>
+              settleBatchRecipients({ ...input, status: "unconfirmed" }),
+          })
+        );
 
       const settleBatchRecipients = (input: {
         readonly batch: PersistedBatch;
@@ -1294,6 +2020,7 @@ export class CampaignBatchDelivery extends Context.Service<
       Layer.mergeAll(
         CampaignEmailConfig.Default,
         CampaignUnsubscribeService.Live,
+        campaignOfferPreparationLayers(CustomerValues.DeliveryLive),
         CampaignRecipientAnalyticsIdentity.Default.pipe(
           Layer.provide(AnalyticsConsentLedger.Default)
         ),
@@ -1395,14 +2122,15 @@ const requestGuardedBatch = Effect.fn("CampaignBatchDelivery.requestGuarded")(
 );
 
 /** The batch status each outcome settles as. */
-const batchStatusOf = (outcome: BatchOutcome) =>
-  BatchOutcome.$match(outcome, {
+const batchStatusOf = Match.type<SettledBatchOutcome>().pipe(
+  Match.tagsExhaustive({
     Accepted: () => "accepted" as const,
     Skipped: () => "rejected" as const,
     Refused: ({ request }) =>
       request === "first" ? ("rejected" as const) : ("unconfirmed" as const),
     Unconfirmed: () => "unconfirmed" as const,
-  });
+  })
+);
 
 /** The emails of an accepted batch that weren't sent, by error code. */
 const unsentEmails = (recipients: readonly RecipientOutcome[]) => ({

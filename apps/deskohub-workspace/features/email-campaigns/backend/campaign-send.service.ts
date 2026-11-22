@@ -24,7 +24,10 @@ import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
 import type { WorkspaceUrlConfigError } from "@/shared/backend/config/workspace-url.config";
 import { currentInstant } from "@/shared/utils/temporal";
 import type { AudienceFilter } from "../audience-filter";
-import { hashCampaignContent } from "../body/campaign-content-hash";
+import {
+  hashCampaignContent,
+  hashCampaignEmailVersion,
+} from "../body/campaign-content-hash";
 import { CampaignEmailOccasion, campaignEmailMessage } from "../campaign-email";
 import type {
   CampaignAudienceId,
@@ -54,6 +57,7 @@ import {
 import { ensureCampaignRecipientsAllowed } from "../recipient-domain-guard";
 import {
   campaignContentCoversAudience,
+  campaignContentLocaleOrder,
   campaignContentLocales,
 } from "../recipient-locale";
 import { AudienceFactsService } from "./audience-facts.service";
@@ -62,6 +66,10 @@ import { CampaignAudienceService } from "./campaign-audience.service";
 import { CampaignCandidateRepository } from "./campaign-candidate.repository";
 import { CampaignConfirmationCodeService } from "./campaign-confirmation-code.service";
 import { CampaignEmailConfig } from "./campaign-email.config";
+import {
+  getCampaignEmailPublication,
+  sampleCampaignEmailContent,
+} from "./campaign-published-email";
 import { CampaignRecipientService } from "./campaign-recipient.service";
 import { CampaignSendQueueService } from "./campaign-send-queue.service";
 import {
@@ -179,7 +187,7 @@ export class CampaignSendService extends Context.Service<
   static Default = Layer.effect(
     this,
     Effect.gen(function* () {
-      const { transaction } = yield* WorkspaceDatabase;
+      const { db, transaction } = yield* WorkspaceDatabase;
       const campaigns = yield* CampaignService;
       const audiences = yield* CampaignAudienceService;
       const recipientResolution = yield* CampaignRecipientService;
@@ -234,6 +242,28 @@ export class CampaignSendService extends Context.Service<
           )
         );
 
+      const testPublication = Effect.fn("CampaignSendService.testPublication")(
+        function* (campaign: CampaignRow) {
+          if (!campaign.emailId) return undefined;
+          const publication = yield* getCampaignEmailPublication(
+            db,
+            campaign.emailId
+          );
+          if (
+            !publication ||
+            campaign.purpose !== publication.document.purpose ||
+            campaign.templateKey !== publication.document.templateKey ||
+            Object.keys(campaign.content).length > 0
+          ) {
+            return yield* new CampaignContentMissing({
+              campaignId: campaign.id,
+            });
+          }
+          return publication;
+        }
+      );
+      type Publication = Effect.Success<ReturnType<typeof testPublication>>;
+
       /**
        * The filter of the campaign's current audience. A campaign without
        * one, or whose audience is gone, counts as unrestricted.
@@ -256,6 +286,7 @@ export class CampaignSendService extends Context.Service<
         Effect.succeed(input).pipe(
           Effect.filterOrFail(
             ({ campaign, audienceFilter }) =>
+              campaign.emailId !== null ||
               campaignContentCoversAudience({
                 content: campaign.content,
                 audienceFilter,
@@ -266,15 +297,17 @@ export class CampaignSendService extends Context.Service<
           Effect.asVoid
         );
 
-      const issueTestCode = (campaign: CampaignRow) =>
+      const issueTestCode = (campaign: CampaignRow, publication: Publication) =>
         confirmation
           .issue({
             campaignId: campaign.id,
-            contentHash: hashCampaignContent({
-              purpose: campaign.purpose,
-              templateKey: campaign.templateKey,
-              locales: campaign.content,
-            }),
+            contentHash: publication
+              ? hashCampaignEmailVersion(publication.versionId)
+              : hashCampaignContent({
+                  purpose: campaign.purpose,
+                  templateKey: campaign.templateKey,
+                  locales: campaign.content,
+                }),
           })
           .pipe(
             // Preview inboxes are Console-only, so the code is read here.
@@ -299,20 +332,34 @@ export class CampaignSendService extends Context.Service<
         readonly recipients: readonly string[];
         readonly contentLocales: readonly Locale[];
         readonly issued: { readonly code: CampaignConfirmationCode };
+        readonly publication: Publication;
       }) =>
         Effect.forEach(input.recipients, (to) =>
-          Effect.forEach(input.contentLocales, (locale) =>
-            campaignEmailMessage({
-              templateKey: input.campaign.templateKey,
-              locale,
-              content: input.campaign.content[locale]!,
-              occasion: CampaignEmailOccasion.Test({
-                to,
-                purpose: input.campaign.purpose,
-                code: input.issued.code,
-              }),
-              sender: config,
-              deploymentEnvironment: config.deploymentEnvironment,
+          Effect.forEach(
+            input.contentLocales,
+            Effect.fnUntraced(function* (locale) {
+              const content = input.publication
+                ? yield* sampleCampaignEmailContent(
+                    input.publication.document,
+                    locale
+                  ).pipe(
+                    Effect.mapError(
+                      (cause) => new CampaignEmailDeliveryFailed({ cause })
+                    )
+                  )
+                : input.campaign.content[locale]!;
+              return yield* campaignEmailMessage({
+                templateKey: input.campaign.templateKey,
+                locale,
+                content,
+                occasion: CampaignEmailOccasion.Test({
+                  to,
+                  purpose: input.campaign.purpose,
+                  code: input.issued.code,
+                }),
+                sender: config,
+                deploymentEnvironment: config.deploymentEnvironment,
+              });
             })
           )
         ).pipe(
@@ -433,14 +480,25 @@ export class CampaignSendService extends Context.Service<
               testRecipients(extraRecipients)
             ),
             Effect.tap(({ recipients }) => ensureRecipientsAllowed(recipients)),
-            Effect.bind("contentLocales", ({ campaign }) =>
-              requireContentLocales(campaign)
+            Effect.bind("publication", ({ campaign }) =>
+              testPublication(campaign)
+            ),
+            Effect.bind("contentLocales", ({ campaign, publication }) =>
+              publication
+                ? Effect.succeed(
+                    campaignContentLocaleOrder.filter((locale) =>
+                      Object.hasOwn(publication.document.translations, locale)
+                    )
+                  )
+                : requireContentLocales(campaign)
             ),
             Effect.bind("audienceFilter", ({ campaign }) =>
               currentAudienceFilter(campaign)
             ),
             Effect.tap(ensureContentCoversAudience),
-            Effect.bind("issued", ({ campaign }) => issueTestCode(campaign)),
+            Effect.bind("issued", ({ campaign, publication }) =>
+              issueTestCode(campaign, publication)
+            ),
             Effect.bind("emails", testEmails),
             Effect.tap(mailTestEmails),
             Effect.map(

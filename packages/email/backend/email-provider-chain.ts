@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Effect, Result } from "effect";
+import { Effect, Ref, Result } from "effect";
 import type {
   EmailBatchResult,
   EmailMessage,
@@ -145,6 +145,27 @@ const checkedBatchAnswer = (
     : Result.fail(unmatchedBatchAnswer(provider));
 
 /**
+ * The messages an admission error denies, when it validly names some but not
+ * all of the request, so that each resend is strictly smaller.
+ */
+const partlyDeniedMessages = (
+  error: EmailSendError,
+  requested: readonly number[]
+) => {
+  if (error._tag !== "EmailServiceError" || !error.deniedPositions) return;
+  const { deniedPositions } = error;
+  const denied = new Set(
+    deniedPositions.map((position) => requested[position])
+  );
+  const valid =
+    !denied.has(undefined) &&
+    denied.size === deniedPositions.length &&
+    denied.size > 0 &&
+    denied.size < requested.length;
+  return valid ? denied : undefined;
+};
+
+/**
  * Sends a batch through the chain. The first provider gets every message
  * under the caller's key; each later provider gets the messages its
  * predecessor failed at the provider level. Results follow the message
@@ -152,7 +173,9 @@ const checkedBatchAnswer = (
  * whole batch and the chain ends there, as a single provider's batch always
  * did; once a message fell through, every failure comes back per message,
  * so a caller's replay of the batch never repeats a fallback that may have
- * delivered. A replay (`options.replay`) tries only the first provider.
+ * delivered. A fallback request partly denied before dispatch continues
+ * without the denied messages (`allowFallbackWithAdmission`). A replay
+ * (`options.replay`) tries only the first provider.
  */
 export const sendBatchThroughChain = (
   chain: ReadonlyArray<EmailProvider>,
@@ -164,18 +187,34 @@ export const sendBatchThroughChain = (
     const results: EmailBatchResult[] = [];
     let pending = messages.map((_, index) => index);
 
-    const providers =
-      options.replay || options.beforeRequest ? chain.slice(0, 1) : chain;
-    for (const [providerIndex, provider] of providers.entries()) {
-      if (pending.length === 0) break;
+    const singleProvider =
+      options.replay ||
+      (options.beforeRequest && !options.allowFallbackWithAdmission);
+    const providers = singleProvider ? chain.slice(0, 1) : chain;
+    const { beforeRequest, allowFallbackWithAdmission } = options;
+    let providerIndex = 0;
+    while (pending.length > 0 && providerIndex < providers.length) {
+      const provider = providers[providerIndex]!;
       const next = providers[providerIndex + 1];
+      const admitted = yield* Ref.make(false);
+      const requested = yield* Ref.make<readonly number[]>([]);
       const outcome = yield* Effect.result(
         provider.sendBatch(
           pending.map((index) => messages[index]!),
           {
-            ...(options.beforeRequest && {
-              beforeRequest: options.beforeRequest,
+            ...(beforeRequest && {
+              beforeRequest: (fingerprint, positions) => {
+                const indices = positions.map((position) => pending[position]!);
+                return Ref.set(requested, indices).pipe(
+                  Effect.andThen(beforeRequest(fingerprint, indices)),
+                  Effect.andThen(Ref.set(admitted, true))
+                );
+              },
             }),
+            ...(!singleProvider &&
+              allowFallbackWithAdmission && {
+                allowFallbackWithAdmission,
+              }),
             idempotencyKey: fallbackIdempotencyKey(
               options,
               providerIndex,
@@ -198,6 +237,27 @@ export const sendBatchThroughChain = (
           (!next || !continuesEmailChain(answer.failure))
         ) {
           return yield* answer.failure;
+        }
+        // Once a request was admitted it may have left, so nothing is repacked.
+        if (providerIndex > 0 && !(yield* Ref.get(admitted))) {
+          const denied = partlyDeniedMessages(
+            answer.failure,
+            yield* Ref.get(requested)
+          );
+          if (denied) {
+            const timestamp = new Date();
+            for (const index of pending) {
+              if (!denied.has(index)) continue;
+              results[index] = {
+                status: "failed",
+                provider: provider.name,
+                timestamp,
+                error: answer.failure,
+              };
+            }
+            pending = pending.filter((index) => !denied.has(index));
+            continue;
+          }
         }
       }
 
@@ -236,6 +296,7 @@ export const sendBatchThroughChain = (
         );
       }
       pending = fallingThrough;
+      providerIndex++;
     }
 
     return results;

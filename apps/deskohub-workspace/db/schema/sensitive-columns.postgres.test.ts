@@ -66,6 +66,7 @@ import {
   discountCodes,
   discounts,
   emailCampaignConfirmationCodes,
+  emailCampaignRecipients,
   emailCampaignSends,
   emailCampaigns,
   emailDiscountIssuances,
@@ -362,6 +363,19 @@ const rowFixtures = new Map([
           expiresAt: inAnHour(),
         };
       }),
+  }),
+  rowFixture(emailCampaignRecipients, {
+    values: { payloadFingerprint: hexDigest },
+    row: (db) =>
+      Effect.promise(() =>
+        seedCampaignSend(db, { purpose: "marketing", recipients: [] })
+      ).pipe(
+        Effect.map(({ sendId }) => ({
+          sendId,
+          dotyposCustomerId: syntheticDotyposCustomerId(),
+          locale: "cs-CZ" as const,
+        }))
+      ),
   }),
   rowFixture(emailValueSnapshots, {
     immutable: true,

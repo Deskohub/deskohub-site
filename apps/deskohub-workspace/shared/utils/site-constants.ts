@@ -1,3 +1,4 @@
+import { workspaceSiteDomain } from "@deskohub/workspace-admin-api/cowork-booking-link";
 import { WORKSPACE_SITE_TIME_ZONE } from "@deskohub/workspace-admin-api/site-time-zone";
 import type { WorkspaceCurrencyCode } from "@/shared/money/currencies";
 
@@ -31,7 +32,7 @@ export const workspaceSiteConstants = {
   brand: {
     name: "Deskohub Workspace",
     legalName: "Desktechub s.r.o.",
-    domain: "workspace.deskohub.cz",
+    domain: workspaceSiteDomain,
   },
   contact: {
     infoEmail: "workspace@deskohub.cz",

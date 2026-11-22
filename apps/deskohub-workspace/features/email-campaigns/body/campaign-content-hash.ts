@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { EmailVersionId } from "@deskohub/workspace-admin-api";
 import { Schema } from "effect";
 import { canonicalJson } from "@/shared/utils/canonical-json";
 import type { CampaignContent } from "./campaign-content";
@@ -31,3 +32,13 @@ export function hashCampaignContent(
       .digest("hex")
   );
 }
+
+/** The published version is immutable and owns the printed content and values. */
+export const hashCampaignEmailVersion = (
+  versionId: EmailVersionId
+): CampaignContentHash =>
+  CampaignContentHash.make(
+    createHash("sha256")
+      .update(canonicalJson({ publishedEmailVersionId: versionId }))
+      .digest("hex")
+  );

@@ -1,10 +1,11 @@
 import { mapSupportedLocales } from "@deskohub/i18n/locale-registry";
-import type {
-  AdministrationCampaignContentInputType,
-  AdministrationCampaignEditorContentType,
-  AdministrationCampaignEditorLocaleContentType,
-  AdministrationCampaignUpdateInputType,
-  CampaignTemplatePreviewInputType,
+import {
+  type AdministrationCampaignContentInputType,
+  type AdministrationCampaignEditorContentType,
+  type AdministrationCampaignEditorLocaleContentType,
+  type AdministrationCampaignUpdateInputType,
+  type CampaignTemplatePreviewInputType,
+  EmailId,
 } from "@deskohub/workspace-admin-api";
 import { Data, Match, type Option, Schema } from "effect";
 import { m } from "@/features/administration/i18n";
@@ -56,6 +57,7 @@ export const createCampaignComposerFields = (locale: Locale) =>
     templateKey: CampaignTemplateKey,
     /** Empty means no audience yet. */
     audienceId: Schema.String,
+    emailId: Schema.optionalKey(Schema.Union([EmailId, Schema.Literal("")])),
     locales: Schema.Struct(
       mapSupportedLocales(() => CampaignComposerLocaleFields)
     ),
@@ -100,6 +102,7 @@ export const campaignComposerFieldsFromCampaign = (
   purpose: campaign.purpose,
   templateKey: campaign.templateKey,
   audienceId: campaign.audienceId ?? "",
+  ...(campaign.emailId && { emailId: campaign.emailId }),
   locales: mapSupportedLocales((locale) =>
     localeFieldsFromContent(campaign.content[locale])
   ),

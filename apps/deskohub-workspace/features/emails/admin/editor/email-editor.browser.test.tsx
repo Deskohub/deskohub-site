@@ -53,6 +53,25 @@ beforeAll(async () => {
         // The authorization is stubbed at the action module; the upload
         // itself goes through the real browser code to a routed Cloudinary.
         "./image-upload-actions": `export const authorizeEmailImageUpload = async () => ({ data: ${JSON.stringify(authorization)} });`,
+        "next/navigation": `
+          export const useRouter = () => ({ push() {}, refresh() {} });
+          export const usePathname = () => window.location.pathname;
+          export const useSearchParams = () => new URLSearchParams(window.location.search);
+          export const unstable_rethrow = (error) => { throw error; };
+        `,
+        "./email-library-actions": `
+          export const createReusableEmail = async () => ({ data: { emailId: "synthetic-reusable-email" } });
+          export const writeReusableEmail = async ({ draft, publish }) => {
+            const offer = draft.structure.find(({ _tag }) => _tag === "Offer");
+            document.body.dataset.prefill = String(offer?.prefillDiscountCode);
+            return { data: { publishedVersion: publish ? 1 : null } };
+          };
+        `,
+        "../editor/preview-actions": `
+          export const previewEmailDraft = async () => ({
+            data: { subject: "Synthetic offer", html: "<p>SAMPLE CODE</p>" }
+          });
+        `,
       }),
     ],
     target: "browser",
@@ -93,9 +112,11 @@ const openEditor = async (
   {
     draft = fixtureDraft,
     storedPublicId = authorization.publicId,
+    reusable = false,
   }: {
     readonly draft?: EmailDraftFormValues;
     readonly storedPublicId?: string;
+    readonly reusable?: boolean;
   } = {}
 ): Promise<Page> => {
   if (!browser) throw new Error("Chromium did not launch");
@@ -128,9 +149,14 @@ const openEditor = async (
     return route.abort();
   });
   await page.goto(origin);
-  await page.locator("#editor-root").evaluate((element, value) => {
-    (element as HTMLElement).dataset.draft = JSON.stringify(value);
-  }, draft);
+  await page.locator("#editor-root").evaluate(
+    (element, input) => {
+      const dataset = (element as HTMLElement).dataset;
+      dataset.draft = JSON.stringify(input.draft);
+      if (input.reusable) dataset.reusable = "yes";
+    },
+    { draft, reusable }
+  );
   await page.addStyleTag({ content: styles });
   await page.addScriptTag({ path: bundle, type: "module" });
   try {
@@ -163,6 +189,80 @@ const screenshot = async (page: Page, name: string, part?: Locator) => {
     ? part.screenshot({ path })
     : page.screenshot({ path, fullPage: true }));
 };
+
+test.skipIf(!chromiumAvailable)(
+  "saves an Offer draft and publishes with booking-link prefill",
+  async () => {
+    const locale = "en-US";
+    const page = await openEditor(locale, {
+      reusable: true,
+      draft: {
+        ...fixtureDraft,
+        structure: [
+          {
+            _tag: "Offer",
+            id: "offer-1",
+            value: "welcome_offer",
+            labelKey: "offer-1-label",
+            href: "https://workspace.deskohub.cz/en-US/reservation/cowork?entryTier=open-space",
+          },
+        ],
+        translations: {
+          "cs-CZ": {
+            subject: [{ _tag: "Text", text: "Ukázková nabídka" }],
+            texts: {
+              "offer-1-label": [{ _tag: "Text", text: "Rezervovat coworking" }],
+            },
+          },
+          "en-US": {
+            subject: [{ _tag: "Text", text: "Synthetic offer" }],
+            texts: {
+              "offer-1-label": [{ _tag: "Text", text: "Book coworking" }],
+            },
+          },
+        },
+      },
+    });
+    try {
+      await page
+        .getByRole("switch", {
+          name: m.emailsEditorBlockPrefillDiscountCode({}, { locale }),
+        })
+        .click();
+      await page
+        .getByRole("button", {
+          name: m.emailsLibrarySaveDraft({}, { locale }),
+          exact: true,
+        })
+        .click();
+      await expectBrowser(
+        page.getByText(m.emailsLibraryDraftSaved({}, { locale }), {
+          exact: true,
+        })
+      ).toBeVisible();
+      await page
+        .getByRole("button", {
+          name: m.emailsLibraryPublish({}, { locale }),
+          exact: true,
+        })
+        .click();
+      await expectBrowser(
+        page.getByText(
+          m.emailsLibraryPublishedVersion({ version: 1 }, { locale }),
+          { exact: true }
+        )
+      ).toBeVisible();
+      await expectBrowser(page.locator("body")).toHaveAttribute(
+        "data-prefill",
+        "true"
+      );
+      expectNoPageErrors(page);
+      await screenshot(page, "reusable-offer");
+    } finally {
+      await page.close();
+    }
+  }
+);
 
 const showLanguage = (page: Page, language: Locale) =>
   page.getByRole("tab", { name: new RegExp(languageNames[language]) }).click();

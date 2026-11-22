@@ -1,15 +1,18 @@
 import "server-only";
 
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import type { EmailVersionId } from "@deskohub/workspace-admin-api";
+import { and, eq, inArray, notExists, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
 import {
   type CampaignRow,
+  emailCampaignDeliveryBatches,
   emailCampaignRecipients,
   emailCampaignSends,
   emailCampaigns,
 } from "@/db/schema";
+import { emailPreparations } from "@/db/schema/emails";
 import type { Locale } from "@/features/i18n";
 import type { AudienceFilter } from "../audience-filter";
 import type { CampaignContentHash } from "../body/campaign-content-hash";
@@ -46,6 +49,7 @@ type Confirmation =
   | {
       readonly _tag: "Confirm";
       readonly contentHash: CampaignContentHash;
+      readonly frozenEmailVersionId: EmailVersionId | null;
       readonly now: Temporal.Instant;
     }
   | {
@@ -91,6 +95,7 @@ const startSending = <E, R>(input: {
         audienceId: input.send.audienceId,
         audienceFilter: input.send.audienceFilter,
         contentHash: verdict.contentHash,
+        frozenEmailVersionId: verdict.frozenEmailVersionId,
         createdAt: verdict.now,
       })
       .returning({ id: emailCampaignSends.id });
@@ -105,6 +110,47 @@ const startSending = <E, R>(input: {
     }
     return { _tag: "Confirmed" as const, campaign: updated!, sendId: send!.id };
   });
+
+/** Older requested batches may already have reached a provider. */
+const preserveUncertainOffers = Effect.fn(
+  "OnceCampaignLifecycle.preserveUncertainOffers"
+)(function* (sendId: CampaignSendId, now: Temporal.Instant) {
+  const { db } = yield* WorkspaceTransaction;
+  yield* db
+    .update(emailCampaignDeliveryBatches)
+    .set({ status: "unconfirmed", settledAt: now })
+    .where(
+      and(
+        eq(emailCampaignDeliveryBatches.sendId, sendId),
+        eq(emailCampaignDeliveryBatches.status, "requested")
+      )
+    );
+  const uncertain = yield* db
+    .update(emailPreparations)
+    .set({ deliveryOutcome: "uncertain" })
+    .where(
+      and(
+        eq(emailPreparations.sendId, sendId),
+        inArray(emailPreparations.deliveryOutcome, ["delivering", "uncertain"])
+      )
+    )
+    .returning({ customerId: emailPreparations.dotyposCustomerId });
+  if (uncertain.length > 0) {
+    yield* db
+      .update(emailCampaignRecipients)
+      .set({ status: "unconfirmed", statusUpdatedAt: now })
+      .where(
+        and(
+          eq(emailCampaignRecipients.sendId, sendId),
+          inArray(
+            emailCampaignRecipients.dotyposCustomerId,
+            uncertain.map(({ customerId }) => customerId)
+          ),
+          inArray(emailCampaignRecipients.status, ["pending", "failed"])
+        )
+      );
+  }
+});
 
 const retry = Effect.fn("OnceCampaignLifecycle.retry")(function* (input: {
   readonly campaignId: CampaignId;
@@ -153,32 +199,63 @@ const retry = Effect.fn("OnceCampaignLifecycle.retry")(function* (input: {
     .returning({
       sendId: emailCampaignSends.id,
       deliveryAttempt: emailCampaignSends.deliveryAttempt,
+      frozenEmailVersionId: emailCampaignSends.frozenEmailVersionId,
     });
+  if (!send)
+    return yield* new CampaignNotRetryable({
+      campaignId,
+      status: campaign.status,
+    });
+  if (send.frozenEmailVersionId)
+    yield* preserveUncertainOffers(send.sendId, now);
   const retried = yield* db
     .update(emailCampaignRecipients)
     .set({
-      deliveryAttempt: send!.deliveryAttempt,
+      deliveryAttempt: send.deliveryAttempt,
       status: "pending",
       failureCode: null,
       statusUpdatedAt: now,
     })
     .where(
       and(
-        eq(emailCampaignRecipients.sendId, send!.sendId),
+        eq(emailCampaignRecipients.sendId, send.sendId),
         inArray(
           emailCampaignRecipients.status,
           retryableRecipientStatuses(input.includeUnconfirmed)
-        )
+        ),
+        send.frozenEmailVersionId
+          ? notExists(
+              db
+                .select({ id: emailPreparations.id })
+                .from(emailPreparations)
+                .where(
+                  and(
+                    eq(emailPreparations.sendId, send.sendId),
+                    eq(
+                      emailPreparations.dotyposCustomerId,
+                      emailCampaignRecipients.dotyposCustomerId
+                    ),
+                    eq(emailPreparations.deliveryOutcome, "definitively-unsent")
+                  )
+                )
+            )
+          : undefined
       )
     )
     .returning({
       dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
     });
+  if (send.frozenEmailVersionId && retried.length === 0)
+    return yield* new CampaignNotRetryable({
+      campaignId,
+      status: campaign.status,
+      reason: "no-retryable-recipients",
+    });
   yield* db
     .update(emailCampaigns)
     .set({ status: "sending", updatedAt: now })
     .where(eq(emailCampaigns.id, campaignId));
-  return { ...send!, retriedCount: retried.length };
+  return { ...send, retriedCount: retried.length };
 });
 
 const abandon = Effect.fn("OnceCampaignLifecycle.abandon")(function* (input: {
@@ -188,15 +265,11 @@ const abandon = Effect.fn("OnceCampaignLifecycle.abandon")(function* (input: {
   readonly now: Temporal.Instant;
 }) {
   const { db } = yield* WorkspaceTransaction;
-  const [campaign] = yield* db
-    .select()
-    .from(emailCampaigns)
-    .where(eq(emailCampaigns.id, input.campaignId))
-    .for("update");
-  if (!campaign || !isOnceCampaign(campaign) || campaign.status !== "sending")
-    return;
   const [send] = yield* db
-    .select({ id: emailCampaignSends.id })
+    .select({
+      id: emailCampaignSends.id,
+      frozenEmailVersionId: emailCampaignSends.frozenEmailVersionId,
+    })
     .from(emailCampaignSends)
     .where(
       and(
@@ -204,8 +277,18 @@ const abandon = Effect.fn("OnceCampaignLifecycle.abandon")(function* (input: {
         eq(emailCampaignSends.id, input.sendId),
         eq(emailCampaignSends.deliveryAttempt, input.deliveryAttempt)
       )
-    );
+    )
+    .for("update");
   if (!send) return;
+  const [campaign] = yield* db
+    .select()
+    .from(emailCampaigns)
+    .where(eq(emailCampaigns.id, input.campaignId))
+    .for("update");
+  if (!campaign || !isOnceCampaign(campaign) || campaign.status !== "sending")
+    return;
+  if (send.frozenEmailVersionId)
+    yield* preserveUncertainOffers(send.id, input.now);
   yield* db
     .update(emailCampaigns)
     .set({ status: "failed", updatedAt: input.now })

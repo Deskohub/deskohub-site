@@ -6,6 +6,8 @@ import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { Button } from "@/shared/components/ui/button";
+import { Label } from "@/shared/components/ui/label";
+import { Switch } from "@/shared/components/ui/switch";
 import {
   EmailBlockLabelText,
   EmailBlockNumberSetting,
@@ -448,6 +450,10 @@ function OfferBlockSettings({
   readonly update: (next: EmailDraftComponent) => void;
 }) {
   const locale = useRouteLocale();
+  const prefillId = emailEditorFieldIds.componentSetting(
+    block.id,
+    "prefillDiscountCode"
+  );
   return (
     <>
       <EmailBlockTextSetting
@@ -458,6 +464,24 @@ function OfferBlockSettings({
         type="url"
         value={block.href}
       />
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={block.prefillDiscountCode ?? false}
+          id={prefillId}
+          onCheckedChange={(checked) =>
+            update(
+              withEmailSetting(
+                block,
+                "prefillDiscountCode",
+                checked || undefined
+              )
+            )
+          }
+        />
+        <Label className="text-navy-blue text-xs" htmlFor={prefillId}>
+          {m.emailsEditorBlockPrefillDiscountCode({}, { locale })}
+        </Label>
+      </div>
       <EmailBlockLabelText
         contentLocale={contentLocale}
         label={m.emailsEditorBlockButtonLabel({}, { locale })}
