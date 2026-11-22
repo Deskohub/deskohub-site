@@ -21,6 +21,8 @@ import {
   customerWrite,
 } from "../../customer-api/customer-request";
 
+import { CustomerRequestDispatch } from "../../customer-api/customer-request-dispatch";
+
 const passesApi = Effect.map(Effect.service(CustomerApi), (api) => api.passes);
 
 /** Recheck the signed-in cookie before sending gift or billing details. */
@@ -85,12 +87,27 @@ const writePass = <A, E, R>(
   owns?: () => boolean
 ) =>
   confirmPurchaseAction(owns).pipe(
-    Effect.andThen(passesApi.pipe(Effect.flatMap(write), customerWrite))
+    Effect.andThen(
+      passesApi.pipe(
+        Effect.flatMap(write),
+        Effect.updateService(CustomerRequestDispatch, (dispatch) => ({
+          onSend: Effect.suspend(() =>
+            owns?.() === false ? Effect.interrupt : dispatch.onSend
+          ),
+        })),
+        customerWrite
+      )
+    )
   );
 
 export const beginPassPurchaseAtom = customerDataRuntime.fn(
-  (payload: BeginCustomerPassPurchase) =>
-    writePass((passes) => passes.beginPassPurchase({ payload }))
+  ({
+    payload,
+    owns,
+  }: {
+    payload: BeginCustomerPassPurchase;
+    owns?: () => boolean;
+  }) => writePass((passes) => passes.beginPassPurchase({ payload }), owns)
 );
 
 export const submitPassPurchaseAtom = customerDataRuntime.fn(
@@ -113,12 +130,16 @@ export const updatePassPurchasePriceAtom = customerDataRuntime.fn(
   ({
     orderId,
     payload,
+    owns,
   }: {
     orderId: string;
     payload: UpdateCustomerPassPurchasePrice;
+    owns?: () => boolean;
   }) =>
-    writePass((passes) =>
-      passes.updatePassPurchasePrice({ params: { orderId }, payload })
+    writePass(
+      (passes) =>
+        passes.updatePassPurchasePrice({ params: { orderId }, payload }),
+      owns
     )
 );
 
