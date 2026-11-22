@@ -777,6 +777,9 @@ const answerSubmissionFailure =
           new CustomerCheckoutUnavailable({ reason: "offer_replaced" })
         )
       ),
+      Match.when("entry_pack_unavailable", () =>
+        Effect.fail(new CustomerCheckoutUnavailable({ reason: "not_payable" }))
+      ),
       Match.when("checkout_failed", () =>
         Predicate.isTagged(failure.cause, "WorkspaceTableUnavailableError")
           ? Effect.fail(

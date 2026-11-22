@@ -1940,6 +1940,18 @@ describe("submitCheckout", () => {
       { _tag: "CustomerCheckoutUnavailable", reason: "offer_replaced" },
     ],
     [
+      "an Entry pack hold whose release gate closed",
+      () =>
+        Effect.fail(
+          new CheckoutError({
+            code: "entry_pack_unavailable",
+            message: "closed",
+          })
+        ),
+      409,
+      { _tag: "CustomerCheckoutUnavailable", reason: "not_payable" },
+    ],
+    [
       "a table taken since the hold",
       () =>
         Effect.fail(

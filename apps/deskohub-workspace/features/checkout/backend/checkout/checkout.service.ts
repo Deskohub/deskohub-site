@@ -25,6 +25,10 @@ import { defaultPhoneRegion, type Locale } from "@/features/i18n";
 import { isEarlyPerformanceRequestRequired } from "@/features/legal/early-performance";
 import { getPaymentSubmitLegalEvidence } from "@/features/legal/payment-submit-evidence";
 import {
+  CoworkPassesReleaseGate,
+  CoworkPassesReleaseGateForRun,
+} from "@/features/passes/backend/cowork-passes-release-gate";
+import {
   reservationLogFields,
   type WorkspaceReservation,
   WorkspaceReservationRepository,
@@ -248,6 +252,7 @@ export class CheckoutService extends Context.Service<
   static Default = makeCheckoutServiceLayer(this);
 
   static Live = this.Default.pipe(
+    Layer.provide(CoworkPassesReleaseGateForRun),
     Layer.provide(CustomerAccountSections.Live),
     Layer.provide(PayableCheckout.Default),
     Layer.provide(LegalEvidenceEventRepository.Default),
@@ -341,6 +346,7 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
       const pricing = yield* CheckoutPricingService;
       const payableCheckout = yield* PayableCheckout;
       const accountSections = yield* CustomerAccountSections;
+      const passRelease = yield* CoworkPassesReleaseGate;
       const lifecycle = Option.getOrUndefined(
         yield* Effect.serviceOption(PaymentLifecycleRepository)
       );
@@ -1126,6 +1132,13 @@ function makeCheckoutServiceLayer(service: typeof CheckoutService) {
             returnTarget: input.returnTarget,
           });
           if (progressResult) return progressResult;
+
+          if (entryPackFunded && !(yield* passRelease.isOpen)) {
+            return yield* new CheckoutError({
+              code: "entry_pack_unavailable",
+              message: "Entry pack funding is unavailable for this checkout.",
+            });
+          }
 
           yield* ensureReservationHasNotEnded(state.reservation);
 

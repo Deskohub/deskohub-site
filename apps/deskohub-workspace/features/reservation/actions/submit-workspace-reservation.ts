@@ -136,6 +136,12 @@ export const submitWorkspaceReservation = Effect.fn(
                         { locale: input.locale }
                       )
                     ),
+                    Match.when("entry_pack_unavailable", () =>
+                      m.coworkEntryPackUnavailableDescription(
+                        {},
+                        { locale: input.locale }
+                      )
+                    ),
                     Match.when("checkout_failed", () =>
                       Match.value(checkoutError.cause).pipe(
                         Match.when(
