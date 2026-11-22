@@ -7,7 +7,6 @@ import type {
 } from "@/features/account/account-unlimited-passes.server";
 import { UnlimitedReservationItem } from "@/features/account/components/account-unlimited-pass";
 import { PassSavingsFooter } from "@/features/account/components/pass-savings-footer";
-import { PassProductMarks } from "@/features/passes/components/pass-product-marks";
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import type {
   CustomerReservationHistory,
@@ -18,6 +17,7 @@ import type {
 import { offersPassSavings } from "@/features/account/pass-savings-offer";
 import { getReservationProductName } from "@/features/account/reservation-product-name";
 import { type Locale, m } from "@/features/i18n";
+import { PassProductMarks } from "@/features/passes/components/pass-product-marks";
 import { ReservationAccessButton } from "@/features/reservation/components/reservation-access-button";
 import { formatMeetingRoomSetupStart } from "@/features/reservation/meeting-room-reservation-display-time";
 import {
