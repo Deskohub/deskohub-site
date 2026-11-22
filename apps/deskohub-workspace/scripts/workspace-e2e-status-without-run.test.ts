@@ -9,11 +9,16 @@ import {
 const workflow = parseWorkflow(
   resolve(import.meta.dir, "../../../.github/workflows/workspace-e2e.yml")
 );
+const flowsCli = resolve(
+  import.meta.dir,
+  "../../../.github/actions/workspace-e2e-flows/cli.mjs"
+);
 const targetStep = findStepByName(
   workflow,
   "Resolve eligible PR and immutable preview"
 );
 const statusStep = findStepByName(workflow, "Decide status without an E2E run");
+const finalStep = findStepByName(workflow, "Publish final commit status");
 const publishStep = findStepByName(
   workflow,
   "Publish status without an E2E run"
@@ -39,7 +44,11 @@ type Scenario = {
 const { cleanup, runStep } = createWorkflowStepRunner("workspace-e2e-status-");
 afterAll(cleanup);
 
-const decideStatus = (deployment: string, scenario: Scenario) =>
+const decideStatus = (
+  deployment: string,
+  scenario: Scenario,
+  overrides: Readonly<Record<string, string>> = {}
+) =>
   runStep(
     statusStep,
     {
@@ -61,10 +70,13 @@ const decideStatus = (deployment: string, scenario: Scenario) =>
     },
     {
       DEPLOYMENT: deployment,
+      FLOWS: "all",
+      FLOWS_CLI: flowsCli,
       PR_NUMBER: String(prNumber),
       RESOLUTION_ERROR: "",
       TARGET_OUTCOME: "success",
       TARGET_SHA: targetSha,
+      ...overrides,
     }
   );
 
@@ -261,6 +273,7 @@ type DeploymentStatus = {
 };
 
 const pullRequest = {
+  body: "## Summary\n\nChange\n\n## E2E flows\n- `all`\n",
   draft: false,
   head: { ref: "feature/x", repo: { full_name: repository }, sha: targetSha },
   number: prNumber,
@@ -285,7 +298,9 @@ const resolveTarget = (
     },
     {
       EVENT_NAME: "repository_dispatch",
+      FLOWS_CLI: flowsCli,
       INCLUDE_NIGHTLY_CASES: "false",
+      INPUT_FLOWS: "",
       TARGET_DEPLOYMENT: deployment,
       TARGET_REF: "feature/x",
       TARGET_SHA: targetSha,
@@ -408,7 +423,9 @@ const resolveNightlyTarget = ({
     },
     {
       EVENT_NAME: eventName,
+      FLOWS_CLI: flowsCli,
       INCLUDE_NIGHTLY_CASES: includeNightlyCases,
+      INPUT_FLOWS: "",
       TARGET_DEPLOYMENT: "success",
       TARGET_REF: nightlyBranch,
       TARGET_SHA: targetSha,
@@ -423,9 +440,12 @@ describe("Workspace E2E nightly target resolution", () => {
     expect(outputs).toEqual({
       deployment: "success",
       eligible: "true",
+      flows: "all",
       head_ref: nightlyBranch,
+      install_webkit: "true",
       nightly: "true",
       nightly_cases: "true",
+      run_e2e: "true",
       sha: targetSha,
       url: previewUrl,
     });
@@ -544,6 +564,8 @@ describe("Workspace E2E status after a failed resolution", () => {
       {},
       {
         DEPLOYMENT: target.outputs.deployment ?? "",
+        FLOWS: target.outputs.flows ?? "",
+        FLOWS_CLI: flowsCli,
         PR_NUMBER: target.outputs.pr_number ?? "",
         RESOLUTION_ERROR: target.outputs.resolution_error ?? "",
         TARGET_OUTCOME: target.result.exitCode === 0 ? "success" : "failure",
@@ -604,6 +626,125 @@ describe("Workspace E2E status after a failed resolution", () => {
     // The final-status job owns only heads whose resolution succeeded.
     expect(workflow.jobs["publish-final-status"]?.if).toContain(
       "needs.resolve-target.result == 'success'"
+    );
+  });
+});
+
+describe("Workspace E2E selective PR flows", () => {
+  test("fails closed when the PR description lacks a valid ## E2E flows section", async () => {
+    const { outputs, result } = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [{ ...pullRequest, body: "## Summary\nMissing flows" }]
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(outputs.eligible).toBe("true");
+    expect(outputs.resolution_error).toContain("## E2E flows");
+  });
+
+  test("resolves a subset PR flow list and skips WebKit unless webkit is requested", async () => {
+    const subset = await resolveTarget("success", deploymentSucceeded, [
+      { ...pullRequest, body: "## E2E flows\n- `email-campaigns`\n- admin\n" },
+    ]);
+    expect(subset.result.exitCode).toBe(0);
+    expect(subset.outputs).toMatchObject({
+      flows: "admin,email-campaigns",
+      install_webkit: "false",
+      run_e2e: "true",
+    });
+
+    const withWebkit = await resolveTarget("success", deploymentSucceeded, [
+      { ...pullRequest, body: "## E2E flows\n- webkit\n" },
+    ]);
+    expect(withWebkit.result.exitCode).toBe(0);
+    expect(withWebkit.outputs).toMatchObject({
+      flows: "webkit",
+      install_webkit: "true",
+      run_e2e: "true",
+    });
+  });
+
+  test("skips running E2E when PR declares none and publishes a skipped success status", async () => {
+    const resolved = await resolveTarget("success", deploymentSucceeded, [
+      { ...pullRequest, body: "## E2E flows\n- `none`\n" },
+    ]);
+    expect(resolved.result.exitCode).toBe(0);
+    expect(resolved.outputs).toMatchObject({
+      flows: "none",
+      install_webkit: "false",
+      run_e2e: "false",
+    });
+
+    const decided = await decideStatus(
+      "success",
+      { commits: [] },
+      {
+        FLOWS: "none",
+      }
+    );
+    expect(decided.result.exitCode).toBe(0);
+    expect(decided.outputs).toMatchObject({
+      description: "Protected preview E2E skipped [flows: none]",
+      state: "success",
+    });
+  });
+
+  test("fails a skipped deployment when the same-tree commit passed only a smaller flow subset", async () => {
+    const { outputs, result } = await decideStatus(
+      "skipped",
+      {
+        commits: [
+          { sha: sha("b"), tree: "tree-same" },
+          { sha: targetSha, tree: "tree-same" },
+        ],
+        statuses: {
+          [sha("b")]: [
+            {
+              description: "Protected preview E2E passed [flows: admin]",
+              state: "success",
+            },
+          ],
+        },
+      },
+      { FLOWS: "admin,email-campaigns" }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(outputs.state).toBe("failure");
+    expect(outputs.description).toContain("lacks required E2E flows");
+  });
+
+  test("unions newly passed flows with prior passing flows on the same SHA in publish-final-status", async () => {
+    const { calls, result } = await runStep(
+      finalStep,
+      {
+        [`commits/${targetSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description: "Protected preview E2E passed [flows: admin]",
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
+        ALLOCATION_SHARD: "1",
+        FLOWS: "email-campaigns",
+        FLOWS_CLI: flowsCli,
+        PR_NUMBER: String(prNumber),
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    const e2ePost = calls.find(
+      (call) =>
+        call.includes(`statuses/${targetSha}`) &&
+        call.includes("context=Workspace E2E")
+    );
+    expect(e2ePost).toContain(
+      "description=Protected preview E2E passed [flows: admin,email-campaigns]"
     );
   });
 });

@@ -13,7 +13,7 @@ const journalRoot = resolve(checkoutArtifactRoot, "cleanup-journals");
 const formatVersion = 2;
 
 export type WorkspaceE2ERunPlan = {
-  readonly preparation: WorkspaceE2EPreparation;
+  readonly preparation?: WorkspaceE2EPreparation;
   readonly runContext: E2ERunContext;
   readonly version: typeof formatVersion;
 };
@@ -105,7 +105,7 @@ const parseRunPlan = (serialized: string): WorkspaceE2ERunPlan => {
   if (
     !isRecord(value) ||
     value.version !== formatVersion ||
-    !isRecord(value.preparation) ||
+    (value.preparation !== undefined && !isRecord(value.preparation)) ||
     !isRecord(value.runContext)
   ) {
     throw new Error("Invalid workspace E2E run plan");

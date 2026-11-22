@@ -16,9 +16,14 @@
 `.github/workflows/workspace-e2e.yml` runs on the Vercel `repository_dispatch` events for the Workspace project's Preview environment:
 
 1. Vercel builds the protected Git preview, and the Neon integration creates its database branch.
-2. On `vercel.deployment.success`, the `resolve-target` job checks the project, environment, SHA, PR, and URL. It accepts only an open, internal, non-draft, non-Dependabot PR whose head is the target SHA, and resolves that PR before it checks the preview.
-3. The `test-e2e` job leases a date shard, installs dependencies, resolves and migrates the preview's Neon branch, validates Dotypos capacity, and runs `bun turbo test:e2e --filter=deskohub-workspace`.
-4. `publish-final-status` publishes the commit status.
+2. On `vercel.deployment.success`, the `resolve-target` job checks the project, environment, SHA, PR, URL, and the PR description's required `## E2E flows` section. It accepts only an open, internal, non-draft, non-Dependabot PR whose head is the target SHA, and resolves that PR before it checks the preview.
+3. If `## E2E flows` is missing, empty, unknown, or mixes `all`/`none` with other flows, `resolve-target` fails closed and `publish-status-without-run` posts a failing `Workspace E2E` status. If it declares `none` (and the Vercel deployment succeeded or skipped), `test-e2e` is skipped with no shard lease and `Workspace E2E` passes as `Protected preview E2E skipped [flows: none]`.
+4. Otherwise `test-e2e` leases a date shard, installs dependencies, resolves and migrates the preview's Neon branch, validates Dotypos capacity, installs WebKit only when `webkit` or `all` is selected, and runs `bun turbo test:e2e --filter=deskohub-workspace` with `WORKSPACE_E2E_FLOWS`.
+5. `publish-final-status` publishes the commit status, unioning newly passed flows with any flows that already passed on the same SHA.
+
+`.github/workflows/workspace-e2e-pr-sync.yml` runs on `pull_request_target` (`opened`, `edited`, `reopened`, `ready_for_review`) without checking out PR code. It validates `## E2E flows` immediately, fails `Workspace E2E` if the section is missing or invalid, and when a PR edit adds flows not yet covered by a passing `Workspace E2E` status on the current head SHA, immediately marks `Workspace E2E` failed and dispatches `workspace-e2e.yml` for only the missing flows (or the full unpassed list if an earlier run is still in progress). Flow definitions, PR-body parsing, and status encoding live in `.github/actions/workspace-e2e-flows/flows.mjs` and `apps/deskohub-workspace/e2e/flows.ts`.
+
+Valid `## E2E flows` values: `all`, `none`, or bullet items from `checkout-cowork`, `checkout-meeting-room`, `checkout-office`, `payments`, `discounts`, `referrals`, `agent-booking`, `account`, `admin`, `email-campaigns`, `access-codes`, `public-site`, `webkit`. Nightly runs always execute `all` plus nightly cases.
 
 A `Workspace E2E` success means E2E ran against that commit's code. For a deployment E2E doesn't run against, `resolve-target` checks the exact-SHA deployment status, decides the status in `Decide status without an E2E run`, and `publish-status-without-run` publishes it:
 
@@ -116,6 +121,7 @@ Never put production Nexi, Dotypos, or database credentials in Preview. Never ad
 - `NEXI_API_ORIGIN`: the sandbox origin, supplied explicitly.
 - `WORKSPACE_E2E_ALLOCATION_SHARD`, `WORKSPACE_E2E_PROVIDER_PERMIT_REQUIRED`, `WORKSPACE_E2E_PROVIDER_PERMIT_DATABASE_URL`: see [suite orchestration](suite-orchestration.md).
 - `WORKSPACE_E2E_EXECUTION_CONTEXT`: `manual` or `ci`. Locally it defaults to `manual`; the workflow sets `manual` for `workflow_dispatch` and `ci` for the repository dispatch. A rerun keeps its trigger's value.
+- `WORKSPACE_E2E_FLOWS`: optional `all`, `none`, or comma-separated flow IDs from `e2e/flows.ts`. Defaults to `all` when unset. Manual `workflow_dispatch` also accepts a `flows` input.
 - `WORKSPACE_E2E_NIGHTLY_CASES=true`: also run the nightly cases (see [nightly run](#nightly-run)). The workflow sets it only for a validated nightly target dispatched with `include_nightly_cases`.
 - `WORKSPACE_E2E_REVIEW_SCREENSHOTS=true`: opt-in general account PR review screenshots, including the administration Overview and customer calendar captures (see [browser driving](browser-driving.md#review-screenshots)). A manual workflow dispatch sets it only when `review_screenshots=true`; PR preview events leave it unset.
 - `WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS=true`: opt-in campaign-composer screenshots only. A manual workflow dispatch enables this with `campaign_screenshots=true`; it does not enable general account captures.

@@ -1,0 +1,250 @@
+name: Workspace E2E PR flows
+
+# Validates the required `## E2E flows` section whenever a PR is opened,
+# edited, reopened, or marked ready for review, and immediately fails
+# `Workspace E2E` and dispatches missing flows when a PR edit adds flows
+# that have not passed on the current head SHA.
+#
+# Runs on pull_request_target without ever checking out or executing PR code;
+# only internal, non-draft, non-Dependabot PRs in the source repository are
+# eligible.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: workspace-e2e-pr-sync-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  sync-pr-e2e-flows:
+    if: >-
+      github.repository == 'totalolage/deskohub-site' &&
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      !startsWith(github.event.pull_request.head.ref, 'dependabot/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      deployments: read
+      pull-requests: read
+      statuses: write
+    steps:
+      # Only the workflow commit's flow parser is checked out, never PR code.
+      - name: Checkout E2E flow parser
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workspace-e2e-flows
+          persist-credentials: false
+          sparse-checkout: .github/actions/workspace-e2e-flows
+
+      - name: Sync Workspace E2E flows with PR description
+        env:
+          FLOWS_CLI: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/cli.mjs
+          GH_TOKEN: ${{ github.token }}
+          INVALID_FLOWS_DESCRIPTION: 'Invalid or missing ## E2E flows in PR description; list valid flows, all, or none'
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PREVIEW_ENVIRONMENT: 'Preview – deskohub-workspace-site'
+        run: |
+          set -euo pipefail
+          repo="repos/$GITHUB_REPOSITORY"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          post_status() {
+            local sha="$1" state="$2" description="$3"
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "$repo/statuses/$sha" \
+              -f state="$state" \
+              -f context='Workspace E2E' \
+              -f description="$description" \
+              -f target_url="$run_url" \
+              >/dev/null
+          }
+
+          pr="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "$repo/pulls/$PR_NUMBER")"
+          if ! jq -e \
+            --arg repo "$GITHUB_REPOSITORY" \
+            '.state == "open" and
+             .draft == false and
+             .head.repo.full_name == $repo and
+             .user.login != "dependabot[bot]" and
+             (.head.ref | startswith("dependabot/") | not)' \
+            <<<"$pr" >/dev/null; then
+            echo "PR #$PR_NUMBER is no longer an eligible open internal PR"
+            exit 0
+          fi
+
+          head_sha="$(jq -r '.head.sha' <<<"$pr")"
+          head_ref="$(jq -r '.head.ref' <<<"$pr")"
+          pr_body="$(jq -r '.body // ""' <<<"$pr")"
+
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "PR #$PR_NUMBER head SHA is invalid" >&2
+            exit 1
+          fi
+          if ! git check-ref-format --branch "$head_ref" >/dev/null; then
+            echo "PR #$PR_NUMBER head ref is invalid" >&2
+            exit 1
+          fi
+
+          if ! parsed="$(PR_BODY="$pr_body" node "$FLOWS_CLI" parse-pr-body)"; then
+            error_message="$(jq -r '.error // "Invalid ## E2E flows section"' <<<"$parsed" 2>/dev/null || echo "Invalid ## E2E flows section")"
+            echo "$error_message" >&2
+            echo "Workspace E2E flow check failed for PR #$PR_NUMBER: $error_message" >> "$GITHUB_STEP_SUMMARY"
+            post_status "$head_sha" failure "$INVALID_FLOWS_DESCRIPTION"
+            exit 1
+          fi
+
+          requested_flows="$(jq -r '.flows' <<<"$parsed")"
+          echo "PR #$PR_NUMBER requests Workspace E2E flows: \`$requested_flows\`" >> "$GITHUB_STEP_SUMMARY"
+
+          statuses="$(gh api --paginate --slurp \
+            "$repo/commits/$head_sha/statuses?per_page=100" | jq 'add')"
+          summary="$(REQUESTED_FLOWS="$requested_flows" INCLUDE_CARRIED=true node "$FLOWS_CLI" summarize-statuses <<<"$statuses")"
+          latest_state="$(jq -r '.latestState' <<<"$summary")"
+          latest_description="$(jq -r '.latestDescription' <<<"$summary")"
+          passed_flows_csv="$(jq -r '.passedFlowsCsv' <<<"$summary")"
+          missing_flows_csv="$(jq -r '.missingFlowsCsv' <<<"$summary")"
+          all_covered="$(jq -r '.allCovered' <<<"$summary")"
+          covered_by_running="$(jq -r '.coveredByRunning' <<<"$summary")"
+
+          deployment_state="pending"
+          preview_url=""
+          deployments="$(gh api --method GET \
+            -H "Accept: application/vnd.github+json" \
+            "$repo/deployments" \
+            -f sha="$head_sha" \
+            -f environment="$PREVIEW_ENVIRONMENT" \
+            -f per_page=100)"
+          while IFS= read -r deployment_id; do
+            if [[ -z "$deployment_id" ]]; then
+              continue
+            fi
+            deployment_statuses="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "$repo/deployments/$deployment_id/statuses")"
+            resolved="$(jq -r '
+              (first(.[] | select(.state == "success" and (.environment_url // "") != "")) | "success \(.environment_url | rtrimstr("/"))") //
+              (first(.[] | select(.state == "inactive" and .description == "Skipped - Not affected")) | "skipped") //
+              (first(.[] | select(.state == "failure" or .state == "error")) | "failed") //
+              "pending"' <<<"$deployment_statuses")"
+            if [[ "$resolved" != "pending" ]]; then
+              deployment_state="${resolved%% *}"
+              if [[ "$deployment_state" == "success" ]]; then
+                preview_url="${resolved#success }"
+              fi
+              break
+            fi
+          done < <(jq -r '.[] | select(.creator.login == "vercel[bot]") | .id' <<<"$deployments")
+
+          if [[ "$requested_flows" == "none" ]]; then
+            case "$deployment_state" in
+              failed)
+                post_status "$head_sha" failure 'Vercel preview deployment failed; fix or redeploy it to run E2E'
+                ;;
+              success | skipped)
+                if [[ "$latest_state" != "success" ]]; then
+                  skip_description="$(STATUS_KIND=skipped-none node "$FLOWS_CLI" format-status)"
+                  post_status "$head_sha" success "$skip_description"
+                fi
+                ;;
+              pending)
+                if [[ "$latest_state" == "failure" && "$latest_description" == "$INVALID_FLOWS_DESCRIPTION" ]]; then
+                  post_status "$head_sha" pending 'Waiting for Vercel preview to resolve E2E'
+                fi
+                ;;
+            esac
+            exit 0
+          fi
+
+          if [[ "$all_covered" == "true" ]]; then
+            if [[ "$latest_state" != "success" ]]; then
+              restored="$(STATUS_KIND=passed FLOWS="$passed_flows_csv" node "$FLOWS_CLI" format-status)"
+              post_status "$head_sha" success "$restored"
+            fi
+            exit 0
+          fi
+
+          if [[ "$covered_by_running" == "true" ]]; then
+            echo "An in-progress Workspace E2E run already covers $requested_flows" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          case "$deployment_state" in
+            success)
+              # Fail the required check immediately so the PR cannot merge while
+              # the newly added flows wait to start and finish.
+              post_status "$head_sha" failure 'PR E2E flows changed; starting Workspace E2E for missing flows'
+              gh workflow run workspace-e2e.yml \
+                --repo "$GITHUB_REPOSITORY" \
+                --ref main \
+                -f sha="$head_sha" \
+                -f url="$preview_url" \
+                -f ref="$head_ref" \
+                -f flows="$missing_flows_csv"
+              echo "Dispatched Workspace E2E for ${head_sha:0:7} with missing flows: \`$missing_flows_csv\`" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            skipped)
+              pr_commits="$(gh api --paginate --slurp \
+                "$repo/pulls/$PR_NUMBER/commits?per_page=100" | jq 'add')"
+              target_tree="$(jq -r --arg sha "$head_sha" \
+                'first(.[] | select(.sha == $sha) | .commit.tree.sha) // empty' \
+                <<<"$pr_commits")"
+              if [[ -z "$target_tree" ]]; then
+                post_status "$head_sha" failure "Head missing from this PR's commit list (GitHub lists 250 at most); deploy its Workspace preview to run E2E"
+                exit 0
+              fi
+              mapfile -t same_tree_shas < <(jq -r \
+                --arg sha "$head_sha" \
+                --arg tree "$target_tree" \
+                '[.[] | select(.sha != $sha and .commit.tree.sha == $tree) | .sha] | reverse | .[]' \
+                <<<"$pr_commits")
+              for sha in "${same_tree_shas[@]}"; do
+                commit_statuses="$(gh api --paginate --slurp \
+                  "$repo/commits/$sha/statuses?per_page=100" | jq 'add')"
+                commit_summary="$(REQUESTED_FLOWS="$requested_flows" node "$FLOWS_CLI" summarize-statuses <<<"$commit_statuses")"
+                run_state="$(jq -r '.latestRunState' <<<"$commit_summary")"
+                commit_covered="$(jq -r '.allCovered' <<<"$commit_summary")"
+                commit_passed_csv="$(jq -r '.passedFlowsCsv' <<<"$commit_summary")"
+                case "$run_state" in
+                  success)
+                    if [[ "$commit_covered" == "true" ]]; then
+                      same_tree_description="$(STATUS_KIND=same-tree-passed FLOWS="$commit_passed_csv" SOURCE_SHA="$sha" node "$FLOWS_CLI" format-status)"
+                      post_status "$head_sha" success "$same_tree_description"
+                    else
+                      post_status "$head_sha" failure "Same tree as ${sha:0:7} lacks required E2E flows; deploy its Workspace preview"
+                    fi
+                    exit 0
+                    ;;
+                  failure | error)
+                    post_status "$head_sha" failure "Same tree as ${sha:0:7}, which failed E2E"
+                    exit 0
+                    ;;
+                  pending)
+                    post_status "$head_sha" failure "Same tree as ${sha:0:7}, whose E2E is still running; rerun this check after it ends"
+                    exit 0
+                    ;;
+                esac
+              done
+              post_status "$head_sha" failure 'Vercel skipped this SHA and no E2E-tested commit has its tree; deploy its Workspace preview'
+              ;;
+            failed)
+              post_status "$head_sha" failure 'Vercel preview deployment failed; fix or redeploy it to run E2E'
+              ;;
+            pending)
+              if [[ "$latest_state" == "failure" && "$latest_description" == "$INVALID_FLOWS_DESCRIPTION" ]]; then
+                post_status "$head_sha" pending 'Waiting for Vercel preview to run E2E'
+              fi
+              ;;
+          esac

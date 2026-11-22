@@ -1,0 +1,107 @@
+#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import {
+  diffFlowIds,
+  formatE2EStatusDescription,
+  parseFlowsInput,
+  parsePrBodyE2EFlows,
+  summarizeCommitStatuses,
+  unionFlowIds,
+  WORKSPACE_E2E_FLOW_IDS,
+} from "./flows.mjs";
+
+const [command] = process.argv.slice(2);
+
+const writeJson = (value) => {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+};
+
+const readStdinJson = () => {
+  const input = readFileSync(0, "utf8").trim();
+  return input ? JSON.parse(input) : [];
+};
+
+const toCanonicalFlows = (flowIds) => {
+  if (flowIds.length === 0) return "none";
+  if (flowIds.length === WORKSPACE_E2E_FLOW_IDS.length) return "all";
+  return flowIds.join(",");
+};
+
+switch (command) {
+  case "parse-pr-body": {
+    const result = parsePrBodyE2EFlows(process.env.PR_BODY ?? "");
+    writeJson(result);
+    if (!result.ok) process.exit(1);
+    break;
+  }
+  case "parse-flows": {
+    const result = parseFlowsInput(process.env.FLOWS_INPUT ?? "");
+    writeJson(result);
+    if (!result.ok) process.exit(1);
+    break;
+  }
+  case "format-status": {
+    const description = formatE2EStatusDescription({
+      kind: process.env.STATUS_KIND ?? "",
+      flows: process.env.FLOWS ?? "",
+      sourceSha: process.env.SOURCE_SHA ?? "",
+    });
+    process.stdout.write(`${description}\n`);
+    break;
+  }
+  case "summarize-statuses": {
+    const statuses = readStdinJson();
+    const includeCarried = process.env.INCLUDE_CARRIED === "true";
+    const summary = summarizeCommitStatuses(statuses, { includeCarried });
+
+    const requestedRaw = (process.env.REQUESTED_FLOWS ?? "").trim();
+    const addedRaw = (process.env.ADDED_FLOWS ?? "").trim();
+
+    let missing = [];
+    let allCovered = false;
+    let coveredByRunning = false;
+    if (requestedRaw) {
+      const parsedRequested = parseFlowsInput(requestedRaw);
+      if (!parsedRequested.ok) {
+        process.stderr.write(`${parsedRequested.error}\n`);
+        process.exit(1);
+      }
+      missing = diffFlowIds(parsedRequested.selected, summary.passedFlows);
+      allCovered = missing.length === 0;
+      const inFlightCovered = unionFlowIds(
+        summary.passedFlows,
+        summary.runningFlows
+      );
+      coveredByRunning =
+        summary.latestRunKind === "running" &&
+        diffFlowIds(parsedRequested.selected, inFlightCovered).length === 0;
+    }
+
+    let union = summary.passedFlows;
+    if (addedRaw) {
+      const parsedAdded = parseFlowsInput(addedRaw);
+      if (!parsedAdded.ok) {
+        process.stderr.write(`${parsedAdded.error}\n`);
+        process.exit(1);
+      }
+      union = unionFlowIds(summary.passedFlows, parsedAdded.selected);
+    }
+
+    writeJson({
+      ...summary,
+      missingFlows: missing,
+      missingFlowsCsv: toCanonicalFlows(missing),
+      allCovered,
+      coveredByRunning,
+      unionFlows: union,
+      unionFlowsCsv: toCanonicalFlows(union),
+    });
+    break;
+  }
+  default: {
+    process.stderr.write(
+      `Unknown workspace-e2e-flows command: ${command ?? "<missing>"}\n`
+    );
+    process.exit(1);
+  }
+}

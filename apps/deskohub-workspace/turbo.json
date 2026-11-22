@@ -167,6 +167,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "!test-timings.shard-*.json",
+        "$TURBO_ROOT$/.github/actions/**",
         "$TURBO_ROOT$/.github/workflows/**",
         "$TURBO_ROOT$/biome.json",
         "$TURBO_ROOT$/lint/*.grit",
@@ -201,6 +202,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "!test-timings.shard-*.json",
+        "$TURBO_ROOT$/.github/actions/**",
         "$TURBO_ROOT$/.github/workflows/**",
         "$TURBO_ROOT$/biome.json",
         "$TURBO_ROOT$/lint/*.grit",
@@ -235,6 +237,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "!test-timings.shard-*.json",
+        "$TURBO_ROOT$/.github/actions/**",
         "$TURBO_ROOT$/.github/workflows/**",
         "$TURBO_ROOT$/biome.json",
         "$TURBO_ROOT$/lint/*.grit",
@@ -269,6 +272,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "!test-timings.shard-*.json",
+        "$TURBO_ROOT$/.github/actions/**",
         "$TURBO_ROOT$/.github/workflows/**",
         "$TURBO_ROOT$/biome.json",
         "$TURBO_ROOT$/lint/*.grit",

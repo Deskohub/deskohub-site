@@ -37,6 +37,7 @@ Merge `main` earlier only to resolve a real conflict or a failure that blocks wo
 
 ## Completion
 
+- Every PR description must include a `## E2E flows` bullet list naming the affected Workspace E2E flows (`checkout-cowork`, `checkout-meeting-room`, `checkout-office`, `payments`, `discounts`, `referrals`, `agent-booking`, `account`, `admin`, `email-campaigns`, `access-codes`, `public-site`, `webkit`), `all`, or `none`. Missing, empty, or unknown values fail `Workspace E2E` closed; editing the PR description to add flows fails `Workspace E2E` and automatically dispatches the newly added flows.
 - At a planned stopping point, mark the PR ready for review instead of leaving it in draft.
 - Local verification is a checkpoint, not the finish. Continue through review, commit, push, screenshot evidence from the deployment, thread resolution, required checks, and the final main merge until the PR is mergeable. Stop earlier only when the user pauses the work or a blocker needs their input.
 - After a fix is pushed and validated, reply to each addressed thread with a short summary and resolve it.

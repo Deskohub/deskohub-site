@@ -455,6 +455,7 @@ describe("workspace E2E workflow", () => {
     expect(environment).toContain("WORKSPACE_E2E_VERCEL_TOKEN");
     expect(environment).toContain("WORKSPACE_E2E_VERCEL_PROJECT");
     expect(environment).toContain("WORKSPACE_E2E_BETTER_AUTH_SECRETS");
+    expect(environment).toContain("WORKSPACE_E2E_FLOWS");
     expect(environment).toContain("WORKSPACE_E2E_REVIEW_SCREENSHOTS");
     expect(environment).toContain("WORKSPACE_E2E_CAMPAIGN_REVIEW_SCREENSHOTS");
     expect(environment).not.toContain("WORKSPACE_E2E_RESEND_API_KEY");
@@ -1006,11 +1007,16 @@ describe("workspace E2E workflow", () => {
     expect(restoreIndex).toBeLessThan(
       steps.indexOf(stepByName("Install repository dependencies"))
     );
-    // A hit or a miss, the install step still runs: it installs WebKit's
-    // system packages and downloads the browser only when it is missing.
+    // When webkit is selected, restore runs first and install installs WebKit's
+    // system packages and downloads the browser only on a cache miss.
     const install = stepByName("Install Workspace Playwright WebKit");
     expect(steps.indexOf(install)).toBeGreaterThan(restoreIndex);
-    expect(install.if).toBeUndefined();
+    expect(restore.if).toBe(
+      "needs.resolve-target.outputs.install_webkit == 'true'"
+    );
+    expect(install.if).toBe(
+      "needs.resolve-target.outputs.install_webkit == 'true'"
+    );
     expect(install.run).toContain("install --with-deps webkit");
   });
 

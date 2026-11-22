@@ -124,6 +124,19 @@ test("the actual ownership reader requires complete case, owner, run and pre-cre
     expect(
       (await readRunOwnership(environment, directory)).intents
     ).toHaveLength(1);
+
+    // Scoped runs only require journals for the selected flows.
+    const scopedEnvironment = makeTestE2EEnvironment({
+      GITHUB_RUN_ID: "12345",
+      GITHUB_RUN_ATTEMPT: "1",
+      TARGET_SHA: "a".repeat(40),
+      WORKSPACE_E2E_FLOWS: "checkout-cowork",
+    });
+    await rm(join(directory, "account-journals/account-lane.json"));
+    await rm(join(directory, "cleanup-journals/contact-form.json"));
+    expect(
+      (await readRunOwnership(scopedEnvironment, directory)).intents
+    ).toHaveLength(1);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

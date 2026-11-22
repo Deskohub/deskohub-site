@@ -2,10 +2,20 @@ import "./shared/testing/workspace-test-environment";
 
 import { defineConfig } from "@playwright/test";
 import {
+  makeInstantNavigationFlowEnvironment,
+  workspaceE2EFlowSelection,
+} from "./e2e/e2e-env";
+import { selectedWorkspaceE2EInstantNavigationPlan } from "./e2e/flows";
+import {
   workspaceE2EPlaywrightDefaults,
   workspaceE2EPlaywrightReporter,
 } from "./e2e/playwright-defaults";
 import { workspaceE2ETimeouts } from "./e2e/timeouts";
+
+const flowSelection = workspaceE2EFlowSelection(
+  makeInstantNavigationFlowEnvironment()
+);
+const navigationPlan = selectedWorkspaceE2EInstantNavigationPlan(flowSelection);
 
 // Read-only navigation runs as its own invocation beside the checkout graph:
 // it takes no lease and must not gate checkout setup. Administration navigation
@@ -36,11 +46,17 @@ export default defineConfig({
       // Public, account, and reservation navigation never waits for the
       // administrator setup.
       name: "navigation",
-      testIgnore: [
-        "admin-navigation.pw.ts",
-        "administrator-cleanup.pw.ts",
-        "administrator-setup.pw.ts",
-      ],
+      ...(flowSelection.kind === "all"
+        ? {
+            testIgnore: [
+              "admin-navigation.pw.ts",
+              "administrator-cleanup.pw.ts",
+              "administrator-setup.pw.ts",
+            ],
+          }
+        : {
+            testMatch: [...navigationPlan.navigationSpecs],
+          }),
     },
     {
       // Safari and every iOS browser run WebKit, which gets the Temporal
