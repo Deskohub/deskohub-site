@@ -242,14 +242,17 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
       (await runEngineAt(plan(true), layer, afterMidnight)).intake.unitsPlanned
     ).toBe(0);
     const { rows } = await pool.query(
-      `select trigger_pass_id, pass_reminder_context, dotypos_customer_id, step_id
-       from email_campaign_automation_runs where trigger_pass_id is not null`
+      `select trigger_pass_id, pass_reminder_context, dotypos_customer_id, step_id,
+              trigger_at = $1::timestamptz as original_fire
+       from email_campaign_automation_runs where trigger_pass_id is not null`,
+      [dueAt.toString()]
     );
     expect(rows).toHaveLength(2);
     expect(rows).toEqual(
       expect.arrayContaining(
         [id, otherPass.id].map((passId) => ({
           trigger_pass_id: passId,
+          original_fire: true,
           step_id: "send",
           dotypos_customer_id: eligible,
           pass_reminder_context: {
