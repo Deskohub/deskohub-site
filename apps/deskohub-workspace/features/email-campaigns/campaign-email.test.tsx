@@ -589,6 +589,8 @@ describe("campaign pass offer cards", () => {
     ]) {
       expect(email.text).toContain(line);
     }
+    // Each line of a card stays its own line.
+    expect(email.text).toContain("Save CZK 460\non 5 Reserved Desk visits");
     expect(email.text.split(entryPackUrl)).toHaveLength(2);
     expect(email.text.split(unlimitedUrl)).toHaveLength(2);
     expect(email.text).not.toContain("→");

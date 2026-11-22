@@ -70,7 +70,11 @@ function CellLink({
   );
 }
 
-/** The product name, lead line, and detail line, as linked text. */
+/**
+ * The product name, lead line, and detail line, as linked text. The lines are
+ * inline text split by line breaks, which Outlook keeps inside the link and
+ * plain text keeps as lines; each line's height sets its spacing.
+ */
 function PassOfferText({
   color,
   copy,
@@ -84,13 +88,16 @@ function PassOfferText({
   readonly href: string;
   readonly padding: string;
 }) {
-  const line = { display: "block", fontFamily, textWrap: "balance" } as const;
   return (
-    <CellLink color={color} href={href} style={{ padding }}>
+    <CellLink
+      color={color}
+      href={href}
+      style={{ fontSize: 0, lineHeight: 0, padding, textWrap: "balance" }}
+    >
       <span
         style={{
-          ...line,
           color,
+          fontFamily,
           fontSize: 14.5,
           fontWeight: 700,
           lineHeight: "19px",
@@ -98,31 +105,33 @@ function PassOfferText({
       >
         {copy.name}
       </span>
+      <br />
       <span
         style={{
-          ...line,
           color,
+          fontFamily,
           fontSize: 24,
           fontWeight: 700,
           letterSpacing: -0.4,
-          lineHeight: "28px",
-          paddingTop: 3,
+          lineHeight: "31px",
         }}
       >
         {copy.headline}
       </span>
       {copy.detail && (
-        <span
-          style={{
-            ...line,
-            color: detailColor,
-            fontSize: 13,
-            lineHeight: "18px",
-            paddingTop: 4,
-          }}
-        >
-          {copy.detail}
-        </span>
+        <>
+          <br />
+          <span
+            style={{
+              color: detailColor,
+              fontFamily,
+              fontSize: 13,
+              lineHeight: "22px",
+            }}
+          >
+            {copy.detail}
+          </span>
+        </>
       )}
     </CellLink>
   );
