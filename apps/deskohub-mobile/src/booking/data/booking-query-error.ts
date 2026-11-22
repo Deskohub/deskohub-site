@@ -2,6 +2,7 @@ import type {
   CustomerBookingDateOutOfRange,
   CustomerBookingSelectionInvalid,
   CustomerOfferingUnavailable,
+  CustomerSelectionUnavailable,
 } from "@deskohub/workspace-customer-api";
 import { Data, Match } from "effect";
 import {
@@ -15,7 +16,8 @@ export type BookingQueryFailure =
   | CustomerRequestFailure
   | CustomerBookingSelectionInvalid
   | CustomerBookingDateOutOfRange
-  | CustomerOfferingUnavailable;
+  | CustomerOfferingUnavailable
+  | CustomerSelectionUnavailable;
 
 /** What a booking screen shows for a catalog failure of its own. */
 export type BookingCatalogViewError = Data.TaggedEnum<{
@@ -51,6 +53,9 @@ export const toBookingQueryError = (
     ),
     Match.tag("CustomerOfferingUnavailable", ({ family }) =>
       BookingCatalogViewError.OfferingUnavailable({ family })
+    ),
+    Match.tag("CustomerSelectionUnavailable", () =>
+      BookingCatalogViewError.SelectionInvalid({ field: "funding" })
     ),
     // The rest is exactly `CustomerRequestFailure`, which it maps exhaustively.
     Match.orElse(toCustomerViewError)

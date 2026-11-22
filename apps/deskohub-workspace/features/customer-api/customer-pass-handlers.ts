@@ -1,11 +1,14 @@
 import {
+  CustomerBookingSelectionInvalid,
   CustomerPassesUnavailable,
   CustomerPassNotFound,
+  CustomerPassPurchaseRefused,
   WorkspaceCustomerApi,
 } from "@deskohub/workspace-customer-api";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { HttpApiBuilder } from "effect/http-api";
 import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
+import { checkoutSubmitDeadline } from "@/features/checkout/backend/checkout/checkout-submit-deadline";
 import { defaultLocale } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import {
@@ -13,6 +16,7 @@ import {
   HeldPassNotFound,
 } from "@/features/passes/backend/customer-pass-reads";
 import { CustomerPasses } from "@/features/passes/backend/customer-passes.service";
+import { EntryPackPurchaseError } from "@/features/passes/backend/entry-pack-purchase";
 import { providePerRequest } from "@/shared/backend/provide-per-request";
 import { runToCompletion } from "@/shared/backend/run-to-completion";
 import {
@@ -20,6 +24,12 @@ import {
   type CustomerAccountApiFailure,
 } from "./customer-api-failure";
 import { CustomerPassLayers } from "./customer-pass-layers";
+import {
+  beginCustomerPassPurchase,
+  loadCustomerPassPurchaseStatus,
+  loadCustomerUnlimitedStartDates,
+  submitCustomerPassPurchase,
+} from "./customer-pass-purchase-operations";
 import { CustomerReservationLayers } from "./customer-reservation-layers";
 
 type PassReadFailure = CustomerAccountApiFailure | CustomerPassesUnavailable;
@@ -36,6 +46,39 @@ const answerPassFailure =
   (operation: string) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.catch((failure) => failPassRequest(operation, failure)));
+
+type PassPurchaseFailure = PassReadFailure | CustomerPassPurchaseRefused;
+
+const failPurchaseRequest = <E>(
+  operation: string,
+  failure: E
+): Effect.Effect<never, PassPurchaseFailure> => {
+  if (failure instanceof CustomerPassPurchaseRefused)
+    return Effect.fail(failure);
+  if (failure instanceof Schema.SchemaError) {
+    return Effect.fail(
+      new CustomerPassPurchaseRefused({ reason: "invalid-selection" })
+    );
+  }
+  if (failure instanceof EntryPackPurchaseError) {
+    const { reason } = failure;
+    return reason === "unavailable"
+      ? Effect.fail(new CustomerPassesUnavailable())
+      : Effect.fail(
+          new CustomerPassPurchaseRefused({
+            reason: reason === "terms-changed" ? "quote-expired" : reason,
+          })
+        );
+  }
+  return failPassRequest(operation, failure);
+};
+
+const answerPurchaseFailure =
+  (operation: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.catch((failure) => failPurchaseRequest(operation, failure))
+    );
 
 export const CustomerPassApiHandlers = HttpApiBuilder.group(
   WorkspaceCustomerApi,
@@ -56,6 +99,13 @@ export const CustomerPassApiHandlers = HttpApiBuilder.group(
       currentAccount
     );
     const passReads = Layer.mergeAll(shared, layers.database);
+    const beginPurchase = Layer.mergeAll(shared, layers.purchases.begin).pipe(
+      Layer.provide(authentication)
+    );
+    const purchasePayment = Layer.mergeAll(
+      shared,
+      layers.purchases.payment
+    ).pipe(Layer.provide(authentication));
 
     return handlers
       .handle("listPassOffers", () =>
@@ -75,7 +125,19 @@ export const CustomerPassApiHandlers = HttpApiBuilder.group(
         Effect.flatMap(CustomerPasses, (passes) => passes.options(query)).pipe(
           providePerRequest(passReads),
           runToCompletion,
-          answerPassFailure("customerApi.getPassBookingOptions")
+          Effect.catch(
+            (
+              failure
+            ): Effect.Effect<
+              never,
+              PassReadFailure | CustomerBookingSelectionInvalid
+            > =>
+              failure instanceof Schema.SchemaError
+                ? Effect.fail(
+                    new CustomerBookingSelectionInvalid({ field: "date" })
+                  )
+                : failPassRequest("customerApi.getPassBookingOptions", failure)
+          )
         )
       )
       .handle("getUnlimitedAccess", ({ params: { passId } }) =>
@@ -102,6 +164,71 @@ export const CustomerPassApiHandlers = HttpApiBuilder.group(
         ).pipe(
           providePerRequest(passReads),
           answerPassFailure("customerApi.getReservationPassFunding")
+        )
+      )
+      .handle("resendPassInvitation", ({ params: { passId } }) =>
+        Effect.flatMap(CustomerPasses, (passes) =>
+          passes.resendInvitation(orderIdSchema.make(passId))
+        ).pipe(
+          Effect.map((status) => ({ status })),
+          providePerRequest(
+            Layer.mergeAll(passReads, layers.giftInvitation).pipe(
+              Layer.provide(authentication)
+            )
+          ),
+          answerPassFailure("customerApi.resendPassInvitation")
+        )
+      )
+      .handle("getUnlimitedStartDates", ({ query }) =>
+        loadCustomerUnlimitedStartDates(query).pipe(
+          providePerRequest(
+            Layer.mergeAll(shared, layers.purchases.availability)
+          ),
+          Effect.timeout("18 seconds"),
+          answerPurchaseFailure("customerApi.getUnlimitedStartDates")
+        )
+      )
+      .handle("beginPassPurchase", ({ payload }) =>
+        beginCustomerPassPurchase(payload).pipe(
+          providePerRequest(beginPurchase),
+          Effect.timeout("180 seconds"),
+          answerPurchaseFailure("customerApi.beginPassPurchase")
+        )
+      )
+      .handle(
+        "getPassPurchaseStatus",
+        ({ params, query: { locale = defaultLocale } }) =>
+          loadCustomerPassPurchaseStatus(
+            orderIdSchema.make(params.orderId),
+            locale
+          ).pipe(
+            providePerRequest(Layer.mergeAll(shared, layers.purchases.status)),
+            Effect.timeout("50 seconds"),
+            runToCompletion,
+            Effect.catch(
+              (
+                failure
+              ): Effect.Effect<
+                never,
+                PassPurchaseFailure | CustomerPassNotFound
+              > =>
+                failure instanceof HeldPassNotFound
+                  ? Effect.fail(new CustomerPassNotFound())
+                  : failPurchaseRequest(
+                      "customerApi.getPassPurchaseStatus",
+                      failure
+                    )
+            )
+          )
+      )
+      .handle("submitPassPurchase", ({ params, payload }) =>
+        submitCustomerPassPurchase(
+          orderIdSchema.make(params.orderId),
+          payload
+        ).pipe(
+          providePerRequest(purchasePayment),
+          Effect.timeout(checkoutSubmitDeadline),
+          answerPurchaseFailure("customerApi.submitPassPurchase")
         )
       );
   })

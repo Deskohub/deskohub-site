@@ -4,7 +4,6 @@ import {
   customerApiPathPrefix,
 } from "@deskohub/workspace-customer-api";
 import { Effect, Layer, Option } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { AccountDataExportService } from "@/features/account/backend/account-data-export.service";
 import {
@@ -83,6 +82,7 @@ import { toWorkspaceWebHandler } from "@/shared/backend/workspace-effect";
 import { continueMutationsAfterDisconnect } from "@/shared/backend/workspace-http-api-route";
 import { makeMeetingPoint } from "@/shared/testing/overlapping-requests.test-utils";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import {
   CustomerAccountLayers,
   type CustomerAccountServiceLayers,
@@ -402,7 +402,9 @@ const unusedBookingCatalog: CustomerBookingCatalogLayerSet = {
   entryPackQuote: Layer.mergeAll(
     CoworkPassesReleaseGate.fromDecision(false),
     Layer.mock(CurrentCustomerAccount, {}),
-    Layer.mock(WorkspaceDatabase, {})
+    Layer.unwrap(
+      Effect.promise(async () => (await makeRecordingWorkspaceDatabase()).layer)
+    )
   ),
   releases: {
     meetingRoom: MeetingRoomReleaseGate.fromDecision(true),

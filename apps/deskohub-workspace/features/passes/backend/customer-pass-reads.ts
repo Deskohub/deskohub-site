@@ -134,6 +134,7 @@ export const listCustomerPasses = Effect.fn("CustomerPasses.list")(function* (
     return {
       ...bookingPack(pack),
       status: getHeldEntryPackStatus(pack, todayString),
+      bookedDates: pack.bookedDates.filter((date) => date >= todayString),
       ...(!pack.complimentary && {
         boughtOn: getWorkspaceDate(pack.paidAt).toString(),
       }),
@@ -184,10 +185,18 @@ export const listCustomerPasses = Effect.fn("CustomerPasses.list")(function* (
   const result: CustomerPassList = {
     held: [...heldPacks, ...heldUnlimited],
     boughtForOthers: boughtForOthers.map(
-      ({ orderId, product, claimed, invitation, maskedHolderEmail }) => ({
+      ({
+        orderId,
+        product,
+        claimed,
+        canResend,
+        invitation,
+        maskedHolderEmail,
+      }) => ({
         passId: orderId,
         product,
         claimed,
+        canResend: product.kind === "entry-pack" && canResend,
         invitation,
         ...(maskedHolderEmail && { maskedHolderEmail }),
       })

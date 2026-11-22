@@ -413,6 +413,7 @@ describe("a linked Entry pack", () => {
     validFrom: plainDateStringSchema.make("2099-07-09"),
     validUntil: plainDateStringSchema.make("2099-09-09"),
     claimedDates: [],
+    bookedDates: [],
     reservedEntryDates: {},
     giftIssuedAt: null,
     giftClaimedAt: null,

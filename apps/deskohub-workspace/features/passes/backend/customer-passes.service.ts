@@ -1,4 +1,11 @@
-import { Context, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
+import {
+  beginPurchase,
+  payPurchase,
+  purchaseStartDates,
+  purchaseStatus,
+  startPurchase,
+} from "./customer-pass-purchase";
 import {
   getCustomerPassBookingOptions,
   getCustomerReservationPassFunding,
@@ -6,9 +13,29 @@ import {
   getCustomerUnlimitedAccessPath,
   listCustomerPasses,
   listCustomerPassOffers,
+  requireCustomerPassAccount,
 } from "./customer-pass-reads";
+import { requestEntryPackGiftResend } from "./entry-pack-gift-resend";
 
-interface ICustomerPasses {
+const requireActivePassAccount =
+  <Input, Value, E, R>(
+    operation: (input: Input) => Effect.Effect<Value, E, R>
+  ) =>
+  (input: Input) =>
+    requireCustomerPassAccount().pipe(Effect.andThen(() => operation(input)));
+
+const purchases = {
+  beginPurchase: requireActivePassAccount(beginPurchase),
+  startPurchase: requireActivePassAccount(startPurchase),
+  purchaseStartDates: requireActivePassAccount(purchaseStartDates),
+  payPurchase: requireActivePassAccount(payPurchase),
+  purchaseStatus: requireActivePassAccount(purchaseStatus),
+  resendInvitation: requireActivePassAccount(requestEntryPackGiftResend),
+};
+
+type CustomerPassPurchases = typeof purchases;
+
+interface ICustomerPasses extends CustomerPassPurchases {
   readonly catalog: typeof listCustomerPassOffers;
   readonly list: typeof listCustomerPasses;
   readonly options: typeof getCustomerPassBookingOptions;
@@ -22,6 +49,7 @@ export class CustomerPasses extends Context.Service<
   ICustomerPasses
 >()("@deskohub-workspace/passes/CustomerPasses") {
   static Default = Layer.succeed(this, {
+    ...purchases,
     catalog: listCustomerPassOffers,
     list: listCustomerPasses,
     options: getCustomerPassBookingOptions,

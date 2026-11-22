@@ -56,14 +56,40 @@ describe("customer pass reads", () => {
     });
   });
 
-  for (const path of [
-    "/passes",
-    "/passes/options?date=2026-11-25&tier=open-space",
-    `/passes/${passId}/access`,
-    `/passes/reservation-funding?orderIds=${passId}`,
-  ]) {
-    test(`closed passes withhold ${path.split("?")[0]}`, async () => {
-      const call: CustomerApiCall = { method: "GET", path };
+  for (const call of [
+    ...[
+      "/passes",
+      "/passes/options?date=2026-11-25&tier=open-space",
+      `/passes/${passId}/access`,
+      `/passes/reservation-funding?orderIds=${passId}`,
+      "/passes/unlimited/start-dates",
+      `/passes/purchases/${passId}`,
+    ].map((path) => ({ method: "GET" as const, path })),
+    {
+      method: "POST",
+      path: `/passes/${passId}/invitation`,
+    },
+    {
+      method: "POST",
+      path: "/passes/purchases",
+      body: {
+        orderId: passId,
+        locale: "en-US",
+        product: { kind: "entry-pack", tier: "open-space", size: 5 },
+      },
+    },
+    {
+      method: "POST",
+      path: `/passes/purchases/${passId}/payment`,
+      body: {
+        productKind: "entry-pack",
+        accepted: false,
+        acceptedDocuments: [],
+        displayedPriceFingerprint: "0".repeat(64),
+      },
+    },
+  ] satisfies readonly CustomerApiCall[]) {
+    test(`closed passes withhold ${call.method} ${call.path.split("?")[0]}`, async () => {
       const api = makeCustomerApiTestServer();
       const response = await api.handle(customerApiRequest(call));
       expect(response.status).toBe(404);

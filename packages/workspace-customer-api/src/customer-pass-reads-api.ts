@@ -3,6 +3,7 @@ import { HttpApiEndpoint, HttpApiSchema } from "effect/http-api";
 import { CustomerAccountLinkRequired, Money } from "./customer-account-api";
 import {
   CustomerBookableCoworkTier,
+  CustomerBookingSelectionInvalid,
   CustomerCoworkStay,
   CustomerMonitorOption,
   CustomerPlainDate,
@@ -105,7 +106,9 @@ export const CustomerHeldEntryPack = Schema.Struct({
   ...entryPackFieldsForHolder,
   ...acquisition,
   status: heldEntryPackStatus,
-  /** The first selectable date for the current pack, when it is usable. */
+  /** Dates already booked and confirmed on or after today in Prague. */
+  bookedDates: Schema.Array(CustomerPlainDate),
+  /** The first valid date without an existing claim, when the pack is usable. */
   bookFrom: Schema.optionalKey(CustomerPlainDate),
 }).annotate({ identifier: "CustomerHeldEntryPack" });
 export type CustomerHeldEntryPack = typeof CustomerHeldEntryPack.Type;
@@ -142,6 +145,7 @@ export const CustomerPassList = Schema.Struct({
         }),
       ]),
       claimed: Schema.Boolean,
+      canResend: Schema.Boolean,
       invitation: Schema.Literals(["not_sent", "pending", "sent", "failed"]),
       maskedHolderEmail: Schema.optionalKey(Schema.String),
     })
@@ -204,7 +208,7 @@ export const customerPassReadEndpoints = [
       stay: Schema.optionalKey(CustomerCoworkStay),
     },
     success: CustomerPassBookingOptions,
-    error: readErrors,
+    error: [...readErrors, CustomerBookingSelectionInvalid.schema],
   }),
   HttpApiEndpoint.get("getUnlimitedAccess", "/:passId/access", {
     params: { passId: CustomerPassId },
@@ -220,6 +224,13 @@ export const customerPassReadEndpoints = [
     },
     success: Schema.Struct({
       entryPackOrderIds: Schema.Array(CustomerReservationOrderId),
+    }),
+    error: readErrors,
+  }),
+  HttpApiEndpoint.post("resendPassInvitation", "/:passId/invitation", {
+    params: { passId: CustomerPassId },
+    success: Schema.Struct({
+      status: Schema.Literals(["queued", "unavailable"]),
     }),
     error: readErrors,
   }),

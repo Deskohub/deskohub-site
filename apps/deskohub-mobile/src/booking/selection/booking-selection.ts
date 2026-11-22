@@ -25,10 +25,10 @@ export class SelectionIncomplete extends Data.TaggedClass(
   "SelectionIncomplete"
 )<{ readonly missing: ReadonlyArray<keyof CustomerBookingSelection> }> {}
 
-// Every selection field but the family, in the one order the key lists
-// them; typecheck names a field the contract adds.
+// The scalar fields in key order. The family and funding have their own
+// encoding below. Typecheck names a field the contract adds.
 const selectionKeyFieldOrder: Record<
-  Exclude<keyof CustomerBookingSelection, "family">,
+  Exclude<keyof CustomerBookingSelection, "family" | "funding">,
   true
 > = {
   date: true,
@@ -56,6 +56,9 @@ export const selectionKey = (selection: CustomerBookingSelection): string =>
       const value = selection[field];
       return value === undefined ? [] : [`${field}=${String(value)}`];
     }),
+    ...(selection.funding
+      ? [`funding=${selection.funding.kind}:${selection.funding.passId}`]
+      : []),
   ].join("&");
 
 /**

@@ -2830,6 +2830,16 @@
             "required": false
           },
           {
+            "name": "passId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+              "format": "uuid"
+            },
+            "required": false
+          },
+          {
             "name": "earlySetup",
             "in": "query",
             "schema": {
@@ -2895,6 +2905,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CustomerOfferingUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerSelectionUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSelectionUnavailableEncoded"
                 }
               }
             }
@@ -4150,6 +4170,16 @@
               }
             }
           },
+          "400": {
+            "description": "CustomerBookingSelectionInvalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerBookingSelectionInvalidEncoded"
+                }
+              }
+            }
+          },
           "401": {
             "description": "CustomerSessionRequired",
             "content": {
@@ -4412,6 +4442,528 @@
           }
         }
       }
+    },
+    "/api/customer/passes/{passId}/invitation": {
+      "post": {
+        "tags": ["passes"],
+        "operationId": "passes.resendPassInvitation",
+        "parameters": [
+          {
+            "name": "passId",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPassId"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["queued", "unavailable"]
+                    }
+                  },
+                  "required": ["status"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerPassesUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPassesUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerAccountLinkRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerAccountLinkRequiredEncoded"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customer/passes/unlimited/start-dates": {
+      "get": {
+        "tags": ["passes"],
+        "operationId": "passes.getUnlimitedStartDates",
+        "parameters": [
+          {
+            "name": "startsOn",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPlainDate"
+            },
+            "required": false
+          },
+          {
+            "name": "supersedeOrderId",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPassId"
+            },
+            "required": false
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerUnlimitedStartDates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerUnlimitedStartDates"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerPassesUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPassesUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerAccountLinkRequired | CustomerPassPurchaseRefused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomerAccountLinkRequiredEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerPassPurchaseRefusedEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customer/passes/purchases": {
+      "post": {
+        "tags": ["passes"],
+        "operationId": "passes.beginPassPurchase",
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerPassPurchase",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPassPurchase"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerPassesUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPassesUnavailableEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerAccountLinkRequired | CustomerPassPurchaseRefused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomerAccountLinkRequiredEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerPassPurchaseRefusedEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BeginCustomerPassPurchase"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/customer/passes/purchases/{orderId}": {
+      "get": {
+        "tags": ["passes"],
+        "operationId": "passes.getPassPurchaseStatus",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPassId"
+            },
+            "required": true
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerLocale"
+            },
+            "required": false
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerPassPurchaseStatus",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPassPurchaseStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerPassesUnavailable | CustomerPassNotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomerPassesUnavailableEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerPassNotFoundEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerAccountLinkRequired | CustomerPassPurchaseRefused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomerAccountLinkRequiredEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerPassPurchaseRefusedEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customer/passes/purchases/{orderId}/payment": {
+      "post": {
+        "tags": ["passes"],
+        "operationId": "passes.submitPassPurchase",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/CustomerPassId"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "CustomerPassPayment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPassPayment"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "CustomerSessionRequired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSessionRequiredEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CustomerRequestRejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRequestRejectedEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CustomerPassesUnavailable | CustomerPassNotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomerPassesUnavailableEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerPassNotFoundEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CustomerAccountLinkRequired | CustomerPassPurchaseRefused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomerAccountLinkRequiredEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CustomerPassPurchaseRefusedEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CustomerRateLimited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRateLimitedEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CustomerServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerServiceUnavailableEncoded"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitCustomerPassPurchase"
+              }
+            }
+          },
+          "required": true
+        }
+      }
     }
   },
   "components": {
@@ -4460,6 +5012,41 @@
         "required": ["_tag"],
         "additionalProperties": false
       },
+      "CustomerPassPurchaseRefusedEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["CustomerPassPurchaseRefused"]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "buyer-profile-required",
+              "holder-unavailable",
+              "purchase-conflict",
+              "consent-required",
+              "quote-expired",
+              "payment-in-progress",
+              "holds-unavailable",
+              "billing-changed",
+              "invalid-selection"
+            ]
+          },
+          "blockingDates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerPlainDate"
+            }
+          }
+        },
+        "required": ["_tag", "reason"],
+        "additionalProperties": false
+      },
+      "CustomerPlainDate": {
+        "type": "string",
+        "description": "Prague calendar date in YYYY-MM-DD format."
+      },
       "CustomerAccountLinkRequiredEncoded": {
         "type": "object",
         "properties": {
@@ -4475,6 +5062,17 @@
         "required": ["_tag", "reason"],
         "additionalProperties": false
       },
+      "CustomerPassNotFoundEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["CustomerPassNotFound"]
+          }
+        },
+        "required": ["_tag"],
+        "additionalProperties": false
+      },
       "CustomerPassesUnavailableEncoded": {
         "type": "object",
         "properties": {
@@ -4486,21 +5084,818 @@
         "required": ["_tag"],
         "additionalProperties": false
       },
+      "CustomerPassPayment": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["hosted"]
+              },
+              "statusUrl": {
+                "type": "string"
+              },
+              "redirectUrl": {
+                "type": "string"
+              }
+            },
+            "required": ["status", "statusUrl", "redirectUrl"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["paid", "pending"]
+              },
+              "statusUrl": {
+                "type": "string"
+              }
+            },
+            "required": ["status", "statusUrl"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["pricing_changed"]
+              },
+              "price": {
+                "$ref": "#/components/schemas/CustomerPassPurchasePrice"
+              }
+            },
+            "required": ["status", "price"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["terms_changed"]
+              },
+              "disclosure": {
+                "$ref": "#/components/schemas/CustomerPassPurchaseDisclosure"
+              }
+            },
+            "required": ["status", "disclosure"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CustomerPassPurchaseDisclosure": {
+        "type": "object",
+        "properties": {
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerLegalDocument"
+            }
+          },
+          "earlyStartRequest": {
+            "type": "string"
+          }
+        },
+        "required": ["documents"],
+        "additionalProperties": false
+      },
+      "CustomerLegalDocument": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": ["terms-and-conditions", "operating-rules"]
+          },
+          "path": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "hashAlgorithm": {
+            "type": "string",
+            "enum": ["sha256"]
+          }
+        },
+        "required": ["key", "path", "hash", "hashAlgorithm"],
+        "additionalProperties": false
+      },
+      "CustomerPassPurchasePrice": {
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": "string"
+          },
+          "subtotal": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "appliedDiscountCode": {
+            "type": "string"
+          },
+          "discounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "amount": {
+                  "$ref": "#/components/schemas/Money"
+                }
+              },
+              "required": ["id", "label", "amount"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["fingerprint", "subtotal", "total", "discounts"],
+        "additionalProperties": false
+      },
+      "Money": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "exponent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "currency": {
+            "type": "string"
+          }
+        },
+        "required": ["value", "exponent", "currency"],
+        "additionalProperties": false
+      },
+      "CustomerPassId": {
+        "type": "string",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+        "format": "uuid",
+        "description": "Opaque identifier of a pass purchase order."
+      },
+      "SubmitCustomerPassPurchase": {
+        "type": "object",
+        "properties": {
+          "productKind": {
+            "type": "string",
+            "enum": ["entry-pack", "unlimited"]
+          },
+          "accepted": {
+            "type": "boolean"
+          },
+          "acceptedDocuments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "hash": {
+                  "type": "string"
+                }
+              },
+              "required": ["key", "hash"],
+              "additionalProperties": false
+            },
+            "maxItems": 2
+          },
+          "unlimitedEarlyStartAccepted": {
+            "type": "boolean"
+          },
+          "displayedPriceFingerprint": {
+            "type": "string"
+          },
+          "billing": {
+            "$ref": "#/components/schemas/CustomerCheckoutBilling"
+          },
+          "priorPaymentAttemptId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "returnTarget": {
+            "$ref": "#/components/schemas/CustomerCheckoutReturnTarget"
+          }
+        },
+        "required": [
+          "productKind",
+          "accepted",
+          "acceptedDocuments",
+          "displayedPriceFingerprint"
+        ],
+        "additionalProperties": false
+      },
+      "CustomerCheckoutReturnTarget": {
+        "type": "string",
+        "enum": ["native-app", "web-app"]
+      },
+      "CustomerCheckoutBilling": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "enum": ["personal"]
+              },
+              "invoice": {
+                "type": "string",
+                "enum": ["none"]
+              }
+            },
+            "required": ["purpose", "invoice"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "enum": ["personal"]
+              },
+              "invoice": {
+                "type": "string",
+                "enum": ["requested"]
+              },
+              "address": {
+                "$ref": "#/components/schemas/CustomerInvoiceAddress"
+              }
+            },
+            "required": ["purpose", "invoice", "address"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "enum": ["business"]
+              },
+              "invoice": {
+                "type": "string",
+                "enum": ["required"]
+              },
+              "buyer": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["business"]
+                  },
+                  "legalName": {
+                    "type": "string",
+                    "maxLength": 180
+                  },
+                  "companyId": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "vatId": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "address": {
+                    "$ref": "#/components/schemas/CustomerInvoiceAddress"
+                  }
+                },
+                "required": ["kind", "legalName", "companyId", "address"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["purpose", "invoice", "buyer"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CustomerInvoiceAddress": {
+        "type": "object",
+        "properties": {
+          "line1": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "line2": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "city": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "postalCode": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "country": {
+            "type": "string"
+          }
+        },
+        "required": ["line1", "city", "postalCode", "country"],
+        "additionalProperties": false
+      },
+      "CustomerPassPurchaseStatus": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "$ref": "#/components/schemas/CustomerPassId"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_started",
+              "pending",
+              "checking",
+              "paid",
+              "cancelled",
+              "expired",
+              "failed",
+              "refund_required",
+              "refunded",
+              "partially_refunded",
+              "granted",
+              "grant_cancelled"
+            ]
+          },
+          "productKind": {
+            "type": "string",
+            "enum": ["entry-pack", "unlimited"]
+          },
+          "tier": {
+            "$ref": "#/components/schemas/CustomerPassTier"
+          },
+          "statusPath": {
+            "type": "string"
+          },
+          "gift": {
+            "type": "boolean"
+          },
+          "validFrom": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "lastUsableDate": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "retry": {
+            "type": "object",
+            "properties": {
+              "priorPaymentAttemptId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "price": {
+                "$ref": "#/components/schemas/CustomerPassPurchasePrice"
+              },
+              "disclosure": {
+                "$ref": "#/components/schemas/CustomerPassPurchaseDisclosure"
+              }
+            },
+            "required": ["priorPaymentAttemptId", "price", "disclosure"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["orderId", "status", "productKind", "tier", "statusPath"],
+        "additionalProperties": false
+      },
+      "CustomerPassTier": {
+        "type": "string",
+        "enum": ["open-space", "reserved-desk", "reserved-desk-workstation"]
+      },
+      "CustomerLocale": {
+        "type": "string",
+        "enum": ["en-US", "cs-CZ", "de-DE", "uk-UA", "sk-SK", "vi-VN", "hi-IN"]
+      },
+      "CustomerPassPurchase": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "$ref": "#/components/schemas/CustomerPassId"
+          },
+          "product": {
+            "$ref": "#/components/schemas/CustomerPassPurchaseProduct"
+          },
+          "payPath": {
+            "type": "string"
+          },
+          "statusPath": {
+            "type": "string"
+          },
+          "price": {
+            "$ref": "#/components/schemas/CustomerPassPurchasePrice"
+          },
+          "validFrom": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "lastUsableDate": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "disclosure": {
+            "$ref": "#/components/schemas/CustomerPassPurchaseDisclosure"
+          }
+        },
+        "required": [
+          "orderId",
+          "product",
+          "payPath",
+          "statusPath",
+          "price",
+          "validFrom",
+          "lastUsableDate",
+          "disclosure"
+        ],
+        "additionalProperties": false
+      },
+      "CustomerPassPurchaseProduct": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/CustomerEntryPackProduct"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["unlimited"]
+              },
+              "selection": {
+                "$ref": "#/components/schemas/CustomerUnlimitedPassSelection"
+              }
+            },
+            "required": ["kind", "selection"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CustomerUnlimitedPassSelection": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": ["open-space"]
+              },
+              "startDate": {
+                "$ref": "#/components/schemas/CustomerPlainDate"
+              },
+              "coffee": {
+                "type": "boolean"
+              }
+            },
+            "required": ["tier", "startDate", "coffee"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": ["reserved-desk"]
+              },
+              "startDate": {
+                "$ref": "#/components/schemas/CustomerPlainDate"
+              }
+            },
+            "required": ["tier", "startDate"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "tier": {
+                "type": "string",
+                "enum": ["reserved-desk-workstation"]
+              },
+              "startDate": {
+                "$ref": "#/components/schemas/CustomerPlainDate"
+              },
+              "monitorOption": {
+                "$ref": "#/components/schemas/CustomerMonitorOption"
+              }
+            },
+            "required": ["tier", "startDate", "monitorOption"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CustomerMonitorOption": {
+        "type": "string",
+        "enum": ["2x27-qhd", "2x32-qhd", "2x27-4k", "2x32-4k"]
+      },
+      "CustomerEntryPackProduct": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["entry-pack"]
+          },
+          "tier": {
+            "$ref": "#/components/schemas/CustomerPassTier"
+          },
+          "size": {
+            "type": "number",
+            "enum": [5, 10]
+          }
+        },
+        "required": ["kind", "tier", "size"],
+        "additionalProperties": false
+      },
+      "BeginCustomerPassPurchase": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "$ref": "#/components/schemas/CustomerPassId"
+          },
+          "locale": {
+            "$ref": "#/components/schemas/CustomerLocale"
+          },
+          "product": {
+            "$ref": "#/components/schemas/CustomerPassPurchaseProduct"
+          },
+          "holderEmail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "recipientName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "buyerProfile": {
+            "type": "object",
+            "properties": {
+              "firstName": {
+                "type": "string"
+              },
+              "lastName": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "phone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "billing": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["personal"]
+                      },
+                      "addressLine1": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "addressLine2": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "city": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "zip": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "country": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["kind"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["business"]
+                      },
+                      "addressLine1": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "addressLine2": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "city": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "zip": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "country": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "companyName": {
+                        "type": "string"
+                      },
+                      "companyId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "vatId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["kind", "companyName"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["firstName"],
+            "additionalProperties": false
+          },
+          "supersedeOrderId": {
+            "$ref": "#/components/schemas/CustomerPassId"
+          }
+        },
+        "required": ["orderId", "locale", "product"],
+        "additionalProperties": false
+      },
+      "CustomerUnlimitedStartDates": {
+        "type": "object",
+        "properties": {
+          "today": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "lastStartDate": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "starts": {
+            "type": "object",
+            "properties": {
+              "open-space": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CustomerPlainDate"
+                }
+              },
+              "reserved-desk": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CustomerPlainDate"
+                }
+              },
+              "reserved-desk-workstation": {
+                "type": "object",
+                "properties": {
+                  "2x27-qhd": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/CustomerPlainDate"
+                    }
+                  },
+                  "2x32-qhd": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/CustomerPlainDate"
+                    }
+                  },
+                  "2x27-4k": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/CustomerPlainDate"
+                    }
+                  },
+                  "2x32-4k": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/CustomerPlainDate"
+                    }
+                  }
+                },
+                "required": ["2x27-qhd", "2x32-qhd", "2x27-4k", "2x32-4k"],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "open-space",
+              "reserved-desk",
+              "reserved-desk-workstation"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": ["today", "lastStartDate", "starts"],
+        "additionalProperties": false
+      },
       "CustomerReservationOrderId": {
         "type": "string",
         "minLength": 1,
         "description": "Opaque identifier of an order booked on the website."
-      },
-      "CustomerPassNotFoundEncoded": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["CustomerPassNotFound"]
-          }
-        },
-        "required": ["_tag"],
-        "additionalProperties": false
       },
       "CustomerUnlimitedAccess": {
         "anyOf": [
@@ -4636,19 +6031,19 @@
           }
         ]
       },
-      "CustomerPlainDate": {
-        "type": "string",
-        "description": "Prague calendar date in YYYY-MM-DD format."
-      },
-      "CustomerPassTier": {
-        "type": "string",
-        "enum": ["open-space", "reserved-desk", "reserved-desk-workstation"]
-      },
-      "CustomerPassId": {
-        "type": "string",
-        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
-        "format": "uuid",
-        "description": "Opaque identifier of a pass purchase order."
+      "CustomerBookingSelectionInvalidEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["CustomerBookingSelectionInvalid"]
+          },
+          "field": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag"],
+        "additionalProperties": false
       },
       "CustomerPassBookingOptions": {
         "type": "object",
@@ -4727,10 +6122,6 @@
         "enum": ["day", "overnight"],
         "description": "day (the arrival date's Prague calendar day) or overnight (noon on the arrival date to noon the next date, Prague time). Reserved Desk only."
       },
-      "CustomerMonitorOption": {
-        "type": "string",
-        "enum": ["2x27-qhd", "2x32-qhd", "2x27-4k", "2x32-4k"]
-      },
       "CustomerBookableCoworkTier": {
         "type": "string",
         "enum": ["open-space", "reserved-desk"]
@@ -4783,6 +6174,9 @@
                 "claimed": {
                   "type": "boolean"
                 },
+                "canResend": {
+                  "type": "boolean"
+                },
                 "invitation": {
                   "type": "string",
                   "enum": ["not_sent", "pending", "sent", "failed"]
@@ -4791,30 +6185,18 @@
                   "type": "string"
                 }
               },
-              "required": ["passId", "product", "claimed", "invitation"],
+              "required": [
+                "passId",
+                "product",
+                "claimed",
+                "canResend",
+                "invitation"
+              ],
               "additionalProperties": false
             }
           }
         },
         "required": ["held", "boughtForOthers"],
-        "additionalProperties": false
-      },
-      "CustomerEntryPackProduct": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": ["entry-pack"]
-          },
-          "tier": {
-            "$ref": "#/components/schemas/CustomerPassTier"
-          },
-          "size": {
-            "type": "number",
-            "enum": [5, 10]
-          }
-        },
-        "required": ["kind", "tier", "size"],
         "additionalProperties": false
       },
       "CustomerHeldUnlimitedPass": {
@@ -4933,6 +6315,12 @@
             "type": "string",
             "enum": ["active", "expired", "depleted", "ended"]
           },
+          "bookedDates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerPlainDate"
+            }
+          },
           "bookFrom": {
             "$ref": "#/components/schemas/CustomerPlainDate"
           }
@@ -4945,13 +6333,10 @@
           "kind",
           "size",
           "entriesLeft",
-          "status"
+          "status",
+          "bookedDates"
         ],
         "additionalProperties": false
-      },
-      "CustomerLocale": {
-        "type": "string",
-        "enum": ["en-US", "cs-CZ", "de-DE", "uk-UA", "sk-SK", "vi-VN", "hi-IN"]
       },
       "CustomerPassCatalog": {
         "type": "object",
@@ -5014,26 +6399,6 @@
           }
         },
         "required": ["entryPacks", "unlimited", "unlimitedCoffeePrice"],
-        "additionalProperties": false
-      },
-      "Money": {
-        "type": "object",
-        "properties": {
-          "value": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
-          },
-          "exponent": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
-          },
-          "currency": {
-            "type": "string"
-          }
-        },
-        "required": ["value", "exponent", "currency"],
         "additionalProperties": false
       },
       "CustomerCompanyRegistryUnavailableEncoded": {
@@ -5680,10 +7045,6 @@
         ],
         "additionalProperties": false
       },
-      "CustomerCheckoutReturnTarget": {
-        "type": "string",
-        "enum": ["native-app", "web-app"]
-      },
       "AcceptCustomerCheckoutPriceChange": {
         "type": "object",
         "properties": {
@@ -5905,20 +7266,6 @@
         "required": ["_tag"],
         "additionalProperties": false
       },
-      "CustomerBookingSelectionInvalidEncoded": {
-        "type": "object",
-        "properties": {
-          "_tag": {
-            "type": "string",
-            "enum": ["CustomerBookingSelectionInvalid"]
-          },
-          "field": {
-            "type": "string"
-          }
-        },
-        "required": ["_tag"],
-        "additionalProperties": false
-      },
       "CustomerCheckoutStart": {
         "anyOf": [
           {
@@ -6012,110 +7359,6 @@
         ],
         "additionalProperties": false
       },
-      "CustomerCheckoutBilling": {
-        "anyOf": [
-          {
-            "type": "object",
-            "properties": {
-              "purpose": {
-                "type": "string",
-                "enum": ["personal"]
-              },
-              "invoice": {
-                "type": "string",
-                "enum": ["none"]
-              }
-            },
-            "required": ["purpose", "invoice"],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "purpose": {
-                "type": "string",
-                "enum": ["personal"]
-              },
-              "invoice": {
-                "type": "string",
-                "enum": ["requested"]
-              },
-              "address": {
-                "$ref": "#/components/schemas/CustomerInvoiceAddress"
-              }
-            },
-            "required": ["purpose", "invoice", "address"],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "purpose": {
-                "type": "string",
-                "enum": ["business"]
-              },
-              "invoice": {
-                "type": "string",
-                "enum": ["required"]
-              },
-              "buyer": {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "enum": ["business"]
-                  },
-                  "legalName": {
-                    "type": "string",
-                    "maxLength": 180
-                  },
-                  "companyId": {
-                    "type": "string",
-                    "maxLength": 64
-                  },
-                  "vatId": {
-                    "type": "string",
-                    "maxLength": 64
-                  },
-                  "address": {
-                    "$ref": "#/components/schemas/CustomerInvoiceAddress"
-                  }
-                },
-                "required": ["kind", "legalName", "companyId", "address"],
-                "additionalProperties": false
-              }
-            },
-            "required": ["purpose", "invoice", "buyer"],
-            "additionalProperties": false
-          }
-        ]
-      },
-      "CustomerInvoiceAddress": {
-        "type": "object",
-        "properties": {
-          "line1": {
-            "type": "string",
-            "maxLength": 180
-          },
-          "line2": {
-            "type": "string",
-            "maxLength": 180
-          },
-          "city": {
-            "type": "string",
-            "maxLength": 255
-          },
-          "postalCode": {
-            "type": "string",
-            "maxLength": 20
-          },
-          "country": {
-            "type": "string"
-          }
-        },
-        "required": ["line1", "city", "postalCode", "country"],
-        "additionalProperties": false
-      },
       "CustomerBookingSelection": {
         "type": "object",
         "properties": {
@@ -6150,6 +7393,22 @@
           },
           "coffee": {
             "type": "boolean"
+          },
+          "funding": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["entry"]
+              },
+              "passId": {
+                "type": "string",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            },
+            "required": ["kind", "passId"],
+            "additionalProperties": false
           }
         },
         "required": ["family", "date"],
@@ -6179,27 +7438,6 @@
           }
         },
         "required": ["documents"],
-        "additionalProperties": false
-      },
-      "CustomerLegalDocument": {
-        "type": "object",
-        "properties": {
-          "key": {
-            "type": "string",
-            "enum": ["terms-and-conditions", "operating-rules"]
-          },
-          "path": {
-            "type": "string"
-          },
-          "hash": {
-            "type": "string"
-          },
-          "hashAlgorithm": {
-            "type": "string",
-            "enum": ["sha256"]
-          }
-        },
-        "required": ["key", "path", "hash", "hashAlgorithm"],
         "additionalProperties": false
       },
       "CustomerBookingQuote": {

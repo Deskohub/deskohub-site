@@ -130,6 +130,11 @@ export const customerRequestBudgetClasses = {
     getPassBookingOptions: "workspace-only",
     getUnlimitedAccess: "account-read",
     getReservationPassFunding: "workspace-only",
+    resendPassInvitation: "workspace-only",
+    getUnlimitedStartDates: "catalog-read",
+    beginPassPurchase: "dotypos-mutation",
+    getPassPurchaseStatus: "account-read",
+    submitPassPurchase: "dotypos-mutation",
   },
   booking: {
     // The office's seat maximum reads the shared table snapshot, which

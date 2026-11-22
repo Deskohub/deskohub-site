@@ -32,6 +32,8 @@ export type HeldEntryPack = {
   readonly giftClaimedAt: Temporal.Instant | null;
   readonly giftPaymentIsUsable: boolean;
   readonly claimedDates: readonly PlainDate[];
+  /** Confirmed dates booked by this holder, excluding a previous holder's usage. */
+  readonly bookedDates: readonly PlainDate[];
   /** Server-only lookup for editing a signed draft that already holds an entry. */
   readonly reservedEntryDates: Readonly<
     Partial<Record<WorkspaceReservationId, PlainDate>>
@@ -91,6 +93,13 @@ export const listHeldEntryPacks = Effect.fn("listHeldEntryPacks")(function* (
       claimedDates: sql<PlainDate[]>`coalesce(
         array_agg(${passEntryClaims.date}::text order by ${passEntryClaims.date})
           filter (where ${passEntryClaims.date} is not null),
+        array[]::text[]
+      )`,
+      bookedDates: sql<PlainDate[]>`coalesce(
+        array_agg(${passEntryClaims.date}::text order by ${passEntryClaims.date})
+          filter (where ${workspaceReservations.authorAccountId} = ${accountId}
+            and ${workspaceReservations.reservationState} = 'confirmed'
+            and ${passEntryClaims.status} = 'consumed'),
         array[]::text[]
       )`,
       reservedEntryDates: sql<HeldEntryPack["reservedEntryDates"]>`coalesce(

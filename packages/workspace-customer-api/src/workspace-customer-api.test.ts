@@ -115,6 +115,8 @@ describe("WorkspaceCustomerApi", () => {
         "booking.clearCheckoutDiscountCode",
         "booking.acceptCheckoutPriceChange",
         "booking.submitCheckout",
+        "passes.beginPassPurchase",
+        "passes.submitPassPurchase",
       ].map((reference) => ({
         reference,
         options: { errors: "all", onExcessProperty: "error" },

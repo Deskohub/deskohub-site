@@ -129,6 +129,20 @@ export {
 } from "./customer-invoices-api";
 export { CustomerLocale, customerSignInLocaleHeader } from "./customer-locale";
 export {
+  BeginCustomerPassPurchase,
+  CustomerPassPayment,
+  CustomerPassPurchase,
+  CustomerPassPurchaseDisclosure,
+  CustomerPassPurchasePrice,
+  CustomerPassPurchaseProduct,
+  CustomerPassPurchaseRefused,
+  CustomerPassPurchaseState,
+  CustomerPassPurchaseStatus,
+  CustomerUnlimitedPassSelection,
+  CustomerUnlimitedStartDates,
+  SubmitCustomerPassPurchase,
+} from "./customer-pass-purchase-api";
+export {
   CustomerEntryPackProduct,
   CustomerEntryPackSize,
   CustomerHeldEntryPack,
