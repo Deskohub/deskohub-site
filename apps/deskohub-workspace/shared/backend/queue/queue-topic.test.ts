@@ -190,6 +190,28 @@ describe("defineQueueTopic", () => {
     });
   });
 
+  test("acknowledges a failure the consumer classifies as permanent", async () => {
+    const route = routeFor(
+      () => Effect.fail(new ParcelNotReadyError()),
+      () => QueueRedelivery.Never()
+    );
+
+    const failure = await Promise.resolve(
+      route.handler({ parcelId: "p-1" }, metadata)
+    ).then(
+      () => undefined,
+      (cause: unknown) => cause
+    );
+
+    expect(failure).toMatchObject({
+      _tag: "QueueDeliveryFailure",
+      reason: "permanent_failure",
+    });
+    expect(route.options?.retry?.(failure, metadata)).toEqual({
+      acknowledge: true,
+    });
+  });
+
   test.each([
     { millisecondsFromNow: -10_800_000, afterSeconds: 1 },
     { millisecondsFromNow: 420_001, afterSeconds: 421 },
