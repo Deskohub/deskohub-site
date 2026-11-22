@@ -224,6 +224,18 @@ export interface ICampaignCandidateRepository {
     EffectDrizzleQueryError
   >;
   /**
+   * Each customer's latest one-off marketing campaign email, dated as
+   * `countReceivedCampaignEmails` dates them: received, or still pending
+   * in a batch already requested from the provider. Automated and
+   * operational campaigns don't count. Customers without one are absent.
+   */
+  readonly latestOneOffMarketingEmails: (
+    customers: readonly DotyposCustomerId[]
+  ) => Effect.Effect<
+    ReadonlyMap<DotyposCustomerId, Temporal.Instant>,
+    EffectDrizzleQueryError
+  >;
+  /**
    * Customers with a linked account created by `asOf`, and those whose
    * account was created in the bounds. An account created later doesn't
    * exist yet at a replayed moment. A legacy account was created before
@@ -448,6 +460,64 @@ export class CampaignCandidateRepository extends Context.Service<
             .groupBy(emailCampaignRecipients.dotyposCustomerId);
           return new Map(
             rows.map((row) => [row.dotyposCustomerId, row.count] as const)
+          );
+        }),
+        latestOneOffMarketingEmails: Effect.fn(
+          "CampaignCandidateRepository.latestOneOffMarketingEmails"
+        )(function* (customers) {
+          if (customers.length === 0) return new Map();
+          const rows = yield* db
+            .select({
+              dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
+              latest:
+                sql`max(coalesce(${emailCampaignDeliveryBatches.requestedAt}, ${emailCampaignRecipients.statusUpdatedAt}))`.mapWith(
+                  emailCampaignDeliveryBatches.requestedAt
+                ),
+            })
+            .from(emailCampaignRecipients)
+            .innerJoin(
+              emailCampaignSends,
+              eq(emailCampaignSends.id, emailCampaignRecipients.sendId)
+            )
+            .innerJoin(
+              emailCampaigns,
+              eq(emailCampaigns.id, emailCampaignSends.campaignId)
+            )
+            .leftJoin(
+              emailCampaignDeliveryBatches,
+              and(
+                eq(
+                  emailCampaignDeliveryBatches.sendId,
+                  emailCampaignRecipients.sendId
+                ),
+                eq(
+                  emailCampaignDeliveryBatches.deliveryAttempt,
+                  emailCampaignRecipients.deliveryAttempt
+                ),
+                sql`${emailCampaignRecipients.dotyposCustomerId} = any(${emailCampaignDeliveryBatches.dotyposCustomerIds})`
+              )
+            )
+            .where(
+              and(
+                eq(emailCampaigns.delivery, "once"),
+                eq(emailCampaigns.purpose, "marketing"),
+                inArray(emailCampaignRecipients.dotyposCustomerId, [
+                  ...customers,
+                ]),
+                or(
+                  inArray(emailCampaignRecipients.status, [
+                    ...receivedCampaignEmailStatuses,
+                  ]),
+                  and(
+                    eq(emailCampaignRecipients.status, "pending"),
+                    isNotNull(emailCampaignDeliveryBatches.requestedAt)
+                  )
+                )
+              )
+            )
+            .groupBy(emailCampaignRecipients.dotyposCustomerId);
+          return new Map(
+            rows.map((row) => [row.dotyposCustomerId, row.latest] as const)
           );
         }),
         accountCreations: Effect.fn(
