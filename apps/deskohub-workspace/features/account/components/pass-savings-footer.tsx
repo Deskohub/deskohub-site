@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { type Locale, m } from "@/features/i18n";
+import { getPricingPath } from "@/features/pricing/pricing-path";
 import { GuardedLink } from "@/shared/components/guarded-link";
 
 /**
@@ -20,7 +21,7 @@ export function PassSavingsFooter({
     <GuardedLink
       className="group flex min-h-14 items-center gap-3 border-t border-[#e9ded0] bg-[#fbf6ee] px-5 py-3 font-semibold text-[#813311] leading-[1.35] shadow-[0_-8px_18px_-14px_#522d1b55] outline-none hover:bg-[#f6ebdc] focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-[#813311] @xl:px-8"
       data-account-pass-savings=""
-      href={`/${locale}/pricing`}
+      href={getPricingPath(locale)}
     >
       {marks !== undefined && (
         <span

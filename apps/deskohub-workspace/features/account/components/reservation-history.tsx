@@ -7,6 +7,7 @@ import type {
 } from "@/features/account/account-unlimited-passes.server";
 import { UnlimitedReservationItem } from "@/features/account/components/account-unlimited-pass";
 import { PassSavingsFooter } from "@/features/account/components/pass-savings-footer";
+import { PassProductMarks } from "@/features/passes/components/pass-product-marks";
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import type {
   CustomerReservationHistory,
@@ -671,7 +672,11 @@ function PassSavingsOffer({
     entryPacks: use(entryPacks),
     unlimitedPasses,
   });
-  return offered && <PassSavingsFooter locale={locale} />;
+  return (
+    offered && (
+      <PassSavingsFooter locale={locale} marks={<PassProductMarks />} />
+    )
+  );
 }
 
 function PastReservationGroup({
