@@ -1,4 +1,4 @@
-import { Array as Arr, Order, Schema } from "effect";
+import { Array as Arr, Order, Schema, Struct } from "effect";
 import { ReservationProductFilter } from "./audience-attribute-kinds";
 import {
   type AudienceCondition,
@@ -429,7 +429,11 @@ export type AutomationDryRunCustomer = typeof AutomationDryRunCustomer.Type;
 
 export const AutomationDryRunEmail = Schema.Struct({
   locale: AdministrationCampaignLocale,
-  ...AdministrationCampaignEmailPreview.fields,
+  ...Struct.pick(AdministrationCampaignEmailPreview.fields, [
+    "subject",
+    "html",
+    "text",
+  ]),
 });
 export type AutomationDryRunEmail = typeof AutomationDryRunEmail.Type;
 

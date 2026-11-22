@@ -28217,9 +28217,6 @@
                             "subject": {
                               "type": "string"
                             },
-                            "preheader": {
-                              "type": "string"
-                            },
                             "html": {
                               "type": "string"
                             },
