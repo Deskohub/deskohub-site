@@ -27,7 +27,22 @@ export interface KeptCoworkDraft {
   readonly seed: string;
   readonly draft: CoworkDraft;
   readonly entryPackId?: string;
+  readonly routeKey?: string;
 }
+
+/** Reuse a funding choice on this visit or an explicit checkout restart. */
+export const keptCoworkEntryChoice = (
+  kept: Option.Option<KeptCoworkDraft>,
+  seed: string,
+  routeKey: string,
+  restarting: boolean
+) =>
+  Option.filter(
+    kept,
+    (stored) =>
+      (seed === "" || stored.seed === seed) &&
+      (stored.routeKey === routeKey || restarting)
+  );
 
 /**
  * The draft the cowork screen shows: the one it keeps, unless the screen

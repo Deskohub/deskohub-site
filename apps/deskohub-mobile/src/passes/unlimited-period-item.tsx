@@ -20,11 +20,12 @@ export function UnlimitedPeriodItem({
 }) {
   const locale = useAppLocale();
   const router = useRouter();
-  const today = pass.today;
+  const past = pass.status === "expired" || pass.status === "ended";
+  const today = past ? undefined : pass.today;
   const period = passPeriod(pass.validFrom, pass.lastUsableDate, locale);
   const tier = passTierName(pass.tier, locale);
   return (
-    <View style={styles.period}>
+    <View style={[styles.period, past && styles.past]}>
       <View style={styles.head}>
         <View style={styles.tile}>
           <Icon icon={CalendarRange} size={20} color={color.positiveInk} />
@@ -93,6 +94,7 @@ const styles = StyleSheet.create({
     padding: space.lg,
     ...shadow.card,
   },
+  past: { borderColor: color.line },
   head: { columnGap: space.md, flexDirection: "row" },
   tile: {
     alignItems: "center",

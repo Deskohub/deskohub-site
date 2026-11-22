@@ -1,4 +1,7 @@
-import type { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
+import type {
+  CustomerHeldUnlimitedPass,
+  CustomerReservationOrderId,
+} from "@deskohub/workspace-customer-api";
 import {
   useAtom,
   useAtomMount,
@@ -368,6 +371,14 @@ function ReservationsListView<E extends CustomerRequestFailure>({
   const { isExpanded } = useViewport();
   const open = useOpenReservation();
   const value = AsyncResult.value(list);
+  const passReads = useReservationPasses(
+    showPreferred,
+    Option.map(value, ({ groups }) => groups)
+  );
+  const refreshAll = () => {
+    refresh();
+    passReads.refresh();
+  };
   // Once shown, retain the featured order through resizing and list refreshes.
   // null records that the customer returned from a missing preview.
   const [preview, setPreview] = useState<CustomerReservationOrderId | null>();
@@ -401,19 +412,22 @@ function ReservationsListView<E extends CustomerRequestFailure>({
   const content = (
     <SelectionContext value={listSelection}>
       <ReservationsScreen
-        refreshing={list.waiting && !AsyncResult.isInitial(list)}
-        onRefresh={refresh}
+        refreshing={
+          (list.waiting && !AsyncResult.isInitial(list)) || passReads.refreshing
+        }
+        onRefresh={refreshAll}
         inPane={listSelection !== undefined}
       >
         <AsyncView
           result={shown}
-          onRetry={refresh}
+          onRetry={refreshAll}
           errorTitle={m.reservations_load_failed_title({}, { locale })}
           loading={<ReservationsListSkeleton />}
         >
           {({ groups }) => (
             <ReservationGroupsView
               groups={groups}
+              passes={passReads}
               // The list from the device, with when it was saved.
               savedNotice={
                 <Notice
@@ -488,33 +502,30 @@ function EntryPackFundingBadge({
   );
 }
 
-function ReservationGroupsView({
-  groups,
-  savedNotice,
-}: {
-  readonly groups: ReservationGroups;
-  readonly savedNotice: ReactNode;
-}) {
+function useReservationPasses(
+  enabled: boolean,
+  groups: Option.Option<ReservationGroups>
+) {
   const locale = useAppLocale();
-  const selection = useContext(SelectionContext);
-  const catalog = useAtomValue(passCatalogAtom);
+  const catalogAtom = enabled ? passCatalogAtom : unneededReadAtom;
+  const catalog = useAtomValue(catalogAtom);
+  const refreshCatalog = useAtomRefresh(catalogAtom);
   const passesReleased = AsyncResult.isSuccess(catalog);
-  const list = useAtomValue(
-    passesReleased ? heldPassesAtom(locale) : unneededReadAtom
-  );
+  const listAtom = passesReleased ? heldPassesAtom(locale) : unneededReadAtom;
+  const list = useAtomValue(listAtom);
+  const refreshList = useAtomRefresh(listAtom);
   const unlimited = AsyncResult.isSuccess(list)
-    ? list.value.held
-        .filter((pass) => pass.kind === "unlimited")
-        .filter(
-          (pass) => pass.status === "active" || pass.status === "upcoming"
-        )
+    ? list.value.held.filter((pass) => pass.kind === "unlimited")
     : [];
-  const own = [
-    ...Option.toArray(groups.featured),
-    ...groups.moreCurrent,
-    ...groups.undated,
-    ...groups.past,
-  ];
+  const own = Option.match(groups, {
+    onNone: () => [],
+    onSome: ({ featured, moreCurrent, undated, past }) => [
+      ...Option.toArray(featured),
+      ...moreCurrent,
+      ...undated,
+      ...past,
+    ],
+  });
   const ids = Array.from(
     new Set(
       own.flatMap((row) =>
@@ -524,15 +535,62 @@ function ReservationGroupsView({
       )
     )
   ).sort();
-  const funding = useAtomValue(
+  const fundingAtom =
     passesReleased && ids.length > 0
       ? reservationFundingAtom(ids)
-      : unneededReadAtom
+      : unneededReadAtom;
+  const funding = useAtomValue(fundingAtom);
+  const refreshFunding = useAtomRefresh(fundingAtom);
+  return {
+    unlimited,
+    funded: AsyncResult.isSuccess(funding) ? funding.value : undefined,
+    failed: AsyncResult.isFailure(list) || AsyncResult.isFailure(funding),
+    refreshing:
+      (list.waiting && !AsyncResult.isInitial(list)) ||
+      (funding.waiting && !AsyncResult.isInitial(funding)),
+    refresh: () => {
+      refreshCatalog();
+      refreshList();
+      refreshFunding();
+    },
+  };
+}
+
+function ReservationGroupsView({
+  groups,
+  savedNotice,
+  passes,
+}: {
+  readonly groups: ReservationGroups;
+  readonly savedNotice: ReactNode;
+  readonly passes: ReturnType<typeof useReservationPasses>;
+}) {
+  const locale = useAppLocale();
+  const selection = useContext(SelectionContext);
+  const unlimited = passes.unlimited.filter(
+    (pass) => pass.status === "active" || pass.status === "upcoming"
   );
-  const funded = AsyncResult.isSuccess(funding) ? funding.value : undefined;
-  if (groups.empty && unlimited.length === 0) {
+  const ended = passes.unlimited.filter(
+    (pass) => pass.status === "ended" || pass.status === "expired"
+  );
+  const passNotice = passes.failed && (
+    <View>
+      <Notice
+        tone="error"
+        message={m.passes_reservations_load_failed({}, { locale })}
+      />
+      <Button
+        variant="text"
+        label={m.account_retry({}, { locale })}
+        disabled={passes.refreshing}
+        onPress={passes.refresh}
+      />
+    </View>
+  );
+  if (groups.empty && unlimited.length === 0 && ended.length === 0) {
     return (
       <View style={styles.stack}>
+        {passNotice}
         <Card>
           <EmptyState
             icon={CalendarIcon}
@@ -547,8 +605,9 @@ function ReservationGroupsView({
   }
   const later = [...groups.moreCurrent, ...groups.undated];
   return (
-    <EntryPackFundingContext value={funded}>
+    <EntryPackFundingContext value={passes.funded}>
       <View style={styles.stack}>
+        {passNotice}
         {unlimited.map((pass) => (
           <UnlimitedPeriodItem key={pass.passId} pass={pass} />
         ))}
@@ -573,7 +632,9 @@ function ReservationGroupsView({
             <ReservationRows rows={later} place="later" />
           </View>
         )}
-        {groups.past.length > 0 && <PastReservations rows={groups.past} />}
+        {(groups.past.length > 0 || ended.length > 0) && (
+          <PastReservations rows={groups.past} passes={ended} />
+        )}
       </View>
     </EntryPackFundingContext>
   );
@@ -661,8 +722,10 @@ function NothingUpcoming() {
 
 function PastReservations({
   rows,
+  passes,
 }: {
   readonly rows: ReadonlyArray<ReservationListRow>;
+  readonly passes: ReadonlyArray<CustomerHeldUnlimitedPass>;
 }) {
   const locale = useAppLocale();
   const selection = useContext(SelectionContext);
@@ -682,19 +745,26 @@ function PastReservations({
   return (
     <View>
       <SectionHeader title={m.reservations_section_past({}, { locale })} />
-      <ReservationRows
-        rows={shown}
-        place="past"
-        footer={
-          rows.length > shown.length ? (
-            <Button
-              variant="text"
-              label={m.reservations_show_all_past({}, { locale })}
-              onPress={() => setAll(true)}
-            />
-          ) : undefined
-        }
-      />
+      <View style={passes.length > 0 && styles.stack}>
+        {passes.map((pass) => (
+          <UnlimitedPeriodItem key={pass.passId} pass={pass} />
+        ))}
+        {shown.length > 0 && (
+          <ReservationRows
+            rows={shown}
+            place="past"
+            footer={
+              rows.length > shown.length ? (
+                <Button
+                  variant="text"
+                  label={m.reservations_show_all_past({}, { locale })}
+                  onPress={() => setAll(true)}
+                />
+              ) : undefined
+            }
+          />
+        )}
+      </View>
     </View>
   );
 }

@@ -5,10 +5,10 @@ import {
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { DateTime } from "effect";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { Stack } from "expo-router";
+import { Stack, useFocusEffect, useIsFocused } from "expo-router";
 import DoorOpen from "lucide-react-native/icons/door-open";
-import { useEffect } from "react";
-import { StyleSheet, View } from "react-native";
+import { useCallback, useEffect, useRef } from "react";
+import { AppState, StyleSheet, View } from "react-native";
 import { secondClock } from "../account/reservations/access-clock";
 import { accessPinGroups } from "../account/reservations/access-pin-groups";
 import { CopyPin, PinDigits } from "../account/reservations/access-screen";
@@ -63,6 +63,18 @@ function HeldUnlimitedAccess({ passId }: { readonly passId: string }) {
   const atom = unlimitedAccessAtom(passId);
   const result = useAtomValue(atom);
   const refresh = useAtomRefresh(atom);
+  const focused = useIsFocused();
+  const loadedInView = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      if (loadedInView.current) refresh();
+      loadedInView.current = true;
+      const subscription = AppState.addEventListener("change", (state) => {
+        if (state === "active") refresh();
+      });
+      return () => subscription.remove();
+    }, [refresh])
+  );
   const now = useAtomValue(accessClockAtom);
   const value = AsyncResult.isSuccess(result) ? result.value : undefined;
   const today = pragueToday(new Date(now));
@@ -70,8 +82,12 @@ function HeldUnlimitedAccess({ passId }: { readonly passId: string }) {
     value !== undefined && "date" in value && value.date < today;
   const expiration =
     value?.state === "available" ? Date.parse(value.endsAt) : undefined;
-  const expired = expiration !== undefined && expiration <= now;
+  const expired =
+    expiration !== undefined &&
+    (!Number.isFinite(expiration) || expiration <= now);
   const canShow =
+    focused &&
+    !result.waiting &&
     value?.state === "available" &&
     value.date === today &&
     expiration !== undefined &&

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { CustomerHeldEntryPack } from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
+import { keptCoworkEntryChoice } from "../booking/family/cowork-booking-model";
 import {
   type CoworkDraft,
   selectCoworkWorkstation,
@@ -9,7 +10,6 @@ import {
   entryPackDates,
   openEntryPackDraft,
   packCoversDraft,
-  unlimitedCoversDraft,
 } from "./entry-pack-booking";
 import { entryPackHrefForDraft } from "./pass-routes";
 
@@ -73,7 +73,7 @@ test("the buy link uses the current compatible choices, including clearing a wor
     )
   ).toEqual({
     pathname: "/passes/entry-pack",
-    params: { tier: "reserved-desk-workstation", monitorOption: "2x27-qhd" },
+    params: { tier: "reserved-desk-workstation" },
   });
   expect(
     entryPackHrefForDraft(selectCoworkWorkstation(draft, Option.none())).params
@@ -93,23 +93,21 @@ test("a regular Reserved Desk pack covers a required paid workstation and keeps 
   expect(packCoversDraft(deskPack, workstation, true)).toBe(true);
 });
 
-test("an Unlimited-only holder has coverage for its own desk type and inclusive dates", () => {
-  const unlimited = {
-    kind: "unlimited",
-    tier: "open-space",
-    status: "active",
-    passId: pack.passId,
-    validFrom: "2026-11-21",
-    lastUsableDate: "2026-12-20",
-  } as const;
-  expect(unlimitedCoversDraft(unlimited, previous, "2026-11-21")).toBe(true);
-  expect(unlimitedCoversDraft(unlimited, previous, "2026-12-20")).toBe(true);
-  expect(unlimitedCoversDraft(unlimited, previous, "2026-12-21")).toBe(false);
-  expect(
-    unlimitedCoversDraft(
-      unlimited,
-      { ...previous, tier: "reserved-desk" },
-      "2026-11-21"
-    )
-  ).toBe(false);
+test("a fresh Book route ignores the previous pack choice while Back and checkout restart keep it", () => {
+  const kept = Option.some({
+    seed: pack.passId,
+    routeKey: "booking:1",
+    draft: previous,
+    entryPackId: pack.passId,
+  });
+  expect(keptCoworkEntryChoice(kept, "", "booking:2", false)).toEqual(
+    Option.none()
+  );
+  expect(keptCoworkEntryChoice(kept, pack.passId, "booking:1", false)).toEqual(
+    kept
+  );
+  expect(keptCoworkEntryChoice(kept, "", "booking:2", true)).toEqual(kept);
+  expect(keptCoworkEntryChoice(kept, pack.passId, "booking:2", false)).toEqual(
+    Option.none()
+  );
 });

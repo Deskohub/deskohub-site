@@ -374,13 +374,8 @@
   "passes_days_gone": "Số ngày đã qua: {count}",
   "passes_days_remaining": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "Còn {count} ngày, tính cả hôm nay"
       }
@@ -392,13 +387,8 @@
   "passes_ended": "Đã kết thúc",
   "passes_ends_in": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "hết hạn sau {count} ngày"
       }
@@ -414,13 +404,8 @@
   "passes_gifted_by": "Quà tặng từ {name}",
   "passes_in_days": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "sau {count} ngày"
       }
@@ -442,6 +427,7 @@
   "passes_renew": "Gia hạn thẻ",
   "passes_renew_failed": "Không mở được trang gia hạn.",
   "passes_resend": "Gửi lại lời mời",
+  "passes_reservations_load_failed": "Không tải được thông tin thẻ.",
   "passes_reserved_desk": "Bàn đặt riêng",
   "passes_reserved_workstation": "Bàn đặt riêng có trạm làm việc",
   "passes_same_desk": "Cùng một bàn mỗi ngày",
@@ -450,15 +436,10 @@
   "passes_to_book": "Có thể đặt: {count}",
   "passes_today_included": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "Còn  ngày, tính cả hôm nay"
+        "countPlural=other": "ngày còn lại, tính cả hôm nay"
       }
     }
   ],

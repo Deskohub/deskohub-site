@@ -376,13 +376,8 @@
   "passes_days_gone": "Days gone: {count}",
   "passes_days_remaining": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{count} day left, including today",
         "countPlural=other": "{count} days left, including today"
@@ -395,13 +390,8 @@
   "passes_ended": "Ended",
   "passes_ends_in": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "ends in {count} day",
         "countPlural=other": "ends in {count} days"
@@ -418,13 +408,8 @@
   "passes_gifted_by": "Bought for you by {name}",
   "passes_in_days": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "in {count} day",
         "countPlural=other": "in {count} days"
@@ -447,6 +432,7 @@
   "passes_renew": "Renew pass",
   "passes_renew_failed": "We couldn’t open the renewal page.",
   "passes_resend": "Resend invitation",
+  "passes_reservations_load_failed": "Pass details could not be loaded.",
   "passes_reserved_desk": "Reserved Desk",
   "passes_reserved_workstation": "Reserved Desk with workstation",
   "passes_same_desk": "The same desk every day",
@@ -455,13 +441,8 @@
   "passes_to_book": "{count} to book",
   "passes_today_included": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "day left, including today",
         "countPlural=other": "days left, including today"

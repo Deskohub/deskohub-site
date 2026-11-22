@@ -292,7 +292,7 @@ function PassCard({
             </View>
           )}
           <View style={styles.heading}>
-            <PassProductLabel product={product} size={size} stacked={stacked} />
+            <PassProductLabel product={product} size={size} />
             <Text variant="title">{passTierName(pass.tier, locale)}</Text>
             <View style={styles.badge}>
               <Badge label={badge} tone="positive" />
@@ -309,15 +309,14 @@ function PassCard({
 function PassProductLabel({
   product,
   size,
-  stacked,
 }: {
   readonly product: string;
   readonly size: string;
-  readonly stacked: boolean;
 }) {
-  const { availableWidth } = useViewport();
-  const [wrappedAt, setWrappedAt] = useState<number>();
-  if (stacked || wrappedAt === availableWidth) {
+  const { availableWidth, fontScale } = useViewport();
+  const layout = `${availableWidth}/${fontScale}/${product}/${size}`;
+  const [wrappedAt, setWrappedAt] = useState<string>();
+  if (wrappedAt === layout) {
     return (
       <View>
         <Text variant="caption" style={styles.eyebrow}>
@@ -334,7 +333,7 @@ function PassProductLabel({
       variant="caption"
       style={styles.eyebrow}
       onTextLayout={({ nativeEvent }) => {
-        if (nativeEvent.lines.length > 1) setWrappedAt(availableWidth);
+        if (nativeEvent.lines.length > 1) setWrappedAt(layout);
       }}
     >
       {product} · {size}

@@ -11,7 +11,7 @@ import {
 } from "@effect/atom-react";
 import { type Array as Arr, Option, Schema } from "effect";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRoute, useRouter } from "expo-router";
 import Coffee from "lucide-react-native/icons/coffee";
 import Monitor from "lucide-react-native/icons/monitor";
 import RotateCcw from "lucide-react-native/icons/rotate-ccw";
@@ -28,7 +28,6 @@ import {
   fundWithEntryPack,
   openEntryPackDraft,
   packCoversDraft,
-  unlimitedCoversDraft,
 } from "../../passes/entry-pack-booking";
 import { EntryPackOfferLink } from "../../passes/entry-pack-offer-link";
 import {
@@ -93,6 +92,7 @@ import {
   loadedValue,
   quoteFailureRepeats,
   readValue,
+  restartReasonOf,
 } from "./booking-family-view";
 import { BookingGate } from "./booking-gate";
 import { BookingReadFailure, BookingReadView } from "./booking-read-view";
@@ -104,6 +104,7 @@ import {
 import {
   coworkBookingModel,
   type KeptCoworkDraft,
+  keptCoworkEntryChoice,
   openingCoworkDraft,
 } from "./cowork-booking-model";
 import { CoworkDateHeading, CoworkStayTimes } from "./cowork-stay";
@@ -227,7 +228,12 @@ function CoworkSelection({
   const now = useAtomValue(bookingClockAtom);
   const today = pragueToday(now);
 
-  const { passId: passParam } = useLocalSearchParams<{ passId?: string }>();
+  const { key: routeKey } = useRoute();
+  const { passId: passParam, restart: restartParam } = useLocalSearchParams<{
+    passId?: string;
+    restart?: string;
+  }>();
+  const restart = restartReasonOf(restartParam);
   const linkedPassId =
     passParam === undefined
       ? undefined
@@ -235,7 +241,12 @@ function CoworkSelection({
   const seed = linkedPassId ?? bookingPreselectionKey(preselection);
   const [kept, setStored] = useAtom(coworkDraftAtom);
   const keptForRoute = Option.getOrUndefined(
-    Option.filter(kept, (stored) => seed === "" || stored.seed === seed)
+    keptCoworkEntryChoice(
+      kept,
+      seed,
+      routeKey,
+      linkedPassId === undefined && Option.isSome(restart)
+    )
   );
   const entryPackId =
     keptForRoute === undefined ? linkedPassId : keptForRoute.entryPackId;
@@ -244,6 +255,10 @@ function CoworkSelection({
   const passListAtom = heldPassesAtom(locale);
   const passList = useAtomValue(passListAtom);
   const refreshPassList = useAtomRefresh(passListAtom);
+  const waitingForLinkedPack =
+    linkedPassId !== undefined &&
+    keptForRoute === undefined &&
+    AsyncResult.isInitial(passList);
   const held = AsyncResult.isSuccess(passList) ? passList.value.held : [];
   const packs = held.filter((pass) => pass.kind === "entry-pack");
   const unlimited = held.filter((pass) => pass.kind === "unlimited");
@@ -266,6 +281,7 @@ function CoworkSelection({
     setStored(
       Option.some({
         seed,
+        routeKey,
         draft: next,
         ...(fundingId && { entryPackId: fundingId }),
       })
@@ -313,16 +329,25 @@ function CoworkSelection({
 
   // Keep the workstation the availability fitted, so the next reads are for it.
   useEffect(() => {
-    if (model.draft !== draft) {
+    if (!waitingForLinkedPack && model.draft !== draft) {
       setStored(
         Option.some({
           seed,
+          routeKey,
           draft: model.draft,
           ...(entryPackId && { entryPackId }),
         })
       );
     }
-  }, [model.draft, draft, seed, setStored, entryPackId]);
+  }, [
+    model.draft,
+    draft,
+    seed,
+    routeKey,
+    setStored,
+    entryPackId,
+    waitingForLinkedPack,
+  ]);
 
   const chosenDate = Option.getOrUndefined(model.draft.date);
   const chosenWorkstation = Option.getOrUndefined(model.draft.workstation);
@@ -354,11 +379,12 @@ function CoworkSelection({
         )
       : undefined;
   const coveredByUnlimited =
+    options?.unlimited?.tier === coworkPassTier(model.draft);
+  const checkingCoverage =
+    entryPackId === undefined &&
     chosenDate !== undefined &&
-    (options?.unlimited?.tier === coworkPassTier(model.draft) ||
-      unlimited.some((pass) =>
-        unlimitedCoversDraft(pass, model.draft, chosenDate)
-      ));
+    ((AsyncResult.isSuccess(passCatalog) && AsyncResult.isInitial(passList)) ||
+      (unlimited.length > 0 && AsyncResult.isInitial(optionsResult)));
   const offer =
     chosenDate === undefined
       ? packs
@@ -456,7 +482,9 @@ function CoworkSelection({
   const checkout = checkoutRequestOf({
     locale,
     selection: selectedBooking,
-    blockers: enablement.blockers,
+    blockers: checkingCoverage
+      ? [...enablement.blockers, "pass-coverage"]
+      : enablement.blockers,
     quote: Option.flatMap(quote, freshValue),
     ...overnightTimes,
   });
@@ -554,6 +582,14 @@ function CoworkSelection({
   const firstFreeWorkstation = enablement.workstations.find(
     ({ id }) => !enablement.unavailableWorkstations.has(id)
   );
+
+  if (waitingForLinkedPack) {
+    return (
+      <BookingStepLayout step="choose" locale={locale} bar={undefined}>
+        <CoworkSkeleton locale={locale} />
+      </BookingStepLayout>
+    );
+  }
 
   return (
     <BookingStepLayout

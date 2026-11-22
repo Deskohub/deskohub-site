@@ -376,13 +376,8 @@
   "passes_days_gone": "Tage vergangen: {count}",
   "passes_days_remaining": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "Noch {count} Tag einschließlich heute",
         "countPlural=other": "Noch {count} Tage einschließlich heute"
@@ -395,13 +390,8 @@
   "passes_ended": "Beendet",
   "passes_ends_in": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "endet in {count} Tag",
         "countPlural=other": "endet in {count} Tagen"
@@ -418,13 +408,8 @@
   "passes_gifted_by": "Geschenk von {name}",
   "passes_in_days": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "in {count} Tag",
         "countPlural=other": "in {count} Tagen"
@@ -447,6 +432,7 @@
   "passes_renew": "Pass verlängern",
   "passes_renew_failed": "Die Verlängerungsseite konnte nicht geöffnet werden.",
   "passes_resend": "Einladung erneut senden",
+  "passes_reservations_load_failed": "Die Passdetails konnten nicht geladen werden.",
   "passes_reserved_desk": "Reservierter Schreibtisch",
   "passes_reserved_workstation": "Reservierter Schreibtisch mit Arbeitsplatz",
   "passes_same_desk": "Jeden Tag derselbe Schreibtisch",
@@ -455,16 +441,11 @@
   "passes_to_book": "{count} buchbar",
   "passes_today_included": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "Noch  Tag einschließlich heute",
-        "countPlural=other": "Noch  Tage einschließlich heute"
+        "countPlural=one": "Tag übrig, heute eingeschlossen",
+        "countPlural=other": "Tage übrig, heute eingeschlossen"
       }
     }
   ],

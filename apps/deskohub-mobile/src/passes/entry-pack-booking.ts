@@ -1,7 +1,6 @@
 import type {
   CustomerBookingSelection,
   CustomerHeldEntryPack,
-  CustomerHeldUnlimitedPass,
   CustomerPassTier,
 } from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
@@ -26,16 +25,6 @@ export const packCoversDraft = (
   (workstationRequired &&
     pack.tier === "reserved-desk" &&
     draft.tier === "reserved-desk");
-
-export const unlimitedCoversDraft = (
-  pass: CustomerHeldUnlimitedPass,
-  draft: CoworkDraft,
-  date: PragueDate
-) =>
-  (pass.status === "active" || pass.status === "upcoming") &&
-  pass.tier === coworkPassTier(draft) &&
-  pass.validFrom <= date &&
-  date <= pass.lastUsableDate;
 
 // A pack opened from Account chooses the desk type, then lets the customer
 // choose a date and, for workstation packs, an available monitor.

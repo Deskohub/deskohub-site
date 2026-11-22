@@ -380,13 +380,8 @@
   "passes_days_gone": "Днів минуло: {count}",
   "passes_days_remaining": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "Залишився {count} день разом із сьогоднішнім",
         "countPlural=few": "Залишилося {count} дні разом із сьогоднішнім",
@@ -401,13 +396,8 @@
   "passes_ended": "Завершено",
   "passes_ends_in": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "закінчиться через {count} день",
         "countPlural=few": "закінчиться через {count} дні",
@@ -426,13 +416,8 @@
   "passes_gifted_by": "Подарунок від {name}",
   "passes_in_days": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "через {count} день",
         "countPlural=few": "через {count} дні",
@@ -457,6 +442,7 @@
   "passes_renew": "Продовжити абонемент",
   "passes_renew_failed": "Не вдалося відкрити сторінку продовження.",
   "passes_resend": "Надіслати запрошення ще раз",
+  "passes_reservations_load_failed": "Не вдалося завантажити відомості про абонементи.",
   "passes_reserved_desk": "Зарезервований стіл",
   "passes_reserved_workstation": "Зарезервований стіл із робочою станцією",
   "passes_same_desk": "Те саме місце щодня",
@@ -465,18 +451,13 @@
   "passes_to_book": "Доступно для бронювання: {count}",
   "passes_today_included": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "Залишився  день разом із сьогоднішнім",
-        "countPlural=few": "Залишилося  дні разом із сьогоднішнім",
-        "countPlural=many": "Залишилося  днів разом із сьогоднішнім",
-        "countPlural=other": "Залишилося  дня разом із сьогоднішнім"
+        "countPlural=one": "день залишився, включно із сьогоднішнім",
+        "countPlural=few": "дні залишилися, включно із сьогоднішнім",
+        "countPlural=many": "днів залишилося, включно із сьогоднішнім",
+        "countPlural=other": "дня залишилося, включно із сьогоднішнім"
       }
     }
   ],

@@ -378,13 +378,8 @@
   "passes_days_gone": "Uplynulé dny: {count}",
   "passes_days_remaining": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "Zbývá {count} den včetně dneška",
         "countPlural=few": "Zbývají {count} dny včetně dneška",
@@ -398,13 +393,8 @@
   "passes_ended": "Ukončeno",
   "passes_ends_in": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "končí za {count} den",
         "countPlural=few": "končí za {count} dny",
@@ -422,13 +412,8 @@
   "passes_gifted_by": "Dárek od {name}",
   "passes_in_days": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "za {count} den",
         "countPlural=few": "za {count} dny",
@@ -452,6 +437,7 @@
   "passes_renew": "Prodloužit členství",
   "passes_renew_failed": "Stránku prodloužení se nepodařilo otevřít.",
   "passes_resend": "Poslat pozvánku znovu",
+  "passes_reservations_load_failed": "Podrobnosti k permanentkám se nepodařilo načíst.",
   "passes_reserved_desk": "Rezervovaný stůl",
   "passes_reserved_workstation": "Rezervovaný stůl s pracovní stanicí",
   "passes_same_desk": "Každý den stejný stůl",
@@ -460,17 +446,12 @@
   "passes_to_book": "K rezervaci: {count}",
   "passes_today_included": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "Zbývá  den včetně dneška",
-        "countPlural=few": "Zbývají  dny včetně dneška",
-        "countPlural=other": "Zbývá  dní včetně dneška"
+        "countPlural=one": "den zbývá včetně dneška",
+        "countPlural=few": "dny zbývají včetně dneška",
+        "countPlural=other": "dní zbývá včetně dneška"
       }
     }
   ],

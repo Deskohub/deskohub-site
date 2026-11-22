@@ -376,13 +376,8 @@
   "passes_days_gone": "बीते दिन: {count}",
   "passes_days_remaining": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "आज समेत {count} दिन बाकी है",
         "countPlural=other": "आज समेत {count} दिन बाकी हैं"
@@ -395,13 +390,8 @@
   "passes_ended": "समाप्त",
   "passes_ends_in": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{count} दिन में खत्म होगा",
         "countPlural=other": "{count} दिनों में खत्म होगा"
@@ -418,13 +408,8 @@
   "passes_gifted_by": "{name} की ओर से उपहार",
   "passes_in_days": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{count} दिन में",
         "countPlural=other": "{count} दिनों में"
@@ -447,6 +432,7 @@
   "passes_renew": "पास का नवीनीकरण करें",
   "passes_renew_failed": "नवीनीकरण पेज नहीं खुल सका।",
   "passes_resend": "निमंत्रण फिर से भेजें",
+  "passes_reservations_load_failed": "पास की जानकारी लोड नहीं हो सकी। रीफ़्रेश करने के लिए नीचे खींचें।.",
   "passes_reserved_desk": "आरक्षित डेस्क",
   "passes_reserved_workstation": "वर्कस्टेशन के साथ आरक्षित डेस्क",
   "passes_same_desk": "हर दिन वही डेस्क",
@@ -455,16 +441,11 @@
   "passes_to_book": "{count} बुक करने के लिए",
   "passes_today_included": [
     {
-      "declarations": [
-        "input count",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "आज समेत  दिन बाकी है",
-        "countPlural=other": "आज समेत  दिन बाकी हैं"
+        "countPlural=one": "दिन बाकी है, आज सहित",
+        "countPlural=other": "दिन बाकी हैं, आज सहित"
       }
     }
   ],
