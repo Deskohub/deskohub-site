@@ -1,23 +1,42 @@
 import "@/shared/testing/workspace-test-env";
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { DotyposServiceMock } from "@deskohub/dotypos/backend/service.mock";
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import {
+  EmailConfigTag,
   EmailDeliveryIdSchema,
   type EmailMessage,
+  type EmailProvider,
+  EmailProviders,
   EmailServiceError,
   EmailServiceTag,
   NetworkError,
 } from "@deskohub/email";
+import { makePostHogEmailProvider } from "@deskohub/email-posthog";
+import {
+  makeResendEmailProvider,
+  resendRequestTimeouts,
+} from "@deskohub/email-resend";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   CliMutationRequestId,
   EmailDraft,
 } from "@deskohub/workspace-admin-api";
 import { NodeCrypto } from "@effect/platform-node";
-import { Effect, Exit, Layer, Logger, Schema } from "effect";
+import {
+  Cause,
+  Effect,
+  Exit,
+  Layer,
+  Logger,
+  Redacted,
+  References,
+  Schema,
+} from "effect";
+import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
@@ -44,7 +63,10 @@ import type { Locale } from "@/features/i18n";
 import { analyticsConsentLedgerOf } from "@/features/legal/backend/analytics-consent-ledger.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import { campaignDeliveryPayloadHash } from "../campaign-delivery-batches";
+import {
+  campaignDeliveryBatchIdempotencyKey,
+  campaignDeliveryPayloadHash,
+} from "../campaign-delivery-batches";
 import { CampaignService } from "./campaign.service";
 import { CampaignAudienceService } from "./campaign-audience.service";
 import { CampaignConfirmationCodeService } from "./campaign-confirmation-code.service";
@@ -74,7 +96,7 @@ const sender = testEmailAddress("campaigns");
 const adminInbox = testEmailAddress("admin");
 const primary = ["first", "second"] as const;
 
-const bookingCode = (message: EmailMessage | undefined) => {
+const bookingCode = (message: Pick<EmailMessage, "html"> | undefined) => {
   const href = message?.html?.match(
     /href="(https:\/\/workspace\.deskohub\.cz\/en-US\/reservation\/cowork\?[^"]+)"/
   )?.[1];
@@ -127,6 +149,13 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       includeCustomerValue = false,
       checkLocales = false,
       includeAnalytics = false,
+      marketingProviders,
+    }: {
+      includeCustomerValue?: boolean;
+      checkLocales?: boolean;
+      includeAnalytics?: boolean;
+      /** Delivers through the real email service over these providers. */
+      marketingProviders?: readonly EmailProvider[];
     } = {}
   ) => {
     const now = Temporal.Now.instant();
@@ -374,10 +403,25 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
           );
         })
       );
+    const logged: string[] = [];
+    const deliveryEmail = marketingProviders
+      ? EmailServiceTag.Default.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(EmailProviders, {
+                transactional: [],
+                marketing: marketingProviders,
+                marketingCategories: new Set(["email-campaign"]),
+              }),
+              Layer.succeed(EmailConfigTag, { defaultFrom: { email: sender } })
+            )
+          )
+        )
+      : email;
     const delivery = campaignDeliveryTestLayer(
       Layer.mergeAll(
         config,
-        email,
+        deliveryEmail,
         DotyposServiceMock({
           getCustomersByIds: dotypos.service.getCustomersByIds,
         })
@@ -391,7 +435,22 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
             ? Effect.succeed("Sample Customer")
             : Effect.fail(new CustomerValueUnavailable({ source: "profile" })),
       })
-    ).pipe(Layer.provideMerge(Logger.layer([])), Layer.provide(database.layer));
+    ).pipe(
+      Layer.provideMerge(
+        Logger.layer([
+          Logger.make(({ message, cause, fiber }) => {
+            logged.push(
+              JSON.stringify({
+                message,
+                annotations: fiber.getRef(References.CurrentLogAnnotations),
+                cause: Cause.pretty(cause),
+              })
+            );
+          }),
+        ])
+      ),
+      Layer.provide(database.layer)
+    );
     const discountId = storedDiscountIdSchema.make(crypto.randomUUID());
     await Effect.runPromise(
       db.insert(discounts).values({
@@ -553,6 +612,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       recipients,
       sendId,
       requests,
+      logged,
       answerWith: (next: typeof answer) => {
         answer = next;
       },
@@ -938,6 +998,176 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
     );
     expect(delivered.rowCount).toBe(2);
   });
+
+  test.each([
+    [401, 2],
+    [503, 6],
+  ] as const)(
+    "a withdrawal after PostHog refusals (%i) leaves the Resend fallback peer deliverable",
+    async (status, postHogAttempts) => {
+      const tag = `fallback-withdrawal-${status}`;
+      const persistedBatches = async () =>
+        (
+          await pool.query<{
+            send_id: Parameters<
+              typeof campaignDeliveryBatchIdempotencyKey
+            >[0]["sendId"];
+            delivery_attempt: number;
+            batch_index: number;
+            payload_hash: string;
+            dotypos_customer_ids: string[];
+          }>(
+            "select send_id, delivery_attempt, batch_index, payload_hash, dotypos_customer_ids from email_campaign_delivery_batches where $1 = any(dotypos_customer_ids)",
+            [`${tag}-second`]
+          )
+        ).rows;
+      let pinned: Awaited<ReturnType<typeof persistedBatches>> = [];
+      let postHogRequests = 0;
+      const postHogFetch = Object.assign(
+        async () => {
+          postHogRequests += 1;
+          return Response.json({ code: "synthetic_refusal" }, { status });
+        },
+        { preconnect: globalThis.fetch.preconnect }
+      );
+      const postHog = makePostHogEmailProvider({
+        secretKey: Redacted.make("synthetic-posthog-key"),
+        host: "https://posthog.synthetic.invalid",
+        systemIdentity: "synthetic-email-system",
+      });
+      const resend = makeResendEmailProvider({
+        apiKey: "synthetic-resend-key",
+        timeouts: resendRequestTimeouts.nonProduction,
+      });
+      const marketingProviders: readonly EmailProvider[] = [
+        {
+          ...postHog,
+          sendBatch: (messages, options) =>
+            postHog
+              .sendBatch(messages, options)
+              .pipe(Effect.provideService(FetchHttpClient.Fetch, postHogFetch)),
+        },
+        {
+          ...resend,
+          // Both PostHog requests are over; Resend has not asked admission yet.
+          sendBatch: (messages, options) =>
+            Effect.promise(async () => {
+              if (pinned.length > 0) return;
+              pinned = await persistedBatches();
+              await pool.query(
+                "update customer_marketing_consents set withdrawn_at = now() where dotypos_customer_id = $1",
+                [`${tag}-first`]
+              );
+            }).pipe(Effect.andThen(resend.sendBatch(messages, options))),
+        },
+      ];
+      const run = await setup(tag, { marketingProviders });
+      const resendRequests: {
+        url: string;
+        key: string | null;
+        body: string;
+      }[] = [];
+      const fetching = spyOn(globalThis, "fetch").mockImplementation((async (
+        url: RequestInfo | URL,
+        init?: RequestInit
+      ) => {
+        const body = String(init?.body);
+        resendRequests.push({
+          url: String(url),
+          key: new Headers(init?.headers).get("Idempotency-Key"),
+          body,
+        });
+        return Response.json({
+          data: (JSON.parse(body) as unknown[]).map((_, index) => ({
+            id: `synthetic-resend-${status}-${index}`,
+          })),
+        });
+      }) as typeof fetch);
+      try {
+        expect(Exit.isSuccess(await run.deliver())).toBe(true);
+        expect(postHogRequests).toBe(postHogAttempts);
+        expect(resendRequests.length).toBe(1);
+        // Redelivery neither replays the original batch nor sends the subset again.
+        expect(Exit.isSuccess(await run.deliver())).toBe(true);
+        expect(postHogRequests).toBe(postHogAttempts);
+        expect(resendRequests.length).toBe(1);
+      } finally {
+        fetching.mockRestore();
+      }
+      const [first, second] = run.recipients;
+      const [request] = resendRequests;
+      expect(request?.url.endsWith("/emails/batch")).toBe(true);
+      const sent = JSON.parse(request?.body ?? "[]") as {
+        readonly to: string | string[];
+        readonly html: string;
+      }[];
+      expect(sent.length).toBe(1);
+      expect([sent[0]?.to].flat().join() === second!.email).toBe(true);
+
+      expect(pinned.length).toBe(1);
+      expect(await persistedBatches()).toEqual(pinned);
+      const [batch] = pinned;
+      const eligible = batch!.dotypos_customer_ids.indexOf(`${tag}-second`);
+      const subset = createHash("sha256")
+        .update(`1:${eligible}`)
+        .digest("hex")
+        .slice(0, 16);
+      const batchKey = campaignDeliveryBatchIdempotencyKey({
+        sendId: batch!.send_id,
+        deliveryAttempt: batch!.delivery_attempt,
+        batchIndex: batch!.batch_index,
+      });
+      expect(request?.key).toBe(`${batchKey}:fallback:${subset}`);
+
+      const { rows } = await pool.query(
+        `select r.status, r.provider_message_id, p.delivery_outcome
+         from email_campaign_recipients r
+         join email_preparations p on p.send_id = r.send_id and p.dotypos_customer_id = r.dotypos_customer_id
+         where r.send_id = $1 and r.dotypos_customer_id in ($2, $3)
+         order by r.dotypos_customer_id`,
+        [run.sendId, first!.dotyposCustomerId, second!.dotyposCustomerId]
+      );
+      // The withdrawn recipient keeps the uncertainty of its PostHog request.
+      expect(rows).toEqual([
+        {
+          status: "unconfirmed",
+          provider_message_id: null,
+          delivery_outcome: "uncertain",
+        },
+        {
+          status: "sent",
+          provider_message_id: `synthetic-resend-${status}-0`,
+          delivery_outcome: "accepted",
+        },
+      ]);
+
+      const issued = await pool.query<{ code: string; customer: string }>(
+        "select i.code, p.dotypos_customer_id as customer from email_discount_issuances i join email_preparations p on p.id = i.preparation_id where p.send_id = $1 order by p.dotypos_customer_id",
+        [run.sendId]
+      );
+      const [withdrawnCode, eligibleCode] = issued.rows.map(({ code }) => code);
+      expect(request?.body.includes(withdrawnCode!)).toBe(false);
+      expect(request?.body.includes(first!.email)).toBe(false);
+      expect(bookingCode(sent[0]) === eligibleCode).toBe(true);
+      expect((await run.issued()).rows.map(({ enabled }) => enabled)).toEqual([
+        true,
+        true,
+      ]);
+      const artifacts = `${request?.key}${run.logged.join("")}${JSON.stringify(rows)}`;
+      const privateValues = [
+        first!.email,
+        second!.email,
+        first!.dotyposCustomerId,
+        second!.dotyposCustomerId,
+        withdrawnCode!,
+        eligibleCode!,
+      ];
+      expect(privateValues.some((value) => artifacts.includes(value))).toBe(
+        false
+      );
+    },
+    20_000
+  );
 
   test("a competing delivery cannot issue a second set of codes or request a second batch", async () => {
     const run = await setup("competing");

@@ -36,6 +36,11 @@ export class EmailServiceError extends Data.TaggedError("EmailServiceError")<{
   readonly failureKind: EmailFailureKind;
   readonly code?: string;
   readonly definitivelyUnsent?: true;
+  /**
+   * Set by `beforeRequest`: the entries of its `messagePositions` argument
+   * it refuses, by their place in that argument.
+   */
+  readonly deniedPositions?: readonly number[];
 }> {
   constructor(
     message: string,
@@ -45,6 +50,7 @@ export class EmailServiceError extends Data.TaggedError("EmailServiceError")<{
       readonly failureKind?: EmailFailureKind;
       readonly code?: string;
       readonly definitivelyUnsent?: true;
+      readonly deniedPositions?: readonly number[];
     }
   ) {
     super({
@@ -54,6 +60,9 @@ export class EmailServiceError extends Data.TaggedError("EmailServiceError")<{
       failureKind: classification?.failureKind ?? "message",
       code: classification?.code,
       ...(classification?.definitivelyUnsent && { definitivelyUnsent: true }),
+      ...(classification?.deniedPositions && {
+        deniedPositions: classification.deniedPositions,
+      }),
     });
   }
 }
@@ -78,7 +87,12 @@ export interface EmailBatchOptions {
     fingerprint: string,
     messagePositions: readonly number[]
   ) => Effect.Effect<void, EmailSendError>;
-  /** Allows the normal provider chain while checking admission at each provider. */
+  /**
+   * Allows the normal provider chain while checking admission at each
+   * provider. When a fallback provider fails its batch with a denial naming
+   * some of the request (`deniedPositions`) and admitted no request, those
+   * messages fail and the never-dispatched rest is sent under its subset key.
+   */
   readonly allowFallbackWithAdmission?: boolean;
   /**
    * A repeat of a request whose outcome is unknown. Each message stays with

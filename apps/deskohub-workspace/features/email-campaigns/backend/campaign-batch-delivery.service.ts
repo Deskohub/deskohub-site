@@ -1301,9 +1301,8 @@ export class CampaignBatchDelivery extends Context.Service<
             CampaignDeliveryIncomplete | DatabaseQueryError
           >
         >(Result.succeed("unrequested"));
-        const denied = new EmailServiceError(
-          "Campaign offer request admission failed"
-        );
+        const denialMessage = "Campaign offer request admission failed";
+        const denied = new EmailServiceError(denialMessage);
         const beforeRequest: NonNullable<EmailBatchOptions["beforeRequest"]> = (
           _fingerprint,
           requestPositions
@@ -1375,7 +1374,12 @@ export class CampaignBatchDelivery extends Context.Service<
                       return BatchOutcome.Replanned();
                     }
                     return previous === "admitted"
-                      ? ("denied" as const)
+                      ? ({
+                          _tag: "Denied",
+                          positions: ineligible.map(({ customerId }) =>
+                            customerIds.indexOf(customerId)
+                          ),
+                        } as const)
                       : BatchOutcome.Unconfirmed({ reason: "payload-changed" });
                   })
                 )
@@ -1384,9 +1388,16 @@ export class CampaignBatchDelivery extends Context.Service<
                 yield* Ref.set(state, Result.fail(decision.failure));
                 return yield* denied;
               }
-              if (decision.success === "denied") return yield* denied;
-              yield* Ref.set(state, Result.succeed(decision.success));
-              if (decision.success !== "admitted") return yield* denied;
+              const verdict = decision.success;
+              if (verdict !== "admitted" && verdict._tag === "Denied")
+                return yield* new EmailServiceError(
+                  denialMessage,
+                  undefined,
+                  undefined,
+                  { deniedPositions: verdict.positions }
+                );
+              yield* Ref.set(state, Result.succeed(verdict));
+              if (verdict !== "admitted") return yield* denied;
             })
           );
         const result = yield* Effect.result(request(beforeRequest));
