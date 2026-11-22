@@ -564,7 +564,7 @@ describe("campaign pass offer cards", () => {
     const hrefs = hrefsOf(email.html);
 
     expect(entryPackUrl).not.toMatch(/\/en-US\//);
-    expect(hrefs.filter((href) => href === entryPackUrl)).toHaveLength(2);
+    expect(hrefs.filter((href) => href === entryPackUrl)).toHaveLength(3);
     expect(hrefs.filter((href) => href === unlimitedUrl)).toHaveLength(4);
     // Solid colours stand in where gradients don't render.
     expect(email.html).toContain('bgcolor="#f9cb70"');
