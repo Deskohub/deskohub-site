@@ -200,7 +200,6 @@ function EntryPackTicket({
         backgroundRepeat: "no-repeat, no-repeat",
         backgroundSize: "191px auto, auto",
         borderCollapse: "separate",
-        borderLeft: "4px solid #a43810",
         borderRadius: 14,
         marginTop: 22,
         width: "100%",
@@ -209,6 +208,20 @@ function EntryPackTicket({
     >
       <tbody>
         <tr>
+          {/* The ticket's edge stripe, a cell so the card link covers it. */}
+          <LinkedCell
+            color={ink}
+            href={href}
+            padding="0"
+            skipInText
+            style={{
+              backgroundColor: "#a43810",
+              borderRadius: "14px 0 0 14px",
+            }}
+            width={4}
+          >
+            {null}
+          </LinkedCell>
           <PassOfferTextCell
             color={ink}
             copy={copy}

@@ -98,6 +98,23 @@ for (const width of [1280, 390]) {
                   }
                 }
               }
+              // The card's own edges, painted stripe and borders included;
+              // corners are rounded off, so only the edge midpoints count.
+              const card = table.getBoundingClientRect();
+              for (const [fx, fy] of [
+                [0, 0.5],
+                [1, 0.5],
+                [0.5, 0],
+                [0.5, 1],
+              ] as const) {
+                const x = card.left + 2 + fx * (card.width - 4);
+                const y = card.top + 2 + fy * (card.height - 4);
+                const link = document
+                  .elementFromPoint(x, y)
+                  ?.closest("a")
+                  ?.getAttribute("href");
+                if (link !== url) misses.push(`card edge at ${fx},${fy}`);
+              }
               return misses;
             },
             { background: card.background, url: card.url }
