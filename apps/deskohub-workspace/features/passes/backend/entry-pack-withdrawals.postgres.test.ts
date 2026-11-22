@@ -569,7 +569,7 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
     }).pipe(
       Effect.provideService(CurrentAdministrator, {
         accountId: pack.buyer,
-        email: "operator@example.test",
+        email: testEmailAddress("withdrawal-operator"),
       })
     );
     const [buyerResult, operatorResult] = await Promise.all([
