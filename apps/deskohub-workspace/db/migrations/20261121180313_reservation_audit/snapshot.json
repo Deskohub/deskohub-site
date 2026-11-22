@@ -1,9 +1,9 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "8854caac-0756-4b1f-92a6-dc13f0371957",
+  "id": "70065cf2-6e4a-4b5c-bfd4-afd472468850",
   "prevIds": [
-    "41c61144-ace4-43f4-8995-053cadc08306"
+    "efbacdb1-fc6a-4bf0-b49d-9e122e603aaa"
   ],
   "ddl": [
     {
@@ -373,6 +373,12 @@
     {
       "isRlsEnabled": false,
       "name": "orders",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "pass_administration_changes",
       "entityType": "tables",
       "schema": "public"
     },
@@ -6003,6 +6009,19 @@
       "table": "entry_pack_gift_invitations"
     },
     {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "first_generation",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "entry_pack_gift_invitations"
+    },
+    {
       "type": "uuid",
       "typeSchema": null,
       "notNull": true,
@@ -7901,6 +7920,162 @@
       "table": "orders"
     },
     {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "pass_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "actor_account_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "actor_account_email",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "reason",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "change",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "requested_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "last_attempt_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "hold_rollback_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "transfer_progress",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "completed_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "failed_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
       "type": "text",
       "typeSchema": null,
       "notNull": true,
@@ -7987,6 +8162,19 @@
       "generated": null,
       "identity": null,
       "name": "holder_account_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "pass_purchases"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "holder_version",
       "entityType": "columns",
       "schema": "public",
       "table": "pass_purchases"
@@ -15796,6 +15984,55 @@
           "opclass": null
         },
         {
+          "value": "requested_at",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "pass_administration_changes_pass_requested_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "pass_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"completed_at\" is null and \"failed_at\" is null",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "pass_administration_changes_pending_pass_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "pass_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
           "value": "date",
           "isExpression": false,
           "asc": true,
@@ -19393,6 +19630,40 @@
     {
       "nameExplicit": false,
       "columns": [
+        "pass_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "pass_purchases",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "pass_administration_changes_pass_id_pass_purchases_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "actor_account_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "customer_accounts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "pass_administration_changes_2R11NicRa2wi_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "pass_administration_changes"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
         "reservation_id"
       ],
       "schemaTo": "public",
@@ -20934,6 +21205,16 @@
     },
     {
       "columns": [
+        "request_id"
+      ],
+      "nameExplicit": false,
+      "name": "pass_administration_changes_pkey",
+      "schema": "public",
+      "table": "pass_administration_changes",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "reservation_id"
       ],
       "nameExplicit": false,
@@ -22251,6 +22532,13 @@
       "table": "entry_pack_gift_invitations"
     },
     {
+      "value": "\"first_generation\" between 0 and \"generation\"",
+      "name": "entry_pack_gift_first_generation_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "entry_pack_gift_invitations"
+    },
+    {
       "value": "\"attempts\" >= 0",
       "name": "entry_pack_gift_attempts_check",
       "entityType": "checks",
@@ -22587,7 +22875,7 @@
       "table": "orders"
     },
     {
-      "value": "\"payment_state\" in ('not_started', 'pending', 'paid', 'failed', 'cancelled', 'expired')",
+      "value": "\"payment_state\" in ('not_started', 'pending', 'paid', 'failed', 'cancelled', 'expired', 'complimentary')",
       "name": "orders_payment_state_check",
       "entityType": "checks",
       "schema": "public",
@@ -22615,6 +22903,13 @@
       "table": "orders"
     },
     {
+      "value": "\"payment_state\" <> 'complimentary' or (\"kind\" = 'pass-purchase'\n        and \"active_payment_attempt_id\" is null and \"paid_at\" is null)",
+      "name": "orders_complimentary_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "orders"
+    },
+    {
       "value": "\"fulfillment_state\" <> 'fulfilled' or \"fulfilled_at\" is not null",
       "name": "orders_fulfilled_check",
       "entityType": "checks",
@@ -22627,6 +22922,13 @@
       "entityType": "checks",
       "schema": "public",
       "table": "orders"
+    },
+    {
+      "value": "num_nonnulls(\"completed_at\", \"failed_at\") <= 1\n        and (\"completed_at\" is null or \"completed_at\" >= \"requested_at\")\n        and (\"failed_at\" is null or \"failed_at\" >= \"requested_at\")\n        and (\"hold_rollback_at\" is null or\n          (\"completed_at\" is null and \"hold_rollback_at\" >= \"requested_at\"))",
+      "name": "pass_administration_changes_result_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "pass_administration_changes"
     },
     {
       "value": "\"status\" in ('reserved', 'consumed', 'released')",
