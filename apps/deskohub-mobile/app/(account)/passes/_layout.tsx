@@ -6,5 +6,9 @@ import { useUpdateOfferHost } from "../../../src/updates/update-offer";
 export default function PassesLayout() {
   const locale = useAppLocale();
   useUpdateOfferHost();
-  return <Stack screenOptions={stackScreenOptions(locale)} />;
+  return (
+    <Stack screenOptions={stackScreenOptions(locale)}>
+      <Stack.Screen name="access" options={{ headerShown: false }} />
+    </Stack>
+  );
 }
