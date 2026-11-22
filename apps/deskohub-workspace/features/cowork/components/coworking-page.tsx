@@ -338,7 +338,7 @@ function CoworkingDesks({
           >
             <Link
               href={`/${locale}/pricing`}
-              className="group ms-auto flex min-h-[3.125rem] w-fit max-w-full items-center gap-3 rounded-[0.625rem] border border-[#56588b] bg-[#10115a] px-[0.8125rem] py-[0.5625rem] leading-[1.35] font-semibold text-white transition-colors hover:bg-[#1c1e66] focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-sunset-yellow"
+              className="group ms-auto flex min-h-[3.125rem] w-fit max-w-full items-center gap-2 rounded-[0.625rem] border border-[#56588b] bg-[#10115a] px-2.5 py-[0.5625rem] sm:gap-3 sm:px-[0.8125rem] leading-[1.35] font-semibold text-white transition-colors hover:bg-[#1c1e66] focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-sunset-yellow"
             >
               <PassProductMarks surface="dark" className="text-lg" />
               <span className="text-balance underline-offset-[0.18em] group-hover:underline">
