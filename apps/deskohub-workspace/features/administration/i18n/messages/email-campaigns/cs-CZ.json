@@ -1266,6 +1266,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "Už není v systému Dotypos",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Mimo testovací e-mailovou doménu",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "E-mail nemá překlad pro tohoto příjemce",
+  "emailCampaignsSentSkipReasonPassHolder": "Držitel permanentky",
   "emailCampaignsSentStatus": "Stav",
   "emailCampaignsTestSendAdd": "Přidat",
   "emailCampaignsTestSendAddRecipientLabel": "Přidat příjemce testu",

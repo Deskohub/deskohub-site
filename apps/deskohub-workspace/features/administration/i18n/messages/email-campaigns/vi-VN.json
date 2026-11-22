@@ -1192,6 +1192,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "Không còn trong Dotypos",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Ngoài tên miền email thử nghiệm",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "Email chưa có bản dịch cho người nhận này",
+  "emailCampaignsSentSkipReasonPassHolder": "Khách hàng đang có thẻ coworking",
   "emailCampaignsSentStatus": "Trạng thái",
   "emailCampaignsTestSendAdd": "Thêm",
   "emailCampaignsTestSendAddRecipientLabel": "Thêm người nhận email thử",

@@ -1229,6 +1229,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "Nicht mehr in Dotypos",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Außerhalb der Test-E-Mail-Domain",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "Die E-Mail hat keine Übersetzung für diesen Empfänger",
+  "emailCampaignsSentSkipReasonPassHolder": "Pass-Inhaber",
   "emailCampaignsSentStatus": "Status",
   "emailCampaignsTestSendAdd": "Hinzufügen",
   "emailCampaignsTestSendAddRecipientLabel": "Testempfänger hinzufügen",

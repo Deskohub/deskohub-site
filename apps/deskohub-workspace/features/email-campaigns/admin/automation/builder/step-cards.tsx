@@ -284,12 +284,15 @@ export function SendStepCard({
   campaign,
   step,
   number,
+  skipPassHoldersAvailable,
   onChange,
   errorAt,
 }: {
   readonly campaign: AdministrationCampaignDetail;
   readonly step: SendStep;
   readonly number: number;
+  /** False under a pass reminder trigger, whose recipients all hold a pass. */
+  readonly skipPassHoldersAvailable?: boolean;
   readonly onChange?: (step: SendStep) => void;
   /** Errors at paths below the step. */
   readonly errorAt: FieldErrorLookup;
@@ -346,7 +349,12 @@ export function SendStepCard({
       </AdministrationLink>
       <SendPolicySummary step={step} />
       {onChange && (
-        <SendPolicyControls step={step} onChange={onChange} errorAt={errorAt} />
+        <SendPolicyControls
+          step={step}
+          skipPassHoldersAvailable={skipPassHoldersAvailable}
+          onChange={onChange}
+          errorAt={errorAt}
+        />
       )}
     </FlowCard>
   );

@@ -22,7 +22,7 @@ import {
   sql,
 } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Context, Effect, Layer } from "effect";
+import { Context, Duration, Effect, Layer } from "effect";
 import {
   WorkspaceDatabase,
   type WorkspaceDatabaseClient,
@@ -51,6 +51,7 @@ import type { StoredWorkspaceReservationDetails } from "@/features/reservation/p
 import { temporalInstantToDate } from "@/shared/utils/temporal";
 import type { AudienceDateFacts } from "../audience-filter";
 import type { CampaignPurpose } from "../body/campaign-content";
+import { campaignDeliveryBatchReplayWindow } from "../campaign-delivery-batches";
 import type { CampaignId } from "../campaign-identifiers";
 import type { DatePeriodBounds } from "../date-period";
 import { sendAutomationVersion, sendPurpose } from "./campaign-send-selection";
@@ -103,11 +104,17 @@ export type CampaignBookedReservation = {
  * reads them.
  */
 export type OneOffCampaignEmails = {
-  /** When the latest one they received was dispatched, if any. */
+  /**
+   * When the latest one they received was dispatched, if any. A pending one
+   * whose delivery batch was requested longer than the batch replay window
+   * ago counts as received at its request: no replay can settle it any
+   * more, and it may have reached them.
+   */
   readonly latestReceivedAt: Temporal.Instant | null;
   /**
-   * Whether one is still pending while its campaign is sending or a
-   * delivery batch already carries it: it may reach them any moment.
+   * Whether one is still pending while its campaign is sending, or its
+   * delivery batch is requested within the replay window: it may reach
+   * them any moment.
    */
   readonly inFlight: boolean;
 };
@@ -133,7 +140,46 @@ const oneOffEmailReceived = inArray(emailCampaignRecipients.status, [
  * status change when a webhook settled it without a batch in its current
  * attempt.
  */
-const oneOffEmailDispatchedAt = sql`coalesce(${emailCampaignDeliveryBatches.requestedAt}, ${emailCampaignRecipients.statusUpdatedAt})`;
+const campaignEmailDispatchedAt = sql`coalesce(${emailCampaignDeliveryBatches.requestedAt}, ${emailCampaignRecipients.statusUpdatedAt})`;
+
+/** A pending one-off email: not yet received, though maybe on its way. */
+const oneOffEmailPending = eq(emailCampaignRecipients.status, "pending");
+
+/**
+ * A pending one-off email whose delivery batch is requested: the provider
+ * may be mailing it.
+ */
+const oneOffEmailRequested = and(
+  oneOffEmailPending,
+  eq(emailCampaignDeliveryBatches.status, "requested")
+);
+
+/**
+ * A one-off email that counts as received at `now`: Resend accepted it, or
+ * its batch was requested longer than the replay window ago. Such a batch
+ * stays requested only when its campaign was abandoned mid-delivery, and
+ * it may have reached the customer.
+ */
+const oneOffEmailReceivedAt = (now: Temporal.Instant) =>
+  or(
+    oneOffEmailReceived,
+    and(
+      oneOffEmailRequested,
+      sql`${emailCampaignDeliveryBatches.requestedAt} < ${temporalInstantToDate(
+        now.subtract({
+          milliseconds: Duration.toMillis(campaignDeliveryBatchReplayWindow),
+        })
+      )}`
+    )
+  );
+
+/**
+ * When a one-off email was, or is assumed to be, dispatched. A pending one
+ * of a sending campaign that no requested batch carries yet is assumed to
+ * go out at `now`: its status change says nothing about a request.
+ */
+const oneOffEmailDispatchedAt = (now: Temporal.Instant) =>
+  sql`case when ${oneOffEmailPending} and ${emailCampaignDeliveryBatches.status} is distinct from 'requested' then ${temporalInstantToDate(now)} else ${campaignEmailDispatchedAt} end`;
 
 /** Only verified logins may receive campaigns. */
 const verifiedLogin = eq(authUser.emailVerified, true);
@@ -253,21 +299,27 @@ export interface ICampaignCandidateRepository {
    * Each customer's one-off campaign emails, of either purpose, for a Send's
    * one-off campaign gap: when the latest one they received was dispatched,
    * dated as `countReceivedCampaignEmails` dates them, and whether one is
-   * still in flight. Customers with neither are absent.
+   * still in flight at `now`. Customers with neither are absent.
    */
-  readonly latestOneOffCampaignEmails: (
-    customers: readonly DotyposCustomerId[]
-  ) => Effect.Effect<
+  readonly latestOneOffCampaignEmails: (query: {
+    readonly customers: readonly DotyposCustomerId[];
+    readonly now: Temporal.Instant;
+  }) => Effect.Effect<
     ReadonlyMap<DotyposCustomerId, OneOffCampaignEmails>,
     EffectDrizzleQueryError
   >;
   /**
-   * When each customer's one-off campaign emails, received or in flight,
-   * were dispatched at or after `since`, in ascending order. Customers
-   * without one are absent.
+   * When each customer's one-off campaign emails, received or in flight at
+   * `now`, were dispatched at or after `since`, in ascending order, for a
+   * dry run. It projects an in-flight email as dispatched: at its batch's
+   * request, or at `now` while no requested batch carries it yet. Live, a
+   * run waits for such an email with short rechecks and then holds the gap
+   * from the same instant, so the projection differs only when that email
+   * ends failed. Customers without one are absent.
    */
   readonly oneOffCampaignEmails: (query: {
     readonly customers: readonly DotyposCustomerId[];
+    readonly now: Temporal.Instant;
     readonly since: Temporal.Instant;
   }) => Effect.Effect<
     ReadonlyMap<DotyposCustomerId, readonly Temporal.Instant[]>,
@@ -342,18 +394,24 @@ export class CampaignCandidateRepository extends Context.Service<
 
       /**
        * Customers' one-off campaign emails of either purpose that a Send's
-       * one-off campaign gap counts, received or in flight, in dispatch
-       * order, dispatched at or after `since` when given.
+       * one-off campaign gap counts at `now`, received or in flight, in
+       * dispatch order, dispatched at or after `since` when given. The
+       * delivery batch join is the recipient's current attempt in any
+       * status, so a received email keeps its batch's request as its
+       * dispatch; a pending one is in flight only through a requested batch
+       * or its sending campaign.
        */
       const oneOffCampaignEmailRows = (query: {
         readonly customers: readonly DotyposCustomerId[];
+        readonly now: Temporal.Instant;
         readonly since?: Temporal.Instant;
-      }) =>
-        db
+      }) => {
+        const dispatchedAt = oneOffEmailDispatchedAt(query.now);
+        return db
           .select({
             dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
-            received: sql<boolean>`${oneOffEmailReceived}`,
-            dispatchedAt: sql`${oneOffEmailDispatchedAt}`.mapWith(
+            received: sql<boolean>`${oneOffEmailReceivedAt(query.now)}`,
+            dispatchedAt: dispatchedAt.mapWith(
               emailCampaignDeliveryBatches.requestedAt
             ),
           })
@@ -388,19 +446,15 @@ export class CampaignCandidateRepository extends Context.Service<
               ]),
               or(
                 oneOffEmailReceived,
-                and(
-                  eq(emailCampaignRecipients.status, "pending"),
-                  or(
-                    eq(emailCampaigns.status, "sending"),
-                    isNotNull(emailCampaignDeliveryBatches.sendId)
-                  )
-                )
+                oneOffEmailRequested,
+                and(oneOffEmailPending, eq(emailCampaigns.status, "sending"))
               ),
               query.since &&
-                sql`${oneOffEmailDispatchedAt} >= ${temporalInstantToDate(query.since)}`
+                sql`${dispatchedAt} >= ${temporalInstantToDate(query.since)}`
             )
           )
-          .orderBy(sql`${oneOffEmailDispatchedAt}`);
+          .orderBy(dispatchedAt);
+      };
 
       const latestReservations = (customers?: readonly DotyposCustomerId[]) =>
         db
@@ -564,10 +618,10 @@ export class CampaignCandidateRepository extends Context.Service<
         }),
         latestOneOffCampaignEmails: Effect.fn(
           "CampaignCandidateRepository.latestOneOffCampaignEmails"
-        )(function* (customers) {
+        )(function* ({ customers, now }) {
           const byCustomer = new Map<DotyposCustomerId, OneOffCampaignEmails>();
           if (customers.length === 0) return byCustomer;
-          const rows = yield* oneOffCampaignEmailRows({ customers });
+          const rows = yield* oneOffCampaignEmailRows({ customers, now });
           for (const row of rows) {
             const emails = byCustomer.get(row.dotyposCustomerId) ?? {
               latestReceivedAt: null,
@@ -585,10 +639,14 @@ export class CampaignCandidateRepository extends Context.Service<
         }),
         oneOffCampaignEmails: Effect.fn(
           "CampaignCandidateRepository.oneOffCampaignEmails"
-        )(function* ({ customers, since }) {
+        )(function* ({ customers, now, since }) {
           const byCustomer = new Map<DotyposCustomerId, Temporal.Instant[]>();
           if (customers.length === 0) return byCustomer;
-          const rows = yield* oneOffCampaignEmailRows({ customers, since });
+          const rows = yield* oneOffCampaignEmailRows({
+            customers,
+            now,
+            since,
+          });
           for (const row of rows) {
             const dispatched = byCustomer.get(row.dotyposCustomerId) ?? [];
             dispatched.push(row.dispatchedAt);

@@ -1266,6 +1266,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "No longer in Dotypos",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Outside the test email domain",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "The email has no translation for this recipient",
+  "emailCampaignsSentSkipReasonPassHolder": "Pass holder",
   "emailCampaignsSentStatus": "Status",
   "emailCampaignsTestSendAdd": "Add",
   "emailCampaignsTestSendAddRecipientLabel": "Add a test recipient",

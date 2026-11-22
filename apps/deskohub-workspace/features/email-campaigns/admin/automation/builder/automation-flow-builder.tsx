@@ -15,6 +15,7 @@ import { m } from "@/features/administration/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { Button } from "@/shared/components/ui/button";
 import { cn } from "@/shared/utils";
+import { isPassReminderTrigger } from "../../../automation/automation-triggers";
 import type { CampaignOperationFailureCopy } from "../../campaign-operation-failure";
 import { useCampaignOperation } from "../../use-campaign-operation";
 import {
@@ -254,6 +255,7 @@ export function AutomationFlowBuilder({
                       campaign={campaign}
                       step={step}
                       number={number}
+                      skipPassHoldersAvailable={!isPassReminderTrigger(trigger)}
                       onChange={readOnly ? undefined : update}
                       errorAt={(field) => errorAt(`${path}.${field}`)}
                     />

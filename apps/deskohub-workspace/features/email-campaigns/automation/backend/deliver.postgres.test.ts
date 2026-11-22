@@ -99,7 +99,8 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
   const seedPassReminder = async (
     kind: "entry-pack" | "unlimited" = "entry-pack",
     count = 1,
-    deskLabel?: string
+    deskLabel?: string,
+    policies: Parameters<typeof sendOnlyFlow>[1] = {}
   ) => {
     const customer = customerId(crypto.randomUUID());
     const account = customerAccountIdSchema.make(crypto.randomUUID());
@@ -124,7 +125,8 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
       flow: sendOnlyFlow(
         kind === "entry-pack"
           ? { _tag: "EntryPackExpiring" }
-          : { _tag: "UnlimitedEnding" }
+          : { _tag: "UnlimitedEnding" },
+        policies
       ),
       text: "Generic automation copy must never be sent",
     });
@@ -352,6 +354,31 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
     expect(outcomesOf(await runsOf(campaignId))).toEqual({
       [customer]: ["ended", "withdrawn", null],
     });
+  });
+
+  test("a reminder withdrawn on its first request releases its once-per-customer claim", async () => {
+    const { campaignId, customer, engine } = await seedPassReminder(
+      "entry-pack",
+      1,
+      undefined,
+      { oncePerCustomer: true }
+    );
+    engine.dotypos.onRequest(({ method }) =>
+      method === "getCustomersByIds" &&
+      engine.dotypos.calls.getCustomersByIds === 2
+        ? TestClock.adjust("2 seconds")
+        : Effect.void
+    );
+    await engine.tick(Temporal.Instant.from("2026-10-26T22:59:59Z"));
+    expect(engine.resend.requests()).toEqual([]);
+    expect(outcomesOf(await runsOf(campaignId))).toEqual({
+      [customer]: ["ended", "withdrawn", null],
+    });
+    const { rows } = await pool.query(
+      "select 1 from email_campaign_automation_customer_claims where campaign_id = $1",
+      [campaignId]
+    );
+    expect(rows).toEqual([]);
   });
 
   test("withdraws an Entry Pack that expires while its first request is being checked", async () => {

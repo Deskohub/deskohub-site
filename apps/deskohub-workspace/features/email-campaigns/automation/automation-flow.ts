@@ -127,6 +127,26 @@ const ensureWaitWithinLimit = (step: AutomationStep) =>
       )
     : Effect.void;
 
+/**
+ * A pass reminder's own check at the request decides whether its holder
+ * still gets it, so a Send under a pass reminder trigger can't skip pass
+ * holders: every recipient holds the pass it reminds them of.
+ */
+const ensureSendPoliciesFitTrigger = (
+  trigger: AutomationTrigger,
+  step: AutomationStep
+) =>
+  step._tag === "Send" &&
+  step.skipPassHolders === true &&
+  isPassReminderTrigger(trigger)
+    ? Effect.fail(
+        new AutomationFlowInvalid({
+          location: stepLocation(step),
+          message: `Step "${step.id}" skips pass holders, but a pass reminder goes only to pass holders.`,
+        })
+      )
+    : Effect.void;
+
 /** A schedule fires only on the engine's ticks (D36); calendar waits may use any minute. */
 export const ensureScheduleOnTicks = (calendar: CalendarExpression) => {
   const minutes = scheduleMinutesOffTick(calendar);
@@ -188,7 +208,8 @@ export const canonicalAutomationFlow = (
 /**
  * The flow every write path stores and activation publishes: decoded with
  * `automationFlowSchema`, a schedule firing only on engine ticks, each
- * wait at most 366 days, each calendar occurring within eight years, in
+ * wait at most 366 days, no Send skipping pass holders under a pass
+ * reminder trigger, each calendar occurring within eight years, in
  * canonical form. Condition steps may use
  * trigger windows, "this campaign" and saved audiences; the campaign's
  * entry audience is a saved audience, so its writes reject them. Whether
@@ -214,6 +235,13 @@ export const validateAutomationFlow = (
     ),
     Effect.tap(({ steps }) =>
       Effect.forEach(steps, ensureWaitWithinLimit, { discard: true })
+    ),
+    Effect.tap(({ trigger, steps }) =>
+      Effect.forEach(
+        steps,
+        (step) => ensureSendPoliciesFitTrigger(trigger, step),
+        { discard: true }
+      )
     ),
     Effect.tap((decoded) =>
       Effect.forEach(

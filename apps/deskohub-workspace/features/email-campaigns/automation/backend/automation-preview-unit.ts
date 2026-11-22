@@ -776,6 +776,7 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
       oneOffEmails: carries((step) => step.oneOffCampaignGap !== undefined)
         ? candidates.oneOffCampaignEmails({
             customers: input.customers,
+            now: input.now,
             since: input.since,
           })
         : Effect.succeed(

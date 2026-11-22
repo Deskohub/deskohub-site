@@ -228,9 +228,11 @@ const renderSend = (
   step: SendStep,
   {
     editable = true,
+    skipPassHoldersAvailable,
     errorAt = () => undefined,
   }: {
     readonly editable?: boolean;
+    readonly skipPassHoldersAvailable?: boolean;
     readonly errorAt?: (field: string) => string | undefined;
   } = {}
 ) => {
@@ -241,6 +243,7 @@ const renderSend = (
         campaign={campaign}
         step={step}
         number={2}
+        skipPassHoldersAvailable={skipPassHoldersAvailable}
         onChange={editable ? onChange : undefined}
         errorAt={errorAt}
       />
@@ -289,6 +292,20 @@ describe("SendStepCard delivery rules", () => {
     expect(controls.gap()?.getAttribute("aria-checked")).toBe("false");
     expect(controls.skip()?.getAttribute("aria-checked")).toBe("true");
     expect(controls.gapDays()).toBeNull();
+  });
+
+  test("under a pass reminder trigger, skipping pass holders is offered only to turn it off", () => {
+    const off = renderSend(plainSend, { skipPassHoldersAvailable: false });
+    expect(off.controls.skip()).toBeNull();
+    expect(off.controls.once()).not.toBeNull();
+    off.view.unmount();
+
+    const on = renderSend(
+      { ...plainSend, skipPassHolders: true },
+      { skipPassHoldersAvailable: false }
+    );
+    on.click(on.controls.skip());
+    expect(emittedSend(on.onChange.mock.calls)).toEqual(plainSend);
   });
 
   test.each([

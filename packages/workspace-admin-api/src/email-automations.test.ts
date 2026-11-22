@@ -4,6 +4,7 @@ import { Result, Schema } from "effect";
 import { administrationInputParseOptions } from "./administration-input-parse-options";
 import {
   AutomationDetail,
+  AutomationDryRun,
   AutomationDryRunRow,
   AutomationEngineHealth,
   AutomationFlow,
@@ -310,6 +311,76 @@ describe("automation responses", () => {
         })
       )
     ).toBe(true);
+  });
+
+  test("decode an older server's counts by skip reason without the reasons it doesn't know as 0", () => {
+    expect(
+      Result.getOrThrow(
+        Schema.decodeUnknownResult(AutomationRunStats)({
+          campaignId: "campaign-1",
+          bySkipReason: {
+            "missing-from-dotypos": 1,
+            "deleted-customer": 2,
+            "missing-email": 3,
+            "invalid-email": 4,
+            "consent-withdrawn": 5,
+            "outside-test-domain": 6,
+          },
+        })
+      ).bySkipReason
+    ).toEqual({
+      "missing-from-dotypos": 1,
+      "deleted-customer": 2,
+      "missing-email": 3,
+      "invalid-email": 4,
+      "consent-withdrawn": 5,
+      "outside-test-domain": 6,
+      "pass-holder": 0,
+      "already-sent-once": 0,
+    });
+  });
+
+  describe("dry run counts", () => {
+    const olderDryRun = {
+      previewId: "preview-1",
+      campaignId: "campaign-1",
+      draftHash: "hash",
+      kind: "replay",
+      status: "completed",
+      asOf: "2026-10-19T10:00:00.000Z",
+      createdAt: "2026-10-19T10:00:00.000Z",
+    };
+    const olderCounts = {
+      "would-send": 1,
+      "condition-failed": 2,
+      "not-in-audience": 3,
+      "already-active": 4,
+      withdrawn: 5,
+      unavailable: 6,
+    };
+
+    test("decode an older server's counts without skipped as 0", () => {
+      expect(
+        Result.getOrThrow(
+          Schema.decodeUnknownResult(AutomationDryRun)({
+            ...olderDryRun,
+            counts: olderCounts,
+          })
+        ).counts
+      ).toEqual({ ...olderCounts, skipped: 0 });
+    });
+
+    test("refuse counts that leave out an outcome every server sends", () => {
+      const { withdrawn: _, ...withoutWithdrawn } = olderCounts;
+      expect(
+        Result.isFailure(
+          Schema.decodeUnknownResult(AutomationDryRun)({
+            ...olderDryRun,
+            counts: withoutWithdrawn,
+          })
+        )
+      ).toBe(true);
+    });
   });
 
   test("round-trip a run's live contact and the counts by skip reason", () => {

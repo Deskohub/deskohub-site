@@ -100,13 +100,20 @@ export function SendPolicySummary({ step }: { readonly step: SendStep }) {
   );
 }
 
-/** The delivery rules' switches, and the gap's length once it is on. */
+/**
+ * The delivery rules' switches, and the gap's length once it is on. Where
+ * skipping pass holders isn't available, its switch shows only while on,
+ * so it can be turned off.
+ */
 export function SendPolicyControls({
   step,
+  skipPassHoldersAvailable = true,
   onChange,
   errorAt,
 }: {
   readonly step: SendStep;
+  /** False under a pass reminder trigger, whose recipients all hold a pass. */
+  readonly skipPassHoldersAvailable?: boolean;
   readonly onChange: (step: SendStep) => void;
   /** Errors at paths below the step. */
   readonly errorAt: FieldErrorLookup;
@@ -189,12 +196,14 @@ export function SendPolicyControls({
           </div>
         )}
       </div>
-      <PolicyCheckbox
-        id={ids.skip}
-        checked={step.skipPassHolders === true}
-        onCheckedChange={(on) => onChange(withSkipPassHolders(step, on))}
-        label={m.emailAutomationFlowSendSkipPassHoldersLabel({}, { locale })}
-      />
+      {(skipPassHoldersAvailable || step.skipPassHolders === true) && (
+        <PolicyCheckbox
+          id={ids.skip}
+          checked={step.skipPassHolders === true}
+          onCheckedChange={(on) => onChange(withSkipPassHolders(step, on))}
+          label={m.emailAutomationFlowSendSkipPassHoldersLabel({}, { locale })}
+        />
+      )}
     </fieldset>
   );
 }

@@ -443,7 +443,7 @@ export const makeDeliverHandler = Effect.gen(function* () {
       ),
       Effect.bind("oneOffEmails", () =>
         sendStep.oneOffCampaignGap
-          ? candidates.latestOneOffCampaignEmails(customers)
+          ? candidates.latestOneOffCampaignEmails({ customers, now: input.at })
           : Effect.succeed(new Map<DotyposCustomerId, OneOffCampaignEmails>())
       ),
       Effect.let("verdicts", ({ cancellations, claimed, oneOffEmails }) =>

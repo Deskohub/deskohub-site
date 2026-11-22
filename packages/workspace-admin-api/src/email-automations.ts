@@ -25,7 +25,12 @@ import {
   AdministrationCampaignSendId,
   AdministrationCampaignTemplateKey,
 } from "./email-campaigns";
-import { fieldWithDefault, listField, nullableField } from "./response-fields";
+import {
+  countsField,
+  fieldWithDefault,
+  listField,
+  nullableField,
+} from "./response-fields";
 import { AdministrationDotyposCustomerId } from "./workspace-admin-api";
 
 /** Stable id of a flow step. A run's position is a step id, not an index. */
@@ -507,15 +512,19 @@ export const AutomationDryRun = Schema.Struct({
   /** Schedules only: the next five fires of the working copy. */
   nextFires: listField(Instant),
   frequency: nullableField(AutomationFrequency),
-  counts: fieldWithDefault(Schema.Record(AutomationPreviewOutcome, count), {
-    "would-send": 0,
-    "condition-failed": 0,
-    "not-in-audience": 0,
-    "already-active": 0,
-    withdrawn: 0,
-    skipped: 0,
-    unavailable: 0,
-  }),
+  /** An older server doesn't count `skipped`. */
+  counts: fieldWithDefault(
+    countsField(automationPreviewOutcomes, ["skipped"], count),
+    {
+      "would-send": 0,
+      "condition-failed": 0,
+      "not-in-audience": 0,
+      "already-active": 0,
+      withdrawn: 0,
+      skipped: 0,
+      unavailable: 0,
+    }
+  ),
   /** Replay only: the events in the window, before truncation. */
   eventsTotal: nullableField(count),
   /** More events happened than the replay evaluates. */
@@ -627,11 +636,16 @@ export const AutomationRunStats = Schema.Struct({
     })
   ),
   /**
-   * Skipped runs by why delivery skipped them. An older server omits it, so
-   * it may not add up to `byOutcome.skipped`.
+   * Skipped runs by why delivery skipped them. An older server omits it, or
+   * the reasons it doesn't know yet, so it may not add up to
+   * `byOutcome.skipped`.
    */
   bySkipReason: fieldWithDefault(
-    Schema.Record(AutomationRunSkipReason, count),
+    countsField(
+      automationRunSkipReasons,
+      ["pass-holder", "already-sent-once"],
+      count
+    ),
     zeroSkipReasonCounts
   ),
 });

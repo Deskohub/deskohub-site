@@ -1303,6 +1303,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "Už nie je v Dotypose",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Mimo testovacej e-mailovej domény",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "E-mail nemá preklad pre tohto príjemcu",
+  "emailCampaignsSentSkipReasonPassHolder": "Držiteľ permanentky",
   "emailCampaignsSentStatus": "Stav",
   "emailCampaignsTestSendAdd": "Pridať",
   "emailCampaignsTestSendAddRecipientLabel": "Pridať príjemcu testu",

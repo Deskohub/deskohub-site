@@ -1303,6 +1303,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "Більше немає в Dotypos",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Поза тестовим поштовим доменом",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "Лист не має перекладу для цього одержувача",
+  "emailCampaignsSentSkipReasonPassHolder": "Власник абонемента",
   "emailCampaignsSentStatus": "Статус",
   "emailCampaignsTestSendAdd": "Додати",
   "emailCampaignsTestSendAddRecipientLabel": "Додати тестового одержувача",

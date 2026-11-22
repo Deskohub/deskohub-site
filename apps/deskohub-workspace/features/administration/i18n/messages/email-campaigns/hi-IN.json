@@ -1229,6 +1229,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "अब Dotypos में नहीं है",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "टेस्ट email डोमेन से बाहर",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "इस प्राप्तकर्ता की भाषा में ईमेल का अनुवाद उपलब्ध नहीं है",
+  "emailCampaignsSentSkipReasonPassHolder": "पास धारक",
   "emailCampaignsSentStatus": "स्थिति",
   "emailCampaignsTestSendAdd": "जोड़ें",
   "emailCampaignsTestSendAddRecipientLabel": "टेस्ट प्राप्तकर्ता जोड़ें",
