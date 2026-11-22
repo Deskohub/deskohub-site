@@ -720,6 +720,31 @@ describe.skipIf(!testDatabase)("CampaignService on disposable Postgres", () => {
     ]);
   });
 
+  test("keeps a pass reminder draft from being duplicated while writes are closed", async () => {
+    const campaignId = await createAutomated("draft");
+    await pool.query(
+      "update email_campaign_automations set flow = $2 where campaign_id = $1",
+      [
+        campaignId,
+        {
+          trigger: { _tag: "EntryPackExpiring" },
+          steps: [{ _tag: "Send", id: "send" }],
+        },
+      ]
+    );
+    const copies = () =>
+      pool.query(
+        "select count(*)::int as copies from email_campaigns where title = 'Copy of Weekly come-back'"
+      );
+    const before = await copies();
+    expect(
+      failure(
+        await withCampaigns((campaigns) => campaigns.duplicate(campaignId))
+      )
+    ).toMatchObject({ _tag: "AutomationFlowInvalid" });
+    expect((await copies()).rows).toEqual(before.rows);
+  });
+
   test("refuses to duplicate a draft whose saved flow breaks a save rule", async () => {
     const campaignId = await createAutomated("draft");
     // Saved before schedules had to fire on engine ticks (D36).

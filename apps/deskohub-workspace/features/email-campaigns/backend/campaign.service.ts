@@ -19,6 +19,7 @@ import {
   isSavedAudienceFilter,
 } from "../audience-filter-usage";
 import { validateStoredAutomationFlow } from "../automation/backend/automation-working-copy";
+import { ensurePassReminderWritesAllowed } from "../automation/backend/pass-reminder-write-policy";
 import type {
   AutomationCalendarNeverOccurs,
   AutomationFlowInvalid,
@@ -324,6 +325,12 @@ export class CampaignService extends Context.Service<
             Option.getOrNull
           )
         );
+        if (Option.isSome(flow)) {
+          yield* ensurePassReminderWritesAllowed(
+            flow.value.trigger,
+            source.purpose
+          );
+        }
         const audience =
           source.audienceId === null
             ? Option.none()

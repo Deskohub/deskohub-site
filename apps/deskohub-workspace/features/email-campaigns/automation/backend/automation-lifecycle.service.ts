@@ -670,6 +670,7 @@ type TransitionInput = {
 type TransitionError =
   | DatabaseQueryError
   | AutomationArchived
+  | AutomationFlowInvalid
   | AutomationStatusConflict;
 
 const ensureNotArchived = (copy: AutomationWorkingCopy) =>
@@ -753,6 +754,14 @@ const resumeIn = ({
           return Effect.fail(statusConflict(copy, "resume"));
         case "paused":
           return loadAutomationVersionActivations(campaignId).pipe(
+            Effect.tap((versions) => {
+              const active = versions.find(
+                ({ id }) => id === copy.automation.activeVersionId
+              );
+              return active
+                ? ensurePassReminderWritesAllowed(active.trigger, "marketing")
+                : Effect.void;
+            }),
             Effect.flatMap((versions) =>
               Effect.all(
                 [
