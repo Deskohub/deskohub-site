@@ -2,7 +2,7 @@ import type {
   CustomerLegalDocument,
   CustomerPassPurchaseDisclosure,
 } from "@deskohub/workspace-customer-api";
-import { Interpolate } from "@doist/react-interpolate";
+import Interpolate from "@doist/react-interpolate";
 import type { ReactNode } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { apiOrigin } from "../../auth/auth-client";
