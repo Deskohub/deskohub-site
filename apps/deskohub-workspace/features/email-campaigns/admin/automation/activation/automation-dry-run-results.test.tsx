@@ -37,9 +37,11 @@ const renderResults = (
   {
     content = {},
     cursor,
+    trigger = flow.trigger,
   }: {
     readonly content?: AdministrationCampaignContent;
     readonly cursor?: string;
+    readonly trigger?: typeof flow.trigger;
   } = {}
 ) =>
   render(
@@ -48,7 +50,7 @@ const renderResults = (
         content={content}
         cursor={cursor}
         dryRun={dryRun}
-        flow={flow}
+        flow={{ ...flow, trigger }}
         locale={locale}
       />
     </RouteLocaleProvider>
@@ -447,5 +449,39 @@ describe("AutomationDryRunResults", () => {
     expect(
       view.queryByText(m.emailAutomationActivationEmailTitle({}, { locale }))
     ).toBeNull();
+  });
+
+  test("shows the code-owned preheader when the draft contains different copy", () => {
+    const view = renderResults(
+      {
+        ...automationDryRunFixture(),
+        emails: [
+          {
+            locale: "cs-CZ",
+            subject: "Reminder sample subject",
+            preheader: "Reminder sample preheader",
+            html: "<p>Reminder sample body</p>",
+            text: "Reminder sample body",
+          },
+        ],
+      },
+      {
+        trigger: { _tag: "EntryPackExpiring" },
+        content: {
+          "cs-CZ": {
+            subject: "Draft subject",
+            preheader: "Draft preheader",
+            bodyMarkdown: "Draft body",
+          },
+        },
+      }
+    );
+    expect(
+      view.getByText(
+        m.emailAutomationActivationExampleEmailTitle({}, { locale })
+      )
+    ).not.toBeNull();
+    expect(view.getByText("Reminder sample preheader")).not.toBeNull();
+    expect(view.queryByText("Draft preheader")).toBeNull();
   });
 });

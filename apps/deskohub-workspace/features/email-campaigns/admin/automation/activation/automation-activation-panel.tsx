@@ -6,6 +6,7 @@ import type {
 import { AdministrationAlert } from "@/features/administration/components";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
+import { isPassReminderKind } from "../../../automation/automation-triggers";
 import { describeCampaignOperationFailure } from "../../campaign-operation-failure";
 import { AutomationDryRunPolling } from "./automation-dry-run-polling";
 import { dryRunJobFailureCopy } from "./automation-failure-copy";
@@ -115,10 +116,11 @@ function DryRunRequiredExplanation({
   readonly automation: AutomationDetail;
   readonly locale: Locale;
 }) {
-  const explanation = {
-    schedule: m.emailAutomationActivationExplainSchedule,
-    replay: m.emailAutomationActivationExplainReplay,
-  }[automation.trigger?.kind === "schedule" ? "schedule" : "replay"];
+  const kind = automation.trigger?.kind;
+  const explanation =
+    kind === "schedule" || (kind !== undefined && isPassReminderKind(kind))
+      ? m.emailAutomationActivationExplainSchedule
+      : m.emailAutomationActivationExplainReplay;
   return (
     <div className="max-w-prose space-y-2 text-navy-blue/75">
       <p>{explanation({}, { locale })}</p>
@@ -197,7 +199,7 @@ function ActivationReadiness({
 
 /** The dry run and Activate buttons, which an archived automation lacks. */
 function AutomationPreviewControls({
-  automation: { activation, activeVersion, campaignId, status },
+  automation: { activation, activeVersion, campaignId, status, trigger },
   locale,
   settled,
 }: {
@@ -212,11 +214,15 @@ function AutomationPreviewControls({
       </p>
     );
   }
+  const refreshable =
+    activation._tag === "Ready" &&
+    trigger !== null &&
+    isPassReminderKind(trigger.kind);
   return (
     <div className="flex flex-wrap items-start gap-3 pt-1">
-      {(activation._tag === "PreviewRequired" || settled) && (
+      {(activation._tag === "PreviewRequired" || settled || refreshable) && (
         <AutomationDryRunButton
-          again={settled !== undefined}
+          again={settled !== undefined || refreshable}
           campaignId={campaignId}
         />
       )}

@@ -2,6 +2,7 @@ import type {
   AutomationTriggerKindType as AutomationTriggerKind,
   CalendarExpressionType as CalendarExpression,
 } from "@deskohub/workspace-admin-api";
+import { isPassReminderTrigger } from "../../../automation/automation-triggers";
 import type {
   FlowStepValue as AutomationStep,
   FlowTriggerValue as AutomationTrigger,
@@ -23,6 +24,8 @@ export const eventTriggerTags = {
   "reservation-started": "ReservationStarted",
   "reservation-finished": "ReservationFinished",
   "account-created": "AccountCreated",
+  "entry-pack-expiring": "EntryPackExpiring",
+  "unlimited-ending": "UnlimitedEnding",
 } as const satisfies Record<
   Exclude<AutomationTriggerKind, "schedule">,
   Exclude<AutomationTrigger["_tag"], "Schedule">
@@ -42,8 +45,8 @@ export const eventTriggerKindOf = (trigger: EventTrigger): EventTriggerKind =>
 /** Whether an event trigger can narrow to one reservation product. */
 export const takesProductFilter = (
   trigger: EventTrigger
-): trigger is Exclude<EventTrigger, { _tag: "AccountCreated" }> =>
-  trigger._tag !== "AccountCreated";
+): trigger is Extract<EventTrigger, { product?: unknown }> =>
+  trigger._tag !== "AccountCreated" && !isPassReminderTrigger(trigger);
 
 /**
  * The trigger after switching to `kind`. Reservation triggers keep the
@@ -54,7 +57,13 @@ export const eventTrigger = (
   current: AutomationTrigger | null
 ): EventTrigger => {
   const tag = eventTriggerTags[kind];
-  if (tag === "AccountCreated") return { _tag: tag };
+  if (
+    tag === "AccountCreated" ||
+    tag === "EntryPackExpiring" ||
+    tag === "UnlimitedEnding"
+  ) {
+    return { _tag: tag };
+  }
   const product =
     current && current._tag !== "Schedule" && takesProductFilter(current)
       ? current.product

@@ -1841,6 +1841,48 @@
   "entryPackCheckoutTermsChanged": "Die Bedingungen haben sich geändert. Lies die aktuellen Bedingungen und bestätige sie erneut, bevor du bezahlst.",
   "passEntryPack": "Eintrittspaket",
   "passUnlimited": "Unbegrenzter Pass",
+  "passReminderGreeting": "Hallo {firstName},",
+  "passReminderGreetingUnnamed": "Guten Tag,",
+  "passReminderEntryPackSubject": [
+    {
+      "declarations": [
+        "input remaining",
+        "local remainingPlural = remaining: plural",
+        "local remainingNumber = remaining: number"
+      ],
+      "selectors": ["remainingPlural"],
+      "match": {
+        "remainingPlural=one": "Noch {remainingNumber} Eintritt in deinem Paket",
+        "remainingPlural=other": "Noch {remainingNumber} Eintritte in deinem Paket"
+      }
+    }
+  ],
+  "passReminderEntryPackPreheader": "Dein Paket ({tier}) endet am {endsOn}.",
+  "passReminderEntryPackBody": [
+    {
+      "declarations": [
+        "input remaining",
+        "input total",
+        "local remainingPlural = remaining: plural",
+        "local remainingNumber = remaining: number",
+        "local totalNumber = total: number"
+      ],
+      "selectors": ["remainingPlural"],
+      "match": {
+        "remainingPlural=one": "Dein Eintrittspaket ({tier}) endet am <strong>{endsOn}</strong>. Du kannst noch <strong>{remainingNumber} von {totalNumber} Eintritten</strong> nutzen. Such dir jetzt Tage aus, damit deine Eintritte nicht verfallen.",
+        "remainingPlural=other": "Dein Eintrittspaket ({tier}) endet am <strong>{endsOn}</strong>. Du kannst noch <strong>{remainingNumber} von {totalNumber} Eintritten</strong> nutzen. Such dir jetzt Tage aus, damit deine Eintritte nicht verfallen."
+      }
+    }
+  ],
+  "passReminderEntryPackBook": "Einen Tag buchen",
+  "passReminderEntryPackExpiry": "Eintritte, die du bis dahin nicht buchst, verfallen mit dem Paket.",
+  "passReminderUnlimitedSubject": "Dein unbegrenzter Pass endet am {endsOn}",
+  "passReminderUnlimitedPreheader": "Verlängere deinen Pass jetzt um {days} Tage.",
+  "passReminderUnlimitedPreheaderWithDesk": "Verlängere jetzt und behalte {deskLabel} für weitere {days} Tage.",
+  "passReminderUnlimitedBody": "Dein unbegrenzter Pass ({tier}) endet am <strong>{endsOn}</strong>. Verlängere ihn jetzt, dann beginnen deine nächsten {days} Tage direkt danach am {renewalStartsOn}.",
+  "passReminderUnlimitedBodyWithDesk": "Dein unbegrenzter Pass ({tier}) endet am <strong>{endsOn}</strong>. Verlängere ihn jetzt, dann beginnen deine nächsten {days} Tage direkt danach am {renewalStartsOn}. Dein Platz bleibt <strong>{deskLabel}</strong>.",
+  "passReminderUnlimitedRenew": "Um {days} Tage verlängern",
+  "passReminderUnlimitedDeskFallback": "Wenn {deskLabel} bei der Verlängerung schon belegt ist, weisen wir dir einen anderen Platz zu.",
   "unlimitedPassRenew": "Pass verlängern",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Reservierter Schreibtisch",

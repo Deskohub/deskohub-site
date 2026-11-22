@@ -3,6 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, describe, expect, test } from "bun:test";
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import type { AutomationFlowType } from "@deskohub/workspace-admin-api";
+import { Effect } from "effect";
 import {
   campaignContentFixture,
   seedAutomatedSend,
@@ -25,6 +26,8 @@ import {
   automationLifecycleTestKit,
   bookedSendFlow,
 } from "./automation-lifecycle.test-utils";
+import { nextPassReminderPreviewOccurrence } from "./automation-pass-reminder-preview";
+import { PassReminderWritesOpen } from "./pass-reminder-write-policy";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
 
@@ -124,6 +127,25 @@ describe.skipIf(!testDatabase)(
       );
       return rows;
     };
+
+    test("reads the pass reminder trigger tags before the writer release permits saving them", async () => {
+      const { campaignId } = await seedDraft();
+      for (const tag of ["EntryPackExpiring", "UnlimitedEnding"] as const) {
+        const flow = automationFlowFixture({
+          trigger: { _tag: tag },
+          steps: [{ _tag: "Send", id: "send" }],
+        });
+        const error = await failure(
+          lifecycle((l) => l.updateFlow({ campaignId, flow }))
+        );
+        expect(error._tag).toBe("AutomationFlowInvalid");
+      }
+      const { rows } = await pool.query(
+        "select flow from email_campaign_automations where campaign_id = $1",
+        [campaignId]
+      );
+      expect(rows).toEqual([{ flow: null }]);
+    });
 
     describe("the preview gate (§7.5)", () => {
       test("refuses without a completed dry run of this campaign", async () => {
@@ -487,6 +509,52 @@ describe.skipIf(!testDatabase)(
     });
 
     describe("pause, resume and archive (§5.10)", () => {
+      test("keeps a published pass reminder paused while writes are closed even if the draft changed", async () => {
+        const { campaignId } = await seedDraft();
+        const flow = automationFlowFixture({
+          trigger: { _tag: "UnlimitedEnding" },
+          steps: [{ _tag: "Send", id: "send" }],
+        });
+        const permit = Effect.provideService(
+          PassReminderWritesOpen,
+          Effect.succeed(true)
+        );
+        await run(
+          lifecycle((service) => service.updateFlow({ campaignId, flow })).pipe(
+            permit
+          )
+        );
+        const previewId = await seedPreview(campaignId, {
+          status: "completed",
+        });
+        const { fireAt } = nextPassReminderPreviewOccurrence(
+          { _tag: "UnlimitedEnding" },
+          now
+        );
+        await pool.query(
+          "update email_campaign_automation_previews set as_of = $2 where id = $1",
+          [previewId, fireAt.toString()]
+        );
+        await run(
+          lifecycle((service) =>
+            service.activate({ campaignId, previewId, activatedBy: null })
+          ).pipe(permit)
+        );
+        await run(lifecycle((service) => service.pause(campaignId)));
+        await run(
+          lifecycle((service) =>
+            service.updateFlow({ campaignId, flow: bookedSendFlow })
+          )
+        );
+        const before = await automationRow(campaignId);
+        const refused = await failure(
+          lifecycle((service) => service.resume(campaignId)).pipe(
+            Effect.provideService(PassReminderWritesOpen, Effect.succeed(false))
+          )
+        );
+        expect(refused._tag).toBe("AutomationFlowInvalid");
+        expect(await automationRow(campaignId)).toEqual(before);
+      });
       const seedRun = async (input: {
         readonly campaignId: CampaignId;
         readonly versionId: AutomationVersionId;

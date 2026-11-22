@@ -85,6 +85,8 @@
   "emailAutomationFlowConditionTitle": "Перевірка клієнта",
   "emailAutomationFlowDiscard": "Скасувати зміни",
   "emailAutomationFlowEventAccountCreatedDescription": "Новий клієнт створює обліковий запис у Workspace.",
+  "emailAutomationFlowEventEntryPackExpiringDescription": "Термін дії пакета з невикористаними відвідуваннями закінчується через 7 календарних днів.",
+  "emailAutomationFlowEventUnlimitedEndingDescription": "Абонемент Unlimited закінчується через 5 календарних днів.",
   "emailAutomationFlowEventBookedDescription": "Бронювання клієнта підтверджено у Workspace.",
   "emailAutomationFlowEventCancelledDescription": "Клієнт скасовує бронювання у Workspace.",
   "emailAutomationFlowEventFinishedDescription": "Час завершення бронювання клієнта минув.",

@@ -231,6 +231,11 @@ describe("AutomationPreviewPage activation gate", () => {
       { kind: "account-created", frequency: null },
       m.emailAutomationActivationExplainReplay,
     ],
+    [
+      "pass reminder",
+      { kind: "entry-pack-expiring", frequency: null },
+      m.emailAutomationActivationExplainSchedule,
+    ],
   ] as const)(
     "explains what a %s trigger's dry run evaluates",
     async (_, trigger, explanation) => {
@@ -264,6 +269,16 @@ describe("AutomationPreviewPage activation gate", () => {
     expect(
       view.queryByText(m.emailAutomationActivationJobSuperseded({}, { locale }))
     ).toBeNull();
+  });
+
+  test("allows refreshing a completed pass reminder forecast", async () => {
+    const view = await renderPage(
+      automationDetailFixture({
+        activation: ready,
+        trigger: { kind: "entry-pack-expiring", frequency: null },
+      })
+    );
+    expect(controls(view).runAgain).not.toBeNull();
   });
 
   test("says a newer job superseded this one", async () => {

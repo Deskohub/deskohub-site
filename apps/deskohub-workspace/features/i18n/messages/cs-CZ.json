@@ -1859,6 +1859,50 @@
   "entryPackCheckoutTermsChanged": "Podmínky se změnily. Před platbou si přečtěte aktuální znění a znovu je potvrďte.",
   "passEntryPack": "Balíček vstupů",
   "passUnlimited": "Neomezené členství",
+  "passReminderGreeting": "Ahoj {firstName},",
+  "passReminderGreetingUnnamed": "Dobrý den,",
+  "passReminderEntryPackSubject": [
+    {
+      "declarations": [
+        "input remaining",
+        "local remainingPlural = remaining: plural",
+        "local remainingNumber = remaining: number"
+      ],
+      "selectors": ["remainingPlural"],
+      "match": {
+        "remainingPlural=one": "V balíčku ti zbývá {remainingNumber} vstup",
+        "remainingPlural=few": "V balíčku ti zbývají {remainingNumber} vstupy",
+        "remainingPlural=other": "V balíčku ti zbývá {remainingNumber} vstupů"
+      }
+    }
+  ],
+  "passReminderEntryPackPreheader": "Tvůj balíček ({tier}) končí {endsOn}.",
+  "passReminderEntryPackBody": [
+    {
+      "declarations": [
+        "input remaining",
+        "input total",
+        "local remainingPlural = remaining: plural",
+        "local remainingNumber = remaining: number",
+        "local totalNumber = total: number"
+      ],
+      "selectors": ["remainingPlural"],
+      "match": {
+        "remainingPlural=one": "Tvůj balíček vstupů ({tier}) končí <strong>{endsOn}</strong>. Ještě můžeš využít <strong>{remainingNumber} z {totalNumber} vstupů</strong>. Vyber si dny, ať vstupy nepropadnou.",
+        "remainingPlural=few": "Tvůj balíček vstupů ({tier}) končí <strong>{endsOn}</strong>. Ještě můžeš využít <strong>{remainingNumber} z {totalNumber} vstupů</strong>. Vyber si dny, ať vstupy nepropadnou.",
+        "remainingPlural=other": "Tvůj balíček vstupů ({tier}) končí <strong>{endsOn}</strong>. Ještě můžeš využít <strong>{remainingNumber} z {totalNumber} vstupů</strong>. Vyber si dny, ať vstupy nepropadnou."
+      }
+    }
+  ],
+  "passReminderEntryPackBook": "Rezervovat den",
+  "passReminderEntryPackExpiry": "Vstupy, na které do té doby nemáš rezervaci, s balíčkem propadnou.",
+  "passReminderUnlimitedSubject": "Tvé neomezené členství končí {endsOn}",
+  "passReminderUnlimitedPreheader": "Obnov si členství na dalších {days} dní.",
+  "passReminderUnlimitedPreheaderWithDesk": "Obnov si členství a {deskLabel} ti zůstane na dalších {days} dní.",
+  "passReminderUnlimitedBody": "Tvé neomezené členství ({tier}) končí <strong>{endsOn}</strong>. Obnov si ho teď a dalších {days} dní začne hned poté, {renewalStartsOn}.",
+  "passReminderUnlimitedBodyWithDesk": "Tvé neomezené členství ({tier}) končí <strong>{endsOn}</strong>. Obnov si ho teď a dalších {days} dní začne hned poté, {renewalStartsOn}. Zůstane ti <strong>{deskLabel}</strong>.",
+  "passReminderUnlimitedRenew": "Obnovit na {days} dní",
+  "passReminderUnlimitedDeskFallback": "Pokud už při obnovení nebude {deskLabel} k dispozici, přidělíme ti jiný stůl.",
   "unlimitedPassRenew": "Prodloužit členství",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Rezervovaný stůl",

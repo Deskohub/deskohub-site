@@ -6,9 +6,13 @@ import { and, inArray, isNull } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { customerAccounts } from "@/db/schema/customer-accounts";
+import type { DatabaseQueryError } from "@/db/sql-constraint";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { getPostHogAccountDistinctId } from "@/features/account/posthog-account-distinct-id";
-import { AnalyticsConsentLedger } from "@/features/legal/backend/analytics-consent-ledger";
+import {
+  AnalyticsConsentLedger,
+  type AnalyticsConsentUnavailable,
+} from "@/features/legal/backend/analytics-consent-ledger";
 
 /** Consent reads for one batch run this many at a time. */
 const consentReadConcurrency = 10;
@@ -19,6 +23,8 @@ type LinkedAccount = {
   readonly accountId: CustomerAccountId;
   readonly dotyposCustomerId: DotyposCustomerId;
 };
+
+type RecipientIdentities = ReadonlyMap<DotyposCustomerId, PostHogDistinctId>;
 
 export interface ICampaignRecipientAnalyticsIdentity {
   /**
@@ -31,7 +37,14 @@ export interface ICampaignRecipientAnalyticsIdentity {
    */
   readonly forRecipients: (
     customerIds: readonly DotyposCustomerId[]
-  ) => Effect.Effect<ReadonlyMap<DotyposCustomerId, PostHogDistinctId>>;
+  ) => Effect.Effect<RecipientIdentities>;
+  /** A pinned provider request must distinguish an unavailable read from a withdrawal. */
+  readonly forGuardedRecipients: (
+    customerIds: readonly DotyposCustomerId[]
+  ) => Effect.Effect<
+    RecipientIdentities,
+    AnalyticsConsentUnavailable | DatabaseQueryError
+  >;
 }
 
 /**
@@ -75,47 +88,63 @@ export class CampaignRecipientAnalyticsIdentity extends Context.Service<
           );
 
       const grants = (accountId: CustomerAccountId) =>
-        ledger.currentDecision(accountId).pipe(
-          Effect.map(Option.exists(({ decision }) => decision === "grant")),
-          Effect.catchTag("AnalyticsConsentUnavailable", (cause) =>
-            Effect.logWarning(
-              "Campaign recipient analytics consent unavailable",
-              { errorType: cause._tag }
-            ).pipe(Effect.as(false))
-          )
+        ledger
+          .currentDecision(accountId)
+          .pipe(
+            Effect.map(Option.exists(({ decision }) => decision === "grant"))
+          );
+
+      const identities = Effect.fn(
+        "CampaignRecipientAnalyticsIdentity.identities"
+      )(function* <Failure>(
+        customerIds: readonly DotyposCustomerId[],
+        allows: (
+          accountId: CustomerAccountId
+        ) => Effect.Effect<boolean, Failure>
+      ) {
+        if (customerIds.length === 0) return noIdentities();
+
+        const accounts = yield* linkedAccounts(customerIds);
+        const consented = yield* Effect.filter(
+          accounts,
+          ({ accountId }) => allows(accountId),
+          {
+            concurrency: consentReadConcurrency,
+          }
         );
+        return new Map(
+          consented.map(({ accountId, dotyposCustomerId }) => [
+            dotyposCustomerId,
+            getPostHogAccountDistinctId(accountId),
+          ])
+        );
+      });
 
-      const consentedAccounts = (accounts: readonly LinkedAccount[]) =>
-        Effect.filter(accounts, ({ accountId }) => grants(accountId), {
-          concurrency: consentReadConcurrency,
-        });
-
-      const forRecipients = Effect.fn(
-        "CampaignRecipientAnalyticsIdentity.forRecipients"
-      )((customerIds: readonly DotyposCustomerId[]) =>
-        Effect.succeed(customerIds).pipe(
-          Effect.flatMap(linkedAccounts),
-          Effect.flatMap(consentedAccounts),
-          Effect.map(
-            (consented) =>
-              new Map(
-                consented.map(({ accountId, dotyposCustomerId }) => [
-                  dotyposCustomerId,
-                  getPostHogAccountDistinctId(accountId),
-                ])
+      return {
+        forGuardedRecipients: (customerIds) => identities(customerIds, grants),
+        forRecipients: (customerIds) =>
+          identities(customerIds, (accountId) =>
+            grants(accountId).pipe(
+              Effect.catchTag("AnalyticsConsentUnavailable", (cause) =>
+                Effect.logWarning(
+                  "Campaign recipient analytics consent unavailable",
+                  {
+                    errorType: cause._tag,
+                  }
+                ).pipe(Effect.as(false))
               )
+            )
+          ).pipe(
+            Effect.catchTag("EffectDrizzleQueryError", (cause) =>
+              Effect.logWarning(
+                "Campaign recipient accounts could not be read",
+                {
+                  errorType: cause._tag,
+                }
+              ).pipe(Effect.as(noIdentities()))
+            )
           ),
-          Effect.catchTag("EffectDrizzleQueryError", (cause) =>
-            Effect.logWarning("Campaign recipient accounts could not be read", {
-              errorType: cause._tag,
-            }).pipe(Effect.as(noIdentities()))
-          ),
-          Effect.when(Effect.succeed(customerIds.length > 0)),
-          Effect.map(Option.getOrElse(noIdentities))
-        )
-      );
-
-      return { forRecipients } satisfies ICampaignRecipientAnalyticsIdentity;
+      } satisfies ICampaignRecipientAnalyticsIdentity;
     })
   );
 }

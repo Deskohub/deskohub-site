@@ -117,6 +117,8 @@ export const replayEventScope = (
       ReservationFinished: ({ product }) =>
         scope("reservation-finished", product),
       AccountCreated: () => scope("account-created"),
+      EntryPackExpiring: () => Option.none(),
+      UnlimitedEnding: () => Option.none(),
     })
   );
 };

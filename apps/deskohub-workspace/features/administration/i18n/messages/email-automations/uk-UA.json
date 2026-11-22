@@ -25,6 +25,8 @@
   "emailAutomationsStatusDraft": "Чернетка",
   "emailAutomationsStatusPaused": "Призупинена",
   "emailAutomationsTriggerAccountCreated": "Створення облікового запису",
+  "emailAutomationsTriggerEntryPackExpiring": "Пакет відвідувань скоро закінчується",
+  "emailAutomationsTriggerUnlimitedEnding": "Абонемент Unlimited скоро закінчується",
   "emailAutomationsTriggerReservationBooked": "Підтвердження бронювання",
   "emailAutomationsTriggerReservationCancelled": "Скасування бронювання",
   "emailAutomationsTriggerReservationFinished": "Завершення бронювання",

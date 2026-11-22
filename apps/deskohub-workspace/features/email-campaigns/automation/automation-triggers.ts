@@ -18,8 +18,23 @@ export const automationTriggerKind = (
       ReservationStarted: () => "reservation-started" as const,
       ReservationFinished: () => "reservation-finished" as const,
       AccountCreated: () => "account-created" as const,
+      EntryPackExpiring: () => "entry-pack-expiring" as const,
+      UnlimitedEnding: () => "unlimited-ending" as const,
     })
   );
+
+/** Only these triggers carry a pass rather than customer-scoped entry. */
+export const isPassReminderTrigger = (
+  trigger: AutomationTrigger
+): trigger is Extract<
+  AutomationTrigger,
+  { _tag: "EntryPackExpiring" | "UnlimitedEnding" }
+> => trigger._tag === "EntryPackExpiring" || trigger._tag === "UnlimitedEnding";
+
+export const isPassReminderKind = (
+  kind: AutomationTriggerKind
+): kind is "entry-pack-expiring" | "unlimited-ending" =>
+  kind === "entry-pack-expiring" || kind === "unlimited-ending";
 
 /**
  * A trigger's kind with a schedule's frequency, so adapters can warn about
