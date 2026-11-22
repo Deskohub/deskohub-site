@@ -121,7 +121,16 @@ const beginUnlimitedOrder = Effect.fn("passes.beginUnlimitedOrder")(function* (
     ...(holderEmail !== undefined && { holderEmail }),
     ...(recipientName !== undefined && { recipientName }),
   });
-  return yield* Effect.fromResult(outcome);
+  return yield* Effect.fromResult(outcome).pipe(
+    Effect.catchTag("UnlimitedPassAdmissionError", ({ reason }) =>
+      Effect.fail(
+        new EntryPackPurchaseError({
+          reason:
+            reason === "holder-unavailable" ? reason : "purchase-conflict",
+        })
+      )
+    )
+  );
 });
 
 const beginPassOrder = Effect.fn("passes.beginPassOrder")(function* (
@@ -234,23 +243,26 @@ const startPurchaseDetails = Effect.fn("passes.startPurchaseDetails")(
 );
 
 const startPurchaseStatus = Effect.fn("passes.startPurchaseStatus")(function* (
-  input: BeginPassPurchaseInput
+  orderId: OrderId,
+  productKind: PassPurchaseProduct["kind"]
 ) {
   const actor = yield* CurrentCustomerAccount;
   const { accountId } = yield* actor.requireActive;
   const owned = yield* findOwnedPassPurchaseOrder(
-    input.orderId,
+    orderId,
     accountId,
-    input.product.kind
+    productKind
   );
   if (!owned) {
     return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
   }
-  const orderId = owned.order.id;
-  const statusPath = getPassPurchaseStatusPath(owned.purchase.locale, orderId);
+  const statusPath = getPassPurchaseStatusPath(
+    owned.purchase.locale,
+    owned.order.id
+  );
   return {
     status: "status" as const,
-    orderId,
+    orderId: owned.order.id,
     checkoutPath: statusPath,
     statusPath,
   };
@@ -274,7 +286,10 @@ export const startPurchase = Effect.fn("passes.startPurchase")(
             case "holder-unavailable":
               return yield* startPurchaseDetails(input);
             case "payment-in-progress":
-              return yield* startPurchaseStatus(input);
+              return yield* startPurchaseStatus(
+                error.orderId ?? input.orderId,
+                input.product.kind
+              );
             default:
               return yield* error;
           }

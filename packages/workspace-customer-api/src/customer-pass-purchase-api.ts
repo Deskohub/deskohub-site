@@ -22,7 +22,10 @@ import {
   CustomerProfileInput,
   customerInputParseOptions,
 } from "./customer-profile";
-import { CustomerServiceUnavailable } from "./customer-session";
+import {
+  CustomerAccountId,
+  CustomerServiceUnavailable,
+} from "./customer-session";
 
 const shortText = Schema.NonEmptyString.check(Schema.isMaxLength(255));
 
@@ -58,6 +61,7 @@ export type CustomerPassPurchaseProduct =
 export const BeginCustomerPassPurchase = Schema.Struct({
   /** The buyer keeps this ID across retries of the same purchase. */
   orderId: CustomerPassId,
+  expectedBuyerAccountId: Schema.optionalKey(CustomerAccountId),
   locale: CustomerLocale,
   product: CustomerPassPurchaseProduct,
   holderEmail: Schema.optionalKey(shortText),
@@ -75,6 +79,7 @@ export const CustomerPassPurchasePrice = Schema.Struct({
   fingerprint: priceFingerprint,
   subtotal: Money,
   total: Money,
+  coffeePrice: Schema.optionalKey(Money),
   appliedDiscountCode: Schema.optionalKey(Schema.String),
   discounts: Schema.Array(
     Schema.Struct({ id: Schema.String, label: Schema.String, amount: Money })
@@ -225,6 +230,7 @@ export class CustomerPassPurchaseRefused extends Schema.TaggedError<CustomerPass
       "invalid-selection",
     ]),
     blockingDates: Schema.optionalKey(Schema.Array(CustomerPlainDate)),
+    orderId: Schema.optionalKey(CustomerPassId),
   }
 ) {
   static schema = this.pipe(HttpApiSchema.status("Conflict"));

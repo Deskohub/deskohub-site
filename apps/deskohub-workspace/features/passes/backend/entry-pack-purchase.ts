@@ -56,6 +56,7 @@ import {
   getEntryPackPrice,
   getUnlimitedPassPrice,
   isEntryPackQuoteExpired,
+  unlimitedPassCoffeePrice,
 } from "../pass-offer";
 import {
   type PassPurchaseQuote,
@@ -94,6 +95,7 @@ export class EntryPackPurchaseError extends Data.TaggedError(
     | "billing-changed";
   readonly locale?: Locale;
   readonly earlyStartRequired?: boolean;
+  readonly orderId?: OrderId;
 }> {}
 
 const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
@@ -128,6 +130,7 @@ export const displayPassPurchasePrice = (
     quote.discountedSubtotal,
     quote.unlimitedCoffee
   ),
+  ...(quote.unlimitedCoffee && { coffeePrice: unlimitedPassCoffeePrice }),
   ...(quote.selection?.submittedCode !== undefined &&
     quote.discounts.some(
       ({ discount }) => discount.id === quote.submittedCodeDiscountId

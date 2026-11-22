@@ -5144,10 +5144,19 @@
             "items": {
               "$ref": "#/components/schemas/CustomerPlainDate"
             }
+          },
+          "orderId": {
+            "$ref": "#/components/schemas/CustomerPassId"
           }
         },
         "required": ["_tag", "reason"],
         "additionalProperties": false
+      },
+      "CustomerPassId": {
+        "type": "string",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+        "format": "uuid",
+        "description": "Opaque identifier of a pass purchase order."
       },
       "CustomerPlainDate": {
         "type": "string",
@@ -5220,6 +5229,9 @@
           "total": {
             "$ref": "#/components/schemas/Money"
           },
+          "coffeePrice": {
+            "$ref": "#/components/schemas/Money"
+          },
           "appliedDiscountCode": {
             "type": "string"
           },
@@ -5265,12 +5277,6 @@
         },
         "required": ["value", "exponent", "currency"],
         "additionalProperties": false
-      },
-      "CustomerPassId": {
-        "type": "string",
-        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
-        "format": "uuid",
-        "description": "Opaque identifier of a pass purchase order."
       },
       "UpdateCustomerPassPurchasePrice": {
         "type": "object",
@@ -5779,6 +5785,9 @@
           "orderId": {
             "$ref": "#/components/schemas/CustomerPassId"
           },
+          "expectedBuyerAccountId": {
+            "$ref": "#/components/schemas/CustomerAccountIdEncoded"
+          },
           "locale": {
             "$ref": "#/components/schemas/CustomerLocale"
           },
@@ -5983,6 +5992,9 @@
         },
         "required": ["orderId", "locale", "product"],
         "additionalProperties": false
+      },
+      "CustomerAccountIdEncoded": {
+        "type": "string"
       },
       "CustomerUnlimitedStartDates": {
         "type": "object",
@@ -10896,9 +10908,6 @@
             "additionalProperties": false
           }
         ]
-      },
-      "CustomerAccountIdEncoded": {
-        "type": "string"
       },
       "CustomerAvatarPresentation": {
         "anyOf": [

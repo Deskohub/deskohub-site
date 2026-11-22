@@ -1277,7 +1277,8 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
         expect(protectedResult.outcome).toEqual(
           Result.fail(
             expect.objectContaining({
-              _tag: "UnlimitedPassHandoffPaymentStarted",
+              _tag: "EntryPackPurchaseError",
+              reason: "payment-in-progress",
               orderId,
             })
           )
@@ -1287,6 +1288,20 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
       expect(
         yield* readOwnedPassPurchaseStatusPath(orderId, accountId, "unlimited")
       ).toBe(`/en-US/reservation/status/${orderId}`);
+      const statusPath = `/en-US/reservation/status/${orderId}`;
+      expect(
+        yield* startPurchase({
+          orderId: replacementOrderId,
+          supersedeOrderId: orderId,
+          locale: "en-US",
+          product: { kind: "unlimited", selection: editedSelection },
+        })
+      ).toEqual({
+        status: "status",
+        orderId,
+        checkoutPath: statusPath,
+        statusPath,
+      });
       expect(
         yield* db
           .select({ id: orders.id })

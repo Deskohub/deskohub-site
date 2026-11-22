@@ -216,11 +216,7 @@ type UnlimitedPassPurchaseInput = {
   readonly continueFromHandoff?: true;
 };
 
-export class UnlimitedPassHandoffPaymentStarted extends Data.TaggedError(
-  "UnlimitedPassHandoffPaymentStarted"
-)<{ readonly orderId: OrderId }> {}
-
-const requireUnpaidHandoffOrder = Effect.fnUntraced(function* (
+const requireUnpaidUnlimitedOrder = Effect.fnUntraced(function* (
   entry: Effect.Success<ReturnType<typeof findOwnedPassPurchaseOrder>>
 ) {
   if (
@@ -228,7 +224,8 @@ const requireUnpaidHandoffOrder = Effect.fnUntraced(function* (
     hasPassPurchasePaymentStarted(entry.order) &&
     !isVoidedUnlimitedDraft(entry)
   ) {
-    return yield* new UnlimitedPassHandoffPaymentStarted({
+    return yield* new EntryPackPurchaseError({
+      reason: "payment-in-progress",
       orderId: entry.order.id,
     });
   }
@@ -242,8 +239,9 @@ export const beginUnlimitedPassPurchase = Effect.fn(
   const session = yield* current.requireActive;
   const accounts = yield* CustomerAccountSections;
   const { db } = yield* WorkspaceDatabase;
+  const replacedOrderId = input.supersedeOrderId?.toLowerCase();
   const priorOrderIds = new Set(
-    [input.supersedeOrderId, ...(input.supersedeOrderIds ?? [])]
+    [replacedOrderId, ...(input.supersedeOrderIds ?? [])]
       .filter((id) => id !== undefined)
       .map((id) => orderIdSchema.make(id.toLowerCase()))
   );
@@ -258,7 +256,7 @@ export const beginUnlimitedPassPurchase = Effect.fn(
             input.orderId,
             session.accountId,
             "unlimited"
-          ).pipe(Effect.flatMap(requireUnpaidHandoffOrder)),
+          ).pipe(Effect.flatMap(requireUnpaidUnlimitedOrder)),
           { passPurchaseOrderId: input.orderId }
         );
       }
@@ -275,8 +273,17 @@ export const beginUnlimitedPassPurchase = Effect.fn(
               session.accountId,
               "unlimited"
             );
-            if (input.continueFromHandoff)
-              yield* requireUnpaidHandoffOrder(prior);
+            // The open web form carries earlier failed attempts alongside the draft it edits.
+            if (
+              prior &&
+              !input.continueFromHandoff &&
+              priorOrderId !== replacedOrderId &&
+              isEndedUnpaidPaymentState(prior.order.paymentState) &&
+              !isVoidedUnlimitedDraft(prior)
+            ) {
+              return;
+            }
+            yield* requireUnpaidUnlimitedOrder(prior);
             if (!prior) {
               yield* retireUnrecordedUnlimitedDraft(
                 session.accountId,
@@ -285,7 +292,6 @@ export const beginUnlimitedPassPurchase = Effect.fn(
               retiredPredecessorOrderIds.push(priorOrderId);
               return;
             }
-            if (prior.order.activePaymentAttemptId) return;
             let voided: Purchase | undefined;
             if (isVoidedUnlimitedDraft(prior)) {
               voided = prior.purchase;
@@ -350,7 +356,7 @@ const continueUnlimitedPassPurchase = Effect.fn(
           });
         }
         if (input.continueFromHandoff)
-          yield* requireUnpaidHandoffOrder(existing);
+          yield* requireUnpaidUnlimitedOrder(existing);
         const selection = readUnlimitedPassSelection(existing.purchase);
         const holderId = giftEmail
           ? yield* findPassHolderAccount(giftEmail)
@@ -528,7 +534,8 @@ const continueUnlimitedPassPurchase = Effect.fn(
           blockingDates: yield* readVoidedDraftDates(prepared.purchase),
         });
       }
-      if (input.continueFromHandoff) yield* requireUnpaidHandoffOrder(prepared);
+      if (input.continueFromHandoff)
+        yield* requireUnpaidUnlimitedOrder(prepared);
       if (prepared && hasPassPurchasePaymentStarted(prepared.order)) {
         return yield* new EntryPackPurchaseError({
           reason: "payment-in-progress",

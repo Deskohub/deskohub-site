@@ -51,6 +51,7 @@ export type EntryPackCheckoutPrice = {
   readonly fingerprint: string;
   readonly subtotal: Money;
   readonly total: Money;
+  readonly coffeePrice?: Money;
   readonly appliedDiscountCode?: string;
   readonly discounts: ReadonlyArray<{
     readonly id: string;
