@@ -6,6 +6,7 @@ import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { SegmentedControl } from "@/shared/components/ui/segmented-control";
+import { cn } from "@/shared/utils";
 import { campaignLocaleName } from "../sending/campaign-locale-names";
 
 /**
@@ -24,7 +25,7 @@ export function CampaignInboxPreview({
   placeholder,
   preheader,
   subject,
-  updating = false,
+  updating,
 }: {
   readonly error?: string;
   readonly html?: string;
@@ -34,10 +35,18 @@ export function CampaignInboxPreview({
   readonly placeholder: string;
   readonly preheader: string;
   readonly subject: string;
+  /**
+   * Pass it, true or false, where the email re-renders as it's edited: the
+   * indicator then keeps its space, so the languages don't move under it.
+   */
   readonly updating?: boolean;
 }) {
   const localeName = useId();
   const routeLocale = useRouteLocale();
+  const updatingLabel = m.emailCampaignsEmailPreviewUpdating(
+    {},
+    { locale: routeLocale }
+  );
 
   return (
     <section
@@ -47,25 +56,25 @@ export function CampaignInboxPreview({
       )}
       className="flex h-full flex-col overflow-hidden rounded-xl border border-navy-blue/10 bg-white"
     >
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-navy-blue/10 border-b px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-navy-blue/10 border-b px-4 py-2.5">
         <h2 className="font-semibold text-navy-blue/65 text-xs uppercase tracking-[0.1em]">
           {m.emailCampaignsEmailPreviewHeading({}, { locale: routeLocale })}
         </h2>
-        {/* Takes only leftover space, so updating never rewraps the languages. */}
-        <span
-          className="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-hidden whitespace-nowrap text-navy-blue/55 text-xs"
-          role="status"
-        >
-          {updating && (
-            <>
-              <Loader2 aria-hidden className="size-3.5 animate-spin" />
-              {m.emailCampaignsEmailPreviewUpdating(
-                {},
-                { locale: routeLocale }
-              )}
-            </>
-          )}
+        <span className="sr-only" role="status">
+          {updating && updatingLabel}
         </span>
+        {updating !== undefined && (
+          <span
+            aria-hidden
+            className={cn(
+              "ms-auto inline-flex items-center gap-1 whitespace-nowrap text-navy-blue/55 text-xs",
+              !updating && "invisible"
+            )}
+          >
+            <Loader2 className="size-3.5 animate-spin" />
+            {updatingLabel}
+          </span>
+        )}
         {locales.length > 1 && (
           <SegmentedControl
             label={m.emailCampaignsEmailPreviewLanguage(
