@@ -1,18 +1,29 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { DotyposService } from "@deskohub/dotypos";
+import {
+  EmailConfigTag,
+  EmailServiceTag,
+} from "@deskohub/email/backend/service";
+import type { EmailMessage } from "@deskohub/email/types/email.types";
+import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { CurrentAdministrator } from "@/features/administrators/backend/current-administrator";
+import { attachPaymentProviderSession } from "@/features/checkout/backend/repositories/payment-attempt-writes";
 import { PaymentRefundRepository } from "@/features/checkout/backend/repositories/payment-refund.repository";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import { ReservationCancellation } from "@/features/reservation/backend/reservation-cancellation.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
+import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { WithdrawalRepository } from "@/features/withdrawal/backend/withdrawal.repository";
+import { WithdrawalEmails } from "@/features/withdrawal/backend/withdrawal-emails.service";
+import { staffLocale } from "@/shared/backend/staff-locale";
 import { currencyCZK } from "@/shared/money/currencies";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
@@ -38,6 +49,22 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
   const providerStatuses = new Map<string, string>();
   const providerFailures = new Set<string>();
   const providerCalls: string[] = [];
+  const providerTimings = new Map<
+    string,
+    {
+      readonly dotyposReservationId: string;
+      readonly reservedFrom: Temporal.Instant;
+      readonly reservedUntil: Temporal.Instant;
+    }
+  >();
+  const reservationDetails = Layer.mock(WorkspaceReservationService, {
+    getReservation: (id) =>
+      Effect.succeed({
+        dotyposReservationId: id,
+        providerStatus: providerStatuses.get(id) ?? "CONFIRMED",
+        ...providerTimings.get(id),
+      }),
+  });
   const storage = Layer.mergeAll(
     database.layer,
     WorkspaceDatabaseAdvisoryLock.makeLayer(database.databasePool),
@@ -60,13 +87,7 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
               return Effect.void;
             }),
         }),
-        Layer.mock(WorkspaceReservationService, {
-          getReservation: (id) =>
-            Effect.succeed({
-              dotyposReservationId: id,
-              providerStatus: providerStatuses.get(id) ?? "CONFIRMED",
-            }),
-        })
+        reservationDetails
       )
     )
   );
@@ -76,6 +97,7 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
       Layer.mergeAll(
         storage,
         cancellation,
+        reservationDetails,
         Layer.mock(AccountingDocumentSnapshots, {
           findPassPurchase: (id) => Effect.succeed(snapshots.get(id)),
         })
@@ -89,6 +111,7 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
     delivery = delivered,
     purpose = "personal",
     earlyStart = true,
+    tier: passTier = "open-space",
   } = {}) => {
     const buyer = customerAccountIdSchema.make(crypto.randomUUID());
     const holder = customerAccountIdSchema.make(crypto.randomUUID());
@@ -120,9 +143,9 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
       `insert into pass_purchases (id, buyer_account_id, holder_account_id, product,
          tier, entry_count, status, valid_from, valid_until, quote, locale,
          created_at, buyer_confirmation_delivered_at)
-       values ($1, $2, $3, 'entry-pack', 'open-space', 5, 'active', '2027-03-25',
+       values ($1, $2, $3, 'entry-pack', $6, 5, 'active', '2027-03-25',
          '2027-05-25', '{}', 'en-US', $4, $5)`,
-      [id, buyer, holder, delivered, delivery]
+      [id, buyer, holder, delivered, delivery, passTier]
     );
     await pool.query(
       `insert into legal_evidence_events (order_id, document_key, document_path,
@@ -144,13 +167,14 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
       product: { kind: "entry-pack" },
       billing: { purpose },
     });
-    return { id, attempt, buyer, holder };
+    return { id, attempt, buyer, holder, tier: passTier };
   };
 
   const addClaim = async (
     pack: Awaited<ReturnType<typeof seed>>,
     date: string,
-    status: "reserved" | "consumed"
+    status: "reserved" | "consumed",
+    stay: "day" | "overnight" = "day"
   ) => {
     const reservation = await run(
       workspaceFixtures(database.db).reservation({
@@ -170,27 +194,47 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
       "insert into pass_entry_claims (reservation_id, pass_id, date, status) values ($1,$2,$3,$4)",
       [reservation.id, pack.id, date, status]
     );
+    if (pack.tier !== "open-space") {
+      const { startsAt, endsAt } = getCoworkReservationInterval(
+        pack.tier,
+        date,
+        stay
+      );
+      providerTimings.set(reservation.id, {
+        dotyposReservationId: reservation.dotyposReservationId,
+        reservedFrom: instant(startsAt),
+        reservedUntil: instant(endsAt),
+      });
+    }
     return reservation.id;
   };
 
-  const find = (id: string, accountId: string, locale = "en-US") =>
+  const find = (
+    id: string,
+    accountId: string,
+    locale = "en-US",
+    assessedAt?: Temporal.Instant
+  ) =>
     run(
       EntryPackWithdrawals.use((family) =>
-        family.find({ contractId: id, accountId, locale })
+        family.find({ contractId: id, accountId, locale, assessedAt })
       )
     );
 
   const statement = async (
     pack: Awaited<ReturnType<typeof seed>>,
-    now = submittedAt
+    now = submittedAt,
+    locale = "en-US" as const
   ) => {
-    const contract = Option.getOrThrow(await find(pack.id, pack.buyer));
+    const contract = Option.getOrThrow(
+      await find(pack.id, pack.buyer, locale, now)
+    );
     const assessment = contract.assess(now);
     if (!assessment.withdrawable) throw new Error(assessment.reason);
     return {
       contract: contract.ref,
       accountId: pack.buyer,
-      locale: "en-US" as const,
+      locale,
       contractLabel: contract.label,
       statementName: "Synthetic Buyer",
       submittedAt: now,
@@ -198,6 +242,7 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
       paidAmount: contract.paidAmount,
       refundAmount: assessment.refundAmount,
       refundBasis: assessment.refundBasis,
+      bookingIntervals: contract.bookingIntervals,
     };
   };
 
@@ -221,6 +266,18 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
         [id]
       )
     ).rows[0];
+
+  const providerRefund = (id: string, total: number) =>
+    run(
+      PaymentRefundRepository.use((refunds) =>
+        refunds.recordRefund({
+          id,
+          refundedAmountValue: total,
+          refundedAt: submittedAt,
+          recordedAt: submittedAt,
+        })
+      )
+    );
 
   const claim = async (id: string) =>
     (
@@ -446,14 +503,14 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
     });
   });
 
-  test("cancels a pending add-on attempt before releasing its reserved entry", async () => {
+  test("retains a pending add-on hold until its provider session can be attached", async () => {
     const pack = await seed();
-    const reservationId = await addClaim(pack, "2027-03-29", "reserved");
+    const reservationId = await addClaim(pack, "2027-03-28", "reserved");
     const attempt = paymentAttemptIdSchema.make(crypto.randomUUID());
     await pool.query(
       `insert into payment_attempts (id, workspace_reservation_id, order_id, provider,
         provider_order_id, state, amount_value, amount_exponent, currency)
-       values ($1, $2, $2, 'nexi', $1, 'pending', 12000, 2, 'CZK')`,
+       values ($1, $2, $2, 'nexi', $1, 'created', 12000, 2, 'CZK')`,
       [attempt, reservationId]
     );
     await pool.query(
@@ -464,6 +521,21 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
     const input = await statement(pack);
     expect(input.refundBasis).toEqual({ kind: "full" });
     await run(recordEffect(input));
+    expect((await run(Effect.flip(cancel(input)))).code).toBe(
+      "entry_pack_bookings_release_failed"
+    );
+    expect(await claim(reservationId)).toMatchObject({
+      status: "reserved",
+      reservation_state: "held",
+    });
+    expect(providerCalls).not.toContain(reservationId);
+    await run(
+      attachPaymentProviderSession({
+        id: attempt,
+        securityToken: "synthetic-session",
+        providerRedirectUrl: "https://provider.example.test/checkout",
+      })
+    );
     await run(cancel(input));
     const cancelled = await pool.query(
       "select state, refund_state from payment_attempts where id=$1",
@@ -511,6 +583,134 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
     });
   });
 
+  test("uses the actual overnight start and end for retained entries", async () => {
+    const pack = await seed({ tier: "reserved-desk" });
+    const cancelled = await addClaim(
+      pack,
+      "2027-03-26",
+      "consumed",
+      "overnight"
+    );
+    await pool.query(
+      `update workspace_reservations set reservation_state='cancelled',
+        cancellation_cause='operator', reservation_cancelled_at=$2 where id=$1`,
+      [cancelled, "2027-03-26T07:00:00Z"]
+    );
+    const beforeService = await statement(pack);
+    expect(beforeService.refundBasis).toEqual({ kind: "full" });
+    await run(recordEffect(beforeService));
+
+    const depleted = await seed({ tier: "reserved-desk" });
+    for (const day of [25, 26, 27, 28, 29]) {
+      await addClaim(
+        depleted,
+        `2027-03-${day}`,
+        "consumed",
+        day === 29 ? "overnight" : "day"
+      );
+    }
+    await pool.query(
+      "update pass_purchases set status='depleted' where id=$1",
+      [depleted.id]
+    );
+    const overnight = Option.getOrThrow(
+      await find(depleted.id, depleted.buyer)
+    );
+    expect(overnight.assess(instant("2027-03-30T10:00:00Z"))).toEqual({
+      withdrawable: false,
+      reason: "performance_started",
+    });
+    const accepted = await statement(depleted, instant("2027-03-30T07:00:00Z"));
+    expect(accepted.refundAmount.value).toBe(0);
+    expect((await run(recordEffect(accepted))).recorded).toBe(true);
+  });
+
+  test.each([true, false])(
+    "reconciles the full paid add-on when a partial refund arrives before cancellation: %s",
+    async (refundBeforeCancellation) => {
+      const pack = await seed();
+      const reservationId = await addClaim(pack, "2027-03-30", "consumed");
+      const attempt = paymentAttemptIdSchema.make(crypto.randomUUID());
+      await pool.query(
+        `insert into payment_attempts (id, workspace_reservation_id, order_id, provider,
+        provider_order_id, state, amount_value, amount_exponent, currency)
+       values ($1, $2, $2, 'nexi', $1, 'paid', 12000, 2, 'CZK')`,
+        [attempt, reservationId]
+      );
+      await pool.query(
+        "update workspace_reservations set active_payment_attempt_id=$2 where id=$1",
+        [reservationId, attempt]
+      );
+      const input = await statement(pack);
+      await run(recordEffect(input));
+      if (refundBeforeCancellation) await providerRefund(attempt, 2_000);
+      await run(cancel(input));
+      if (!refundBeforeCancellation) await providerRefund(attempt, 2_000);
+      expect(await payment(attempt)).toEqual({
+        refund_state: "required",
+        refund_target_value: 12_000,
+        refunded_amount_value: 2_000,
+      });
+      await providerRefund(attempt, 12_000);
+      expect(await payment(attempt)).toMatchObject({
+        refund_state: "refunded",
+      });
+    }
+  );
+
+  test("records an already refunded pass and sends buyer and staff mail in their own locales", async () => {
+    const pack = await seed();
+    await addClaim(pack, "2027-03-28", "consumed");
+    await providerRefund(pack.attempt, 100_119);
+    const input = await statement(pack, submittedAt, "de-DE");
+    const { withdrawal } = await run(recordEffect(input));
+    expect(await payment(pack.attempt)).toEqual({
+      refund_state: "refunded",
+      refund_target_value: 80_000,
+      refunded_amount_value: 100_119,
+    });
+    const outbox: EmailMessage[] = [];
+    const email = testEmailAddress("withdrawal-buyer");
+    const delivery = WithdrawalEmails.Default.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          database.layer,
+          Layer.mock(EmailConfigTag, { defaultFrom: { email } }),
+          Layer.mock(EmailServiceTag, {
+            send: (message) =>
+              Effect.sync(() => {
+                outbox.push(message);
+              }),
+          })
+        )
+      )
+    );
+    await run(
+      WithdrawalEmails.use((emails) =>
+        Effect.andThen(
+          emails.sendReceipt({ withdrawal, receiptEmail: email }),
+          emails.sendOperatorNotice({ withdrawal, customerEmail: email })
+        )
+      ).pipe(Effect.provide(delivery))
+    );
+    const [receipt, notice] = outbox;
+    const buyerLocale = { locale: "de-DE" } as const;
+    expect(receipt?.text).toContain(m.passEntryPack({}, buyerLocale));
+    expect(receipt?.text).toContain(
+      m.passWithdrawalRefundTotal({}, buyerLocale)
+    );
+    expect(receipt?.text).toContain(
+      m.passWithdrawalRefundNote({}, buyerLocale).split(". ")[0]
+    );
+    expect(notice?.subject).toContain(
+      m.passEntryPack({}, { locale: staffLocale })
+    );
+    expect(notice?.text).toContain(
+      m.passEntryPack({}, { locale: staffLocale })
+    );
+    expect(notice?.subject).not.toContain(m.passEntryPack({}, buyerLocale));
+  });
+
   test("keeps larger manual refund targets and reconciles their outstanding amount", async () => {
     const pack = await seed();
     await addClaim(pack, "2027-03-28", "consumed");
@@ -520,25 +720,17 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
        where id=$1`,
       [pack.attempt]
     );
-    const providerRefund = (total: number) =>
-      run(
-        PaymentRefundRepository.use((refunds) =>
-          refunds.recordRefund({
-            id: pack.attempt,
-            refundedAmountValue: total,
-            refundedAt: submittedAt,
-            recordedAt: submittedAt,
-          })
-        )
-      );
-    await Promise.all([run(recordEffect(input)), providerRefund(50_000)]);
+    await Promise.all([
+      run(recordEffect(input)),
+      providerRefund(pack.attempt, 50_000),
+    ]);
     expect(await payment(pack.attempt)).toEqual({
       refund_state: "required",
       refund_target_value: 90_000,
       refunded_amount_value: 50_000,
     });
-    await providerRefund(90_000);
-    await providerRefund(70_000);
+    await providerRefund(pack.attempt, 90_000);
+    await providerRefund(pack.attempt, 70_000);
     expect(await payment(pack.attempt)).toEqual({
       refund_state: "refunded",
       refund_target_value: 90_000,

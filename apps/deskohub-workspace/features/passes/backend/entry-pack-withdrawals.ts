@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, lte, ne, or } from "drizzle-orm";
+import { and, asc, eq, lte, ne } from "drizzle-orm";
 import { Context, Effect, Layer, Option } from "effect";
 import {
   WorkspaceDatabase,
@@ -9,14 +9,16 @@ import {
   contractWithdrawals,
   passEntryClaims,
   passPurchases,
+  paymentAttempts,
+  reservationAccessGrants,
   workspaceReservations,
 } from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
-import { m } from "@/features/i18n";
 import { getConsumerWithdrawalPeriodCutoff } from "@/features/legal/early-performance";
 import type { OrderId } from "@/features/order";
 import { ReservationCancellation } from "@/features/reservation/backend/reservation-cancellation.service";
+import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import {
@@ -24,6 +26,7 @@ import {
   type WithdrawableContract,
   type WithdrawableContractFamily,
   WithdrawableContractUnavailableError,
+  type WithdrawalBookingInterval,
 } from "@/features/withdrawal/withdrawable-contract";
 import type {
   WithdrawalAssessment,
@@ -34,7 +37,8 @@ import { type Money, sameMoneyUnit } from "@/shared/money/money";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
 import { getEntryPackWithdrawalRefund } from "../pass";
 import type { EntryPackSize, PassTier } from "../pass-offer";
-import { getPassTierName } from "../pass-offer.i18n";
+import { isEntryPackClaimCancelledByWithdrawal } from "./entry-pack-redemption";
+import { getPassWithdrawalLabel } from "./pass-withdrawal-label";
 import {
   decodePassWithdrawalOrderId,
   markPassWithdrawalRefund,
@@ -54,13 +58,24 @@ const readConsumedEntries = (
 ) =>
   db
     .select({
+      reservationId: passEntryClaims.reservationId,
+      dotyposReservationId: workspaceReservations.dotyposReservationId,
       date: passEntryClaims.date,
       cancelledAt: workspaceReservations.reservationCancelledAt,
+      startsAt: reservationAccessGrants.scheduledAccessStartsAt,
+      endsAt: reservationAccessGrants.accessEndsAt,
     })
     .from(passEntryClaims)
     .innerJoin(
       workspaceReservations,
       eq(workspaceReservations.id, passEntryClaims.reservationId)
+    )
+    .leftJoin(
+      reservationAccessGrants,
+      eq(
+        reservationAccessGrants.workspaceReservationId,
+        passEntryClaims.reservationId
+      )
     )
     .where(
       and(
@@ -70,11 +85,39 @@ const readConsumedEntries = (
       )
     );
 
+type ConsumedEntry = Effect.Success<
+  ReturnType<typeof readConsumedEntries>
+>[number];
+type BookingInterval = WithdrawalBookingInterval["interval"];
+
+const bookingInterval = (
+  entry: ConsumedEntry,
+  tier: PassTier,
+  observations: readonly WithdrawalBookingInterval[]
+): BookingInterval | undefined => {
+  if (entry.startsAt && entry.endsAt) {
+    return { startsAt: entry.startsAt, endsAt: entry.endsAt };
+  }
+  if (tier === "open-space") {
+    const { startsAt, endsAt } = getCoworkReservationInterval(tier, entry.date);
+    return {
+      startsAt: Temporal.Instant.from(startsAt),
+      endsAt: Temporal.Instant.from(endsAt),
+    };
+  }
+  return observations.find(
+    (observed) =>
+      observed.reservationId === entry.reservationId &&
+      observed.dotyposReservationId === entry.dotyposReservationId
+  )?.interval;
+};
+
 const assessEntryPackWithdrawal = ({
   pack,
   paid,
   now,
   consumedEntries,
+  bookingIntervals,
   earlyPerformanceConsent,
 }: {
   readonly pack: {
@@ -84,10 +127,8 @@ const assessEntryPackWithdrawal = ({
   };
   readonly paid: Money;
   readonly now: Temporal.Instant;
-  readonly consumedEntries: readonly {
-    readonly date: PlainDate;
-    readonly cancelledAt: Temporal.Instant | null;
-  }[];
+  readonly consumedEntries: readonly ConsumedEntry[];
+  readonly bookingIntervals: readonly WithdrawalBookingInterval[];
   readonly earlyPerformanceConsent: boolean;
 }): WithdrawalAssessment => {
   const delivery = pack.buyerConfirmationDeliveredAt;
@@ -99,11 +140,21 @@ const assessEntryPackWithdrawal = ({
     return { withdrawable: false, reason: "period_ended" };
   }
   const today = workspaceDay(now);
-  // A standalone cancellation can leave the original claim consumed.
-  const usedEntries = consumedEntries.filter(
-    ({ date, cancelledAt }) =>
-      date <= today && (!cancelledAt || workspaceDay(cancelledAt) >= date)
-  );
+  const usedEntries: BookingInterval[] = [];
+  if (earlyPerformanceConsent) {
+    for (const entry of consumedEntries) {
+      if (entry.date > today) continue;
+      const interval = bookingInterval(entry, pack.tier, bookingIntervals);
+      if (!interval) return { withdrawable: false, reason: "not_withdrawable" };
+      // A pre-start cancellation can leave the original claim consumed.
+      if (
+        !entry.cancelledAt ||
+        Temporal.Instant.compare(entry.cancelledAt, interval.startsAt) >= 0
+      ) {
+        usedEntries.push(interval);
+      }
+    }
+  }
   if (!earlyPerformanceConsent || usedEntries.length === 0) {
     return {
       withdrawable: true,
@@ -114,18 +165,14 @@ const assessEntryPackWithdrawal = ({
   }
 
   const unusedEntries = pack.entryCount - usedEntries.length;
-  if (unusedEntries <= 0) {
-    const { endsAt } = getCoworkReservationInterval(
-      pack.tier === "open-space" ? "open-space" : "reserved-desk",
-      today
-    );
-    if (
-      unusedEntries < 0 ||
-      !usedEntries.some(({ date }) => date === today) ||
-      Temporal.Instant.compare(now, endsAt) >= 0
-    ) {
-      return { withdrawable: false, reason: "performance_started" };
-    }
+  if (
+    unusedEntries < 0 ||
+    (unusedEntries === 0 &&
+      usedEntries.every(
+        ({ endsAt }) => Temporal.Instant.compare(now, endsAt) >= 0
+      ))
+  ) {
+    return { withdrawable: false, reason: "performance_started" };
   }
   return {
     withdrawable: true,
@@ -167,6 +214,7 @@ export const recordEntryPackWithdrawal = Effect.fn("recordEntryPackWithdrawal")(
     readonly paidAmount: Money;
     readonly refundAmount: Money;
     readonly refundBasis: WithdrawalRefundBasis;
+    readonly bookingIntervals?: readonly WithdrawalBookingInterval[];
   }) {
     const { db } = yield* WorkspaceTransaction;
     const [pack] = yield* readPaidPassForWithdrawal(
@@ -204,6 +252,7 @@ export const recordEntryPackWithdrawal = Effect.fn("recordEntryPackWithdrawal")(
       paid,
       now: input.submittedAt,
       consumedEntries,
+      bookingIntervals: input.bookingIntervals ?? [],
       earlyPerformanceConsent,
     });
     if (
@@ -233,13 +282,14 @@ export class EntryPackWithdrawals extends Context.Service<
   static Default = Layer.effect(
     this,
     Effect.gen(function* () {
-      const { db } = yield* WorkspaceDatabase;
+      const { db, transaction } = yield* WorkspaceDatabase;
       const snapshots = yield* AccountingDocumentSnapshots;
       const reservations = yield* ReservationCancellation;
+      const reservationDetails = yield* WorkspaceReservationService;
       return {
         kind,
         find: Effect.fn("EntryPackWithdrawals.find")(
-          function* ({ contractId, accountId, locale }) {
+          function* ({ contractId, accountId, locale, assessedAt }) {
             const id = decodePassWithdrawalOrderId(contractId);
             if (Option.isNone(id)) return Option.none();
             const [pack] = yield* readPaidPassForWithdrawal(
@@ -264,15 +314,40 @@ export class EntryPackWithdrawals extends Context.Service<
             if (earlyPerformanceConsent === undefined) return Option.none();
             // Capture the claims once. The quote and submission assess the
             // date at their own instant, and recording rechecks under lock.
-            const consumed = yield* readConsumedEntries(db, id.value);
+            const consumed = yield* readConsumedEntries(
+              db,
+              id.value,
+              assessedAt ? workspaceDay(assessedAt) : undefined
+            );
+            const bookingIntervals: WithdrawalBookingInterval[] = [];
+            if (
+              pack.tier !== "open-space" &&
+              earlyPerformanceConsent &&
+              pack.buyerConfirmationDeliveredAt &&
+              snapshot.billing.purpose !== "business" &&
+              (pack.status === "active" || pack.status === "depleted")
+            ) {
+              for (const entry of consumed) {
+                if (bookingInterval(entry, pack.tier, bookingIntervals))
+                  continue;
+                const details = yield* reservationDetails.getReservation(
+                  entry.reservationId
+                );
+                bookingIntervals.push({
+                  reservationId: entry.reservationId,
+                  dotyposReservationId: details.dotyposReservationId,
+                  interval: {
+                    startsAt: details.reservedFrom,
+                    endsAt: details.reservedUntil,
+                  },
+                });
+              }
+            }
             return Option.some<WithdrawableContract>({
               ref: { kind, id: id.value },
-              label: [
-                m.passEntryPack({}, { locale }),
-                m.passEntryCount({ count: entryCount }, { locale }),
-                getPassTierName(pack.tier, locale),
-              ].join(" · "),
+              label: getPassWithdrawalLabel(pack, locale),
               paidAmount: paid,
+              bookingIntervals,
               assess: (now) => {
                 if (pack.status !== "active" && pack.status !== "depleted") {
                   return { withdrawable: false, reason: "not_withdrawable" };
@@ -285,6 +360,7 @@ export class EntryPackWithdrawals extends Context.Service<
                   paid,
                   now,
                   consumedEntries: consumed,
+                  bookingIntervals,
                   earlyPerformanceConsent,
                 });
               },
@@ -333,45 +409,73 @@ export class EntryPackWithdrawals extends Context.Service<
                 message: "The Entry pack withdrawal could not be found.",
               });
             }
+            const entryPackWithdrawal = {
+              passId: id.value,
+              submittedOn: workspaceDay(withdrawal.submittedAt),
+            };
             const claims = yield* db
               .select({ reservationId: passEntryClaims.reservationId })
               .from(passEntryClaims)
-              .where(
-                and(
-                  eq(passEntryClaims.passId, id.value),
-                  or(
-                    eq(passEntryClaims.status, "reserved"),
-                    and(
-                      eq(passEntryClaims.status, "consumed"),
-                      gt(
-                        passEntryClaims.date,
-                        workspaceDay(withdrawal.submittedAt)
-                      )
-                    )
-                  )
-                )
-              )
+              .where(isEntryPackClaimCancelledByWithdrawal(entryPackWithdrawal))
               .orderBy(
                 asc(passEntryClaims.date),
                 asc(passEntryClaims.reservationId)
               );
             for (const { reservationId } of claims) {
-              yield* reservations.cancel({
+              const cancelled = yield* reservations.cancel({
                 reservationId,
                 cause: "customer_withdrawal",
-                entryPackWithdrawal: id.value,
+                entryPackWithdrawal,
                 force: true,
               });
-              yield* db
-                .update(passEntryClaims)
-                .set({ status: "released" })
-                .where(
-                  and(
-                    eq(passEntryClaims.reservationId, reservationId),
-                    eq(passEntryClaims.passId, id.value),
-                    ne(passEntryClaims.status, "released")
-                  )
-                );
+              yield* transaction(
+                Effect.gen(function* () {
+                  if (cancelled.outcome === "already_cancelled") {
+                    const [paid] = yield* db
+                      .select({
+                        attemptId: paymentAttempts.id,
+                        paidValue: paymentAttempts.amountValue,
+                        exponent: paymentAttempts.amountExponent,
+                        currency: paymentAttempts.currency,
+                      })
+                      .from(workspaceReservations)
+                      .innerJoin(
+                        paymentAttempts,
+                        eq(
+                          paymentAttempts.id,
+                          workspaceReservations.activePaymentAttemptId
+                        )
+                      )
+                      .where(
+                        and(
+                          eq(workspaceReservations.id, reservationId),
+                          eq(
+                            workspaceReservations.reservationState,
+                            "cancelled"
+                          ),
+                          eq(paymentAttempts.state, "paid")
+                        )
+                      );
+                    if (paid) {
+                      yield* markPassWithdrawalRefund(
+                        paid.attemptId,
+                        paidPassAmount(paid),
+                        withdrawal.submittedAt
+                      );
+                    }
+                  }
+                  yield* db
+                    .update(passEntryClaims)
+                    .set({ status: "released" })
+                    .where(
+                      and(
+                        eq(passEntryClaims.reservationId, reservationId),
+                        eq(passEntryClaims.passId, id.value),
+                        ne(passEntryClaims.status, "released")
+                      )
+                    );
+                })
+              );
             }
           },
           Effect.mapError((cause) =>

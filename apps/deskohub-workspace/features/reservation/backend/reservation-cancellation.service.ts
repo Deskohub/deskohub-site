@@ -1,7 +1,7 @@
 import { DotyposService } from "@deskohub/dotypos";
 import { Context, Data, Effect, Layer } from "effect";
 import { administrationForcedPaymentCancellationFailureCode } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
-import type { OrderId } from "@/features/order";
+import type { EntryPackWithdrawalCancellation } from "@/features/passes/backend/entry-pack-redemption";
 import {
   type RequestedCancellationCause,
   type RequestedCancellationRefund,
@@ -47,7 +47,7 @@ export type ReservationCancellationInput = {
   readonly reservationId: WorkspaceReservationId;
   readonly cause: RequestedCancellationCause;
   /** The withdrawn pass that funded this booking, when cancelling its claim. */
-  readonly entryPackWithdrawal?: OrderId;
+  readonly entryPackWithdrawal?: EntryPackWithdrawalCancellation;
   /** An administrator's override that cancels a pending payment too. */
   readonly force?: boolean;
   /** What the payment owes back; absent, the whole Nexi payment is owed. */
@@ -94,7 +94,7 @@ export class ReservationCancellation extends Context.Service<
         current: WorkspaceReservation,
         cause: RequestedCancellationCause,
         forcedPendingPayment: boolean,
-        entryPackWithdrawal: OrderId | undefined
+        entryPackWithdrawal: EntryPackWithdrawalCancellation | undefined
       ) {
         const pendingPaymentCancellation = getPendingPaymentCancellation(
           current,
@@ -308,7 +308,9 @@ export class ReservationCancellation extends Context.Service<
               claimed,
               input.cause,
               administrationForceCancellation,
-              input.refund
+              input.entryPackWithdrawal
+                ? { targetValue: "full", releasesPromotions: false }
+                : input.refund
             );
 
             return { outcome: "cancelled", reservation: details } as const;

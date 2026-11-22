@@ -20,7 +20,10 @@ import {
   requireWithinReadLimit,
 } from "@/shared/backend/read-limit";
 import type { Money } from "@/shared/money/money";
-import type { WithdrawableContractRef } from "../withdrawable-contract";
+import type {
+  WithdrawableContractRef,
+  WithdrawalBookingInterval,
+} from "../withdrawable-contract";
 import type { WithdrawalRefundBasis } from "../withdrawal-assessment";
 import type {
   WithdrawableContractKind,
@@ -100,7 +103,10 @@ type NewContractWithdrawal = Pick<
   | "paidAmount"
   | "refundAmount"
   | "refundBasis"
-> & { readonly statementName: string };
+> & {
+  readonly statementName: string;
+  readonly bookingIntervals?: readonly WithdrawalBookingInterval[];
+};
 
 /** Names the settlement run that holds a withdrawal's claim. */
 type SettlementClaim = {
@@ -345,6 +351,7 @@ export class WithdrawalRepository extends Context.Service<
                     paidAmount: withdrawal.paidAmount,
                     refundAmount: withdrawal.refundAmount,
                     refundBasis: withdrawal.refundBasis,
+                    bookingIntervals: withdrawal.bookingIntervals,
                   };
                   const passPeriodEndsAt =
                     withdrawal.contract.kind === "entry-pack"

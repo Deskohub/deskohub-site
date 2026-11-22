@@ -18,7 +18,6 @@ import {
 } from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
-import { m } from "@/features/i18n";
 import { getConsumerWithdrawalPeriodCutoff } from "@/features/legal/early-performance";
 import type { OrderId } from "@/features/order";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
@@ -32,14 +31,13 @@ import {
 import type { WithdrawalAssessment } from "@/features/withdrawal/withdrawal-assessment";
 import { currencyCZK } from "@/shared/money/currencies";
 import { type Money, sameMoneyUnit } from "@/shared/money/money";
-import { formatPlainDateRange } from "@/shared/utils/date-time-format";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
 import { type PassTier, unlimitedPassDays } from "../pass-offer";
-import { getPassTierName } from "../pass-offer.i18n";
 import {
   getUnlimitedPassEndDate,
   getUnlimitedPassWithdrawal,
 } from "../unlimited-pass";
+import { getPassWithdrawalLabel } from "./pass-withdrawal-label";
 import {
   decodePassWithdrawalOrderId,
   markPassWithdrawalRefund,
@@ -201,19 +199,9 @@ export class UnlimitedPassWithdrawals extends Context.Service<
             const earlyPerformanceConsent =
               yield* readPassEarlyPerformanceConsent(db, id.value, "unlimited");
             if (earlyPerformanceConsent === undefined) return Option.none();
-            const start = Temporal.PlainDate.from(pass.validFrom);
-            const dates = formatPlainDateRange({
-              locale,
-              start,
-              end: start.add({ days: unlimitedPassDays - 1 }),
-            });
             return Option.some<WithdrawableContract>({
               ref: { kind, id: id.value },
-              label: [
-                m.passUnlimited({}, { locale }),
-                getPassTierName(pass.tier, locale),
-                dates,
-              ].join(" · "),
+              label: getPassWithdrawalLabel(pass, locale),
               paidAmount: paid,
               assess: (now) => {
                 if (pass.status !== "active") {

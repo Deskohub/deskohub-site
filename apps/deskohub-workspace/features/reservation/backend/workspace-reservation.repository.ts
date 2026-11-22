@@ -66,8 +66,10 @@ import {
   checkEntryPackClaim,
   type EntryPackRedemption,
   type EntryPackUnavailableError,
+  type EntryPackWithdrawalCancellation,
   type entryPackUnavailableFailureCode,
   findReservationEntryClaim,
+  isEntryPackClaimCancelledByWithdrawal,
   releaseReservedEntryPackClaim,
   reserveEntryPackClaim,
   reserveReleasedEntryPackClaim,
@@ -502,7 +504,7 @@ export interface IWorkspaceReservationRepository {
   readonly claimRequestedCancellation: (input: {
     readonly id: WorkspaceReservationId;
     readonly cause: RequestedCancellationCause;
-    readonly entryPackWithdrawal?: OrderId;
+    readonly entryPackWithdrawal?: EntryPackWithdrawalCancellation;
     readonly pendingPaymentCancellation?: {
       readonly paymentAttemptId: PaymentAttemptId;
       readonly failureCode: string;
@@ -748,8 +750,8 @@ export type RequestedCancellationCause = Extract<
 
 /** What a requested cancellation owes back on the reservation's payment. */
 export type RequestedCancellationRefund = {
-  /** Minor units owed when less than the whole payment; absent for all of it. */
-  readonly targetValue?: number;
+  /** The exact cumulative target, including the full captured amount when specified. */
+  readonly targetValue?: number | "full";
   /** Whether the payment's code, voucher and referral claims are given back. */
   readonly releasesPromotions: boolean;
 };
@@ -870,7 +872,7 @@ const recordRequestedCancellationClaim = Effect.fnUntraced(function* (
         .where(
           and(
             eq(passEntryClaims.reservationId, input.id),
-            eq(passEntryClaims.passId, input.entryPackWithdrawal),
+            isEntryPackClaimCancelledByWithdrawal(input.entryPackWithdrawal),
             eq(contractWithdrawals.contractKind, "entry-pack")
           )
         )
@@ -994,7 +996,8 @@ const customerWithdrawalReleaseReason = "customer_withdrawal";
 const cancelPendingPaymentAttempt = Effect.fnUntraced(function* (
   reservationId: WorkspaceReservationId,
   pendingPaymentCancellation: PendingPaymentCancellation,
-  now: Temporal.Instant
+  now: Temporal.Instant,
+  waitForProviderSession: boolean
 ) {
   const { db } = yield* WorkspaceTransaction;
   const [attempt] = yield* db
@@ -1008,7 +1011,12 @@ const cancelPendingPaymentAttempt = Effect.fnUntraced(function* (
       and(
         eq(paymentAttempts.id, pendingPaymentCancellation.paymentAttemptId),
         eq(paymentAttempts.workspaceReservationId, reservationId),
-        inArray(paymentAttempts.state, ["created", "pending", "cancelled"])
+        inArray(
+          paymentAttempts.state,
+          waitForProviderSession
+            ? ["pending", "cancelled"]
+            : ["created", "pending", "cancelled"]
+        )
       )
     )
     .returning({ id: paymentAttempts.id });
@@ -1235,7 +1243,8 @@ export class WorkspaceReservationRepository extends Context.Service<
               yield* cancelPendingPaymentAttempt(
                 input.id,
                 input.pendingPaymentCancellation,
-                now
+                now,
+                input.entryPackWithdrawal !== undefined
               );
             }
 
@@ -1346,7 +1355,10 @@ export class WorkspaceReservationRepository extends Context.Service<
                 workspaceReservationId: input.id,
               });
             }
-            const target = input.refund?.targetValue;
+            const target =
+              input.refund?.targetValue === "full"
+                ? paymentAttempts.amountValue
+                : input.refund?.targetValue;
             const activeAttempt = cancelled?.activePaymentAttemptId;
             const paidProviderAttempts = and(
               eq(paymentAttempts.orderId, reservationOrderId(input.id)),
@@ -1366,7 +1378,10 @@ export class WorkspaceReservationRepository extends Context.Service<
                 .where(
                   and(
                     paidProviderAttempts,
-                    eq(paymentAttempts.id, activeAttempt)
+                    eq(paymentAttempts.id, activeAttempt),
+                    input.refund?.targetValue === "full"
+                      ? gt(paymentAttempts.amountValue, 0)
+                      : undefined
                   )
                 );
             } else if (input.refund === undefined) {

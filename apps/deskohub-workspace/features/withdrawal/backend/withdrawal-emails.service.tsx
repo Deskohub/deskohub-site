@@ -1,11 +1,12 @@
 import {
   EmailConfigTag,
   type EmailSendError,
-  type EmailServiceError,
+  EmailServiceError,
   EmailServiceTag,
 } from "@deskohub/email/backend/service";
 import type { EmailMessage } from "@deskohub/email/types/email.types";
 import { Context, Effect, Layer } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
 import {
   ContractWithdrawalNoticeEmail,
   contractWithdrawalNoticeEmailSubject,
@@ -15,6 +16,7 @@ import {
   contractWithdrawalReceiptEmailSubject,
 } from "@/emails/contract-withdrawal-receipt";
 import { env } from "@/env";
+import { readPassWithdrawalLabel } from "@/features/passes/backend/pass-withdrawal-label";
 import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
 import { renderWorkspaceEmail } from "@/shared/backend/email/render-react-email";
 import {
@@ -22,6 +24,7 @@ import {
   internalWorkspaceEmailSubject,
   workspaceEmailRecipient,
 } from "@/shared/backend/email/workspace-email-recipients";
+import { staffLocale } from "@/shared/backend/staff-locale";
 import { getWorkspaceCanonicalUrl } from "@/shared/utils";
 import type { ContractWithdrawal } from "./withdrawal.repository";
 
@@ -50,6 +53,7 @@ export class WithdrawalEmails extends Context.Service<
     Effect.gen(function* () {
       const emailService = yield* EmailServiceTag;
       const emailConfig = yield* EmailConfigTag;
+      const { db } = yield* WorkspaceDatabase;
 
       const metadataOf = (withdrawal: ContractWithdrawal) => ({
         deploymentEnvironment: env.VERCEL_ENV,
@@ -93,9 +97,25 @@ export class WithdrawalEmails extends Context.Service<
         }),
         sendOperatorNotice: Effect.fn("WithdrawalEmails.sendOperatorNotice")(
           function* ({ withdrawal, customerEmail }) {
+            const contract = withdrawal.contract;
+            const contractLabel =
+              contract.kind === "reservation"
+                ? withdrawal.contractLabel
+                : yield* readPassWithdrawalLabel(db, {
+                    kind: contract.kind,
+                    id: contract.id,
+                    locale: staffLocale,
+                  }).pipe(
+                    Effect.mapError(
+                      () =>
+                        new EmailServiceError(
+                          "The pass could not be read for the withdrawal notice."
+                        )
+                    )
+                  );
             const props = {
               contractKind: withdrawal.contract.kind,
-              contractLabel: withdrawal.contractLabel,
+              contractLabel,
               contractId: withdrawal.contract.id,
               accountId: withdrawal.accountId,
               customerName: withdrawal.statementName,

@@ -470,14 +470,20 @@ function WithdrawalStatementForm({
               </div>
             )}
             <div className="mt-1 flex items-baseline justify-between gap-4 border-t border-navy-blue/10 pt-3 text-base font-semibold">
-              <dt>{m.withdrawalRefundAmount({}, { locale })}</dt>
+              <dt>
+                {(isPass
+                  ? m.passWithdrawalRefundTotal
+                  : m.withdrawalRefundAmount)({}, { locale })}
+              </dt>
               <dd className="m-0 shrink-0 text-right">
                 {formatMoney(quote.refundAmount, locale)}
               </dd>
             </div>
           </dl>
           <p className="mt-1 text-xs leading-5 text-navy-blue/60">
-            {m.withdrawalConfirmRefundNote({}, { locale })}
+            {(isPass
+              ? m.passWithdrawalRefundNote
+              : m.withdrawalConfirmRefundNote)({}, { locale })}
           </p>
         </div>
 
@@ -564,12 +570,21 @@ function WithdrawalReceived({
             locale
           )}
         </ContractRow>
-        <ContractRow label={m.withdrawalRefundAmount({}, { locale })}>
+        <ContractRow
+          label={(isPass
+            ? m.passWithdrawalRefundTotal
+            : m.withdrawalRefundAmount)({}, { locale })}
+        >
           <span className="tabular-nums">
             {formatMoney(receipt.refundAmount, locale)}
           </span>
         </ContractRow>
       </dl>
+      {isPass && receipt.refundAmount.value > 0 && (
+        <p className="text-sm leading-6 text-navy-blue/70">
+          {m.passWithdrawalRefundNote({}, { locale })}
+        </p>
+      )}
       <p className="text-sm leading-6 text-navy-blue/70">
         {m.withdrawalReceivedEmailed(
           { email: receipt.receiptEmail },

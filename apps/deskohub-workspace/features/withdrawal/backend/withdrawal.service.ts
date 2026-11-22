@@ -20,9 +20,11 @@ import type { CustomerAccountId } from "@/features/account/customer-account";
 import { AccountingStorage } from "@/features/accounting/backend/accounting-storage";
 import type { Locale } from "@/features/i18n";
 import { EntryPackWithdrawals } from "@/features/passes/backend/entry-pack-withdrawals";
+import { decodePassWithdrawalOrderId } from "@/features/passes/backend/pass-withdrawal-payment";
 import { UnlimitedPassWithdrawals } from "@/features/passes/backend/unlimited-pass-withdrawals";
 import { ReservationCancellation } from "@/features/reservation/backend/reservation-cancellation.service";
 import { ReservationWithdrawals } from "@/features/reservation/backend/reservation-withdrawals";
+import { WorkspaceReservationService } from "@/features/reservation/backend/workspace-reservation.service";
 import type { Money } from "@/shared/money/money";
 import type {
   ContractCancellationError,
@@ -239,6 +241,7 @@ export class WithdrawalService extends Context.Service<
             contractId: input.contract.id,
             accountId: input.accountId,
             locale: input.locale,
+            assessedAt: now,
           })
           .pipe(
             Effect.mapError(
@@ -539,6 +542,12 @@ export class WithdrawalService extends Context.Service<
             const profileName = yield* currentCustomerName;
             const customerName =
               profileName ?? (input.customerName?.trim() || null);
+            const passPurchaseOrderId =
+              input.contract.kind === "entry-pack"
+                ? Option.getOrUndefined(
+                    decodePassWithdrawalOrderId(input.contract.id)
+                  )
+                : undefined;
             const { withdrawal, recorded, receiptEmail } =
               yield* sections.withActiveAccount(
                 input.accountId,
@@ -610,6 +619,7 @@ export class WithdrawalService extends Context.Service<
                       paidAmount: contract.paidAmount,
                       refundAmount: assessment.refundAmount,
                       refundBasis: assessment.refundBasis,
+                      bookingIntervals: contract.bookingIntervals,
                     })
                     .pipe(
                       Effect.mapError((error) =>
@@ -621,7 +631,8 @@ export class WithdrawalService extends Context.Service<
                       )
                     );
                   return { ...result, receiptEmail: held.email };
-                })
+                }),
+                passPurchaseOrderId ? { passPurchaseOrderId } : undefined
               );
             if (recorded) {
               yield* Effect.logInfo("Withdrawal recorded");
@@ -716,6 +727,7 @@ export class WithdrawalService extends Context.Service<
               ReservationWithdrawals.Live,
               EntryPackWithdrawals.Default.pipe(
                 Layer.provide(ReservationCancellation.Live),
+                Layer.provide(WorkspaceReservationService.Live),
                 Layer.provide(AccountingStorage.Live)
               ),
               UnlimitedPassWithdrawals.Default.pipe(

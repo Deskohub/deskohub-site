@@ -159,10 +159,10 @@ export function EntryPackStatusPage({
             (!showWithdrawalTitle || withdrawn.refundAmount.value > 0) && (
               <p className="mt-2 text-navy-blue/70">
                 {showWithdrawalTitle
-                  ? m.passStatusWithdrawalRefund(
+                  ? `${m.passStatusWithdrawalRefund(
                       { amount: formatMoney(withdrawn.refundAmount, locale) },
                       { locale }
-                    )
+                    )} ${m.passWithdrawalRefundNote({}, { locale })}`
                   : m.withdrawalReceivedTitle({}, { locale })}
               </p>
             )}

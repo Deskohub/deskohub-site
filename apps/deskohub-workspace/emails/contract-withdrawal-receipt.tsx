@@ -71,12 +71,14 @@ export function ContractWithdrawalReceiptEmail(
           paidAmount={props.paidAmount}
           refundAmount={props.refundAmount}
           refundBasis={refundBasis}
-          refundLabel={m.withdrawalRefundAmount({}, { locale })}
+          refundLabel={(pass
+            ? m.passWithdrawalRefundTotal
+            : m.withdrawalRefundAmount)({}, { locale })}
         />
       )}
       {pass && props.refundAmount.value > 0 && (
         <WorkspaceEmailBody>
-          {m.withdrawalConfirmRefundNote({}, { locale })}
+          {m.passWithdrawalRefundNote({}, { locale })}
         </WorkspaceEmailBody>
       )}
     </WorkspaceEmailLayout>
@@ -134,7 +136,10 @@ export const contractWithdrawalReceiptDetails = ({
   ...(refundBasis.kind === "full"
     ? [
         {
-          label: m.withdrawalRefundAmount({}, { locale }),
+          label: (contractKind === "unlimited-pass" ||
+            contractKind === "entry-pack"
+            ? m.passWithdrawalRefundTotal
+            : m.withdrawalRefundAmount)({}, { locale }),
           value: formatMoney(refundAmount, locale),
         },
       ]

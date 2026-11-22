@@ -1,4 +1,14 @@
-import { and, count, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  eq,
+  gt,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import { Data, Effect } from "effect";
 import {
   type WorkspaceDatabaseClient,
@@ -29,6 +39,27 @@ export type EntryPackRedemption = {
   readonly date: PlainDate;
   readonly tier: PassTier;
 };
+
+export type EntryPackWithdrawalCancellation = {
+  readonly passId: OrderId;
+  readonly submittedOn: PlainDate;
+};
+
+/** Paid bookings through the withdrawal date are retained. Unspent holds end. */
+export const isEntryPackClaimCancelledByWithdrawal = ({
+  passId,
+  submittedOn,
+}: EntryPackWithdrawalCancellation) =>
+  and(
+    eq(passEntryClaims.passId, passId),
+    or(
+      eq(passEntryClaims.status, "reserved"),
+      and(
+        eq(passEntryClaims.status, "consumed"),
+        gt(passEntryClaims.date, submittedOn)
+      )
+    )
+  );
 
 type EntryPackRequest = Omit<EntryPackRedemption, "tier">;
 
