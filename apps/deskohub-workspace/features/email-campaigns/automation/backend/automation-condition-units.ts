@@ -232,13 +232,13 @@ export const planConditionSteps = Effect.fn("automationConditionSteps.plan")(
       readonly chainedSteps: number;
     }
   ) {
-    const steps = input.steps.flatMap((step) => {
+    const steps = input.steps.flatMap<ConditionStepRuns>((step) => {
       // The normal packing maps one run to each customer. Pass reminders
       // can reach the same condition independently for the same holder.
       if (
         step.runs.some(({ triggerKind }) => isPassReminderKind(triggerKind))
       ) {
-        return step.runs.map((run) => ({ ...step, runs: [run] }));
+        return step.runs.map((run) => ({ ...step, runs: [run] as const }));
       }
       return [step];
     });
