@@ -52,7 +52,10 @@ const openPage = async (body: string) => {
   await page.setContent(
     `<!doctype html><html lang="en"><head><meta charset="utf-8"></head><body>${body}</body></html>`
   );
-  await page.addStyleTag({ content: appStyles });
+  // A spinner caught mid-turn measures wider than the space it takes.
+  await page.addStyleTag({
+    content: `${appStyles}*{animation:none!important;transition:none!important}`,
+  });
   return { context, page };
 };
 
@@ -111,13 +114,16 @@ test.skipIf(!chromiumAvailable).each([
 );
 
 test.skipIf(!chromiumAvailable).each([...locales])(
-  "shows the whole updating label without moving the languages at any width in %s",
+  "shows the whole updating label without moving any set of languages at any width in %s",
   async (routeLocale) => {
+    // A published email offers any number of the languages.
     const { context, page } = await openPage(
-      [true, false]
-        .map(
-          (updating) =>
-            `<main>${markup({ routeLocale, shown: locales, updating })}</main>`
+      locales
+        .flatMap((_, index) =>
+          [true, false].map(
+            (updating) =>
+              `<main>${markup({ routeLocale, shown: locales.slice(0, index + 1), updating })}</main>`
+          )
         )
         .join("")
     );
@@ -125,7 +131,7 @@ test.skipIf(!chromiumAvailable).each([...locales])(
       const failures = await page.evaluate(
         (label) => {
           const failed: string[] = [];
-          const [busy, idle] = [...document.querySelectorAll("main")];
+          const mains = [...document.querySelectorAll("main")];
           const layout = (main: Element) => {
             const card = main.querySelector("section")!;
             const origin = card.getBoundingClientRect();
@@ -140,26 +146,32 @@ test.skipIf(!chromiumAvailable).each([...locales])(
               )
             );
           };
-          const text = document.createRange();
-          const shownLabel = [...busy!.querySelectorAll("span")].find(
-            (span) =>
-              span.textContent === label &&
-              span.getBoundingClientRect().width > 1
-          )!;
-          text.selectNodeContents(shownLabel);
-          for (let width = 288; width <= 1100; width += 4) {
-            busy!.style.width = idle!.style.width = `${width}px`;
-            if (layout(busy!) !== layout(idle!)) failed.push(`moved ${width}`);
-            const inner = text.getBoundingClientRect();
-            const outer = shownLabel.getBoundingClientRect();
-            const card = busy!
-              .querySelector("section")!
-              .getBoundingClientRect();
-            if (
-              inner.left < Math.max(outer.left, card.left) - 0.5 ||
-              inner.right > Math.min(outer.right, card.right) + 0.5
-            ) {
-              failed.push(`clipped ${width}`);
+          for (let index = 0; index < mains.length; index += 2) {
+            const busy = mains[index]!;
+            const idle = mains[index + 1]!;
+            const count = index / 2 + 1;
+            const text = document.createRange();
+            const shownLabel = [...busy.querySelectorAll("span")].find(
+              (span) =>
+                span.textContent === label &&
+                span.getBoundingClientRect().width > 1
+            )!;
+            text.selectNodeContents(shownLabel);
+            for (let width = 288; width <= 1100; width += 4) {
+              busy.style.width = idle.style.width = `${width}px`;
+              const at = `${count} languages at ${width}`;
+              if (layout(busy) !== layout(idle)) failed.push(`moved ${at}`);
+              const inner = text.getBoundingClientRect();
+              const outer = shownLabel.getBoundingClientRect();
+              const card = busy
+                .querySelector("section")!
+                .getBoundingClientRect();
+              if (
+                inner.left < Math.max(outer.left, card.left) - 0.5 ||
+                inner.right > Math.min(outer.right, card.right) + 0.5
+              ) {
+                failed.push(`clipped ${at}`);
+              }
             }
           }
           return failed;
