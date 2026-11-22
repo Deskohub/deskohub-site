@@ -7,7 +7,7 @@ import { Cause, Data, Effect, Exit, Option } from "effect";
 import type { Atom } from "effect/reactivity";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { apiOrigin } from "../../../auth/auth-client";
 import { checkoutReturnTarget } from "../../../booking/checkout/checkout-commands";
 import { customerDataRuntime } from "../../../customer-api/customer-data-runtime";
@@ -104,7 +104,15 @@ export const passPurchaseResumeUrl = (path: string, origin: string) => {
 };
 
 const resumePassPurchaseAtom = customerDataRuntime.fn(
-  ({ path, owns }: { path: string; owns: () => boolean }) =>
+  ({
+    path,
+    owns,
+    onAndroidOpen,
+  }: {
+    path: string;
+    owns: () => boolean;
+    onAndroidOpen: () => void;
+  }) =>
     confirmPassPurchaseScope.pipe(
       Effect.andThen(
         Effect.tryPromise({
@@ -114,9 +122,14 @@ const resumePassPurchaseAtom = customerDataRuntime.fn(
             if (!owns()) return;
             if (Platform.OS === "web") {
               globalThis.location.assign(url);
-            } else {
-              await openSitePage(url);
+              return "external" as const;
             }
+            const android = Platform.OS === "android";
+            if (android) onAndroidOpen();
+            const browser = await openSitePage(url);
+            return android && browser.type === "opened"
+              ? ("external" as const)
+              : undefined;
           },
           catch: () => new PassPurchaseResumeUnavailable(),
         })
@@ -167,13 +180,16 @@ export function usePassPurchasePayment(
   const [busy, setBusy] = useState(false);
   const focus = useRef<symbol | undefined>(undefined);
   const inFlight = useRef(false);
+  const draftReturn = useRef<(() => void) | undefined>(undefined);
+  const abandon = useCallback(() => {
+    focus.current = undefined;
+    draftReturn.current?.();
+  }, []);
   useFocusEffect(
     useCallback(() => {
       focus.current = Symbol();
-      return () => {
-        focus.current = undefined;
-      };
-    }, [])
+      return abandon;
+    }, [abandon])
   );
 
   const run = async (
@@ -226,6 +242,7 @@ export function usePassPurchasePayment(
           Cause.findErrorOption(payment.cause)
         );
         if (failure?._tag === "CustomerWriteUnconfirmed") {
+          setNotice(m.pass_purchase_status_checking({}, { locale }));
           checkStatus(true);
         } else {
           setNotice(retryFailureMessage(failure, locale));
@@ -266,17 +283,36 @@ export function usePassPurchasePayment(
       }
       const opened =
         action.kind === "resume"
-          ? await resume({ path: action.path, owns })
+          ? await resume({
+              path: action.path,
+              owns,
+              onAndroidOpen: () => {
+                draftReturn.current?.();
+                // Android reports `opened` at launch. Wait until the buyer
+                // has left the app and returned before reading the draft.
+                let backgrounded = AppState.currentState === "background";
+                const subscription = AppState.addEventListener(
+                  "change",
+                  (state) => {
+                    if (state === "background") backgrounded = true;
+                    if (state !== "active" || !backgrounded) return;
+                    draftReturn.current?.();
+                    if (owns()) checkStatus(true);
+                  }
+                );
+                draftReturn.current = () => {
+                  subscription.remove();
+                  draftReturn.current = undefined;
+                };
+              },
+            })
           : await open({ orderId, redirectUrl: action.url, owns });
       if (!owns()) return;
+      if (opened._tag === "Success" && opened.value === "external") return;
+      draftReturn.current?.();
       if (opened._tag === "Failure") browserNotice();
-      else if (action.kind === "resume" && Platform.OS === "web") return;
       checkStatus(true);
     });
-
-  const abandon = () => {
-    focus.current = undefined;
-  };
 
   return { busy, notice, retry, continuePayment, abandon };
 }

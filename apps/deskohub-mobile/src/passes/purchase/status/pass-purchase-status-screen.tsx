@@ -82,13 +82,15 @@ export function PassPurchaseStatusScreen({
   const shown = Option.getOrUndefined(AsyncResult.value(progress));
   const outcome = shown?.outcome;
   const reading = shown?.reading ?? false;
+  const confirmed = shown?.confirmed;
   const purchase =
     outcome && Result.isSuccess(outcome) ? outcome.success : undefined;
-  const retry = purchase && availablePassPurchaseRetry(purchase);
-  const continuation = purchase && availablePassPurchaseContinuation(purchase);
+  const retry = confirmed && availablePassPurchaseRetry(confirmed);
+  const continuation =
+    confirmed && availablePassPurchaseContinuation(confirmed);
   const failure =
     outcome && Result.isFailure(outcome) ? outcome.failure : undefined;
-  const title = purchase && statusTitle(purchase, locale);
+  const title = confirmed && statusTitle(confirmed, locale);
   useLiveRegionAnnouncement(focused ? title : undefined, "polite");
 
   let message: string | undefined;
@@ -116,9 +118,11 @@ export function PassPurchaseStatusScreen({
 
   return (
     <ScrollScreen contentWidth="form">
-      {outcome === undefined && !AsyncResult.isFailure(progress) && (
-        <LoadingState label={m.account_loading({}, { locale })} />
-      )}
+      {outcome === undefined &&
+        !confirmed &&
+        !AsyncResult.isFailure(progress) && (
+          <LoadingState label={m.account_loading({}, { locale })} />
+        )}
       <Notice
         tone="error"
         message={
@@ -128,9 +132,12 @@ export function PassPurchaseStatusScreen({
             : undefined)
         }
       />
-      <Notice tone="warning" message={payment.notice} />
+      <Notice
+        tone="warning"
+        message={confirmed?.status === "paid" ? undefined : payment.notice}
+      />
       <RefreshingIndicator
-        refreshing={outcome !== undefined && reading === "manual"}
+        refreshing={confirmed !== undefined && reading === "manual"}
         label={m.account_refreshing({}, { locale })}
       />
       {title !== undefined && (
@@ -145,7 +152,7 @@ export function PassPurchaseStatusScreen({
           </Text>
         </Card>
       )}
-      {outcome !== undefined && failure?._tag !== "CustomerPassNotFound" && (
+      {(outcome || confirmed) && failure?._tag !== "CustomerPassNotFound" && (
         <Button
           variant="secondary"
           label={m.pass_purchase_status_check_again({}, { locale })}
@@ -159,7 +166,7 @@ export function PassPurchaseStatusScreen({
           retry={retry}
           locale={locale}
           busy={payment.busy}
-          disabled={Boolean(reading)}
+          disabled={!purchase}
           onPay={payment.retry}
         />
       )}
@@ -171,7 +178,7 @@ export function PassPurchaseStatusScreen({
               : m.booking_checkout_payment_reopen({}, { locale })
           }
           busy={payment.busy}
-          disabled={Boolean(reading)}
+          disabled={!purchase}
           onPress={() => void payment.continuePayment(continuation.kind)}
         />
       )}

@@ -31,16 +31,19 @@ import { eventually, quietly } from "../../../testing/eventually";
 import { makePassPurchaseStatusAtoms } from "./pass-purchase-status-state";
 
 const orderId = "836223a1-29fd-4c4f-b876-49782ae18eda";
+const errorTags = {
+  401: "CustomerSessionRequired",
+  404: "CustomerPassNotFound",
+  429: "CustomerRateLimited",
+} as const;
+type TestAnswer = CustomerPassPurchaseStatus["status"] | keyof typeof errorTags;
 
 function setup({
   answers,
   afterPayment = true,
   replyDelay = 0,
 }: {
-  readonly answers: readonly [
-    CustomerPassPurchaseStatus["status"] | 401,
-    ...(CustomerPassPurchaseStatus["status"] | 401)[],
-  ];
+  readonly answers: readonly [TestAnswer, ...TestAnswer[]];
   readonly afterPayment?: boolean;
   readonly replyDelay?: Duration.Input;
 }) {
@@ -51,8 +54,8 @@ function setup({
       calls.push({ method: request.method, url: url.href });
       return HttpClientResponse.fromWeb(
         request,
-        answer === 401
-          ? Response.json({ _tag: "CustomerSessionRequired" }, { status: 401 })
+        typeof answer === "number"
+          ? Response.json({ _tag: errorTags[answer] }, { status: answer })
           : Response.json({
               orderId,
               status: answer,
@@ -107,7 +110,9 @@ function setup({
     Option.getOrUndefined(AsyncResult.value(registry.get(atoms.status)));
   const settled = (
     count: number,
-    status: CustomerPassPurchaseStatus["status"] | "CustomerSessionRequired"
+    status:
+      | CustomerPassPurchaseStatus["status"]
+      | (typeof errorTags)[keyof typeof errorTags]
   ) =>
     Effect.runPromise(
       eventually(
@@ -134,6 +139,7 @@ function setup({
         afterPayment,
       })),
     fromRuntime,
+    current,
     settled,
     remaining: () => remainingAccountReads(registry),
     closeSession: () =>
@@ -166,6 +172,95 @@ test("reads the owned pass by UUID and locale, then polls only until settlement"
     await status.fromRuntime(TestClock.adjust("5 minutes"));
     expect(status.calls).toHaveLength(3);
     expect(await status.remaining()).toBe(37);
+  } finally {
+    status.dispose();
+  }
+});
+
+test.each([
+  [401, "CustomerSessionRequired"],
+  [404, "CustomerPassNotFound"],
+] as const)(
+  "retains the confirmed status on transient failure and clears it on %d",
+  async (accessFailure, tag) => {
+    const status = setup({
+      answers: ["paid", 429, accessFailure],
+      afterPayment: false,
+    });
+    try {
+      status.focus(true);
+      await status.settled(1, "paid");
+      status.refresh();
+      await status.settled(2, "CustomerRateLimited");
+      expect(status.current()?.confirmed?.status).toBe("paid");
+      status.refresh();
+      await status.settled(3, tag);
+      expect(status.current()?.confirmed).toBeUndefined();
+    } finally {
+      status.dispose();
+    }
+  }
+);
+
+test("foreground changes do not replay a manual read when a status is already known", async () => {
+  const status = setup({
+    answers: ["failed", "paid"],
+    afterPayment: false,
+    replyDelay: "1 second",
+  });
+  try {
+    status.focus(true);
+    const sent = (count: number) =>
+      Effect.runPromise(
+        eventually(() => status.calls.length === count).pipe(
+          Effect.andThen(quietly)
+        )
+      );
+    await sent(1);
+    await status.fromRuntime(TestClock.adjust("1 second"));
+    await status.settled(1, "failed");
+    status.refresh();
+    await sent(2);
+    status.foreground(false);
+    await status.fromRuntime(TestClock.adjust("1 second"));
+    status.foreground(true);
+    await Effect.runPromise(
+      eventually(() => status.current()?.reading === false)
+    );
+    await status.fromRuntime(TestClock.adjust("1 minute"));
+    expect(status.calls).toHaveLength(2);
+    expect(status.current()?.confirmed?.status).toBe("failed");
+    expect(status.current()?.outcome).toBeUndefined();
+    status.refresh();
+    await sent(3);
+    await status.fromRuntime(TestClock.adjust("1 second"));
+    await status.settled(3, "paid");
+  } finally {
+    status.dispose();
+  }
+});
+
+test("foregrounding recovers the first read when there is no status to keep", async () => {
+  const status = setup({
+    answers: ["pending"],
+    afterPayment: false,
+    replyDelay: "1 second",
+  });
+  try {
+    status.focus(true);
+    const sent = (count: number) =>
+      Effect.runPromise(
+        eventually(() => status.calls.length === count).pipe(
+          Effect.andThen(quietly)
+        )
+      );
+    await sent(1);
+    status.foreground(false);
+    await status.fromRuntime(TestClock.adjust("1 second"));
+    status.foreground(true);
+    await sent(2);
+    await status.fromRuntime(TestClock.adjust("1 second"));
+    await status.settled(2, "pending");
   } finally {
     status.dispose();
   }

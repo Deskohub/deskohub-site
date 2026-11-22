@@ -4,7 +4,7 @@ import { RegistryContext } from "@effect/atom-react";
 import { Effect, Layer } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { act, createElement, useEffect } from "react";
-import { Platform } from "react-native";
+import { AppState, type AppStateStatus, Platform } from "react-native";
 import {
   CustomerApi,
   CustomerAuthApi,
@@ -362,6 +362,38 @@ test("the PWA resumes the confirmed draft in the current tab", async () => {
   }
 });
 
+test("Android draft launch only checks status after the app returns", async () => {
+  const action = setupAction(draft);
+  let onChange: ((state: AppStateStatus) => void) | undefined;
+  const remove = mock(() => {
+    onChange = undefined;
+  });
+  const listen = spyOn(AppState, "addEventListener").mockImplementation(
+    (type, listener) => {
+      if (type === "change") {
+        onChange = listener as (state: AppStateStatus) => void;
+      }
+      return { remove };
+    }
+  );
+  try {
+    await action.mount();
+    await act(async () => action.payment().continuePayment("resume"));
+    expect(listen).toHaveBeenCalledTimes(1);
+    onChange?.("active");
+    expect(action.checks).toEqual([]);
+    onChange?.("background");
+    onChange?.("active");
+    onChange?.("background");
+    onChange?.("active");
+    expect(action.checks).toEqual([true]);
+    expect(remove).toHaveBeenCalledTimes(1);
+  } finally {
+    listen.mockRestore();
+    await action.dispose();
+  }
+});
+
 test("a definitive payment refusal explains why and checks status without settlement polling", async () => {
   const action = setupAction(status, { failure: "refused" });
   try {
@@ -384,6 +416,9 @@ test("an uncertain dispatched payment starts settlement reconciliation", async (
     await act(async () => action.payment().retry(approved));
     expect(action.posts).toHaveLength(1);
     expect(action.checks).toEqual([true]);
+    expect(action.payment().notice).toBe(
+      m.pass_purchase_status_checking({}, { locale: "en-US" })
+    );
   } finally {
     await action.dispose();
   }

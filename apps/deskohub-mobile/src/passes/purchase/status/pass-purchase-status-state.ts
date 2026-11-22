@@ -35,31 +35,41 @@ export const readPassPurchaseStatus = Effect.fn("readPassPurchaseStatus")(
     if (!(yield* fence.isCurrent(scope))) {
       return yield* new CustomerSessionRequired();
     }
-    const status = yield* api.passes
+    const outcome = yield* api.passes
       .getPassPurchaseStatus({ params: { orderId }, query: { locale } })
-      .pipe(customerRead({ accountRead: true }));
+      .pipe(customerRead({ accountRead: true }), Effect.result);
     if (!(yield* fence.isCurrent(scope))) {
       return yield* new CustomerSessionRequired();
     }
-    return status;
+    return yield* Effect.fromResult(outcome);
   }
 );
 
 // Space out settlement reads and keep the account budget available for taps.
 const pollDelays = [3, 3, 5, 5, 10, 15, 20, 30, 60] as const;
 
-type StatusRead = Result.Result<
-  CustomerPassPurchaseStatus,
-  Effect.Error<ReturnType<typeof readPassPurchaseStatus>>
+type StatusReadFailure = Effect.Error<
+  ReturnType<typeof readPassPurchaseStatus>
 >;
+type StatusRead = Result.Result<CustomerPassPurchaseStatus, StatusReadFailure>;
 
 interface StatusProgress {
   readonly refresh: number;
   readonly attempts: number;
   readonly reading: "manual" | "automatic" | false;
   readonly polling: boolean;
-  readonly outcome?: StatusRead;
+  readonly outcome?: StatusRead | undefined;
+  readonly confirmed?: CustomerPassPurchaseStatus | undefined;
 }
+
+const canKeepConfirmed = (failure: StatusReadFailure) =>
+  failure._tag === "CustomerRateLimited" ||
+  failure._tag === "CustomerServiceUnavailable" ||
+  failure._tag === "CustomerRequestTimedOut" ||
+  (failure._tag === "HttpClientError" &&
+    (failure.reason._tag === "TransportError" ||
+      (failure.reason._tag === "StatusCodeError" &&
+        failure.reason.response.status >= 500)));
 
 interface StatusRefresh {
   readonly revision: number;
@@ -81,13 +91,20 @@ const statusUpdates = (
             ...state,
             refresh,
             reading,
+            outcome: undefined,
             attempts: state.attempts + (reading === "automatic" ? 1 : 0),
           };
           yield* Queue.offer(queue, state);
           const outcome = yield* Effect.result(read);
+          const confirmed = Result.match(outcome, {
+            onSuccess: (status) => status,
+            onFailure: (failure) =>
+              canKeepConfirmed(failure) ? state.confirmed : undefined,
+          });
           state = {
             ...state,
             outcome,
+            confirmed,
             reading: false,
             polling:
               state.polling &&
@@ -98,14 +115,11 @@ const statusUpdates = (
           yield* Queue.offer(queue, state);
         });
 
-      if (
-        !state.outcome ||
-        state.refresh !== refresh ||
-        state.reading === "manual"
-      ) {
+      if (state.refresh !== refresh || (!state.outcome && !state.confirmed)) {
         yield* readOnce("manual");
       } else {
-        // A backgrounded automatic request already spent its attempt.
+        // An interrupted refresh already spent its dispatch. Recover the
+        // first read, but wait for a new tap before repeating a manual read.
         state = { ...state, reading: false };
         yield* Queue.offer(queue, state);
       }
