@@ -24,10 +24,12 @@ export const automationTriggerKind = (
   );
 
 /** Only these triggers carry a pass rather than customer-scoped entry. */
-export const isPassReminderTrigger = (
-  trigger: AutomationTrigger
+export const isPassReminderTrigger = <
+  Trigger extends Pick<AutomationTrigger, "_tag">,
+>(
+  trigger: Trigger
 ): trigger is Extract<
-  AutomationTrigger,
+  Trigger,
   { _tag: "EntryPackExpiring" | "UnlimitedEnding" }
 > => trigger._tag === "EntryPackExpiring" || trigger._tag === "UnlimitedEnding";
 
