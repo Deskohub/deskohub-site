@@ -54,6 +54,7 @@ import {
   deleteAutomatedCampaigns,
   everyoneFilter,
   seedAutomatedCampaign,
+  seedAutomatedSend,
   seedCampaignSend,
 } from "../../backend/email-campaigns.test-utils";
 import type {
@@ -1903,6 +1904,123 @@ describe.skipIf(!testDatabase)(
         "pass-holder",
         "pass-holder",
       ]);
+    });
+
+    test("an earlier version's sent run counts as sent once, and skipping pass holders reads marketing consent on an operational campaign", async () => {
+      const triggerAt = ago({ hours: 24 * 10 });
+      const [plain, sentEarlier, withdrawn] = [
+        "policy-op-plain",
+        "policy-op-sent-earlier",
+        "policy-op-withdrawn",
+      ].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const { campaignId, previewId: activationPreviewId } =
+        await kit.seedActive(
+          decodeFlow({
+            trigger: { _tag: "ReservationFinished" },
+            steps: [{ ...send, oncePerCustomer: true, skipPassHolders: true }],
+          })
+        );
+      await query(
+        db
+          .update(emailCampaigns)
+          .set({ purpose: "operational" })
+          .where(eq(emailCampaigns.id, campaignId))
+      );
+      const customers = [plain, sentEarlier, withdrawn];
+      dotyposState.customers.push(...customers.map((id) => profile(id)));
+      await seedKnownCustomers(db, customers);
+      await query(
+        db
+          .update(customerMarketingConsents)
+          .set({ withdrawnAt: now })
+          .where(eq(customerMarketingConsents.dotyposCustomerId, withdrawn))
+      );
+      // Activation's completed dry run would otherwise be reused.
+      await query(
+        db
+          .update(emailCampaignAutomationPreviews)
+          .set({ status: "superseded" })
+          .where(eq(emailCampaignAutomationPreviews.id, activationPreviewId))
+      );
+      claimedCampaignIds.push(campaignId);
+      // A run of the campaign sent `sentEarlier` the email without a claim,
+      // as a version without the policy does.
+      const [version] = await query(
+        db
+          .select({ id: emailCampaignAutomationVersions.id })
+          .from(emailCampaignAutomationVersions)
+          .where(eq(emailCampaignAutomationVersions.campaignId, campaignId))
+      );
+      const sendId = await seedAutomatedSend(db, {
+        campaignId,
+        versionId: version!.id,
+        purpose: "operational",
+        recipients: [
+          { dotyposCustomerId: sentEarlier, status: "sent" as const },
+        ],
+      });
+      const earlierRun = await seedAutomationRun(db, {
+        campaignId,
+        versionId: version!.id,
+        customerId: sentEarlier,
+        stepId: "send",
+        phase: "ready",
+        stepEnteredAt: ago({ hours: 24 * 20 }),
+        dueAt: ago({ hours: 24 * 20 }),
+      });
+      await query(
+        db
+          .update(emailCampaignAutomationRuns)
+          .set({
+            status: "ended",
+            phase: null,
+            dueAt: null,
+            sendId,
+            outcome: "sent",
+            endedAt: ago({ hours: 24 * 20 }),
+          })
+          .where(eq(emailCampaignAutomationRuns.id, earlierRun))
+      );
+
+      await seedReservations(
+        customers.map((customer, index) => ({
+          label: `policy-op-${index}`,
+          customer,
+          startsAt: triggerAt.subtract({ hours: 2 }),
+          endsAt: triggerAt,
+        }))
+      );
+      await seedEvents(
+        customers.map((customer, index) => ({
+          kind: "reservation-finished" as const,
+          reservation: `policy-op-${index}`,
+          customer,
+          occurredAt: triggerAt,
+        }))
+      );
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+      const report = await read(started.previewId);
+      const rowOf = (customer: DotyposCustomerId) =>
+        report.rows.find((row) => row.customerId === customer);
+
+      expect(rowOf(plain)).toMatchObject({
+        outcome: "would-send",
+        skipReason: null,
+      });
+      expect(rowOf(sentEarlier)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "already-sent-once",
+      });
+      expect(rowOf(withdrawn)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "consent-withdrawn",
+      });
     });
 
     describe("schedule triggers", () => {

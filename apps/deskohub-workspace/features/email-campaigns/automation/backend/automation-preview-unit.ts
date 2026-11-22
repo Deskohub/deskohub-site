@@ -77,7 +77,7 @@ import {
 } from "../automation-triggers";
 import type { AutomationConditionAudienceMissing } from "../errors";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
-import { claimedCampaignCustomers } from "./automation-customer-claims";
+import { customersAlreadySentOnce } from "./automation-customer-claims";
 import {
   AutomationEvaluationFacts,
   type AutomationEvaluationPlan,
@@ -747,10 +747,10 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
 
   /**
    * Each customer's facts for the Send step's delivery policies, read only
-   * for the policies it carries: the once-ever claims and the one-off
-   * campaign emails in one query each, and for `skipPassHolders` the
-   * pre-submit check as it is now, consent first, then pass coverage for
-   * the customers who still consent.
+   * for the policies it carries: the campaign's earlier emails (claims and
+   * runs that reached their send) and the one-off campaign emails, and for
+   * `skipPassHolders` the pre-submit check as it is now, active marketing
+   * consent first, then pass coverage for the customers who still consent.
    */
   const sendPolicyFactsOf = (input: {
     readonly job: PreviewJob;
@@ -766,8 +766,8 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
     const carries = (policy: (step: SendStep) => boolean) =>
       input.customers.length > 0 && Option.exists(send, policy);
     return Effect.all({
-      claimed: carries((step) => step.oncePerCustomer === true)
-        ? claimedCampaignCustomers(
+      alreadySent: carries((step) => step.oncePerCustomer === true)
+        ? customersAlreadySentOnce(
             db,
             input.job.preview.campaignId,
             input.customers
@@ -787,14 +787,14 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
         : Effect.succeed(new Map<DotyposCustomerId, SendGuardSkipReason>()),
     }).pipe(
       Effect.map(
-        ({ claimed, oneOffEmails, guardSkips }) =>
+        ({ alreadySent, oneOffEmails, guardSkips }) =>
           new Map(
             input.customers.map(
               (customerId): [DotyposCustomerId, SendPolicyFacts] => {
                 return [
                   customerId,
                   {
-                    claimed: claimed.has(customerId),
+                    alreadySentOnce: alreadySent.has(customerId),
                     oneOffCampaignEmails: oneOffEmails.get(customerId) ?? [],
                     guardSkip: Option.fromUndefinedOr(
                       guardSkips.get(customerId)
@@ -815,9 +815,11 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
     readonly customers: readonly DotyposCustomerId[];
     readonly now: Temporal.Instant;
   }) =>
+    // Active marketing consent whatever the campaign's purpose, as the
+    // engine's pre-submit check reads it.
     consentingCampaignCustomers({
       db,
-      purpose: input.job.purpose,
+      purpose: "marketing",
       customerIds: input.customers,
     }).pipe(
       Effect.flatMap((consenting) =>

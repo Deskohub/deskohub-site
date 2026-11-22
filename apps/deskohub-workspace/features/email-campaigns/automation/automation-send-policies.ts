@@ -66,19 +66,20 @@ export type DeliverVerdict = Data.TaggedEnum<{
 export const DeliverVerdict = Data.taggedEnum<DeliverVerdict>();
 
 /**
- * One run's verdict from its trigger, its customer's once-per-customer
- * claim and the one-off campaign gap: a withdrawn trigger withdraws it;
- * otherwise a customer another run claimed skips it; otherwise a moved
+ * One run's verdict from its trigger, its once-per-customer send's earlier
+ * email to the customer and the one-off campaign gap: a withdrawn trigger
+ * withdraws it; otherwise a customer the campaign already sent its email
+ * skips it; otherwise a moved
  * trigger or the gap defers it to the later of their rechecks.
  */
 export const deliverVerdictOf = (input: {
   readonly trigger: "send" | "withdraw" | "defer";
-  readonly claimed: boolean;
+  readonly alreadySentOnce: boolean;
   readonly gapHold: Option.Option<Temporal.Instant>;
   readonly triggerRecheckAt: Temporal.Instant;
 }): DeliverVerdict => {
   if (input.trigger === "withdraw") return DeliverVerdict.Withdraw();
-  if (input.claimed)
+  if (input.alreadySentOnce)
     return DeliverVerdict.Skip({ reason: "already-sent-once" });
   const deferrals = [
     ...(input.trigger === "defer"

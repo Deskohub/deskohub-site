@@ -83,12 +83,12 @@ describe("deliverVerdictOf", () => {
   const gapEndsAt = instant("2026-11-03T08:00:00Z");
   const verdict = (input: {
     readonly trigger: "send" | "withdraw" | "defer";
-    readonly claimed?: boolean;
+    readonly alreadySentOnce?: boolean;
     readonly gapHold?: Temporal.Instant;
   }) => {
     const judged = deliverVerdictOf({
       trigger: input.trigger,
-      claimed: input.claimed ?? false,
+      alreadySentOnce: input.alreadySentOnce ?? false,
       gapHold: Option.fromNullishOr(input.gapHold),
       triggerRecheckAt,
     });
@@ -105,13 +105,17 @@ describe("deliverVerdictOf", () => {
 
   test("a withdrawn trigger withdraws the run before its claim or gap", () => {
     expect(
-      verdict({ trigger: "withdraw", claimed: true, gapHold: gapEndsAt })
+      verdict({
+        trigger: "withdraw",
+        alreadySentOnce: true,
+        gapHold: gapEndsAt,
+      })
     ).toEqual(DeliverVerdict.Withdraw());
   });
 
-  test("a claimed customer skips the run before any deferral", () => {
+  test("a customer already sent once skips the run before any deferral", () => {
     expect(
-      verdict({ trigger: "defer", claimed: true, gapHold: gapEndsAt })
+      verdict({ trigger: "defer", alreadySentOnce: true, gapHold: gapEndsAt })
     ).toEqual(DeliverVerdict.Skip({ reason: "already-sent-once" }));
   });
 

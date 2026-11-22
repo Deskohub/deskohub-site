@@ -59,9 +59,11 @@ export const makePassHolderGuard = Effect.gen(function* () {
       const [id] = input.batch.dotyposCustomerIds;
       if (id === undefined) return true as const;
       const profiles = yield* profilesFor(input.batch);
+      // `skipPassHolders` rechecks active marketing consent whatever the
+      // campaign's purpose: an operational Send using it is still gated.
       const consenting = yield* consentingCampaignCustomers({
         db,
-        purpose: input.send.campaign.purpose,
+        purpose: "marketing",
         customerIds: [id],
       });
       const reachable = campaignEligibility({

@@ -58,7 +58,7 @@ import {
   AutomatedSendSubmission,
   makeAutomatedCampaignSend,
 } from "./automated-campaign-send";
-import { claimedCampaignCustomers } from "./automation-customer-claims";
+import { customersAlreadySentOnce } from "./automation-customer-claims";
 import { lockAutomationForEngine } from "./automation-lifecycle-lock";
 import { AutomationRunSettlement } from "./automation-run-settlement.service";
 import { appendAutomationRunProgress } from "./automation-run-timeline";
@@ -401,7 +401,8 @@ export const makeDeliverHandler = Effect.gen(function* () {
    * before any write, so a reclaimed worker committing the same unit takes
    * them in the same order. It judges each locked run (`deliverVerdictOf`):
    * ends withdrawn runs
-   * and runs another run of the campaign already claimed, defers runs whose
+   * and, for a once-per-customer send, runs whose customer the campaign
+   * already sent its email (`customersAlreadySentOnce`), defers runs whose
    * trigger moved later or whom the one-off campaign gap holds, and
    * persists the rest as one send with batch 0, recording the send on the
    * unit. The policies are judged afresh at every commit, never from a
@@ -451,9 +452,9 @@ export const makeDeliverHandler = Effect.gen(function* () {
           .for("update")
           .pipe(Effect.map((locked) => new Set(locked.map(({ id }) => id))))
       ),
-      Effect.bind("claimed", () =>
+      Effect.bind("alreadySent", () =>
         sendStep.oncePerCustomer
-          ? claimedCampaignCustomers(db, input.facts.campaignId, customers)
+          ? customersAlreadySentOnce(db, input.facts.campaignId, customers)
           : Effect.succeed(new Set<DotyposCustomerId>())
       ),
       Effect.bind("oneOffEmails", () =>
@@ -463,7 +464,7 @@ export const makeDeliverHandler = Effect.gen(function* () {
       ),
       Effect.let(
         "verdicts",
-        ({ ready, cancellations, claimed, oneOffEmails }) =>
+        ({ ready, cancellations, alreadySent, oneOffEmails }) =>
           Arr.groupBy(
             input.facts.runs
               .flatMap((run) => (ready.has(run.id) ? [run] : []))
@@ -476,7 +477,7 @@ export const makeDeliverHandler = Effect.gen(function* () {
                     cancellations,
                     at: input.at,
                   }),
-                  claimed: claimed.has(run.dotyposCustomerId),
+                  alreadySentOnce: alreadySent.has(run.dotyposCustomerId),
                   gapHold: Option.flatMap(
                     Option.fromNullishOr(sendStep.oneOffCampaignGap),
                     (gap) =>
@@ -609,11 +610,17 @@ export const makeDeliverHandler = Effect.gen(function* () {
     );
 
   /**
-   * A once-per-customer send's claims (D2), for sendable runs the commit
-   * already row-locked: claims their customers in customer order. Returns
-   * the runs that won their claim; a run whose customer another run of the
-   * campaign claimed since the verdict ends `skipped / already-sent-once`.
-   * Without the policy every sendable run goes on.
+   * The customers' claims (D2), for sendable runs the commit already
+   * row-locked, in customer order. Every send claims, so the claim insert
+   * arbitrates between any two runs of the campaign committing at once,
+   * whatever their versions' policies: a once-per-customer send goes on
+   * only with the runs that won their claim, and a run whose customer
+   * another run claimed since the verdict ends `skipped / already-sent-once`.
+   * Without the policy every sendable run goes on, claim won or not.
+   * Earlier runs are settled by the verdict's read, which sees them
+   * committed: a campaign holds one open run per customer, so a run exists
+   * only once the customer's earlier run ended. Pass reminders, exempt from
+   * that, meet their concurrent runs here.
    */
   const claimCustomers = Effect.fn("DeliverUnit.claimCustomers")(
     function* (input: {
@@ -623,7 +630,6 @@ export const makeDeliverHandler = Effect.gen(function* () {
       readonly sendable: readonly DeliverRun[];
       readonly at: Temporal.Instant;
     }) {
-      if (!input.sendStep.oncePerCustomer) return input.sendable;
       if (input.sendable.length === 0) return [];
       const claimed = yield* db
         .insert(customerClaims)
@@ -642,6 +648,7 @@ export const makeDeliverHandler = Effect.gen(function* () {
           target: [customerClaims.campaignId, customerClaims.dotyposCustomerId],
         })
         .returning({ runId: customerClaims.runId });
+      if (!input.sendStep.oncePerCustomer) return input.sendable;
       const won = new Set(claimed.map(({ runId }) => runId));
       const winners = input.sendable.filter((run) => won.has(run.id));
       const losers = input.sendable.filter((run) => !won.has(run.id));

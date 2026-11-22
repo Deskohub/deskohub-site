@@ -230,6 +230,51 @@ describe.skipIf(!database)(
         ).rejects.toThrow(/duplicate key/);
       });
 
+      test("enabling the policy on a later version skips a customer an earlier version already sent", async () => {
+        const plainFlow = policyFlow({}, "ReservationBooked");
+        const { campaignId } = await kit.seedActive(plainFlow, { at: start });
+        const customer = await fixtures.addCustomer("once-later-version");
+        await book(customer, "once-later-version-first", start);
+        await scenario.tick(start.add({ minutes: 1 }));
+        const [first] = await runsOf(campaignId);
+        expect(first).toMatchObject({ status: "ended", outcome: "sent" });
+        // Every send claims, with the policy or not.
+        expect(await claimsOf(campaignId)).toEqual([
+          { customer, runId: first!.id },
+        ]);
+        // As a run from before claims existed, it holds none.
+        await pool.query(
+          "delete from email_campaign_automation_customer_claims where campaign_id = $1",
+          [campaignId]
+        );
+
+        await scenario.lifecycle(
+          (lifecycle) => lifecycle.updateFlow({ campaignId, flow: onceFlow }),
+          start.add({ minutes: 5 })
+        );
+        const previewId = await kit.seedPreview(campaignId, {
+          status: "completed",
+        });
+        await scenario.lifecycle(
+          (lifecycle) =>
+            lifecycle.activate({ campaignId, previewId, activatedBy: null }),
+          start.add({ minutes: 5 })
+        );
+        await book(
+          customer,
+          "once-later-version-second",
+          start.add({ hours: 1 })
+        );
+        await scenario.tick(start.add({ hours: 1, minutes: 1 }));
+
+        expect(await runsOf(campaignId)).toMatchObject([
+          { status: "ended", outcome: "sent" },
+          { status: "ended", outcome: "skipped", reason: "already-sent-once" },
+        ]);
+        expect(mailed()).toEqual([emailOf(customer)]);
+        expect(await claimsOf(campaignId)).toEqual([]);
+      });
+
       test("a claim another run commits while the unit reads Dotypos skips the run without a send", async () => {
         const { campaignId } = await kit.seedActive(onceFlow, { at: start });
         const customer = await fixtures.addCustomer("once-raced");
@@ -273,9 +318,15 @@ describe.skipIf(!database)(
         await book(customer, "once-conflict-first", start);
         await scenario.tick(start.add({ minutes: 1 }));
         const [sent] = await runsOf(campaignId);
+        // The blocker below stands in for a concurrent run of the campaign,
+        // so the verdict's read of earlier runs mustn't see the first one.
         await pool.query(
           "delete from email_campaign_automation_customer_claims where campaign_id = $1",
           [campaignId]
+        );
+        await pool.query(
+          "update email_campaign_automation_runs set send_id = null where id = $1",
+          [sent!.id]
         );
         // Mid-fetch, another transaction takes the claim and holds it
         // uncommitted: the commit's verdict can't see it, and its claim
@@ -675,6 +726,42 @@ describe.skipIf(!database)(
         expect(await claimsOf(campaignId)).toEqual([]);
       });
 
+      test("an operational Send rechecks marketing consent too: withdrawn consent skips the customer at the guard", async () => {
+        // The version pins the purpose the draft had at activation.
+        const { campaignId } = await kit.seedDraft({ flow: guardedFlow });
+        await pool.query(
+          "update email_campaigns set purpose = 'operational' where id = $1",
+          [campaignId]
+        );
+        const previewId = await kit.seedPreview(campaignId, {
+          status: "completed",
+        });
+        await scenario.lifecycle(
+          (lifecycle) =>
+            lifecycle.activate({ campaignId, previewId, activatedBy: null }),
+          start
+        );
+        const { rows: versions } = await pool.query(
+          "select purpose from email_campaign_automation_versions where campaign_id = $1",
+          [campaignId]
+        );
+        expect(versions).toEqual([{ purpose: "operational" }]);
+        const customer = await signUp("guard-operational-consent", start);
+        beforeGuard(campaignId, () =>
+          pool.query(
+            "update customer_marketing_consents set withdrawn_at = $2 where dotypos_customer_id = $1",
+            [customer, start.add({ minutes: 1 }).toString()]
+          )
+        );
+        await scenario.tick(start.add({ minutes: 1 }));
+
+        expect(await runsOf(campaignId)).toMatchObject([
+          { status: "ended", outcome: "skipped", reason: "consent-withdrawn" },
+        ]);
+        expect(requests()).toEqual([]);
+        expect(await claimsOf(campaignId)).toEqual([]);
+      });
+
       test("an Entry pack acquired before the request skips the customer as a pass holder and releases the claim", async () => {
         const { campaignId } = await kit.seedActive(guardedFlow, { at: start });
         const customer = await signUp("guard-pack", start);
@@ -796,6 +883,47 @@ describe.skipIf(!database)(
           { status: "ended", outcome: "sent" },
         ]);
         expect(mailed()).toEqual([emailOf(customer)]);
+      });
+
+      test("a pass acquired between a failed guard read and the unit's retry skips the customer, with no request", async () => {
+        const { campaignId } = await kit.seedActive(guardedFlow, { at: start });
+        const customer = await signUp("guard-retry-pack", start);
+        let failed = false;
+        scenario.dotypos.onRequest(({ method }) =>
+          method !== "getCustomersByIds" || failed
+            ? Effect.void
+            : Effect.promise(() => batchPersisted(campaignId)).pipe(
+                Effect.flatMap((persisted) => {
+                  if (!persisted) return Effect.void;
+                  failed = true;
+                  return Effect.fail(
+                    new DotyposUnavailable({
+                      operation: "getCustomersByIds",
+                      reason: "server",
+                      httpStatus: 503,
+                    })
+                  );
+                })
+              )
+        );
+        await scenario.tick(start.add({ minutes: 1 }));
+        expect(failed).toBe(true);
+        expect(await runsOf(campaignId)).toMatchObject([{ status: "sending" }]);
+        expect(await claimsOf(campaignId)).toHaveLength(1);
+
+        await fixtures.holdPass({
+          customer,
+          kind: "entry-pack",
+          validFrom: "2026-10-20",
+          validUntil: "2026-12-31",
+        });
+        await scenario.tick(start.add({ minutes: 3 }));
+
+        expect(await runsOf(campaignId)).toMatchObject([
+          { status: "ended", outcome: "skipped", reason: "pass-holder" },
+        ]);
+        expect(requests()).toEqual([]);
+        expect(await claimsOf(campaignId)).toEqual([]);
       });
 
       test("a pass holder and another customer on the same tick settle independently", async () => {

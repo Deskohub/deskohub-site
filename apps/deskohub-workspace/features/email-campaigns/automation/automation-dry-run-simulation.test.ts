@@ -239,7 +239,7 @@ describe("simulateRun at a Send step with delivery policies", () => {
         step: send,
         triggerAt: "2026-10-21T10:01:00Z",
         facts: {
-          claimed: true,
+          alreadySentOnce: true,
           oneOffCampaignEmails: [at("2026-10-20T10:00:00Z")],
           guardSkip: Option.some("pass-holder"),
         },
@@ -257,7 +257,7 @@ describe("simulateRun at a Send step with delivery policies", () => {
       simulateSend({
         step: sendWith({ oncePerCustomer: true }),
         triggerAt: "2026-10-21T10:01:00Z",
-        facts: { claimed: true },
+        facts: { alreadySentOnce: true },
       })
     ).toEqual({
       outcome: "skipped",
@@ -282,7 +282,7 @@ describe("simulateRun at a Send step with delivery policies", () => {
         step: sendWith({ oncePerCustomer: true, ...gap }),
         triggerAt: "2026-10-21T10:01:00Z",
         facts: {
-          claimed: true,
+          alreadySentOnce: true,
           oneOffCampaignEmails: [at("2026-10-20T10:00:00Z")],
         },
       })
@@ -385,10 +385,11 @@ describe("simulateRun at a Send step with delivery policies", () => {
   });
 
   describe("in a customer's replay", () => {
-    const replayWith = (
+    const replayRows = (
       step: AutomationStep,
       facts: Partial<SendPolicyFacts>,
-      events: readonly string[]
+      events: readonly string[],
+      undatedChangeAt: Option.Option<Temporal.Instant> = Option.none()
     ) => {
       const sendPolicyFacts = { ...noSendPolicyFacts, ...facts };
       return Effect.runSync(
@@ -397,10 +398,7 @@ describe("simulateRun at a Send step with delivery policies", () => {
           occurredAt: (event) => event,
           now: at("2026-10-22T00:00:00Z"),
           steps: [step],
-          approximation: {
-            undatedChangeAt: Option.none(),
-            countsSimulatedSends: false,
-          },
+          approximation: { undatedChangeAt, countsSimulatedSends: false },
           sendPolicyFacts,
           replay: (event, simulatedSends) =>
             Effect.map(
@@ -414,13 +412,19 @@ describe("simulateRun at a Send step with delivery policies", () => {
               (end): ReplayedEvent => ({ _tag: "Entered", end })
             ),
         })
-      ).map(({ outcome }) => [
+      );
+    };
+    const replayWith = (
+      step: AutomationStep,
+      facts: Partial<SendPolicyFacts>,
+      events: readonly string[]
+    ) =>
+      replayRows(step, facts, events).map(({ outcome }) => [
         outcome.outcome,
         outcome.sendAt?.toString() ?? null,
         outcome.skipReason,
         outcome.projected,
       ]);
-    };
 
     test("a deferred send holds later events off until it goes out", () => {
       expect(
@@ -449,6 +453,30 @@ describe("simulateRun at a Send step with delivery policies", () => {
       ).toEqual([
         ["would-send", "2026-10-10T10:15:00Z", null, false],
         ["skipped", null, "already-sent-once", false],
+      ]);
+    });
+
+    test("a row skipped once per customer after an approximate send is approximate too", () => {
+      const events = ["2026-10-10T10:01:00Z", "2026-10-12T10:01:00Z"];
+      // Statuses read for the first event predate an undated change.
+      const undatedChangeAt = Option.some(at("2026-10-11T00:00:00Z"));
+      const rowsOf = (step: AutomationStep) =>
+        replayRows(step, {}, events, undatedChangeAt).map(
+          ({ outcome, reservationStatusesApproximate }) => [
+            outcome.outcome,
+            outcome.skipReason,
+            reservationStatusesApproximate,
+          ]
+        );
+
+      expect(rowsOf(sendWith({ oncePerCustomer: true }))).toEqual([
+        ["would-send", null, true],
+        ["skipped", "already-sent-once", true],
+      ]);
+      // Without the policy the later row doesn't depend on the earlier send.
+      expect(rowsOf(send)).toEqual([
+        ["would-send", null, true],
+        ["would-send", null, false],
       ]);
     });
 

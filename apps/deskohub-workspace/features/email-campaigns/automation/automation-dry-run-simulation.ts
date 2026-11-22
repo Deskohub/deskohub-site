@@ -44,13 +44,16 @@ export type SendGuardSkipReason = Extract<
 
 /**
  * What a Send step's delivery policies see for one customer, read once by
- * the caller. The claim and the pre-submit check are observed as they are
+ * the caller. Earlier sends and the pre-submit check are observed as they are
  * now, not as they were at a replayed send, like the profile facts the
  * dry run's conditions read.
  */
 export type SendPolicyFacts = {
-  /** `oncePerCustomer`: a run of the campaign already holds the customer's claim. */
-  readonly claimed: boolean;
+  /**
+   * `oncePerCustomer`: the campaign already sent the customer its email, a
+   * claim or an earlier run that reached its send (`customersAlreadySentOnce`).
+   */
+  readonly alreadySentOnce: boolean;
   /**
    * `oneOffCampaignGap`: when the customer's one-off campaign emails went
    * out, ascending. One still in flight is projected as dispatched at its
@@ -71,7 +74,7 @@ export const sendStepOf = (steps: readonly AutomationStep[]) =>
 
 /** A Send step's policies see nothing: no claim, no one-off email, no skip. */
 export const noSendPolicyFacts: SendPolicyFacts = {
-  claimed: false,
+  alreadySentOnce: false,
   oneOffCampaignEmails: [],
   guardSkip: Option.none(),
 };
@@ -197,7 +200,7 @@ export const simulateRun = <E, R>(input: {
 
 /**
  * A run reaching its Send step on tick `at`, in the engine's order: the
- * once-ever claim skips a customer whose claim a run of the campaign holds,
+ * once-ever rule skips a customer the campaign already sent its email,
  * or whose send this dry run already simulated; the one-off campaign gap
  * defers the send; then the pre-submit check skips a pass holder or a
  * customer who withdrew consent, on the tick it would send.
@@ -211,7 +214,7 @@ export const sendStepEnd = (input: {
   const { step, facts } = input;
   if (
     step.oncePerCustomer === true &&
-    (facts.claimed || input.simulatedSends.length > 0)
+    (facts.alreadySentOnce || input.simulatedSends.length > 0)
   ) {
     return {
       outcome: "skipped",
@@ -331,9 +334,10 @@ export type ReplayApproximation = {
  * A row is approximate when the entry audience or a condition decided it
  * from statuses read before the undated change, or when an approximate row
  * could change it: an approximate row might really have entered, or not,
- * so it could hold off any event up to the latest its run can end, and
- * when the flow counts this campaign's sends, it might really have sent,
- * or not, before any later decided row.
+ * so it could hold off any event up to the latest its run can end, and it
+ * might really have sent, or not, before any later decided row: that
+ * changes every later row when the flow counts this campaign's sends, and
+ * every later row reaching a once-per-customer Send step.
  */
 export const replayCustomerEvents = <Event, E, R>(input: {
   /** In `occurredAt` order. */
@@ -351,6 +355,14 @@ export const replayCustomerEvents = <Event, E, R>(input: {
 }): Effect.Effect<readonly ReplayedRow<Event>[], E, R> => {
   const projected = (at: Temporal.Instant) =>
     Temporal.Instant.compare(at, input.now) > 0;
+  // A row reaching a once-per-customer Send step depends on whether an
+  // earlier row really sent.
+  const oncePerCustomerSend = Option.filter(
+    sendStepOf(input.steps),
+    (step) => step.oncePerCustomer === true
+  );
+  const decidedByOncePerCustomer = (outcome: DecidedEvent["outcome"]) =>
+    Option.exists(oncePerCustomerSend, (step) => outcome.stepId === step.id);
   const beforeUndatedChange = (triggerAt: Temporal.Instant) =>
     Option.exists(
       input.approximation.undatedChangeAt,
@@ -374,8 +386,9 @@ export const replayCustomerEvents = <Event, E, R>(input: {
         heldOffBy(replayed.approximateUntil) ||
         (decided.evaluated &&
           (beforeUndatedChange(triggerAt) ||
-            (input.approximation.countsSimulatedSends &&
-              replayed.sendsApproximate)));
+            (replayed.sendsApproximate &&
+              (input.approximation.countsSimulatedSends ||
+                decidedByOncePerCustomer(decided.outcome)))));
       const state: CustomerReplay<Event> = {
         ...replayed,
         ...decided.state,
@@ -521,7 +534,7 @@ const latestRunEnd = (input: {
     evaluateCondition: () => Effect.succeed<AudienceFilterOutcome>("match"),
     sendPolicyFacts: {
       ...(input.sendPolicyFacts ?? noSendPolicyFacts),
-      claimed: false,
+      alreadySentOnce: false,
     },
   }).pipe(Effect.map(({ at }) => at));
 

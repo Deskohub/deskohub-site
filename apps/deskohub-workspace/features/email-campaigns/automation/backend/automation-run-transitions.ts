@@ -21,6 +21,7 @@ import type {
   AutomationRunPhase,
   AutomationRunSkipReason,
 } from "../automation-states";
+import { releasesCustomerClaim } from "./automation-customer-claims";
 import {
   type AutomationRunEndingEntry,
   appendAutomationRunEndings,
@@ -196,16 +197,6 @@ const endingRecord = (
       }),
     })
   );
-
-/**
- * Whether an ending proves the run never mailed the customer. A `withdrawn`
- * run never reached the provider: delivery withdraws a pass reminder only
- * when its first request is refused before admission (a replay or an
- * admitted attempt ends `unconfirmed`), and every other withdrawal comes
- * before the send.
- */
-const releasesCustomerClaim = (outcome: AutomationRunEnding["outcome"]) =>
-  outcome === "skipped" || outcome === "failed" || outcome === "withdrawn";
 
 /**
  * The runs still in `expect`, row-locked in id order (§5.4) within the
