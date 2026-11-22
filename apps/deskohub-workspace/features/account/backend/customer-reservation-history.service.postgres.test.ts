@@ -800,6 +800,7 @@ describe.skipIf(!testDatabase)(
       const fullyRefunded = booking(6);
       const refundOwed = booking(7);
       const partlyRefunded = booking(8);
+      const partRefundOwed = booking(9);
       const providerOnly = DotyposReservationIdSchema.make(
         `dotypos-${uniqueId()}`
       );
@@ -812,6 +813,7 @@ describe.skipIf(!testDatabase)(
         fullyRefunded,
         refundOwed,
         partlyRefunded,
+        partRefundOwed,
       ]) {
         await insertWorkspaceReservation({
           id: workspaceReservationId,
@@ -900,6 +902,11 @@ describe.skipIf(!testDatabase)(
         amount: 7000,
         refund: { state: "refunded", amount: 2000 },
       });
+      await settleAttempt(partRefundOwed.workspaceReservationId, {
+        provider: "nexi",
+        amount: 7000,
+        refund: { state: "required", target: 2000 },
+      });
 
       const passId = uniqueId();
       await testDatabase!.pool.query(
@@ -939,6 +946,7 @@ describe.skipIf(!testDatabase)(
                   fullyRefunded,
                   refundOwed,
                   partlyRefunded,
+                  partRefundOwed,
                 ].map(({ dotyposReservationId, day }) =>
                   makeDotyposReservation({
                     id: dotyposReservationId,
@@ -976,6 +984,7 @@ describe.skipIf(!testDatabase)(
         [fullyRefunded.workspaceReservationId]: undefined,
         [refundOwed.workspaceReservationId]: undefined,
         [partlyRefunded.workspaceReservationId]: true,
+        [partRefundOwed.workspaceReservationId]: true,
         [providerOnly]: undefined,
       });
       expect(
