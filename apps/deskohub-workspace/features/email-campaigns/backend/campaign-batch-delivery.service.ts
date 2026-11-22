@@ -1257,7 +1257,7 @@ const requestGuardedBatch = Effect.fn("CampaignBatchDelivery.requestGuarded")(
         })
       );
       if (Result.isFailure(verdict)) {
-        yield* Ref.set(denial, verdict);
+        yield* Ref.set(denial, Result.fail(verdict.failure));
       } else if (verdict.success === true) {
         yield* Ref.set(admitted, true);
         return;
