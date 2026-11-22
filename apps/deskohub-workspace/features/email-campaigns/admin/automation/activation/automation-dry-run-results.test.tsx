@@ -99,6 +99,46 @@ describe("AutomationDryRunResults", () => {
     );
   });
 
+  test("explains the outcome counts of a pass forecast", () => {
+    const view = renderResults(
+      automationDryRunFixture({ kind: "schedule", asOf, nextFires: [asOf] }),
+      { trigger: { _tag: "EntryPackExpiring" } }
+    );
+
+    expect(
+      view.getByText(
+        m.emailAutomationActivationPassForecastCounts({}, { locale })
+      )
+    ).not.toBeNull();
+  });
+
+  test.each([
+    [
+      "schedule",
+      {
+        kind: "schedule",
+        asOf,
+        nextFires: [asOf],
+        frequency: {
+          maxFiresPerHour: 1,
+          firesMoreThanHourly: false,
+        },
+      },
+    ],
+    ["replay", { kind: "replay" }],
+    ["previous draft", { kind: "schedule", asOf, nextFires: [] }],
+  ] as const)("keeps the ordinary counts for a %s report", (_, overrides) => {
+    const view = renderResults(automationDryRunFixture(overrides), {
+      trigger: { _tag: "UnlimitedEnding" },
+    });
+
+    expect(
+      view.queryByText(
+        m.emailAutomationActivationPassForecastCounts({}, { locale })
+      )
+    ).toBeNull();
+  });
+
   test("dates a replay's window and says it read current profiles", () => {
     const view = renderResults(automationDryRunFixture({ asOf }));
 

@@ -117,10 +117,12 @@ function DryRunRequiredExplanation({
   readonly locale: Locale;
 }) {
   const kind = automation.trigger?.kind;
-  const explanation =
-    kind === "schedule" || (kind !== undefined && isPassReminderKind(kind))
-      ? m.emailAutomationActivationExplainSchedule
-      : m.emailAutomationActivationExplainReplay;
+  let explanation = m.emailAutomationActivationExplainReplay;
+  if (kind === "schedule") {
+    explanation = m.emailAutomationActivationExplainSchedule;
+  } else if (kind !== undefined && isPassReminderKind(kind)) {
+    explanation = m.emailAutomationActivationExplainPassForecast;
+  }
   return (
     <div className="max-w-prose space-y-2 text-navy-blue/75">
       <p>{explanation({}, { locale })}</p>

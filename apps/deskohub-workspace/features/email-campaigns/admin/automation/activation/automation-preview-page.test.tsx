@@ -234,7 +234,7 @@ describe("AutomationPreviewPage activation gate", () => {
     [
       "pass reminder",
       { kind: "entry-pack-expiring", frequency: null },
-      m.emailAutomationActivationExplainSchedule,
+      m.emailAutomationActivationExplainPassForecast,
     ],
   ] as const)(
     "explains what a %s trigger's dry run evaluates",

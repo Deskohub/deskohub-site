@@ -149,11 +149,22 @@ function DryRunSummary({
   readonly locale: Locale;
   readonly replay: boolean;
 }) {
+  // A matching pass draft supplies its forecast date without a schedule frequency.
+  const passForecast =
+    !replay &&
+    dryRun.frequency === null &&
+    dryRun.nextFires.length === 1 &&
+    dryRun.nextFires[0] === dryRun.asOf;
   return (
     <AdministrationDetailSection
       title={m.emailAutomationActivationResultsTitle({}, { locale })}
     >
       <div className="space-y-5">
+        {passForecast && (
+          <p className="text-navy-blue/70 text-sm leading-6">
+            {m.emailAutomationActivationPassForecastCounts({}, { locale })}
+          </p>
+        )}
         <dl className="grid grid-cols-2 gap-4 max-sm:[&>div]:flex max-sm:[&>div]:flex-col max-sm:[&>div]:justify-between sm:grid-cols-3">
           {automationPreviewOutcomes.map((outcome) => (
             <AdministrationFact
