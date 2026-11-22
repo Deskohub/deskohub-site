@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7](https://github.com/totalolage/deskohub-site/compare/mobile-v0.2.6...mobile-v0.2.7) (2026-11-22)
+
+### Bug Fixes
+
+* **mobile:** keep onboarding profile edits if the app restarts before you finish
+* **mobile:** enlarge the Reserved Desk card artwork in coworking booking
+
 ## [0.2.6](https://github.com/totalolage/deskohub-site/compare/mobile-v0.2.5...mobile-v0.2.6) (2026-11-19)
 
 ### Features
