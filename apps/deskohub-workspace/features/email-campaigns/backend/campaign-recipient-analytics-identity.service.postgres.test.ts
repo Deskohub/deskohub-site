@@ -45,11 +45,14 @@ describe.skipIf(!testDatabase)(
 
     const identitiesOf = (
       customers: readonly DotyposCustomerId[],
-      decisions: ReadonlyMap<CustomerAccountId, TestAnalyticsConsent>
+      decisions: ReadonlyMap<CustomerAccountId, TestAnalyticsConsent>,
+      guarded = false
     ) =>
       Effect.runPromise(
         Effect.flatMap(CampaignRecipientAnalyticsIdentity, (identity) =>
-          identity.forRecipients(customers)
+          guarded
+            ? identity.forGuardedRecipients(customers)
+            : identity.forRecipients(customers)
         ).pipe(
           Effect.provide(
             CampaignRecipientAnalyticsIdentity.Default.pipe(
@@ -65,6 +68,18 @@ describe.skipIf(!testDatabase)(
           )
         )
       );
+
+    test("a guarded request distinguishes a temporary loss of consent data", async () => {
+      const customer = customerId("guarded-unavailable");
+      const account = await linkAccount(customer);
+      const decisions = new Map([[account, "unavailable" as const]]);
+      await expect(
+        identitiesOf([customer], decisions, true)
+      ).rejects.toMatchObject({
+        _tag: "AnalyticsConsentUnavailable",
+      });
+      expect(await identitiesOf([customer], decisions)).toEqual(new Map());
+    });
 
     test("names only recipients whose account currently grants analytics", async () => {
       const granted = customerId("granted");
@@ -83,9 +98,10 @@ describe.skipIf(!testDatabase)(
         ])
       );
 
-      expect([...identities]).toEqual([
-        [granted, `workspace-account:${grantedAccount}`],
-      ]);
+      expect(identities.size).toBe(1);
+      expect(String(identities.get(granted))).toBe(
+        `workspace-account:${grantedAccount}`
+      );
     });
 
     test("names no one whose consent can't be read", async () => {
@@ -102,9 +118,10 @@ describe.skipIf(!testDatabase)(
         ])
       );
 
-      expect([...identities]).toEqual([
-        [granted, `workspace-account:${grantedAccount}`],
-      ]);
+      expect(identities.size).toBe(1);
+      expect(String(identities.get(granted))).toBe(
+        `workspace-account:${grantedAccount}`
+      );
     });
   }
 );

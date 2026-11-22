@@ -25,6 +25,9 @@ const getGlobalWorkspaceFeatureFlagValues = mock(() =>
 );
 let constancy: WorkspaceFeatureFlagConstancy = { kind: "per-request" };
 const getWorkspaceFeatureFlagConstancy = mock(() => Promise.resolve(constancy));
+const readLiveWorkspaceFeatureFlagConstantValue = mock((_key: string) =>
+  Effect.fail("definition unavailable")
+);
 const visitorSubject = {
   distinctId: "consented-visitor",
   sendFeatureFlagEvents: true,
@@ -41,6 +44,7 @@ mock.module("./feature-flag-evaluation-mode.server", () => ({
   getGlobalWorkspaceFeatureFlagValue,
   getGlobalWorkspaceFeatureFlagValues,
   getWorkspaceFeatureFlagConstancy,
+  readLiveWorkspaceFeatureFlagConstantValue,
 }));
 
 const getCurrentFeatureFlagAudience = mock(() =>
@@ -57,6 +61,35 @@ describe("WorkspaceFeatureFlagService", () => {
     getGlobalWorkspaceFeatureFlagValue.mockClear();
     getGlobalWorkspaceFeatureFlagValues.mockClear();
     getCurrentFeatureFlagAudience.mockClear();
+  });
+
+  test("a live-only flag read refuses an unavailable definition even when the cached flag is open", async () => {
+    const { WorkspaceFeatureFlagService } = await import(
+      "./workspace-feature-flag.service"
+    );
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const flags = yield* WorkspaceFeatureFlagService;
+        const previous = constancy;
+        constancy = { kind: "constant", value: true };
+        try {
+          const cached = yield* flags.constantValue("cowork_passes");
+          const live = yield* Effect.result(
+            flags.constantValue("cowork_passes", {
+              requireLiveDefinition: true,
+            })
+          );
+          return { cached, live };
+        } finally {
+          constancy = previous;
+        }
+      }).pipe(Effect.provide(WorkspaceFeatureFlagService.Default))
+    );
+    expect(result.cached).toEqual(Option.some(true));
+    expect(Result.isFailure(result.live)).toBe(true);
+    expect(readLiveWorkspaceFeatureFlagConstantValue).toHaveBeenCalledWith(
+      "cowork_passes"
+    );
   });
 
   test("does not read the request subject for globally evaluated flags", async () => {

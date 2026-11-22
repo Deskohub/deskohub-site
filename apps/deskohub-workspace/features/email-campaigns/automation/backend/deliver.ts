@@ -8,6 +8,7 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { Array as Arr, Effect, Match, Option, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
+  emailCampaignRecipients,
   emailCampaignSends,
   emailCampaignAutomationRuns as runs,
   emailCampaignAutomationWorkUnits as units,
@@ -36,7 +37,6 @@ import {
   automationRunIdSchema,
   automationVersionIdSchema,
 } from "../automation-identifiers";
-import type { AutomationTriggerKind } from "../automation-states";
 import { automationTickAtOrBefore } from "../automation-ticks";
 import {
   readsTriggeringVisit,
@@ -44,6 +44,7 @@ import {
   type WorkspaceCancellations,
   withdrawnByWorkspaceCancellation,
 } from "../automation-trigger-verification";
+import { isPassReminderKind } from "../automation-triggers";
 import {
   AutomatedSendSubmission,
   makeAutomatedCampaignSend,
@@ -61,6 +62,12 @@ import {
   type PlannedAutomationUnit,
   registerAutomationUnitHandler,
 } from "./automation-unit-handler";
+import {
+  makePassReminderDelivery,
+  type PassReminderRun,
+  type PreparedPassReminder,
+  passReminderContent,
+} from "./pass-reminder-delivery";
 
 /** A deliver unit holds at most this many runs of one version (§1.2.13). */
 export const deliverUnitRunLimit = 100;
@@ -90,6 +97,7 @@ export const plannedDeliverUnit = (input: {
   /** Triggering reservations to verify. */
   readonly reservations: number;
   readonly customers: number;
+  readonly readsPassDeskLabel?: boolean;
   readonly at: Temporal.Instant;
 }): PlannedAutomationUnit => ({
   kind: "deliver",
@@ -109,15 +117,14 @@ export const plannedDeliverUnit = (input: {
 const deliverRequestCost = (input: {
   readonly reservations: number;
   readonly customers: number;
+  readonly readsPassDeskLabel?: boolean;
 }) =>
   dotyposIdReadRequests(input.reservations) +
-  dotyposIdReadRequests(input.customers);
+  dotyposIdReadRequests(input.customers) +
+  Number(input.readsPassDeskLabel ?? false);
 
-type DeliverRun = {
+type DeliverRun = PassReminderRun & {
   readonly id: AutomationRunId;
-  readonly dotyposCustomerId: DotyposCustomerId;
-  readonly triggerKind: AutomationTriggerKind;
-  readonly triggerAt: Temporal.Instant;
   readonly triggerReservationId: WorkspaceReservationId | null;
 };
 
@@ -133,6 +140,7 @@ type DeliverFacts = {
   >;
   readonly profiles: ReadonlyMap<DotyposCustomerId, DotyposCustomer>;
   readonly locales: ReadonlyMap<DotyposCustomerId, Locale>;
+  readonly passReminder: Option.Option<PreparedPassReminder>;
 };
 
 const decodeFlow = Schema.decodeUnknownOption(automationFlowSchema);
@@ -148,17 +156,24 @@ export const makeDeliverHandler = Effect.gen(function* () {
   const dotypos = yield* DotyposService;
   const candidates = yield* CampaignCandidateRepository;
   const sends = yield* makeAutomatedCampaignSend;
+  const passReminders = yield* makePassReminderDelivery;
   const runSettlement = yield* AutomationRunSettlement;
   const context = yield* Effect.context<WorkspaceDatabase | DotyposService>();
+
+  const passTrigger = {
+    dotyposCustomerId: runs.dotyposCustomerId,
+    triggerKind: runs.triggerKind,
+    triggerAt: runs.triggerAt,
+    triggerPassId: runs.triggerPassId,
+    passReminderContext: runs.passReminderContext,
+  };
 
   /** The unit's runs still open at their send step and owned by it. */
   const loadRuns = (unit: ClaimedAutomationUnit<DeliverSubject>) =>
     db
       .select({
         id: runs.id,
-        dotyposCustomerId: runs.dotyposCustomerId,
-        triggerKind: runs.triggerKind,
-        triggerAt: runs.triggerAt,
+        ...passTrigger,
         triggerReservationId: runs.triggerReservationId,
       })
       .from(runs)
@@ -172,6 +187,26 @@ export const makeDeliverHandler = Effect.gen(function* () {
         )
       )
       .orderBy(asc(runs.id));
+
+  const loadPassReminderForSend = (sendId: CampaignSendId) =>
+    db
+      .select({ ...passTrigger, locale: emailCampaignRecipients.locale })
+      .from(runs)
+      .leftJoin(
+        emailCampaignRecipients,
+        and(
+          eq(emailCampaignRecipients.sendId, runs.sendId),
+          eq(emailCampaignRecipients.dotyposCustomerId, runs.dotyposCustomerId)
+        )
+      )
+      .where(
+        and(
+          eq(runs.sendId, sendId),
+          inArray(runs.triggerKind, ["entry-pack-expiring", "unlimited-ending"])
+        )
+      )
+      .limit(1)
+      .pipe(Effect.map(([run]) => Option.fromNullishOr(run)));
 
   const loadVersion = (versionId: AutomationVersionId) =>
     db
@@ -242,8 +277,23 @@ export const makeDeliverHandler = Effect.gen(function* () {
             )
           )
       ),
+      Effect.bind("passReminder", ({ version, runs: [run, ...other] }) =>
+        run &&
+        other.length === 0 &&
+        isPassReminderKind(run.triggerKind) &&
+        version.purpose === "marketing"
+          ? passReminders.prepare(run)
+          : Effect.succeed(Option.none<PreparedPassReminder>())
+      ),
       Effect.map(
-        ({ version, runs: open, visits, profiles, locales }): DeliverFacts => ({
+        ({
+          version,
+          runs: open,
+          visits,
+          profiles,
+          locales,
+          passReminder,
+        }): DeliverFacts => ({
           campaignId: version.campaignId,
           sendStepId: Option.flatMap(decodeFlow(version.flow), (flow) =>
             Option.fromNullishOr(
@@ -254,10 +304,18 @@ export const makeDeliverHandler = Effect.gen(function* () {
           visits,
           profiles,
           locales,
+          passReminder,
         })
       ),
       Effect.catchIf(isDatabaseQueryError, (cause) =>
         Effect.fail(new AutomationUnitFetchFailure({ code: "database", cause }))
+      ),
+      Effect.catchTag(
+        "ReleaseGateUnavailableError",
+        () =>
+          new AutomationUnitFetchFailure({
+            code: "pass-reminder-gate-unavailable",
+          })
       )
     );
 
@@ -426,6 +484,10 @@ export const makeDeliverHandler = Effect.gen(function* () {
               dueAt: null,
               sendId,
               updatedAt: input.at,
+              ...Option.match(input.facts.passReminder, {
+                onNone: () => ({}),
+                onSome: ({ snapshot }) => ({ passReminderContext: snapshot }),
+              }),
             })
             .where(
               and(
@@ -444,42 +506,53 @@ export const makeDeliverHandler = Effect.gen(function* () {
               dotyposCustomerId: runs.dotyposCustomerId,
             })
         ),
-        Effect.tap(({ sendId, sending }) =>
-          sending.length === 0
-            ? // No run moved (only possible for a commit about to lose its
-              // claim): the empty send goes.
-              db
-                .delete(emailCampaignSends)
-                .where(eq(emailCampaignSends.id, sendId))
-            : sends
-                .persistBatch({
-                  sendId,
-                  recipients: sending.map(({ dotyposCustomerId }) => ({
-                    dotyposCustomerId,
-                    locale:
-                      input.facts.locales.get(dotyposCustomerId) ??
-                      campaignFallbackLocale,
-                  })),
-                  profiles: input.facts.profiles,
-                  at: input.at,
-                })
-                .pipe(
-                  Effect.andThen(
-                    appendAutomationRunProgress(
-                      sending.map(({ id }) => ({
-                        runId: id,
-                        kind: "send-queued" as const,
-                        stepId: input.sendStepId,
-                        at: input.at,
-                        detail: { sendId },
-                      }))
-                    )
+        Effect.tap(({ sendId, sending }) => {
+          if (sending.length === 0) {
+            // A commit about to lose its claim can leave an empty send.
+            return db
+              .delete(emailCampaignSends)
+              .where(eq(emailCampaignSends.id, sendId));
+          }
+          const recipients = sending.map(({ dotyposCustomerId }) => ({
+            dotyposCustomerId,
+            locale:
+              input.facts.locales.get(dotyposCustomerId) ??
+              campaignFallbackLocale,
+          }));
+          const [recipient] = recipients;
+          const content =
+            recipient && Option.isSome(input.facts.passReminder)
+              ? passReminderContent({
+                  reminder: input.facts.passReminder.value,
+                  locale: recipient.locale,
+                  profile: input.facts.profiles.get(
+                    recipient.dotyposCustomerId
                   ),
-                  Effect.andThen(
-                    recordUnitSend({ unitId: input.unit.id, sendId })
-                  )
+                })
+              : undefined;
+          return sends
+            .persistBatch({
+              sendId,
+              recipients,
+              profiles: input.facts.profiles,
+              at: input.at,
+              ...(content && { content }),
+            })
+            .pipe(
+              Effect.andThen(
+                appendAutomationRunProgress(
+                  sending.map(({ id }) => ({
+                    runId: id,
+                    kind: "send-queued" as const,
+                    stepId: input.sendStepId,
+                    at: input.at,
+                    detail: { sendId },
+                  }))
                 )
-        )
+              ),
+              Effect.andThen(recordUnitSend({ unitId: input.unit.id, sendId }))
+            );
+        })
       );
 
   const recordUnitSend = (input: {
@@ -519,33 +592,42 @@ export const makeDeliverHandler = Effect.gen(function* () {
     fetch,
     commit,
     submit: (unit, facts) =>
-      sends
-        .submit({
-          sendId: unit.sendId,
-          profiles: Option.map(facts, ({ profiles }) => profiles),
-        })
-        .pipe(
-          Effect.map(
-            (submission) => (at: Temporal.Instant) =>
-              // Serialises the settlement with archive (§5.4).
-              Effect.forEach(
-                Option.toArray(Option.fromNullishOr(unit.campaignId)),
-                (campaignId) => lockAutomationForEngine(campaignId)
-              ).pipe(
-                Effect.andThen(
-                  settleSubmission({ sendId: unit.sendId, submission, at })
-                )
+      loadPassReminderForSend(unit.sendId).pipe(
+        Effect.flatMap((pass) => {
+          const profiles = Option.map(facts, ({ profiles }) => profiles);
+          return sends.submit({
+            sendId: unit.sendId,
+            profiles,
+            ...(Option.isSome(pass) && {
+              requestPassReminder: passReminders.request({
+                run: pass.value,
+                profiles,
+                claim: { unitId: unit.id, claimId: unit.claimId },
+              }),
+            }),
+          });
+        }),
+        Effect.map(
+          (submission) => (at: Temporal.Instant) =>
+            // Serialises the settlement with archive (§5.4).
+            Effect.forEach(
+              Option.toArray(Option.fromNullishOr(unit.campaignId)),
+              (campaignId) => lockAutomationForEngine(campaignId)
+            ).pipe(
+              Effect.andThen(
+                settleSubmission({ sendId: unit.sendId, submission, at })
               )
-          ),
-          Effect.catchTag("CampaignDeliveryIncomplete", (cause) =>
-            Effect.fail(
-              new AutomationUnitFetchFailure({
-                code: "delivery-incomplete",
-                cause,
-              })
             )
-          )
         ),
+        Effect.catchTag("CampaignDeliveryIncomplete", (cause) =>
+          Effect.fail(
+            new AutomationUnitFetchFailure({
+              code: "delivery-incomplete",
+              cause,
+            })
+          )
+        )
+      ),
   };
 
   return registerAutomationUnitHandler(handler);
@@ -565,6 +647,9 @@ const verdictOf = (input: {
   readonly at: Temporal.Instant;
 }): "send" | "withdraw" | "defer" => {
   const { run } = input;
+  if (isPassReminderKind(run.triggerKind)) {
+    return Option.isSome(input.facts.passReminder) ? "send" : "withdraw";
+  }
   const reservation = run.triggerReservationId;
   if (reservation === null) return "send";
   if (

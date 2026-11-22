@@ -28,8 +28,8 @@ mock.module("@/features/checkout/actions/reopen-payment-page", () => ({
   reopenPaymentPage: mock(),
 }));
 mock.module("@/features/account/withdrawal-actions", () => ({
-  quoteReservationWithdrawal: mock(),
-  withdrawFromReservation: mock(),
+  quoteContractWithdrawal: mock(),
+  withdrawFromContract: mock(),
 }));
 mock.module("@/features/checkout/actions/prepare-payment-retry", () => ({
   preparePaymentRetry: mock(),

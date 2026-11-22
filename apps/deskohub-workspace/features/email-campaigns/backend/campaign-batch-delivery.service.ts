@@ -7,11 +7,14 @@ import {
   DotyposService,
 } from "@deskohub/dotypos";
 import {
+  type EmailBatchOptions,
   type EmailBatchResult,
   type EmailMessage,
+  type EmailSendError,
+  EmailServiceError,
   EmailServiceTag,
 } from "@deskohub/email";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, exists, gt, inArray, sql } from "drizzle-orm";
 import {
   Array as Arr,
   Context,
@@ -21,6 +24,7 @@ import {
   Layer,
   Match,
   Option,
+  Ref,
   Result,
 } from "effect";
 import {
@@ -28,6 +32,7 @@ import {
   type WorkspaceTransaction,
 } from "@/db/database.service";
 import {
+  emailCampaignAutomationWorkUnits,
   emailCampaignDeliveryBatches,
   emailCampaignRecipients,
 } from "@/db/schema";
@@ -37,6 +42,7 @@ import { AnalyticsConsentLedger } from "@/features/legal/backend/analytics-conse
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
 import { currentInstant } from "@/shared/utils/temporal";
+import type { AutomationWorkUnitId } from "../automation/automation-identifiers";
 import type {
   CampaignLocalizedContent,
   CampaignPurpose,
@@ -96,6 +102,7 @@ export type DeliveredCampaign = {
 /** An attempt with the campaign email it mails. */
 export type DeliveredAttempt = CampaignDeliveryAttempt & {
   readonly campaign: DeliveredCampaign;
+  readonly guarded?: true;
 };
 
 /** A frozen recipient a batch may carry. */
@@ -106,6 +113,26 @@ export type BatchRecipient = {
 
 /** Dotypos profiles read for a batch's recipients. */
 export type BatchProfiles = ReadonlyMap<DotyposCustomerId, DotyposCustomer>;
+
+type BatchRequestMode = "first" | "replay";
+export type BatchRequestClaim = {
+  readonly unitId: AutomationWorkUnitId;
+  readonly claimId: string;
+};
+type BatchRequestAdmission = {
+  readonly guard: BatchRequestGuard;
+  readonly claim: BatchRequestClaim;
+  readonly preparedHash: string;
+  readonly failureCodeOnStalePayload: string;
+};
+
+/** A rejected admission check proves nothing was attempted at that boundary. */
+export type BatchRequestGuard = Effect.Effect<
+  | true
+  | { readonly skipReason: CampaignRecipientSkipReason }
+  | { readonly failureCode: string },
+  CampaignDeliveryIncomplete | DatabaseQueryError
+>;
 
 type ReachableRecipient = BatchRecipient & { readonly to: string };
 
@@ -173,6 +200,19 @@ export type BatchRequest = Data.TaggedEnum<{
     readonly batch: PersistedBatch;
     readonly admit: Effect.Effect<void, CampaignDeliveryIncomplete>;
   };
+  Guarded: {
+    readonly batch: PersistedBatch;
+    readonly claim: BatchRequestClaim;
+    readonly failureCodeOnStalePayload: string;
+    readonly prepare: Effect.Effect<
+      Option.Option<{
+        readonly send: DeliveredAttempt;
+        readonly profiles: BatchProfiles;
+        readonly guard: BatchRequestGuard;
+      }>,
+      CampaignDeliveryIncomplete | DatabaseQueryError
+    >;
+  };
 }>;
 
 export const BatchRequest = Data.taggedEnum<BatchRequest>();
@@ -203,8 +243,9 @@ type RecipientOutcome =
  */
 export type BatchOutcome = Data.TaggedEnum<{
   Accepted: { readonly recipients: readonly RecipientOutcome[] };
+  Skipped: { readonly reason: CampaignRecipientSkipReason };
   Refused: {
-    readonly request: "first" | "replay";
+    readonly request: BatchRequestMode;
     readonly failureCode: string | undefined;
   };
   Unconfirmed: { readonly reason: "key-expired" | "payload-changed" };
@@ -218,6 +259,7 @@ export const BatchOutcome = Data.taggedEnum<BatchOutcome>();
  */
 class UnreplayableBatch extends Data.TaggedError("UnreplayableBatch")<{
   readonly reason: "key-expired" | "payload-changed";
+  readonly skipReason?: CampaignRecipientSkipReason;
 }> {}
 
 export interface ICampaignBatchDelivery {
@@ -503,7 +545,7 @@ export class CampaignBatchDelivery extends Context.Service<
             insertBatch({
               attempt: send,
               reachable,
-              payloadHash: campaignDeliveryPayloadHash(messages),
+              payloadHash: `${send.guarded ? guardedPayloadPrefix : ""}${campaignDeliveryPayloadHash(messages)}`,
               at,
             }).pipe(Effect.when(Effect.succeed(reachable.length > 0))),
           Unrendered: ({ send, reachable }) =>
@@ -692,44 +734,119 @@ export class CampaignBatchDelivery extends Context.Service<
         return yield* BatchRequest.$match(input, {
           First: ({ batch, messages }) =>
             sendBatch({ batch, messages, request: "first" }),
-          Reproduced: (reproduced) =>
+          Reproduced: ({ batch, send, profiles }) =>
             requestReproduced({
-              ...reproduced,
-              profiles: Option.some(reproduced.profiles),
-              admit: Effect.void,
+              batch,
+              mode: "first",
+              prepare: Effect.succeed({
+                send,
+                profiles: Option.some(profiles),
+              }),
             }),
-          Replay: (replay) =>
-            requestReproduced({ ...replay, profiles: Option.none() }),
+          Replay: ({ batch, send, admit }) =>
+            requestReproduced({
+              batch,
+              mode: "replay",
+              prepare: admit.pipe(
+                Effect.as({ send, profiles: Option.none<BatchProfiles>() })
+              ),
+            }),
+          Guarded: ({ batch, claim, prepare, failureCodeOnStalePayload }) => {
+            const [, preparedHash, providerHash] =
+              /^guarded-v1:([a-f0-9]{64})(?::([a-f0-9]{64}))?$/.exec(
+                batch.payloadHash
+              ) ?? [];
+            if (preparedHash === undefined) {
+              return Effect.succeed(
+                BatchOutcome.Unconfirmed({ reason: "payload-changed" })
+              );
+            }
+            return requestReproduced({
+              batch,
+              mode: providerHash === undefined ? "first" : "replay",
+              failureCodeOnStalePayload,
+              prepare: prepare.pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.fail(payloadChanged()),
+                    onSome: ({ send, profiles, guard }) =>
+                      Effect.succeed({
+                        send,
+                        profiles: Option.some(profiles),
+                        admission: {
+                          guard,
+                          claim,
+                          preparedHash,
+                          failureCodeOnStalePayload,
+                        },
+                      }),
+                  })
+                )
+              ),
+            });
+          },
         });
       });
 
       /**
        * Requests a persisted batch with its reproduced payload, within its
-       * key's replay window. Without the profiles it was persisted from, the
-       * request is a replay. A batch that can't be requested again is
+       * key's replay window. A batch that can't be requested again is
        * `Unconfirmed`.
        */
       const requestReproduced = (input: {
-        readonly send: DeliveredAttempt;
         readonly batch: PersistedBatch;
-        readonly profiles: Option.Option<BatchProfiles>;
-        readonly admit: Effect.Effect<void, CampaignDeliveryIncomplete>;
+        readonly mode: BatchRequestMode;
+        readonly failureCodeOnStalePayload?: string;
+        readonly prepare: Effect.Effect<
+          {
+            readonly send: DeliveredAttempt;
+            readonly profiles: Option.Option<BatchProfiles>;
+            readonly admission?: BatchRequestAdmission;
+          },
+          CampaignDeliveryIncomplete | DatabaseQueryError | UnreplayableBatch
+        >;
       }) =>
         ensureReplayWindow(input.batch).pipe(
-          Effect.andThen(input.admit),
-          Effect.andThen(reproducePayload(input)),
-          Effect.flatMap((messages) =>
-            sendBatch({
+          Effect.andThen(input.prepare),
+          Effect.flatMap(({ send, profiles, admission }) =>
+            reproducePayload({
+              send,
               batch: input.batch,
-              messages,
-              request: Option.isNone(input.profiles) ? "replay" : "first",
-            })
+              profiles,
+              payloadHash: admission?.preparedHash ?? input.batch.payloadHash,
+              recheckConsent: admission !== undefined,
+            }).pipe(
+              Effect.flatMap((messages) =>
+                sendBatch({
+                  batch: input.batch,
+                  messages,
+                  request: input.mode,
+                  admission,
+                })
+              )
+            )
           ),
-          Effect.catchTag("UnreplayableBatch", ({ reason }) =>
-            Effect.logWarning("Campaign delivery batch unconfirmed", {
-              batchIndex: input.batch.batchIndex,
-              reason,
-            }).pipe(Effect.as(BatchOutcome.Unconfirmed({ reason })))
+          Effect.catchTag(
+            "UnreplayableBatch",
+            ({ reason, skipReason }): Effect.Effect<BatchOutcome> => {
+              if (input.mode === "first" && input.failureCodeOnStalePayload) {
+                if (skipReason !== undefined) {
+                  return Effect.succeed(
+                    BatchOutcome.Skipped({ reason: skipReason })
+                  );
+                }
+                return Effect.succeed(
+                  BatchOutcome.Refused({
+                    request: "first",
+                    failureCode: input.failureCodeOnStalePayload,
+                  })
+                );
+              }
+              return Effect.logWarning("Campaign delivery batch unconfirmed", {
+                batchIndex: input.batch.batchIndex,
+                reason,
+              }).pipe(Effect.as(BatchOutcome.Unconfirmed({ reason })));
+            }
           )
         );
 
@@ -754,6 +871,8 @@ export class CampaignBatchDelivery extends Context.Service<
         readonly batch: PersistedBatch;
         /** The batch was persisted from these profiles. */
         readonly profiles: Option.Option<BatchProfiles>;
+        readonly payloadHash: string;
+        readonly recheckConsent: boolean;
       }) =>
         loadBatchRecipients(input.batch).pipe(
           Effect.filterOrFail(
@@ -764,26 +883,35 @@ export class CampaignBatchDelivery extends Context.Service<
           Effect.flatMap((recipients) =>
             Option.match(input.profiles, {
               onNone: () => hydrate({ send: input.send, recipients }),
-              // They passed the recheck when the batch was persisted.
               onSome: (profiles) =>
-                Effect.succeed(
-                  classifyRecipients({
-                    recipients,
-                    profiles,
-                    consenting: new Set(input.batch.dotyposCustomerIds),
-                  })
+                (input.recheckConsent
+                  ? loadConsenting({
+                      campaign: input.send.campaign,
+                      customerIds: input.batch.dotyposCustomerIds,
+                    })
+                  : Effect.succeed(new Set(input.batch.dotyposCustomerIds))
+                ).pipe(
+                  Effect.map((consenting) =>
+                    classifyRecipients({ recipients, profiles, consenting })
+                  )
                 ),
             })
           ),
           Effect.flatMap((hydrated) =>
             Effect.fromResult(Result.all(hydrated)).pipe(
-              Effect.mapError(payloadChanged)
+              Effect.mapError(
+                ({ reason: skipReason }) =>
+                  new UnreplayableBatch({
+                    reason: "payload-changed",
+                    skipReason,
+                  })
+              )
             )
           ),
           Effect.flatMap((recipients) => {
             const rendering = { send: input.send, recipients };
             const matches = (messages: readonly EmailMessage[]) =>
-              campaignDeliveryPayloadHash(messages) === input.batch.payloadHash;
+              campaignDeliveryPayloadHash(messages) === input.payloadHash;
             return renderMessages(rendering).pipe(
               Effect.filterOrFail(matches, payloadChanged),
               Effect.catchTag("UnreplayableBatch", (error) =>
@@ -819,11 +947,19 @@ export class CampaignBatchDelivery extends Context.Service<
        * person is read at each request and isn't part of the persisted
        * payload, so a replay names whom consent allows then.
        */
-      const withRecipientIdentities = (input: {
-        readonly batch: PersistedBatch;
-        readonly messages: readonly EmailMessage[];
-      }) =>
-        analyticsIdentity.forRecipients(input.batch.dotyposCustomerIds).pipe(
+      const withRecipientIdentities = (
+        input: {
+          readonly batch: PersistedBatch;
+          readonly messages: readonly EmailMessage[];
+        },
+        guarded = false
+      ) =>
+        (guarded
+          ? analyticsIdentity
+              .forGuardedRecipients(input.batch.dotyposCustomerIds)
+              .pipe(Effect.catch(() => incomplete(input.batch)))
+          : analyticsIdentity.forRecipients(input.batch.dotyposCustomerIds)
+        ).pipe(
           Effect.map((identities) =>
             Arr.zipWith(
               input.messages,
@@ -843,56 +979,175 @@ export class CampaignBatchDelivery extends Context.Service<
           )
         );
 
+      const checkGuardedRecipientIdentity = Effect.fn(
+        "CampaignBatchDelivery.checkGuardedRecipientIdentity"
+      )(function* (
+        input: {
+          readonly batch: PersistedBatch;
+          readonly messages: readonly EmailMessage[];
+        },
+        prepared: readonly EmailMessage[],
+        admission: BatchRequestAdmission
+      ) {
+        const eligibility = yield* admission.guard;
+        if (eligibility !== true) return eligibility;
+
+        const current = yield* withRecipientIdentities(input, true);
+        return current.every(
+          (message, index) =>
+            message.recipientIdentity === prepared[index]?.recipientIdentity
+        )
+          ? (true as const)
+          : { failureCode: admission.failureCodeOnStalePayload };
+      });
+
       /**
        * Sends a persisted batch under its key, once. An unknown outcome
        * fails, leaving the batch `requested` for a replay.
        */
-      const sendBatch = (input: {
-        readonly batch: PersistedBatch;
-        readonly messages: readonly EmailMessage[];
-        readonly request: "first" | "replay";
-      }) =>
-        withRecipientIdentities(input).pipe(
-          Effect.flatMap((messages) =>
-            email.sendBatch(messages, {
-              idempotencyKey: campaignDeliveryBatchIdempotencyKey(input.batch),
-              // A repeat stays with the provider that may have taken the
-              // earlier request, so no other provider mails it again.
-              replay: input.request === "replay",
-            })
-          ),
-          Effect.map((results) =>
-            BatchOutcome.Accepted({
-              recipients: results.map((result) =>
-                recipientOutcome(result, input.request)
-              ),
-            })
-          ),
-          Effect.tap(({ recipients }) =>
-            logUnsentEmails(unsentEmails(recipients))
-          ),
-          Effect.catchTags({
-            EmailServiceError: (error) =>
-              Effect.logError("Campaign delivery batch refused", {
+      const sendBatch = Effect.fn("CampaignBatchDelivery.sendBatch")(
+        function* (input: {
+          readonly batch: PersistedBatch;
+          readonly messages: readonly EmailMessage[];
+          readonly request: BatchRequestMode;
+          readonly admission?: BatchRequestAdmission | undefined;
+        }) {
+          const { admission } = input;
+          const request = (
+            messages: readonly EmailMessage[],
+            beforeRequest?: EmailBatchOptions["beforeRequest"]
+          ) =>
+            email
+              .sendBatch(messages, {
+                ...(beforeRequest && { beforeRequest }),
+                idempotencyKey: campaignDeliveryBatchIdempotencyKey(
+                  input.batch
+                ),
+                // A repeat stays with the provider that may have taken the
+                // earlier request, so no other provider mails it again.
                 replay: input.request === "replay",
-              }).pipe(
-                Effect.as(
-                  BatchOutcome.Refused({
-                    request: input.request,
-                    failureCode: error.code,
+              })
+              .pipe(
+                Effect.map((results) =>
+                  BatchOutcome.Accepted({
+                    recipients: results.map((result) =>
+                      recipientOutcome(result, input.request)
+                    ),
                   })
+                ),
+                Effect.tap(({ recipients }) =>
+                  logUnsentEmails(unsentEmails(recipients))
                 )
+              );
+          return yield* withRecipientIdentities(
+            input,
+            admission !== undefined
+          ).pipe(
+            Effect.flatMap((messages) =>
+              admission
+                ? requestGuardedBatch({
+                    batch: input.batch,
+                    mode: input.request,
+                    guard: checkGuardedRecipientIdentity(
+                      input,
+                      messages,
+                      admission
+                    ),
+                    pin: (fingerprint) =>
+                      pinProviderRequest({
+                        batch: input.batch,
+                        mode: input.request,
+                        claim: admission.claim,
+                        preparedHash: admission.preparedHash,
+                        fingerprint,
+                      }),
+                    request: (beforeRequest) =>
+                      request(messages, beforeRequest),
+                  })
+                : request(messages)
+            ),
+            Effect.catchTags({
+              EmailServiceError: (error) =>
+                Effect.logError("Campaign delivery batch refused", {
+                  replay: input.request === "replay",
+                }).pipe(
+                  Effect.as(
+                    BatchOutcome.Refused({
+                      request: input.request,
+                      failureCode: error.code,
+                    })
+                  )
+                ),
+              NetworkError: () =>
+                Effect.logWarning(
+                  "Campaign delivery batch outcome unknown; it will be replayed"
+                ).pipe(Effect.andThen(incomplete(input.batch))),
+            }),
+            Effect.annotateLogs({
+              batchIndex: input.batch.batchIndex,
+              batchSize: input.batch.dotyposCustomerIds.length,
+            })
+          );
+        }
+      );
+
+      /**
+       * The second digest pins the provider's request, including data the
+       * campaign message hash omits, such as a PostHog recipient identity.
+       * Only the current automation claim can admit it. A replay with no
+       * recorded admission can't prove which provider request would repeat.
+       */
+      const pinProviderRequest = Effect.fn(
+        "CampaignBatchDelivery.pinProviderRequest"
+      )(function* (input: {
+        readonly batch: PersistedBatch;
+        readonly mode: BatchRequestMode;
+        readonly claim: BatchRequestClaim;
+        readonly preparedHash: string;
+        readonly fingerprint: string;
+      }) {
+        const { batch, claim, fingerprint, mode } = input;
+        const prepared = `${guardedPayloadPrefix}${input.preparedHash}`;
+        const pinned = `${prepared}:${fingerprint}`;
+        const acceptedHashes = mode === "first" ? [prepared, pinned] : [pinned];
+        if (!acceptedHashes.includes(batch.payloadHash)) return false;
+
+        const now = yield* currentInstant;
+        const [admitted] = yield* db
+          .update(emailCampaignDeliveryBatches)
+          .set({ payloadHash: pinned })
+          .where(
+            and(
+              eq(emailCampaignDeliveryBatches.sendId, batch.sendId),
+              eq(
+                emailCampaignDeliveryBatches.deliveryAttempt,
+                batch.deliveryAttempt
               ),
-            NetworkError: () =>
-              Effect.logWarning(
-                "Campaign delivery batch outcome unknown; it will be replayed"
-              ).pipe(Effect.andThen(incomplete(input.batch))),
-          }),
-          Effect.annotateLogs({
-            batchIndex: input.batch.batchIndex,
-            batchSize: input.batch.dotyposCustomerIds.length,
-          })
-        );
+              eq(emailCampaignDeliveryBatches.batchIndex, batch.batchIndex),
+              eq(emailCampaignDeliveryBatches.status, "requested"),
+              inArray(emailCampaignDeliveryBatches.payloadHash, acceptedHashes),
+              exists(
+                db
+                  .select({ id: emailCampaignAutomationWorkUnits.id })
+                  .from(emailCampaignAutomationWorkUnits)
+                  .where(
+                    and(
+                      eq(emailCampaignAutomationWorkUnits.id, claim.unitId),
+                      eq(
+                        emailCampaignAutomationWorkUnits.claimId,
+                        claim.claimId
+                      ),
+                      eq(emailCampaignAutomationWorkUnits.sendId, batch.sendId),
+                      eq(emailCampaignAutomationWorkUnits.status, "claimed"),
+                      gt(emailCampaignAutomationWorkUnits.claimExpiresAt, now)
+                    )
+                  )
+              )
+            )
+          )
+          .returning({ batchIndex: emailCampaignDeliveryBatches.batchIndex });
+        return admitted !== undefined;
+      });
 
       const settle: ICampaignBatchDelivery["settle"] = Effect.fn(
         "CampaignBatchDelivery.settle"
@@ -932,6 +1187,17 @@ export class CampaignBatchDelivery extends Context.Service<
         BatchOutcome.$match(input.outcome, {
           Accepted: ({ recipients }) =>
             settleRecipients({ ...input, recipients }),
+          Skipped: ({ reason }) =>
+            markSkipped({
+              sendId: input.batch.sendId,
+              at: input.at,
+              skipped: input.batch.dotyposCustomerIds.map(
+                (dotyposCustomerId) => ({
+                  dotyposCustomerId,
+                  reason,
+                })
+              ),
+            }).pipe(Effect.asVoid),
           Refused: ({ request: refused, failureCode }) =>
             settleBatchRecipients({
               ...input,
@@ -1039,10 +1305,100 @@ export class CampaignBatchDelivery extends Context.Service<
   );
 }
 
+const guardedPayloadPrefix = "guarded-v1:";
+
+/**
+ * The guard runs again for provider retries. Once any attempt
+ * was admitted, a later denial cannot prove the message was never sent.
+ */
+const requestGuardedBatch = Effect.fn("CampaignBatchDelivery.requestGuarded")(
+  function* (input: {
+    readonly batch: PersistedBatch;
+    readonly mode: BatchRequestMode;
+    readonly guard: BatchRequestGuard;
+    readonly pin: (
+      fingerprint: string
+    ) => Effect.Effect<boolean, DatabaseQueryError>;
+    readonly request: (
+      beforeRequest: NonNullable<EmailBatchOptions["beforeRequest"]>
+    ) => Effect.Effect<BatchOutcome, EmailSendError>;
+  }) {
+    const admitted = yield* Ref.make(false);
+    const denial = yield* Ref.make<
+      | Result.Result<
+          BatchOutcome,
+          CampaignDeliveryIncomplete | DatabaseQueryError
+        >
+      | undefined
+    >(undefined);
+    const beforeRequest = Effect.fn(
+      "CampaignBatchDelivery.beforeProviderRequest"
+    )(
+      function* (fingerprint: string) {
+        const verdict = yield* Effect.result(
+          Effect.gen(function* () {
+            const current = yield* input.guard;
+            if (current !== true) return current;
+            const pinned = yield* input.pin(fingerprint);
+            return pinned ? (true as const) : ("request-changed" as const);
+          })
+        );
+        if (Result.isFailure(verdict)) {
+          yield* Ref.set(denial, Result.fail(verdict.failure));
+        } else if (verdict.success === true) {
+          yield* Ref.set(admitted, true);
+          return;
+        } else if (verdict.success === "request-changed") {
+          yield* Ref.set(
+            denial,
+            Result.succeed(
+              BatchOutcome.Unconfirmed({ reason: "payload-changed" })
+            )
+          );
+        } else {
+          const attempted = yield* Ref.get(admitted);
+          const refusal =
+            "skipReason" in verdict.success
+              ? BatchOutcome.Skipped({ reason: verdict.success.skipReason })
+              : BatchOutcome.Refused({
+                  request: "first",
+                  failureCode: verdict.success.failureCode,
+                });
+          const outcome =
+            input.mode === "replay" || attempted
+              ? BatchOutcome.Unconfirmed({ reason: "payload-changed" })
+              : refusal;
+          yield* Ref.set(denial, Result.succeed(outcome));
+        }
+        return yield* new EmailServiceError("Email request admission failed");
+      },
+      (effect) =>
+        effect.pipe(
+          Effect.onInterrupt(() =>
+            Ref.set(
+              denial,
+              Result.fail(
+                new CampaignDeliveryIncomplete({
+                  sendId: input.batch.sendId,
+                  deliveryAttempt: input.batch.deliveryAttempt,
+                })
+              )
+            )
+          )
+        )
+    );
+    const outcome = yield* Effect.result(input.request(beforeRequest));
+    const denied = yield* Ref.get(denial);
+    if (denied !== undefined) return yield* Effect.fromResult(denied);
+    return yield* Effect.fromResult(outcome);
+  }
+);
+
 /** The batch status each outcome settles as. */
 const batchStatusOf = (outcome: BatchOutcome) =>
   BatchOutcome.$match(outcome, {
     Accepted: () => "accepted" as const,
+    Skipped: () => "rejected" as const,
     Refused: ({ request }) =>
       request === "first" ? ("rejected" as const) : ("unconfirmed" as const),
     Unconfirmed: () => "unconfirmed" as const,

@@ -10,6 +10,7 @@ import {
 import { testEmailAddress } from "@deskohub/test-email";
 import { useAction } from "next-safe-action/hooks";
 import { m } from "@/features/i18n";
+import { orderIdSchema } from "@/features/order";
 import { workspaceReservationIdSchema } from "@/features/reservation/persistence-contracts";
 import { formatMoney } from "@/shared/money/money";
 import {
@@ -45,19 +46,23 @@ const receipt = {
   receiptEmail: testEmailAddress("customer"),
 };
 
-const quoteReservationWithdrawal = mock(
-  (_input: { readonly orderId: string }): Promise<ActionResult> =>
+const quoteContractWithdrawal = mock(
+  (_input: {
+    readonly contract: { kind: string; orderId: string };
+  }): Promise<ActionResult> =>
     Promise.resolve({
       data: { status: "available", quote: quote("Alex Example") },
     })
 );
-const withdrawFromReservation = mock(
-  (_input: { readonly orderId: string }): Promise<ActionResult> =>
+const withdrawFromContract = mock(
+  (_input: {
+    readonly contract: { kind: string; orderId: string };
+  }): Promise<ActionResult> =>
     Promise.resolve({ data: { status: "withdrawn", receipt } })
 );
 mock.module("@/features/account/withdrawal-actions", () => ({
-  quoteReservationWithdrawal,
-  withdrawFromReservation,
+  quoteContractWithdrawal,
+  withdrawFromContract,
 }));
 
 registerWorkspaceComponentTestEnv();
@@ -70,9 +75,12 @@ const { act, cleanup, fireEvent, render } = await import(
 const { ReservationWithdrawalLink } = await import(
   "./reservation-withdrawal-link"
 );
+const { WithdrawalLink } = await import("./withdrawal-link");
 
 const locale = "en-US";
 const orderId = workspaceReservationIdSchema.make("reservation-1");
+
+const contract = { kind: "reservation", orderId } as const;
 
 const openDialog = async () => {
   const view = render(
@@ -99,8 +107,8 @@ const confirmButton = (view: ReturnType<typeof render>) =>
 
 describe("ReservationWithdrawalLink", () => {
   beforeEach(() => {
-    quoteReservationWithdrawal.mockClear();
-    withdrawFromReservation.mockClear();
+    quoteContractWithdrawal.mockClear();
+    withdrawFromContract.mockClear();
     workspaceRouterRefresh.mockClear();
   });
 
@@ -116,7 +124,7 @@ describe("ReservationWithdrawalLink", () => {
   test("quotes on open, withdraws on confirm, then refreshes the page once closed", async () => {
     const view = await openDialog();
 
-    expect(quoteReservationWithdrawal).toHaveBeenCalledWith({ orderId });
+    expect(quoteContractWithdrawal).toHaveBeenCalledWith({ contract });
     expect(await view.findByText("Alex Example")).toBeTruthy();
     expect(
       view.queryByLabelText(m.withdrawalConfirmNameLabel({}, { locale }))
@@ -126,8 +134,8 @@ describe("ReservationWithdrawalLink", () => {
       fireEvent.click(await confirmButton(view));
     });
 
-    expect(withdrawFromReservation).toHaveBeenCalledWith({
-      orderId,
+    expect(withdrawFromContract).toHaveBeenCalledWith({
+      contract,
       refundTermsKey: "two-days",
     });
     expect(
@@ -148,8 +156,50 @@ describe("ReservationWithdrawalLink", () => {
     expect(workspaceRouterRefresh).toHaveBeenCalledTimes(1);
   });
 
+  test("shows the pass, order number and used entries in the buyer's locale", async () => {
+    const locale = "cs-CZ";
+    const orderId = orderIdSchema.make(crypto.randomUUID());
+    const contract = { kind: "entry-pack", orderId } as const;
+    quoteContractWithdrawal.mockImplementationOnce(() =>
+      Promise.resolve({
+        data: {
+          status: "available",
+          quote: {
+            ...quote("Alex Example"),
+            contractId: orderId,
+            contractLabel: "Balíček vstupů",
+            refundBasis: {
+              kind: "partial",
+              unit: "entry",
+              unstarted: 3,
+              total: 5,
+            },
+          },
+        },
+      })
+    );
+    const view = render(
+      <WithdrawalLink contract={contract} locale={locale} reference={orderId} />
+    );
+    await act(async () => {
+      fireEvent.click(
+        view.getByRole("button", {
+          name: m.reservationWithdrawalAction({}, { locale }),
+        })
+      );
+    });
+
+    expect(quoteContractWithdrawal).toHaveBeenCalledWith({ contract });
+    expect(await view.findByText("Číslo objednávky")).toBeTruthy();
+    expect(view.getByText("Balíček vstupů")).toBeTruthy();
+    expect(view.getByText("Za využité vstupy (2)")).toBeTruthy();
+    expect(
+      view.queryByText(m.withdrawalReservationReference({}, { locale }))
+    ).toBeNull();
+  });
+
   test("asks for the name when the account has none, and sends the typed one", async () => {
-    quoteReservationWithdrawal.mockImplementationOnce(() =>
+    quoteContractWithdrawal.mockImplementationOnce(() =>
       Promise.resolve({ data: { status: "available", quote: quote(null) } })
     );
     const view = await openDialog();
@@ -157,7 +207,7 @@ describe("ReservationWithdrawalLink", () => {
     await act(async () => {
       fireEvent.click(await confirmButton(view));
     });
-    expect(withdrawFromReservation).not.toHaveBeenCalled();
+    expect(withdrawFromContract).not.toHaveBeenCalled();
     expect(
       await view.findByText(m.withdrawalConfirmNameRequired({}, { locale }))
     ).toBeTruthy();
@@ -172,18 +222,18 @@ describe("ReservationWithdrawalLink", () => {
       fireEvent.click(await confirmButton(view));
     });
 
-    expect(withdrawFromReservation).toHaveBeenCalledWith({
-      orderId,
+    expect(withdrawFromContract).toHaveBeenCalledWith({
+      contract,
       customerName: "Sam Typed",
       refundTermsKey: "two-days",
     });
   });
 
   test("shows the updated refund and keeps the name until the customer confirms again", async () => {
-    quoteReservationWithdrawal.mockImplementationOnce(() =>
+    quoteContractWithdrawal.mockImplementationOnce(() =>
       Promise.resolve({ data: { status: "available", quote: quote(null) } })
     );
-    withdrawFromReservation
+    withdrawFromContract
       .mockImplementationOnce(() =>
         Promise.resolve({
           data: {
@@ -221,9 +271,9 @@ describe("ReservationWithdrawalLink", () => {
       formatMoney({ ...paid, value: 100_000 }, locale)
     );
     expect(name.value).toBe("Sam Typed");
-    expect(withdrawFromReservation).toHaveBeenCalledTimes(1);
-    expect(withdrawFromReservation).toHaveBeenLastCalledWith({
-      orderId,
+    expect(withdrawFromContract).toHaveBeenCalledTimes(1);
+    expect(withdrawFromContract).toHaveBeenLastCalledWith({
+      contract,
       customerName: "Sam Typed",
       refundTermsKey: "two-days",
     });
@@ -236,9 +286,9 @@ describe("ReservationWithdrawalLink", () => {
     await act(async () => {
       fireEvent.click(await confirmButton(view));
     });
-    expect(withdrawFromReservation.mock.calls.slice(1)).toEqual([
-      [{ orderId, customerName: "Sam Typed", refundTermsKey: "one-day" }],
-      [{ orderId, customerName: "Sam Typed", refundTermsKey: "one-day" }],
+    expect(withdrawFromContract.mock.calls.slice(1)).toEqual([
+      [{ contract, customerName: "Sam Typed", refundTermsKey: "one-day" }],
+      [{ contract, customerName: "Sam Typed", refundTermsKey: "one-day" }],
     ]);
     expect(
       await view.findByRole("heading", {
@@ -248,7 +298,7 @@ describe("ReservationWithdrawalLink", () => {
   });
 
   test("asks for the name when the server needs one the profile couldn't give", async () => {
-    withdrawFromReservation.mockImplementationOnce(() =>
+    withdrawFromContract.mockImplementationOnce(() =>
       Promise.resolve({ data: { status: "name_required" } })
     );
     const view = await openDialog();
@@ -263,7 +313,7 @@ describe("ReservationWithdrawalLink", () => {
   });
 
   test("explains a refusal instead of the statement", async () => {
-    quoteReservationWithdrawal.mockImplementationOnce(() =>
+    quoteContractWithdrawal.mockImplementationOnce(() =>
       Promise.resolve({ data: { status: "refused", reason: "period_ended" } })
     );
     const view = await openDialog();
@@ -279,7 +329,7 @@ describe("ReservationWithdrawalLink", () => {
   });
 
   test("offers a retry when the quote can't be read", async () => {
-    quoteReservationWithdrawal.mockImplementationOnce(() =>
+    quoteContractWithdrawal.mockImplementationOnce(() =>
       Promise.reject(new Error("network down"))
     );
     const view = await openDialog();
@@ -292,12 +342,12 @@ describe("ReservationWithdrawalLink", () => {
       );
     });
 
-    expect(quoteReservationWithdrawal).toHaveBeenCalledTimes(2);
+    expect(quoteContractWithdrawal).toHaveBeenCalledTimes(2);
     expect(await confirmButton(view)).toBeTruthy();
   });
 
   test("keeps the statement with an error when the withdrawal can't be sent", async () => {
-    withdrawFromReservation.mockImplementationOnce(() =>
+    withdrawFromContract.mockImplementationOnce(() =>
       Promise.resolve({ serverError: "Withdrawal unavailable right now." })
     );
     const view = await openDialog();

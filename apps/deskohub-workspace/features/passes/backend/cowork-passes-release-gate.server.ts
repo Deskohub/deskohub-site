@@ -10,3 +10,4 @@ const coworkPassesRequest = releaseGateForRequest(CoworkPassesReleaseGate, {
 });
 
 export const isCoworkPassesPageOpenAfterConnection = coworkPassesRequest.isOpen;
+export const CoworkPassesReleaseGateRequest = coworkPassesRequest.layer;

@@ -16,6 +16,7 @@
   "withdrawalPaidAmount": "Оплачено",
   "withdrawalRefundAmount": "Ми повернемо вам",
   "withdrawalStartedDays": "За розпочаті дні ({started}/{total})",
+  "withdrawalStartedEntries": "За використані відвідування ({count})",
   "withdrawalStartedHours": "За розпочаті години ({started}/{total})",
   "withdrawalConfirmRefundNote": "На початковий спосіб оплати протягом 14 днів.",
   "withdrawalRefundChanged": "Сума повернення змінилася. Перевірте нову суму та ще раз підтвердьте відмову від договору.",

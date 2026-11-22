@@ -48,7 +48,7 @@ export const contractWithdrawalNoticeEmailSubject = ({
   "contractKind" | "contractLabel" | "refundAmount"
 >) => {
   const messageOptions = { locale: staffLocale };
-  if (contractKind === "unlimited-pass") {
+  if (contractKind === "unlimited-pass" || contractKind === "entry-pack") {
     return `${m.withdrawalNoticeEmailHeading({}, messageOptions)} · ${contractLabel}`;
   }
   return refundAmount.value > 0
@@ -79,7 +79,8 @@ export function ContractWithdrawalNoticeEmail(
 ) {
   const messageOptions = { locale: staffLocale };
   const refunds = props.refundAmount.value > 0;
-  const reservation = props.contractKind !== "unlimited-pass";
+  const reservation =
+    props.contractKind === undefined || props.contractKind === "reservation";
   const formattedRefund = formatMoney(props.refundAmount, staffLocale);
   const reservationRefundInstruction = refunds
     ? m.withdrawalNoticeActionRefund(

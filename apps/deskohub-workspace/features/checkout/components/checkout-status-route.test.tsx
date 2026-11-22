@@ -11,7 +11,7 @@ import type { OrderKind } from "@/features/order";
 import { orderIdSchema } from "@/features/order";
 import type { EntryPackStatus } from "@/features/passes/backend/entry-pack-status";
 import { getReservationAccessCookieName } from "@/features/reservation/backend/reservation-access-cookie";
-import type { ReservationWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
+import type { ContractWithdrawalEntry } from "@/features/withdrawal/withdrawal-read-model";
 import { maskEmailAddress } from "@/shared/utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 
@@ -142,9 +142,22 @@ mock.module(
 );
 
 // The reservation's withdrawal entry, and the reservations it was read for.
-let withdrawalEntry: ReservationWithdrawalEntry = { status: "none" };
+let withdrawalEntry: ContractWithdrawalEntry = { status: "none" };
 const withdrawalEntryReads: string[] = [];
+let passWithdrawal: ContractWithdrawalEntry = { status: "none" };
+const passWithdrawalReads: { kind: string; id: string; offer: boolean }[] = [];
 mock.module("@/features/withdrawal/backend/withdrawal-entry.server", () => ({
+  readPassWithdrawalEntry: ({
+    contract,
+    offerWithdrawal,
+  }: {
+    contract: { kind: string; id: string };
+    offerWithdrawal: boolean;
+  }) =>
+    Effect.sync(() => {
+      passWithdrawalReads.push({ ...contract, offer: offerWithdrawal });
+      return passWithdrawal;
+    }),
   readReservationWithdrawalEntry: (input: { readonly reservationId: string }) =>
     Effect.sync(() => {
       withdrawalEntryReads.push(input.reservationId);
@@ -166,7 +179,7 @@ mock.module("@/features/checkout/components/checkout-status-page", () => ({
     readonly presentation: string;
     readonly resendInvitation?: typeof resendReservationInvitation;
     readonly status: CheckoutStatusViewModel;
-    readonly withdrawal?: ReservationWithdrawalEntry;
+    readonly withdrawal?: ContractWithdrawalEntry;
   }) => (
     <article
       data-locale={locale}
@@ -263,6 +276,14 @@ mock.module(
   })
 );
 
+mock.module("@/features/withdrawal/components/withdrawal-link", () => ({
+  WithdrawalLink: ({ contract }: { contract: { kind: string } }) => (
+    <button data-withdrawal-kind={contract.kind} type="button">
+      Withdraw from contract
+    </button>
+  ),
+}));
+
 const { CheckoutStatusRoute } = await import("./checkout-status-route");
 const { getReservationStatusSignInPath } = signIn;
 
@@ -315,6 +336,8 @@ describe("CheckoutStatusRoute", () => {
     passStatusReads.length = 0;
     passStatus = { status: "not_found" };
     passPurchaseOpen = true;
+    passWithdrawal = { status: "none" };
+    passWithdrawalReads.length = 0;
     readCookieNames.length = 0;
     connections = 0;
     signedOut = false;
@@ -624,6 +647,56 @@ describe("CheckoutStatusRoute", () => {
     expect(failed.html).not.toContain("/passes/entry-pack");
   });
 
+  test.each([
+    [5, "entry-pack"],
+    [null, "unlimited-pass"],
+  ] as const)(
+    "offers withdrawal on the buyer's paid pass status (%s entries)",
+    async (entryCount, kind) => {
+      orderKind = "pass-purchase";
+      passStatus = {
+        ...passOrder,
+        entryCount,
+        status: "paid",
+        paidAt: Temporal.Instant.from("2027-01-01T10:00:00Z"),
+        validFrom: "2027-01-01",
+        validUntil: "2027-03-01",
+        gift: false,
+      } as EntryPackStatus;
+      passWithdrawal = { status: "offered" };
+      const { errors, html } = await renderRoute({ order: passOrderId });
+
+      expect(errors).toEqual([]);
+      expect(html).toContain(`data-withdrawal-kind="${kind}"`);
+      expect(passWithdrawalReads).toEqual([
+        { kind, id: passOrderId, offer: true },
+      ]);
+    }
+  );
+
+  test("shows a recorded pass withdrawal while purchase continuation is closed", async () => {
+    orderKind = "pass-purchase";
+    passPurchaseOpen = false;
+    passStatus = {
+      ...passOrder,
+      status: "refund_required",
+      lateCapture: false,
+    };
+    passWithdrawal = {
+      status: "withdrawn",
+      refundAmount: { value: 25000, exponent: 2, currency: "CZK" },
+    };
+    const { errors, html } = await renderRoute({ order: passOrderId });
+
+    expect(errors).toEqual([]);
+    expect(html).toContain("received your withdrawal");
+    expect(html).toContain("250");
+    expect(html).not.toContain("data-withdrawal-kind");
+    expect(passWithdrawalReads).toEqual([
+      { kind: "entry-pack", id: passOrderId, offer: true },
+    ]);
+  });
+
   test("the pass status renders the partial refund without a payment action", async () => {
     orderKind = "pass-purchase";
     passStatus = {
@@ -638,6 +711,9 @@ describe("CheckoutStatusRoute", () => {
     expect(html).toContain("250");
     expect(html).toContain("The rest of your refund is still pending.");
     expect(html).not.toContain("Try again");
+    expect(passWithdrawalReads).toEqual([
+      { kind: "entry-pack", id: passOrderId, offer: true },
+    ]);
   });
 
   test("preserves the return outcome when a pass purchase requires sign-in", async () => {
@@ -667,6 +743,7 @@ describe("CheckoutStatusRoute", () => {
     expect(errors[0]).toBeInstanceOf(NotFoundSignal);
     expect(loadCalls).toEqual([]);
     expect(html).not.toContain("data-entry-pack-status");
+    expect(passWithdrawalReads).toEqual([]);
   });
 
   test("answers an invalid order id with not found before loading", async () => {

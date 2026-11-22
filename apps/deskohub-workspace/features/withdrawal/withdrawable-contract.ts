@@ -1,6 +1,8 @@
+import type { DotyposReservationId } from "@deskohub/dotypos";
 import { Data, type Effect, type Option } from "effect";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { Locale } from "@/features/i18n";
+import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { Money } from "@/shared/money/money";
 import type {
   WithdrawalAssessment,
@@ -15,12 +17,23 @@ export type WithdrawableContractRef = {
   readonly id: string;
 };
 
+export type WithdrawalBookingInterval = {
+  readonly reservationId: WorkspaceReservationId;
+  readonly dotyposReservationId: DotyposReservationId;
+  readonly interval: {
+    readonly startsAt: Temporal.Instant;
+    readonly endsAt: Temporal.Instant;
+  };
+};
+
 /** A customer's contract as its family reads it for a withdrawal. */
 export type WithdrawableContract = {
   readonly ref: WithdrawableContractRef;
   /** Identifies the contract in the statement and the receipt, in the locale read. */
   readonly label: string;
   readonly paidAmount: Money;
+  /** Booking intervals resolved before recording, keyed by the provider booking. */
+  readonly bookingIntervals?: readonly WithdrawalBookingInterval[];
   /** The contract's withdrawal standing at `now`. */
   readonly assess: (now: Temporal.Instant) => WithdrawalAssessment;
 };
@@ -72,6 +85,7 @@ export interface WithdrawableContractFamily {
     readonly contractId: string;
     readonly accountId: CustomerAccountId;
     readonly locale: Locale;
+    readonly assessedAt?: Temporal.Instant;
   }) => Effect.Effect<
     Option.Option<WithdrawableContract>,
     WithdrawableContractUnavailableError

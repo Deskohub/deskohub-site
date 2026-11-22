@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "6f08a997-c79f-421f-ae35-9a106ede68a3",
+  "id": "808dac01-ef42-4f90-9e77-f8922cee5e81",
   "prevIds": [
     "70065cf2-6e4a-4b5c-bfd4-afd472468850"
   ],
@@ -3856,32 +3856,6 @@
       "generated": null,
       "identity": null,
       "name": "trigger_reservation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "email_campaign_automation_runs"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "trigger_pass_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "email_campaign_automation_runs"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "pass_reminder_context",
       "entityType": "columns",
       "schema": "public",
       "table": "email_campaign_automation_runs"
@@ -14764,55 +14738,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "campaign_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "dotypos_customer_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"status\" <> 'ended' and \"trigger_pass_id\" is null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "email_campaign_automation_runs_one_open_customer_run_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "email_campaign_automation_runs"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "trigger_pass_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"trigger_pass_id\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "email_campaign_automation_runs_one_pass_run_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "email_campaign_automation_runs"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "due_at",
           "isExpression": false,
           "asc": true,
@@ -18803,23 +18728,6 @@
       "table": "email_campaign_automation_runs"
     },
     {
-      "nameExplicit": false,
-      "columns": [
-        "trigger_pass_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "pass_purchases",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "email_campaign_automation_runs_uvm3UnjpWtuk_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "email_campaign_automation_runs"
-    },
-    {
       "nameExplicit": true,
       "columns": [
         "version_id",
@@ -21994,7 +21902,7 @@
       "table": "contract_withdrawals"
     },
     {
-      "value": "(\"refund_unit\" is null and \"refund_unstarted_units\" is null and \"refund_total_units\" is null and \"refund_amount_value\" = \"paid_amount_value\") or (\"refund_unit\" in ('day', 'hour') and (\"refund_unstarted_units\" > 0 or (\"contract_kind\" = 'unlimited-pass' and \"refund_unit\" = 'day' and \"refund_unstarted_units\" = 0 and \"refund_amount_value\" = 0)) and \"refund_total_units\" > \"refund_unstarted_units\")",
+      "value": "(\"refund_unit\" is null and \"refund_unstarted_units\" is null and \"refund_total_units\" is null and \"refund_amount_value\" = \"paid_amount_value\")\n        or ((\"refund_unit\" in ('day', 'hour') or (\"contract_kind\" = 'entry-pack' and \"refund_unit\" = 'entry'))\n          and (\"refund_unstarted_units\" > 0\n            or (((\"contract_kind\" = 'unlimited-pass' and \"refund_unit\" = 'day')\n              or (\"contract_kind\" = 'entry-pack' and \"refund_unit\" = 'entry'))\n              and \"refund_unstarted_units\" = 0 and \"refund_amount_value\" = 0))\n          and \"refund_total_units\" > \"refund_unstarted_units\")",
       "name": "contract_withdrawals_refund_basis_check",
       "entityType": "checks",
       "schema": "public",
@@ -22330,7 +22238,7 @@
       "table": "email_campaign_automation_run_events"
     },
     {
-      "value": "\"trigger_kind\" in ('schedule', 'reservation-booked', 'reservation-cancelled', 'reservation-started', 'reservation-finished', 'account-created', 'entry-pack-expiring', 'unlimited-ending')",
+      "value": "\"trigger_kind\" in ('schedule', 'reservation-booked', 'reservation-cancelled', 'reservation-started', 'reservation-finished', 'account-created')",
       "name": "email_campaign_automation_runs_trigger_kind_check",
       "entityType": "checks",
       "schema": "public",
@@ -22360,13 +22268,6 @@
     {
       "value": "(\"trigger_kind\" like 'reservation-%') = (\"trigger_reservation_id\" is not null)",
       "name": "email_campaign_automation_runs_trigger_check",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "email_campaign_automation_runs"
-    },
-    {
-      "value": "(\"trigger_kind\" in ('entry-pack-expiring', 'unlimited-ending')) = (\"trigger_pass_id\" is not null) and (\"trigger_pass_id\" is null) = (\"pass_reminder_context\" is null)",
-      "name": "email_campaign_automation_runs_pass_trigger_check",
       "entityType": "checks",
       "schema": "public",
       "table": "email_campaign_automation_runs"
