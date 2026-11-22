@@ -1,6 +1,8 @@
 "use client";
 
 import { EmailId } from "@deskohub/workspace-admin-api";
+import { AdministrationLink } from "@/features/administration/admin-link";
+import { administrationHref } from "@/features/administration/administration-href";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { ChoiceCard } from "@/shared/components/ui/choice-card";
@@ -19,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/shared/components/ui/select";
+import { textLink } from "@/shared/components/ui/text-link";
 import type { CampaignPurpose } from "../../body/campaign-content";
 import type { CampaignDelivery } from "../../campaign-states";
 import type { AudienceOption } from "../audiences/audience-page-data.server";
@@ -437,6 +440,14 @@ export function CampaignSettingsFields({
           locale={locale}
           publishedEmails={publishedEmails}
         />
+      )}
+      {delivery === "once" && (
+        <AdministrationLink
+          className={textLink({ className: "text-sm" })}
+          href={administrationHref("/[locale]/admin/email-campaigns/library")}
+        >
+          {m.emailsLibraryHeading({}, { locale })}
+        </AdministrationLink>
       )}
       {!linkedEmailId && (
         <>

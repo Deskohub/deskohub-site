@@ -28,6 +28,7 @@ import { storedDiscountIdSchema } from "@/features/discounts/persistence-contrac
 import { PromotionCodeRepository } from "@/features/discounts/promotion-code.repository";
 import { PromotionCodeProvider } from "@/features/discounts/promotion-code-provider.service";
 import { EmailPersistence } from "@/features/emails/backend";
+import { writeEmailDraft } from "@/features/emails/backend/write-email-draft";
 import {
   CustomerValues,
   CustomerValueUnavailable,
@@ -41,6 +42,7 @@ import { CampaignAudienceService } from "./campaign-audience.service";
 import { CampaignConfirmationCodeService } from "./campaign-confirmation-code.service";
 import { campaignDeliveryTestLayer } from "./campaign-delivery.test-utils";
 import { CampaignEmailConfig } from "./campaign-email.config";
+import { listCampaignEmailPublications } from "./campaign-published-email";
 import { CampaignRecipientService } from "./campaign-recipient.service";
 import { CampaignSendService } from "./campaign-send.service";
 import {
@@ -250,7 +252,10 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
           )
         )
       )
-    ).pipe(Layer.provideMerge(Logger.layer([])), Layer.provide(database.layer));
+    ).pipe(
+      Layer.provideMerge(Logger.layer([])),
+      Layer.provideMerge(database.layer)
+    );
     const delivery = campaignDeliveryTestLayer(
       Layer.mergeAll(
         config,
@@ -286,62 +291,80 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
         const emails = yield* EmailPersistence;
         const reusable = yield* emails.create({
           title: "Synthetic cowork offer",
-          draft: Schema.decodeUnknownSync(EmailDraft)({
-            purpose: "marketing",
-            templateKey: "workspace",
-            structure: [
-              {
-                _tag: "Offer",
-                id: "offer",
-                value: "offer",
-                labelKey: "book",
-                href: invite,
-                prefillDiscountCode: true,
-              },
-            ],
-            translations: {
-              "cs-CZ": {
-                subject: [
-                  { _tag: "Text", text: "Ukázková nabídka coworkingu" },
-                ],
-                texts: {
-                  book: [{ _tag: "Text", text: "Rezervovat coworking" }],
-                },
-              },
-              "en-US": {
-                subject: [{ _tag: "Text", text: "Synthetic cowork offer" }],
-                ...(includeCustomerValue && {
-                  preheader: [{ _tag: "Value", name: "customer" }],
-                }),
-                texts: { book: [{ _tag: "Text", text: "Book coworking" }] },
+          draft: { purpose: "marketing", templateKey: "workspace" },
+        });
+        const draft = Schema.decodeUnknownSync(EmailDraft)({
+          purpose: "marketing",
+          templateKey: "workspace",
+          structure: [
+            {
+              _tag: "Offer",
+              id: "offer",
+              value: "offer",
+              labelKey: "book",
+              href: invite,
+              prefillDiscountCode: true,
+            },
+          ],
+          translations: {
+            "cs-CZ": {
+              subject: [{ _tag: "Text", text: "Ukázková nabídka coworkingu" }],
+              texts: {
+                book: [{ _tag: "Text", text: "Rezervovat coworking" }],
               },
             },
-            values: [
-              {
-                name: "offer",
-                source: {
-                  kind: "discount",
-                  discountId,
-                  validDays: 30,
-                  maxUses: 1,
-                  maxUsesPerCustomer: 1,
-                },
+            "en-US": {
+              subject: [{ _tag: "Text", text: "Synthetic cowork offer" }],
+              ...(includeCustomerValue && {
+                preheader: [{ _tag: "Value", name: "customer" }],
+              }),
+              texts: { book: [{ _tag: "Text", text: "Book coworking" }] },
+            },
+          },
+          values: [
+            {
+              name: "offer",
+              source: {
+                kind: "discount",
+                discountId,
+                validDays: 30,
+                maxUses: 1,
+                maxUsesPerCustomer: 1,
               },
-              ...(includeCustomerValue
-                ? [
-                    {
-                      name: "customer",
-                      source: {
-                        kind: "customer",
-                        path: ["profile", "customer", "displayName"],
-                      },
+            },
+            ...(includeCustomerValue
+              ? [
+                  {
+                    name: "customer",
+                    source: {
+                      kind: "customer",
+                      path: ["profile", "customer", "displayName"],
                     },
-                  ]
-                : []),
-            ],
-          }),
+                  },
+                ]
+              : []),
+          ],
         });
-        yield* emails.publish(reusable.id);
+        const saved = yield* writeEmailDraft({
+          emailId: reusable.id,
+          draft,
+          publish: false,
+        });
+        expect(saved.publishedVersion).toBeNull();
+        const beforePublish = yield* listCampaignEmailPublications(db);
+        expect(
+          beforePublish.some(({ emailId }) => emailId === reusable.id)
+        ).toBe(false);
+        const published = yield* writeEmailDraft({
+          emailId: reusable.id,
+          draft,
+          publish: true,
+        });
+        expect(published.publishedVersion).toBe(1);
+        const choices = yield* listCampaignEmailPublications(db);
+        expect(choices.some(({ emailId }) => emailId === reusable.id)).toBe(
+          true
+        );
         const audiences = yield* CampaignAudienceService;
         const audience = yield* audiences.create({
           title: "Synthetic audience",
