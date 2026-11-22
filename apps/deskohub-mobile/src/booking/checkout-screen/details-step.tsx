@@ -320,7 +320,7 @@ type Change = (next: DetailsDraft, what: DetailsChange) => void;
 type FieldPropsOf = (name: DetailsField) => {
   readonly error: string | undefined;
   readonly editable: boolean;
-  readonly viewRef: (view: ComponentRef<typeof View> | null) => void;
+  readonly viewRef?: (view: ComponentRef<typeof View> | null) => void;
 };
 
 /** "Me" or "Someone else". */
@@ -558,7 +558,7 @@ const savedAddressText = (address: InvoiceAddress, locale: AppLocale) =>
  * me" offers the saved address as it is (or asks for one), a company
  * invoice asks for the company and its address.
  */
-function InvoiceSection({
+export function InvoiceSection({
   first,
   draft,
   saved,
@@ -878,7 +878,7 @@ function Field({
   viewRef,
   ...input
 }: Parameters<typeof TextField>[0] & {
-  readonly viewRef: (view: ComponentRef<typeof View> | null) => void;
+  readonly viewRef?: (view: ComponentRef<typeof View> | null) => void;
 }): ReactNode {
   return (
     <View ref={viewRef}>

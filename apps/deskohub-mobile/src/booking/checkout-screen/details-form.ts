@@ -550,7 +550,7 @@ const addressInput = (draft: AddressDraft) => {
 export const asksPersonalAddress = (saved: SavedBilling) =>
   Option.isNone(saved.address);
 
-const billingInput = (
+export const checkoutBillingInput = (
   saved: SavedBilling,
   draft: DetailsDraft
 ): BillingInput => {
@@ -628,7 +628,10 @@ export function validateDetails(
     draft.bookingFor === "self"
       ? selfContactInput(self, draft)
       : someoneElseInput(draft);
-  const { billing, problems: billingProblems } = billingInput(saved, draft);
+  const { billing, problems: billingProblems } = checkoutBillingInput(
+    saved,
+    draft
+  );
   const problems = presentProblems({
     ...contactInput.problems,
     ...billingProblems,
