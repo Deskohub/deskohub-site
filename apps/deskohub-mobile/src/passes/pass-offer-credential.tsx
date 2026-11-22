@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderTopColor: color.credentialLine,
     borderTopWidth: 1,
-    columnGap: space.md,
+    columnGap: space.sm,
     flexDirection: "row",
     flexWrap: "wrap",
     paddingTop: 6,
