@@ -1,5 +1,6 @@
 import {
   type BeginCustomerPassPurchase,
+  type CustomerAccountId,
   type CustomerPassPurchase,
   CustomerSessionRequired,
   type SubmitCustomerPassPurchase,
@@ -20,7 +21,6 @@ import {
   customerRead,
   customerWrite,
 } from "../../customer-api/customer-request";
-
 import { CustomerRequestDispatch } from "../../customer-api/customer-request-dispatch";
 
 const passesApi = Effect.map(Effect.service(CustomerApi), (api) => api.passes);
@@ -31,16 +31,17 @@ export const confirmPassPurchaseScope = Effect.Do.pipe(
   Effect.bind("fence", () => Effect.service(AccountExitFence)),
   Effect.bind("auth", () => Effect.service(CustomerAuthApi)),
   Effect.bind("session", ({ auth }) => auth.auth.getSession({})),
+  Effect.bind("buyerAccountId", ({ scope, session }) =>
+    session !== null && session.user.id === scope.accountId
+      ? Effect.succeed(session.user.id)
+      : Effect.fail(new CustomerSessionRequired())
+  ),
+  Effect.bind("current", ({ scope, fence }) => fence.isCurrent(scope)),
   Effect.filterOrFail(
-    ({ scope, session }) => session?.user.id === scope.accountId,
+    ({ current }) => current,
     () => new CustomerSessionRequired()
   ),
-  Effect.flatMap(({ scope, fence }) => fence.isCurrent(scope)),
-  Effect.filterOrFail(
-    (current) => current,
-    () => new CustomerSessionRequired()
-  ),
-  Effect.asVoid,
+  Effect.map(({ buyerAccountId }) => buyerAccountId),
   customerRead({ accountRead: false })
 );
 
@@ -67,22 +68,23 @@ class PassPurchaseViewChanged extends Data.TaggedError(
 
 const confirmPurchaseAction = (owns?: () => boolean) =>
   confirmPassPurchaseScope.pipe(
-    Effect.andThen(Effect.sync(() => owns?.() ?? true)),
     Effect.filterOrFail(
-      (owned) => owned,
+      () => owns?.() ?? true,
       () => new PassPurchaseViewChanged()
-    ),
-    Effect.asVoid
+    )
   );
 
 const writePass = <A, E, R>(
-  write: (passes: Effect.Success<typeof passesApi>) => Effect.Effect<A, E, R>,
+  write: (
+    passes: Effect.Success<typeof passesApi>,
+    buyerAccountId: CustomerAccountId
+  ) => Effect.Effect<A, E, R>,
   owns?: () => boolean
 ) =>
   confirmPurchaseAction(owns).pipe(
-    Effect.andThen(
+    Effect.flatMap((buyerAccountId) =>
       passesApi.pipe(
-        Effect.flatMap(write),
+        Effect.flatMap((passes) => write(passes, buyerAccountId)),
         Effect.updateService(CustomerRequestDispatch, (dispatch) => ({
           onSend: Effect.suspend(() =>
             owns?.() === false ? Effect.interrupt : dispatch.onSend
@@ -101,14 +103,12 @@ export const beginPassPurchaseAtom = customerDataRuntime.fn(
     payload: BeginCustomerPassPurchase;
     owns?: () => boolean;
   }) =>
-    Effect.flatMap(Effect.service(CustomerAccountScope), ({ accountId }) =>
-      writePass(
-        (passes) =>
-          passes.beginPassPurchase({
-            payload: { ...payload, expectedBuyerAccountId: accountId },
-          }),
-        owns
-      )
+    writePass(
+      (passes, expectedBuyerAccountId) =>
+        passes.beginPassPurchase({
+          payload: { ...payload, expectedBuyerAccountId },
+        }),
+      owns
     )
 );
 
