@@ -1,7 +1,7 @@
 import {
   openBrowserAsync,
   type WebBrowserResult,
-  WebBrowserResultType,
+  type WebBrowserResultType,
 } from "expo-web-browser";
 import { Platform } from "react-native";
 import { color } from "../ui/tokens";
@@ -30,5 +30,5 @@ export const openSitePage = async (url: string): Promise<WebBrowserResult> => {
   const page = window.open(url, "_blank");
   if (page === null) throw new Error("The browser blocked the page.");
   page.opener = null;
-  return { type: WebBrowserResultType.OPENED };
+  return { type: "opened" as WebBrowserResultType.OPENED };
 };

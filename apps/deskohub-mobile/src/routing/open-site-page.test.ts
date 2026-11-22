@@ -3,7 +3,6 @@ import { Platform } from "react-native";
 
 const browserTabs: Array<string> = [];
 mock.module("expo-web-browser", () => ({
-  WebBrowserResultType: { OPENED: "opened" },
   openBrowserAsync: async (url: string) => {
     browserTabs.push(url);
     return { type: "opened" };
