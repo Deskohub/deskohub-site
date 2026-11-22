@@ -1,9 +1,9 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "fbe8acea-eeb3-4aca-a57d-9272aca3362d",
+  "id": "0e9eef19-a6da-4dfb-9bc3-7a56702c8c0e",
   "prevIds": [
-    "feda084c-e03a-4aac-bf01-d202922e6fa1"
+    "a39fb005-bc95-4004-bd3f-af908a40186a"
   ],
   "ddl": [
     {
@@ -5159,6 +5159,19 @@
       "generated": null,
       "identity": null,
       "name": "provider_message_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "email_campaign_recipients"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "payload_fingerprint",
       "entityType": "columns",
       "schema": "public",
       "table": "email_campaign_recipients"
@@ -22470,7 +22483,7 @@
       "table": "email_campaign_recipients"
     },
     {
-      "value": "(\"status\" = 'skipped') = (\"skip_reason\" is not null) and (\"skip_reason\" is null or \"skip_reason\" in ('missing-from-dotypos', 'deleted-customer', 'missing-email', 'invalid-email', 'consent-withdrawn', 'outside-test-domain'))",
+      "value": "(\"status\" = 'skipped') = (\"skip_reason\" is not null) and (\"skip_reason\" is null or \"skip_reason\" in ('missing-from-dotypos', 'deleted-customer', 'missing-email', 'invalid-email', 'consent-withdrawn', 'outside-test-domain', 'missing-email-language'))",
       "name": "email_campaign_recipients_skip_reason_check",
       "entityType": "checks",
       "schema": "public",
@@ -22507,6 +22520,13 @@
     {
       "value": "\"purpose\" in ('marketing', 'operational')",
       "name": "email_campaigns_purpose_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "email_campaigns"
+    },
+    {
+      "value": "\"delivery\" <> 'once' or \"email_id\" is null or (\"purpose\" = 'marketing' and \"content\" = '{}'::jsonb)",
+      "name": "email_campaigns_published_email_check",
       "entityType": "checks",
       "schema": "public",
       "table": "email_campaigns"
