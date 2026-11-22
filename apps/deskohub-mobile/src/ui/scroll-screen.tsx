@@ -253,7 +253,8 @@ function PinnedFooters({
 }) {
   return (
     <>
-      {/* The content stops above the pinned footers, as above a bar. */}
+      {/* The content stops above the pinned footers, as above a bar: the
+          band takes the taps on what scrolls under it. */}
       <View aria-hidden style={[styles.belowPinned, { height: bottom }]} />
       {Array.from(footers, ([key, pinned]) => (
         <View
@@ -566,7 +567,6 @@ const styles = StyleSheet.create({
     backgroundColor: color.paper,
     bottom: 0,
     left: 0,
-    pointerEvents: "none",
     position: "absolute",
     right: 0,
   },

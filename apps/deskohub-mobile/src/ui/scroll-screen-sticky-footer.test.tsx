@@ -11,6 +11,7 @@ import {
   stickyFooterPinned,
   useIsHiddenStickyCopy,
 } from "./scroll-screen";
+import { find, hostTree } from "./testing/element-tree";
 import { Text } from "./text";
 
 type Measured = (x: number, y: number, width: number, height: number) => void;
@@ -104,6 +105,29 @@ describe("StickyFooterGroup", () => {
 
     await screen.scrollTo(400);
     expect(screen.pins.at(-1)).toBeDefined();
+  });
+
+  test("its layout handlers are set from mount, before any footer", () => {
+    // React Native Web observes a view's layout only when it has a handler
+    // as it mounts, and the footer comes once eligibility settles.
+    const group = find(
+      hostTree(
+        <StickyFooterGroup>
+          <Text>rows</Text>
+        </StickyFooterGroup>
+      ),
+      "View"
+    );
+    expect(typeof group?.props.onLayout).toBe("function");
+    const scrollView = find(
+      hostTree(
+        <ScrollScreen>
+          <Text>rows</Text>
+        </ScrollScreen>
+      ),
+      "ScrollView"
+    );
+    expect(typeof scrollView?.props.onContentSizeChange).toBe("function");
   });
 
   test("a group without a footer never follows the scroll", async () => {

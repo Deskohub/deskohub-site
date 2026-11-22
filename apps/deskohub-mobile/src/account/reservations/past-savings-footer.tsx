@@ -1,5 +1,12 @@
 import ChevronRight from "lucide-react-native/icons/chevron-right";
-import { Pressable, StyleSheet, View } from "react-native";
+import { useState } from "react";
+import {
+  Platform,
+  Pressable,
+  StyleSheet,
+  type TextStyle,
+  View,
+} from "react-native";
 import { apiOrigin } from "../../auth/auth-client";
 import { useAppLocale } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
@@ -18,14 +25,17 @@ import { useViewport } from "../../ui/viewport";
  * The Past group's last row (board 06): the two product marks and "Save
  * with packs and passes", opening the site's Pricing page in the in-app
  * browser. Past reservations hold no booking to carry there, so the page
- * opens unselected. At large text the label moves under the marks.
+ * opens unselected. When the label has little room for its text size (large
+ * text, or a zoomed web page) it moves under the marks.
  */
 export function PastSavingsFooter() {
   const locale = useAppLocale();
   const toast = useToast();
   const hiddenCopy = useIsHiddenStickyCopy();
   const { fontScale } = useViewport();
-  const stacked = fontScale >= 1.3;
+  const [width, setWidth] = useState<number>();
+  // The web reports no font scale, but a zoomed page leaves less width.
+  const stacked = width !== undefined && width / fontScale < stackedBelowWidth;
   const label = m.reservations_save_with_passes({}, { locale });
   const open = () =>
     openSitePage(sitePageUrl("/pricing", apiOrigin, locale)).catch(() =>
@@ -43,11 +53,17 @@ export function PastSavingsFooter() {
       tabIndex={hiddenCopy ? -1 : 0}
       onPress={open}
       onKeyDown={followLinkOnEnter(open)}
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
       style={({ pressed }) => [styles.footer, pressed && styles.pressed]}
     >
       <View style={stacked ? styles.stackedText : styles.inlineText}>
         <PassProductMarks />
-        <Text variant="bodyStrong" tone="action" style={styles.label}>
+        <Text
+          variant="bodyStrong"
+          tone="action"
+          textBreakStrategy="balanced"
+          style={[styles.label, balancedWeb]}
+        >
           {label}
         </Text>
       </View>
@@ -55,6 +71,17 @@ export function PastSavingsFooter() {
     </Pressable>
   );
 }
+
+/**
+ * The row's width, at default text size, under which its label stacks: at
+ * 360 dp that is from about 130% text.
+ */
+const stackedBelowWidth = 260;
+
+// Balanced lines, as the board's text-wrap: balance; Android balances
+// through textBreakStrategy.
+const balancedWeb =
+  Platform.OS === "web" ? ({ textWrap: "balance" } as TextStyle) : undefined;
 
 const styles = StyleSheet.create({
   footer: {

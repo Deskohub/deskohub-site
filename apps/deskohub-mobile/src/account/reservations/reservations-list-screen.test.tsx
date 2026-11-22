@@ -44,16 +44,23 @@ import {
 mock.module("expo-router", () => expoRouterStandIn());
 
 const openedPages: Array<string> = [];
+// How many next pages the browser blocks.
+let blockedPages = 0;
 mock.module("../../routing/open-site-page", () => ({
   appBrowserTabColors: {},
   openSitePage: async (url: string) => {
+    if (blockedPages > 0) {
+      blockedPages -= 1;
+      throw new Error("blocked");
+    }
     openedPages.push(url);
     return { type: "opened" };
   },
 }));
 
 const { ReservationsListScreen } = await import("./reservations-list-screen");
-const { ToastProvider } = await import("../../ui/toast");
+const toasts = await import("../../ui/toast");
+const { ToastProvider } = toasts;
 
 const screenHosts = (registry: AtomRegistry.AtomRegistry) => {
   const within = (node: ReactElement) => (
@@ -299,4 +306,26 @@ test("visits paid with an Entry pack offer no savings link", async () => {
       expect(savingsLinks(hosts)).toHaveLength(0);
     }
   );
+});
+
+test("a blocked Pricing page shows the neutral toast", async () => {
+  const shown: Array<{ readonly tone?: string }> = [];
+  const useToast = spyOn(toasts, "useToast").mockReturnValue({
+    show: (toast) => {
+      shown.push(toast);
+    },
+  });
+  try {
+    blockedPages = 1;
+    await withPastVisits([], (hosts) => {
+      const press = savingsLinks(hosts)[0]?.props.onPress as () => void;
+      press();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(shown).toHaveLength(1);
+    expect(shown[0]?.tone).toBe("neutral");
+  } finally {
+    blockedPages = 0;
+    useToast.mockRestore();
+  }
 });
