@@ -391,6 +391,9 @@ export function UnlimitedPassCheckout({
         orderId: orderIdSchema.make(crypto.randomUUID()),
         predecessorOrderIds,
         ...(supersedeOrderId && { supersedeOrderId }),
+        ...(order &&
+          "legacyPredecessors" in order &&
+          order.legacyPredecessors && { legacyPredecessors: true }),
       };
     }
     submittedHolder.current = { email: holderEmail };
@@ -405,7 +408,7 @@ export function UnlimitedPassCheckout({
       setOrder(order);
     };
     const beginSubmission = async (attempt: SubmittedOrder) => {
-      const { supersedeOrderId } = attempt;
+      const { supersedeOrderId, legacyPredecessors, ...previous } = attempt;
       const send = () =>
         beginCheckout({
           orderId: attempt.orderId,
@@ -415,6 +418,7 @@ export function UnlimitedPassCheckout({
           ...(supersedeOrderId && { supersedeOrderId }),
           ...(attempt.predecessorOrderIds.length > 0 && {
             supersedeOrderIds: attempt.predecessorOrderIds,
+            ...(legacyPredecessors && { legacyPredecessors }),
           }),
           buyerEmail: buyer.email,
           ...(activeHandoff && { handoffToken: activeHandoff.token }),
@@ -440,14 +444,16 @@ export function UnlimitedPassCheckout({
       }
       const retired = result.data?.retiredPredecessorOrderIds;
       if (detailRevision.current === revision && retired?.length) {
+        const predecessorOrderIds = attempt.predecessorOrderIds.filter(
+          (orderId) => !retired.includes(orderId)
+        );
         submission = {
-          kind: "submitted",
-          orderId: attempt.orderId,
-          predecessorOrderIds: attempt.predecessorOrderIds.filter(
-            (orderId) => !retired.includes(orderId)
-          ),
+          ...previous,
+          predecessorOrderIds,
           ...(supersedeOrderId &&
             !retired.includes(supersedeOrderId) && { supersedeOrderId }),
+          ...(predecessorOrderIds.length > 0 &&
+            legacyPredecessors && { legacyPredecessors }),
         };
         saveOrder(submission);
       }
@@ -463,7 +469,7 @@ export function UnlimitedPassCheckout({
           unlimitedCheckoutPredecessorLimit
       ) {
         submission = {
-          kind: "submitted",
+          ...submission,
           orderId: orderIdSchema.make(crypto.randomUUID()),
           supersedeOrderId: submission.orderId,
           predecessorOrderIds: [
@@ -507,7 +513,11 @@ export function UnlimitedPassCheckout({
       ) {
         const retryHandoff = result.data.handoff;
         setHandoff(retryHandoff);
-        const { predecessorOrderIds: remaining, supersedeOrderId } = submission;
+        const {
+          predecessorOrderIds: remaining,
+          supersedeOrderId,
+          legacyPredecessors,
+        } = submission;
         let edit: UnlimitedPassOrderLink | undefined;
         if (retryHandoff) {
           edit = { kind: "resume", orderId: retryHandoff.orderId };
@@ -516,6 +526,7 @@ export function UnlimitedPassCheckout({
             kind: "edit",
             predecessorOrderIds: remaining,
             ...(supersedeOrderId && { supersedeOrderId }),
+            ...(legacyPredecessors && { legacyPredecessors }),
           };
         }
         setOrder(edit);
@@ -702,5 +713,9 @@ function editOrder(
     kind: "edit",
     predecessorOrderIds: getUnlimitedCheckoutPredecessors(order),
     supersedeOrderId: order.orderId,
+    ...(order.kind === "submitted" &&
+      order.legacyPredecessors && {
+        legacyPredecessors: order.legacyPredecessors,
+      }),
   };
 }

@@ -59,6 +59,7 @@ type Query = Parameters<typeof readUnlimitedPassSelection>[0] & {
   readonly submittedOrder?: string | string[];
   readonly supersedeOrder?: string | string[];
   readonly predecessorOrder?: string | string[];
+  readonly predecessorMode?: string | string[];
   readonly renew?: string | string[];
   readonly handoff?: string | string[];
 };
@@ -111,9 +112,15 @@ async function leaveUnavailableOrder(orderId: OrderId): Promise<never> {
 function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
   if (
     query.submittedOrder !== undefined ||
-    query.predecessorOrder !== undefined
+    query.predecessorOrder !== undefined ||
+    query.predecessorMode !== undefined
   ) {
-    const { submittedOrder, predecessorOrder, supersedeOrder } = query;
+    const {
+      submittedOrder,
+      predecessorOrder,
+      predecessorMode,
+      supersedeOrder,
+    } = query;
     const ids = Array.isArray(predecessorOrder)
       ? predecessorOrder
       : [predecessorOrder].filter((id) => id !== undefined);
@@ -121,6 +128,9 @@ function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
     if (
       query.order !== undefined ||
       (query.step !== undefined && query.step !== "details") ||
+      (predecessorMode !== undefined &&
+        (ids.length === 0 ||
+          (predecessorMode !== "legacy" && predecessorMode !== "history"))) ||
       ids.length > unlimitedCheckoutPredecessorLimit ||
       !ids.every(isOrderId)
     )
@@ -134,9 +144,16 @@ function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
       supersedeOrderId = orderIdSchema.make(supersedeOrder.toLowerCase());
       if (!predecessorOrderIds.includes(supersedeOrderId)) notFound();
     }
+    // Shipped links used the same list for edits and leftover cleanup history.
+    const legacyPredecessors =
+      predecessorMode === "legacy" ||
+      (predecessorMode === undefined &&
+        predecessorOrderIds.length > 0 &&
+        !supersedeOrderId);
     const predecessors = {
       predecessorOrderIds,
       ...(supersedeOrderId && { supersedeOrderId }),
+      ...(legacyPredecessors && { legacyPredecessors: true as const }),
     };
     if (submittedOrder === undefined) return { kind: "edit", ...predecessors };
     if (!isOrderId(submittedOrder)) notFound();

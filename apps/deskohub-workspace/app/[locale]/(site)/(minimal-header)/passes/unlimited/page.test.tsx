@@ -325,6 +325,7 @@ test("reload before commit retains submitted and predecessor IDs without restori
       kind: "submitted",
       orderId: submittedOrder,
       predecessorOrderIds: [unresolvedOrder, ownedOrder],
+      legacyPredecessors: true,
     },
     initialDetails: {
       tier: "open-space",
@@ -335,6 +336,21 @@ test("reload before commit retains submitted and predecessor IDs without restori
   });
   expect(props.draft).not.toHaveProperty("holderEmail");
   expect(props.draft).not.toHaveProperty("supersedeOrderId");
+});
+
+test("a shipped edit link preserves ambiguous predecessors without prefilling account data", async () => {
+  const query = { ...selectionQuery, predecessorOrder: ownedOrder };
+  const shipped = await renderContent(query);
+  expect(shipped.props.children.props.draft).toEqual({
+    kind: "edit",
+    predecessorOrderIds: [ownedOrder],
+    legacyPredecessors: true,
+  });
+  const modern = await renderContent({ ...query, predecessorMode: "history" });
+  expect(modern.props.children.props.draft).toEqual({
+    kind: "edit",
+    predecessorOrderIds: [ownedOrder],
+  });
 });
 
 test("reload distinguishes an owned self-purchase from a submission that has not committed", async () => {

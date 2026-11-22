@@ -82,12 +82,14 @@ export type UnlimitedPassOrderLink =
       readonly kind: "edit";
       readonly predecessorOrderIds: readonly OrderId[];
       readonly supersedeOrderId?: OrderId;
+      readonly legacyPredecessors?: true;
     }
   | {
       readonly kind: "submitted";
       readonly orderId: OrderId;
       readonly predecessorOrderIds: readonly OrderId[];
       readonly supersedeOrderId?: OrderId;
+      readonly legacyPredecessors?: true;
     };
 
 export const unlimitedCheckoutPredecessorLimit = 8;
@@ -135,6 +137,13 @@ export function getUnlimitedPassChoosePath(
   if (order?.kind === "submitted" || order?.kind === "edit") {
     if (order.supersedeOrderId) {
       query.set("supersedeOrder", order.supersedeOrderId);
+    }
+    if (order.predecessorOrderIds.length > 0) {
+      if (order.legacyPredecessors) {
+        query.set("predecessorMode", "legacy");
+      } else if (!order.supersedeOrderId) {
+        query.set("predecessorMode", "history");
+      }
     }
     for (const orderId of order.predecessorOrderIds) {
       query.append("predecessorOrder", orderId);

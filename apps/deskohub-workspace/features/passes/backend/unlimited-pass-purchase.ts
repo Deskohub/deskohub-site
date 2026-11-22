@@ -213,6 +213,7 @@ type UnlimitedPassPurchaseInput = {
   readonly referralCode?: CanonicalPromotionCode;
   readonly supersedeOrderId?: OrderId;
   readonly supersedeOrderIds?: readonly OrderId[];
+  readonly legacyPredecessors?: true;
   readonly continueFromHandoff?: true;
   readonly requireGiftRecipientName?: true;
 };
@@ -287,10 +288,11 @@ export const beginUnlimitedPassPurchase = Effect.fn(
               session.accountId,
               "unlimited"
             );
-            // The open web form carries earlier failed attempts alongside the draft it edits.
+            // Only modern links distinguish cleanup history from the edited draft.
             if (
               prior &&
               !input.continueFromHandoff &&
+              !input.legacyPredecessors &&
               priorOrderId !== replacedOrderId &&
               isEndedUnpaidPaymentState(prior.order.paymentState) &&
               !isVoidedUnlimitedDraft(prior)

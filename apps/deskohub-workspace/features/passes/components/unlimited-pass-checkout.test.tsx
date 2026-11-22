@@ -859,6 +859,7 @@ test("retrying an Unlimited draft keeps old predecessors without replacing them"
     })
   );
   expect(checkoutUrl().searchParams.get("supersedeOrder")).toBeNull();
+  expect(checkoutUrl().searchParams.get("predecessorMode")).toBe("history");
   expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
     earlierOrderId,
   ]);

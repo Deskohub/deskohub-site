@@ -1080,6 +1080,25 @@ it("Continue acknowledges retired predecessors when a stale date prevents a draf
         () => orderIdSchema.make(crypto.randomUUID())
       );
       const orderId = orderIdSchema.make(crypto.randomUUID());
+      const legacy = yield* beginUnlimitedPassPurchaseWithDisposition({
+        orderId,
+        locale: "en-US",
+        selection: {
+          tier: "reserved-desk",
+          startDate: date(today.add({ days: 31 })),
+        },
+        supersedeOrderIds: [protectedDraft.id, ...retired],
+        legacyPredecessors: true,
+      });
+      expect(legacy).toEqual({
+        outcome: Result.fail(
+          expect.objectContaining({
+            reason: "payment-in-progress",
+            orderId: protectedDraft.id,
+          })
+        ),
+        retiredPredecessorOrderIds: [],
+      });
       const result = yield* beginUnlimitedPassPurchaseWithDisposition({
         orderId,
         locale: "en-US",
