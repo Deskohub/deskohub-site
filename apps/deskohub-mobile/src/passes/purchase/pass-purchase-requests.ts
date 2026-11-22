@@ -1,7 +1,9 @@
 import {
   type BeginCustomerPassPurchase,
+  type CustomerPassPurchase,
   CustomerSessionRequired,
   type SubmitCustomerPassPurchase,
+  type UpdateCustomerPassPurchasePrice,
 } from "@deskohub/workspace-customer-api";
 import { Effect } from "effect";
 import { Atom } from "effect/reactivity";
@@ -64,16 +66,16 @@ export const unlimitedStartDatesAtom = Atom.family(
     )
 );
 
+const writePass = <A, E, R>(
+  write: (passes: Effect.Success<typeof passesApi>) => Effect.Effect<A, E, R>
+) =>
+  confirmPassPurchaseScope.pipe(
+    Effect.andThen(passesApi.pipe(Effect.flatMap(write), customerWrite))
+  );
+
 export const beginPassPurchaseAtom = customerDataRuntime.fn(
   (payload: BeginCustomerPassPurchase) =>
-    confirmPassPurchaseScope.pipe(
-      Effect.andThen(
-        passesApi.pipe(
-          Effect.flatMap((api) => api.beginPassPurchase({ payload })),
-          customerWrite
-        )
-      )
-    )
+    writePass((passes) => passes.beginPassPurchase({ payload }))
 );
 
 export const submitPassPurchaseAtom = customerDataRuntime.fn(
@@ -84,15 +86,21 @@ export const submitPassPurchaseAtom = customerDataRuntime.fn(
     orderId: string;
     payload: SubmitCustomerPassPurchase;
   }) =>
-    confirmPassPurchaseScope.pipe(
-      Effect.andThen(
-        passesApi.pipe(
-          Effect.flatMap((api) =>
-            api.submitPassPurchase({ params: { orderId }, payload })
-          ),
-          customerWrite
-        )
-      )
+    writePass((passes) =>
+      passes.submitPassPurchase({ params: { orderId }, payload })
+    )
+);
+
+export const updatePassPurchasePriceAtom = customerDataRuntime.fn(
+  ({
+    orderId,
+    payload,
+  }: {
+    orderId: string;
+    payload: UpdateCustomerPassPurchasePrice;
+  }) =>
+    writePass((passes) =>
+      passes.updatePassPurchasePrice({ params: { orderId }, payload })
     )
 );
 
@@ -115,3 +123,23 @@ export const passPurchaseStatusHref = (orderId: string) =>
     pathname: "/passes/purchases/[orderId]",
     params: { orderId, after: "payment" },
   }) as const;
+
+export const passPaymentPayload = (
+  quote: CustomerPassPurchase,
+  billing: NonNullable<SubmitCustomerPassPurchase["billing"]>,
+  returnTarget: NonNullable<SubmitCustomerPassPurchase["returnTarget"]>
+): SubmitCustomerPassPurchase => ({
+  productKind: quote.product.kind,
+  accepted: true,
+  acceptedDocuments: quote.disclosure.documents.map(({ key, hash }) => ({
+    key,
+    hash,
+  })),
+  ...(quote.product.kind === "unlimited" &&
+    quote.disclosure.earlyStartRequest !== undefined && {
+      unlimitedEarlyStartAccepted: true,
+    }),
+  displayedPriceFingerprint: quote.price.fingerprint,
+  billing,
+  returnTarget,
+});
