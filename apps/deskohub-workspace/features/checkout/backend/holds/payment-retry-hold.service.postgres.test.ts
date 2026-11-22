@@ -20,6 +20,7 @@ import {
 } from "@/db/schema";
 import { makeCoworkInvoiceDocument } from "@/features/accounting/invoice.test-utils";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
   WorkspaceAvailabilityService,
   WorkspaceTableUnavailableError,
@@ -150,6 +151,7 @@ describe.skipIf(!postgresDatabase)(
         readonly status?: DotyposReservationStatus;
         readonly overlapping?: readonly unknown[];
         readonly unavailable?: boolean;
+        readonly coworkPassesEnabled?: boolean;
         /** Runs when the retry creates the new Dotypos reservation. */
         readonly onCreate?: () => Promise<void>;
       } = {}
@@ -189,6 +191,9 @@ describe.skipIf(!postgresDatabase)(
         Layer.provide(
           Layer.mergeAll(
             reservations,
+            CoworkPassesReleaseGate.fromDecision(
+              options.coworkPassesEnabled ?? true
+            ),
             LatePaymentRecoveryRepository.Default.pipe(
               Layer.provide(postgres.layer)
             ),
@@ -518,12 +523,12 @@ describe.skipIf(!postgresDatabase)(
       expect((await rowOf(order.orderId)).dotyposReservationId).toBe(orphan);
     });
 
-    test("cancels an interrupted retry's NEW hold when the Entry pack can no longer attach", async () => {
-      const order = await retriedOrder({
-        reservation: "cancelled",
-        overrides: { cancellationCause: "payment_retry" },
-      });
-      const row = await rowOf(order.orderId);
+    const withReleasedEntryClaim = async (
+      orderId: WorkspaceReservationId,
+      status: "active" | "cancelled",
+      run: () => Promise<void>
+    ) => {
+      const row = await rowOf(orderId);
       const packId = crypto.randomUUID();
       await postgres.pool.query(
         `insert into orders
@@ -535,15 +540,64 @@ describe.skipIf(!postgresDatabase)(
         await postgres.pool.query(
           `insert into pass_purchases
             (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
-            values ($1, $2, $2, 'entry-pack', 'open-space', 5, 'cancelled', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
-          [packId, row.authorAccountId]
+            values ($1, $2, $2, 'entry-pack', 'open-space', 5, $3, '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
+          [packId, row.authorAccountId, status]
         );
         await postgres.pool.query(
           `insert into pass_entry_claims (reservation_id, pass_id, date, status)
             values ($1, $2, '2099-06-12', 'released')`,
-          [order.orderId, packId]
+          [orderId, packId]
         );
+        await run();
+      } finally {
+        await postgres.pool.query(
+          "delete from pass_entry_claims where pass_id = $1",
+          [packId]
+        );
+        await postgres.pool.query("delete from pass_purchases where id = $1", [
+          packId,
+        ]);
+        await postgres.pool.query("delete from orders where id = $1", [packId]);
+      }
+    };
 
+    test("leaves a released Entry claim and its attempt alone when the gate has closed", async () => {
+      const order = await retriedOrder({
+        reservation: "held",
+        overrides: {
+          reservationHoldExpiresAt: Temporal.Now.instant().add({ minutes: 5 }),
+        },
+      });
+      await withReleasedEntryClaim(order.orderId, "active", async () => {
+        const closed = makeHarness({ coworkPassesEnabled: false });
+        expect(await closed.secure(order)).toEqual({
+          kind: "spot_unavailable",
+        });
+        const claim = () =>
+          postgres.pool.query(
+            "select status from pass_entry_claims where reservation_id = $1",
+            [order.orderId]
+          );
+        expect((await claim()).rows).toEqual([{ status: "released" }]);
+        expect((await rowOf(order.orderId)).activePaymentAttemptId).toBe(
+          order.attemptId
+        );
+        expect(closed.spies.getReservationStatus).not.toHaveBeenCalled();
+        expect(closed.spies.cancelReservation).not.toHaveBeenCalled();
+        expect(closed.spies.createReservation).not.toHaveBeenCalled();
+
+        const open = makeHarness();
+        expect(await open.secure(order)).toMatchObject({ kind: "kept" });
+        expect((await claim()).rows).toEqual([{ status: "reserved" }]);
+      });
+    });
+
+    test("cancels an interrupted retry's NEW hold when the Entry pack can no longer attach", async () => {
+      const order = await retriedOrder({
+        reservation: "cancelled",
+        overrides: { cancellationCause: "payment_retry" },
+      });
+      await withReleasedEntryClaim(order.orderId, "cancelled", async () => {
         const orphan = DotyposReservationIdSchema.make(
           "entry-pack-retry-orphan"
         );
@@ -562,16 +616,7 @@ describe.skipIf(!postgresDatabase)(
         expect(harness.spies.cancelReservation).toHaveBeenCalledWith(orphan);
         expect(harness.spies.createReservation).not.toHaveBeenCalled();
         expect((await rowOf(order.orderId)).reservationState).toBe("cancelled");
-      } finally {
-        await postgres.pool.query(
-          "delete from pass_entry_claims where pass_id = $1",
-          [packId]
-        );
-        await postgres.pool.query("delete from pass_purchases where id = $1", [
-          packId,
-        ]);
-        await postgres.pool.query("delete from orders where id = $1", [packId]);
-      }
+      });
     });
 
     test("cancels the reservation it created when the order changed before it could be attached", async () => {

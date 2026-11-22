@@ -6,6 +6,10 @@ import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import {
+  CoworkPassesReleaseGate,
+  CoworkPassesReleaseGateForRun,
+} from "@/features/passes/backend/cowork-passes-release-gate";
 import { enqueueReservationHoldCleanup } from "@/features/reservation/backend/reservation-holds.service";
 import { WorkspaceAvailabilityService } from "@/features/reservation/backend/workspace-availability.service";
 import {
@@ -289,6 +293,11 @@ const secure = Effect.fn("PaymentRetryHoldService.secure")(
     );
     if (recovery) return refused("not_retryable");
 
+    const entryClaim = yield* reservations.findEntryPackClaim(order.id);
+    if (entryClaim && !(yield* CoworkPassesReleaseGate.isOpen)) {
+      return { kind: "spot_unavailable" } as const;
+    }
+
     const kept = yield* keepLiveHold({
       order,
       retriedAttemptId: request.retriedAttemptId,
@@ -334,6 +343,7 @@ const retryHoldCapabilities = [
   UnpaidHoldRelease,
   DotyposService,
   WorkspaceAvailabilityService,
+  CoworkPassesReleaseGate,
   WorkspaceTableAssignmentService,
   ReservationHoldCleanupScheduleService,
   WorkspaceDatabaseAdvisoryLock,
@@ -346,6 +356,7 @@ type RetryHoldCapabilities =
   | UnpaidHoldRelease
   | DotyposService
   | WorkspaceAvailabilityService
+  | CoworkPassesReleaseGate
   | WorkspaceTableAssignmentService
   | ReservationHoldCleanupScheduleService
   | WorkspaceDatabaseAdvisoryLock;
@@ -384,6 +395,7 @@ export class PaymentRetryHoldService extends Context.Service<
   );
 
   static Live = this.Default.pipe(
+    Layer.provide(CoworkPassesReleaseGateForRun),
     Layer.provide(UnpaidHoldRelease.Default),
     Layer.provide(
       Layer.mergeAll(
