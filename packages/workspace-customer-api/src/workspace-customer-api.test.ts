@@ -140,6 +140,7 @@ describe("WorkspaceCustomerApi", () => {
         "booking.submitCheckout",
         "passes.beginPassPurchase",
         "passes.submitPassPurchase",
+        "passes.updatePassPurchasePrice",
       ].map((reference) => ({
         reference,
         options: { errors: "all", onExcessProperty: "error" },

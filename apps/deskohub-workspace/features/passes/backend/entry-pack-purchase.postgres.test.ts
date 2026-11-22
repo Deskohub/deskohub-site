@@ -763,6 +763,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       return {
         orderId,
         initialPurchase,
+        promotionCode: code,
         mail,
         invitations,
         attemptedKeys,
@@ -863,6 +864,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
               purchases: {
                 ...customerPassPurchaseLayers,
                 begin: withoutActor,
+                reprice: withoutActor,
                 payment: withoutActor,
                 status: ProviderPaymentFinalizationService.Default.pipe(
                   Layer.provideMerge(withoutActor)
@@ -1472,6 +1474,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         orderId,
         status: "not_started",
         productKind: "entry-pack",
+        resumePath: details.payPath,
       });
       const otherBuyer = purchase.customerApi({
         ...session,
@@ -1482,6 +1485,41 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       expect(hidden.status).toBe(404);
       expect(await hidden.json()).toEqual({ _tag: "CustomerPassNotFound" });
+
+      const reprice = (fingerprint: string, submittedCode?: string) =>
+        api.handle(
+          customerApiRequest({
+            method: "PATCH",
+            path: `${path}/price`,
+            body: {
+              productKind: "entry-pack",
+              displayedPriceFingerprint: fingerprint,
+              ...(submittedCode && { submittedCode }),
+            },
+          })
+        );
+      const rejectedCode = await reprice(
+        purchase.initialFingerprint,
+        "? invalid ?"
+      );
+      expect(await rejectedCode.json()).toEqual({ status: "code_unavailable" });
+      const removed = await reprice(purchase.initialFingerprint);
+      const removedBody = await removed.json();
+      expect(removedBody).toMatchObject({
+        status: "ready",
+      });
+      expect(removedBody.price.appliedDiscountCode).toBeUndefined();
+      expect(removedBody.price.fingerprint).not.toBe(
+        purchase.initialFingerprint
+      );
+      const reapplied = await reprice(
+        removedBody.price.fingerprint,
+        purchase.promotionCode
+      );
+      expect(await reapplied.json()).toMatchObject({
+        status: "ready",
+        price: { fingerprint: purchase.initialFingerprint },
+      });
 
       const submit = (accepted: boolean) =>
         api.handle(

@@ -1,10 +1,11 @@
 import "server-only";
 
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import type { CustomerAccountSession } from "@/features/account/backend/customer-authentication.service";
 import type { CustomerProfileSave } from "@/features/account/contracts";
 import type { CanonicalPromotionCode } from "@/features/discounts/contracts";
+import { normalizeSubmittedPromotionCode } from "@/features/discounts/promotion-code";
 import type { Locale } from "@/features/i18n";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
@@ -37,6 +38,7 @@ import {
   EntryPackPurchaseError,
   getEntryPackPaymentDisclosure,
   payForEntryPack,
+  repriceEntryPackPurchase,
   requirePassPurchasesEnabled,
 } from "./entry-pack-purchase";
 import { loadEntryPackStatus } from "./entry-pack-status";
@@ -303,6 +305,35 @@ export type PayPassPurchaseInput = Parameters<typeof payForEntryPack>[0] & {
   readonly productKind: PassPurchaseProduct["kind"];
   readonly displayedPriceFingerprint: string;
 };
+
+export const repricePurchase = Effect.fn("CustomerPasses.repricePurchase")(
+  (input: {
+    readonly orderId: OrderId;
+    readonly productKind: PassPurchaseProduct["kind"];
+    readonly displayedPriceFingerprint: string;
+    readonly submittedCode?: string;
+  }) =>
+    normalizeSubmittedPromotionCode({
+      submittedCode: input.submittedCode,
+    }).pipe(
+      Effect.flatMap((code) =>
+        repriceEntryPackPurchase({
+          orderId: input.orderId,
+          productKind: input.productKind,
+          displayedPriceFingerprint: input.displayedPriceFingerprint,
+          preserveReferral: true,
+          ...(Option.isSome(code) && { submittedCode: code.value }),
+        })
+      ),
+      Effect.map(({ status, quote }) => ({
+        status,
+        price: displayPassPurchasePrice(quote),
+      })),
+      Effect.catchTag("PromotionCodeUnavailableError", () =>
+        Effect.succeed({ status: "code_unavailable" as const })
+      )
+    )
+);
 
 export const payPurchase = Effect.fn("passes.payPurchase")(
   (input: PayPassPurchaseInput) =>

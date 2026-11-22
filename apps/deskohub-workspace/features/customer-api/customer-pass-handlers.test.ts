@@ -112,6 +112,14 @@ describe("customer pass reads", () => {
         displayedPriceFingerprint: "0".repeat(64),
       },
     },
+    {
+      method: "PATCH",
+      path: `/passes/purchases/${passId}/price`,
+      body: {
+        productKind: "entry-pack",
+        displayedPriceFingerprint: "0".repeat(64),
+      },
+    },
   ] satisfies readonly CustomerApiCall[]) {
     test(`closed passes withhold ${call.method} ${call.path.split("?")[0]}`, async () => {
       const api = makeCustomerApiTestServer();

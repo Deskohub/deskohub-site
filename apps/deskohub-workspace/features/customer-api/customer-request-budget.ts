@@ -135,6 +135,7 @@ export const customerRequestBudgetClasses = {
     beginPassPurchase: "dotypos-mutation",
     getPassPurchaseStatus: "account-read",
     submitPassPurchase: "dotypos-mutation",
+    updatePassPurchasePrice: "dotypos-mutation",
   },
   booking: {
     // The office's seat maximum reads the shared table snapshot, which

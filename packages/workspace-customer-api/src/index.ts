@@ -134,6 +134,7 @@ export {
   CustomerPassPurchase,
   CustomerPassPurchaseDisclosure,
   CustomerPassPurchasePrice,
+  CustomerPassPurchasePriceUpdate,
   CustomerPassPurchaseProduct,
   CustomerPassPurchaseRefused,
   CustomerPassPurchaseState,
@@ -141,6 +142,7 @@ export {
   CustomerUnlimitedPassSelection,
   CustomerUnlimitedStartDates,
   SubmitCustomerPassPurchase,
+  UpdateCustomerPassPurchasePrice,
 } from "./customer-pass-purchase-api";
 export {
   CustomerEntryPackProduct,

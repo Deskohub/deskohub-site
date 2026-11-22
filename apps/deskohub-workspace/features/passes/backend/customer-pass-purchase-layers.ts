@@ -47,6 +47,7 @@ const begin = Layer.mergeAll(buyerCheckout, availability);
 /** Purchase dependencies that use the authentication supplied by the caller. */
 export const customerPassPurchaseLayers = {
   begin,
+  reprice: buyerCheckout,
   agentStart: Layer.mergeAll(begin, SealedStateKeys.Default),
   availability,
   payment: Layer.mergeAll(
