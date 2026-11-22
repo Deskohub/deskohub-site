@@ -54,7 +54,7 @@ function LinkedCell({
   colSpan,
   href,
   padding,
-  skipInText = false,
+  decorative = false,
   style,
   width,
 }: {
@@ -64,8 +64,12 @@ function LinkedCell({
   readonly colSpan?: number;
   readonly href: string;
   readonly padding: string;
-  /** Decorative cells stay out of plain text, which keeps one card link. */
-  readonly skipInText?: boolean;
+  /**
+   * A decorative cell's link only widens the card's click area: it stays out
+   * of plain text, the tab order, and assistive technology, so the text
+   * cell's link is the card's one named link.
+   */
+  readonly decorative?: boolean;
   /** The cell's own style, such as the ticket's perforation. */
   readonly style?: CSSProperties;
   readonly width?: number;
@@ -79,7 +83,8 @@ function LinkedCell({
       width={width}
     >
       <Link
-        data-skip-in-text={skipInText ? "true" : undefined}
+        aria-hidden={decorative ? "true" : undefined}
+        data-skip-in-text={decorative ? "true" : undefined}
         href={href}
         style={{
           color,
@@ -88,6 +93,7 @@ function LinkedCell({
           textDecoration: "none",
           width: "100%",
         }}
+        tabIndex={decorative ? -1 : undefined}
       >
         <span
           style={{
@@ -213,7 +219,7 @@ function EntryPackTicket({
             color={ink}
             href={href}
             padding="0"
-            skipInText
+            decorative
             style={{
               backgroundColor: "#a43810",
               borderRadius: "14px 0 0 14px",
@@ -234,7 +240,7 @@ function EntryPackTicket({
             color={ink}
             href={href}
             padding="14px 8px"
-            skipInText
+            decorative
             style={{ borderLeft: "1.5px dashed #9a4a1c" }}
             width={64}
           >
@@ -282,7 +288,7 @@ function UnlimitedPassCard({
             colSpan={3}
             href={href}
             padding="12px 22px 0 18px"
-            skipInText
+            decorative
           >
             <table
               {...presentationTable}
@@ -337,7 +343,7 @@ function UnlimitedPassCard({
             color={ink}
             href={href}
             padding="10px 0 15px 18px"
-            skipInText
+            decorative
             width={68}
           >
             <Img
@@ -360,7 +366,7 @@ function UnlimitedPassCard({
             color={ink}
             href={href}
             padding="10px 22px 15px 0"
-            skipInText
+            decorative
             width={52}
           >
             <EmailArrowBadge background="#ffdae6" color="#761730" />

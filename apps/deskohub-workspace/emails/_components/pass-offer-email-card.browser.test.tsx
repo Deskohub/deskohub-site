@@ -3,6 +3,7 @@ import { type Browser, chromium } from "@playwright/test";
 import { Effect } from "effect";
 import type { CampaignBodyNode } from "@/features/email-campaigns/body/campaign-body-document";
 import { renderCampaignEmailPreview } from "@/features/email-campaigns/campaign-email";
+import { m } from "@/features/i18n";
 import { getWorkspacePageUrl } from "@/features/i18n/page-url";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
 
@@ -121,6 +122,24 @@ for (const width of [1280, 390]) {
           );
           expect(missed).toEqual([]);
         }
+        // From the top, the keyboard reaches each card once, at a link that
+        // names its product; the decorative cells take no stop.
+        const focused = async () => {
+          await page.keyboard.press("Tab");
+          return page.evaluate(() => {
+            const link = document.activeElement;
+            return {
+              href: link?.getAttribute("href"),
+              text: link?.textContent ?? "",
+            };
+          });
+        };
+        const first = await focused();
+        expect(first.href).toBe(cards.entryPack.url);
+        expect(first.text).toContain(m.passEntryPack({}, { locale: "en-US" }));
+        const second = await focused();
+        expect(second.href).toBe(cards.unlimited.url);
+        expect(second.text).toContain(m.passUnlimited({}, { locale: "en-US" }));
       } finally {
         await page.close();
       }
