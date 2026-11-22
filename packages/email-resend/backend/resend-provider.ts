@@ -161,7 +161,10 @@ const classifyResendError = (error: unknown): EmailSendError => {
   }
   return [401, 403, 404, 429].includes(statusCode)
     ? resendProviderRefusal(code, true)
-    : resendMessageRefusal(code, true);
+    : resendMessageRefusal(
+        code,
+        [400, 422].includes(statusCode) ? true : undefined
+      );
 };
 
 /**

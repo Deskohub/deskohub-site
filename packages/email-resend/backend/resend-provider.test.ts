@@ -873,26 +873,32 @@ describe("ResendEmailProvider", () => {
     }
   });
 
-  test("a statusless batch error does not prove non-delivery", async () => {
-    batchSend = mock<BatchSendImplementation>(async () => ({
-      error: { message: "invalid response" },
-    }));
-    const result = await runProvider(
-      Effect.flatMap(resendProvider, (provider) =>
-        settle(
-          provider.sendBatch(batchMessages, {
-            idempotencyKey: "campaign-batch-key",
-          })
+  test.each([
+    [undefined, "invalid response", "resend-invalid"],
+    [408, "request timeout", "http-408"],
+  ] as const)(
+    "a batch error with status %s does not prove non-delivery",
+    async (statusCode, message, code) => {
+      batchSend = mock<BatchSendImplementation>(async () => ({
+        error: { message, ...(statusCode !== undefined && { statusCode }) },
+      }));
+      const result = await runProvider(
+        Effect.flatMap(resendProvider, (provider) =>
+          settle(
+            provider.sendBatch(batchMessages, {
+              idempotencyKey: "campaign-batch-key",
+            })
+          )
         )
-      )
-    );
-    expect(result).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "EmailServiceError", code: "resend-invalid" },
-    });
-    if (result._tag === "Failure")
-      expect(result.failure).not.toHaveProperty("definitivelyUnsent");
-  });
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "EmailServiceError", code },
+      });
+      if (result._tag === "Failure")
+        expect(result.failure).not.toHaveProperty("definitivelyUnsent");
+    }
+  );
 
   test("treats a batch response with fewer IDs than messages as unconfirmed", async () => {
     batchSend = mock<BatchSendImplementation>(async () => ({

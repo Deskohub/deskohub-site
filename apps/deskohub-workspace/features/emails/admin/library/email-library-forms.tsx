@@ -7,7 +7,7 @@ import {
   type EmailId,
 } from "@deskohub/workspace-admin-api";
 import { useRouter } from "next/navigation";
-import { useId, useRef, useState } from "react";
+import { type BaseSyntheticEvent, useId, useRef, useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { m } from "@/features/administration/i18n";
 import { locales } from "@/features/i18n";
@@ -125,8 +125,8 @@ export function ReusableEmailForm({
         error.serverError ?? m.emailsActionFailedUnexpectedly({}, { locale })
       ),
   });
-  const write = (publish: boolean) =>
-    form.handleSubmit(
+  const write = (publish: boolean, event?: BaseSyntheticEvent) => {
+    void form.handleSubmit(
       (resolved) => {
         setNotice(undefined);
         setError(undefined);
@@ -134,10 +134,15 @@ export function ReusableEmailForm({
         save.execute({ emailId, draft: resolved, publish });
       },
       () => setError(m.emailsLibraryPublicationInvalid({}, { locale }))
-    );
+    )(event);
+  };
   return (
     <FormProvider {...form}>
-      <form className="space-y-6" noValidate onSubmit={write(false)}>
+      <form
+        className="space-y-6"
+        noValidate
+        onSubmit={(event) => write(false, event)}
+      >
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" disabled={save.isExecuting} variant="secondary">
             {m.emailsLibrarySaveDraft({}, { locale })}
@@ -145,7 +150,7 @@ export function ReusableEmailForm({
           <Button
             type="button"
             disabled={save.isExecuting}
-            onClick={write(true)}
+            onClick={() => write(true)}
           >
             {m.emailsLibraryPublish({}, { locale })}
           </Button>
