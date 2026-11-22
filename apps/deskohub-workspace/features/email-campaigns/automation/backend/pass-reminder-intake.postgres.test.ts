@@ -10,7 +10,7 @@ import { PassReminderReads } from "@/features/passes/backend/pass-reminder-reads
 import { getPassReminderDueAt } from "@/features/passes/pass-reminder-schedule";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import { plainDateStringSchema } from "@/shared/utils/temporal";
+import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import {
   automationScenarioLayer,
   makeEngineDotypos,
@@ -134,13 +134,11 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
 
   test("plans the 10:00 occurrence and processes its retained passes after Prague midnight", async () => {
     const eligible = await fixtures.addCustomer("eligible");
-    const noConsent = await fixtures.addCustomer("no-consent", {
-      consent: false,
-    });
+    const revokedConsent = await fixtures.addCustomer("revoked-consent");
     const unclaimedGift = await fixtures.addCustomer("unclaimed-gift");
     const { id, holder } = await seedPass(eligible);
     const otherPass = await seedPass(eligible, false, holder);
-    await seedPass(noConsent);
+    await seedPass(revokedConsent);
     await seedPass(unclaimedGift, true);
     const editedCampaign = await seedVersion();
     const resumedCampaign = await seedVersion(
@@ -157,13 +155,20 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
       kit.lifecycle((lifecycle) => lifecycle.pause(resumedCampaign))
     );
     const queue = makeAutomationUnitQueueFake();
+    const afterMidnight = dueAt.add({ hours: 15 });
+    const liveOpen = Effect.map(currentInstant, (now) =>
+      now.equals(afterMidnight)
+    );
     const layer = await automationScenarioLayer({
       database,
       dotypos: provider,
       queue,
       kinds: ["pass-reminder-intake", "condition"],
       planning: ["intake"],
-      passReminderGate: CoworkPassesReleaseGate.fromDecision(true),
+      passReminderGate: Layer.succeed(CoworkPassesReleaseGate, {
+        isOpen: liveOpen,
+        decision: liveOpen,
+      }),
       passReminderReads: PassReminderReads.Default.pipe(
         Layer.provide(
           Layer.merge(
@@ -235,8 +240,11 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     expect(
       pages.some(({ campaign_id }) => campaign_id === resumedCampaign)
     ).toBe(false);
-    const afterMidnight = dueAt.add({ hours: 15 });
     expect(new Set(queue.pending().map(({ unitId }) => unitId)).size).toBe(1);
+    await pool.query(
+      "update customer_marketing_consents set withdrawn_at = $2 where dotypos_customer_id = $1",
+      [revokedConsent, afterMidnight.toString()]
+    );
     await runEngineAt(drainAutomationUnitQueue(queue), layer, afterMidnight);
     expect(
       (await runEngineAt(plan(true), layer, afterMidnight)).intake.unitsPlanned
