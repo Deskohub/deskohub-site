@@ -185,6 +185,15 @@ export const makePassReminderIntakeHandler = Effect.gen(function* () {
   const recipients = yield* CampaignRecipientService;
   const candidates = yield* CampaignCandidateRepository;
   const gate = yield* CoworkPassesReleaseGate;
+  const gateDecision = gate.decision.pipe(
+    Effect.mapError(
+      (cause) =>
+        new AutomationUnitFetchFailure({
+          code: "pass-reminder-release-unavailable",
+          cause,
+        })
+    )
+  );
 
   const fetchPage = Effect.fn("passReminderIntake.fetchPage")(function* (
     subject: PageSubject,
@@ -283,7 +292,7 @@ export const makePassReminderIntakeHandler = Effect.gen(function* () {
         if (
           unit.campaignId !== subject.campaignId ||
           !stillDueToday(subject, now) ||
-          !(yield* gate.isOpen)
+          !(yield* gateDecision)
         )
           return Fetched.None();
         const version = yield* transaction(intakeVersion(subject));
@@ -305,7 +314,7 @@ export const makePassReminderIntakeHandler = Effect.gen(function* () {
       function* (unit, fetched, now) {
         if (
           fetched._tag === "None" ||
-          !(yield* gate.isOpen) ||
+          !(yield* gateDecision) ||
           !stillDueToday(unit.subject, now)
         )
           return empty;

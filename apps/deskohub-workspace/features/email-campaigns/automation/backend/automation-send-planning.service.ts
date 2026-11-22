@@ -88,6 +88,7 @@ export const planDeliverRuns = (
             readsTriggeringVisit(run.triggerKind)
           ).length,
           customers: chunk.length,
+          readsPassDeskLabel: chunk[0].triggerKind === "unlimited-ending",
           at,
         }),
       };

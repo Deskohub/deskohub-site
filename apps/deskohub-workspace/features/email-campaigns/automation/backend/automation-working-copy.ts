@@ -23,7 +23,9 @@ import {
   automationFlowSchema,
   validateAutomationFlow,
 } from "../automation-flow";
+import { isPassReminderTrigger } from "../automation-triggers";
 import { AutomationFlowInvalid } from "../errors";
+import { passReminderSampleContent } from "./automation-pass-reminder-preview";
 
 export type AutomationRow = typeof emailCampaignAutomations.$inferSelect;
 
@@ -69,15 +71,22 @@ export const loadAutomationWorkingCopy = (
     Effect.bind("row", () => selectWorkingCopy(campaignId)),
     Effect.bind("flow", ({ row }) => decodeStoredFlow(row.automation.flow)),
     Effect.let("audience", ({ row }) => Option.fromNullishOr(row.audience)),
+    Effect.let("campaign", ({ row, flow }) => {
+      const trigger = Option.getOrUndefined(flow)?.trigger;
+      // The approved copy and its revision both participate in the draft hash.
+      if (trigger === undefined || !isPassReminderTrigger(trigger))
+        return row.campaign;
+      return { ...row.campaign, content: passReminderSampleContent(trigger) };
+    }),
     Effect.map(
-      ({ row, flow, audience }): AutomationWorkingCopy => ({
-        campaign: row.campaign,
+      ({ row, campaign, flow, audience }): AutomationWorkingCopy => ({
+        campaign,
         automation: row.automation,
         flow,
         audience,
         draftHash: Option.zipWith(flow, audience, (flow, { filter }) =>
           hashAutomationDraft({
-            ...row.campaign,
+            ...campaign,
             flow,
             audienceFilter: filter,
           })

@@ -41,6 +41,7 @@ import {
 } from "@/shared/components/ui/table";
 import { Tooltip } from "@/shared/components/ui/tooltip";
 import { formatCount } from "@/shared/utils/number";
+import { isPassReminderTrigger } from "../../../automation/automation-triggers";
 import type {
   AutomationDryRunCustomerWithLifecycle,
   AutomationDryRunWithLifecycle,
@@ -128,7 +129,12 @@ export function AutomationDryRunResults({
         locale={locale}
         replay={replay}
       />
-      <DryRunEmails content={content} dryRun={dryRun} locale={locale} />
+      <DryRunEmails
+        content={content}
+        dryRun={dryRun}
+        example={flow !== null && isPassReminderTrigger(flow.trigger)}
+        locale={locale}
+      />
     </div>
   );
 }
@@ -330,22 +336,28 @@ function DryRunPages({
 function DryRunEmails({
   content,
   dryRun,
+  example,
   locale,
 }: {
   readonly content: AdministrationCampaignContent;
   readonly dryRun: AutomationDryRunWithLifecycle;
+  readonly example: boolean;
   readonly locale: Locale;
 }) {
   if (dryRun.emails.length === 0) return null;
   return (
     <AdministrationDetailSection
-      title={m.emailAutomationActivationEmailTitle({}, { locale })}
+      title={
+        example
+          ? m.emailAutomationActivationExampleEmailTitle({}, { locale })
+          : m.emailAutomationActivationEmailTitle({}, { locale })
+      }
     >
       <SentCampaignEmailPreview
         emails={dryRun.emails.map((email) => ({
           locale: email.locale,
           subject: email.subject,
-          preheader: content[email.locale]?.preheader ?? "",
+          preheader: email.preheader ?? content[email.locale]?.preheader ?? "",
           html: email.html,
         }))}
       />
