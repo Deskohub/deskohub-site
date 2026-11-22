@@ -11,7 +11,7 @@ import { PassReminderReads } from "@/features/passes/backend/pass-reminder-reads
 import { getPassReminderDueAt } from "@/features/passes/pass-reminder-schedule";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import { plainDateStringSchema } from "@/shared/utils/temporal";
+import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import { automationVersionIdSchema } from "../automation-identifiers";
 import {
   automationScenarioLayer,
@@ -54,24 +54,30 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
   );
   const kit = automationLifecycleTestKit(database, { now: activatedAt });
 
-  const seedPass = async (customer: DotyposCustomerId, unclaimed = false) => {
+  const seedPass = async (
+    customer: DotyposCustomerId,
+    unclaimed = false,
+    existingHolder?: string
+  ) => {
     const id = orderIdSchema.make(crypto.randomUUID());
-    const holder = crypto.randomUUID();
+    const holder = existingHolder ?? crypto.randomUUID();
     const buyer = unclaimed ? crypto.randomUUID() : holder;
-    await pool.query(
-      "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
-      [holder, customer]
-    );
+    if (existingHolder === undefined) {
+      await pool.query(
+        "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
+        [holder, customer]
+      );
+      await pool.query(
+        `insert into auth."user" (id, name, email, email_verified)
+         values ($1, 'Synthetic holder', $2, true)`,
+        [holder, testEmailAddress(holder)]
+      );
+    }
     if (unclaimed) {
       await pool.query("insert into customer_accounts (id) values ($1)", [
         buyer,
       ]);
     }
-    await pool.query(
-      `insert into auth."user" (id, name, email, email_verified)
-       values ($1, 'Synthetic holder', $2, true)`,
-      [holder, testEmailAddress(holder)]
-    );
     await pool.query(
       `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, fulfilled_at)
        values ($1, 'pass-purchase', $2, 'complimentary', 'fulfilled', now())`,
@@ -119,24 +125,36 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     };
   };
 
-  test("pins one consenting claimed pass through intake and overlapping replans", async () => {
+  test("consumes retained pass occurrences after Prague midnight on the rollback floor", async () => {
+    // A rollback from the writer retains its database migration.
+    await pool.query(
+      "drop index if exists email_campaign_automation_runs_one_open_run_idx"
+    );
+    const afterMidnight = dueAt.add({ hours: 15 });
     const eligible = await fixtures.addCustomer("eligible");
-    const noConsent = await fixtures.addCustomer("no-consent", {
-      consent: false,
-    });
+    const noConsent = await fixtures.addCustomer(
+      "consent-revoked-before-intake"
+    );
     const unclaimedGift = await fixtures.addCustomer("unclaimed-gift");
     const { id, holder } = await seedPass(eligible);
+    const secondPass = await seedPass(eligible, false, holder);
     await seedPass(noConsent);
     await seedPass(unclaimedGift, true);
     const targets = [await seedVersion(), await seedVersion()];
     const queue = makeAutomationUnitQueueFake();
+    const liveOpen = Effect.map(currentInstant, (now) =>
+      now.equals(afterMidnight)
+    );
     const layer = await automationScenarioLayer({
       database,
       dotypos: provider,
       queue,
       kinds: ["pass-reminder-intake"],
       planning: [],
-      passReminderGate: CoworkPassesReleaseGate.fromDecision(true),
+      passReminderGate: Layer.succeed(CoworkPassesReleaseGate, {
+        isOpen: liveOpen,
+        decision: liveOpen,
+      }),
       passReminderReads: PassReminderReads.Default.pipe(
         Layer.provide(
           Layer.merge(
@@ -156,28 +174,38 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
       runEngineAt(write, layer, dueAt),
       runEngineAt(write, layer, dueAt),
     ]);
-    await runEngineAt(planAndProcess(queue), layer, dueAt);
-    await runEngineAt(write, layer, dueAt);
-    await runEngineAt(planAndProcess(queue), layer, dueAt);
-    const { rows } = await pool.query(
-      `select trigger_pass_id, pass_reminder_context, dotypos_customer_id
-       from email_campaign_automation_runs where trigger_pass_id is not null`
+    await pool.query(
+      "update customer_marketing_consents set withdrawn_at = $2 where dotypos_customer_id = $1",
+      [noConsent, afterMidnight.toString()]
     );
-    expect(rows).toEqual([
-      {
-        trigger_pass_id: id,
-        dotypos_customer_id: eligible,
-        pass_reminder_context: {
-          copyVersion: 1,
-          holderAccountId: holder,
-          holderVersion: 0,
-          tier: "open-space",
-          endsOn: "2027-01-14",
-          product: "entry-pack",
-          remainingEntries: 5,
-          totalEntries: 5,
-        },
-      },
-    ]);
+    await runEngineAt(planAndProcess(queue), layer, afterMidnight);
+    await runEngineAt(write, layer, afterMidnight);
+    await runEngineAt(planAndProcess(queue), layer, afterMidnight);
+    const { rows } = await pool.query(
+      `select trigger_pass_id, pass_reminder_context, dotypos_customer_id,
+              trigger_at = $1::timestamptz as original_fire
+       from email_campaign_automation_runs where trigger_pass_id is not null`,
+      [dueAt.toString()]
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(
+      expect.arrayContaining(
+        [id, secondPass.id].map((passId) => ({
+          trigger_pass_id: passId,
+          original_fire: true,
+          dotypos_customer_id: eligible,
+          pass_reminder_context: {
+            copyVersion: 1,
+            holderAccountId: holder,
+            holderVersion: 0,
+            tier: "open-space",
+            endsOn: "2027-01-14",
+            product: "entry-pack",
+            remainingEntries: 5,
+            totalEntries: 5,
+          },
+        }))
+      )
+    );
   });
 });

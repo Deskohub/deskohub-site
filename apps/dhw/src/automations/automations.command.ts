@@ -206,7 +206,7 @@ const automationsFlowSetCommand = Command.make(
     campaignId: campaignIdArgument,
     flowFile: Flag.String("flow-file").pipe(
       Flag.withDescription(
-        "JSON file with the flow's trigger and steps. Cowork pass reminder triggers require server support."
+        "JSON file with the flow's trigger and steps. EntryPackExpiring and UnlimitedEnding require a marketing campaign and Workspace support for pass reminder writes."
       )
     ),
   },
@@ -296,6 +296,12 @@ const runDryRun = (
   });
 
 const formatDryRun = (dryRun: AutomationDryRunType) => {
+  // A matching pass draft supplies its forecast date without a schedule frequency.
+  const passForecast =
+    dryRun.kind === "schedule" &&
+    dryRun.frequency === null &&
+    dryRun.nextFires.length === 1 &&
+    dryRun.nextFires[0] === dryRun.asOf;
   const customers = new Map(
     dryRun.customers.map((customer) => [customer.customerId, customer])
   );
@@ -318,6 +324,11 @@ const formatDryRun = (dryRun: AutomationDryRunType) => {
       : [
           `Events\t${dryRun.eventsTotal}${dryRun.truncated ? " (truncated: only the most recent are evaluated)" : ""}`,
         ]),
+    ...(passForecast
+      ? [
+          "The forecast counts each evaluated pass holder once, including those excluded or skipped. A holder may receive a separate reminder for each qualifying pass.",
+        ]
+      : []),
     ...AutomationPreviewOutcome.literals.map(
       (outcome) => `${outcome}\t${dryRun.counts[outcome]}`
     ),
@@ -345,7 +356,7 @@ const formatDryRun = (dryRun: AutomationDryRunType) => {
         ].join(", "),
       ].join("\t");
     }),
-    `Emails: ${dryRun.emails.length}`,
+    `${passForecast ? "Example emails" : "Emails"}: ${dryRun.emails.length}`,
     ...dryRun.emails.map((email) => `${email.locale}\t${email.subject}`),
   ].join("\n");
 };
