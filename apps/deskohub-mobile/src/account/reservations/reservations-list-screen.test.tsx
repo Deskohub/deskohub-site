@@ -280,6 +280,15 @@ test("the savings link opens Pricing in the app's language, unselected", async (
     press();
     expect(openedPages).toEqual([sitePageUrl("/pricing", apiOrigin, "en-US")]);
     expect(new URL(openedPages[0] ?? "").search).toBe("");
+
+    // Enter follows it too, on the web, where the link has no href.
+    openedPages.length = 0;
+    const keyDown = savingsLinks(hosts)[0]?.props.onKeyDown as (event: {
+      nativeEvent: { key: string };
+      preventDefault: () => void;
+    }) => void;
+    keyDown({ nativeEvent: { key: "Enter" }, preventDefault: () => undefined });
+    expect(openedPages).toHaveLength(1);
   });
 });
 

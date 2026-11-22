@@ -7,7 +7,8 @@ import { PassProductMarks } from "../../passes/pass-product-marks";
 import { openSitePage } from "../../routing/open-site-page";
 import { sitePageUrl } from "../../routing/site-page";
 import { Icon } from "../../ui/icon";
-import { useIsPinnedCopy } from "../../ui/scroll-screen";
+import { followLinkOnEnter } from "../../ui/link-activation";
+import { useIsHiddenStickyCopy } from "../../ui/scroll-screen";
 import { Text } from "../../ui/text";
 import { useToast } from "../../ui/toast";
 import { color, space } from "../../ui/tokens";
@@ -22,7 +23,7 @@ import { useViewport } from "../../ui/viewport";
 export function PastSavingsFooter() {
   const locale = useAppLocale();
   const toast = useToast();
-  const pinnedCopy = useIsPinnedCopy();
+  const hiddenCopy = useIsHiddenStickyCopy();
   const { fontScale } = useViewport();
   const stacked = fontScale >= 1.3;
   const label = m.reservations_save_with_passes({}, { locale });
@@ -37,9 +38,11 @@ export function PastSavingsFooter() {
     <Pressable
       role="link"
       aria-label={label}
-      // The pinned copy is drawn only; keyboard focus reaches the row in place.
-      focusable={!pinnedCopy}
+      // Keyboard focus reaches only the copy in sight while the row is pinned.
+      focusable={!hiddenCopy}
+      tabIndex={hiddenCopy ? -1 : 0}
       onPress={open}
+      onKeyDown={followLinkOnEnter(open)}
       style={({ pressed }) => [styles.footer, pressed && styles.pressed]}
     >
       <View style={stacked ? styles.stackedText : styles.inlineText}>

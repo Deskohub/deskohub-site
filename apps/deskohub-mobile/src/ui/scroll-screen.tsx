@@ -102,14 +102,15 @@ export const StickyFooterHostContext = createContext<
   StickyFooterHost | undefined
 >(undefined);
 
-/** Whether a footer is drawn by its screen's pinned copy instead. */
-const PinnedCopyContext = createContext(false);
+/** Whether this copy of a sticky footer is the one out of sight. */
+const HiddenCopyContext = createContext(false);
 
 /**
- * Whether this is the pinned copy of a sticky footer, which assistive
- * technology and keyboard focus skip: they reach the footer in its place.
+ * Whether this copy of a sticky footer is the hidden one, which assistive
+ * technology and keyboard focus skip: while the footer is pinned they reach
+ * its pinned copy, and otherwise the footer in its place.
  */
-export const useIsPinnedCopy = () => useContext(PinnedCopyContext);
+export const useIsHiddenStickyCopy = () => useContext(HiddenCopyContext);
 
 /**
  * Whether a group's footer pins to the bottom of the screen, as CSS
@@ -132,8 +133,8 @@ export const stickyFooterPinned = ({
  * A group whose `footer` ends it, and sticks above the bottom of its
  * `ScrollScreen` (clear of the tab bar's raised circle) while the group
  * runs on below it; at the group's end the footer rests in place. The
- * pinned copy takes `pinnedStyle` and stays hidden from assistive
- * technology: the footer in place is the one it reads. `onObstruction`
+ * pinned copy takes `pinnedStyle`. Assistive technology and keyboard focus
+ * reach only the copy in sight (see `useIsHiddenStickyCopy`). `onObstruction`
  * hears how much of the window's bottom the pinned copy covers, 0 while
  * none shows, for the toast. Outside a `ScrollScreen` the footer never pins.
  */
@@ -156,16 +157,21 @@ export function StickyFooterGroup({
   const footerView = useRef<ComponentRef<typeof View>>(null);
   const boxes = useRef<{ group?: ContentBox; footer?: ContentBox }>({});
   const [pinned, setPinned] = useState(false);
+  // How much of the window's bottom the pinned copy covers.
+  const [covered, setCovered] = useState(0);
   const [frame, setFrame] = useState<ContentBox>();
   const shown = footer !== undefined && footer !== null && footer !== false;
   const update = useCallback(() => {
     const { group, footer: place } = boxes.current;
-    setPinned(
+    const pinnedNow =
       host !== undefined &&
-        group !== undefined &&
-        place !== undefined &&
-        stickyFooterPinned({ pinLine: host.pinLine(), group, footer: place })
-    );
+      group !== undefined &&
+      place !== undefined &&
+      // Not before the footer is laid out.
+      place.height > 0 &&
+      stickyFooterPinned({ pinLine: host.pinLine(), group, footer: place });
+    setPinned(pinnedNow);
+    setCovered(pinnedNow ? host.belowPinned() + place.height : 0);
   }, [host]);
   const remeasure = useCallback(() => {
     if (host === undefined) return;
@@ -203,9 +209,7 @@ export function StickyFooterGroup({
     });
     return () => host.pin(key, undefined);
   }, [host, key, pinning, footer, frame, pinnedStyle]);
-  const footerHeight = boxes.current.footer?.height ?? 0;
-  const obstruction =
-    host !== undefined && pinning ? host.belowPinned() + footerHeight : 0;
+  const obstruction = pinning ? covered : 0;
   useEffect(() => {
     onObstruction?.(obstruction);
   }, [onObstruction, obstruction]);
@@ -217,14 +221,15 @@ export function StickyFooterGroup({
     >
       {children}
       {shown && (
-        // While pinned, the copy covers this place; the place stays for
-        // assistive technology, which scrolls it into view and unpins it.
+        // While pinned, the copy drawn over the screen is the footer to see,
+        // read and focus; this place stays only for the layout.
         <View
           ref={footerView}
           onLayout={remeasure}
+          aria-hidden={pinning}
           style={pinning ? styles.coveredFooter : undefined}
         >
-          {footer}
+          <HiddenCopyContext value={pinning}>{footer}</HiddenCopyContext>
         </View>
       )}
     </View>
@@ -245,13 +250,12 @@ function PinnedFooters({
   readonly left: number;
 }) {
   return (
-    <PinnedCopyContext value={true}>
+    <>
       {/* The content stops above the pinned footers, as above a bar. */}
       <View aria-hidden style={[styles.belowPinned, { height: bottom }]} />
       {Array.from(footers, ([key, pinned]) => (
         <View
           key={key}
-          aria-hidden
           style={[
             styles.pinned,
             { bottom, left: left + pinned.x, width: pinned.width },
@@ -261,7 +265,7 @@ function PinnedFooters({
           {pinned.node}
         </View>
       ))}
-    </PinnedCopyContext>
+    </>
   );
 }
 
@@ -307,12 +311,13 @@ export function ScrollScreen({
   const [collapsed, setCollapsed] = useState(false);
   const scrollView = useRef<ComponentRef<typeof ScrollView>>(null);
   // Instantly: a screen coming back into view shows its top right away.
-  const scrollToTop = useCallback(
-    () => scrollView.current?.scrollTo({ y: 0, animated: false }),
-    []
-  );
-  const focusedField = useFocusedFieldScroll(scrollView);
   const sticky = useStickyFooterHost(scrollView, isWide);
+  const { onScroll: stickyScroll } = sticky;
+  const scrollToTop = useCallback(() => {
+    scrollView.current?.scrollTo({ y: 0, animated: false });
+    stickyScroll(0);
+  }, [stickyScroll]);
+  const focusedField = useFocusedFieldScroll(scrollView);
   const withMasthead = masthead !== undefined;
   const overlapping = withMasthead && overlap;
   const collapsing =
@@ -327,7 +332,9 @@ export function ScrollScreen({
               focusedField.onLayout(event);
               sticky.onLayout(event);
             }}
-            onContentSizeChange={sticky.onContentSizeChange}
+            onContentSizeChange={
+              sticky.tracking ? sticky.onContentSizeChange : undefined
+            }
             // A tap on a button, or on a row of a sheet opened from this screen,
             // acts while the keyboard is up; elsewhere it closes the keyboard.
             // The responder system follows the React tree, so a modal sheet's
@@ -371,7 +378,7 @@ export function ScrollScreen({
                   {masthead}
                 </View>
               )}
-              <View ref={sticky.content} style={styles.page}>
+              <View style={styles.page}>
                 {overlapping && <View aria-hidden style={styles.overlap} />}
                 <View
                   style={[
@@ -432,7 +439,6 @@ function useStickyFooterHost(
 ) {
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const content = useRef<ComponentRef<typeof View>>(null);
   const frame = useRef({ scrollY: 0, viewportHeight: 0, belowScreen: 0 });
   const listeners = useRef(new Set<(change: "scroll" | "layout") => void>());
   const [tracking, setTracking] = useState(false);
@@ -445,18 +451,30 @@ function useStickyFooterHost(
   const notify = useCallback((change: "scroll" | "layout") => {
     for (const listener of listeners.current) listener(change);
   }, []);
-  // How far the window runs on below this screen, such as over the tab bar.
-  const measureBelowScreen = useCallback(() => {
-    scrollView.current?.measureInWindow((_x, y, _width, height) => {
-      frame.current.belowScreen = Math.max(0, windowHeight - (y + height));
-      notify("layout");
-    });
+  // Where the content has scrolled to, read from the viewport's and the
+  // content's frames in the window (a footer can start listening after the
+  // last scroll event), and how far the window runs on below this screen,
+  // such as over the tab bar.
+  const measureWindow = useCallback(() => {
+    const view = scrollView.current;
+    const viewport = view?.getNativeScrollRef();
+    const content = view?.getInnerViewRef();
+    if (!viewport || !content) return;
+    viewport.measureInWindow((_x, top, _width, height) =>
+      content.measureInWindow((_contentX, contentTop) => {
+        frame.current.scrollY = top - contentTop;
+        frame.current.viewportHeight = height;
+        frame.current.belowScreen = Math.max(0, windowHeight - (top + height));
+        notify("layout");
+      })
+    );
   }, [scrollView, windowHeight, notify]);
   const host = useMemo<StickyFooterHost>(
     () => ({
+      // In the scrolled content's own frame, which its offset is read in.
       measure: (node, onBox) => {
-        const relativeTo = content.current;
-        if (node === null || relativeTo === null) return;
+        const relativeTo = scrollView.current?.getInnerViewRef();
+        if (node === null || !relativeTo) return;
         node.measureLayout(relativeTo, (x, y, width, height) =>
           onBox({ x, y, width, height })
         );
@@ -467,7 +485,7 @@ function useStickyFooterHost(
       subscribe: (listener) => {
         listeners.current.add(listener);
         setTracking(true);
-        measureBelowScreen();
+        measureWindow();
         return () => {
           listeners.current.delete(listener);
           setTracking(listeners.current.size > 0);
@@ -482,25 +500,26 @@ function useStickyFooterHost(
           return next;
         }),
     }),
-    [pinBottom, measureBelowScreen]
+    [scrollView, pinBottom, measureWindow]
   );
-  return {
-    host,
-    content,
-    tracking,
-    pinned,
-    pinBottom,
-    onScroll: (y: number) => {
+  const onScroll = useCallback(
+    (y: number) => {
       frame.current.scrollY = y;
       notify("scroll");
     },
+    [notify]
+  );
+  return {
+    host,
+    tracking,
+    pinned,
+    pinBottom,
+    onScroll,
     onLayout: (event: LayoutChangeEvent) => {
       frame.current.viewportHeight = event.nativeEvent.layout.height;
-      if (listeners.current.size > 0) measureBelowScreen();
+      if (listeners.current.size > 0) measureWindow();
     },
-    onContentSizeChange: () => {
-      if (listeners.current.size > 0) notify("layout");
-    },
+    onContentSizeChange: () => notify("layout"),
   };
 }
 

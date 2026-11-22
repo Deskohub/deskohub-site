@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { act, useContext, useEffect } from "react";
+import { act } from "react";
 import { clientRoot } from "../testing/client-root";
 import {
   type ContentBox,
@@ -9,9 +9,11 @@ import {
   type StickyFooterHost,
   StickyFooterHostContext,
   stickyFooterPinned,
-  useIsPinnedCopy,
+  useIsHiddenStickyCopy,
 } from "./scroll-screen";
 import { Text } from "./text";
+
+type Measured = (x: number, y: number, width: number, height: number) => void;
 
 const box = (y: number, height: number): ContentBox => ({
   x: 16,
@@ -116,30 +118,65 @@ describe("StickyFooterGroup", () => {
     expect(screen.listeners.size).toBe(0);
   });
 
-  test("assistive technology reads the footer in place, not its pinned copy", async () => {
+  test("on a screen, it pins at once from where the content already is", async () => {
+    // The content scrolled 400 down a 700 high viewport before the footer
+    // showed: no scroll event will tell it so.
+    const inner = {
+      measureInWindow: (done: Measured) => done(0, -400, 360, 0),
+    };
+    const relativeTo: Array<unknown> = [];
+    const stubs = {
+      getNativeScrollRef() {
+        return { measureInWindow: (done: Measured) => done(0, 0, 360, 700) };
+      },
+      getInnerViewRef: () => inner,
+      measureLayout(
+        this: HTMLElement,
+        to: unknown,
+        done: (x: number, y: number, width: number, height: number) => void
+      ) {
+        relativeTo.push(to);
+        if (this.textContent === "footer") done(16, 1250, 328, 50);
+        else done(16, 100, 328, 1200);
+      },
+    };
+    Object.assign(HTMLElement.prototype, stubs);
     function Probe() {
-      return <Text>{useIsPinnedCopy() ? "copy" : "place"}</Text>;
+      return <Text>{useIsHiddenStickyCopy() ? "hidden" : "footer"}</Text>;
     }
-    function PinsProbe() {
-      const host = useContext(StickyFooterHostContext);
-      useEffect(() => {
-        host?.pin("probe", { node: <Probe />, x: 16, width: 328 });
-      }, [host]);
-      return <Probe />;
+    try {
+      await root.render(
+        <ScrollScreen>
+          <StickyFooterGroup footer={<Probe />}>
+            <Text>rows</Text>
+          </StickyFooterGroup>
+        </ScrollScreen>
+      );
+      // Measured in the scrolled content's own frame, the one its offset is in.
+      expect(relativeTo.length).toBeGreaterThan(0);
+      expect(relativeTo.every((to) => to === inner)).toBe(true);
+      const texts = Array.from(root.container().querySelectorAll("Text"));
+      const exposed = texts.filter(
+        (text) => text.closest('[aria-hidden="true"]') === null
+      );
+      // The footer in place hides; the pinned copy in sight is the one to
+      // read and focus.
+      expect(texts.map((text) => text.textContent).sort()).toEqual([
+        "footer",
+        "hidden",
+        "rows",
+      ]);
+      expect(exposed.map((text) => text.textContent).sort()).toEqual([
+        "footer",
+        "rows",
+      ]);
+      const pinned = exposed.find((text) => text.textContent === "footer");
+      expect(pinned?.closest("ScrollView")).toBeNull();
+    } finally {
+      for (const key of Object.keys(stubs))
+        delete (HTMLElement.prototype as unknown as Record<string, unknown>)[
+          key
+        ];
     }
-    await root.render(
-      <ScrollScreen>
-        <PinsProbe />
-      </ScrollScreen>
-    );
-    const texts = Array.from(root.container().querySelectorAll("Text"));
-    const exposed = texts.filter(
-      (text) => text.closest('[aria-hidden="true"]') === null
-    );
-    expect(texts.map((text) => text.textContent).sort()).toEqual([
-      "copy",
-      "place",
-    ]);
-    expect(exposed.map((text) => text.textContent)).toEqual(["place"]);
   });
 });
