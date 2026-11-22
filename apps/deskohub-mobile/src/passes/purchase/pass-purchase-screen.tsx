@@ -379,17 +379,39 @@ function PassPurchaseFlow({
     attempt.current = pending;
     const { input, billing } = pending;
     const exit = await begin({ payload: input, owns: ownsView });
-    if (!focused.current) return;
     if (Exit.isSuccess(exit)) {
       attempt.current = { ...pending, unconfirmed: false };
-      setPurchase({ quote: exit.value, billing });
       if (kind === "unlimited") setPreviousOrderId(exit.value.orderId);
+      if (!ownsView()) return;
+      setPurchase({ quote: exit.value, billing });
       setApprovedQuote(undefined);
       setStage("pay");
       return;
     }
     const error = errorOf(exit);
     const reason = purchaseRefusal(error);
+    const holdsUnavailable = reason === "holds-unavailable";
+    const ambiguousHold =
+      holdsUnavailable &&
+      !(
+        Predicate.hasProperty(error, "blockingDates") &&
+        Array.isArray(error.blockingDates)
+      );
+    if (
+      Predicate.isTagged(error, "CustomerWriteUnconfirmed") ||
+      ambiguousHold ||
+      reason === "payment-in-progress"
+    ) {
+      attempt.current = { ...pending, unconfirmed: true };
+    } else if (
+      holdsUnavailable ||
+      reason === "quote-expired" ||
+      reason === "invalid-selection"
+    ) {
+      attempt.current = undefined;
+    }
+
+    if (!ownsView()) return;
     if (reason === "payment-in-progress") {
       const orderId =
         Predicate.hasProperty(error, "orderId") &&
@@ -399,17 +421,7 @@ function PassPurchaseFlow({
       showStatus(orderId);
       return;
     }
-    if (Predicate.isTagged(error, "CustomerWriteUnconfirmed")) {
-      attempt.current = { ...pending, unconfirmed: true };
-    }
-    if (reason === "quote-expired") attempt.current = undefined;
-    if (
-      reason === "holds-unavailable" &&
-      !(
-        Predicate.hasProperty(error, "blockingDates") &&
-        Array.isArray(error.blockingDates)
-      )
-    ) {
+    if (ambiguousHold) {
       // A bare hold refusal does not tell us whether the old order is live.
       const status = await reconcileOrder({ orderId: input.orderId, locale });
       if (!ownsView()) return;
@@ -418,13 +430,12 @@ function PassPurchaseFlow({
         return;
       }
       if (!Predicate.isTagged(errorOf(status), "CustomerPassNotFound")) {
-        attempt.current = { ...pending, unconfirmed: true };
         setNotice(m.booking_checkout_unconfirmed({}, { locale }));
         return;
       }
-    }
-    if (reason === "holds-unavailable" || reason === "invalid-selection") {
       attempt.current = undefined;
+    }
+    if (holdsUnavailable || reason === "invalid-selection") {
       setStage("choose");
       refreshDates();
     }
@@ -613,7 +624,15 @@ function PassPurchaseFlow({
       <ScrollScreen key={step} contentWidth="wide">
         <QuietUpdateOffer backdrop="paper" />
         <View style={styles.body}>
-          <Notice tone="warning" message={notice} />
+          <Notice
+            tone="warning"
+            message={
+              notice ??
+              (step === "details" && attempt.current?.unconfirmed
+                ? m.booking_checkout_unconfirmed({}, { locale })
+                : undefined)
+            }
+          />
           {step === "choose" && (
             <>
               <PassChoose

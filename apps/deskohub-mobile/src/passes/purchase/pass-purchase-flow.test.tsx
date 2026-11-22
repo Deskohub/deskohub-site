@@ -10,7 +10,13 @@ import {
 import { RegistryContext } from "@effect/atom-react";
 import { Context, Effect, Layer, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
-import { act, type ReactNode, useEffect } from "react";
+import {
+  act,
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+} from "react";
 import { PaymentBrowser } from "../../booking/payment-browser.service";
 import type { BookingBarAction } from "../../booking/ui/booking-bar";
 import { CustomerApi } from "../../customer-api/customer-api.service";
@@ -34,6 +40,8 @@ import { clientRoot } from "../../testing/client-root";
 import { expoRouterStandIn } from "../../testing/expo-router-stand-in";
 
 let locale: AppLocale = "en-US";
+let routeFocused = true;
+const RouteFocus = createContext(true);
 const navigate = mock((_href: unknown) => undefined);
 const openHosted = mock(
   async (_url: string, _redirect: string) => "dismissed" as const
@@ -41,8 +49,10 @@ const openHosted = mock(
 
 mock.module("expo-router", () => ({
   ...expoRouterStandIn({
-    useFocusEffect: (effect: () => undefined | (() => void)) =>
-      useEffect(effect, [effect]),
+    useFocusEffect: (effect: () => undefined | (() => void)) => {
+      const focused = useContext(RouteFocus);
+      useEffect(() => (focused ? effect() : undefined), [effect, focused]);
+    },
     useLocalSearchParams: () => ({
       tier: "reserved-desk",
       size: "10",
@@ -116,7 +126,9 @@ mock.module("./pass-purchase-details", () => ({
         onChange({
           ...details,
           gift: true,
-          holderEmail: "gift@example.test",
+          holderEmail: details.gift
+            ? "change@example.test"
+            : "gift@example.test",
           recipientName: "Synthetic Holder",
           invoice: {
             ...details.invoice,
@@ -224,12 +236,14 @@ for (const { language, kind } of [
 ] as const) {
   test(`pass purchase repricing and hosted return in ${language}`, async () => {
     locale = language;
+    routeFocused = true;
     navigate.mockClear();
     openHosted.mockClear();
     const workspace = FakeWorkspace.forKind("linked");
     const submitCalls: SubmitCustomerPassPurchase[] = [];
     const codeUpdates: UpdateCustomerPassPurchasePrice[] = [];
     const beginCalls: BeginCustomerPassPurchase[] = [];
+    const finishBegin = Promise.withResolvers<void>();
     let catalogAvailable = true;
     let quote: CustomerPassPurchase | undefined;
     const fixture = Layer.effect(
@@ -315,6 +329,7 @@ for (const { language, kind } of [
                 },
               };
               if (beginCalls.length === 1) {
+                yield* Effect.promise(() => finishBegin.promise);
                 return HttpClientResponse.fromWeb(request, Response.json({}));
               }
               if (kind === "unlimited" && beginCalls.length === 2) {
@@ -424,11 +439,15 @@ for (const { language, kind } of [
     expect(await settle(registry, passCatalogAtom)).toMatchObject({
       _tag: "Success",
     });
-    await render(
-      <RegistryContext.Provider value={registry}>
-        <PassPurchaseScreen key={language} kind={kind} />
-      </RegistryContext.Provider>
-    );
+    const renderCheckout = () =>
+      render(
+        <RegistryContext.Provider value={registry}>
+          <RouteFocus.Provider value={routeFocused}>
+            <PassPurchaseScreen key={language} kind={kind} />
+          </RouteFocus.Provider>
+        </RegistryContext.Provider>
+      );
+    await renderCheckout();
     await button("continue");
     expect(container().querySelector("#choice")?.textContent).toBe(
       "reserved-desk/10"
@@ -437,6 +456,17 @@ for (const { language, kind } of [
     await press("gift");
     await press("continue");
     expect(beginCalls).toHaveLength(1);
+
+    routeFocused = false;
+    await renderCheckout();
+    await act(async () => {
+      finishBegin.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    routeFocused = true;
+    await renderCheckout();
+    expect((await button("continue")).disabled).toBe(false);
+    await press("gift");
 
     workspace.signedIn = false;
     await press("continue");
