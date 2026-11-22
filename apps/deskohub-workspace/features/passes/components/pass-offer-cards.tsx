@@ -71,7 +71,7 @@ function PassOfferLink({
     <a
       aria-describedby={describedBy}
       aria-label={label}
-      className="group grid min-w-0 rounded-xl text-inherit no-underline focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[#a3f0d6]"
+      className="group grid min-w-0 rounded-xl text-balance text-inherit no-underline focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[#a3f0d6]"
       href={href}
     >
       {children}
