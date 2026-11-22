@@ -165,6 +165,19 @@ describe("PR description ## E2E flows parser", () => {
     ],
     ["indented bullet inside section", "## E2E flows\n    - none\n"],
     ["code block inside section", "## E2E flows\n```\n- admin\n```\n"],
+    [
+      "heading inside raw <pre> HTML block",
+      "<pre>\n## E2E flows\n- none\n## End\n</pre>\n",
+    ],
+    [
+      "heading inside raw <details> HTML block without blank line",
+      "<details><summary>Details</summary>\n## E2E flows\n- none\n</details>\n",
+    ],
+    [
+      "heading inside raw <div> HTML block",
+      "<div>\n## E2E flows\n- none\n</div>\n",
+    ],
+    ["raw HTML block inside section", "## E2E flows\n<pre>\n- none\n</pre>\n"],
     ["empty section", "## E2E flows\n\n<!-- only comment -->\n## Next\nText"],
     ["duplicate sections", "## E2E flows\n- admin\n## E2E flows\n- account"],
     ["unknown flow", "## E2E flows\n- checkout-magic"],
@@ -383,6 +396,42 @@ describe("commit status description encoding and coverage summary", () => {
     ]);
     expect(supersededRerun.latestRunKind).toBe("superseded");
     expect(supersededRerun.realPassedFlows).toEqual(["admin"]);
+
+    // Switching selection to another already-passed flow (`webkit`) posts a
+    // newer pass above the still-running `admin` run; `admin` must remain
+    // active rather than falling back to the older `admin,webkit` pass.
+    const activeAcrossSelectionChange = summarizeCommitStatuses([
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E passed [flows: webkit]",
+        state: "success",
+        target_url: "https://github.com/owner/repo/actions/runs/300",
+      },
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E is running [flows: admin]",
+        state: "pending",
+        target_url: "https://github.com/owner/repo/actions/runs/200",
+      },
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E passed [flows: admin,webkit]",
+        state: "success",
+        target_url: "https://github.com/owner/repo/actions/runs/100",
+      },
+    ]);
+    expect(activeAcrossSelectionChange.realPassedFlows).toEqual(["webkit"]);
+    expect(activeAcrossSelectionChange.runningFlows).toEqual(["admin"]);
+    expect(activeAcrossSelectionChange.activeRuns).toEqual([
+      {
+        description: "Protected preview E2E is running [flows: admin]",
+        flows: ["admin"],
+        targetUrl: "https://github.com/owner/repo/actions/runs/200",
+      },
+    ]);
 
     const partialAndCarried = summarizeCommitStatuses(
       [

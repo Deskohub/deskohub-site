@@ -2,20 +2,23 @@
 /**
  * Coordinated status reconciler and CAS publisher for `Workspace E2E`.
  *
- * Every writer that can publish `Workspace E2E: success` (`publish-final-status`,
+ * Every writer that can publish `Workspace E2E` (`publish-final-status`,
  * `publish-status-without-run`, and `sync-pr-e2e-flows`) runs through this
  * helper so that:
  * 1. Success requires affirmative live evidence of PR head, valid `## E2E flows`,
- *    applicable Vercel deployment state (never treating lookup failure as valid),
- *    and un-invalidated flow coverage.
+ *    the current Vercel deployment's current status (never falling through from
+ *    an unresolved deployment or treating lookup failure as valid), readable
+ *    head commit-status history, and un-invalidated flow coverage.
  * 2. Every `success` write performs post-write verification against fresh PR,
- *    deployment, and commit status reads; if a concurrent edit, validation
- *    failure, deployment failure, or active rerun interleaved between read and
- *    write, it immediately reconciles and overwrites the stale success (or fails
- *    closed after bounded retries).
- * 3. Failed runs on the current head always record their actual run failure in
- *    commit status history first, then reconcile against the live PR selection
- *    (for example `none` on a valid preview).
+ *    deployment, and commit-status reads while excluding all tentative writes
+ *    from this process. If a concurrent edit, validation failure, deployment
+ *    change, real run failure, or active rerun interleaved between read and
+ *    write, it immediately applies the verified decision (preserving any
+ *    dispatch action and preserving the active run's original `target_url`
+ *    when restoring `pending`), or fails closed after bounded retries.
+ * 3. Delayed failure paths (`publish-final-status` failure and
+ *    `publish-status-without-run` failure) reconcile against the live PR
+ *    selection while retaining any real run failure in commit-status history.
  */
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -109,6 +112,11 @@ const fetchPrCommits = (prNumber) =>
     slurp: true,
   });
 
+/**
+ * Resolves the current (newest) Vercel deployment's current (newest) status
+ * for `sha`. Never falls through from an unresolved (`in_progress`, `queued`,
+ * `pending`) current deployment or status to an older deployment or status.
+ */
 const fetchDeploymentState = (sha) => {
   const deploymentsRes = ghApiJson([
     "--method",
@@ -127,30 +135,37 @@ const fetchDeploymentState = (sha) => {
   const vercelDeployments = deploymentsRes.data.filter(
     (entry) => entry?.creator?.login === "vercel[bot]" && entry?.id != null
   );
-  for (const deployment of vercelDeployments) {
-    const statusesRes = ghApiJson([
-      `${repoApi}/deployments/${deployment.id}/statuses`,
-    ]);
-    if (!statusesRes.ok || !Array.isArray(statusesRes.data)) {
-      return { state: "unavailable", previewUrl: "" };
-    }
-    for (const status of statusesRes.data) {
-      if (status?.state === "success" && (status?.environment_url ?? "") !== "") {
-        return {
-          state: "success",
-          previewUrl: String(status.environment_url).replace(/\/+$/, ""),
-        };
-      }
-      if (
-        status?.state === "inactive" &&
-        status?.description === "Skipped - Not affected"
-      ) {
-        return { state: "skipped", previewUrl: "" };
-      }
-      if (status?.state === "failure" || status?.state === "error") {
-        return { state: "failed", previewUrl: "" };
-      }
-    }
+  if (vercelDeployments.length === 0) {
+    return { state: "pending", previewUrl: "" };
+  }
+  const currentDeployment = vercelDeployments[0];
+  const statusesRes = ghApiJson([
+    `${repoApi}/deployments/${currentDeployment.id}/statuses`,
+  ]);
+  if (!statusesRes.ok || !Array.isArray(statusesRes.data)) {
+    return { state: "unavailable", previewUrl: "" };
+  }
+  if (statusesRes.data.length === 0) {
+    return { state: "pending", previewUrl: "" };
+  }
+  const currentStatus = statusesRes.data[0];
+  if (
+    currentStatus?.state === "success" &&
+    (currentStatus?.environment_url ?? "") !== ""
+  ) {
+    return {
+      state: "success",
+      previewUrl: String(currentStatus.environment_url).replace(/\/+$/, ""),
+    };
+  }
+  if (
+    currentStatus?.state === "inactive" &&
+    currentStatus?.description === "Skipped - Not affected"
+  ) {
+    return { state: "skipped", previewUrl: "" };
+  }
+  if (currentStatus?.state === "failure" || currentStatus?.state === "error") {
+    return { state: "failed", previewUrl: "" };
   }
   return { state: "pending", previewUrl: "" };
 };
@@ -183,21 +198,47 @@ const toCanonicalFlows = (flowIds) => {
   return flowIds.join(",");
 };
 
-const stripOwnTopStatus = (statuses, posted, { state, description, targetUrl }) => {
+/**
+ * Removes every tentative status posted by THIS process during the current CAS
+ * loop so no retry can ever treat its own tentative `success` as proof of a
+ * pass when another writer interleaved a failure or active rerun.
+ */
+const stripTentativePosts = (statuses, tentativePosts) => {
   if (!Array.isArray(statuses) || statuses.length === 0) return [];
-  const head = statuses[0];
-  const matchesId =
-    posted && typeof posted === "object" && posted.id != null && head?.id === posted.id;
-  const matchesFields =
-    head?.context === "Workspace E2E" &&
-    head?.creator?.login === "github-actions[bot]" &&
-    head?.state === state &&
-    head?.description === description &&
-    (head?.target_url == null || head?.target_url === targetUrl);
-  if (matchesId || matchesFields) {
-    return statuses.slice(1);
+  if (tentativePosts.length === 0) return statuses;
+  const remainingTentative = [...tentativePosts];
+  const filtered = [];
+  for (const status of statuses) {
+    const matchIndex = remainingTentative.findIndex((post) => {
+      if (post.id != null) {
+        return status?.id === post.id;
+      }
+      return (
+        status?.context === "Workspace E2E" &&
+        status?.creator?.login === "github-actions[bot]" &&
+        status?.state === post.state &&
+        status?.description === post.description &&
+        status?.target_url === post.targetUrl
+      );
+    });
+    if (matchIndex !== -1) {
+      remainingTentative.splice(matchIndex, 1);
+      continue;
+    }
+    filtered.push(status);
   }
-  return statuses;
+  return filtered;
+};
+
+const findActiveRunForFlows = (summary, flowIds) => {
+  if (!Array.isArray(summary.activeRuns) || summary.activeRuns.length === 0) {
+    return null;
+  }
+  const wanted = new Set(flowIds);
+  const matching = summary.activeRuns.find((run) =>
+    run.flows.some((flow) => wanted.has(flow))
+  );
+  return matching ?? summary.activeRuns[0];
 };
 
 /**
@@ -258,40 +299,55 @@ const evaluateSameTreeCommit = (commitSha, commitStatuses, requestedSelected) =>
 /**
  * Executes a decide -> post -> post-write CAS verify loop so that no writer can
  * leave a stale `success` status after a concurrent PR edit, validation failure,
- * deployment change, or active rerun.
+ * deployment change, real failure, or active rerun.
  */
 const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
+  const tentativePosts = [];
+  let pendingSnapshot = null;
+
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-    const before = readSnapshot();
+    const rawBefore = pendingSnapshot ?? readSnapshot();
+    pendingSnapshot = null;
+    const before = {
+      ...rawBefore,
+      statuses: rawBefore.statusesOk
+        ? stripTentativePosts(rawBefore.statuses, tentativePosts)
+        : rawBefore.statuses,
+    };
     const decision = decide(before);
     if (decision.skipPost) {
       return decision;
     }
 
+    const postTargetUrl = decision.targetUrl || runUrl;
     const posted = postCommitStatus(sha, {
       context: "Workspace E2E",
       state: decision.state,
       description: decision.description,
-      targetUrl: runUrl,
+      targetUrl: postTargetUrl,
     });
 
     if (decision.state !== "success") {
       return decision;
     }
 
-    // Verify linearizability against fresh live state after every success write.
-    const after = readSnapshot();
-    const statusesWithoutOurs = after.statusesOk
-      ? stripOwnTopStatus(after.statuses, posted, {
-          state: decision.state,
-          description: decision.description,
-          targetUrl: runUrl,
-        })
-      : after.statuses;
-    const verifyDecision = decide({
-      ...after,
-      statuses: statusesWithoutOurs,
+    tentativePosts.push({
+      id: posted && typeof posted === "object" ? posted.id : undefined,
+      state: decision.state,
+      description: decision.description,
+      targetUrl: postTargetUrl,
     });
+
+    // Verify linearizability against fresh live state after every success write,
+    // excluding all tentative posts made by this process.
+    const rawAfter = readSnapshot();
+    const after = {
+      ...rawAfter,
+      statuses: rawAfter.statusesOk
+        ? stripTentativePosts(rawAfter.statuses, tentativePosts)
+        : rawAfter.statuses,
+    };
+    const verifyDecision = decide(after);
 
     const samePr =
       before.prOk &&
@@ -310,25 +366,39 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       return decision;
     }
 
-    // If a concurrent active rerun appeared right beneath our speculative
-    // success, restore the pending running status rather than leaving green.
+    // If a concurrent active rerun appeared right beneath our tentative
+    // success, restore the pending running status preserving the active run's
+    // original target_url so that run still recognizes ownership when it ends.
     if (verifyDecision.restorePendingDescription) {
+      const pendingTargetUrl = verifyDecision.restorePendingTargetUrl || runUrl;
       postCommitStatus(sha, {
         context: "Workspace E2E",
         state: "pending",
         description: verifyDecision.restorePendingDescription,
-        targetUrl: runUrl,
+        targetUrl: pendingTargetUrl,
       });
       return {
         state: "pending",
         description: verifyDecision.restorePendingDescription,
+        targetUrl: pendingTargetUrl,
       };
     }
 
+    // If verification produced a non-success decision (for example a concurrent
+    // real run failure, PR invalidation, or widened flows requiring dispatch),
+    // apply that exact decision immediately and preserve its dispatchAction.
+    if (!verifyDecision.skipPost && verifyDecision.state !== "success") {
+      const finalTargetUrl = verifyDecision.targetUrl || runUrl;
+      postCommitStatus(sha, {
+        context: "Workspace E2E",
+        state: verifyDecision.state,
+        description: verifyDecision.description,
+        targetUrl: finalTargetUrl,
+      });
+      return verifyDecision;
+    }
+
     if (verifyDecision.skipPost) {
-      // Another writer already made the status converge cleanly, or PR became
-      // ineligible; only accept if not leaving our speculative success behind
-      // without authorization.
       if (
         after.prOk &&
         before.prOk &&
@@ -338,7 +408,25 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       ) {
         return decision;
       }
+      // PR became ineligible or state shifted without authorizing our tentative
+      // success: do not leave our tentative success on top if we cannot prove it.
+      if (!after.prOk) {
+        postCommitStatus(sha, {
+          context: "Workspace E2E",
+          state: "failure",
+          description: PR_UNAVAILABLE_DESCRIPTION,
+          targetUrl: runUrl,
+        });
+        return { state: "failure", description: PR_UNAVAILABLE_DESCRIPTION };
+      }
+      // Re-run loop on the fresh snapshot if it changed.
+      pendingSnapshot = rawAfter;
+      continue;
     }
+
+    // Verification wants a different `success` description; reuse `rawAfter`
+    // (with tentativePosts stripped at the top of the next iteration).
+    pendingSnapshot = rawAfter;
   }
 
   postCommitStatus(sha, {
@@ -372,7 +460,10 @@ const runPublishFinalStatus = () => {
       prOk: prRes.ok && Boolean(prRes.data),
       pr: prRes.ok ? prRes.data : null,
       statusesOk: statusesRes.ok && Array.isArray(statusesRes.data),
-      statuses: statusesRes.ok && Array.isArray(statusesRes.data) ? statusesRes.data : [],
+      statuses:
+        statusesRes.ok && Array.isArray(statusesRes.data)
+          ? statusesRes.data
+          : [],
       deployment,
     };
   };
@@ -397,16 +488,15 @@ const runPublishFinalStatus = () => {
             description: DEPLOYMENT_UNAVAILABLE_DESCRIPTION,
           };
         }
-
-        const headSha = String(pr?.head?.sha ?? "");
-        const prBody = String(pr?.body ?? "");
-
-        if (effectiveFlows !== "all" && !statusesOk) {
+        if (!statusesOk) {
           return {
             state: "failure",
             description: STATUSES_UNAVAILABLE_DESCRIPTION,
           };
         }
+
+        const headSha = String(pr?.head?.sha ?? "");
+        const prBody = String(pr?.body ?? "");
 
         const summary = summarizeCommitStatuses(statuses, {
           includeCarried: false,
@@ -434,20 +524,20 @@ const runPublishFinalStatus = () => {
           return { state: "failure", description: INVALID_FLOWS_DESCRIPTION };
         }
 
-        // Never overwrite a newer active run started by another workflow run.
-        if (
-          statusesOk &&
-          summary.latestRunKind === "running" &&
-          summary.runningTargetUrl !== "" &&
-          summary.runningTargetUrl !== runUrl
-        ) {
-          const runningSet = new Set(summary.runningFlows);
-          if (parsedPr.selected.some((id) => runningSet.has(id))) {
-            return {
-              skipPost: true,
-              restorePendingDescription: summary.runningDescription,
-            };
-          }
+        // Never overwrite a newer active run started by a DIFFERENT workflow run
+        // for any requested flow.
+        const foreignActiveRun = summary.activeRuns.find(
+          (run) =>
+            run.targetUrl !== "" &&
+            run.targetUrl !== runUrl &&
+            run.flows.some((flow) => parsedPr.selected.includes(flow))
+        );
+        if (foreignActiveRun) {
+          return {
+            skipPost: true,
+            restorePendingDescription: foreignActiveRun.description,
+            restorePendingTargetUrl: foreignActiveRun.targetUrl,
+          };
         }
 
         const missingFromUnion = diffFlowIds(parsedPr.selected, union);
@@ -481,10 +571,13 @@ const runPublishFinalStatus = () => {
   }
 
   // Failure path: check if superseded first; otherwise ALWAYS record the actual
-  // run failure in commit status history, then reconcile against the live PR
-  // selection (for example `none` on a valid preview).
+  // run failure in commit status history, then ALWAYS reconcile against the
+  // live PR selection (even if the initial PR body was invalid and was fixed to
+  // `none` before reconciliation).
   const initialPr = prNumber ? fetchPr(prNumber) : { ok: false };
-  const initialHeadSha = initialPr.ok ? String(initialPr.data?.head?.sha ?? "") : "";
+  const initialHeadSha = initialPr.ok
+    ? String(initialPr.data?.head?.sha ?? "")
+    : "";
   if (/^[0-9a-f]{40}$/.test(initialHeadSha) && initialHeadSha !== targetSha) {
     postCommitStatus(targetSha, {
       context: "Workspace E2E",
@@ -512,70 +605,90 @@ const runPublishFinalStatus = () => {
     targetUrl: runUrl,
   });
 
-  // Reconcile the live PR selection after recording the failure outcome.
-  if (initialPr.ok) {
-    const initialParsed = parsePrBodyE2EFlows(String(initialPr.data?.body ?? ""));
-    if (initialParsed.ok) {
-      publishWithCasReconcile({
-        sha: targetSha,
-        readSnapshot,
-        decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
-          if (!prOk) {
-            return { skipPost: true };
-          }
-          const headSha = String(pr?.head?.sha ?? "");
-          if (/^[0-9a-f]{40}$/.test(headSha) && headSha !== targetSha) {
-            return { skipPost: true };
-          }
-          const parsedPr = parsePrBodyE2EFlows(String(pr?.body ?? ""));
-          if (!parsedPr.ok) {
-            return { state: "failure", description: INVALID_FLOWS_DESCRIPTION };
-          }
-          if (parsedPr.flows === "none") {
-            if (deployment.state === "success" || deployment.state === "skipped") {
-              return {
-                state: "success",
-                description: formatE2EStatusDescription({
-                  kind: "skipped-none",
-                }),
-              };
-            }
-            return { skipPost: true };
-          }
-          if (deployment.state === "success" && statusesOk) {
-            // Always include the failure we just posted so eventual consistency
-            // cannot resurrect an older pass for the flows that just failed.
-            const effectiveStatuses = [
-              {
-                context: "Workspace E2E",
-                creator: { login: "github-actions[bot]" },
-                description: failedDescription,
-                state: "failure",
-                target_url: runUrl,
-              },
-              ...statuses,
-            ];
-            const summary = summarizeCommitStatuses(effectiveStatuses, {
-              includeCarried: false,
-            });
-            const missingReal = diffFlowIds(
-              parsedPr.selected,
-              summary.realPassedFlows
-            );
-            if (missingReal.length === 0) {
-              return {
-                state: "success",
-                description: formatE2EStatusDescription({
-                  kind: "passed",
-                  flows: summary.realPassedFlowsCsv,
-                }),
-              };
-            }
+  if (prNumber) {
+    publishWithCasReconcile({
+      sha: targetSha,
+      readSnapshot,
+      decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
+        if (!prOk) {
+          return { skipPost: true };
+        }
+        const headSha = String(pr?.head?.sha ?? "");
+        if (/^[0-9a-f]{40}$/.test(headSha) && headSha !== targetSha) {
+          return { skipPost: true };
+        }
+        const parsedPr = parsePrBodyE2EFlows(String(pr?.body ?? ""));
+        if (!parsedPr.ok) {
+          return { skipPost: true };
+        }
+        if (parsedPr.flows === "none") {
+          if (deployment.state === "success" || deployment.state === "skipped") {
+            return {
+              state: "success",
+              description: formatE2EStatusDescription({
+                kind: "skipped-none",
+              }),
+            };
           }
           return { skipPost: true };
-        },
-      });
-    }
+        }
+        if (deployment.state === "success" && statusesOk) {
+          // Ensure the failure we just posted is reflected even under read-after-write
+          // lag, while preserving server order if it is already present (so a newer
+          // foreign active run above it is still recognized).
+          const alreadyRecorded = statuses.some(
+            (status) =>
+              status?.context === "Workspace E2E" &&
+              status?.creator?.login === "github-actions[bot]" &&
+              status?.state === "failure" &&
+              status?.description === failedDescription &&
+              (status?.target_url == null || status?.target_url === runUrl)
+          );
+          const effectiveStatuses = alreadyRecorded
+            ? statuses
+            : [
+                {
+                  context: "Workspace E2E",
+                  creator: { login: "github-actions[bot]" },
+                  description: failedDescription,
+                  state: "failure",
+                  target_url: runUrl,
+                },
+                ...statuses,
+              ];
+          const summary = summarizeCommitStatuses(effectiveStatuses, {
+            includeCarried: false,
+          });
+          const foreignActiveRun = summary.activeRuns.find(
+            (run) =>
+              run.targetUrl !== "" &&
+              run.targetUrl !== runUrl &&
+              run.flows.some((flow) => parsedPr.selected.includes(flow))
+          );
+          if (foreignActiveRun) {
+            return {
+              state: "pending",
+              description: foreignActiveRun.description,
+              targetUrl: foreignActiveRun.targetUrl,
+            };
+          }
+          const missingReal = diffFlowIds(
+            parsedPr.selected,
+            summary.realPassedFlows
+          );
+          if (missingReal.length === 0) {
+            return {
+              state: "success",
+              description: formatE2EStatusDescription({
+                kind: "passed",
+                flows: summary.realPassedFlowsCsv,
+              }),
+            };
+          }
+        }
+        return { skipPost: true };
+      },
+    });
   }
 
   postCommitStatus(targetSha, {
@@ -592,27 +705,18 @@ const runPublishStatusWithoutRun = () => {
   const statusState = process.env.STATUS_STATE ?? "failure";
   const statusDescription = process.env.STATUS_DESCRIPTION ?? "";
 
-  if (statusState !== "success") {
-    postCommitStatus(targetSha, {
-      context: "Workspace E2E",
-      state: statusState,
-      description: statusDescription,
-      targetUrl: runUrl,
-    });
-    return;
-  }
-
   if (!prNumber) {
     postCommitStatus(targetSha, {
       context: "Workspace E2E",
-      state: "failure",
-      description: PR_UNAVAILABLE_DESCRIPTION,
+      state: statusState === "success" ? "failure" : statusState,
+      description:
+        statusState === "success"
+          ? PR_UNAVAILABLE_DESCRIPTION
+          : statusDescription,
       targetUrl: runUrl,
     });
     return;
   }
-
-  const classified = classifyE2EStatusDescription(statusDescription);
 
   const readSnapshot = () => {
     const prRes = fetchPr(prNumber);
@@ -622,10 +726,101 @@ const runPublishStatusWithoutRun = () => {
       prOk: prRes.ok && Boolean(prRes.data),
       pr: prRes.ok ? prRes.data : null,
       statusesOk: statusesRes.ok && Array.isArray(statusesRes.data),
-      statuses: statusesRes.ok && Array.isArray(statusesRes.data) ? statusesRes.data : [],
+      statuses:
+        statusesRes.ok && Array.isArray(statusesRes.data)
+          ? statusesRes.data
+          : [],
       deployment,
     };
   };
+
+  // Delayed failure path: reconcile against live PR, deployment, and commit
+  // status history so a stale failure (e.g. invalid metadata that was fixed to
+  // `none` while this job queued) never overwrites a valid live decision.
+  if (statusState !== "success") {
+    publishWithCasReconcile({
+      sha: targetSha,
+      readSnapshot,
+      decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
+        if (!prOk) {
+          return { state: statusState, description: statusDescription };
+        }
+        const headSha = String(pr?.head?.sha ?? "");
+        if (/^[0-9a-f]{40}$/.test(headSha) && headSha !== targetSha) {
+          return { state: statusState, description: statusDescription };
+        }
+        if (deployment.state === "failed") {
+          return {
+            state: "failure",
+            description: DEPLOYMENT_FAILED_DESCRIPTION,
+          };
+        }
+        if (deployment.state !== "success" && deployment.state !== "skipped") {
+          return { state: statusState, description: statusDescription };
+        }
+        const parsedPr = parsePrBodyE2EFlows(String(pr?.body ?? ""));
+        if (!parsedPr.ok) {
+          return { state: statusState, description: statusDescription };
+        }
+        if (parsedPr.flows === "none") {
+          return {
+            state: "success",
+            description: formatE2EStatusDescription({ kind: "skipped-none" }),
+          };
+        }
+        if (statusesOk) {
+          const summary = summarizeCommitStatuses(statuses, {
+            includeCarried: true,
+          });
+          if (diffFlowIds(parsedPr.selected, summary.realPassedFlows).length === 0) {
+            return {
+              state: "success",
+              description: formatE2EStatusDescription({
+                kind: "passed",
+                flows: summary.realPassedFlowsCsv,
+              }),
+            };
+          }
+          const carriedCovers =
+            summary.carriedSourceSha !== "" &&
+            diffFlowIds(parsedPr.selected, summary.carriedPassedFlows).length ===
+              0;
+          if (carriedCovers) {
+            return {
+              state: "success",
+              description: formatE2EStatusDescription({
+                kind: "same-tree-passed",
+                flows: summary.carriedPassedFlowsCsv,
+                sourceSha: summary.carriedSourceSha,
+              }),
+            };
+          }
+          const inFlightCovered = unionFlowIds(
+            summary.realPassedFlows,
+            summary.runningFlows
+          );
+          if (
+            summary.runningFlows.length > 0 &&
+            diffFlowIds(parsedPr.selected, inFlightCovered).length === 0
+          ) {
+            const activeRun = findActiveRunForFlows(
+              summary,
+              diffFlowIds(parsedPr.selected, summary.realPassedFlows)
+            );
+            return {
+              skipPost: true,
+              restorePendingDescription: activeRun?.description,
+              restorePendingTargetUrl: activeRun?.targetUrl,
+            };
+          }
+        }
+        return { state: statusState, description: statusDescription };
+      },
+    });
+    return;
+  }
+
+  const classified = classifyE2EStatusDescription(statusDescription);
 
   publishWithCasReconcile({
     sha: targetSha,
@@ -669,23 +864,30 @@ const runPublishStatusWithoutRun = () => {
       }
 
       if (classified.kind === "carried-passed") {
-        if (statusesOk) {
-          const summary = summarizeCommitStatuses(statuses, {
-            includeCarried: false,
-          });
-          if (summary.latestRunKind === "running") {
-            return {
-              skipPost: true,
-              restorePendingDescription: summary.runningDescription,
-            };
-          }
-          const failedSet = new Set(summary.failedFlows);
-          if (parsedPr.selected.some((id) => failedSet.has(id))) {
-            return {
-              state: "failure",
-              description: "Protected preview E2E failed on this commit",
-            };
-          }
+        if (!statusesOk) {
+          return {
+            state: "failure",
+            description: STATUSES_UNAVAILABLE_DESCRIPTION,
+          };
+        }
+        const summary = summarizeCommitStatuses(statuses, {
+          includeCarried: false,
+        });
+        const runningSet = new Set(summary.runningFlows);
+        if (parsedPr.selected.some((id) => runningSet.has(id))) {
+          const activeRun = findActiveRunForFlows(summary, parsedPr.selected);
+          return {
+            skipPost: true,
+            restorePendingDescription: activeRun?.description,
+            restorePendingTargetUrl: activeRun?.targetUrl,
+          };
+        }
+        const failedSet = new Set(summary.failedFlows);
+        if (parsedPr.selected.some((id) => failedSet.has(id))) {
+          return {
+            state: "failure",
+            description: "Protected preview E2E failed on this commit",
+          };
         }
         const missing = diffFlowIds(parsedPr.selected, classified.selected);
         if (missing.length > 0) {
@@ -769,18 +971,18 @@ const runSyncPrFlows = () => {
       prOk: prRes.ok && Boolean(prRes.data),
       pr: prRes.ok ? prRes.data : null,
       statusesOk: statusesRes.ok && Array.isArray(statusesRes.data),
-      statuses: statusesRes.ok && Array.isArray(statusesRes.data) ? statusesRes.data : [],
+      statuses:
+        statusesRes.ok && Array.isArray(statusesRes.data)
+          ? statusesRes.data
+          : [],
       deployment,
     };
   };
-
-  let dispatchAction = null;
 
   const outcome = publishWithCasReconcile({
     sha: headSha,
     readSnapshot,
     decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
-      dispatchAction = null;
       if (!prOk) {
         return { state: "failure", description: PR_UNAVAILABLE_DESCRIPTION };
       }
@@ -819,9 +1021,11 @@ const runSyncPrFlows = () => {
       });
       const requestedFlows = parsedPr.flows;
       const requestedSelected = parsedPr.selected;
+      const deploymentResolved =
+        deployment.state === "success" || deployment.state === "skipped";
 
       if (requestedFlows === "none") {
-        if (deployment.state === "success" || deployment.state === "skipped") {
+        if (deploymentResolved) {
           if (summary.latestState !== "success") {
             return {
               state: "success",
@@ -844,6 +1048,18 @@ const runSyncPrFlows = () => {
 
       const missingReal = diffFlowIds(requestedSelected, summary.realPassedFlows);
       if (missingReal.length === 0) {
+        if (!deploymentResolved) {
+          if (
+            summary.latestState === "failure" &&
+            summary.latestDescription === INVALID_FLOWS_DESCRIPTION
+          ) {
+            return {
+              state: "pending",
+              description: "Waiting for Vercel preview to run E2E",
+            };
+          }
+          return { skipPost: true };
+        }
         if (
           summary.latestState !== "success" ||
           summary.latestKind === "skipped-none"
@@ -863,6 +1079,18 @@ const runSyncPrFlows = () => {
         summary.carriedSourceSha !== "" &&
         diffFlowIds(requestedSelected, summary.carriedPassedFlows).length === 0;
       if (carriedCoversRequested) {
+        if (!deploymentResolved) {
+          if (
+            summary.latestState === "failure" &&
+            summary.latestDescription === INVALID_FLOWS_DESCRIPTION
+          ) {
+            return {
+              state: "pending",
+              description: "Waiting for Vercel preview to run E2E",
+            };
+          }
+          return { skipPost: true };
+        }
         if (
           summary.latestState !== "success" ||
           summary.latestKind === "skipped-none"
@@ -884,15 +1112,28 @@ const runSyncPrFlows = () => {
         summary.runningFlows
       );
       const coveredByRunning =
-        summary.latestRunKind === "running" &&
+        summary.runningFlows.length > 0 &&
         diffFlowIds(requestedSelected, inFlightCovered).length === 0;
       if (coveredByRunning) {
+        const activeRun = findActiveRunForFlows(summary, missingReal);
         appendSummary(
           `An in-progress Workspace E2E run already covers ${requestedFlows}`
         );
+        // If an intermediate status (for example another flow's pass) sits on
+        // top of the still-active run, restore `pending` preserving the active
+        // run's original target_url so merge stays blocked and the run retains
+        // ownership when it finishes.
+        if (summary.latestState !== "pending" && activeRun) {
+          return {
+            state: "pending",
+            description: activeRun.description,
+            targetUrl: activeRun.targetUrl || runUrl,
+          };
+        }
         return {
           skipPost: true,
-          restorePendingDescription: summary.runningDescription,
+          restorePendingDescription: activeRun?.description,
+          restorePendingTargetUrl: activeRun?.targetUrl,
         };
       }
 
@@ -905,20 +1146,41 @@ const runSyncPrFlows = () => {
               "Workspace E2E could not determine missing flows; re-run this check",
           };
         }
-        dispatchAction = {
-          sha: headSha,
-          url: deployment.previewUrl,
-          ref: headRef,
-          flows: dispatchFlows,
-        };
         return {
           state: "failure",
           description:
             "PR E2E flows changed; starting Workspace E2E for missing flows",
+          dispatchAction: {
+            sha: headSha,
+            url: deployment.previewUrl,
+            ref: headRef,
+            flows: dispatchFlows,
+          },
         };
       }
 
       if (deployment.state === "skipped") {
+        // Honor failures and active reruns recorded directly on the head SHA
+        // before considering an older same-tree commit.
+        const headFailedSet = new Set(summary.failedFlows);
+        if (requestedSelected.some((id) => headFailedSet.has(id))) {
+          return {
+            state: "failure",
+            description: "Protected preview E2E failed on this commit",
+          };
+        }
+        const headRunningSet = new Set(summary.runningFlows);
+        if (requestedSelected.some((id) => headRunningSet.has(id))) {
+          const activeRun = findActiveRunForFlows(summary, missingReal);
+          return {
+            state: "failure",
+            description:
+              "Workspace E2E is still running for part of this commit; wait or deploy its Workspace preview",
+            restorePendingDescription: activeRun?.description,
+            restorePendingTargetUrl: activeRun?.targetUrl,
+          };
+        }
+
         const commitsRes = fetchPrCommits(prNumber);
         if (!commitsRes.ok || !Array.isArray(commitsRes.data)) {
           return {
@@ -990,7 +1252,7 @@ const runSyncPrFlows = () => {
     process.exit(1);
   }
 
-  if (dispatchAction) {
+  if (outcome.dispatchAction) {
     const dispatchRes = ghExec([
       "workflow",
       "run",
@@ -1000,13 +1262,13 @@ const runSyncPrFlows = () => {
       "--ref",
       "main",
       "-f",
-      `sha=${dispatchAction.sha}`,
+      `sha=${outcome.dispatchAction.sha}`,
       "-f",
-      `url=${dispatchAction.url}`,
+      `url=${outcome.dispatchAction.url}`,
       "-f",
-      `ref=${dispatchAction.ref}`,
+      `ref=${outcome.dispatchAction.ref}`,
       "-f",
-      `flows=${dispatchAction.flows}`,
+      `flows=${outcome.dispatchAction.flows}`,
     ]);
     if (!dispatchRes.ok) {
       throw new Error(
@@ -1014,7 +1276,7 @@ const runSyncPrFlows = () => {
       );
     }
     appendSummary(
-      `Dispatched Workspace E2E for ${dispatchAction.sha.slice(0, 7)} with missing flows: \`${dispatchAction.flows}\``
+      `Dispatched Workspace E2E for ${outcome.dispatchAction.sha.slice(0, 7)} with missing flows: \`${outcome.dispatchAction.flows}\``
     );
   }
 };

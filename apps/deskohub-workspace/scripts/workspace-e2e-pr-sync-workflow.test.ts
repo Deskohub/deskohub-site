@@ -556,7 +556,8 @@ describe("Workspace E2E PR flows sync step", () => {
     expect(workflowDispatches(uncovered.calls)).toEqual([]);
   });
 
-  test("restores pending if a concurrent rerun starts between sync read and status write", async () => {
+  test("restores pending with the active run's original target_url and lets that run publish its final pass", async () => {
+    const activeRunUrl = `https://github.com/${repository}/actions/runs/200`;
     const statefulGh = `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
@@ -578,7 +579,7 @@ if [[ "$*" == *"/commits/${headSha}/statuses"* ]]; then
   if [[ "$(cat "$state_file")" == "before" ]]; then
     echo '[[{"id":10,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"Invalid or missing ## E2E flows in PR description; list valid flows, all, or none"},{"id":9,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
   else
-    echo '[[{"id":12,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"},{"id":11,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"pending","description":"Protected preview E2E is running [flows: admin]"},{"id":9,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
+    echo '[[{"id":12,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"},{"id":11,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"pending","description":"Protected preview E2E is running [flows: admin]","target_url":"${activeRunUrl}"},{"id":9,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
   fi
   exit 0
 fi
@@ -602,5 +603,210 @@ exit 1
     expect(posts[1]).toContain(
       "description=Protected preview E2E is running [flows: admin]"
     );
+    expect(posts[1]).toContain(`target_url=${activeRunUrl}`);
+
+    // Now replay the active run (#200) completing: because pending preserved
+    // run #200's target_url, publish-final-status recognizes ownership and
+    // publishes success rather than leaving the check pending.
+    const e2eWorkflow = parseWorkflow(
+      resolve(import.meta.dir, "../../../.github/workflows/workspace-e2e.yml")
+    );
+    const finalStep = findStepByName(
+      e2eWorkflow,
+      "Publish final commit status"
+    );
+    const completed = await runStep(
+      finalStep,
+      {
+        [`pulls/${prNumber}`]: makePr("## E2E flows\n- admin\n"),
+        ...deploymentFixtures([
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ]),
+        [`commits/${headSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description: "Protected preview E2E is running [flows: admin]",
+            id: 13,
+            state: "pending",
+            target_url: activeRunUrl,
+          },
+        ],
+        [`statuses/${headSha}`]: { id: 14 },
+      },
+      {
+        ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
+        ALLOCATION_SHARD: "1",
+        FLOWS: "admin",
+        FLOWS_PUBLISH: flowsPublish,
+        GITHUB_RUN_ID: "200",
+        PR_NUMBER: String(prNumber),
+        STATUS_STATE: "success",
+        TARGET_SHA: headSha,
+      }
+    );
+    expect(completed.result.exitCode).toBe(0);
+    const finalE2EPosts = statusPosts(completed.calls).filter(
+      (call) =>
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
+    );
+    expect(finalE2EPosts).toHaveLength(1);
+    expect(finalE2EPosts[0]).toContain("state=success");
+    expect(finalE2EPosts[0]).toContain(
+      "description=Protected preview E2E passed [flows: admin]"
+    );
+  });
+
+  test("excludes tentative success on retry when a real failure interleaves, posting failure and dispatching missing flows", async () => {
+    const statefulGh = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+state_file="$GH_FIXTURES/state.txt"
+[[ -f "$state_file" ]] || echo "before" > "$state_file"
+if [[ "$*" == "workflow run workspace-e2e.yml"* ]]; then
+  exit 0
+fi
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  echo '{"number":${prNumber},"state":"open","draft":false,"user":{"login":"author"},"head":{"ref":"${headRef}","sha":"${headSha}","repo":{"full_name":"${repository}"}},"body":"## E2E flows\\n- admin\\n"}'
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"${previewUrl}/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${headSha}/statuses"* ]]; then
+  if [[ "$(cat "$state_file")" == "before" ]]; then
+    echo '[[{"id":10,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"Invalid or missing ## E2E flows in PR description; list valid flows, all, or none"},{"id":9,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
+  else
+    echo '[[{"id":12,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]","target_url":"https://github.com/${repository}/actions/runs/99"},{"id":11,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"Protected preview E2E failed [flows: admin]","target_url":"https://github.com/${repository}/actions/runs/205"},{"id":9,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/statuses/${headSha}"* ]]; then
+  if [[ "$(cat "$state_file")" == "before" ]]; then
+    echo "after" > "$state_file"
+    echo '{"id":12}'
+  else
+    echo '{"id":13}'
+  fi
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const { calls, result } = await runSync({
+      body: "## E2E flows\n- admin\n",
+      commands: { gh: statefulGh },
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toContain("state=success");
+    expect(posts[1]).toContain("state=failure");
+    expect(posts[1]).toContain("starting Workspace E2E for missing flows");
+    const dispatches = workflowDispatches(calls);
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]).toContain("flows=admin");
+  });
+
+  test("restores pending preserving run identity when reselecting a flow still running underneath another pass", async () => {
+    const activeRunUrl = `https://github.com/${repository}/actions/runs/200`;
+    const { calls, result } = await runSync({
+      body: "## E2E flows\n- admin\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E passed [flows: webkit]",
+          state: "success",
+          target_url: `https://github.com/${repository}/actions/runs/300`,
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E is running [flows: admin]",
+          state: "pending",
+          target_url: activeRunUrl,
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E passed [flows: admin,webkit]",
+          state: "success",
+          target_url: `https://github.com/${repository}/actions/runs/100`,
+        },
+      ],
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain("state=pending");
+    expect(posts[0]).toContain(
+      "description=Protected preview E2E is running [flows: admin]"
+    );
+    expect(posts[0]).toContain(`target_url=${activeRunUrl}`);
+    expect(workflowDispatches(calls)).toEqual([]);
+  });
+
+  test("does not restore coverage while the current deployment is in_progress and honors head failures on skipped previews", async () => {
+    const inProgressDeployment = await runSync({
+      body: "## E2E flows\n- admin\n",
+      deployment: deploymentFixtures([
+        { description: "Deployment in progress", state: "in_progress" },
+      ]),
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E passed [flows: admin]",
+          state: "success",
+        },
+      ],
+    });
+    expect(inProgressDeployment.result.exitCode).toBe(0);
+    expect(statusPosts(inProgressDeployment.calls)).toEqual([]);
+
+    const headFailedSkipped = await runSync({
+      body: "## E2E flows\n- admin\n",
+      deployment: deploymentFixtures([
+        { description: "Skipped - Not affected", state: "inactive" },
+      ]),
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E failed [flows: admin]",
+          state: "failure",
+        },
+      ],
+      extraFixtures: {
+        [`pulls/${prNumber}/commits`]: [
+          { commit: { tree: { sha: "tree-1" } }, sha: earlierSha },
+          { commit: { tree: { sha: "tree-1" } }, sha: headSha },
+        ],
+        [`commits/${earlierSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description: "Protected preview E2E passed [flows: admin]",
+            state: "success",
+          },
+        ],
+      },
+    });
+    expect(headFailedSkipped.result.exitCode).toBe(0);
+    const posts = statusPosts(headFailedSkipped.calls);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain("state=failure");
+    expect(posts[0]).toContain("Protected preview E2E failed on this commit");
   });
 });

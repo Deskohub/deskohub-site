@@ -122,6 +122,11 @@ export type CommitStatusFlowSummary = {
   readonly runningFlowsCsv: string;
   readonly runningDescription: string;
   readonly runningTargetUrl: string;
+  readonly activeRuns: readonly {
+    readonly description: string;
+    readonly targetUrl: string;
+    readonly flows: readonly WorkflowE2EFlowId[];
+  }[];
   readonly anyPassed: boolean;
 };
 

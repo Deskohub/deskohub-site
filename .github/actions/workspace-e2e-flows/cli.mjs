@@ -125,7 +125,7 @@ switch (command) {
         summary.runningFlows
       );
       coveredByRunning =
-        summary.latestRunKind === "running" &&
+        summary.runningFlows.length > 0 &&
         diffFlowIds(parsedRequested.selected, inFlightCovered).length === 0;
       const failedSet = new Set(summary.failedFlows);
       const runningSet = new Set(summary.runningFlows);

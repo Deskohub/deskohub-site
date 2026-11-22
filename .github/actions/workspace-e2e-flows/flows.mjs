@@ -171,9 +171,45 @@ const stripClosingAtxHashes = (line) => line.replace(/[ \t]+#+[ \t]*$/, "");
 const sectionHeadingPattern = /^ {0,3}##[ \t]+e2e[ \t]+flows[ \t]*:?[ \t]*$/i;
 const anyHeadingPattern = /^ {0,3}#{1,6}(?:[ \t]+.*|[ \t]*)$/;
 const fenceOpenPattern = /^ {0,3}(`{3,}|~{3,})/;
-const htmlCommentBlockStartPattern = /^ {0,3}<!--/;
 const indentedCodeLinePattern = /^(?: {4,}|\t)/;
 const bulletPattern = /^ {0,3}[-*][ \t]+`?([^\s`:]+)`?(?:[ \t]*:[ \t]*\S.*)?$/;
+
+// GFM Section 4.6 HTML block start/end patterns (types 1–7).
+const htmlType1Start = /^ {0,3}<(?:pre|script|style|textarea)(?:[ \t>]|$)/i;
+const htmlType1End = /<\/(?:pre|script|style|textarea)>/i;
+const htmlType2Start = /^ {0,3}<!--/;
+const htmlType3Start = /^ {0,3}<\?/;
+const htmlType4Start = /^ {0,3}<![A-Za-z]/;
+const htmlType5Start = /^ {0,3}<!\[CDATA\[/;
+const htmlType6Start =
+  /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$)/i;
+const htmlType7Start =
+  /^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^\n>]*)?\/?>|<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$/;
+
+const matchHtmlBlockStart = (line, previousBlank) => {
+  if (htmlType1Start.test(line)) {
+    return { kind: "html-raw", endPattern: htmlType1End };
+  }
+  if (htmlType2Start.test(line)) {
+    return { kind: "html-comment", endPattern: /-->/ };
+  }
+  if (htmlType3Start.test(line)) {
+    return { kind: "html-raw", endPattern: /\?>/ };
+  }
+  if (htmlType4Start.test(line)) {
+    return { kind: "html-raw", endPattern: />/ };
+  }
+  if (htmlType5Start.test(line)) {
+    return { kind: "html-raw", endPattern: /\]\]>/ };
+  }
+  if (htmlType6Start.test(line)) {
+    return { kind: "html-raw", endOnBlank: true };
+  }
+  if (previousBlank && htmlType7Start.test(line)) {
+    return { kind: "html-raw", endOnBlank: true };
+  }
+  return null;
+};
 
 /**
  * Strips inline HTML comments (`<!-- ... -->`) outside backtick code spans,
@@ -244,11 +280,12 @@ const scanVisibleLines = (lines) => {
   let fenceLength = 0;
   let previousBlank = true;
   let inIndentedCode = false;
-  let inHtmlCommentBlock = false;
+  let htmlBlock = null;
   let inInlineComment = false;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    const isBlank = /^[ \t]*$/.test(line);
 
     if (fenceChar) {
       const closePattern = new RegExp(
@@ -259,30 +296,55 @@ const scanVisibleLines = (lines) => {
         fenceLength = 0;
         previousBlank = false;
       }
-      visible.push({ index, line, visibleLine: "", hidden: true });
+      visible.push({
+        index,
+        line,
+        visibleLine: "",
+        hidden: true,
+        hiddenKind: "fence",
+      });
       continue;
     }
 
-    // GFM HTML block type 2 (`<!--` ... `-->`, or through EOF if unclosed).
-    if (inHtmlCommentBlock) {
-      if (line.includes("-->")) {
-        inHtmlCommentBlock = false;
+    if (htmlBlock) {
+      if (htmlBlock.endOnBlank && isBlank) {
+        htmlBlock = null;
+        previousBlank = true;
+        visible.push({
+          index,
+          line,
+          visibleLine: "",
+          hidden: false,
+          hiddenKind: "",
+        });
+        continue;
       }
-      previousBlank = false;
-      visible.push({ index, line, visibleLine: "", hidden: true });
+      const hiddenKind = htmlBlock.kind;
+      if (htmlBlock.endPattern && htmlBlock.endPattern.test(line)) {
+        htmlBlock = null;
+      }
+      previousBlank = isBlank;
+      visible.push({
+        index,
+        line,
+        visibleLine: "",
+        hidden: true,
+        hiddenKind,
+      });
       continue;
     }
 
     if (inInlineComment) {
       const stripped = stripInlineHtmlComments(line, true);
       inInlineComment = stripped.inComment;
-      const isBlank = /^[ \t]*$/.test(stripped.text);
-      previousBlank = isBlank;
+      const blankAfter = /^[ \t]*$/.test(stripped.text);
+      previousBlank = blankAfter;
       visible.push({
         index,
         line,
         visibleLine: stripped.text,
-        hidden: isBlank,
+        hidden: blankAfter,
+        hiddenKind: blankAfter ? "html-comment" : "",
       });
       continue;
     }
@@ -299,12 +361,17 @@ const scanVisibleLines = (lines) => {
         fenceLength = marker.length;
         inIndentedCode = false;
         previousBlank = false;
-        visible.push({ index, line, visibleLine: "", hidden: true });
+        visible.push({
+          index,
+          line,
+          visibleLine: "",
+          hidden: true,
+          hiddenKind: "fence",
+        });
         continue;
       }
     }
 
-    const isBlank = /^[ \t]*$/.test(line);
     if (isBlank) {
       previousBlank = true;
       visible.push({
@@ -312,6 +379,7 @@ const scanVisibleLines = (lines) => {
         line,
         visibleLine: "",
         hidden: inIndentedCode,
+        hiddenKind: inIndentedCode ? "indented-code" : "",
       });
       continue;
     }
@@ -322,18 +390,33 @@ const scanVisibleLines = (lines) => {
     ) {
       inIndentedCode = true;
       previousBlank = false;
-      visible.push({ index, line, visibleLine: "", hidden: true });
+      visible.push({
+        index,
+        line,
+        visibleLine: "",
+        hidden: true,
+        hiddenKind: "indented-code",
+      });
       continue;
     }
 
     inIndentedCode = false;
 
-    if (htmlCommentBlockStartPattern.test(line)) {
-      if (!line.includes("-->")) {
-        inHtmlCommentBlock = true;
+    const matchedHtml = matchHtmlBlockStart(line, previousBlank);
+    if (matchedHtml) {
+      const endsOnSameLine =
+        matchedHtml.endPattern && matchedHtml.endPattern.test(line);
+      if (!endsOnSameLine) {
+        htmlBlock = matchedHtml;
       }
       previousBlank = false;
-      visible.push({ index, line, visibleLine: "", hidden: true });
+      visible.push({
+        index,
+        line,
+        visibleLine: "",
+        hidden: true,
+        hiddenKind: matchedHtml.kind,
+      });
       continue;
     }
 
@@ -345,6 +428,7 @@ const scanVisibleLines = (lines) => {
       line,
       visibleLine: stripped.text,
       hidden: false,
+      hiddenKind: "",
     });
   }
 
@@ -399,25 +483,32 @@ export const parsePrBodyE2EFlows = (body) => {
   for (let index = start; index < end; index += 1) {
     const entry = scanned[index];
     if (entry.hidden) {
-      // Allow HTML comment blocks inside the section, but reject indented code
-      // lines or fenced code blocks inside `## E2E flows`.
+      if (entry.hiddenKind === "html-comment") {
+        continue;
+      }
       if (
-        indentedCodeLinePattern.test(entry.line) &&
-        !/^[ \t]*$/.test(entry.line)
+        entry.hiddenKind === "indented-code" &&
+        /^[ \t]*$/.test(entry.line)
       ) {
+        continue;
+      }
+      if (entry.hiddenKind === "indented-code") {
         return {
           ok: false,
           error: `Invalid indented line in \`## E2E flows\`: "${entry.line.trim()}". Use top-level bullet items like \`- admin\`, \`- all\`, or \`- none\`.`,
         };
       }
-      if (fenceOpenPattern.test(entry.line)) {
+      if (entry.hiddenKind === "fence") {
         return {
           ok: false,
           error:
             "Code blocks are not allowed inside `## E2E flows`. Use top-level bullet items like `- admin`, `- all`, or `- none`.",
         };
       }
-      continue;
+      return {
+        ok: false,
+        error: `Raw HTML is not allowed inside \`## E2E flows\`: "${entry.line.trim()}". Use top-level bullet items like \`- admin\`, \`- all\`, or \`- none\`.`,
+      };
     }
     const rawLine = entry.visibleLine;
     if (/^[ \t]*$/.test(rawLine)) continue;
@@ -591,9 +682,16 @@ export const summarizeCommitStatuses = (
   const latest = relevant[0] ?? null;
   let latestRunKind = null;
   let latestRunState = null;
-  let runningFlowIds = [];
+  const runningFlowIds = [];
+  const activeRuns = [];
   let runningDescription = "";
   let runningTargetUrl = "";
+  // Track run URLs that have already reached a terminal or superseded status
+  // above this point in history so their earlier `running` statuses are not
+  // treated as still active, while an active run whose flows are NOT yet
+  // decided stays active even when another flow's status was posted above it.
+  const terminatedRunUrls = new Set();
+  let unscopedSupersededSeen = false;
   // Track the newest active/terminal verdict per flow so a newer failure OR an
   // active rerun always invalidates an earlier pass for that flow.
   const decidedFlows = new Set();
@@ -604,7 +702,14 @@ export const summarizeCommitStatuses = (
 
   for (const status of relevant) {
     const classified = classifyE2EStatusDescription(status.description);
+    const targetUrl = String(status.target_url ?? "");
+
     if (classified.kind === "superseded") {
+      if (targetUrl) {
+        terminatedRunUrls.add(targetUrl);
+      } else {
+        unscopedSupersededSeen = true;
+      }
       if (latestRunKind === null) {
         latestRunKind = "superseded";
         latestRunState = "superseded";
@@ -615,6 +720,9 @@ export const summarizeCommitStatuses = (
       (classified.kind === "passed" && status.state === "success") ||
       (classified.kind === "partial" && status.state === "failure")
     ) {
+      if (targetUrl) {
+        terminatedRunUrls.add(targetUrl);
+      }
       if (latestRunKind === null) {
         latestRunKind = classified.kind;
         latestRunState = status.state;
@@ -650,18 +758,32 @@ export const summarizeCommitStatuses = (
       continue;
     }
     if (classified.kind === "running" && status.state === "pending") {
-      if (latestRunKind === null) {
-        latestRunKind = "running";
-        latestRunState = "pending";
-        runningFlowIds = [...classified.selected];
-        runningDescription = String(status.description ?? "");
-        runningTargetUrl = String(status.target_url ?? "");
-        // Exclude older passes for flows actively being rerun so sync never
-        // restores an older pass over an in-flight rerun.
-        for (const flow of classified.selected) {
-          if (!decidedFlows.has(flow)) {
-            decidedFlows.add(flow);
-          }
+      const isTerminated = targetUrl
+        ? terminatedRunUrls.has(targetUrl)
+        : unscopedSupersededSeen;
+      if (isTerminated) {
+        continue;
+      }
+      const activeFlows = classified.selected.filter(
+        (flow) => !decidedFlows.has(flow)
+      );
+      if (activeFlows.length > 0) {
+        if (latestRunKind === null) {
+          latestRunKind = "running";
+          latestRunState = "pending";
+        }
+        if (!runningDescription) {
+          runningDescription = String(status.description ?? "");
+          runningTargetUrl = targetUrl;
+        }
+        activeRuns.push({
+          description: String(status.description ?? ""),
+          targetUrl,
+          flows: activeFlows,
+        });
+        for (const flow of activeFlows) {
+          decidedFlows.add(flow);
+          runningFlowIds.push(flow);
         }
       }
       continue;
@@ -670,6 +792,9 @@ export const summarizeCommitStatuses = (
       classified.kind === "failed" &&
       (status.state === "failure" || status.state === "error")
     ) {
+      if (targetUrl) {
+        terminatedRunUrls.add(targetUrl);
+      }
       if (latestRunKind === null) {
         latestRunKind = "failed";
         latestRunState = status.state;
@@ -720,6 +845,7 @@ export const summarizeCommitStatuses = (
     runningFlowsCsv: running.flows,
     runningDescription,
     runningTargetUrl,
+    activeRuns,
     anyPassed: allPassed.selected.length > 0,
   };
 };

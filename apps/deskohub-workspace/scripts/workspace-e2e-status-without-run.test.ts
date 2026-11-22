@@ -1117,4 +1117,156 @@ exit 1
     expect(e2ePosts.at(-1)).toContain("state=failure");
     expect(e2ePosts.at(-1)).toContain("Invalid or missing ## E2E flows");
   });
+
+  test("refuses success when the newest deployment is in_progress above an older success or head history is unreadable", async () => {
+    const unresolvedDeployment = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [],
+        deployments: [
+          { creator: { login: "vercel[bot]" }, id: 12 },
+          { creator: { login: "vercel[bot]" }, id: 11 },
+        ],
+        "deployments/12/statuses": [
+          { description: "Deployment in progress", state: "in_progress" },
+        ],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(unresolvedDeployment.result.exitCode).toBe(0);
+    const unresolvedPost = unresolvedDeployment.calls.find((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(unresolvedPost).toContain("state=failure");
+    expect(unresolvedPost).toContain("deployment state could not be verified");
+
+    const unreadableCarried = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- admin\n",
+          head: { sha: targetSha },
+        },
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          { description: "Skipped - Not affected", state: "inactive" },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION:
+          "Same tree as bbbbbbb, which passed E2E [flows: admin]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(unreadableCarried.result.exitCode).toBe(0);
+    const carriedPost = unreadableCarried.calls.find((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(carriedPost).toContain("state=failure");
+    expect(carriedPost).toContain("could not verify commit statuses");
+
+    const unreadableAllFlows = await runStep(
+      finalStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- all\n",
+          head: { sha: targetSha },
+        },
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
+        ALLOCATION_SHARD: "1",
+        FLOWS: "all",
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(unreadableAllFlows.result.exitCode).toBe(0);
+    const allPost = unreadableAllFlows.calls.find(
+      (call) =>
+        call.includes(`statuses/${targetSha}`) &&
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
+    );
+    expect(allPost).toContain("state=failure");
+    expect(allPost).toContain("could not verify commit statuses");
+  });
+
+  test("reconciles a delayed no-run failure to none after the PR description was fixed", async () => {
+    const delayedFailure = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description: "Protected preview E2E skipped [flows: none]",
+            state: "success",
+          },
+        ],
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION:
+          "Invalid or missing ## E2E flows in PR description; list valid flows, all, or none",
+        STATUS_STATE: "failure",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(delayedFailure.result.exitCode).toBe(0);
+    const posts = delayedFailure.calls.filter((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(posts.at(-1)).toContain("state=success");
+    expect(posts.at(-1)).toContain(
+      "description=Protected preview E2E skipped [flows: none]"
+    );
+  });
 });
