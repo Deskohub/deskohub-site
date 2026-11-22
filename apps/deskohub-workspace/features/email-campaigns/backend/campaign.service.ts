@@ -23,10 +23,7 @@ import {
   isSavedAudienceFilter,
 } from "../audience-filter-usage";
 import { validateStoredAutomationFlow } from "../automation/backend/automation-working-copy";
-import {
-  ensurePassReminderPurpose,
-  ensurePassReminderWritesAllowed,
-} from "../automation/backend/pass-reminder-write-policy";
+import { ensurePassReminderPurpose } from "../automation/backend/pass-reminder-write-policy";
 import type {
   AutomationCalendarNeverOccurs,
   AutomationFlowInvalid,
@@ -356,10 +353,7 @@ export class CampaignService extends Context.Service<
           )
         );
         if (Option.isSome(flow)) {
-          yield* ensurePassReminderWritesAllowed(
-            flow.value.trigger,
-            source.purpose
-          );
+          yield* ensurePassReminderPurpose(flow.value.trigger, source.purpose);
         }
         const audience =
           source.audienceId === null

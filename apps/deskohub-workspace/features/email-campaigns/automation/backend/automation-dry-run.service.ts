@@ -92,7 +92,7 @@ import {
   type AutomationWorkingCopy,
   loadAutomationWorkingCopy,
 } from "./automation-working-copy";
-import { ensurePassReminderWritesAllowed } from "./pass-reminder-write-policy";
+import { ensurePassReminderPurpose } from "./pass-reminder-write-policy";
 
 /** How many next fires a schedule's dry run shows (§8.1). */
 const previewedFires = 5;
@@ -202,7 +202,7 @@ export class AutomationDryRun extends Context.Service<
             })
           ),
           Effect.tap(({ flow }) =>
-            ensurePassReminderWritesAllowed(flow.trigger, copy.campaign.purpose)
+            ensurePassReminderPurpose(flow.trigger, copy.campaign.purpose)
           ),
           Effect.bind("audience", () =>
             Option.match(copy.audience, {

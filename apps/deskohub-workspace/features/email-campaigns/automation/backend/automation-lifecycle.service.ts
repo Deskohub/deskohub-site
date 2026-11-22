@@ -87,7 +87,10 @@ import {
   type AutomationWorkingCopy,
   loadAutomationWorkingCopy,
 } from "./automation-working-copy";
-import { ensurePassReminderWritesAllowed } from "./pass-reminder-write-policy";
+import {
+  ensurePassReminderPurpose,
+  ensurePassReminderWritesAllowed,
+} from "./pass-reminder-write-policy";
 
 type WorkingCopyError =
   | CampaignNotFound
@@ -208,7 +211,7 @@ export class AutomationLifecycle extends Context.Service<
               ),
               Effect.tap(({ copy }) => ensureNotArchived(copy)),
               Effect.bind("flow", ({ copy }) =>
-                validatePublishableFlow(input.flow, copy.campaign.purpose)
+                validateEditableFlow(input.flow, copy.campaign.purpose)
               ),
               Effect.tap(({ flow }) =>
                 db
@@ -565,14 +568,20 @@ const validateActivation = (input: {
     )
   );
 
-/** The flow rules (§2, §3.3, §4.5) plus the database check of its references. */
+/** Draft flow rules (§2, §3.3, §4.5) plus the database check of its references. */
+const validateEditableFlow = (flow: AutomationFlow, purpose: CampaignPurpose) =>
+  ensurePassReminderPurpose(flow.trigger, purpose).pipe(
+    Effect.andThen(validateAutomationFlow(flow)),
+    Effect.tap((validated) => ensureReferencesExist(validated))
+  );
+
+/** Publishing also requires the pass reminder release gate to be globally open. */
 const validatePublishableFlow = (
   flow: AutomationFlow,
   purpose: CampaignPurpose
 ) =>
   ensurePassReminderWritesAllowed(flow.trigger, purpose).pipe(
-    Effect.andThen(validateAutomationFlow(flow)),
-    Effect.tap((validated) => ensureReferencesExist(validated))
+    Effect.andThen(validateEditableFlow(flow, purpose))
   );
 
 const ensureReferencesExist = (flow: AutomationFlow) =>

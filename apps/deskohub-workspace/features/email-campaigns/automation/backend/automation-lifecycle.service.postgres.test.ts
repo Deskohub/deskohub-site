@@ -132,23 +132,46 @@ describe.skipIf(!testDatabase)(
       return rows;
     };
 
-    test("reads the pass reminder trigger tags before the writer release permits saving them", async () => {
+    test("allows saving marketing pass reminder drafts while keeping activation gated until the release opens", async () => {
       const { campaignId } = await seedDraft();
+      const { campaignId: operationalId } = await seedDraft();
+      await pool.query(
+        "update email_campaigns set purpose = 'operational' where id = $1",
+        [operationalId]
+      );
       for (const tag of ["EntryPackExpiring", "UnlimitedEnding"] as const) {
+        const trigger = { _tag: tag };
         const flow = automationFlowFixture({
-          trigger: { _tag: tag },
+          trigger,
           steps: [{ _tag: "Send", id: "send" }],
         });
-        const error = await failure(
+        const operationalError = await failure(
+          lifecycle((l) => l.updateFlow({ campaignId: operationalId, flow }))
+        );
+        expect(operationalError._tag).toBe("AutomationFlowInvalid");
+
+        const saved = await run(
           lifecycle((l) => l.updateFlow({ campaignId, flow }))
         );
-        expect(error._tag).toBe("AutomationFlowInvalid");
+        expect(saved.flow?.trigger).toEqual({ _tag: tag, copyVersion: 1 });
+
+        const previewId = await seedPreview(campaignId, {
+          status: "completed",
+        });
+        const { fireAt } = nextPassReminderPreviewOccurrence(trigger, now);
+        await pool.query(
+          "update email_campaign_automation_previews set as_of = $2 where id = $1",
+          [previewId, fireAt.toString()]
+        );
+        const activationError = await failure(
+          lifecycle((l) =>
+            l.activate({ campaignId, previewId, activatedBy: null })
+          )
+        );
+        expect(activationError._tag).toBe("AutomationFlowInvalid");
+        expect((await automationRow(campaignId)).status).toBe("draft");
+        expect(await versionRows(campaignId)).toEqual([]);
       }
-      const { rows } = await pool.query(
-        "select flow from email_campaign_automations where campaign_id = $1",
-        [campaignId]
-      );
-      expect(rows).toEqual([{ flow: null }]);
     });
 
     describe("pass reminder campaign ownership", () => {
