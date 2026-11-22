@@ -745,6 +745,42 @@ describe.skipIf(!testDatabase)("CampaignService on disposable Postgres", () => {
     expect((await copies()).rows).toEqual(before.rows);
   });
 
+  test("refuses to change a pass reminder draft to operational email", async () => {
+    const campaignId = await createAutomated("draft");
+    await pool.query(
+      "update email_campaign_automations set flow = $2 where campaign_id = $1",
+      [
+        campaignId,
+        {
+          trigger: { _tag: "UnlimitedEnding" },
+          steps: [{ _tag: "Send", id: "send" }],
+        },
+      ]
+    );
+    expect(
+      failure(
+        await withCampaigns((campaigns) =>
+          campaigns.update({ campaignId, purpose: "operational" })
+        )
+      )
+    ).toMatchObject({ _tag: "AutomationFlowInvalid" });
+    expect(
+      failure(
+        await withCampaigns((campaigns) =>
+          campaigns.patch({
+            campaignId,
+            purpose: "operational",
+            content: { "cs-CZ": { subject: "Synthetic changed subject" } },
+          })
+        )
+      )
+    ).toMatchObject({ _tag: "AutomationFlowInvalid" });
+    expect(
+      succeeded(await withCampaigns((campaigns) => campaigns.get(campaignId)))
+        .purpose
+    ).toBe("marketing");
+  });
+
   test("refuses to duplicate a draft whose saved flow breaks a save rule", async () => {
     const campaignId = await createAutomated("draft");
     // Saved before schedules had to fire on engine ticks (D36).

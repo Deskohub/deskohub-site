@@ -1,6 +1,9 @@
 import "server-only";
 
-import type { CampaignPatchInput } from "@deskohub/workspace-admin-api";
+import {
+  AutomationTrigger,
+  type CampaignPatchInput,
+} from "@deskohub/workspace-admin-api";
 import { and, desc, eq, ne, notExists, or } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Option, Schema } from "effect";
@@ -19,7 +22,10 @@ import {
   isSavedAudienceFilter,
 } from "../audience-filter-usage";
 import { validateStoredAutomationFlow } from "../automation/backend/automation-working-copy";
-import { ensurePassReminderWritesAllowed } from "../automation/backend/pass-reminder-write-policy";
+import {
+  ensurePassReminderPurpose,
+  ensurePassReminderWritesAllowed,
+} from "../automation/backend/pass-reminder-write-policy";
 import type {
   AutomationCalendarNeverOccurs,
   AutomationFlowInvalid,
@@ -99,8 +105,13 @@ type CampaignTransactionError = EffectDrizzleQueryError | SqlError.SqlError;
 type CampaignEditError =
   | CampaignNotFound
   | CampaignReadOnly
+  | AutomationFlowInvalid
   | CampaignWriteError
   | CampaignTransactionError;
+
+const decodeStoredTrigger = Schema.decodeUnknownOption(
+  Schema.Struct({ trigger: AutomationTrigger })
+);
 
 /** One-off campaigns are editable in Draft, automated ones until archived. */
 const isEditable = (campaign: Campaign) =>
@@ -450,10 +461,20 @@ export class CampaignService extends Context.Service<
       });
 
       /** Writes an edit if the campaign is still editable once locked. */
-      const writeEdit = Effect.fn("CampaignService.writeEdit")(function* ({
-        campaignId,
-        ...changes
-      }: CampaignEdit) {
+      const writeEdit = Effect.fn("CampaignService.writeEdit")(function* (
+        { campaignId, ...changes }: CampaignEdit,
+        automation: Option.Option<AutomationWorkingCopy>
+      ) {
+        if (changes.purpose !== undefined) {
+          const flow = Option.flatMap(automation, ({ flow }) =>
+            decodeStoredTrigger(flow)
+          );
+          if (Option.isSome(flow))
+            yield* ensurePassReminderPurpose(
+              flow.value.trigger,
+              changes.purpose
+            );
+        }
         if (changes.audienceId !== undefined) {
           yield* lockAssignableAudience(changes.audienceId);
         }
@@ -480,8 +501,8 @@ export class CampaignService extends Context.Service<
         yield* validateContent(content);
         return yield* transaction(
           lockAutomation(edit.campaignId, "update").pipe(
-            Effect.andThen(
-              content === undefined
+            Effect.flatMap((automation) =>
+              (content === undefined
                 ? Effect.void
                 : lockContent(edit.campaignId).pipe(
                     Effect.flatMap(
@@ -492,8 +513,8 @@ export class CampaignService extends Context.Service<
                       })
                     )
                   )
-            ),
-            Effect.andThen(writeEdit(edit))
+              ).pipe(Effect.andThen(writeEdit(edit, automation)))
+            )
           )
         ).pipe(Effect.flatMap(requireEdited(edit.campaignId)));
       });
@@ -509,7 +530,7 @@ export class CampaignService extends Context.Service<
         }: CampaignPatchInput & {
           readonly content: CampaignContentChanges;
         }) {
-          yield* lockAutomation(edit.campaignId, "update");
+          const automation = yield* lockAutomation(edit.campaignId, "update");
           const current = yield* lockContent(edit.campaignId);
           if (Option.isNone(current)) return Option.none<Campaign>();
           const content = yield* changeCampaignContent({
@@ -519,7 +540,7 @@ export class CampaignService extends Context.Service<
           });
           yield* validateContent(content);
           yield* requireUploadedImages(content, current.value);
-          return yield* writeEdit({ ...edit, content });
+          return yield* writeEdit({ ...edit, content }, automation);
         }
       );
 
