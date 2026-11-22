@@ -1,6 +1,10 @@
 import "server-only";
 
 import type { DotyposCustomerId } from "@deskohub/dotypos";
+import type {
+  ReservationPayment,
+  ReservationStay,
+} from "@deskohub/workspace-admin-api";
 import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { WorkspaceTransaction } from "@/db/database.service";
@@ -17,6 +21,7 @@ import type {
   CustomerEventKind,
 } from "@/shared/backend/customer-events/customer-event";
 import { canonicalJson } from "@/shared/utils/canonical-json";
+import { reservationPaymentCondition } from "../../backend/reservation-payment-condition";
 import { reservationProductCondition } from "../../backend/reservation-product-condition";
 import type { CampaignId } from "../../campaign-identifiers";
 import type { AutomationVersionId } from "../automation-identifiers";
@@ -26,6 +31,10 @@ import {
   versionInForce,
 } from "../automation-versions";
 import { takenReceiptKeys } from "./automation-run-entry";
+import {
+  triggerPayment,
+  triggerStay,
+} from "./automation-trigger-qualification";
 import { triggeringCustomerEvent } from "./automation-triggering-events";
 
 import { loadAutomationVersionActivations } from "./automation-version-activations";
@@ -62,6 +71,11 @@ export type IntakeMatch = {
   readonly versionId: AutomationVersionId;
   /** The receipt key: at most one receipt per reservation or account (D31.7). */
   readonly dedupKey: string;
+  /**
+   * The stay the triggering visit must be of (D1), which intake judges
+   * from the live visit; none when the trigger sets none.
+   */
+  readonly stay: Option.Option<ReservationStay>;
 };
 
 /** An automation accepting events, with every version it published. */
@@ -83,7 +97,8 @@ const intakeDedupKey = (event: IntakeEvent) =>
  * event can trigger at all (D37), the version in force at the occurrence
  * has a trigger of the event's kind, the event occurred at or after
  * `accepting_since` (D21, D12), the receipt key is free, and the trigger's
- * product filter holds on the reservation.
+ * product filter (D27) and payment (D1) hold on the Workspace reservation.
+ * A reservation trigger's stay needs the live visit; intake judges it.
  * Reads only; the caller's transaction gives it one snapshot.
  */
 export const matchIntakeEvents = Effect.fn("automationIntake.match")(function* (
@@ -109,38 +124,36 @@ export const matchIntakeEvents = Effect.fn("automationIntake.match")(function* (
     )
   );
 
-  const productMatches = yield* reservationsOfProducts(
+  const qualifiedReservations = yield* reservationsQualifying(
     candidates.flatMap(({ event, version }) =>
-      "product" in version.trigger &&
-      version.trigger.product !== undefined &&
-      event.workspaceReservationId !== null
-        ? [
-            {
-              product: version.trigger.product,
-              reservationId: event.workspaceReservationId,
-            },
-          ]
-        : []
+      Option.match(reservationQualifiers(version.trigger), {
+        onNone: () => [],
+        onSome: (qualifiers) =>
+          event.workspaceReservationId === null
+            ? []
+            : [{ qualifiers, reservationId: event.workspaceReservationId }],
+      })
     )
   );
-  const productHolds = (candidate: (typeof candidates)[number]) => {
-    const { trigger } = candidate.version;
-    if (!("product" in trigger) || trigger.product === undefined) {
-      return true;
-    }
-    const reservationId = candidate.event.workspaceReservationId;
-    return (
-      reservationId !== null &&
-      productMatches.has(productKey(trigger.product, reservationId))
-    );
-  };
+  const reservationQualifies = (candidate: (typeof candidates)[number]) =>
+    Option.match(reservationQualifiers(candidate.version.trigger), {
+      onNone: () => true,
+      onSome: (qualifiers) => {
+        const reservationId = candidate.event.workspaceReservationId;
+        return (
+          reservationId !== null &&
+          qualifiedReservations.has(qualifierKey(qualifiers, reservationId))
+        );
+      },
+    });
 
-  const matches = candidates.filter(productHolds).map(
+  const matches = candidates.filter(reservationQualifies).map(
     ({ event, automation, version }): IntakeMatch => ({
       event,
       campaignId: automation.campaignId,
       versionId: version.id,
       dedupKey: intakeDedupKey(event),
+      stay: triggerStay(version.trigger),
     })
   );
   const taken = yield* Effect.forEach(
@@ -203,23 +216,44 @@ type ProductFilter = NonNullable<
   >["product"]
 >;
 
-const productKey = (
-  product: ProductFilter,
-  reservationId: WorkspaceReservationId
-) => `${canonicalJson(product)}\u0000${reservationId}`;
+/** What a reservation trigger's Workspace reservation must be, in SQL. */
+type ReservationQualifiers = {
+  readonly product?: ProductFilter;
+  readonly payment?: ReservationPayment;
+};
 
-/** The (product filter, reservation) pairs whose reservation is of the product, in SQL. */
-const reservationsOfProducts = (
+/** The trigger's product filter and payment; none when it sets neither. */
+const reservationQualifiers = (
+  trigger: AutomationVersionActivation["trigger"]
+): Option.Option<ReservationQualifiers> => {
+  const product = "product" in trigger ? trigger.product : undefined;
+  const payment = Option.getOrUndefined(triggerPayment(trigger));
+  return product === undefined && payment === undefined
+    ? Option.none()
+    : Option.some({
+        ...(product !== undefined && { product }),
+        ...(payment !== undefined && { payment }),
+      });
+};
+
+const qualifierKey = (
+  qualifiers: ReservationQualifiers,
+  reservationId: WorkspaceReservationId
+) => `${canonicalJson(qualifiers)}\u0000${reservationId}`;
+
+/** The (qualifiers, reservation) pairs whose reservation meets them, in SQL. */
+const reservationsQualifying = (
   pairs: readonly {
-    readonly product: ProductFilter;
+    readonly qualifiers: ReservationQualifiers;
     readonly reservationId: WorkspaceReservationId;
   }[]
 ) =>
   Effect.flatMap(WorkspaceTransaction, ({ db }) =>
     Effect.forEach(
-      Map.groupBy(pairs, ({ product }) => canonicalJson(product)),
-      ([, group]) =>
-        db
+      Map.groupBy(pairs, ({ qualifiers }) => canonicalJson(qualifiers)),
+      ([, group]) => {
+        const { qualifiers } = group[0]!;
+        return db
           .select({ id: workspaceReservations.id })
           .from(workspaceReservations)
           .where(
@@ -227,13 +261,19 @@ const reservationsOfProducts = (
               inArray(workspaceReservations.id, [
                 ...new Set(group.map(({ reservationId }) => reservationId)),
               ]),
-              reservationProductCondition(group[0]!.product)
+              qualifiers.product === undefined
+                ? undefined
+                : reservationProductCondition(qualifiers.product),
+              qualifiers.payment === undefined
+                ? undefined
+                : reservationPaymentCondition(qualifiers.payment)
             )
           )
           .pipe(
             Effect.map((rows) =>
-              rows.map(({ id }) => productKey(group[0]!.product, id))
+              rows.map(({ id }) => qualifierKey(qualifiers, id))
             )
-          )
+          );
+      }
     ).pipe(Effect.map((keys) => new Set(keys.flat())))
   );

@@ -9,6 +9,7 @@ import type {
   AutomationConditionFilter,
   AutomationFlowType as AutomationFlow,
   AutomationStepType as AutomationStep,
+  ReservationStay,
 } from "@deskohub/workspace-admin-api";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { Data, Effect, Match, Option, Schema } from "effect";
@@ -57,7 +58,6 @@ import {
 import type { AutomationTriggerKind } from "../automation-states";
 import { automationTickAtOrAfter } from "../automation-ticks";
 import {
-  readsTriggeringVisit,
   triggeringVisitVerdict,
   type WorkspaceCancellations,
   withdrawnByCancellation,
@@ -82,6 +82,13 @@ import {
   replayEventScope,
   selectReplayEvents,
 } from "./automation-previews";
+import {
+  isOfTriggerStay,
+  readsTriggerVisit,
+  type TriggeringVisitTiers,
+  triggeringVisitTiers,
+  triggerStay,
+} from "./automation-trigger-qualification";
 import {
   AutomationUnitFetchFailure,
   type AutomationUnitHandler,
@@ -452,6 +459,7 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
     customers: readonly DotyposCustomerId[]
   ) => {
     const kind = automationTriggerKind(job.flow.trigger);
+    const stay = triggerStay(job.flow.trigger);
     const reservationIds = [
       ...new Set(
         job.events.flatMap(({ workspaceReservationId }) =>
@@ -495,13 +503,20 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
         )
       ),
       Effect.bind("visits", () =>
-        readsTriggeringVisit(kind) && reservationIds.length > 0
+        readsTriggerVisit(job.flow.trigger) && reservationIds.length > 0
           ? withVisits((visits) => visits.ofReservations(reservationIds)).pipe(
               Effect.mapError(AutomationUnitFetchFailure.fromReservationVisits)
             )
           : Effect.succeed(
               new Map<WorkspaceReservationId, Option.Option<ReservationVisit>>()
             )
+      ),
+      Effect.bind("tiers", ({ visits }) =>
+        Option.isSome(stay)
+          ? triggeringVisitTiers(db, visits.values()).pipe(
+              Effect.mapError(databaseFailure)
+            )
+          : Effect.succeed<TriggeringVisitTiers>(new Map())
       ),
       Effect.bind("cancellations", () =>
         workspaceCancellations(reservationIds)
@@ -511,7 +526,7 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
       ),
       Effect.bind("now", () => currentInstant),
       Effect.flatMap(
-        ({ planned, visits, cancellations, undatedChanges, now }) => {
+        ({ planned, visits, tiers, cancellations, undatedChanges, now }) => {
           const replay = (
             event: ReplayEvent,
             simulatedSends: readonly Temporal.Instant[]
@@ -519,7 +534,14 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
             ReplayedEvent,
             AutomationUnitFetchFailure | AutomationConditionAudienceMissing
           > => {
-            const rechecked = recheck({ kind, event, visits, cancellations });
+            const rechecked = recheck({
+              kind,
+              event,
+              visits,
+              cancellations,
+            }).pipe(
+              Option.orElse(() => offStay({ stay, event, visits, tiers }))
+            );
             if (Option.isSome(rechecked))
               return Effect.succeed(rechecked.value);
             const entryContext = contextOf(event, event.occurredAt);
@@ -932,6 +954,31 @@ const recheck = (input: {
     Match.when("moved", () => Option.some<ReplayedEvent>({ _tag: "Hidden" })),
     Match.exhaustive
   );
+};
+
+/**
+ * An event the re-check lets stand whose visit isn't of the trigger's
+ * stay (D1) shows no row: intake takes it in with no receipt, as a product
+ * mismatch. None when it qualifies.
+ */
+const offStay = (input: {
+  readonly stay: Option.Option<ReservationStay>;
+  readonly event: ReplayEvent;
+  readonly visits: ReadonlyMap<
+    WorkspaceReservationId,
+    Option.Option<ReservationVisit>
+  >;
+  readonly tiers: TriggeringVisitTiers;
+}): Option.Option<ReplayedEvent> => {
+  const reservationId = input.event.workspaceReservationId;
+  const visit = Option.flatten(
+    Option.fromUndefinedOr(
+      reservationId === null ? undefined : input.visits.get(reservationId)
+    )
+  );
+  return isOfTriggerStay(input.stay, visit, input.tiers)
+    ? Option.none()
+    : Option.some({ _tag: "Hidden" });
 };
 
 /**

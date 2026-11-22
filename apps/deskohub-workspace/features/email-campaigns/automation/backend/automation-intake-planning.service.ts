@@ -325,9 +325,7 @@ export class AutomationIntakePlanning extends Context.Service<
             ? 0
             : dotyposIdReadRequests(
                 revisitedReservations(
-                  ofCustomers.flatMap((id) =>
-                    (byCustomer.get(id) ?? []).map(({ event }) => event)
-                  )
+                  ofCustomers.flatMap((id) => byCustomer.get(id) ?? [])
                 ).length
               );
         const fit = (chunk: {

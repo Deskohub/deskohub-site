@@ -1301,6 +1301,79 @@ describe.skipIf(!testDatabase)(
       expect(await unitsOf(started.previewId)).toEqual([]);
     });
 
+    test("a stay trigger replays only the visits of its stay", async () => {
+      const [ida, jack] = ["ida", "jack"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const noonDaysAgo = (days: number) =>
+        pragueOf(ago({ hours: 24 * days }))
+          .toPlainDate()
+          .toZonedDateTime({ timeZone: "Europe/Prague", plainTime: "12:00" })
+          .toInstant();
+      const overnight = { startsAt: noonDaysAgo(8), endsAt: noonDaysAgo(7) };
+      const day = {
+        startsAt: noonDaysAgo(6).subtract({ hours: 3 }),
+        endsAt: noonDaysAgo(6).add({ hours: 5 }),
+      };
+      await seedReservations([
+        { label: "ida-overnight", customer: ida, ...overnight },
+        { label: "jack-day", customer: jack, ...day },
+      ]);
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "reserved-desk",
+              coffee: true,
+            },
+          })
+          .where(
+            inArray(workspaceReservations.id, [
+              reservationIdOf("ida-overnight"),
+              reservationIdOf("jack-day"),
+            ])
+          )
+      );
+      const [overnightEvent, dayEvent] = await seedEvents([
+        {
+          kind: "reservation-finished",
+          reservation: "ida-overnight",
+          customer: ida,
+          occurredAt: overnight.endsAt,
+        },
+        {
+          kind: "reservation-finished",
+          reservation: "jack-day",
+          customer: jack,
+          occurredAt: day.endsAt,
+        },
+      ]);
+      const campaignId = await seedAutomation({
+        flow: decodeFlow({
+          trigger: {
+            _tag: "ReservationFinished",
+            product: { family: "cowork", properties: [] },
+            stay: "day",
+          },
+          steps: [send],
+        }),
+      });
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+
+      const outcomes = new Map(
+        (await rowsOf(started.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      expect(outcomes.has(overnightEvent!)).toBe(false);
+      expect(outcomes.get(dayEvent!)).toBe("would-send");
+    });
+
     test("a reschedule in Dotypos changes the next preview without local writes", async () => {
       const hank = customerId("hank");
       await seedReservations([

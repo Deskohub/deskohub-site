@@ -48,6 +48,10 @@ import {
   loadAutomationEntryVersions,
   takenReceiptKeys,
 } from "./automation-run-entry";
+import {
+  isOfTriggerStay,
+  triggeringVisitTiers,
+} from "./automation-trigger-qualification";
 import { lockTriggeringCustomerEvents } from "./automation-triggering-events";
 import { lockTriggeringReservations } from "./automation-triggering-reservations";
 import {
@@ -87,13 +91,17 @@ export const plannedIntakeUnit = (
   requestCost: unit.requestCost,
 });
 
-/** The triggering reservations whose visits intake re-checks, each once. */
+/**
+ * The triggering reservations whose visits intake reads, each once: to
+ * re-check them (D35) or to judge the trigger's stay (D1).
+ */
 export const revisitedReservations = (
-  events: readonly IntakeEvent[]
+  matches: readonly IntakeMatch[]
 ): readonly WorkspaceReservationId[] => [
   ...new Set(
-    events.flatMap(({ kind, workspaceReservationId }) =>
-      readsTriggeringVisit(kind) && workspaceReservationId !== null
+    matches.flatMap(({ event: { kind, workspaceReservationId }, stay }) =>
+      (readsTriggeringVisit(kind) || Option.isSome(stay)) &&
+      workspaceReservationId !== null
         ? [workspaceReservationId]
         : []
     )
@@ -398,7 +406,7 @@ const commitIntakeDecisions = Effect.fn("automationIntake.commit")(
 
 /** The `intake` unit: re-checks triggering visits live and starts runs for matched events (§5.6). */
 export const makeIntakeHandler = Effect.gen(function* () {
-  const { transaction } = yield* WorkspaceDatabase;
+  const { db, transaction } = yield* WorkspaceDatabase;
   const facts = yield* AutomationEvaluationFacts;
   const recipients = yield* CampaignRecipientService;
   const context = yield* Effect.context<WorkspaceDatabase | DotyposService>();
@@ -408,10 +416,10 @@ export const makeIntakeHandler = Effect.gen(function* () {
 
   /** Each triggering visit, from the gates' visits when they read them. */
   const triggeringVisits = (
-    events: readonly IntakeEvent[],
+    matches: readonly IntakeMatch[],
     fetched: AudienceFactSource
   ) => {
-    const reservations = revisitedReservations(events);
+    const reservations = revisitedReservations(matches);
     const gateVisits = AudienceFactSource.$is("Fetched")(fetched)
       ? fetched.visits
       : Option.none();
@@ -514,41 +522,50 @@ export const makeIntakeHandler = Effect.gen(function* () {
         ...new Set(matches.map(({ event }) => event.dotyposCustomerId)),
       ].sort();
       const fetched = yield* facts.fetch({ reads, customers });
-      const visits = yield* triggeringVisits(
-        matches.map(({ event }) => event),
-        fetched
-      );
+      const visits = yield* triggeringVisits(matches, fetched);
+      const visitOf = ({ event }: IntakeMatch) =>
+        Option.flatten(
+          Option.fromUndefinedOr(
+            event.workspaceReservationId === null
+              ? undefined
+              : visits.get(event.workspaceReservationId)
+          )
+        );
+      const tiers = yield* triggeringVisitTiers(
+        db,
+        matches.filter(({ stay }) => Option.isSome(stay)).map(visitOf)
+      ).pipe(Effect.mapError(databaseFailure));
       const now = yield* currentInstant;
 
-      return yield* Effect.forEach(
+      const decisions = yield* Effect.forEach(
         matches,
-        (match): Effect.Effect<IntakeDecision, AutomationUnitFetchFailure> => {
+        (
+          match
+        ): Effect.Effect<
+          Option.Option<IntakeDecision>,
+          AutomationUnitFetchFailure
+        > => {
           const version = versions.get(match.versionId);
           const flow = Option.flatMap(
             Option.fromUndefinedOr(version),
             ({ flow }) => flow
           );
           if (version === undefined || Option.isNone(flow)) {
-            return Effect.succeed({
-              ...match,
-              flow,
-              outcome: "failed",
-            });
+            return Effect.succeed(
+              Option.some({ ...match, flow, outcome: "failed" })
+            );
           }
-          const visit = Option.flatten(
-            Option.fromUndefinedOr(
-              match.event.workspaceReservationId === null
-                ? undefined
-                : visits.get(match.event.workspaceReservationId)
-            )
-          );
+          const visit = visitOf(match);
           const recheck = recheckVisit(match.event, visit, now);
           if (recheck !== "current") {
-            return Effect.succeed({
-              ...match,
-              flow,
-              outcome: recheck,
-            });
+            return Effect.succeed(
+              Option.some({ ...match, flow, outcome: recheck })
+            );
+          }
+          // A visit not of the trigger's stay takes no receipt, as a
+          // product mismatch (D1); a finished visit's stay can't change.
+          if (!isOfTriggerStay(match.stay, visit, tiers)) {
+            return Effect.succeed(Option.none());
           }
           const customer = match.event.dotyposCustomerId;
           return recipients
@@ -572,29 +589,31 @@ export const makeIntakeHandler = Effect.gen(function* () {
             .pipe(
               Effect.mapError(databaseFailure),
               Effect.map(
-                (resolution): IntakeDecision => ({
-                  ...match,
-                  flow,
-                  // Unreachable customers still count as members;
-                  // reachability is checked at send time (§5.6).
-                  outcome: [
-                    ...resolution.recipients.map(
-                      ({ dotyposCustomerId }) => dotyposCustomerId
-                    ),
-                    ...resolution.exclusions.map(
-                      ({ dotyposCustomerId }) => dotyposCustomerId
-                    ),
-                    ...resolution.duplicates.flatMap(
-                      ({ duplicateCustomerIds }) => duplicateCustomerIds
-                    ),
-                  ].includes(customer)
-                    ? "member"
-                    : "not-in-audience",
-                })
+                (resolution): Option.Option<IntakeDecision> =>
+                  Option.some({
+                    ...match,
+                    flow,
+                    // Unreachable customers still count as members;
+                    // reachability is checked at send time (§5.6).
+                    outcome: [
+                      ...resolution.recipients.map(
+                        ({ dotyposCustomerId }) => dotyposCustomerId
+                      ),
+                      ...resolution.exclusions.map(
+                        ({ dotyposCustomerId }) => dotyposCustomerId
+                      ),
+                      ...resolution.duplicates.flatMap(
+                        ({ duplicateCustomerIds }) => duplicateCustomerIds
+                      ),
+                    ].includes(customer)
+                      ? "member"
+                      : "not-in-audience",
+                  })
               )
             );
         }
       );
+      return decisions.flatMap((decision) => Option.toArray(decision));
     }),
     commit: (unit, decisions, at) =>
       commitIntakeDecisions({

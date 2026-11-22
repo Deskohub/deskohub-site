@@ -127,7 +127,10 @@ export const simulateRun = <E, R>(input: {
 
 /** What replaying one event did for its customer. */
 export type ReplayedEvent =
-  /** Superseded: Dotypos moved the visit later, so a later event stands for it. */
+  /**
+   * No row: Dotypos moved the visit later, so a later event stands for it,
+   * or the visit isn't of the trigger's stay.
+   */
   | { readonly _tag: "Hidden" }
   /** The re-check or the pre-submit check withdrew it. */
   | {
