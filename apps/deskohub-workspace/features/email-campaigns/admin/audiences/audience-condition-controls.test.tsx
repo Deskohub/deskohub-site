@@ -523,6 +523,156 @@ describe("ChoiceParamControl", () => {
   });
 });
 
+describe("reservation stay and payment", () => {
+  const wording = audienceAttributeWording(
+    "reservationCount",
+    "en-US"
+  ) as AudienceCountWording;
+  const stay = wording.choices.stay;
+  const payment = wording.choices.payment;
+  const cowork = { family: "cowork", properties: [] } as const;
+  const reservationCount = (
+    params: Partial<
+      Extract<AudienceCondition, { attribute: "reservationCount" }>["params"]
+    >
+  ) => {
+    const condition = newCondition("reservationCount");
+    return {
+      ...condition,
+      params: { ...condition.params, ...params },
+    } as AudienceCondition;
+  };
+  const renderReservationCount = (
+    condition: AudienceCondition,
+    onChange: (condition: AudienceCondition) => void = () => undefined
+  ) =>
+    render(
+      <RouteLocaleProvider locale="en-US">
+        <CountConditionControls
+          entry={audienceAttributeCatalogue.reservationCount}
+          wording={wording}
+          value={condition}
+          onChange={onChange}
+          errorAt={formErrors(condition)}
+          lookups={{}}
+        />
+      </RouteLocaleProvider>
+    );
+
+  test("starts on any stay and any payment", () => {
+    const view = renderReservationCount(newCondition("reservationCount"));
+
+    expect(view.getByRole("combobox", { name: stay?.label }).textContent).toBe(
+      stay?.absent
+    );
+    expect(
+      view.getByRole("combobox", { name: payment?.label }).textContent
+    ).toBe(payment?.absent);
+  });
+
+  test.each([
+    ["stay", "day"],
+    ["stay", "overnight"],
+    ["payment", "individual"],
+  ] as const)("sets the %s to %s", async (param, option) => {
+    const onChange = mock((_condition: AudienceCondition) => undefined);
+    const condition = reservationCount({ product: cowork });
+    const choice = wording.choices[param];
+    const view = renderReservationCount(condition, onChange);
+
+    await choose(view, choice?.label ?? "", choice?.options[option] ?? "");
+
+    expect(changed(onChange)).toEqual(
+      reservationCount({ product: cowork, [param]: option })
+    );
+  });
+
+  test.each(["stay", "payment"] as const)(
+    "clears the %s and keeps the rest",
+    async (param) => {
+      const onChange = mock((_condition: AudienceCondition) => undefined);
+      const choice = wording.choices[param];
+      const view = renderReservationCount(
+        reservationCount({
+          product: cowork,
+          stay: "overnight",
+          payment: "individual",
+        }),
+        onChange
+      );
+
+      await choose(view, choice?.label ?? "", choice?.absent ?? "");
+
+      const { [param]: _, ...rest } = {
+        product: cowork,
+        stay: "overnight",
+        payment: "individual",
+      };
+      expect(changed(onChange)).toEqual(reservationCount(rest));
+    }
+  );
+
+  test.each([
+    ["without the cowork product", { stay: "day" }],
+    [
+      "with another product",
+      { stay: "day", product: { family: "office", properties: [] } },
+    ],
+    [
+      "by booking date",
+      { stay: "overnight", product: cowork, dateBasis: "booking" },
+    ],
+  ] as const)(
+    "explains a stay %s, which the condition rejects",
+    (_case, params) => {
+      const condition = reservationCount(params);
+      expect(
+        Result.isFailure(
+          Schema.decodeUnknownResult(audienceFilterSchema)(condition)
+        )
+      ).toBe(true);
+      const view = renderReservationCount(condition);
+
+      const select = view.getByRole("combobox", { name: stay?.label });
+      expect(select.getAttribute("aria-invalid")).toBe("true");
+      const alert = view.container.ownerDocument.getElementById(
+        select.getAttribute("aria-describedby") ?? ""
+      );
+      expect(alert?.textContent).toBe(
+        stay?.invalid?.(condition.params as never)
+      );
+    }
+  );
+
+  test("explains a booking-date stay apart from a missing product", () => {
+    const booking = reservationCount({ stay: "day", dateBasis: "booking" });
+    const visit = reservationCount({ stay: "day" });
+
+    expect(stay?.invalid?.(booking.params as never)).not.toBe(
+      stay?.invalid?.(visit.params as never)
+    );
+  });
+
+  test("a cowork stay by visit date has no error", () => {
+    const condition = reservationCount({
+      product: cowork,
+      stay: "day",
+      payment: "individual",
+      dateBasis: "visitEnd",
+    });
+    expect(
+      Result.isSuccess(
+        Schema.decodeUnknownResult(audienceFilterSchema)(condition)
+      )
+    ).toBe(true);
+    const view = renderReservationCount(condition);
+
+    for (const select of view.getAllByRole("combobox")) {
+      expect(select.getAttribute("aria-invalid")).not.toBe("true");
+    }
+  });
+});
+
 describe("DateConditionControls", () => {
   const wording = (attribute: "lastVisit" | "accountCreated") =>
     audienceAttributeWording(attribute, "en-US") as AudienceDateWording;

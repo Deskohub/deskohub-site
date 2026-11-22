@@ -6,16 +6,18 @@ import {
   eventTriggerKindOf,
   eventTriggerKinds,
   insertStepAt,
+  isReservationTrigger,
   moveStep,
   newStep,
   newStepId,
   removeStepAt,
   replaceStepAt,
-  takesProductFilter,
+  withReservationQualifier,
 } from "./automation-flow-editing";
 import type { FlowStepValue, FlowTriggerValue } from "./automation-flow-form";
 
 const officeProduct = { family: "office", properties: [] } as const;
+const coworkProduct = { family: "cowork", properties: [] } as const;
 
 const send: FlowStepValue = { _tag: "Send", id: "send" };
 const wait = (id: string): FlowStepValue => ({
@@ -52,6 +54,33 @@ describe("eventTrigger", () => {
     });
   });
 
+  test("keeps the stay and payment when switching between reservation events", () => {
+    expect(
+      eventTrigger("reservation-booked", {
+        _tag: "ReservationFinished",
+        product: coworkProduct,
+        stay: "day",
+        payment: "individual",
+      })
+    ).toStrictEqual({
+      _tag: "ReservationBooked",
+      product: coworkProduct,
+      stay: "day",
+      payment: "individual",
+    });
+  });
+
+  test("drops the stay and payment for a pass reminder", () => {
+    expect(
+      eventTrigger("entry-pack-expiring", {
+        _tag: "ReservationFinished",
+        product: coworkProduct,
+        stay: "overnight",
+        payment: "individual",
+      })
+    ).toStrictEqual({ _tag: "EntryPackExpiring" });
+  });
+
   test("drops the product filter for account created", () => {
     expect(
       eventTrigger("account-created", {
@@ -82,7 +111,7 @@ describe("eventTrigger", () => {
 
   test("offers a product filter for reservation events only", () => {
     const takesProduct = eventTriggerKinds.filter((kind) =>
-      takesProductFilter(eventTrigger(kind, null))
+      isReservationTrigger(eventTrigger(kind, null))
     );
     expect(takesProduct).toEqual([
       "reservation-booked",
@@ -95,7 +124,7 @@ describe("eventTrigger", () => {
   test.each(["entry-pack-expiring", "unlimited-ending"] as const)(
     "omits the reservation product filter for %s",
     (kind) => {
-      expect(takesProductFilter(eventTrigger(kind, null))).toBe(false);
+      expect(isReservationTrigger(eventTrigger(kind, null))).toBe(false);
     }
   );
 });
@@ -265,5 +294,25 @@ describe("builder edits", () => {
       check();
     }
     expect(steps).toEqual(emptyFlowSteps);
+  });
+});
+
+describe("withReservationQualifier", () => {
+  const finished = {
+    _tag: "ReservationFinished",
+    product: coworkProduct,
+    payment: "individual",
+  } as const;
+
+  test("sets one qualifier and keeps the others", () => {
+    expect(
+      withReservationQualifier(finished, "stay", "overnight")
+    ).toStrictEqual({ ...finished, stay: "overnight" });
+  });
+
+  test("removes a qualifier set to undefined", () => {
+    expect(
+      withReservationQualifier(finished, "payment", undefined)
+    ).toStrictEqual({ _tag: "ReservationFinished", product: coworkProduct });
   });
 });

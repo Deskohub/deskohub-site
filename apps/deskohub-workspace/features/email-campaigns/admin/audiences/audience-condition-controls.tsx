@@ -368,11 +368,16 @@ function ChoiceParamControl({
   wording,
   value,
   onChange,
+  errorId,
+  invalid,
 }: {
   readonly param: AudienceChoiceParam;
   readonly wording: AudienceChoiceWording | undefined;
   readonly value: unknown;
   readonly onChange: (value: string | undefined) => void;
+  /** The id of the `FieldError` that explains why the condition rejects it. */
+  readonly errorId: string;
+  readonly invalid: boolean;
 }) {
   const options = Object.keys(param.options).map((option) => ({
     option,
@@ -401,7 +406,11 @@ function ChoiceParamControl({
     )),
     Match.when("select", () => (
       <Select value={chosen ?? absentValue} onValueChange={pick}>
-        <SelectTrigger aria-label={label} className={compactSelectClassName}>
+        <SelectTrigger
+          aria-label={label}
+          className={compactSelectClassName}
+          {...fieldErrorAttributes(errorId, invalid)}
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -558,6 +567,17 @@ export function CountConditionControls<
     campaignChosen && Object.hasOwn(param.options, pinnedChoice);
   const periodErrorAt = withPath(errorAt, "params.period");
   const errorId = useId();
+  const choiceInvalid = (name: string) =>
+    errorAt(`params.${name}`) !== undefined;
+  // A choice the contract cross-checks, such as a stay without the cowork
+  // product, stays offered and explains why the condition rejects it.
+  const choiceErrors = wording.lead.flatMap((token) =>
+    "param" in token &&
+    entry.params[token.param]?.part === "choice" &&
+    choiceInvalid(token.param)
+      ? [wording.choices[token.param]?.invalid?.(params)]
+      : []
+  );
   return (
     <div className="flex flex-col gap-2">
       <ConditionLine>
@@ -617,6 +637,8 @@ export function CountConditionControls<
                       : { ...params, [token.param]: value }
                   );
                 }}
+                errorId={errorId}
+                invalid={choiceInvalid(token.param)}
               />
             )
           );
@@ -656,6 +678,7 @@ export function CountConditionControls<
       <FieldError
         id={errorId}
         messages={[
+          ...choiceErrors,
           ...datePeriodErrors(periodErrorAt, locale),
           countComparisonError(errorAt, condition.operator, locale),
         ]}

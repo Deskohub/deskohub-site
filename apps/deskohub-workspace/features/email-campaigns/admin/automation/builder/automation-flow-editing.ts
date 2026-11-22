@@ -42,15 +42,35 @@ export const eventTriggerKindOf = (trigger: EventTrigger): EventTriggerKind =>
   eventTriggerKinds.find((kind) => eventTriggerTags[kind] === trigger._tag) ??
   "reservation-finished";
 
-/** Whether an event trigger can narrow to one reservation product. */
-export const takesProductFilter = (
+/** A reservation event trigger, which can narrow to a product, stay, and payment. */
+export type ReservationTrigger = Extract<EventTrigger, { product?: unknown }>;
+
+/** What a reservation trigger's event must be, each only when set. */
+export type ReservationTriggerQualifiers = Omit<ReservationTrigger, "_tag">;
+
+/** Whether an event trigger is a reservation event, which qualifiers narrow. */
+export const isReservationTrigger = (
   trigger: EventTrigger
-): trigger is Extract<EventTrigger, { product?: unknown }> =>
+): trigger is ReservationTrigger =>
   trigger._tag !== "AccountCreated" && !isPassReminderTrigger(trigger);
+
+/** The trigger with one qualifier set, or removed when `value` is undefined. */
+export const withReservationQualifier = <
+  Key extends keyof ReservationTriggerQualifiers,
+>(
+  trigger: ReservationTrigger,
+  key: Key,
+  value: ReservationTriggerQualifiers[Key] | undefined
+): ReservationTrigger => {
+  const { [key]: _, ...rest } = trigger;
+  return (
+    value === undefined ? rest : { ...rest, [key]: value }
+  ) as ReservationTrigger;
+};
 
 /**
  * The trigger after switching to `kind`. Reservation triggers keep the
- * product filter they had.
+ * product, stay, and payment they had.
  */
 export const eventTrigger = (
   kind: EventTriggerKind,
@@ -64,11 +84,10 @@ export const eventTrigger = (
   ) {
     return { _tag: tag };
   }
-  const product =
-    current && current._tag !== "Schedule" && takesProductFilter(current)
-      ? current.product
-      : undefined;
-  return product === undefined ? { _tag: tag } : { _tag: tag, product };
+  if (!current || current._tag === "Schedule" || !isReservationTrigger(current))
+    return { _tag: tag };
+  const { _tag: _, ...qualifiers } = current;
+  return { _tag: tag, ...qualifiers };
 };
 
 /** A new schedule fires every Monday at 10:00. */
