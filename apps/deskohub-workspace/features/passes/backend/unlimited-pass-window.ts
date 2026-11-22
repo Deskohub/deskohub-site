@@ -5,7 +5,7 @@ import type { WorkspaceDatabaseClient } from "@/db/database.service";
 import { passPurchases } from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { PlainDate } from "@/shared/utils/temporal";
-import { unlimitedPassDays } from "../pass-offer";
+import { type PassTier, unlimitedPassDays } from "../pass-offer";
 import { hasPendingPassChange } from "./pass-administration-pending";
 
 export const keepsUnlimitedRenewalSource = Effect.fn(
@@ -88,6 +88,34 @@ export const getUnlimitedPassCoverageTiers = Effect.fn(
       )
     );
   return new Set(covered.map(({ tier }) => tier));
+});
+
+/** Read booked coverage for the holder's usable Entry pack windows in one query. */
+export const listUnlimitedPassCoverageWindows = Effect.fn(
+  "listUnlimitedPassCoverageWindows"
+)(function* (
+  db: WorkspaceDatabaseClient,
+  holderAccountId: CustomerAccountId,
+  window: {
+    readonly validFrom: PlainDate;
+    readonly validUntil: PlainDate;
+    readonly tiers: readonly PassTier[];
+  }
+) {
+  return yield* db
+    .select({
+      tier: passPurchases.tier,
+      validFrom: passPurchases.validFrom,
+      validUntil: sql<PlainDate>`coalesce(${passPurchases.accessEndsOn}, ${passPurchases.validUntil})::text`,
+    })
+    .from(passPurchases)
+    .where(
+      and(
+        eq(passPurchases.holderAccountId, holderAccountId),
+        inArray(passPurchases.tier, window.tiers),
+        overlapsUnlimitedPassWindow(passPurchases, window, false)
+      )
+    );
 });
 
 const entitlement = alias(passPurchases, "entitlement");

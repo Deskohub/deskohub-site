@@ -12,12 +12,18 @@ export type BookableEntryPack = {
   readonly entriesLeft: number;
   readonly validFrom: PlainDate;
   readonly validUntil: PlainDate;
+  readonly unavailableDates?: readonly PlainDate[];
 };
 
 export type CoworkEntryPacks = {
   /** Active packs with an entry left, ordered by soonest expiry. */
   readonly packs: readonly BookableEntryPack[];
   readonly claimedDates: readonly PlainDate[];
+};
+
+export const noCoworkBookingPasses: CoworkEntryPacks = {
+  packs: [],
+  claimedDates: [],
 };
 
 export type InitialCoworkEntryPack =
@@ -71,6 +77,10 @@ export const getEntryPackCoworkTier = (
 export const entryPackCoversDate = (pack: BookableEntryPack, date: string) =>
   date >= pack.validFrom && date < pack.validUntil;
 
+export const entryPackIsAvailableOn = (pack: BookableEntryPack, date: string) =>
+  entryPackCoversDate(pack, date) &&
+  !pack.unavailableDates?.some((unavailableDate) => unavailableDate === date);
+
 export const getOfferedEntryPack = (
   { packs, claimedDates }: CoworkEntryPacks,
   {
@@ -102,7 +112,7 @@ export const getOfferedEntryPack = (
         (selectedTier === "reserved-desk-workstation" &&
           workstationRequired &&
           pack.tier === "reserved-desk")) &&
-      entryPackCoversDate(pack, date)
+      entryPackIsAvailableOn(pack, date)
   );
 };
 
@@ -114,10 +124,15 @@ export const firstEntryPackDate = (
   let date = Temporal.PlainDate.from(
     today > pack.validFrom ? today : pack.validFrom
   );
-  while (claimedDates.some((claim) => claim === date.toString())) {
+  while (date.toString() < pack.validUntil) {
+    const day = date.toString();
+    if (
+      !claimedDates.some((claim) => claim === day) &&
+      entryPackIsAvailableOn(pack, day)
+    ) {
+      return day;
+    }
     date = date.add({ days: 1 });
   }
-  return entryPackCoversDate(pack, date.toString())
-    ? date.toString()
-    : undefined;
+  return undefined;
 };
