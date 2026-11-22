@@ -6,6 +6,7 @@ import {
   type CustomerPassPurchaseStatus,
   type CustomerUnlimitedStartDates,
   type SubmitCustomerPassPurchase,
+  type UpdateCustomerPassPurchasePrice,
 } from "@deskohub/workspace-customer-api";
 import { Effect, Schema } from "effect";
 import { updateCustomerProfileSchema } from "@/features/account/contracts";
@@ -14,8 +15,10 @@ import type { Locale } from "@/features/i18n";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { HeldPassNotFound } from "@/features/passes/backend/customer-pass-reads";
 import { CustomerPasses } from "@/features/passes/backend/customer-passes.service";
+import { getEntryPackPayPath } from "@/features/passes/entry-pack-checkout";
 import { getEntryPackLastUsableDate } from "@/features/passes/pass-offer";
 import { unlimitedPassSelectionSchema } from "@/features/passes/unlimited-pass";
+import { getUnlimitedPassPayPath } from "@/features/passes/unlimited-pass-checkout";
 import { reservationBillingSelectionSchema } from "@/features/reservation/reservation-billing";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
@@ -121,6 +124,14 @@ export const loadCustomerPassPurchaseStatus = Effect.fn(
     productKind: view.entryCount === null ? "unlimited" : "entry-pack",
     tier: view.tier,
     statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
+    ...(view.status === "not_started" && {
+      resumePath:
+        view.entryCount === null
+          ? getUnlimitedPassPayPath(locale, orderId)
+          : getEntryPackPayPath(locale, orderId),
+    }),
+    ...(view.status === "pending" &&
+      view.paymentPage && { paymentUrl: view.paymentPage }),
     ...("validFrom" in view && { validFrom: view.validFrom }),
     ...("validUntil" in view && {
       lastUsableDate: getEntryPackLastUsableDate(view.validUntil).toString(),
@@ -130,6 +141,14 @@ export const loadCustomerPassPurchaseStatus = Effect.fn(
   };
   return result;
 });
+
+export const updateCustomerPassPurchasePrice = (
+  orderId: OrderId,
+  input: UpdateCustomerPassPurchasePrice
+) =>
+  Effect.flatMap(CustomerPasses, (passes) =>
+    passes.repricePurchase({ orderId, ...input })
+  );
 
 export const submitCustomerPassPurchase = Effect.fn(
   "customerApi.submitPassPurchase"

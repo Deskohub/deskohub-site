@@ -1012,6 +1012,7 @@ const serverLayer = (workspace: FakeWorkspace) => {
         .handle("beginPassPurchase", passesUnavailable)
         .handle("getPassPurchaseStatus", passesUnavailable)
         .handle("submitPassPurchase", passesUnavailable)
+        .handle("updatePassPurchasePrice", passesUnavailable)
   );
 
   const auth = HttpApiBuilder.group(CustomerAuthHttpApi, "auth", (handlers) =>

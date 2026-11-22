@@ -29,6 +29,7 @@ import {
   loadCustomerPassPurchaseStatus,
   loadCustomerUnlimitedStartDates,
   submitCustomerPassPurchase,
+  updateCustomerPassPurchasePrice,
 } from "./customer-pass-purchase-operations";
 import { CustomerReservationLayers } from "./customer-reservation-layers";
 
@@ -105,6 +106,10 @@ export const CustomerPassApiHandlers = HttpApiBuilder.group(
     const purchasePayment = Layer.mergeAll(
       shared,
       layers.purchases.payment
+    ).pipe(Layer.provide(authentication));
+    const purchaseReprice = Layer.mergeAll(
+      shared,
+      layers.purchases.reprice
     ).pipe(Layer.provide(authentication));
 
     return handlers
@@ -229,6 +234,16 @@ export const CustomerPassApiHandlers = HttpApiBuilder.group(
           providePerRequest(purchasePayment),
           Effect.timeout(checkoutSubmitDeadline),
           answerPurchaseFailure("customerApi.submitPassPurchase")
+        )
+      )
+      .handle("updatePassPurchasePrice", ({ params, payload }) =>
+        updateCustomerPassPurchasePrice(
+          orderIdSchema.make(params.orderId),
+          payload
+        ).pipe(
+          providePerRequest(purchaseReprice),
+          Effect.timeout(checkoutSubmitDeadline),
+          answerPurchaseFailure("customerApi.updatePassPurchasePrice")
         )
       );
   })

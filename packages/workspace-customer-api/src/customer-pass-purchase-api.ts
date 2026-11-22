@@ -136,6 +136,27 @@ export const CustomerPassPayment = Schema.Union([
 ]).annotate({ identifier: "CustomerPassPayment" });
 export type CustomerPassPayment = typeof CustomerPassPayment.Type;
 
+export const UpdateCustomerPassPurchasePrice = Schema.Struct({
+  productKind: Schema.Literals(["entry-pack", "unlimited"]),
+  displayedPriceFingerprint: priceFingerprint,
+  /** Omit the code to remove it from the unpaid quote. */
+  submittedCode: Schema.optionalKey(
+    Schema.String.check(Schema.isMaxLength(160))
+  ),
+}).annotate({ identifier: "UpdateCustomerPassPurchasePrice" });
+export type UpdateCustomerPassPurchasePrice =
+  typeof UpdateCustomerPassPurchasePrice.Type;
+
+export const CustomerPassPurchasePriceUpdate = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literals(["ready", "pricing_changed"]),
+    price: CustomerPassPurchasePrice,
+  }),
+  Schema.Struct({ status: Schema.Literal("code_unavailable") }),
+]).annotate({ identifier: "CustomerPassPurchasePriceUpdate" });
+export type CustomerPassPurchasePriceUpdate =
+  typeof CustomerPassPurchasePriceUpdate.Type;
+
 export const CustomerPassPurchaseState = Schema.Literals([
   "not_started",
   "pending",
@@ -157,6 +178,10 @@ export const CustomerPassPurchaseStatus = Schema.Struct({
   productKind: Schema.Literals(["entry-pack", "unlimited"]),
   tier: CustomerPassTier,
   statusPath: Schema.String,
+  /** The same buyer's website Pay page for an unsubmitted order. */
+  resumePath: Schema.optionalKey(Schema.String),
+  /** The pending provider page when the current attempt can still be reopened. */
+  paymentUrl: Schema.optionalKey(Schema.String),
   gift: Schema.optionalKey(Schema.Boolean),
   validFrom: Schema.optionalKey(CustomerPlainDate),
   lastUsableDate: Schema.optionalKey(CustomerPlainDate),
@@ -238,4 +263,14 @@ export const customerPassPurchaseEndpoints = [
     success: CustomerPassPayment,
     error: [...purchaseErrors, CustomerPassNotFound.schema],
   }).annotate(HttpApi.PayloadParseOptions, customerInputParseOptions),
+  HttpApiEndpoint.patch(
+    "updatePassPurchasePrice",
+    "/purchases/:orderId/price",
+    {
+      params: { orderId: CustomerPassId },
+      payload: UpdateCustomerPassPurchasePrice,
+      success: CustomerPassPurchasePriceUpdate,
+      error: purchaseErrors,
+    }
+  ).annotate(HttpApi.PayloadParseOptions, customerInputParseOptions),
 ] as const;

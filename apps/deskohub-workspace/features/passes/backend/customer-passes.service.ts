@@ -4,6 +4,7 @@ import {
   payPurchase,
   purchaseStartDates,
   purchaseStatus,
+  repricePurchase,
   startPurchase,
 } from "./customer-pass-purchase";
 import {
@@ -30,6 +31,7 @@ const purchases = {
   purchaseStartDates: requireActivePassAccount(purchaseStartDates),
   payPurchase: requireActivePassAccount(payPurchase),
   purchaseStatus: requireActivePassAccount(purchaseStatus),
+  repricePurchase: requireActivePassAccount(repricePurchase),
   resendInvitation: requireActivePassAccount(requestEntryPackGiftResend),
 };
 
