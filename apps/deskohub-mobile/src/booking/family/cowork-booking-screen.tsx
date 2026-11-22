@@ -521,6 +521,9 @@ function CoworkSelection({
           selection: selectedBooking,
           quote,
           blocked: Option.fromNullishOr(blocked[0]),
+          ...(coverage === "covered" && {
+            readyNotice: m.booking_pass_unlimited_covers({}, { locale }),
+          }),
           canContinue: Option.isSome(checkout),
           locale,
         });
@@ -644,14 +647,19 @@ function CoworkSelection({
                   }
             }
             reason={
+              bar.reason ??
               {
-                clear: bar.reason,
+                clear: undefined,
                 checking: m.account_loading({}, { locale }),
                 unknown: m.passes_load_failed({}, { locale }),
-                covered: m.booking_pass_unlimited_covers({}, { locale }),
+                covered: undefined,
               }[coverage]
             }
-            reasonTone={coverage === "unknown" ? "error" : "info"}
+            reasonTone={
+              coverage === "unknown" && bar.reason === undefined
+                ? "error"
+                : "info"
+            }
           />
         )
       }

@@ -2,12 +2,22 @@ import { describe, expect, test } from "bun:test";
 import type { CustomerBookingQuote } from "@deskohub/workspace-customer-api";
 import { Option } from "effect";
 import { CustomerViewError } from "../../customer-api/customer-view-error";
+import { m } from "../../i18n/messages";
 import {
   BookingCatalogViewError,
   type BookingQueryViewError,
 } from "../data/booking-query-error";
-import { czk } from "../testing/sample-booking-catalog";
+import {
+  defaultCoworkDraft,
+  selectCoworkDate,
+} from "../selection/cowork-selection";
+import {
+  czk,
+  sampleBookableDates,
+  sampleOfferings,
+} from "../testing/sample-booking-catalog";
 import { openSpaceWithCoffee } from "../ui/testing/price-fixtures";
+import { coworkBookingModel } from "./cowork-booking-model";
 import { selectionBar } from "./selection-bar";
 
 const from = { title: "Open Space", amount: czk(232), unit: "per day" };
@@ -85,6 +95,60 @@ describe("selectionBar", () => {
     });
     expect(shown).toMatchObject({ action: "continue", disabled: false });
     expect(shown.reason).toBeUndefined();
+  });
+
+  test("a covered Open Space booking shows the cutoff when the selected day closes", () => {
+    const locale = "en-US";
+    const date = "2026-11-26";
+    const { offerings } = sampleOfferings(locale, date);
+    const bookableDates = sampleBookableDates(date, "cowork");
+    const draft = selectCoworkDate(defaultCoworkDraft(offerings), date);
+    const free = Option.some({
+      from: date,
+      to: date,
+      unavailableDates: [],
+      reservedDeskWorkstationRequiredDates: [],
+      unavailableCoworkTiers: [],
+      meetingRoomUnavailable: false,
+      officeUnavailable: false,
+      unavailableMonitorOptions: [],
+      notices: [],
+    });
+    const readyNotice = m.booking_pass_unlimited_covers({}, { locale });
+    const cutoff = m.booking_cowork_open_space_closed_today({}, { locale });
+    const at = (instant: string) => {
+      const model = coworkBookingModel({
+        draft,
+        now: new Date(instant),
+        offerings,
+        bookableDates,
+        availability: {
+          range: free,
+          selection: free,
+          workstationRequirement: Option.none(),
+        },
+      });
+      const closed = model.enablement.blockers.some(
+        (blocker) => blocker._tag === "OpenSpaceClosedToday"
+      );
+      return bar({
+        selection: model.selection,
+        quote: Option.some({ kind: "loaded", value: quote, refreshing: false }),
+        blocked: closed ? Option.some(cutoff) : Option.none(),
+        canContinue: Option.isSome(model.quotable),
+        readyNotice,
+      });
+    };
+    expect(at("2026-11-26T15:59:59Z")).toMatchObject({
+      action: "continue",
+      disabled: false,
+      reason: readyNotice,
+    });
+    expect(at("2026-11-26T16:00:00Z")).toMatchObject({
+      action: "continue",
+      disabled: true,
+      reason: cutoff,
+    });
   });
 
   test("a failed quote: no price, Try again when retrying can help", () => {

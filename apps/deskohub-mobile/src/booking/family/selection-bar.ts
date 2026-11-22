@@ -22,7 +22,7 @@ export interface SelectionBar {
    */
   readonly action: "continue" | "retry";
   readonly disabled: boolean;
-  /** Why Continue is off, under it. */
+  /** A blocker or a notice about the booking, shown under Continue. */
   readonly reason?: string;
 }
 
@@ -37,6 +37,7 @@ export const selectionBar = ({
   selection,
   quote,
   blocked,
+  readyNotice,
   canContinue,
   locale,
 }: {
@@ -61,6 +62,8 @@ export const selectionBar = ({
   readonly quote: Option.Option<BookingRead<CustomerBookingQuote>>;
   /** Why the selection can't continue, worded; none when nothing blocks it. */
   readonly blocked: Option.Option<string>;
+  /** Information to show once the booking can continue. */
+  readonly readyNotice?: string;
   readonly canContinue: boolean;
   readonly locale: AppLocale;
 }): SelectionBar => {
@@ -101,6 +104,7 @@ export const selectionBar = ({
       ...(retry || reason === undefined ? {} : { reason }),
     };
   }
+  const continueReason = reason ?? (canContinue ? readyNotice : undefined);
   return {
     summary:
       read?.kind === "loaded" && !read.refreshing
@@ -108,6 +112,6 @@ export const selectionBar = ({
         : unpriced({ kind: read === undefined ? "none" : "updating" }),
     action: "continue",
     disabled: !canContinue,
-    ...(reason === undefined ? {} : { reason }),
+    ...(continueReason === undefined ? {} : { reason: continueReason }),
   };
 };
