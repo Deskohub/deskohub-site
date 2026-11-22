@@ -49,7 +49,8 @@ export function PassPurchaseAgreement({
       <Text
         role="link"
         style={styles.link}
-        onPress={() => {
+        onPress={(event) => {
+          event.stopPropagation();
           if (document === undefined) return;
           const url = new URL(document.path, apiOrigin);
           if (url.origin === apiOrigin) void openSitePage(url.href);
