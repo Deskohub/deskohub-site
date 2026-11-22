@@ -82,14 +82,14 @@ export type UnlimitedPassOrderLink =
       readonly kind: "edit";
       readonly predecessorOrderIds: readonly OrderId[];
       readonly supersedeOrderId?: OrderId;
-      readonly legacyPredecessors?: true;
+      readonly legacyPredecessorOrderIds?: readonly OrderId[];
     }
   | {
       readonly kind: "submitted";
       readonly orderId: OrderId;
       readonly predecessorOrderIds: readonly OrderId[];
       readonly supersedeOrderId?: OrderId;
-      readonly legacyPredecessors?: true;
+      readonly legacyPredecessorOrderIds?: readonly OrderId[];
     };
 
 export const unlimitedCheckoutPredecessorLimit = 8;
@@ -138,15 +138,18 @@ export function getUnlimitedPassChoosePath(
     if (order.supersedeOrderId) {
       query.set("supersedeOrder", order.supersedeOrderId);
     }
-    if (order.predecessorOrderIds.length > 0) {
-      if (order.legacyPredecessors) {
-        query.set("predecessorMode", "legacy");
-      } else if (!order.supersedeOrderId) {
-        query.set("predecessorMode", "history");
-      }
+    if (
+      order.predecessorOrderIds.length > 0 &&
+      !order.supersedeOrderId &&
+      !order.legacyPredecessorOrderIds?.length
+    ) {
+      query.set("predecessorMode", "history");
     }
     for (const orderId of order.predecessorOrderIds) {
       query.append("predecessorOrder", orderId);
+    }
+    for (const orderId of order.legacyPredecessorOrderIds ?? []) {
+      query.append("legacyPredecessorOrder", orderId);
     }
   }
   return `/${locale}${unlimitedPassCheckoutPath}?${query}`;

@@ -822,11 +822,12 @@ test("editing Unlimited Details continues to the original order's payment status
   }
 });
 
-test("retrying an Unlimited draft keeps old predecessors without replacing them", async () => {
+test("retrying an Unlimited draft preserves only unresolved legacy predecessors", async () => {
   const orderId = orderIdSchema.make(crypto.randomUUID());
   const editedOrderId = orderIdSchema.make(crypto.randomUUID());
   const earlierOrderId = orderIdSchema.make(crypto.randomUUID());
-  let retired = [editedOrderId];
+  const legacyOrderId = orderIdSchema.make(crypto.randomUUID());
+  let retired = [editedOrderId, legacyOrderId];
   const beginCheckout = mock(async (_input: { orderId: OrderId }) => {
     const retiredPredecessorOrderIds = retired;
     retired = [];
@@ -841,7 +842,8 @@ test("retrying an Unlimited draft keeps old predecessors without replacing them"
           kind: "submitted",
           orderId,
           supersedeOrderId: editedOrderId,
-          predecessorOrderIds: [editedOrderId, earlierOrderId],
+          predecessorOrderIds: [editedOrderId, earlierOrderId, legacyOrderId],
+          legacyPredecessorOrderIds: [legacyOrderId],
         }}
         beginCheckout={beginCheckout}
       />
@@ -855,11 +857,13 @@ test("retrying an Unlimited draft keeps old predecessors without replacing them"
     expect.objectContaining({
       orderId,
       supersedeOrderId: editedOrderId,
-      supersedeOrderIds: [editedOrderId, earlierOrderId],
+      supersedeOrderIds: [editedOrderId, earlierOrderId, legacyOrderId],
+      legacyPredecessorOrderIds: [legacyOrderId],
     })
   );
   expect(checkoutUrl().searchParams.get("supersedeOrder")).toBeNull();
   expect(checkoutUrl().searchParams.get("predecessorMode")).toBe("history");
+  expect(checkoutUrl().searchParams.has("legacyPredecessorOrder")).toBe(false);
   expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
     earlierOrderId,
   ]);
@@ -876,6 +880,9 @@ test("retrying an Unlimited draft keeps old predecessors without replacing them"
   );
   expect(beginCheckout.mock.calls[1]?.[0]).not.toHaveProperty(
     "supersedeOrderId"
+  );
+  expect(beginCheckout.mock.calls[1]?.[0]).not.toHaveProperty(
+    "legacyPredecessorOrderIds"
   );
 });
 

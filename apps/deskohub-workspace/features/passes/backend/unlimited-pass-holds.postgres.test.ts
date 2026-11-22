@@ -1088,7 +1088,7 @@ it("Continue acknowledges retired predecessors when a stale date prevents a draf
           startDate: date(today.add({ days: 31 })),
         },
         supersedeOrderIds: [protectedDraft.id, ...retired],
-        legacyPredecessors: true,
+        legacyPredecessorOrderIds: [protectedDraft.id],
       });
       expect(legacy).toEqual({
         outcome: Result.fail(
@@ -1107,6 +1107,7 @@ it("Continue acknowledges retired predecessors when a stale date prevents a draf
           startDate: date(today.subtract({ days: 1 })),
         },
         supersedeOrderIds: [protectedDraft.id, ...retired],
+        legacyPredecessorOrderIds: retired.slice(0, 1),
       });
       expect(result).toEqual({
         outcome: Result.fail(

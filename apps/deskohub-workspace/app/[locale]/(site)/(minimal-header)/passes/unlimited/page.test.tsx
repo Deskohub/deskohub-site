@@ -325,7 +325,7 @@ test("reload before commit retains submitted and predecessor IDs without restori
       kind: "submitted",
       orderId: submittedOrder,
       predecessorOrderIds: [unresolvedOrder, ownedOrder],
-      legacyPredecessors: true,
+      legacyPredecessorOrderIds: [unresolvedOrder, ownedOrder],
     },
     initialDetails: {
       tier: "open-space",
@@ -344,12 +344,25 @@ test("a shipped edit link preserves ambiguous predecessors without prefilling ac
   expect(shipped.props.children.props.draft).toEqual({
     kind: "edit",
     predecessorOrderIds: [ownedOrder],
-    legacyPredecessors: true,
+    legacyPredecessorOrderIds: [ownedOrder],
   });
   const modern = await renderContent({ ...query, predecessorMode: "history" });
   expect(modern.props.children.props.draft).toEqual({
     kind: "edit",
     predecessorOrderIds: [ownedOrder],
+  });
+  const editedOrder = crypto.randomUUID();
+  const mixed = await renderContent({
+    ...query,
+    predecessorOrder: [editedOrder, ownedOrder],
+    supersedeOrder: editedOrder,
+    legacyPredecessorOrder: ownedOrder,
+  });
+  expect(mixed.props.children.props.draft).toEqual({
+    kind: "edit",
+    predecessorOrderIds: [editedOrder, ownedOrder],
+    supersedeOrderId: editedOrder,
+    legacyPredecessorOrderIds: [ownedOrder],
   });
 });
 

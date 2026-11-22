@@ -425,7 +425,9 @@ const beginUnlimitedAction = defineWorkspaceAction(
           supersedeOrderIds: Schema.optionalKey(
             unlimitedCheckoutPredecessorsSchema
           ),
-          legacyPredecessors: Schema.optionalKey(Schema.Literal(true)),
+          legacyPredecessorOrderIds: Schema.optionalKey(
+            unlimitedCheckoutPredecessorsSchema
+          ),
         }).check(
           Schema.makeFilter((input) =>
             input.holderEmail?.toLowerCase() === input.buyerEmail.toLowerCase()
@@ -465,7 +467,7 @@ const beginUnlimitedAction = defineWorkspaceAction(
           handoffToken: _,
           supersedeOrderId,
           supersedeOrderIds,
-          legacyPredecessors,
+          legacyPredecessorOrderIds,
           ...details
         } = input;
         const predecessorOrderIds = handoff
@@ -477,7 +479,10 @@ const beginUnlimitedAction = defineWorkspaceAction(
             ...(referralCode && { referralCode }),
             ...(handoff && { continueFromHandoff: true as const }),
             ...(!handoff && supersedeOrderId && { supersedeOrderId }),
-            ...(!handoff && legacyPredecessors && { legacyPredecessors }),
+            ...(!handoff &&
+              legacyPredecessorOrderIds && {
+                legacyPredecessorOrderIds,
+              }),
             ...(predecessorOrderIds && {
               supersedeOrderIds: predecessorOrderIds,
             }),
