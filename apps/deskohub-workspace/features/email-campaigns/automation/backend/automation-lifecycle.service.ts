@@ -194,7 +194,9 @@ export class AutomationLifecycle extends Context.Service<
                 loadAutomationWorkingCopy(input.campaignId)
               ),
               Effect.tap(({ copy }) => ensureNotArchived(copy)),
-              Effect.bind("flow", () => validatePublishableFlow(input.flow)),
+              Effect.bind("flow", ({ copy }) =>
+                validatePublishableFlow(input.flow, copy.campaign.purpose)
+              ),
               Effect.tap(({ flow }) =>
                 db
                   .update(emailCampaignAutomations)
@@ -446,12 +448,20 @@ const validateActivation = (input: {
             })
           )
     ),
-    Effect.flatMap(() => validatePublishableFlow(input.publishable.flow))
+    Effect.flatMap(() =>
+      validatePublishableFlow(
+        input.publishable.flow,
+        input.copy.campaign.purpose
+      )
+    )
   );
 
 /** The flow rules (§2, §3.3, §4.5) plus the database check of its references. */
-const validatePublishableFlow = (flow: AutomationFlow) =>
-  ensurePassReminderWritesAllowed(flow.trigger).pipe(
+const validatePublishableFlow = (
+  flow: AutomationFlow,
+  purpose: CampaignPurpose
+) =>
+  ensurePassReminderWritesAllowed(flow.trigger, purpose).pipe(
     Effect.andThen(validateAutomationFlow(flow)),
     Effect.tap((validated) => ensureReferencesExist(validated))
   );

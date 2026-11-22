@@ -183,7 +183,7 @@ export class AutomationDryRun extends Context.Service<
             })
           ),
           Effect.tap(({ flow }) =>
-            ensurePassReminderWritesAllowed(flow.trigger)
+            ensurePassReminderWritesAllowed(flow.trigger, copy.campaign.purpose)
           ),
           Effect.bind("audience", () =>
             Option.match(copy.audience, {
