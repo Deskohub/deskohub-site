@@ -19,8 +19,20 @@ export const agentToolAccessMetaKey = "cz.deskohub.workspace/access";
 export const getAgentToolSecuritySchemes = (tool: AgentToolAuthorization) =>
   Match.value(tool).pipe(
     Match.discriminatorsExhaustive("access")({
-      public: () => [{ type: "noauth" }],
-      "signed-in": ({ scope }) => [{ type: "oauth2", scopes: [scope] }],
+      public: ({ scopeWhenArgument }) => [
+        { type: "noauth" },
+        ...(scopeWhenArgument
+          ? [{ type: "oauth2", scopes: [scopeWhenArgument.scope] }]
+          : []),
+      ],
+      // The required scheme applies to ordinary calls. The additional
+      // scheme advertises the scope used when supplying the optional field.
+      "signed-in": ({ scope, scopeWhenArgument }) => [
+        { type: "oauth2", scopes: [scope] },
+        ...(scopeWhenArgument
+          ? [{ type: "oauth2", scopes: [scope, scopeWhenArgument.scope] }]
+          : []),
+      ],
       administration: () => [
         { type: "oauth2", scopes: [administrationAgentScope] },
       ],

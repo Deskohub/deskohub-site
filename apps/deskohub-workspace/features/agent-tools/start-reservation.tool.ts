@@ -7,6 +7,7 @@ import {
   BookingSelectionRejected,
   type QuoteSelection,
 } from "@/features/reservation/backend/booking-selection";
+import { buildEntryPackHoldAdvertisement } from "@/features/reservation/backend/entry-pack-booking";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
@@ -18,6 +19,12 @@ import { AgentToolError } from "./agent-tool-error";
 import { toAgentToolMoney } from "./agent-tool-money";
 import { CurrentCustomerAgentGrant } from "./customer-agent-caller";
 import {
+  passFundingField,
+  passFundingScope,
+  requireAgentPassesOpen,
+  withoutPassFunding,
+} from "./pass-funding";
+import {
   completeSelectionFields,
   resolveQuoteSelection,
 } from "./quote-selection";
@@ -26,7 +33,7 @@ import {
   startReservationResultSchema,
 } from "./start-reservation.schema";
 
-const inputSchema = Schema.Struct({
+const ordinaryInput = Schema.Struct({
   ...completeSelectionFields,
   early_setup: Schema.optionalKey(
     Schema.Boolean.annotate({
@@ -41,6 +48,10 @@ const inputSchema = Schema.Struct({
     })
   ),
   locale: agentToolLocaleField,
+});
+const inputSchema = Schema.Struct({
+  ...ordinaryInput.fields,
+  pass_id: passFundingField,
 });
 
 type StartReservationInput = typeof inputSchema.Type;
@@ -63,6 +74,7 @@ export const startReservationTool = defineSignedInAgentTool({
   description:
     "Holds a complete selection for the signed-in customer, with the same arguments as get_quote plus early_setup for a meeting room, and returns a pay_url. Give the pay_url to the customer: they check the order, accept the terms, and pay on the website before the link expires; this tool can't pay. The customer's account profile is the contact. Calling again with the same selection returns the same held order and pay_url until the link expires; a different selection replaces the unpaid hold you made before. A hold whose payment has started is kept, and holds made by other assistants are not affected.",
   scope: "reservations:create",
+  scopeWhenArgument: passFundingScope,
   accountBudget: startReservationAccountBudget,
   readOnly: false,
   // A different selection cancels the unpaid hold made before; the same
@@ -74,16 +86,34 @@ export const startReservationTool = defineSignedInAgentTool({
   output: startReservationResultSchema,
   run: Effect.fn("agentTools.startReservation")((input) =>
     Effect.succeed({ input }).pipe(
+      Effect.tap(({ input }) => {
+        if (input.pass_id === undefined) return Effect.void;
+        return input.family === "cowork"
+          ? requireAgentPassesOpen
+          : Effect.fail(AgentToolError.invalidInput("pass_id"));
+      }),
       Effect.let("locale", ({ input }) => getAgentToolLocale(input)),
       Effect.bind("now", () => currentInstant),
       Effect.bind("grant", () => CurrentCustomerAgentGrant),
       Effect.bind("quoted", resolveQuoteSelection),
       Effect.bind("selection", withEarlySetup),
       Effect.bind("contact", () => readBookingContact),
-      Effect.bind("advertised", ({ selection }) =>
-        buildAdvertisedPrice(selection.request).pipe(
-          Effect.mapError(AgentToolError.unavailable("reservation_unavailable"))
-        )
+      Effect.bind(
+        "advertised",
+        Effect.fnUntraced(function* ({ input, locale, selection }) {
+          if (input.pass_id !== undefined) {
+            return yield* buildEntryPackHoldAdvertisement({
+              reservation: selection.reservation,
+              locale,
+              passId: input.pass_id,
+            }).pipe(Effect.mapError(AgentToolError.passesUnavailable));
+          }
+          return yield* buildAdvertisedPrice(selection.request).pipe(
+            Effect.mapError(
+              AgentToolError.unavailable("reservation_unavailable")
+            )
+          );
+        })
       ),
       Effect.bind(
         "prepared",
@@ -93,6 +123,7 @@ export const startReservationTool = defineSignedInAgentTool({
             reservation: selection.reservation,
             contact,
             advertisedPriceToken: advertised.advertisedPriceToken,
+            ...(input.pass_id && { entryPackId: input.pass_id }),
             // Absent or false records nothing and withdraws nothing; the
             // booking operation labels a grant with the agent channel.
             marketingConsent: input.marketing_consent === true,
@@ -103,6 +134,11 @@ export const startReservationTool = defineSignedInAgentTool({
     )
   ),
 });
+
+export const startOrdinaryReservationTool = withoutPassFunding(
+  startReservationTool,
+  ordinaryInput
+);
 
 /**
  * Adds the early setup the customer asked for to a meeting-room selection.
@@ -147,6 +183,9 @@ const toStartReservationError = (
     Match.tag("WorkspaceTableUnavailableError", (cause) =>
       AgentToolError.refused("selection_unavailable")(cause)
     ),
+    Match.tag("EntryPackUnavailableError", (cause) =>
+      AgentToolError.refused("selection_unavailable")(cause)
+    ),
     Match.tag("AgentBookingProfileRequiredError", (cause) =>
       AgentToolError.refused("profile_incomplete")(cause)
     ),
@@ -181,7 +220,12 @@ const toStartReservationResult = ({
 }: {
   readonly input: StartReservationInput;
   readonly locale: Locale;
-  readonly advertised: Effect.Success<ReturnType<typeof buildAdvertisedPrice>>;
+  readonly advertised: {
+    readonly quote: Pick<
+      Effect.Success<ReturnType<typeof buildAdvertisedPrice>>["quote"],
+      "payment"
+    >;
+  };
   readonly prepared: Effect.Success<ReturnType<typeof prepareAgentPayState>>;
 }) =>
   Match.value(prepared).pipe(

@@ -7,7 +7,10 @@ import {
   readAgentAccessToken,
 } from "@/features/account";
 import { administrationAgentScope } from "@/features/account/agent-scopes";
-import type { AgentToolAuthorization } from "./agent-tool";
+import {
+  type AgentToolAuthorization,
+  getCustomerToolScopes,
+} from "./agent-tool";
 import type { McpRequest } from "./agent-tool-mcp-messages";
 import type { CustomerAgentCaller } from "./customer-agent-caller";
 
@@ -90,31 +93,24 @@ const authorizeCalledTools = Effect.fn("agentTools.authorizeCalledTools")(
       reason: CustomerAgentChallengeReason
     ) => Effect.Effect<never, AgentToolRequestRefused>;
   }) {
-    const calledTools = toolCalls.flatMap(({ params }) =>
-      tools.filter((tool) => tool.name === params.name)
-    );
-    yield* Effect.forEach(calledTools, (tool) =>
-      Match.value<AgentToolAuthorization>(tool).pipe(
-        Match.discriminatorsExhaustive("access")({
-          public: () => Effect.void,
-          "signed-in": ({ scope }) =>
-            Option.match(caller, {
-              onNone: () => refuse({ kind: "missing-token", scopes: [scope] }),
-              onSome: ({ grant }) =>
-                Effect.when(
-                  refuse({ kind: "insufficient-scope", scopes: [scope] }),
-                  Effect.sync(() => !grant.scopes.has(scope))
-                ),
-            }),
-          // Never challenged: an OAuth challenge naming `administration`
-          // would send a customer's agent, whose consent drops the scope,
-          // into a re-authorization loop. The tools are listed only after
-          // the live administrator check, and each call re-checks the grant
-          // and answers a refusal as a tool error.
-          administration: () => Effect.void,
+    // Administration tools have no customer scopes. Their live grant is
+    // checked separately, without sending a consent challenge to customers.
+    const scopes = [
+      ...new Set(
+        toolCalls.flatMap(({ params }) => {
+          const tool = tools.find(({ name }) => name === params.name);
+          return tool ? getCustomerToolScopes(tool, params.arguments) : [];
         })
-      )
-    );
+      ),
+    ];
+    if (scopes.length === 0) return;
+    yield* Option.match(caller, {
+      onNone: () => refuse({ kind: "missing-token", scopes }),
+      onSome: ({ grant }) =>
+        scopes.every((scope) => grant.scopes.has(scope))
+          ? Effect.void
+          : refuse({ kind: "insufficient-scope", scopes }),
+    });
   }
 );
 
@@ -224,7 +220,10 @@ const getChallengeResults = (
 const toolCallMessageSchema = Schema.Struct({
   id: Schema.Union([Schema.String, Schema.Number]),
   method: Schema.Literal("tools/call"),
-  params: Schema.Struct({ name: Schema.String }),
+  params: Schema.Struct({
+    name: Schema.String,
+    arguments: Schema.optionalKey(Schema.Json),
+  }),
 });
 
 type ToolCallMessage = typeof toolCallMessageSchema.Type;
@@ -232,5 +231,5 @@ type ToolCallMessage = typeof toolCallMessageSchema.Type;
 const decodeToolCall = Schema.decodeUnknownOption(toolCallMessageSchema);
 
 /** The tool calls among the request's JSON-RPC messages. */
-const getToolCalls = (messages: McpRequest["messages"]) =>
+export const getToolCalls = (messages: McpRequest["messages"]) =>
   messages.flatMap((message) => Option.toArray(decodeToolCall(message)));

@@ -7,6 +7,7 @@ export class CheckoutError extends Data.TaggedError("CheckoutError")<{
     | "office_reservation_ended"
     | "cowork_reservation_ended"
     | "cowork_offer_replaced"
+    | "entry_pack_unavailable"
     | "legal_consent_required"
     | "early_performance_consent_required";
   readonly message: string;

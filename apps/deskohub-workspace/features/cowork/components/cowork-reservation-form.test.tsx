@@ -599,6 +599,95 @@ describe("CoworkReservationForm advertised pricing", () => {
       expect(view.queryByRole("button", { name: "Use pass" })).toBeNull();
     });
 
+    test("offers a pack only on eligible dates and keeps other tiers bookable", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(jsonResponse(availabilityResponse))
+      ) as typeof fetch;
+      const date = dateOffsetFromToday(1);
+      const coveredDate = plainDateStringSchema.make(dateOffsetFromToday(2));
+      const openSpace = {
+        ...openSpacePack,
+        validFrom: plainDateStringSchema.make(date),
+        validUntil: plainDateStringSchema.make(dateOffsetFromToday(30)),
+      };
+      const reservedDesk = {
+        ...openSpace,
+        id: orderIdSchema.make("6fd5c251-6506-4697-8006-ca57bb324303"),
+        tier: "reserved-desk" as const,
+      };
+      const view = renderForm({
+        bookingPasses: {
+          packs: [
+            { ...openSpace, unavailableDates: [coveredDate] },
+            reservedDesk,
+          ],
+          claimedDates: [],
+        },
+        initialValues: { ...initialValues, date },
+      });
+
+      await view.findByRole("button", { name: "Use pass" });
+      await selectCalendarDate(view, coveredDate);
+      await waitFor(() =>
+        expect(
+          view
+            .getByRole("button", { name: "Continue" })
+            .hasAttribute("disabled")
+        ).toBe(false)
+      );
+      expect(Boolean(view.queryByRole("button", { name: "Use pass" }))).toBe(
+        false
+      );
+
+      await selectCalendarDate(view, date);
+      await view.findByRole("button", { name: "Use pass" });
+      await selectCalendarDate(view, coveredDate);
+      fireEvent.click(view.getByRole("radio", { name: /Reserved Desk/i }));
+      fireEvent.click(await view.findByRole("button", { name: "Use pass" }));
+      expect(window.location.search).toContain(`pass=${reservedDesk.id}`);
+      expect(view.getByText("Booking with your Entry pack")).toBeDefined();
+    });
+
+    test("a restored pack blocks an ineligible date until the holder picks another day", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(jsonResponse(availabilityResponse))
+      ) as typeof fetch;
+      const coveredDate = plainDateStringSchema.make(dateOffsetFromToday(1));
+      const nextDate = dateOffsetFromToday(2);
+      const pack = {
+        ...openSpacePack,
+        validFrom: coveredDate,
+        validUntil: plainDateStringSchema.make(dateOffsetFromToday(30)),
+        unavailableDates: [coveredDate],
+      };
+      const view = renderForm({
+        bookingPasses: { packs: [pack], claimedDates: [] },
+        initialEntryPack: { kind: "applied", packId: pack.id },
+        initialValues: { ...initialValues, date: coveredDate },
+      });
+
+      expect(
+        Boolean(view.queryByText("This pass can’t be used for booking"))
+      ).toBe(true);
+      expect(
+        view.getByRole("button", { name: "Continue" }).hasAttribute("disabled")
+      ).toBe(true);
+      fireEvent.click(view.getByRole("button", { name: /Reservation date/i }));
+      const dialog = await view.findByRole("dialog");
+      const blocked = await getCalendarDateButton(dialog, coveredDate);
+      expect(blocked.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(await getCalendarDateButton(dialog, nextDate));
+
+      expect(view.getByText("Booking with your Entry pack")).toBeDefined();
+      await waitFor(() =>
+        expect(
+          view
+            .getByRole("button", { name: "Continue" })
+            .hasAttribute("disabled")
+        ).toBe(false)
+      );
+    });
+
     const rejectAppliedPack = async () => {
       const { preparePayState } = await import(
         "@/features/reservation/actions/prepare-pay-state"

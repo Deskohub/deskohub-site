@@ -57,6 +57,7 @@ import { MarketingConsentLedger } from "@/features/legal/backend/marketing-conse
 import { MarketingPreferences } from "@/features/legal/backend/marketing-preferences.service";
 import { MeetingRoomReleaseGate } from "@/features/meeting-room/backend/meeting-room-release-gate";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { ReferralServiceMock } from "@/features/referrals/referral.service.mock";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { ReferralSignupIntentRepository } from "@/features/referrals/signup-intent.repository";
@@ -81,6 +82,7 @@ import { toWorkspaceWebHandler } from "@/shared/backend/workspace-effect";
 import { continueMutationsAfterDisconnect } from "@/shared/backend/workspace-http-api-route";
 import { makeMeetingPoint } from "@/shared/testing/overlapping-requests.test-utils";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import {
   CustomerAccountLayers,
   type CustomerAccountServiceLayers,
@@ -96,6 +98,10 @@ import {
 } from "./customer-booking-checkout-layers";
 import { CustomerCheckoutOperations } from "./customer-checkout-operations.service";
 import { CustomerInvitedReservationsService } from "./customer-invited-reservations.service";
+import {
+  type CustomerPassLayerSet,
+  CustomerPassLayers,
+} from "./customer-pass-layers";
 import {
   CustomerReservationLayers,
   type CustomerReservationServiceLayers,
@@ -144,6 +150,7 @@ export type CustomerApiTestOptions = {
    * implemented, like `services`.
    */
   readonly reservations?: Partial<CustomerReservationServiceLayers>;
+  readonly passes?: Partial<CustomerPassLayerSet>;
 };
 
 /**
@@ -207,6 +214,10 @@ export const makeCustomerApiTestServer = (
     Layer.succeed(CustomerReservationLayers, {
       ...unusedReservationServices,
       ...options.reservations,
+    }),
+    CustomerPassLayers.withLayers({
+      release: CoworkPassesReleaseGate.fromDecision(false),
+      ...options.passes,
     })
   );
 
@@ -388,6 +399,13 @@ const unusedBookingCatalog: CustomerBookingCatalogLayerSet = {
     TestSealedStateKeys
   ),
   sealedStateKeys: TestSealedStateKeys,
+  entryPackQuote: Layer.mergeAll(
+    CoworkPassesReleaseGate.fromDecision(false),
+    Layer.mock(CurrentCustomerAccount, {}),
+    Layer.unwrap(
+      Effect.promise(async () => (await makeRecordingWorkspaceDatabase()).layer)
+    )
+  ),
   releases: {
     meetingRoom: MeetingRoomReleaseGate.fromDecision(true),
     office: OfficeReleaseGate.fromDecision(false),
@@ -400,6 +418,7 @@ const unusedBookingCheckout: CustomerBookingCheckoutLayerSet = {
   operations: Layer.mock(CustomerCheckoutOperations, {}),
   checkout: Layer.mock(CheckoutService, {}),
   inventory: Layer.mock(AdvisoryAvailabilityInventory, {}),
+  passes: CoworkPassesReleaseGate.fromDecision(false),
   releases: {
     office: OfficeReleaseGate.fromDecision(false),
     overnightStay: OvernightStayReleaseGate.fromDecision(false),

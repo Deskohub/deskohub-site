@@ -4,6 +4,7 @@ import {
   type WorkspaceDatabaseClient,
   WorkspaceTransaction,
 } from "@/db/database.service";
+import { customerAccounts } from "@/db/schema/customer-accounts";
 import { passEntryClaims } from "@/db/schema/pass-entry-claims";
 import { passPurchases } from "@/db/schema/pass-purchases";
 import { workspaceReservations } from "@/db/schema/workspace-reservations";
@@ -14,6 +15,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import type { PlainDate } from "@/shared/utils/temporal";
 import type { PassTier } from "../pass-offer";
 import { hasClaimablePassOrder } from "./entry-pack-payment-eligibility";
+import { getUnlimitedPassCoverageTiers } from "./unlimited-pass-window";
 
 export class EntryPackUnavailableError extends Data.TaggedError(
   "EntryPackUnavailableError"
@@ -46,15 +48,66 @@ const passForBooking = (
     sql`${passPurchases.validFrom} <= ${request.date} and ${request.date} < ${passPurchases.validUntil}`
   );
 
-/** Quotes only the verified holder's active pack for the exact booking date. */
+/** The same eligibility for a new quote, a new claim and a released claim. */
+const requireAvailableEntry = Effect.fn("requireAvailableEntry")(function* (
+  db: WorkspaceDatabaseClient,
+  request: EntryPackRedemption,
+  entryCount: number
+) {
+  const [used] = yield* db
+    .select({ entries: count() })
+    .from(passEntryClaims)
+    .where(
+      and(
+        eq(passEntryClaims.passId, request.passId),
+        ne(passEntryClaims.status, "released")
+      )
+    );
+  if ((used?.entries ?? 0) >= entryCount) {
+    return yield* new EntryPackUnavailableError({});
+  }
+
+  const [sameDate] = yield* db
+    .select({ reservationId: passEntryClaims.reservationId })
+    .from(passEntryClaims)
+    .innerJoin(passPurchases, eq(passPurchases.id, passEntryClaims.passId))
+    .where(
+      and(
+        eq(passPurchases.holderAccountId, request.holderAccountId),
+        eq(passEntryClaims.date, request.date),
+        ne(passEntryClaims.status, "released")
+      )
+    )
+    .limit(1);
+  if (
+    sameDate ||
+    (yield* getUnlimitedPassCoverageTiers(db, request)).has(request.tier)
+  ) {
+    return yield* new EntryPackUnavailableError({});
+  }
+});
+
+/** Reads the holder's active pack. New quotes also check its remaining entries. */
 export const loadEntryPackRedemption = Effect.fn("loadEntryPackRedemption")(
-  function* (db: WorkspaceDatabaseClient, request: EntryPackRequest) {
+  function* (
+    db: WorkspaceDatabaseClient,
+    request: EntryPackRequest,
+    forNewQuote = false
+  ) {
     const [pass] = yield* db
-      .select({ tier: passPurchases.tier })
+      .select({
+        tier: passPurchases.tier,
+        entryCount: passPurchases.entryCount,
+      })
       .from(passPurchases)
       .where(passForBooking(db, request));
-    if (!pass) return yield* new EntryPackUnavailableError({});
-    return { ...request, tier: pass.tier };
+    if (!pass || pass.entryCount === null) {
+      return yield* new EntryPackUnavailableError({});
+    }
+    const redemption = { ...request, tier: pass.tier };
+    if (forNewQuote)
+      yield* requireAvailableEntry(db, redemption, pass.entryCount);
+    return redemption;
   }
 );
 
@@ -82,6 +135,20 @@ export const checkEntryPackClaim = Effect.fn("checkEntryPackClaim")(function* (
 ) {
   const { db } = yield* WorkspaceTransaction;
   yield* WorkspaceLocks.entryPackHolder(request.holderAccountId);
+  // Unlimited activation, extension and reassignment take this same holder
+  // row lock before adding coverage. Read it under the lock at admission.
+  const [holder] = yield* db
+    .select({ id: customerAccounts.id })
+    .from(customerAccounts)
+    .where(
+      and(
+        eq(customerAccounts.id, request.holderAccountId),
+        isNull(customerAccounts.deletedAt)
+      )
+    )
+    .for("no key update");
+  if (!holder) return yield* new EntryPackUnavailableError({});
+
   const [pass] = yield* db
     .select({
       tier: passPurchases.tier,
@@ -110,32 +177,14 @@ export const checkEntryPackClaim = Effect.fn("checkEntryPackClaim")(function* (
   ) {
     return yield* new EntryPackUnavailableError({});
   }
+  // A claim that won admission can still finish. A released claim has to
+  // qualify again, including against coverage added after the first hold.
   if (existing?.status === "reserved") return;
-
-  const [used] = yield* db
-    .select({ entries: count() })
-    .from(passEntryClaims)
-    .where(
-      and(
-        eq(passEntryClaims.passId, request.passId),
-        ne(passEntryClaims.status, "released")
-      )
-    );
-  const [sameDate] = yield* db
-    .select({ reservationId: passEntryClaims.reservationId })
-    .from(passEntryClaims)
-    .innerJoin(passPurchases, eq(passPurchases.id, passEntryClaims.passId))
-    .where(
-      and(
-        eq(passPurchases.holderAccountId, request.holderAccountId),
-        eq(passEntryClaims.date, request.date),
-        ne(passEntryClaims.status, "released")
-      )
-    )
-    .limit(1);
-  if ((used?.entries ?? 0) >= pass.entryCount || sameDate) {
-    return yield* new EntryPackUnavailableError({});
-  }
+  yield* requireAvailableEntry(
+    db,
+    { ...request, tier: pass.tier },
+    pass.entryCount
+  );
 });
 
 export const reserveEntryPackClaim = Effect.fn("reserveEntryPackClaim")(

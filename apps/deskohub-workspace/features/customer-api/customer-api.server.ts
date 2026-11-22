@@ -20,6 +20,8 @@ import { CustomerBookingCheckoutLayers } from "./customer-booking-checkout-layer
 import { CustomerBookingApiHandlers } from "./customer-booking-handlers";
 import { CustomerCompaniesApiHandlers } from "./customer-company-handlers";
 import { CustomerInvoicesApiHandlers } from "./customer-invoice-handlers";
+import { CustomerPassApiHandlers } from "./customer-pass-handlers";
+import { CustomerPassLayers } from "./customer-pass-layers";
 import {
   CustomerRequestOriginCheckLive,
   CustomerSessionAuthenticationLive,
@@ -46,7 +48,8 @@ export const makeWorkspaceCustomerApiLayer = () =>
           Layer.fresh(CustomerReservationsApiHandlers),
           Layer.fresh(CustomerBookingApiHandlers),
           Layer.fresh(CustomerInvoicesApiHandlers),
-          Layer.fresh(CustomerCompaniesApiHandlers)
+          Layer.fresh(CustomerCompaniesApiHandlers),
+          Layer.fresh(CustomerPassApiHandlers)
         )
       ),
       Layer.provide(
@@ -75,6 +78,7 @@ const provideWorkspaceCustomerApiServices = <A, E, R>(
         CustomerReservationLayers.Live,
         CustomerBookingCatalogLayers.Live,
         CustomerBookingCheckoutLayers.Live,
+        CustomerPassLayers.Live,
         CustomerAuthentication.Default,
         CustomerRequestOrigins.Default,
         RequestBudget.Live

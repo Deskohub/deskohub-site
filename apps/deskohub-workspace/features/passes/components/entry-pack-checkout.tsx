@@ -24,6 +24,7 @@ import type {
   PassPurchaseBuyer,
   passPurchaseDetailsSchema,
 } from "../pass-purchase-details";
+import { getPassCheckoutHandoffPath } from "../routes";
 import { EntryPackChoose } from "./entry-pack-choose";
 import { EntryPackDetails } from "./entry-pack-details";
 import { EntryPackPay } from "./entry-pack-pay";
@@ -53,7 +54,7 @@ export function EntryPackCheckout({
   validity,
   discountCodeEntryEnabled,
   continuation,
-  retryPayment,
+  initialPayment,
 }: {
   readonly buyer: PassPurchaseBuyer;
   readonly locale: Locale;
@@ -65,12 +66,15 @@ export function EntryPackCheckout({
     readonly orderId: OrderId;
     readonly holderEmail?: string;
     readonly validUntil?: string;
+    readonly handoffToken?: string;
   };
-  readonly retryPayment?: {
+  readonly initialPayment?: {
     readonly orderId: OrderId;
     readonly state: EntryPackPayState;
   };
 }) {
+  const retryingPayment =
+    initialPayment?.state.priorPaymentAttemptId !== undefined;
   const [product, setProduct] = useState(initialProduct);
   const [savedOrderId, setSavedOrderId] = useState(continuation?.orderId);
   const [confirmedValidity, setConfirmedValidity] = useState(
@@ -79,7 +83,7 @@ export function EntryPackCheckout({
   const displayedValidity = confirmedValidity
     ? { ...validity, [product.size]: confirmedValidity }
     : validity;
-  const [step, setStep] = useState<Step>(retryPayment ? "pay" : initialStep);
+  const [step, setStep] = useState<Step>(initialPayment ? "pay" : initialStep);
   const [details, setDetails] = useState<DetailsSchema["Encoded"] | undefined>(
     continuation?.holderEmail === undefined
       ? undefined
@@ -94,7 +98,7 @@ export function EntryPackCheckout({
         state: EntryPackPayState;
       }
     | undefined
-  >(retryPayment);
+  >(initialPayment);
   const [error, setError] = useState<string>();
   const [paymentRequested, setPaymentRequested] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -125,6 +129,10 @@ export function EntryPackCheckout({
       };
     }
     const { orderId } = attempt.current;
+    const handoffToken =
+      !payment && continuation?.orderId === orderId
+        ? continuation.handoffToken
+        : undefined;
     const revision = ++detailsRevision.current;
     try {
       const result = await beginEntryPackCheckout({
@@ -132,6 +140,7 @@ export function EntryPackCheckout({
         product,
         locale,
         buyerEmail: buyer.email,
+        ...(handoffToken && { handoffToken }),
         ...(holderEmail !== undefined && { holderEmail }),
         ...(values.buyerProfile !== undefined && {
           buyerProfile: values.buyerProfile,
@@ -142,13 +151,19 @@ export function EntryPackCheckout({
         window.location.assign(
           getAccountSignInPath(
             locale,
-            getEntryPackDetailsPath(
-              locale,
-              product,
-              savedOrderId === orderId ? savedOrderId : undefined
-            )
+            handoffToken
+              ? getPassCheckoutHandoffPath(locale, "entry-pack", handoffToken)
+              : getEntryPackDetailsPath(
+                  locale,
+                  product,
+                  savedOrderId === orderId ? savedOrderId : undefined
+                )
           )
         );
+        return;
+      }
+      if (result.data?.status === "status") {
+        window.location.assign(result.data.statusPath);
         return;
       }
       if (result.data?.status === "ready") {
@@ -201,9 +216,24 @@ export function EntryPackCheckout({
               chooseSpace: { onSelect: () => moveTo("choose") },
             }),
             ...(step === "pay" &&
-              !retryPayment &&
+              !retryingPayment &&
               !paymentRequested && {
-                contact: { onSelect: () => moveTo("details") },
+                contact: {
+                  onSelect: () => {
+                    if (initialPayment && payment) {
+                      window.history.replaceState(
+                        null,
+                        "",
+                        getEntryPackDetailsPath(
+                          locale,
+                          product,
+                          payment.orderId
+                        )
+                      );
+                    }
+                    moveTo("details");
+                  },
+                },
               }),
           }}
         />
@@ -255,16 +285,18 @@ export function EntryPackCheckout({
           locale={locale}
           orderId={payment.orderId}
           state={payment.state}
-          discountCodeEntryEnabled={discountCodeEntryEnabled && !retryPayment}
+          discountCodeEntryEnabled={
+            discountCodeEntryEnabled && !retryingPayment
+          }
           continuationPath={
-            retryPayment
+            initialPayment
               ? getEntryPackPayPath(locale, payment.orderId)
               : undefined
           }
           headingRef={heading}
           onRequestPayment={() => setPaymentRequested(true)}
           onExpire={() => {
-            if (retryPayment) {
+            if (retryingPayment) {
               window.location.replace(
                 `/${locale}${reservationStatusPath}/${payment.orderId}`
               );

@@ -2,6 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
+import { testCustomerSession } from "@/features/account/backend/account-operations.test-utils";
+import {
+  CurrentCustomerAccount,
+  requireVerifiedIdentity,
+} from "@/features/account/backend/current-customer-account";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { makeAccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
@@ -10,6 +15,12 @@ import { quoteCoworkEntryPack } from "@/features/checkout/backend/checkout/cowor
 import { LatePaymentRecoveryRepository } from "@/features/checkout/backend/repositories/late-payment-recovery.repository";
 import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { paymentAbandonedAfterProviderCutoffFailureCode } from "@/features/checkout/backend/repositories/payment-lifecycle-state";
+import { loadCoworkBookingPasses } from "@/features/cowork/backend/cowork-booking-passes";
+import {
+  currentAccountResolving,
+  customerApiRequest,
+  makeCustomerApiTestServer,
+} from "@/features/customer-api/customer-api.test-utils";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { orderIdSchema } from "@/features/order";
 import { makeTestReservationAuditAttempt } from "@/features/reservation/backend/reservation-audit.test-utils";
@@ -29,6 +40,7 @@ import {
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
+import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate";
 
 describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
   "Entry pack claims on disposable PostgreSQL",
@@ -55,7 +67,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       await database?.close();
     });
 
-    const seedPack = async () => {
+    const seedPassOrder = async () => {
       const passId = orderIdSchema.make(crypto.randomUUID());
       await database.pool.query(
         `insert into orders
@@ -63,11 +75,57 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           values ($1, 'pass-purchase', 'fixture-buyer', 'paid', 'fulfilled', now(), now())`,
         [passId]
       );
+      return passId;
+    };
+
+    const seedPack = async (
+      tier: "open-space" | "reserved-desk" = "open-space",
+      holderAccountId = holder
+    ) => {
+      const passId = await seedPassOrder();
       await database.pool.query(
         `insert into pass_purchases
           (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
-          values ($1, $2, $3, 'entry-pack', 'open-space', 5, 'active', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
-        [passId, buyer, holder]
+          values ($1, $2, $3, 'entry-pack', $4, 5, 'active', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
+        [passId, buyer, holderAccountId, tier]
+      );
+      return passId;
+    };
+
+    const seedUnlimited = async ({
+      validFrom,
+      validUntil,
+      accessEndsOn = null,
+      holderAccountId = holder,
+      status = "active",
+      tier = "open-space",
+    }: {
+      readonly validFrom: string;
+      readonly validUntil: string;
+      readonly accessEndsOn?: string | null;
+      readonly holderAccountId?: typeof holder;
+      readonly status?:
+        | "active"
+        | "pending_payment"
+        | "cancelled"
+        | "withdrawn";
+      readonly tier?: "open-space" | "reserved-desk";
+    }) => {
+      const passId = await seedPassOrder();
+      await database.pool.query(
+        `insert into pass_purchases
+          (id, buyer_account_id, holder_account_id, product, tier, status, valid_from, valid_until, access_ends_on, unlimited_coffee, quote, locale, created_at)
+          values ($1, $2, $3, 'unlimited', $4, $5, $6, $7, $8, case when $4 = 'open-space' then false end, '{}', 'en-US', now())`,
+        [
+          passId,
+          buyer,
+          holderAccountId,
+          tier,
+          status,
+          validFrom,
+          validUntil,
+          accessEndsOn,
+        ]
       );
       return passId;
     };
@@ -192,6 +250,205 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       });
       expect(await status(buyerDraft)).toBeUndefined();
       expect(await status(endDateDraft)).toBeUndefined();
+    });
+
+    test.each([
+      { status: "cancelled", date: "2099-06-05", cutoff: "2099-06-06" },
+      { status: "withdrawn", date: "2099-06-07", cutoff: "2099-06-08" },
+    ] as const)(
+      "blocks retained $status coverage through its last included day",
+      async ({ status: passStatus, date: coveredDate, cutoff }) => {
+        await seedUnlimited({
+          status: passStatus,
+          validFrom: coveredDate,
+          validUntil: "2099-06-30",
+          accessEndsOn: cutoff,
+        });
+        await seedUnlimited({
+          tier: "reserved-desk",
+          validFrom: cutoff,
+          validUntil: "2099-06-10",
+        });
+        const passId = await seedPack();
+        const covered = await draft(coveredDate);
+        await expect(claim(covered, passId, coveredDate)).rejects.toMatchObject(
+          {
+            _tag: "EntryPackUnavailableError",
+          }
+        );
+        expect(await status(covered)).toBeUndefined();
+        expect(await claim(await draft(cutoff), passId, cutoff)).toBe(true);
+      }
+    );
+
+    test("reads newly activated Unlimited coverage after waiting on the holder row", async () => {
+      const serviceDate = "2099-06-29";
+      const unlimitedId = await seedUnlimited({
+        status: "pending_payment",
+        validFrom: serviceDate,
+        validUntil: "2099-07-01",
+      });
+      const passId = await seedPack();
+      const reservation = await draft(serviceDate);
+      // Use the same holder row lock that the activation transaction takes.
+      const activation = await holdPostgresTransaction(
+        database.pool,
+        `with holder_lock as (
+           select id from customer_accounts where id = $1 for no key update
+         )
+         update pass_purchases set status = 'active'
+         from holder_lock where pass_purchases.id = $2
+           and pass_purchases.holder_account_id = holder_lock.id`,
+        [holder, unlimitedId]
+      );
+      const admission = claim(reservation, passId, serviceDate).then(
+        () => "admitted",
+        (failure) => failure
+      );
+      try {
+        await waitForPostgresLockWaiter(database.pool, {
+          condition: "$1 = any(pg_blocking_pids(pid))",
+          values: [activation.pid],
+          description: "Entry pack admission to wait on Unlimited activation",
+        });
+      } finally {
+        await activation.commit();
+      }
+      expect(await admission).toMatchObject({
+        _tag: "EntryPackUnavailableError",
+      });
+      expect(await status(reservation)).toBeUndefined();
+    });
+
+    test("booking options respect days reserved by an unclaimed Unlimited gift without revealing it", async () => {
+      const serviceDate = "2099-06-04";
+      const passId = await seedPack();
+      await database.pool.query(
+        "update pass_purchases set gift_claimed_at = now() where id = $1",
+        [passId]
+      );
+      const api = makeCustomerApiTestServer({
+        session: { ...testCustomerSession, accountId: holder },
+        reservations: {
+          currentAccount: currentAccountResolving((session) => ({
+            kind: "profile-missing",
+            session,
+            reviewMarker: "absent",
+          })),
+        },
+        passes: {
+          database: database.layer,
+          release: CoworkPassesReleaseGate.fromDecision(true),
+        },
+      });
+      const options = () =>
+        api.handle(
+          customerApiRequest({
+            method: "GET",
+            path: `/passes/options?date=${serviceDate}&tier=open-space`,
+          })
+        );
+      const before = await options();
+      expect(before.status).toBe(200);
+      expect(await before.json()).toMatchObject({
+        entryPacks: expect.arrayContaining([
+          expect.objectContaining({ passId }),
+        ]),
+        suggestedPackId: expect.any(String),
+      });
+
+      const unlimitedId = await seedUnlimited({
+        validFrom: serviceDate,
+        validUntil: "2099-06-05",
+      });
+      await database.pool.query(
+        "update pass_purchases set gift_issued_at = now() where id = $1",
+        [unlimitedId]
+      );
+      const after = await options();
+      expect(after.status).toBe(200);
+      expect(await after.json()).toEqual({ entryPacks: [] });
+      const reservation = await draft(serviceDate);
+      await expect(
+        claim(reservation, passId, serviceDate)
+      ).rejects.toMatchObject({
+        _tag: "EntryPackUnavailableError",
+      });
+    });
+
+    test("website booking projects only the holder's same-tier blocked Entry dates", async () => {
+      const recipient = customerAccountIdSchema.make(crypto.randomUUID());
+      await database.pool.query(
+        "insert into customer_accounts (id) values ($1)",
+        [recipient]
+      );
+      const openSpaceId = await seedPack("open-space", recipient);
+      const reservedDeskId = await seedPack("reserved-desk", recipient);
+      const unlimitedId = await seedUnlimited({
+        validFrom: "2099-06-24",
+        validUntil: "2099-06-29",
+        accessEndsOn: "2099-06-26",
+        holderAccountId: recipient,
+        status: "withdrawn",
+      });
+      await database.pool.query(
+        "update pass_purchases set gift_issued_at = now() where id = $1",
+        [unlimitedId]
+      );
+      const read = (accountId?: typeof holder) =>
+        Effect.runPromise(
+          loadCoworkBookingPasses(undefined).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                database.layer,
+                Layer.mock(CurrentCustomerAccount, {
+                  requireActive: requireVerifiedIdentity(
+                    accountId ? { ...testCustomerSession, accountId } : null
+                  ),
+                })
+              )
+            )
+          )
+        );
+      const booking = await read(recipient);
+      const openSpace = booking.packs.find(({ id }) => id === openSpaceId);
+      const reservedDesk = booking.packs.find(
+        ({ id }) => id === reservedDeskId
+      );
+      expect(openSpace?.unavailableDates).toEqual(["2099-06-24", "2099-06-25"]);
+      expect(reservedDesk?.id).toBe(reservedDeskId);
+      expect(reservedDesk?.unavailableDates).toBeUndefined();
+      expect(JSON.stringify(booking)).not.toContain(unlimitedId);
+      for (const accountId of [buyer, undefined]) {
+        expect(await read(accountId)).toEqual({ packs: [], claimedDates: [] });
+      }
+    });
+
+    test("keeps an admitted Entry claim and rejects readmission after coverage starts", async () => {
+      const serviceDate = "2099-06-28";
+      const passId = await seedPack();
+      const reservation = await draft(serviceDate);
+      expect(await claim(reservation, passId, serviceDate)).toBe(true);
+      await seedUnlimited({
+        validFrom: serviceDate,
+        validUntil: "2099-06-29",
+      });
+      const check = () =>
+        runReservations((repository) =>
+          repository.checkEntryPackAvailable(reservation.id, {
+            passId,
+            holderAccountId: holder,
+            date: date(serviceDate),
+            tier: "open-space",
+          })
+        );
+      await check();
+      expect(await status(reservation)).toBe("reserved");
+      await cancelHold(reservation);
+      await expect(check()).rejects.toMatchObject({
+        _tag: "EntryPackUnavailableError",
+      });
+      expect(await status(reservation)).toBe("released");
     });
 
     test("serializes the same Prague date across two packs", async () => {

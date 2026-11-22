@@ -3,12 +3,23 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { Locale } from "@/features/i18n";
+import type { OrderId } from "@/features/order";
 import type { ReservationFormSubmission } from "@/features/reservation/components/reservation-checkout-form";
 import type { OfficeReservationDetails } from "@/features/reservation/office-reservation";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
 import { getReservationStartPath } from "@/features/reservation/routes";
 import { publishReservationForm, useQuoteTool } from "./site-tool-catalog";
 import { getModelContext } from "./webmcp-detection";
+
+export type SiteToolEntryPackQuote = {
+  readonly passId: OrderId;
+  readonly token: string;
+};
+
+export type SiteToolReservationIntent = {
+  readonly entryPackQuote?: SiteToolEntryPackQuote;
+  readonly isCurrent: () => boolean;
+};
 
 /** The mounted reservation form as the `prepare_reservation` tool drives it. */
 export type SiteToolReservationForm = {
@@ -19,6 +30,9 @@ export type SiteToolReservationForm = {
   readonly giveMarketingConsent: () => void;
   /** Sets the selection a reservation link names; whether any value changed. */
   readonly applySelection: (searchParams: URLSearchParams) => boolean;
+  readonly captureSelection: (searchParams: URLSearchParams) => () => boolean;
+  readonly entryPackId?: OrderId;
+  readonly applyEntryPack?: (passId: OrderId) => boolean;
   /** The office interval and seats after availability adjustments. */
   readonly officeSelection?: OfficeReservationDetails;
   readonly readiness: {
@@ -28,7 +42,8 @@ export type SiteToolReservationForm = {
     readonly unavailableMessage?: string;
   };
   readonly submit: (
-    marketingConsentSource: "site_tool" | undefined
+    marketingConsentSource: "site_tool" | undefined,
+    intent: SiteToolReservationIntent
   ) => Promise<ReservationFormSubmission>;
 };
 

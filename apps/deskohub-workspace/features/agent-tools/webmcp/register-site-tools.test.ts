@@ -12,7 +12,7 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
-import { registerReadSiteTools } from "./register-site-tools";
+import { registerSiteTools } from "./register-site-tools";
 import type { ModelContext } from "./webmcp";
 import {
   agentToolEventStream,
@@ -20,6 +20,7 @@ import {
   mockAgentToolEndpoint,
   pendingBodyResponse,
   publishedAgentTools,
+  publishedFundedQuoteTool,
   recordUnhandledRejections,
 } from "./webmcp.test-utils";
 
@@ -27,14 +28,14 @@ let modelContext: ReturnType<typeof installFakeModelContext>;
 let endpoint: ReturnType<typeof mockAgentToolEndpoint>;
 
 const register = (signal = new AbortController().signal) =>
-  registerReadSiteTools({
+  registerSiteTools({
     locale: "cs-CZ",
     modelContext: (document as Document & { modelContext: ModelContext })
       .modelContext,
     signal,
   });
 
-describe("registerReadSiteTools", () => {
+describe("registerSiteTools", () => {
   beforeAll(() => {
     registerWorkspaceComponentTestEnv();
   });
@@ -100,6 +101,62 @@ describe("registerReadSiteTools", () => {
         .map(({ name }) => name)
         .filter((name) => !modelContext.registered.has(name))
     ).toEqual(["start_reservation", "show_booking"]);
+  });
+
+  test("uses the browser session to call pass tools and fetch their quote summaries", async () => {
+    const passId = "11111111-1111-4111-8111-111111111111";
+    const purchase = {
+      ...publishedFundedQuoteTool,
+      name: "start_pass_purchase",
+      annotations: { readOnlyHint: false },
+    };
+    endpoint.restore();
+    endpoint = mockAgentToolEndpoint(
+      ({ params }) =>
+        agentToolEventStream({
+          structuredContent:
+            params.name === "get_quote"
+              ? {
+                  total: { amount: 0, currency: "CZK" },
+                }
+              : {
+                  pay_url:
+                    "https://deskohub.test/en-US/passes/entry-pack?step=pay",
+                },
+        }),
+      ({ path }) =>
+        agentToolEventStream({
+          tools:
+            path === "/api/mcp/web"
+              ? [publishedFundedQuoteTool, purchase]
+              : [publishedFundedQuoteTool],
+        })
+    );
+    await register();
+    expect(endpoint.requests.map(({ path }) => path)).toEqual([
+      "/api/mcp",
+      "/api/mcp/web",
+    ]);
+    expect([...modelContext.registered.keys()]).toEqual([
+      "get_quote",
+      "start_pass_purchase",
+    ]);
+    const starter = modelContext.getTool("start_pass_purchase");
+    expect(starter.annotations).toEqual({
+      readOnlyHint: false,
+      consequentialHint: true,
+    });
+    expect(await starter.execute({})).toEqual({
+      pay_url: "https://deskohub.test/en-US/passes/entry-pack?step=pay",
+    });
+
+    const quote = modelContext.getTool("get_quote");
+    expect(await quote.execute({ pass_id: passId })).toEqual({
+      total: { amount: 0, currency: "CZK" },
+    });
+    expect(endpoint.requests.at(-1)?.path).toBe("/api/mcp/web");
+    await quote.execute({});
+    expect(endpoint.requests.at(-1)?.path).toBe("/api/mcp");
   });
 
   test("unregisters every tool when the registration aborts", async () => {

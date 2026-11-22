@@ -129,6 +129,36 @@ export {
 } from "./customer-invoices-api";
 export { CustomerLocale, customerSignInLocaleHeader } from "./customer-locale";
 export {
+  BeginCustomerPassPurchase,
+  CustomerPassPayment,
+  CustomerPassPurchase,
+  CustomerPassPurchaseDisclosure,
+  CustomerPassPurchasePrice,
+  CustomerPassPurchasePriceUpdate,
+  CustomerPassPurchaseProduct,
+  CustomerPassPurchaseRefused,
+  CustomerPassPurchaseState,
+  CustomerPassPurchaseStatus,
+  CustomerUnlimitedPassSelection,
+  CustomerUnlimitedStartDates,
+  SubmitCustomerPassPurchase,
+  UpdateCustomerPassPurchasePrice,
+} from "./customer-pass-purchase-api";
+export {
+  CustomerEntryPackProduct,
+  CustomerEntryPackSize,
+  CustomerHeldEntryPack,
+  CustomerHeldUnlimitedPass,
+  CustomerPassBookingOptions,
+  CustomerPassCatalog,
+  CustomerPassesUnavailable,
+  CustomerPassId,
+  CustomerPassList,
+  CustomerPassNotFound,
+  CustomerPassTier,
+  CustomerUnlimitedAccess,
+} from "./customer-pass-reads-api";
+export {
   accountPhoneRegion,
   accountProfileSchemas,
   CustomerProfile,

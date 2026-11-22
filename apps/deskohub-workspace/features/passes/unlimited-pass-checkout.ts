@@ -78,14 +78,27 @@ export function readUnlimitedPassSelection(query: {
 export type UnlimitedPassOrderLink =
   | { readonly kind: "resume"; readonly orderId: OrderId }
   | { readonly kind: "replace"; readonly orderId: OrderId }
-  | { readonly kind: "edit"; readonly predecessorOrderIds: readonly OrderId[] }
+  | {
+      readonly kind: "edit";
+      readonly predecessorOrderIds: readonly OrderId[];
+      readonly supersedeOrderId?: OrderId;
+      readonly legacyPredecessorOrderIds?: readonly OrderId[];
+    }
   | {
       readonly kind: "submitted";
       readonly orderId: OrderId;
       readonly predecessorOrderIds: readonly OrderId[];
+      readonly supersedeOrderId?: OrderId;
+      readonly legacyPredecessorOrderIds?: readonly OrderId[];
     };
 
 export const unlimitedCheckoutPredecessorLimit = 8;
+
+export type UnlimitedCheckoutHandoff = {
+  readonly token: string;
+  readonly orderId: OrderId;
+  readonly predecessorOrderIds: readonly OrderId[];
+};
 
 export function getUnlimitedCheckoutPredecessors(
   order?: UnlimitedPassOrderLink
@@ -122,8 +135,21 @@ export function getUnlimitedPassChoosePath(
     }),
   });
   if (order?.kind === "submitted" || order?.kind === "edit") {
+    if (order.supersedeOrderId) {
+      query.set("supersedeOrder", order.supersedeOrderId);
+    }
+    if (
+      order.predecessorOrderIds.length > 0 &&
+      !order.supersedeOrderId &&
+      !order.legacyPredecessorOrderIds?.length
+    ) {
+      query.set("predecessorMode", "history");
+    }
     for (const orderId of order.predecessorOrderIds) {
       query.append("predecessorOrder", orderId);
+    }
+    for (const orderId of order.legacyPredecessorOrderIds ?? []) {
+      query.append("legacyPredecessorOrder", orderId);
     }
   }
   return `/${locale}${unlimitedPassCheckoutPath}?${query}`;

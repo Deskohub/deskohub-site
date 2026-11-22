@@ -3,8 +3,10 @@ import {
   type CustomerBookingSelection,
   CustomerBookingSelectionInvalid,
   CustomerOfferingUnavailable,
+  CustomerSelectionUnavailable,
 } from "@deskohub/workspace-customer-api";
 import { Effect, Match, Option, Schema } from "effect";
+import { EntryPackUnavailableError } from "@/features/passes/backend/entry-pack-redemption";
 import {
   type BookingSelectionInput,
   BookingSelectionRejected,
@@ -26,6 +28,7 @@ const decodePlainDate = Schema.decodeUnknownOption(plainDateStringSchema);
 export const toBookingSelectionInput = ({
   date,
   endDate,
+  funding: _funding,
   ...selection
 }: CustomerBookingSelection): Effect.Effect<
   BookingSelectionInput,
@@ -46,6 +49,9 @@ export const toBookingSelectionInput = ({
       }),
     };
   });
+
+export const entryPackUnavailableAnswer = () =>
+  new CustomerSelectionUnavailable({ reason: "availability_changed" });
 
 /** The public error a selection the booking pages wouldn't accept answers with. */
 const toSelectionRejectionAnswer = (reason: BookingSelectionRejection) =>
@@ -78,16 +84,21 @@ export const answerBookingSelectionFailure =
         ): Effect.Effect<
           never,
           | ReturnType<typeof toSelectionRejectionAnswer>
+          | CustomerSelectionUnavailable
           | Extract<E, CustomerBookingSelectionInvalid>
           | CustomerSessionApiFailure<
               Exclude<
                 E,
-                BookingSelectionRejected | CustomerBookingSelectionInvalid
+                | BookingSelectionRejected
+                | CustomerBookingSelectionInvalid
+                | EntryPackUnavailableError
               >
             >
         > => {
           if (failure instanceof BookingSelectionRejected)
             return Effect.fail(toSelectionRejectionAnswer(failure.reason));
+          if (failure instanceof EntryPackUnavailableError)
+            return Effect.fail(entryPackUnavailableAnswer());
           if (failure instanceof CustomerBookingSelectionInvalid)
             return Effect.fail(
               failure as Extract<E, CustomerBookingSelectionInvalid>

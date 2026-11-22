@@ -89,6 +89,17 @@ export const publishedAgentTools = [
 
 export const publishedQuoteTool = publishedAgentTools[2];
 
+export const publishedFundedQuoteTool = {
+  ...publishedQuoteTool,
+  inputSchema: {
+    ...publishedQuoteTool.inputSchema,
+    properties: {
+      ...publishedQuoteTool.inputSchema.properties,
+      pass_id: { type: "string", format: "uuid" },
+    },
+  },
+} as const;
+
 type RegisteredSiteTool = {
   readonly tool: ModelContextTool;
   readonly signal?: AbortSignal;
@@ -148,6 +159,7 @@ const agentToolRequestSchema = Schema.Struct({
 
 type AgentToolRequest = typeof agentToolRequestSchema.Type & {
   readonly signal?: AbortSignal | null;
+  readonly path: string;
 };
 
 /** An event-stream body the way the endpoint answers the 2025 protocol leg. */
@@ -186,21 +198,37 @@ export const pendingBodyResponse = () => {
 export const mockAgentToolEndpoint = (
   call: (request: AgentToolRequest) => Response | Promise<Response> = () =>
     agentToolEventStream({ structuredContent: {} }),
-  list: () => Response | Promise<Response> = () =>
+  list: (request: AgentToolRequest) => Response | Promise<Response> = () =>
     agentToolEventStream({ tools: publishedAgentTools })
 ) => {
   const requests: AgentToolRequest[] = [];
   const originalFetch = globalThis.fetch;
   const fetchMock = mock(async (...[url, init]: Parameters<typeof fetch>) => {
-    if (String(url) !== "/api/mcp") {
+    const path = String(url);
+    if (
+      path !== "/api/mcp" &&
+      path !== "/api/mcp/web" &&
+      path !== "/api/mcp/web/prepare-quote"
+    ) {
       throw new Error(`Unexpected request to ${String(url)}`);
     }
-    const body = Schema.decodeUnknownSync(
-      Schema.fromJsonString(agentToolRequestSchema)
-    )(String(init?.body));
-    const request = { ...body, signal: init?.signal };
+    const body =
+      path === "/api/mcp/web/prepare-quote"
+        ? {
+            method: "prepare-quote",
+            params: {
+              name: "get_quote",
+              arguments: Schema.decodeUnknownSync(
+                Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
+              )(String(init?.body)),
+            },
+          }
+        : Schema.decodeUnknownSync(
+            Schema.fromJsonString(agentToolRequestSchema)
+          )(String(init?.body));
+    const request = { ...body, signal: init?.signal, path };
     requests.push(request);
-    return body.method === "tools/list" ? list() : call(request);
+    return body.method === "tools/list" ? list(request) : call(request);
   });
   globalThis.fetch = Object.assign(fetchMock, {
     preconnect: originalFetch.preconnect,

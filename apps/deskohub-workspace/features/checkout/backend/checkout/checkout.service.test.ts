@@ -53,6 +53,7 @@ import {
   DiscountClaimError,
 } from "@/features/discounts/errors";
 import type { Locale } from "@/features/i18n";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
   type NormalizedCoworkReservationOrder,
   normalizedCoworkReservationOrderSchema,
@@ -573,6 +574,7 @@ type CheckoutHarnessOptions<ReservationOverrides extends object> = {
   readonly payStateToken?: string;
   readonly locale?: Locale;
   readonly acceptedQuote?: CoworkReservationQuote;
+  readonly coworkPassesEnabled?: boolean;
   readonly checkoutSessionId?: string;
   readonly submittedCode?: CanonicalPromotionCode;
   readonly requestedDiscountCode?: CanonicalPromotionCode;
@@ -866,6 +868,9 @@ const createCheckoutHarness = async <ReservationOverrides extends object>(
             ),
             Layer.mock(WorkspaceReservationRepository, reservations),
             Layer.mock(PaymentAttemptRepository, paymentAttempts),
+            CoworkPassesReleaseGate.fromDecision(
+              options.coworkPassesEnabled ?? false
+            ),
             Layer.mock(QrPaymentRepository, {
               findPaymentWindow: () =>
                 Effect.sync(() =>
@@ -969,6 +974,7 @@ describe("CheckoutService", () => {
       createCheckoutHarness({
         orderId: "entry-pack-workstation-payment",
         acceptedQuote: quote,
+        coworkPassesEnabled: true,
         affirm: mock(() =>
           Effect.succeed({ quote, commitment: emptyCommitment })
         ),
@@ -993,6 +999,76 @@ describe("CheckoutService", () => {
     });
     expect(admission).not.toHaveProperty("publicPayment");
     expect(card.createHostedPaymentPage).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    { reservation: reservationData, tier: "reserved-desk" },
+    { reservation: zeroTotalReservation, tier: "open-space" },
+  ] as const)(
+    "the closed pass gate stops new payment for a held $tier Entry booking",
+    async ({ reservation, tier }) => {
+      const { quoteCoworkEntryPack } = await import(
+        "./cowork-checkout-pricing"
+      );
+      const { orderIdSchema } = await import("@/features/order");
+      const { quote } = await Effect.runPromise(
+        quoteCoworkEntryPack({
+          reservation,
+          entryPack: { passId: orderIdSchema.make(crypto.randomUUID()), tier },
+        })
+      );
+      const harness = await createCheckoutHarness({
+        orderId: "closed-entry-pack-payment",
+        acceptedQuote: quote,
+        affirm: mock(() =>
+          Effect.succeed({ quote, commitment: emptyCommitment })
+        ),
+      });
+      await expect(Effect.runPromise(harness.effect)).rejects.toMatchObject({
+        code: "entry_pack_unavailable",
+      });
+      expect(harness.recordLegalEvidence).not.toHaveBeenCalled();
+      expect(harness.completeInternalPayment).not.toHaveBeenCalled();
+      expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
+      expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
+    }
+  );
+
+  test("recovers a held Entry booking's existing card attempt after the pass gate closes", async () => {
+    const { quoteCoworkEntryPack } = await import("./cowork-checkout-pricing");
+    const { orderIdSchema } = await import("@/features/order");
+    const { quote } = await Effect.runPromise(
+      quoteCoworkEntryPack({
+        reservation: reservationData,
+        entryPack: {
+          passId: orderIdSchema.make(crypto.randomUUID()),
+          tier: "reserved-desk",
+        },
+      })
+    );
+    const orderId = "entry-pack-payment-after-gate-closed";
+    const activeAttempt = {
+      ...makeAttempt({
+        id: "active-entry-pack-attempt",
+        orderId,
+        state: "pending",
+        securityToken: "fixture-security-token",
+        providerRedirectUrl: "https://payments.example/entry-pack",
+      }),
+      amount: quote.payment.expectedPrice,
+    };
+    const harness = await createCheckoutHarness({
+      orderId,
+      acceptedQuote: quote,
+      activeAttempt,
+      reservationOverrides: { activePaymentAttemptId: activeAttempt.id },
+    });
+    expect(await Effect.runPromise(harness.effect)).toMatchObject({
+      status: "redirect",
+      redirectUrl: activeAttempt.providerRedirectUrl,
+    });
+    expect(harness.createPendingProviderAttempt).not.toHaveBeenCalled();
+    expect(harness.createHostedPaymentPage).not.toHaveBeenCalled();
   });
 
   test("starts a public QR payment against the accepted reservation", async () => {

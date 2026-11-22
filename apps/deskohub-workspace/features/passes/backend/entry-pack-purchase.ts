@@ -18,11 +18,13 @@ import type { CustomerAccountId } from "@/features/account/customer-account";
 import { workspaceAccountingSupplier } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
+import { getPaymentReturnDestination } from "@/features/checkout/backend/checkout/payment-return-destination";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { OrderPaymentHandlers } from "@/features/checkout/backend/payment/order-payment-handlers.service";
 import { startPaymentSession } from "@/features/checkout/backend/payment/payment-session";
 import { LegalEvidenceEventRepository } from "@/features/checkout/backend/repositories/legal-evidence-event.repository";
 import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers";
+import type { PaymentReturnTarget } from "@/features/checkout/payment-return-target";
 import {
   getAppliedPromotionDiscountId,
   getDiscountCommitmentPayload,
@@ -54,6 +56,7 @@ import {
   getEntryPackPrice,
   getUnlimitedPassPrice,
   isEntryPackQuoteExpired,
+  unlimitedPassCoffeePrice,
 } from "../pass-offer";
 import {
   type PassPurchaseQuote,
@@ -70,7 +73,10 @@ import {
   isUnlimitedPassFirstDayAdmissionExpired,
 } from "./entry-pack-order-payment-handler";
 import { quoteEntryPack } from "./entry-pack-quote";
-import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
+import {
+  hasPassQuoteExpired,
+  hasUnlimitedPassFirstDayEnded,
+} from "./entry-pack-settlement";
 import { reconfirmUnlimitedPassHolds } from "./unlimited-pass-holds";
 
 export class EntryPackPurchaseError extends Data.TaggedError(
@@ -89,6 +95,7 @@ export class EntryPackPurchaseError extends Data.TaggedError(
     | "billing-changed";
   readonly locale?: Locale;
   readonly earlyStartRequired?: boolean;
+  readonly orderId?: OrderId;
 }> {}
 
 const decodeBilling = Schema.decodeEffect(reservationBillingSelectionSchema, {
@@ -123,6 +130,7 @@ export const displayPassPurchasePrice = (
     quote.discountedSubtotal,
     quote.unlimitedCoffee
   ),
+  ...(quote.unlimitedCoffee && { coffeePrice: unlimitedPassCoffeePrice }),
   ...(quote.selection?.submittedCode !== undefined &&
     quote.discounts.some(
       ({ discount }) => discount.id === quote.submittedCodeDiscountId
@@ -371,13 +379,6 @@ const readOwnedPayablePass = Effect.fn("readOwnedPayablePass")(function* (
   };
 });
 
-const hasPassQuoteExpired = (now: Temporal.Instant, purchase: PassPurchase) =>
-  purchase.product === "entry-pack"
-    ? isEntryPackQuoteExpired(now, purchase.validUntil)
-    : hasUnlimitedPassFirstDayEnded(purchase, now) ||
-      !purchase.holdsExpireAt ||
-      Temporal.Instant.compare(now, purchase.holdsExpireAt) >= 0;
-
 const requireOpenUnlimitedPassQuote = Effect.fnUntraced(function* (
   purchase: PassPurchase
 ) {
@@ -487,6 +488,45 @@ export const readEntryPackPaymentRetry = Effect.fn("readEntryPackPaymentRetry")(
   }
 );
 
+export const readEntryPackCheckoutPayment = Effect.fn(
+  "readEntryPackCheckoutPayment"
+)(function* (orderId: OrderId) {
+  const account = yield* CurrentCustomerAccount;
+  const { accountId } = yield* account.requireActive;
+  const { order, purchase } = yield* readOwnedPurchaseOrder(orderId, accountId);
+  if (order.paymentState !== "not_started" || order.activePaymentAttemptId) {
+    return yield* readEntryPackPaymentRetry(orderId);
+  }
+  const now = yield* currentInstant;
+  if (
+    purchase.status !== "pending_payment" ||
+    isEntryPackQuoteExpired(now, purchase.validUntil)
+  ) {
+    return { kind: "status" as const, locale: purchase.locale };
+  }
+  const gift = purchase.holderAccountId !== accountId;
+  const holderEmail = gift
+    ? yield* findPurchaseLoginEmail(purchase.holderAccountId)
+    : undefined;
+  if (gift && !holderEmail) {
+    return { kind: "status" as const, locale: purchase.locale };
+  }
+  return {
+    kind: "ready" as const,
+    locale: purchase.locale,
+    product: {
+      kind: "entry-pack" as const,
+      tier: purchase.tier,
+      size: purchase.entryCount,
+    },
+    billing: defaultReservationBillingSelection,
+    holderEmail,
+    quote: yield* Schema.decodeEffect(passPurchaseQuoteCodec)(purchase.quote),
+    validFrom: purchase.validFrom,
+    validUntil: purchase.validUntil,
+  };
+});
+
 const savePassPurchaseQuote = Effect.fn("savePassPurchaseQuote")(function* (
   purchase: Pick<PassPurchase, "id" | "product">,
   quote: PassPurchaseQuote
@@ -517,6 +557,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
     readonly productKind?: PassPurchase["product"];
     readonly submittedCode?: CanonicalPromotionCode;
     readonly referralCode?: CanonicalPromotionCode;
+    readonly preserveReferral?: true;
   }) {
     yield* requirePassPurchasesEnabled();
     const current = yield* CurrentCustomerAccount;
@@ -555,6 +596,11 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
         }
 
         const discounts = yield* DiscountService;
+        const referralCode =
+          input.referralCode ??
+          (input.preserveReferral
+            ? storedQuote.selection?.referralCode
+            : undefined);
         const discountInput = {
           product,
           discountableSubtotal,
@@ -563,9 +609,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
           bookedAt,
           dotyposCustomerId: order.dotyposCustomerId,
           locale: purchase.locale,
-          ...(input.referralCode !== undefined && {
-            referralCode: input.referralCode,
-          }),
+          ...(referralCode !== undefined && { referralCode }),
         };
         const baseQuote = yield* discounts.quote(discountInput);
         const appliedCode = input.submittedCode
@@ -589,9 +633,7 @@ export const repriceEntryPackPurchase = Effect.fn("repriceEntryPackPurchase")(
             ...(input.submittedCode !== undefined && {
               submittedCode: input.submittedCode,
             }),
-            ...(input.referralCode !== undefined && {
-              referralCode: input.referralCode,
-            }),
+            ...(referralCode !== undefined && { referralCode }),
           },
         };
         yield* requireOpenUnlimitedPassQuote(purchase);
@@ -663,6 +705,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
     readonly referralCode?: CanonicalPromotionCode;
     readonly billing?: ReservationBillingSelection;
     readonly displayedPriceFingerprint?: string;
+    readonly returnTarget?: PaymentReturnTarget;
   }
 ) {
   yield* requirePassPurchasesEnabled();
@@ -708,7 +751,13 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       );
       const { order, purchase, product, discountableSubtotal } =
         currentPurchase;
-      const statusUrl = `/${purchase.locale}${reservationStatusPath}/${order.id}`;
+      const statusUrl = input.returnTarget
+        ? yield* getPaymentReturnDestination({
+            kind: "pass-purchase",
+            target: input.returnTarget,
+            orderId: order.id,
+          })
+        : `/${purchase.locale}${reservationStatusPath}/${order.id}`;
       if (order.paymentState === "paid") {
         return { status: "paid" as const, statusUrl };
       }
@@ -927,6 +976,7 @@ export const payForEntryPack = Effect.fn("payForEntryPack")(function* (
       const payment = yield* startPaymentSession({
         ...admission,
         kind: "pass-purchase",
+        ...(input.returnTarget && { passReturnTarget: input.returnTarget }),
         correlationId: order.correlationId,
         customer: { name: contact.name, email: session.email },
         beforeAttempt: Effect.void,

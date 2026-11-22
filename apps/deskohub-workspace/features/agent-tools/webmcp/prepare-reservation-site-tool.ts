@@ -4,6 +4,7 @@ import {
   toAgentToolMoney,
 } from "@/features/agent-tools/agent-tool-money";
 import { type Locale, m } from "@/features/i18n";
+import { orderIdSchema } from "@/features/order";
 import type { ReservationFormSubmission } from "@/features/reservation/components/reservation-checkout-form";
 import {
   getOfficeReservationDayCount,
@@ -17,6 +18,7 @@ import {
   AgentToolRequestError,
   callAgentTool,
   type PublishedAgentTool,
+  quotePassForPreparation,
 } from "./agent-tool-mcp-client";
 import {
   prepareReservationToolDescription,
@@ -32,8 +34,10 @@ import {
   subscribeReservationForm,
 } from "./site-tool-catalog";
 import type {
+  SiteToolEntryPackQuote,
   SiteToolReservationForm,
   SiteToolReservationFormHandle,
+  SiteToolReservationIntent,
 } from "./use-prepare-reservation-site-tool";
 import type { ModelContext } from "./webmcp";
 
@@ -68,6 +72,7 @@ const quoteSchema = Schema.StructWithRest(
   Schema.Struct({
     family: workspaceReservationKindSchema,
     reservation_url: Schema.String,
+    advertised_price_token: Schema.optionalKey(Schema.NonEmptyString),
   }),
   [Schema.Record(Schema.String, Schema.Json)]
 );
@@ -140,11 +145,16 @@ const prepareReservation = ({
   readonly form: SiteToolReservationFormHandle;
   readonly input: Schema.JsonObject;
   readonly quoteTool: PublishedAgentTool;
-}) =>
-  callAgentTool(
-    quoteTool.name,
-    withPageLocale(quoteTool, selection, form.current().locale)
-  ).pipe(
+}) => {
+  const locale = form.current().locale;
+  const funded = Object.hasOwn(selection, "pass_id");
+  const quote = funded
+    ? quotePassForPreparation({ ...selection, locale })
+    : callAgentTool(
+        quoteTool.name,
+        withPageLocale(quoteTool, selection, locale)
+      );
+  return quote.pipe(
     // A quote's typed error is the tool's result as it stands.
     Effect.filterOrFail(
       isQuoted,
@@ -156,17 +166,35 @@ const prepareReservation = ({
         Effect.mapError((cause) => new AgentToolRequestError({ cause }))
       )
     ),
-    Effect.flatMap((quote) =>
-      prepareQuotedReservation({
-        form,
-        quote,
-        requestsMarketingConsent: marketingConsent === true,
+    Effect.flatMap(
+      Effect.fnUntraced(function* (quote) {
+        const passId = Schema.decodeUnknownOption(orderIdSchema)(
+          selection.pass_id
+        );
+        const token = quote.advertised_price_token;
+        if (
+          funded &&
+          (Option.isNone(passId) || !token || quote.family !== "cowork")
+        ) {
+          return yield* new AgentToolRequestError({});
+        }
+        return yield* prepareQuotedReservation({
+          form,
+          quote,
+          ...(funded &&
+            Option.isSome(passId) &&
+            token && {
+              entryPackQuote: { passId: passId.value, token },
+            }),
+          requestsMarketingConsent: marketingConsent === true,
+        });
       })
     ),
     Effect.catchTag("PreparationStopped", ({ result }) =>
       Effect.succeed(result)
     )
   );
+};
 
 type AgentToolCall = Effect.Success<ReturnType<typeof callAgentTool>>;
 
@@ -186,6 +214,7 @@ type PreparationRequest = {
   /** The form on the page the agent called the tool from. */
   readonly form: SiteToolReservationFormHandle;
   readonly quote: Quote;
+  readonly entryPackQuote?: SiteToolEntryPackQuote;
   readonly requestsMarketingConsent: boolean;
 };
 
@@ -197,14 +226,19 @@ const prepareQuotedReservation = (request: PreparationRequest) =>
       ({ quote }) => new URL(quote.reservation_url, window.location.origin)
     ),
     Effect.bind("requestedOffice", getRequestedOffice),
-    Effect.bind("settled", awaitSettledReservationForm),
+    Effect.bind("preparedForm", awaitSettledReservationForm),
+    Effect.let("settled", ({ preparedForm }) => preparedForm.settled),
     Effect.tap(stopUnlessBookable),
     Effect.bind("marketingConsentSource", giveRequestedMarketingConsent),
     Effect.let("marketingConsent", ({ settled }) =>
       getMarketingConsentOutcome(settled)
     ),
-    Effect.bind("submission", ({ marketingConsentSource, settled }) =>
-      Effect.promise(() => settled.submit(marketingConsentSource))
+    Effect.bind(
+      "submission",
+      ({ marketingConsentSource, settled, preparedForm }) =>
+        Effect.promise(() =>
+          settled.submit(marketingConsentSource, preparedForm.intent)
+        )
     ),
     Effect.map(toPrepareReservationResult)
   );
@@ -255,11 +289,24 @@ const awaitSettledReservationForm = ({
   link,
   locale,
   quote,
+  entryPackQuote,
 }: PreparationRequest & { readonly link: URL; readonly locale: Locale }) =>
   Effect.sync(() => openReservationPage({ form, link, quote })).pipe(
     Effect.andThen(awaitReservationForm(quote.family)),
-    Effect.tap((matching) => settleSelection({ form: matching, link })),
-    Effect.map((matching) => matching.current()),
+    Effect.flatMap((matching) =>
+      settleSelection({ form: matching, link, entryPackQuote }).pipe(
+        Effect.map((selectionIsCurrent) => ({
+          settled: matching.current(),
+          intent: {
+            ...(entryPackQuote && { entryPackQuote }),
+            isCurrent: () =>
+              getReservationForm() === matching &&
+              matching.current().entryPackId === entryPackQuote?.passId &&
+              selectionIsCurrent(),
+          },
+        }))
+      )
+    ),
     Effect.timeoutOrElse({
       duration: formReadinessTimeout,
       orElse: () =>
@@ -309,17 +356,29 @@ const awaitReservationForm = (kind: SiteToolReservationForm["kind"]) =>
 const settleSelection = ({
   form,
   link,
+  entryPackQuote,
 }: {
   readonly form: SiteToolReservationFormHandle;
   readonly link: URL;
+  readonly entryPackQuote: SiteToolEntryPackQuote | undefined;
 }) =>
-  Effect.sync(() => form.current().applySelection(link.searchParams)).pipe(
-    Effect.flatMap((changed) =>
+  Effect.sync(() => {
+    const current = form.current();
+    const selectionChanged = current.applySelection(link.searchParams);
+    const fundingChanged =
+      entryPackQuote && current.applyEntryPack?.(entryPackQuote.passId);
+    return {
+      changed: selectionChanged || fundingChanged === true,
+      selectionIsCurrent: current.captureSelection(link.searchParams),
+    };
+  }).pipe(
+    Effect.flatMap(({ changed, selectionIsCurrent }) =>
       awaitReadiness(form).pipe(
         // A changed selection renders as pending before it settles.
         Effect.when(
           Effect.sync(() => changed || form.current().readiness.isPending)
-        )
+        ),
+        Effect.as(selectionIsCurrent)
       )
     )
   );
@@ -343,16 +402,44 @@ const awaitReadiness = (form: SiteToolReservationFormHandle) =>
   });
 
 const stopUnlessBookable = ({
+  entryPackQuote,
+  preparedForm,
   requestedOffice,
   settled,
 }: {
+  readonly entryPackQuote?: SiteToolEntryPackQuote;
+  readonly preparedForm: { readonly intent: SiteToolReservationIntent };
   readonly requestedOffice: QuotedOfficeSelection | undefined;
   readonly settled: SiteToolReservationForm;
-}) =>
-  Option.match(getUnbookableResult(settled, requestedOffice), {
-    onNone: () => Effect.void,
+}) => {
+  if (settled.entryPackId !== entryPackQuote?.passId) {
+    return Effect.fail(
+      new PreparationStopped({
+        result: siteToolError(
+          "selection_unavailable",
+          m.coworkEntryPackUnavailableDescription(
+            {},
+            { locale: settled.locale }
+          )
+        ),
+      })
+    );
+  }
+  return Option.match(getUnbookableResult(settled, requestedOffice), {
+    onNone: () =>
+      preparedForm.intent.isCurrent()
+        ? Effect.void
+        : Effect.fail(
+            new PreparationStopped({
+              result: siteToolError(
+                "selection_unavailable",
+                m.reservationErrorMessage({}, { locale: settled.locale })
+              ),
+            })
+          ),
     onSome: (result) => Effect.fail(new PreparationStopped({ result })),
   });
+};
 
 // The submit button stays disabled in both cases, so the tool stops too.
 const getUnbookableResult = (
@@ -417,12 +504,14 @@ const getMarketingConsentOutcome = (
 };
 
 const toPrepareReservationResult = ({
+  entryPackQuote,
   locale,
   marketingConsent,
-  quote: { reservation_url: _link, ...summary },
+  quote: { reservation_url: _link, advertised_price_token: _token, ...summary },
   requestedOffice,
   submission,
 }: {
+  readonly entryPackQuote?: SiteToolEntryPackQuote;
   readonly locale: Locale;
   readonly marketingConsent: MarketingConsentOutcome;
   readonly quote: Quote;
@@ -473,11 +562,20 @@ const toPrepareReservationResult = ({
           marketingConsent,
         };
       }
+      const {
+        total: _total,
+        discount: _discount,
+        regular_price: _regularPrice,
+        ...selection
+      } = summary;
       return {
         status: submission.status,
         pay_url: new URL(submission.redirectUrl, window.location.origin).href,
         expires_at: submission.expiresAt,
-        summary,
+        summary:
+          entryPackQuote && submission.status === "pricing_changed"
+            ? selection
+            : summary,
         marketingConsent,
       };
     }

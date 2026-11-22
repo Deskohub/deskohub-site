@@ -12,14 +12,20 @@ import { runWithRequestLocale } from "@/features/i18n/server/request-locale";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
 import { readOwnedPassPurchaseOrderLocale } from "@/features/passes/backend/entry-pack-order";
+import { readPassCheckoutHandoffForPage } from "@/features/passes/backend/pass-checkout-handoff";
 import { readPassPurchaseBuyer } from "@/features/passes/backend/pass-purchase-buyer";
 import {
   loadUnlimitedCheckoutContinuation,
   readUnlimitedCheckoutRenewal,
 } from "@/features/passes/backend/unlimited-pass-purchase";
 import { UnlimitedPassCheckout } from "@/features/passes/components/unlimited-pass-checkout";
+import { passCheckoutHandoffTokenSchema } from "@/features/passes/entry-pack-checkout";
 import { unlimitedPassDays } from "@/features/passes/pass-offer";
-import { getUnlimitedRenewalPath } from "@/features/passes/routes";
+import {
+  getPassCheckoutHandoffPath,
+  getUnlimitedRenewalPath,
+  withPassCheckoutHandoff,
+} from "@/features/passes/routes";
 import {
   beginUnlimitedCheckout,
   getUnlimitedCheckoutAvailability,
@@ -38,6 +44,7 @@ import { createNoindexedPageMetadata } from "@/features/public-pages/page-metada
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
 import { reservationStatusPath } from "@/features/reservation/routes";
 import { getWorkspaceAvailabilityRange } from "@/features/reservation/workspace-availability";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import { QueryProvider } from "@/shared/components/query-provider";
 import { formatCount } from "@/shared/utils/number";
@@ -52,7 +59,10 @@ type Query = Parameters<typeof readUnlimitedPassSelection>[0] & {
   readonly submittedOrder?: string | string[];
   readonly supersedeOrder?: string | string[];
   readonly predecessorOrder?: string | string[];
+  readonly legacyPredecessorOrder?: string | string[];
+  readonly predecessorMode?: string | string[];
   readonly renew?: string | string[];
+  readonly handoff?: string | string[];
 };
 
 const customerServices = Layer.mergeAll(
@@ -65,7 +75,7 @@ const workspaceDate = (instant: Temporal.Instant) =>
   plainDateStringSchema.make(getCurrentWorkspaceDate(instant).toString());
 
 const readContinuation = cache(
-  (orderId: OrderId, mode: "draft" | "submitted" | "payment-retry") =>
+  (orderId: OrderId, mode: "draft" | "submitted" | "payment") =>
     loadUnlimitedCheckoutContinuation(orderId, mode).pipe(
       Effect.provide(customerServices),
       runWorkspaceEffectOrElse("passes.unlimited-checkout-continuation", {
@@ -103,30 +113,67 @@ async function leaveUnavailableOrder(orderId: OrderId): Promise<never> {
 function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
   if (
     query.submittedOrder !== undefined ||
-    query.predecessorOrder !== undefined
+    query.predecessorOrder !== undefined ||
+    query.legacyPredecessorOrder !== undefined ||
+    query.predecessorMode !== undefined
   ) {
-    const { submittedOrder, predecessorOrder } = query;
-    const ids = Array.isArray(predecessorOrder)
-      ? predecessorOrder
-      : [predecessorOrder].filter((id) => id !== undefined);
+    const {
+      submittedOrder,
+      predecessorOrder,
+      legacyPredecessorOrder,
+      predecessorMode,
+      supersedeOrder,
+    } = query;
+    const ids = [predecessorOrder ?? []].flat();
+    const legacyIds = [legacyPredecessorOrder ?? []].flat();
     const isOrderId = Schema.is(orderIdSchema);
     if (
       query.order !== undefined ||
-      query.supersedeOrder !== undefined ||
       (query.step !== undefined && query.step !== "details") ||
+      (predecessorMode !== undefined &&
+        (ids.length === 0 || predecessorMode !== "history")) ||
       ids.length > unlimitedCheckoutPredecessorLimit ||
-      !ids.every(isOrderId)
+      legacyIds.length > ids.length ||
+      !ids.every(isOrderId) ||
+      !legacyIds.every(isOrderId)
     )
       notFound();
     const predecessorOrderIds = [
       ...new Set(ids.map((id) => orderIdSchema.make(id.toLowerCase()))),
     ];
-    if (submittedOrder === undefined)
-      return { kind: "edit", predecessorOrderIds };
+    let supersedeOrderId: OrderId | undefined;
+    if (supersedeOrder !== undefined) {
+      if (!isOrderId(supersedeOrder)) notFound();
+      supersedeOrderId = orderIdSchema.make(supersedeOrder.toLowerCase());
+      if (!predecessorOrderIds.includes(supersedeOrderId)) notFound();
+    }
+    // Shipped links used the same list for edits and leftover cleanup history.
+    const legacyPredecessorOrderIds =
+      legacyPredecessorOrder === undefined &&
+      predecessorMode === undefined &&
+      !supersedeOrderId
+        ? predecessorOrderIds
+        : [
+            ...new Set(
+              legacyIds.map((id) => orderIdSchema.make(id.toLowerCase()))
+            ),
+          ];
+    if (
+      !legacyPredecessorOrderIds.every((id) => predecessorOrderIds.includes(id))
+    )
+      notFound();
+    const predecessors = {
+      predecessorOrderIds,
+      ...(supersedeOrderId && { supersedeOrderId }),
+      ...(legacyPredecessorOrderIds.length > 0 && {
+        legacyPredecessorOrderIds,
+      }),
+    };
+    if (submittedOrder === undefined) return { kind: "edit", ...predecessors };
     if (!isOrderId(submittedOrder)) notFound();
     const orderId = orderIdSchema.make(submittedOrder.toLowerCase());
     if (predecessorOrderIds.includes(orderId)) notFound();
-    return { kind: "submitted", orderId, predecessorOrderIds };
+    return { kind: "submitted", orderId, ...predecessors };
   }
   if (query.order !== undefined && query.supersedeOrder !== undefined)
     notFound();
@@ -134,7 +181,10 @@ function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
   const orderId = query.order ?? query.supersedeOrder;
   if (orderId === undefined) return undefined;
   if (!Schema.is(orderIdSchema)(orderId)) notFound();
-  return { kind: query.order !== undefined ? "resume" : "replace", orderId };
+  return {
+    kind: query.order !== undefined ? "resume" : "replace",
+    orderId: orderIdSchema.make(orderId.toLowerCase()),
+  };
 }
 
 async function requirePageOpen(searchParams: Promise<Query>) {
@@ -188,11 +238,23 @@ async function UnlimitedPassPageContent({
 }) {
   const query = await searchParams;
   const order = readOrderLink(query);
+  const handoffToken = Schema.is(passCheckoutHandoffTokenSchema)(query.handoff)
+    ? query.handoff
+    : undefined;
+  if (
+    query.handoff !== undefined &&
+    (!handoffToken ||
+      order !== undefined ||
+      query.renew !== undefined ||
+      (query.step !== undefined && query.step !== "details"))
+  ) {
+    notFound();
+  }
   if (query.renew !== undefined && !Schema.is(orderIdSchema)(query.renew))
     notFound();
   const requestedRenewal = query.renew;
   const orderId = order?.kind === "edit" ? undefined : order?.orderId;
-  const isRetry = order?.kind === "resume" && query.step === "pay";
+  const isPaymentStep = order?.kind === "resume" && query.step === "pay";
   const continuationMode = order?.kind === "submitted" ? "submitted" : "draft";
   const { options, startDate } = readUnlimitedPassSelection(query);
   const requestedSelection = startDate && { ...options, startDate };
@@ -203,7 +265,7 @@ async function UnlimitedPassPageContent({
     selection: typeof requestedSelection = requestedSelection,
     renewsPassId = requestedRenewal
   ) => {
-    if (isRetry && orderId)
+    if (isPaymentStep && orderId)
       return getUnlimitedPassPayPath(targetLocale, orderId);
     if (query.step === "details" && selection) {
       return getUnlimitedPassDetailsPath(
@@ -224,12 +286,22 @@ async function UnlimitedPassPageContent({
     );
   };
   const [checkout, continuation] = await Promise.all([
-    Effect.all({
-      buyer: readPassPurchaseBuyer(),
-      today: currentInstant.pipe(Effect.map(workspaceDate)),
-      discountCodeEntryEnabled: getDiscountCodeEntryEnabled.pipe(
-        Effect.orElseSucceed(() => false)
-      ),
+    Effect.gen(function* () {
+      const checkout = yield* Effect.all({
+        buyer: readPassPurchaseBuyer(),
+        today: currentInstant.pipe(Effect.map(workspaceDate)),
+        discountCodeEntryEnabled: getDiscountCodeEntryEnabled.pipe(
+          Effect.orElseSucceed(() => false)
+        ),
+      });
+      const handoff =
+        handoffToken && checkout.buyer.kind !== "signed-out"
+          ? yield* readPassCheckoutHandoffForPage(
+              handoffToken,
+              "unlimited"
+            ).pipe(Effect.provide(SealedStateKeys.Default))
+          : undefined;
+      return { ...checkout, handoff };
     }).pipe(
       Effect.provide(customerServices),
       runWorkspaceEffectOrElse("passes.unlimited-checkout-page", {
@@ -238,12 +310,28 @@ async function UnlimitedPassPageContent({
           buyer: { kind: "unavailable" as const },
           today: workspaceDate(Temporal.Now.instant()),
           discountCodeEntryEnabled: false,
+          handoff: undefined,
         }),
       })
     ),
     orderId &&
-      readContinuation(orderId, isRetry ? "payment-retry" : continuationMode),
+      readContinuation(orderId, isPaymentStep ? "payment" : continuationMode),
   ]);
+  const { handoff } = checkout;
+  if (handoffToken !== undefined) {
+    if (checkout.buyer.kind === "signed-out") {
+      redirect(
+        getAccountSignInPath(
+          locale,
+          query.tier === undefined
+            ? getPassCheckoutHandoffPath(locale, "unlimited", handoffToken)
+            : withPassCheckoutHandoff(checkoutPath(locale), handoffToken)
+        )
+      );
+    }
+    if (handoff?.product.kind !== "unlimited") notFound();
+    if (handoff.statusPath) redirect(handoff.statusPath);
+  }
   if ((order || requestedRenewal) && checkout.buyer.kind === "signed-out") {
     redirect(getAccountSignInPath(locale, checkoutPath(locale)));
   }
@@ -289,11 +377,38 @@ async function UnlimitedPassPageContent({
     ...(query.tier === undefined ? renewal.selection : options),
     startDate: renewal.selection.startDate,
   };
+  const draftSelection = resumesDraft ? draft?.selection : undefined;
   const selection =
-    resumesDraft && draft
-      ? draft.selection
-      : (renewalSelection ?? requestedSelection);
-  const retryPayment = draft?.kind === "pay" ? draft.retryPayment : undefined;
+    handoff?.product.kind === "unlimited" && query.tier === undefined
+      ? handoff.product.selection
+      : (draftSelection ?? renewalSelection ?? requestedSelection);
+  const checkoutDraft =
+    order && draft
+      ? { ...order, holderEmail: draft.holderEmail ?? null }
+      : order;
+  const handoffDraft = handoff
+    ? {
+        kind: "resume" as const,
+        orderId: handoff.orderId,
+        holderEmail: handoff.holderEmail ?? null,
+      }
+    : undefined;
+  const initialPayment = draft?.kind === "pay" ? draft.payment : undefined;
+  if (
+    orderId &&
+    draft?.kind === "pay" &&
+    !initialPayment?.priorPaymentAttemptId &&
+    checkout.buyer.kind === "profile-required"
+  ) {
+    redirect(
+      getUnlimitedPassDetailsPath(
+        draft.locale,
+        draft.selection,
+        { kind: "resume", orderId },
+        renewsPassId
+      )
+    );
+  }
   if (draft && draft.locale !== locale) {
     redirect(checkoutPath(draft.locale, selection, renewsPassId));
   }
@@ -309,6 +424,14 @@ async function UnlimitedPassPageContent({
         initialOptions={selection ?? options}
         initialStartDate={selection?.startDate}
         initialDetails={query.step === "details" ? selection : undefined}
+        {...(handoff &&
+          handoffToken && {
+            initialHandoff: {
+              token: handoffToken,
+              orderId: handoff.orderId,
+              predecessorOrderIds: handoff.predecessorOrderIds ?? [],
+            },
+          })}
         renewsPassId={renewsPassId}
         initialBounds={{
           today,
@@ -316,18 +439,14 @@ async function UnlimitedPassPageContent({
             getWorkspaceAvailabilityRange(today).to
           ),
         }}
-        draft={
-          order && draft
-            ? { ...order, holderEmail: draft.holderEmail ?? null }
-            : order
-        }
-        retryPayment={
-          orderId && draft && retryPayment
+        draft={handoffDraft ?? checkoutDraft}
+        initialPayment={
+          orderId && draft && initialPayment
             ? {
                 orderId,
                 selection: draft.selection,
                 state: {
-                  ...retryPayment,
+                  ...initialPayment,
                   holderEmail: draft.holderEmail,
                 },
               }

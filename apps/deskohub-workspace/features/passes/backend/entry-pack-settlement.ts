@@ -14,6 +14,7 @@ import type { PaymentAttemptId } from "@/features/checkout/checkout-identifiers"
 import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { currentInstant } from "@/shared/utils/temporal";
+import { isEntryPackQuoteExpired } from "../pass-offer";
 import { queueInitialEntryPackGift } from "./entry-pack-gift";
 import { keepsUnlimitedRenewalSource } from "./unlimited-pass-window";
 
@@ -32,6 +33,19 @@ export const hasUnlimitedPassFirstDayEnded = (
   );
   return Temporal.Instant.compare(now, endsAt) >= 0;
 };
+
+export const hasPassQuoteExpired = (
+  now: Temporal.Instant,
+  purchase: Pick<
+    typeof passPurchases.$inferSelect,
+    "product" | "tier" | "validFrom" | "validUntil" | "holdsExpireAt"
+  >
+) =>
+  purchase.product === "entry-pack"
+    ? isEntryPackQuoteExpired(now, purchase.validUntil)
+    : hasUnlimitedPassFirstDayEnded(purchase, now) ||
+      !purchase.holdsExpireAt ||
+      Temporal.Instant.compare(now, purchase.holdsExpireAt) >= 0;
 
 export const isUnsolicitedPartialPassRefund = (
   attempt: typeof paymentAttempts.$inferSelect

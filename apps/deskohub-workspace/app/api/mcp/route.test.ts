@@ -1,6 +1,6 @@
 import "@/shared/testing/workspace-test-env";
 
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import type {
   CallToolResult,
@@ -44,6 +44,20 @@ const resourceMetadata =
   "http://deskohub.test/.well-known/oauth-protected-resource/api/mcp";
 const agentAccountId = "agent-test-account";
 const agentClientId = "https://agent.example/oauth-client.json";
+const testEntryPackId = "11111111-1111-4111-8111-111111111111";
+const testUnlimitedPassId = "22222222-2222-4222-8222-222222222222";
+const browserSession = "deskohub-test-session=holder";
+let passRelease: "off" | "open" | "unavailable" = "off";
+let passGateReads = 0;
+let browserSessionReads = 0;
+const fakeAccountUser = (id: string) => ({
+  id,
+  email: testEmailAddress("mcp-agent"),
+  emailVerified: true,
+  name: "Agent Customer",
+  createdAt: new Date(),
+  updatedAt: new Date(),
+});
 
 /** Access tokens the fake authorization server knows, with their scopes. */
 const accessTokens = new Map<string, string>();
@@ -52,6 +66,15 @@ mock.module("@/features/account/server/auth.server", () => ({
   customerMcpResource: mcpResource,
   auth: {
     api: {
+      getSession: async ({ headers }: { readonly headers: Headers }) => {
+        browserSessionReads += 1;
+        const cookie = headers.get("cookie");
+        if (cookie === browserSession)
+          return { user: fakeAccountUser(agentAccountId) };
+        if (cookie === "deskohub-test-session=another-account")
+          return { user: fakeAccountUser("other-account") };
+        return null;
+      },
       verifyCustomerAgentAccessToken: async ({
         body,
       }: {
@@ -66,8 +89,14 @@ mock.module("@/features/account/server/auth.server", () => ({
         }
         return {
           active: true,
-          sub: agentAccountId,
-          client_id: agentClientId,
+          sub:
+            body.token === "other-holder-grant"
+              ? "other-account"
+              : agentAccountId,
+          client_id:
+            body.token === "other-client-pass-grant"
+              ? "https://another-agent.example/oauth-client.json"
+              : agentClientId,
           scope,
           aud: mcpResource,
         };
@@ -75,14 +104,7 @@ mock.module("@/features/account/server/auth.server", () => ({
     },
     $context: Promise.resolve({
       internalAdapter: {
-        findUserById: async (id: string) => ({
-          id,
-          email: testEmailAddress("mcp-agent"),
-          emailVerified: true,
-          name: "Agent Customer",
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        }),
+        findUserById: async (id: string) => fakeAccountUser(id),
       },
     }),
   },
@@ -189,6 +211,128 @@ const {
   workspaceDateFromToday,
 } = await import("@/features/agent-tools/agent-tools.test-utils");
 const services = makeAgentToolTestServices();
+const { CurrentCustomerAccount } = await import("@/features/account");
+const { decodeCustomerAccountSession } = await import(
+  "@/features/account/backend/customer-authentication.service"
+);
+const { CoworkPassesReleaseGate } = await import(
+  "@/features/passes/backend/cowork-passes-release-gate"
+);
+const { CustomerPasses } = await import(
+  "@/features/passes/backend/customer-passes.service"
+);
+mock.module("@/features/passes/backend/customer-pass-purchase-layers", () => ({
+  customerPassPurchaseLayers: { agentStart: Layer.empty },
+}));
+const { orderIdSchema } = await import("@/features/order");
+const { buildCoworkReservationQuote } = await import(
+  "@/features/checkout/reservation-quote-cowork"
+);
+const { getCoworkCheckoutSummary } = await import(
+  "@/features/checkout/checkout-summary-cowork"
+);
+const { EntryPackUnavailableError } = await import(
+  "@/features/passes/backend/entry-pack-redemption"
+);
+const { HeldPassNotFound } = await import(
+  "@/features/passes/backend/customer-pass-reads"
+);
+const { getUnlimitedAccessPath } = await import("@/features/passes/routes");
+const entryPackBooking = await import(
+  "@/features/reservation/backend/entry-pack-booking"
+);
+const readPassAccount = CurrentCustomerAccount.pipe(
+  Effect.flatMap((account) => account.requireActive)
+);
+const passOperations: string[] = [];
+const signedFundedQuote = "synthetic-advertised-funding-proof";
+let purchaseNeedsDetails = false;
+let passToolSessionAccountId: string | undefined;
+const testPassLayer = Layer.mock(CustomerPasses, {
+  list: () =>
+    readPassAccount.pipe(
+      Effect.map(({ accountId }) => {
+        passOperations.push("list");
+        if (accountId !== agentAccountId)
+          return { held: [], boughtForOthers: [] };
+        return {
+          held: [
+            {
+              kind: "entry-pack" as const,
+              passId: testEntryPackId,
+              tier: "open-space" as const,
+              size: 5 as const,
+              entriesLeft: 3,
+              validFrom: workspaceDateFromToday(0),
+              lastUsableDate: workspaceDateFromToday(31),
+              status: "active" as const,
+              gift: { buyerName: "Synthetic Gift Buyer" },
+            },
+          ],
+          boughtForOthers: [],
+        };
+      })
+    ),
+  accessPath: (passId, locale) =>
+    readPassAccount.pipe(
+      Effect.flatMap(({ accountId }) => {
+        passOperations.push("access");
+        return accountId === agentAccountId && passId === testUnlimitedPassId
+          ? Effect.succeed(getUnlimitedAccessPath(locale, passId))
+          : Effect.fail(new HeldPassNotFound({}));
+      })
+    ),
+  startPurchase: ({ product, orderId }) =>
+    readPassAccount.pipe(
+      Effect.map(() => {
+        passOperations.push("purchase");
+        if (purchaseNeedsDetails) {
+          return {
+            status: "details_required" as const,
+            checkoutPath: `/en-US/passes/${product.kind}?handoff=fixture-handoff`,
+          };
+        }
+        return {
+          status: "ready" as const,
+          orderId,
+          checkoutPath: `/en-US/passes/${product.kind}?order=${orderId}&step=pay`,
+          statusPath: `/en-US/checkout/status/${orderId}`,
+        };
+      })
+    ),
+});
+
+const fakeEntryPackAdvertisement = ({
+  reservation,
+  passId,
+}: Parameters<typeof entryPackBooking.buildEntryPackBookingQuote>[0]) =>
+  Effect.gen(function* () {
+    passOperations.push("quote");
+    const { accountId } = yield* readPassAccount;
+    if (
+      accountId !== agentAccountId ||
+      passId !== testEntryPackId ||
+      reservation.kind !== "cowork"
+    ) {
+      return yield* new EntryPackUnavailableError({});
+    }
+    const quote = yield* buildCoworkReservationQuote(reservation, {
+      entryPack: { passId, tier: "open-space" },
+    });
+    return {
+      kind: "cowork" as const,
+      quote,
+      summary: getCoworkCheckoutSummary(reservation, quote),
+      advertisedPriceToken: signedFundedQuote,
+    };
+  });
+
+mock.module("@/features/reservation/backend/entry-pack-booking", () => ({
+  ...entryPackBooking,
+  buildEntryPackBookingQuote: fakeEntryPackAdvertisement,
+  buildEntryPackHoldAdvertisement: fakeEntryPackAdvertisement,
+}));
+
 const preparePayStateModule = await import(
   "@/features/reservation/backend/reservation-booking.service"
 );
@@ -204,7 +348,16 @@ mock.module(
       >[0]
     ) =>
       Effect.sync(() => bookingCalls.push(input)).pipe(
-        Effect.andThen(preparePayStateModule.prepareWorkspacePayState(input))
+        Effect.andThen(
+          input.entryPackId
+            ? Effect.succeed({
+                status: "ready" as const,
+                orderId: orderIdSchema.make(testEntryPackId),
+                redirectUrl: "/en-US/checkout/pay?draft=test-booking",
+                expiresAt: "2099-07-29T08:10:00.000Z",
+              })
+            : preparePayStateModule.prepareWorkspacePayState(input)
+        )
       ),
   })
 );
@@ -242,14 +395,16 @@ const whoamiTool = defineSignedInAgentTool({
 
 // Every client is served the catalog's customer tools and `whoami` after
 // them, reading the test services.
-const { customerAgentCatalog } = await import(
+const catalogModule = await import(
   "@/features/agent-tools/customer-agent-catalog"
 );
+const { customerAgentCatalog } = catalogModule;
 mock.module("@/features/agent-tools/customer-agent-catalog", () => ({
+  ...catalogModule,
   customerAgentCatalog: {
     ...customerAgentCatalog,
-    forClient: (client: AgentToolClient) => {
-      const served = customerAgentCatalog.forClient(client);
+    forClient: (client: AgentToolClient, passes: boolean) => {
+      const served = customerAgentCatalog.forClient(client, passes);
       return { ...served, tools: [...served.tools, whoamiTool] };
     },
   },
@@ -257,9 +412,35 @@ mock.module("@/features/agent-tools/customer-agent-catalog", () => ({
 // Signed-in tools read the grant the route verified, never the account
 // services its token backs.
 mock.module("@/features/agent-tools/customer-agent-tools", () => ({
-  CustomerAgentToolsLive: Layer.merge(
+  CustomerAgentToolsLive: Layer.mergeAll(
     services.layer,
-    inMemoryCustomerAgentCallServices()
+    CoworkPassesReleaseGate.fromEvaluation(
+      Effect.sync(() => {
+        passGateReads += 1;
+        return passRelease === "open";
+      })
+    ),
+    testPassLayer,
+    inMemoryCustomerAgentCallServices((grant) => ({
+      currentAccount: {
+        requireActive: decodeCustomerAccountSession({
+          user: fakeAccountUser(passToolSessionAccountId ?? grant.accountId),
+        }).pipe(
+          Effect.flatMap((session) =>
+            session
+              ? Effect.succeed(session)
+              : Effect.die("Missing synthetic session")
+          )
+        ),
+      },
+      contact: {
+        current: Effect.succeed({
+          name: "Agent Customer",
+          email: testEmailAddress("mcp-agent"),
+          phone: "+420777555333",
+        }),
+      },
+    }))
   ),
 }));
 
@@ -274,6 +455,8 @@ const route = (await import("./route")) as Record<
   "DELETE" | "GET" | "POST",
   (request: Request) => Promise<Response>
 >;
+const webRoute = await import("./web/route");
+const webPreparationQuoteRoute = await import("./web/prepare-quote/route");
 
 const legacyProtocolVersion = "2025-11-25";
 
@@ -330,6 +513,517 @@ const readJsonRpc = async (response: Response) => {
 
 const callTool = (name: string, args: Schema.JsonObject) =>
   rpc<CallToolResult>("tools/call", { name, arguments: args });
+
+const webRpc = (
+  method: string,
+  params: Schema.JsonObject,
+  headers: Record<string, string> = {}
+) =>
+  webRoute.POST(
+    new Request(`${mcpResource}/web`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": legacyProtocolVersion,
+        "x-real-ip": "203.0.113.7",
+        origin: "http://deskohub.test",
+        ...headers,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++requestId, method, params }),
+    })
+  );
+
+describe("cowork passes through agent transports", () => {
+  const selection = () => ({
+    family: "cowork",
+    date: workspaceDateFromToday(2),
+    tier: "open-space",
+  });
+  const funded = () => ({ ...selection(), pass_id: testEntryPackId });
+  const heldPass = { pass_id: testUnlimitedPassId, locale: "en-US" };
+  const packProduct = {
+    product: { kind: "entry-pack", tier: "open-space", size: 5 },
+    locale: "en-US",
+    purchase_request_id: "abcdef01-0000-4000-8000-000000000001",
+  };
+  const browser = { cookie: browserSession };
+
+  beforeEach(() => {
+    passRelease = "open";
+    purchaseNeedsDetails = false;
+    passOperations.length = 0;
+    bookingCalls.length = 0;
+    browserSessionReads = 0;
+    passGateReads = 0;
+    memoryBudget.reset();
+    rateLimit = { rateLimited: false };
+    authorizationServerReachable = true;
+    accessTokens.clear();
+    accessTokens.set("pass-grant", "passes:manage");
+    accessTokens.set("renewed-pass-grant", "passes:manage");
+    accessTokens.set("other-client-pass-grant", "passes:manage");
+    accessTokens.set("other-holder-grant", "passes:manage");
+    accessTokens.set("reservation-grant", "reservations:create");
+    accessTokens.set(
+      "funded-booking-grant",
+      "passes:manage reservations:create"
+    );
+  });
+  afterEach(() => {
+    passRelease = "off";
+    passToolSessionAccountId = undefined;
+  });
+
+  test("keeps ordinary quotes public and challenges a funded quote before reading account data", async () => {
+    const published = await readJsonRpc(await postRpc("tools/list"));
+    const quote = published.result.tools.find(
+      ({ name }: { name: string }) => name === "get_quote"
+    );
+    expect(quote.securitySchemes).toEqual([
+      { type: "noauth" },
+      { type: "oauth2", scopes: ["passes:manage"] },
+    ]);
+    const gateReadsAfterDiscovery = passGateReads;
+    const regular = await readJsonRpc(
+      await postRpc("tools/call", { name: "get_quote", arguments: selection() })
+    );
+    expect(regular.result.structuredContent.total.amount).toBeGreaterThan(0);
+    expect(passGateReads).toBe(gateReadsAfterDiscovery);
+    expect(
+      new URL(
+        regular.result.structuredContent.reservation_url
+      ).searchParams.has("pass")
+    ).toBe(false);
+
+    const call = { name: "get_quote", arguments: funded() };
+    const cookieOnly = await postRpc("tools/call", call, browser);
+    expect(cookieOnly.status).toBe(401);
+    expect(cookieOnly.headers.get("www-authenticate")).toContain(
+      'scope="passes:manage"'
+    );
+    const oldGrant = await postRpc("tools/call", call, {
+      authorization: "Bearer reservation-grant",
+    });
+    expect(oldGrant.status).toBe(403);
+    expect(passOperations).toEqual([]);
+    expect(browserSessionReads).toBe(0);
+
+    const holder = await readJsonRpc(
+      await postRpc("tools/call", call, { authorization: "Bearer pass-grant" })
+    );
+    expect(holder.result.structuredContent.total.amount).toBe(0);
+    expect(
+      new URL(holder.result.structuredContent.reservation_url).searchParams.get(
+        "pass"
+      )
+    ).toBe(testEntryPackId);
+    expect(JSON.stringify(holder)).not.toContain(signedFundedQuote);
+    expect(passOperations).toEqual(["quote"]);
+  });
+
+  test("requires both grants to start a funded hold and submits the signed selection", async () => {
+    const call = { name: "start_reservation", arguments: funded() };
+    for (const token of ["reservation-grant", "pass-grant"]) {
+      expect(
+        (
+          await postRpc("tools/call", call, {
+            authorization: `Bearer ${token}`,
+          })
+        ).status
+      ).toBe(403);
+    }
+    expect(bookingCalls).toEqual([]);
+
+    const response = await postRpc("tools/call", call, {
+      authorization: "Bearer funded-booking-grant",
+    });
+    const result = (await readJsonRpc(response)).result;
+    expect(result.structuredContent.total.amount).toBe(0);
+    expect(result.structuredContent.pay_url).toContain("/checkout/pay?");
+    expect(bookingCalls).toMatchObject([
+      {
+        entryPackId: testEntryPackId,
+        advertisedPriceToken: signedFundedQuote,
+        requireEntryPackQuote: true,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(signedFundedQuote);
+  });
+
+  test("counts funded quotes against the OAuth grant budget", async () => {
+    const call = { name: "get_quote", arguments: funded() };
+    const headers = { authorization: "Bearer pass-grant" };
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await readJsonRpc(
+        await postRpc("tools/call", call, headers)
+      );
+      expect(response.result.isError).toBeFalsy();
+    }
+    const limited = await readJsonRpc(
+      await postRpc("tools/call", call, headers)
+    );
+    expect(limited.result.structuredContent.error.code).toBe("rate_limited");
+    expect(passOperations).toHaveLength(10);
+  });
+
+  test("a valid pass grant cannot quote or open another holder's pass", async () => {
+    const headers = { authorization: "Bearer other-holder-grant" };
+    for (const call of [
+      { name: "get_quote", arguments: funded() },
+      { name: "show_pass_access", arguments: heldPass },
+    ]) {
+      const { result } = await readJsonRpc(
+        await postRpc("tools/call", call, headers)
+      );
+      expect(result.structuredContent).toEqual({
+        error: expect.objectContaining({ code: "passes_unavailable" }),
+      });
+    }
+    expect(bookingCalls).toEqual([]);
+  });
+
+  test("shares the tighter purchase budget between browser and OAuth calls", async () => {
+    const call = { name: "start_pass_purchase", arguments: packProduct };
+    const headers = { authorization: "Bearer pass-grant" };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await readJsonRpc(
+        await postRpc("tools/call", call, headers)
+      );
+      expect(response.result.isError).toBeFalsy();
+    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await readJsonRpc(
+        await webRpc("tools/call", call, browser)
+      );
+      expect(response.result.isError).toBeFalsy();
+    }
+    const limited = await readJsonRpc(
+      await webRpc("tools/call", call, browser)
+    );
+    expect(limited.result.structuredContent.error.code).toBe("rate_limited");
+    expect(passOperations).toHaveLength(5);
+  });
+
+  test("scopes an OAuth purchase retry to the verified buyer and client", async () => {
+    const purchase = async (token: string, input = packProduct) => {
+      const response = await postRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: input },
+        { authorization: `Bearer ${token}` }
+      );
+      return (await readJsonRpc(response)).result.structuredContent;
+    };
+    const initial = await purchase("pass-grant");
+    expect(new URL(initial.pay_url).searchParams.get("order")).toBe(
+      "852b4cf8-765c-8f98-b368-82fd84c5e101"
+    );
+    expect(
+      await purchase("renewed-pass-grant", {
+        ...packProduct,
+        locale: "cs-CZ",
+        purchase_request_id: packProduct.purchase_request_id.toUpperCase(),
+      })
+    ).toEqual(initial);
+    for (const token of ["other-client-pass-grant", "other-holder-grant"]) {
+      const ownPurchase = await purchase(token);
+      expect(ownPurchase.pay_url).toContain("/passes/entry-pack?order=");
+      expect(ownPurchase).not.toEqual(initial);
+    }
+    passToolSessionAccountId = "other-account";
+    expect(await purchase("pass-grant")).toEqual({
+      error: expect.objectContaining({ code: "passes_unavailable" }),
+    });
+    expect(passOperations).toHaveLength(4);
+  });
+
+  test("requires a purchase request UUID before starting a pass purchase", async () => {
+    const listing = await readJsonRpc(await postRpc("tools/list"));
+    const purchase = listing.result.tools.find(
+      ({ name }: { name: string }) => name === "start_pass_purchase"
+    );
+    expect(purchase).toMatchObject({
+      inputSchema: {
+        required: expect.arrayContaining(["purchase_request_id"]),
+      },
+      annotations: { idempotentHint: true, readOnlyHint: false },
+    });
+    const { purchase_request_id: _, ...selection } = packProduct;
+    const argumentsToReject = [
+      selection,
+      { ...selection, purchase_request_id: "unscoped-client-order" },
+    ];
+    for (const args of argumentsToReject) {
+      const response = await postRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: args },
+        { authorization: "Bearer pass-grant" }
+      );
+      expect((await readJsonRpc(response)).result.structuredContent).toEqual({
+        error: expect.objectContaining({ code: "invalid_input" }),
+      });
+    }
+    expect(passOperations).toEqual([]);
+  });
+
+  test("recovers a same-origin browser purchase and keeps deliberate changes distinct", async () => {
+    const purchase = async (input = packProduct) => {
+      const response = await webRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: input },
+        browser
+      );
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      return (await readJsonRpc(response)).result.structuredContent;
+    };
+    const initial = await purchase();
+    expect(initial.pay_url).toContain("/passes/entry-pack?order=");
+    expect(await purchase()).toEqual(initial);
+    const differentPack = await purchase({
+      ...packProduct,
+      product: { ...packProduct.product, size: 10 },
+    });
+    expect(differentPack.pay_url).toContain("/passes/entry-pack?order=");
+    expect(differentPack).not.toEqual(initial);
+    const newPurchase = await purchase({
+      ...packProduct,
+      purchase_request_id: "abcdef01-0000-4000-8000-000000000002",
+    });
+    expect(newPurchase.pay_url).toContain("/passes/entry-pack?order=");
+    expect(newPurchase).not.toEqual(initial);
+    const remote = await readJsonRpc(
+      await postRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: packProduct },
+        { authorization: "Bearer pass-grant" }
+      )
+    );
+    expect(remote.result.structuredContent.pay_url).toContain(
+      "/passes/entry-pack?order="
+    );
+    expect(remote.result.structuredContent).not.toEqual(initial);
+  });
+
+  test("projects held pass and purchase data without buyer information or access credentials", async () => {
+    const headers = { authorization: "Bearer pass-grant" };
+    const list = await readJsonRpc(
+      await postRpc(
+        "tools/call",
+        { name: "list_passes", arguments: {} },
+        headers
+      )
+    );
+    expect(list.result.structuredContent.passes[0]).toMatchObject({
+      pass_id: testEntryPackId,
+      entries_left: 3,
+    });
+    expect(JSON.stringify(list)).not.toContain("Synthetic Gift Buyer");
+    const access = await readJsonRpc(
+      await postRpc(
+        "tools/call",
+        { name: "show_pass_access", arguments: heldPass },
+        headers
+      )
+    );
+    expect(access.result.structuredContent).toEqual({
+      access_url: expect.stringContaining(`/access/${testUnlimitedPassId}`),
+    });
+    expect(new URL(access.result.structuredContent.access_url).search).toBe("");
+    const wrong = await readJsonRpc(
+      await postRpc(
+        "tools/call",
+        { name: "show_pass_access", arguments: { pass_id: testEntryPackId } },
+        headers
+      )
+    );
+    expect(wrong.result.structuredContent).toEqual({
+      error: expect.objectContaining({ code: "passes_unavailable" }),
+    });
+    const purchase = await readJsonRpc(
+      await postRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: packProduct },
+        headers
+      )
+    );
+    expect(purchase.result.structuredContent).toEqual({
+      pay_url: expect.stringContaining("/passes/entry-pack?order="),
+    });
+    expect(JSON.stringify([list, access, purchase])).not.toContain(
+      fakeAccountUser(agentAccountId).email
+    );
+  });
+
+  test("keeps the buyer details handoff query on a locale-agnostic URL", async () => {
+    purchaseNeedsDetails = true;
+    const { result } = await readJsonRpc(
+      await postRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: packProduct },
+        { authorization: "Bearer pass-grant" }
+      )
+    );
+
+    const url = new URL(result.structuredContent.pay_url);
+    expect(url.pathname).toBe("/passes/entry-pack");
+    expect(url.searchParams.get("handoff")).toBe("fixture-handoff");
+  });
+
+  test("requires a same-origin live browser session, keeps private responses uncached, and rejects the wrong holder", async () => {
+    const access = { name: "show_pass_access", arguments: heldPass };
+    expect(
+      (
+        await webRpc("tools/call", access, {
+          ...browser,
+          origin: "http://deskohub.test:8000",
+        })
+      ).status
+    ).toBe(403);
+    expect(
+      (
+        await webRpc("tools/call", access, {
+          ...browser,
+          "content-type": "text/plain",
+        })
+      ).status
+    ).toBe(415);
+    expect(
+      (
+        await webRpc("tools/call", access, {
+          ...browser,
+          authorization: "Bearer pass-grant",
+        })
+      ).status
+    ).toBe(403);
+    expect(browserSessionReads).toBe(0);
+    expect((await webRpc("tools/call", access)).status).toBe(401);
+    expect(passOperations).toEqual([]);
+
+    const discovery = await readJsonRpc(
+      await webRpc("tools/list", {}, browser)
+    );
+    expect(
+      discovery.result.tools.map(({ name }: { name: string }) => name)
+    ).toEqual([
+      "get_quote",
+      "list_passes",
+      "show_pass_access",
+      "start_pass_purchase",
+    ]);
+    expect(discovery.result.tools[3].inputSchema.required).toContain(
+      "purchase_request_id"
+    );
+    const holder = await webRpc("tools/call", access, browser);
+    expect(holder.headers.get("cache-control")).toBe("no-store");
+    expect((await readJsonRpc(holder)).result.structuredContent).toEqual({
+      access_url: expect.stringContaining(testUnlimitedPassId),
+    });
+    const wrong = await readJsonRpc(
+      await webRpc("tools/call", access, {
+        cookie: "deskohub-test-session=another-account",
+      })
+    );
+    expect(wrong.result.structuredContent.error.code).toBe(
+      "passes_unavailable"
+    );
+    const quoted = await readJsonRpc(
+      await webRpc(
+        "tools/call",
+        { name: "get_quote", arguments: funded() },
+        browser
+      )
+    );
+    expect(quoted.result.structuredContent).toMatchObject({
+      total: { amount: 0 },
+    });
+    expect(JSON.stringify(quoted)).not.toContain(signedFundedQuote);
+    const purchase = await readJsonRpc(
+      await webRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: packProduct },
+        browser
+      )
+    );
+    expect(purchase.result.structuredContent).toEqual({
+      pay_url: expect.stringContaining("/passes/entry-pack?order="),
+    });
+  });
+
+  test("returns the sealed quote only to the internal form request with a live holder session", async () => {
+    const prepareQuote = (headers: Record<string, string> = {}) =>
+      webPreparationQuoteRoute.POST(
+        new Request(`${mcpResource}/web/prepare-quote`, {
+          method: "POST",
+          headers: {
+            origin: "http://deskohub.test",
+            "content-type": "application/json",
+            ...headers,
+          },
+          body: JSON.stringify(funded()),
+        })
+      );
+    expect((await prepareQuote()).status).toBe(401);
+    expect(
+      (await prepareQuote({ ...browser, origin: "https://another.example" }))
+        .status
+    ).toBe(403);
+    expect(passOperations).toEqual([]);
+    const holder = await prepareQuote(browser);
+    expect(holder.headers.get("cache-control")).toBe("no-store");
+    expect(await holder.json()).toMatchObject({
+      quote: {
+        total: { amount: 0 },
+        advertised_price_token: signedFundedQuote,
+      },
+    });
+    const foreignAccount = await prepareQuote({
+      cookie: "deskohub-test-session=another-account",
+    });
+    expect(await foreignAccount.json()).toMatchObject({
+      error: { code: "passes_unavailable" },
+    });
+  });
+
+  test.each(["off", "unavailable"] as const)(
+    "closes both pass transports when the release is %s",
+    async (release) => {
+      passRelease = release;
+      const listing = await readJsonRpc(await postRpc("tools/list"));
+      expect(
+        listing.result.tools.map(({ name }: { name: string }) => name)
+      ).not.toContain("list_passes");
+      const call = { name: "get_quote", arguments: funded() };
+      expect(
+        (
+          await readJsonRpc(
+            await postRpc("tools/call", call, {
+              authorization: "Bearer pass-grant",
+            })
+          )
+        ).result.isError
+      ).toBe(true);
+      expect((await webRpc("tools/call", call, browser)).status).toBe(404);
+      expect(browserSessionReads).toBe(0);
+      expect(passOperations).toEqual([]);
+    }
+  );
+
+  test("keeps only informational pass operations in the ChatGPT catalog", async () => {
+    const { result } = await readJsonRpc(
+      await postRpc("tools/list", {}, { "user-agent": "openai-mcp/1" })
+    );
+    expect(result.tools.map(({ name }: { name: string }) => name)).toEqual(
+      expect.arrayContaining(["list_passes", "show_pass_access"])
+    );
+    expect(
+      result.tools.map(({ name }: { name: string }) => name)
+    ).not.toContain("start_pass_purchase");
+    expect(
+      result.tools.find(({ name }: { name: string }) => name === "get_quote")
+        .inputSchema.properties.pass_id
+    ).toBeUndefined();
+  });
+});
 
 /**
  * An SDK client on the 2026 per-request leg, named `name` in its

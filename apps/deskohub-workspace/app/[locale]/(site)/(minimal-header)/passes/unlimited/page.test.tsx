@@ -106,6 +106,19 @@ mock.module("@/features/passes/backend/entry-pack-order", () => ({
         : undefined
     ),
 }));
+mock.module("@/features/passes/backend/pass-checkout-handoff", () => ({
+  readPassCheckoutHandoffForPage: (token: string) =>
+    Effect.succeed(
+      token === "opaque"
+        ? {
+            orderId: submittedOrder,
+            holderEmail,
+            predecessorOrderIds: [ownedOrder],
+            product: { kind: "unlimited", selection: renewalSelection },
+          }
+        : undefined
+    ),
+}));
 
 const { default: UnlimitedPassPage, generateMetadata } = await import("./page");
 
@@ -192,6 +205,30 @@ async function renderContent(query: Record<string, string | string[]>) {
   return content.type(content.props);
 }
 
+test("Choose and Details can reload before the gift handoff has an order", async () => {
+  const query = {
+    handoff: "opaque",
+    tier: "reserved-desk",
+    startDate: "2026-12-20",
+  };
+  const choose = await renderContent(query);
+  expect(choose.props.children.props).toMatchObject({
+    initialHandoff: {
+      token: "opaque",
+      orderId: submittedOrder,
+      predecessorOrderIds: [ownedOrder],
+    },
+    initialDetails: undefined,
+    initialStartDate: query.startDate,
+    draft: { kind: "resume", orderId: submittedOrder, holderEmail },
+  });
+  const details = await renderContent({ ...query, step: "details" });
+  expect(details.props.children.props).toMatchObject({
+    initialDetails: { tier: query.tier, startDate: query.startDate },
+    draft: { kind: "resume", orderId: submittedOrder, holderEmail },
+  });
+});
+
 test("a renewal preselects the holder's prior configuration and authoritative exclusive end", async () => {
   const content = await renderContent({ renew: renewalSource });
   expect(content.props.children.props).toMatchObject({
@@ -259,6 +296,7 @@ test("reload restores an owned submitted draft to Details using the committed se
   const content = await renderContent({
     ...selectionQuery,
     submittedOrder,
+    supersedeOrder: ownedOrder,
     predecessorOrder: ownedOrder,
   });
   expect(content.props.children.props).toMatchObject({
@@ -267,9 +305,10 @@ test("reload restores an owned submitted draft to Details using the committed se
       orderId: submittedOrder,
       holderEmail,
       predecessorOrderIds: [ownedOrder],
+      supersedeOrderId: ownedOrder,
     },
     initialDetails: { tier: "reserved-desk", startDate: "2026-12-01" },
-    retryPayment: undefined,
+    initialPayment: undefined,
   });
 });
 
@@ -286,15 +325,45 @@ test("reload before commit retains submitted and predecessor IDs without restori
       kind: "submitted",
       orderId: submittedOrder,
       predecessorOrderIds: [unresolvedOrder, ownedOrder],
+      legacyPredecessorOrderIds: [unresolvedOrder, ownedOrder],
     },
     initialDetails: {
       tier: "open-space",
       startDate: "2026-12-15",
       coffee: true,
     },
-    retryPayment: undefined,
+    initialPayment: undefined,
   });
   expect(props.draft).not.toHaveProperty("holderEmail");
+  expect(props.draft).not.toHaveProperty("supersedeOrderId");
+});
+
+test("a shipped edit link preserves ambiguous predecessors without prefilling account data", async () => {
+  const query = { ...selectionQuery, predecessorOrder: ownedOrder };
+  const shipped = await renderContent(query);
+  expect(shipped.props.children.props.draft).toEqual({
+    kind: "edit",
+    predecessorOrderIds: [ownedOrder],
+    legacyPredecessorOrderIds: [ownedOrder],
+  });
+  const modern = await renderContent({ ...query, predecessorMode: "history" });
+  expect(modern.props.children.props.draft).toEqual({
+    kind: "edit",
+    predecessorOrderIds: [ownedOrder],
+  });
+  const editedOrder = crypto.randomUUID();
+  const mixed = await renderContent({
+    ...query,
+    predecessorOrder: [editedOrder, ownedOrder],
+    supersedeOrder: editedOrder,
+    legacyPredecessorOrder: ownedOrder,
+  });
+  expect(mixed.props.children.props.draft).toEqual({
+    kind: "edit",
+    predecessorOrderIds: [editedOrder, ownedOrder],
+    supersedeOrderId: editedOrder,
+    legacyPredecessorOrderIds: [ownedOrder],
+  });
 });
 
 test("reload distinguishes an owned self-purchase from a submission that has not committed", async () => {
@@ -319,7 +388,7 @@ test("an order committed after the reload's owner read stays on Details", async 
       startDate: "2026-12-15",
       coffee: true,
     },
-    retryPayment: undefined,
+    initialPayment: undefined,
   });
 });
 

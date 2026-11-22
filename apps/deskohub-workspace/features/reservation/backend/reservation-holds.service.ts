@@ -273,6 +273,7 @@ const holdForAttempt = Effect.fn("ReservationHolds.holdForAttempt")(function* (
           authorAccountId: booking.author,
           checkoutSessionId: request.checkout.sessionId,
           reservation,
+          ...(request.entryPack && { entryPackId: request.entryPack.passId }),
         });
   if (checkout.kind === "payment_pending") {
     return {
@@ -1431,6 +1432,7 @@ const resolveAgentCheckout = Effect.fn("preparePayState.resolveAgentCheckout")(
     readonly authorAccountId: CustomerAccountId;
     readonly checkoutSessionId: CheckoutSessionId;
     readonly reservation: PreparePayStateInput["reservation"];
+    readonly entryPackId?: EntryPackRedemption["passId"];
   }) {
     const reservations = yield* WorkspaceReservationRepository;
     const [latestFound, previous] =
@@ -1484,6 +1486,7 @@ const resolveAgentCheckout = Effect.fn("preparePayState.resolveAgentCheckout")(
       checkoutSessionId,
       checkoutAttemptId,
       reservation: input.reservation,
+      ...(input.entryPackId && { entryPackId: input.entryPackId }),
     });
     if (isAcceptedLookupKey(latest.checkoutAttemptKey, attemptKeys.accepted)) {
       return {

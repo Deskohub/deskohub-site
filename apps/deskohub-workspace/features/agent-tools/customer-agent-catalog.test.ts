@@ -6,10 +6,6 @@ import type { ShowBookingResult } from "./show-booking.schema";
 const { customerAgentCatalog } = await import("./customer-agent-catalog");
 const { CallableAgentTools } = await import("./agent-tool");
 const { makeAgentToolTestServices } = await import("./agent-tools.test-utils");
-const { startReservationTool } = await import("./start-reservation.tool");
-const { startReservationOnWebsiteTool } = await import(
-  "./start-reservation-on-website.tool"
-);
 
 const clients = ["chatgpt", "claude", "other"] as const;
 
@@ -67,8 +63,16 @@ describe("customerAgentCatalog", () => {
     (client) => {
       const { tools } = customerAgentCatalog.forClient(client);
 
-      expect(tools).toEqual([...customerAgentCatalog.published.tools]);
-      expect(tools).toContain(startReservationTool);
+      expect(toNames(tools)).toEqual(
+        toNames(customerAgentCatalog.published.tools)
+      );
+      expect(
+        tools.find(({ name }) => name === "start_reservation")
+      ).toMatchObject({
+        access: "signed-in",
+        scope: "reservations:create",
+        readOnly: false,
+      });
     }
   );
 
@@ -79,7 +83,6 @@ describe("customerAgentCatalog", () => {
       ({ name }) => name === "start_reservation"
     );
 
-    expect(startReservation).toBe(startReservationOnWebsiteTool);
     expect(startReservation).toMatchObject({
       access: "public",
       readOnly: true,
@@ -97,6 +100,25 @@ describe("customerAgentCatalog", () => {
         )
         .map(({ name }) => name)
     ).toEqual(["start_reservation"]);
+  });
+
+  test("publishes the retryable pass checkout only to clients that admit it", () => {
+    const { tools, instructions } = customerAgentCatalog.forClient(
+      "chatgpt",
+      true
+    );
+    expect(toNames(tools)).toContain("list_passes");
+    expect(toNames(tools)).not.toContain("start_pass_purchase");
+    expect(instructions).not.toMatch(/start_pass_purchase|pay_url|status_url/);
+    expect(
+      customerAgentCatalog
+        .forClient("claude", true)
+        .tools.find(({ name }) => name === "start_pass_purchase")
+    ).toMatchObject({
+      access: "signed-in",
+      scope: "passes:manage",
+      idempotent: true,
+    });
   });
 
   test.each(clients)(

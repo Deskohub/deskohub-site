@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { Context, Option, Schema } from "effect";
 import { HttpApi, type HttpApiGroup, OpenApi } from "effect/http-api";
+import { CustomerBookingSelection } from "./customer-booking-selection";
 import {
+  CustomerBookedSelection,
   CustomerReservationInvitee,
   CustomerReservationPeople,
 } from "./customer-reservations-api";
@@ -61,12 +63,34 @@ const endpointsOf = <Id extends string, Groups extends HttpApiGroup.Constraint>(
 describe("WorkspaceCustomerApi", () => {
   const endpoints = endpointsOf(WorkspaceCustomerApi);
 
-  test("declares the account, reservations, booking, invoices and companies groups", () => {
+  test("accepts Entry funding on booking input and keeps the legacy record selection", () => {
+    const selection = {
+      family: "cowork",
+      date: "2026-11-25",
+      tier: "reserved-desk",
+    } as const;
+    const funded = {
+      ...selection,
+      funding: {
+        kind: "entry",
+        passId: "019acbf0-0000-7000-8000-000000000011",
+      },
+    } as const;
+    expect(Schema.decodeUnknownSync(CustomerBookingSelection)(funded)).toEqual(
+      funded
+    );
+    expect(
+      Schema.decodeUnknownSync(CustomerBookedSelection)({ selection: funded })
+    ).toEqual({ selection });
+  });
+
+  test("declares every customer API group", () => {
     expect(Object.keys(WorkspaceCustomerApi.groups).sort()).toEqual([
       "account",
       "booking",
       "companies",
       "invoices",
+      "passes",
       "reservations",
     ]);
   });
@@ -114,6 +138,9 @@ describe("WorkspaceCustomerApi", () => {
         "booking.clearCheckoutDiscountCode",
         "booking.acceptCheckoutPriceChange",
         "booking.submitCheckout",
+        "passes.beginPassPurchase",
+        "passes.submitPassPurchase",
+        "passes.updatePassPurchasePrice",
       ].map((reference) => ({
         reference,
         options: { errors: "all", onExcessProperty: "error" },

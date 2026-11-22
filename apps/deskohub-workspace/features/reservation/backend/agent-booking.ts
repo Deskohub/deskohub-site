@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import type { CustomerAgentGrant } from "@/features/account";
 import type { Locale } from "@/features/i18n";
+import type { OrderId } from "@/features/order";
 import { preparePayStateInputSchema } from "@/features/reservation/actions/prepare-pay-state.schema";
 import { defaultReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { BookingAgent, deriveAgentCheckoutIdentifiers } from "./booking-agent";
@@ -34,6 +35,7 @@ export const prepareAgentPayState = Effect.fn("agentBooking.preparePayState")(
     readonly reservation: SelectedReservation;
     readonly contact: AgentBookingContact;
     readonly advertisedPriceToken: string;
+    readonly entryPackId?: OrderId;
     readonly marketingConsent: boolean;
     readonly locale: Locale;
   }) {
@@ -45,6 +47,7 @@ export const prepareAgentPayState = Effect.fn("agentBooking.preparePayState")(
       checkoutSessionId: identifiers.checkoutSessionId,
       checkoutAttemptId: identifiers.checkoutAttemptId,
       advertisedPriceToken: request.advertisedPriceToken,
+      ...(request.entryPackId && { entryPackId: request.entryPackId }),
       ...(request.marketingConsent && { marketingConsent: true }),
       customer: "account",
       reservation: {
@@ -55,7 +58,10 @@ export const prepareAgentPayState = Effect.fn("agentBooking.preparePayState")(
         billing: defaultReservationBillingSelection,
       },
     });
-    return yield* prepareWorkspacePayState(submission).pipe(
+    return yield* prepareWorkspacePayState({
+      ...submission,
+      ...(request.entryPackId && { requireEntryPackQuote: true }),
+    }).pipe(
       Effect.provideService(BookingAgent, {
         clientId: request.grant.clientId,
         selectionKey: identifiers.selectionKey,

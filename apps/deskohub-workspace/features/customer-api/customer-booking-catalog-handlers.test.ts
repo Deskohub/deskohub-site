@@ -1,10 +1,13 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import { PostHogFeatureFlagEvaluationError } from "@deskohub/analytics-posthog/feature-flags/node";
 import { DotyposTableSchema, DotyposUnavailable } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { customerAvailabilityReplacementHeader } from "@deskohub/workspace-customer-api";
 import { Effect, Layer, Schema } from "effect";
+import { testCustomerSession } from "@/features/account/backend/account-operations.test-utils";
+import { openAdvertisedPriceState } from "@/features/checkout/backend/checkout/advertised-price-state";
 import { CheckoutPricingService } from "@/features/checkout/backend/checkout/checkout-pricing.service";
 import { CheckoutUnavailableError } from "@/features/checkout/backend/checkout/checkout-unavailable";
 import {
@@ -29,9 +32,11 @@ import {
 } from "@/features/discounts/errors";
 import { releaseGateForRunOverFlags } from "@/features/feature-flags/backend/release-cohorts.test-utils";
 import type { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
+import { WorkspaceFeatureFlagServiceMock } from "@/features/feature-flags/backend/workspace-feature-flag.service.mock";
 import { getPaymentSubmitLegalDocuments } from "@/features/legal/payment-submit-evidence";
 import { MeetingRoomReleaseGate } from "@/features/meeting-room/backend/meeting-room-release-gate";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { OvernightStayReleaseGate } from "@/features/reservation/backend/overnight-stay-release-gate";
@@ -50,6 +55,7 @@ import {
 } from "@/features/reservation/workspace-availability";
 import { moneyWithValue } from "@/shared/money/money";
 import { TestSealedStateKeys } from "@/shared/testing/sealed-state-keys.test-utils";
+import { makeRecordingWorkspaceDatabase } from "@/shared/testing/workspace-recording-database.test-utils";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import {
   instantStringSchema,
@@ -59,6 +65,7 @@ import {
 import {
   answerInEachReleaseCohort,
   type CustomerApiCall,
+  currentAccountResolving,
   customerApiRequest,
   expectEachCohortAnsweredAlone,
   inReleaseCohort,
@@ -73,6 +80,31 @@ type AvailabilityRequest = Parameters<
 
 const workspaceDateFromToday = (days: number) =>
   getCurrentWorkspaceDate().add({ days }).toString();
+
+const passId = "7d3c23b3-02f6-4e40-830f-79bddf11e4fa";
+const unusedOpenSpacePackRows = [[["open-space", 5]], [[0]], [], []];
+
+const passQuoteLayer = async (
+  gate = CoworkPassesReleaseGate.fromDecision(true),
+  tier:
+    | "open-space"
+    | "reserved-desk"
+    | "reserved-desk-workstation"
+    | null = "open-space"
+) => {
+  const database = await makeRecordingWorkspaceDatabase();
+  database.setRows([tier ? [[tier, 5]] : [], [[0]], [], []]);
+  const layer = Layer.mergeAll(
+    gate,
+    database.layer,
+    currentAccountResolving((session) => ({
+      kind: "unlinked",
+      session,
+      reviewMarker: "absent",
+    }))
+  );
+  return { database, layer };
+};
 
 /** No public sale runs. */
 const noSale = ({
@@ -1023,6 +1055,37 @@ describe("getQuote", () => {
 
   testCustomerEndpointGuards(getQuote);
 
+  test.each([
+    { reason: "all entries committed", rows: [[["open-space", 5]], [[5]]] },
+    {
+      reason: "a claim on the selected date",
+      rows: [[["open-space", 5]], [[0]], [["another-reservation"]]],
+    },
+    {
+      reason: "same-tier Unlimited coverage",
+      rows: [[["open-space", 5]], [[0]], [], [["open-space"]]],
+    },
+  ])("refuses to sign a quote with $reason", async ({ rows }) => {
+    const { database, layer } = await passQuoteLayer();
+    database.setRows([...rows]);
+    const api = makeCustomerApiTestServer({
+      bookingCatalog: pricedCatalog({ entryPackQuote: layer }),
+    });
+    const response = await api.handle(
+      customerApiRequest({
+        ...getQuote,
+        path: `${getQuote.path}&passId=${passId}`,
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      _tag: "CustomerSelectionUnavailable",
+      reason: "availability_changed",
+    });
+    expect(database.statements).toHaveLength(rows.length);
+  });
+
   test("quotes the selection with its summary and the signed quote checkout starts from", async () => {
     const api = makeCustomerApiTestServer({ bookingCatalog: pricedCatalog() });
 
@@ -1048,6 +1111,145 @@ describe("getQuote", () => {
     ).toEqual(["product:cowork:open-space", "addon:coffee", "total:final"]);
     expect(body.advertisedPriceToken).toEqual(expect.any(String));
     expect(body.advertisedPriceToken.length).toBeGreaterThan(0);
+  });
+
+  test.each([
+    { coffee: false, total: 0 },
+    { coffee: true, total: 5_000 },
+  ])("quotes an Entry pack with coffee=$coffee", async ({ coffee, total }) => {
+    const { database, layer } = await passQuoteLayer();
+    const api = makeCustomerApiTestServer({
+      bookingCatalog: pricedCatalog({ entryPackQuote: layer }),
+    });
+    const date = workspaceDateFromToday(1);
+
+    const response = await api.handle(
+      customerApiRequest({
+        method: "GET",
+        path: quotePath(
+          `family=cowork&tier=open-space&coffee=${coffee}&date=${date}&passId=${passId}`
+        ),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.total).toMatchObject({ currency: "CZK", value: total });
+    expect(body.summary.total).toEqual(body.total);
+    expect(database.statements[0]?.params).toEqual(
+      expect.arrayContaining([passId, testCustomerSession.accountId, date])
+    );
+    const advertisement = await Effect.runPromise(
+      openAdvertisedPriceState(body.advertisedPriceToken).pipe(
+        Effect.provide(TestSealedStateKeys)
+      )
+    );
+    expect(advertisement).toMatchObject({
+      quote: { entryPack: { passId, tier: "open-space" } },
+    });
+  });
+
+  test.each([
+    CoworkPassesReleaseGate.fromDecision(false),
+    CoworkPassesReleaseGate.Default.pipe(
+      Layer.provide(
+        WorkspaceFeatureFlagServiceMock({
+          isEnabled: () =>
+            Effect.fail(
+              new PostHogFeatureFlagEvaluationError({
+                message: "Test flag evaluation unavailable",
+                cause: undefined,
+              })
+            ),
+        })
+      )
+    ),
+  ])(
+    "refuses a funded quote without reading a pass while the release is closed or unavailable",
+    async (gate) => {
+      const { database, layer } = await passQuoteLayer(gate);
+      const api = makeCustomerApiTestServer({
+        bookingCatalog: pricedCatalog({ entryPackQuote: layer }),
+      });
+
+      const response = await api.handle(
+        customerApiRequest({
+          ...getQuote,
+          path: `${getQuote.path}&passId=${passId}`,
+        })
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        _tag: "CustomerSelectionUnavailable",
+        reason: "availability_changed",
+      });
+      expect(database.statements).toEqual([]);
+    }
+  );
+
+  test.each([
+    { tier: null, selection: "tier=open-space", reason: "unowned pack" },
+    {
+      tier: "reserved-desk",
+      selection: "tier=open-space",
+      reason: "different tier",
+    },
+    {
+      tier: "reserved-desk-workstation",
+      selection: "tier=reserved-desk",
+      reason: "missing workstation",
+    },
+  ] as const)(
+    "refuses a funded quote for $reason",
+    async ({ tier, selection }) => {
+      const { layer } = await passQuoteLayer(
+        CoworkPassesReleaseGate.fromDecision(true),
+        tier
+      );
+      const api = makeCustomerApiTestServer({
+        bookingCatalog: pricedCatalog({ entryPackQuote: layer }),
+      });
+      const response = await api.handle(
+        customerApiRequest({
+          method: "GET",
+          path: quotePath(
+            `family=cowork&${selection}&date=${workspaceDateFromToday(1)}&passId=${passId}`
+          ),
+        })
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        _tag: "CustomerSelectionUnavailable",
+        reason: "availability_changed",
+      });
+    }
+  );
+
+  test("refuses a funded overnight quote while overnight stays are closed", async () => {
+    const { database, layer } = await passQuoteLayer(
+      CoworkPassesReleaseGate.fromDecision(true),
+      "reserved-desk"
+    );
+    const api = makeCustomerApiTestServer({
+      bookingCatalog: pricedCatalog({ entryPackQuote: layer }),
+    });
+    const response = await api.handle(
+      customerApiRequest({
+        method: "GET",
+        path: quotePath(
+          `family=cowork&tier=reserved-desk&stay=overnight&date=${workspaceDateFromToday(1)}&passId=${passId}`
+        ),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      _tag: "CustomerBookingSelectionInvalid",
+      field: "stay",
+    });
+    expect(database.statements).toEqual([]);
   });
 
   test("itemizes a sale on the discounted line", async () => {
@@ -1492,5 +1694,36 @@ describe("overlapping requests in different release cohorts", () => {
         },
       })
     );
+  });
+
+  test("funds quotes only within the request's own passes release cohort", async () => {
+    const fixture = await passQuoteLayer();
+    fixture.database.setRows([
+      ...unusedOpenSpacePackRows,
+      ...unusedOpenSpacePackRows,
+    ]);
+    const getQuote: CustomerApiCall = {
+      method: "GET",
+      path: `/booking/quote?locale=en-US&family=cowork&tier=open-space&date=${workspaceDateFromToday(1)}&passId=${passId}`,
+    };
+    const answers = await answerInEachReleaseCohort({
+      serve: (flags) =>
+        makeCustomerApiTestServer({
+          bookingCatalog: {
+            ...catalogDecidedOver(flags),
+            entryPackQuote: Layer.merge(
+              fixture.layer,
+              releaseGateForRunOverFlags(CoworkPassesReleaseGate, flags)
+            ),
+          },
+        }),
+      send: (cohort) => customerApiRequest(inReleaseCohort(getQuote, cohort)),
+      answer: async (response) => ({ status: response.status }),
+    });
+    expect(answers.alone).toEqual({
+      open: { status: 200 },
+      closed: { status: 409 },
+    });
+    expectEachCohortAnsweredAlone(answers);
   });
 });

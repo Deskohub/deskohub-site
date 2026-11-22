@@ -1,26 +1,26 @@
 import "server-only";
 
-import { getCustomerDisplayName } from "@deskohub/dotypos";
-import { and, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { cache } from "react";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { orders, passPurchases } from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
-import { findEntryPackPurchasePartyContacts } from "@/features/account/backend/customer-account-by-email";
 import { CustomerProfileService } from "@/features/account/backend/customer-profile.service";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import {
   type EntryPackGiftState,
-  readEntryPackGiftStates,
   recoverEntryPackGiftClaims,
 } from "@/features/passes/backend/entry-pack-gift";
 import {
+  getHeldEntryPackStatus,
   type HeldEntryPack,
   listHeldEntryPacks,
 } from "@/features/passes/backend/held-entry-packs";
+import {
+  readBoughtPassGifts,
+  readHeldPassGiftBuyers,
+} from "@/features/passes/backend/pass-gift-reads";
 import {
   type EntryPackSize,
   getEntryPackLastUsableDate,
@@ -30,11 +30,7 @@ import {
   getCoworkReservationPath,
   reservationStatusPath,
 } from "@/features/reservation/routes";
-import {
-  catchRecoverableCause,
-  runWorkspaceEffectOrElse,
-} from "@/shared/backend/workspace-effect";
-import { maskEmailAddress } from "@/shared/utils";
+import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import {
   formatInstantDate,
   formatPlainDate,
@@ -108,7 +104,7 @@ export const loadAccountPasses = Effect.fn("loadAccountPasses")(function* (
     ],
     { concurrency: "unbounded" }
   );
-  const giftBuyers = yield* readHeldGiftBuyers(
+  const giftBuyers = yield* readHeldPassGiftBuyers(
     accountId,
     packs.map(({ id }) => id),
     profileLayer
@@ -128,122 +124,24 @@ const listBoughtGifts = Effect.fn("listBoughtPassGifts")(function* (
   accountId: CustomerAccountId,
   locale: Locale
 ) {
-  const { db } = yield* WorkspaceDatabase;
-  const gifts = yield* db
-    .select({
-      orderId: passPurchases.id,
-      holderAccountId: passPurchases.holderAccountId,
-      tier: passPurchases.tier,
-      product: passPurchases.product,
-      entryCount: passPurchases.entryCount,
-    })
-    .from(passPurchases)
-    .innerJoin(orders, eq(orders.id, passPurchases.id))
-    .where(
-      and(
-        eq(passPurchases.buyerAccountId, accountId),
-        ne(passPurchases.holderAccountId, accountId),
-        eq(orders.kind, "pass-purchase"),
-        eq(orders.paymentState, "paid"),
-        isNotNull(orders.paidAt)
-      )
-    )
-    .orderBy(desc(orders.paidAt), desc(passPurchases.id));
-  if (gifts.length === 0) return [];
-
-  const recipientIds = [...new Set(gifts.map((gift) => gift.holderAccountId))];
-  const [states, recipients] = yield* Effect.all(
-    [
-      readEntryPackGiftStates(gifts.map((gift) => gift.orderId)),
-      findEntryPackPurchasePartyContacts(recipientIds),
-    ],
-    { concurrency: "unbounded" }
-  );
-  const result: AccountBoughtPass[] = [];
-  for (const { orderId, tier, product, entryCount, holderAccountId } of gifts) {
-    const state = states.get(orderId);
-    // A refund can end payment eligibility between the two reads.
-    if (!state) continue;
-    const { canResend, ...invitation } = state;
-    const email = recipients.get(holderAccountId)?.email;
-    const masked = email ? maskEmailAddress(email) : undefined;
-    const maskedHolderEmail = masked === email ? undefined : masked;
-    const summary = {
-      ...invitation,
-      orderId,
-      statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
-      tier: getPassTierName(tier, locale),
-      maskedHolderEmail,
-    };
-    if (product === "unlimited") result.push({ ...summary, product });
-    else if (entryCount !== null)
-      result.push({
-        ...summary,
-        product,
-        entryCount,
-        canResend: canResend && maskedHolderEmail !== undefined,
-      });
-  }
-  return result;
-});
-
-const readHeldGiftBuyers = Effect.fn("readHeldEntryPackGiftBuyers")(function* (
-  holderAccountId: CustomerAccountId,
-  heldIds: readonly OrderId[],
-  profileLayer: Layer.Layer<CustomerProfileService, unknown>
-) {
-  if (heldIds.length === 0) return new Map<OrderId, string | undefined>();
-  const { db } = yield* WorkspaceDatabase;
-  const gifts = yield* db
-    .select({
-      orderId: passPurchases.id,
-      accountId: passPurchases.buyerAccountId,
-    })
-    .from(passPurchases)
-    .innerJoin(orders, eq(orders.id, passPurchases.id))
-    .where(
-      and(
-        eq(passPurchases.holderAccountId, holderAccountId),
-        eq(orders.paymentState, "paid"),
-        ne(passPurchases.buyerAccountId, holderAccountId),
-        inArray(passPurchases.id, heldIds)
-      )
-    );
-  const buyers = yield* findEntryPackPurchasePartyContacts(
-    gifts.map((gift) => gift.accountId)
-  );
-  const linkedBuyers = [...buyers].flatMap(
-    ([accountId, { dotyposCustomerId }]) =>
-      dotyposCustomerId ? [{ accountId, dotyposCustomerId }] : []
-  );
-  const profileNames = new Map(
-    linkedBuyers.length === 0
-      ? []
-      : yield* Effect.gen(function* () {
-          const profiles = yield* CustomerProfileService;
-          return yield* Effect.forEach(
-            linkedBuyers,
-            (buyer) =>
-              profiles.load(buyer).pipe(
-                Effect.map(({ firstName, lastName }) => {
-                  const name = getCustomerDisplayName({ firstName, lastName });
-                  return name?.includes("@") ? undefined : name;
-                }),
-                catchRecoverableCause(() => Effect.succeed(undefined)),
-                Effect.map((name) => [buyer.accountId, name] as const)
-              ),
-            { concurrency: 4 }
-          );
-        }).pipe(
-          Effect.provide(profileLayer),
-          catchRecoverableCause(() => Effect.succeed([]))
-        )
-  );
-  return new Map(
-    gifts.map(({ orderId, accountId }) => [
-      orderId,
-      profileNames.get(accountId),
-    ])
+  const gifts = yield* readBoughtPassGifts(accountId);
+  return gifts.map(
+    ({ orderId, product, canResend, ...gift }): AccountBoughtPass => {
+      const summary = {
+        ...gift,
+        orderId,
+        statusPath: `/${locale}${reservationStatusPath}/${orderId}`,
+        tier: getPassTierName(product.tier, locale),
+      };
+      return product.kind === "unlimited"
+        ? { ...summary, product: "unlimited" }
+        : {
+            ...summary,
+            product: "entry-pack",
+            entryCount: product.size,
+            canResend,
+          };
+    }
   );
 });
 
@@ -261,33 +159,13 @@ export const loadCustomerAccountPasses = cache(
     )
 );
 
-const getAccountPassStatus = (
-  pack: HeldEntryPack,
-  today: PlainDate
-): AccountEntryPack["status"] => {
-  switch (pack.status) {
-    case "active":
-      return Temporal.PlainDate.compare(today, pack.validUntil) >= 0
-        ? "expired"
-        : "active";
-    case "depleted":
-    case "expired":
-      return pack.status;
-    case "pending_payment":
-    case "cancelled":
-    case "withdrawn":
-    case "void":
-      return "ended";
-  }
-};
-
 function toAccountEntryPack(
   pack: HeldEntryPack,
   position: number,
   today: PlainDate,
   locale: Locale
 ): AccountEntryPack {
-  const status = getAccountPassStatus(pack, today);
+  const status = getHeldEntryPackStatus(pack, today);
 
   return {
     position,

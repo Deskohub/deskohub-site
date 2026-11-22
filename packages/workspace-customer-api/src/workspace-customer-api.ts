@@ -3,6 +3,7 @@ import { CustomerAccountApi } from "./customer-account-api";
 import { CustomerBookingApi } from "./customer-booking-api";
 import { CustomerCompaniesApi } from "./customer-companies-api";
 import { CustomerInvoicesApi } from "./customer-invoices-api";
+import { CustomerPassesApi } from "./customer-passes-api";
 import { CustomerReservationsApi } from "./customer-reservations-api";
 import {
   CustomerRequestOriginCheck,
@@ -28,6 +29,7 @@ export const WorkspaceCustomerApi = HttpApi.make("workspaceCustomerApi")
   .add(CustomerBookingApi)
   .add(CustomerInvoicesApi)
   .add(CustomerCompaniesApi)
+  .add(CustomerPassesApi)
   .prefix(customerApiPathPrefix)
   .middleware(CustomerSessionAuthentication)
   .middleware(CustomerRequestOriginCheck)

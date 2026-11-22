@@ -29,6 +29,10 @@ import { Button } from "@/shared/components/ui/button";
 import { currencyCZK } from "@/shared/money/currencies";
 import { moneyMajorAmount } from "@/shared/money/money";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
+import {
+  getCoworkBookingPasses,
+  noCoworkBookingPasses,
+} from "../cowork-entry-packs";
 
 const janEmail = testEmailAddress("jan");
 
@@ -78,7 +82,7 @@ const loadCoworkReservationContent = ({
   initialReservation,
   pageData = {
     entryPackOffered: false,
-    heldEntryPacks: [],
+    bookingPasses: noCoworkBookingPasses,
     overnightStayOffered: false,
   },
   replacementToken = "signed-replacement-token",
@@ -413,6 +417,7 @@ describe("a linked Entry pack", () => {
     validFrom: plainDateStringSchema.make("2099-07-09"),
     validUntil: plainDateStringSchema.make("2099-09-09"),
     claimedDates: [],
+    bookedDates: [],
     reservedEntryDates: {},
     giftIssuedAt: null,
     giftClaimedAt: null,
@@ -420,7 +425,7 @@ describe("a linked Entry pack", () => {
   } satisfies HeldEntryPack;
   const pageData = {
     entryPackOffered: true,
-    heldEntryPacks: [pack],
+    bookingPasses: getCoworkBookingPasses([pack], "2099-07-30"),
     overnightStayOffered: false,
   };
 
@@ -436,6 +441,36 @@ describe("a linked Entry pack", () => {
         initialEntryPack: { kind: "applied", packId: pack.id },
         date: "2099-07-30",
         monitorOption: "2x27-qhd",
+      });
+    }));
+
+  test("skips an unavailable day for an undated pack link and keeps an explicit date", async () =>
+    stubWorkspaceInstant(async () => {
+      const date = plainDateStringSchema.make("2099-07-30");
+      const coveredPageData = {
+        ...pageData,
+        bookingPasses: {
+          claimedDates: [],
+          packs: pageData.bookingPasses.packs.map((bookable) => ({
+            ...bookable,
+            unavailableDates: [date],
+          })),
+        },
+      };
+      const load = (date?: string) =>
+        renderCoworkReservationForm({
+          locale: "en-US",
+          pageData: coveredPageData,
+          searchParams: { pass: pack.id, date },
+        });
+
+      expect((await load()).initialValues).toMatchObject({
+        date: "2099-07-31",
+        initialEntryPack: { kind: "applied", packId: pack.id },
+      });
+      expect((await load(date)).initialValues).toMatchObject({
+        date,
+        initialEntryPack: { kind: "applied", packId: pack.id },
       });
     }));
 
@@ -464,7 +499,10 @@ describe("a linked Entry pack", () => {
       stubWorkspaceInstant(async () => {
         const form = await renderCoworkReservationForm({
           locale: "en-US",
-          pageData: { ...pageData, heldEntryPacks },
+          pageData: {
+            ...pageData,
+            bookingPasses: getCoworkBookingPasses(heldEntryPacks, "2099-07-30"),
+          },
           searchParams: { pass: pack.id },
         });
         expect(form.initialValues.initialEntryPack).toEqual({
@@ -494,21 +532,26 @@ describe("a linked Entry pack", () => {
         const reservationId = workspaceReservationIdSchema.make(
           "d38aa11b-02ae-4819-94a9-4ed582be94f6"
         );
+        const entryPack = { passId: pack.id, reservationId };
         const form = await renderCoworkReservationForm({
           locale: "en-US",
           pageData: {
             ...pageData,
-            heldEntryPacks: [
-              {
-                ...pack,
-                entriesLeft: 0,
-                claimedDates: [date],
-                reservedEntryDates: editable ? { [reservationId]: date } : {},
-              },
-            ],
+            bookingPasses: getCoworkBookingPasses(
+              [
+                {
+                  ...pack,
+                  entriesLeft: 0,
+                  claimedDates: [date],
+                  reservedEntryDates: editable ? { [reservationId]: date } : {},
+                },
+              ],
+              date,
+              entryPack
+            ),
           },
           restoredReservation: {
-            entryPack: { passId: pack.id, reservationId },
+            entryPack,
             replacementToken: "signed-replacement-token",
             reservation: decodeReservedDeskReservation({
               kind: "cowork",
@@ -556,7 +599,7 @@ describe("a linked overnight stay", () => {
       locale: "en-US",
       pageData: {
         entryPackOffered: false,
-        heldEntryPacks: [],
+        bookingPasses: noCoworkBookingPasses,
         overnightStayOffered: true,
       },
       searchParams: overnightLink,
@@ -578,7 +621,7 @@ describe("a linked overnight stay", () => {
       locale: "en-US",
       pageData: {
         entryPackOffered: false,
-        heldEntryPacks: [],
+        bookingPasses: noCoworkBookingPasses,
         overnightStayOffered: false,
       },
       searchParams: overnightLink,

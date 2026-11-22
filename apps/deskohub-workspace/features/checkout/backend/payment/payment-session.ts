@@ -1,4 +1,8 @@
 import { Effect } from "effect";
+import {
+  type PaymentReturnTarget,
+  passPaymentReturnTargetParam,
+} from "@/features/checkout/payment-return-target";
 import type { Locale } from "@/features/i18n";
 import type { OrderId, OrderKind } from "@/features/order";
 import {
@@ -41,11 +45,12 @@ const getCheckoutPayReturnUrl: (
   locale: Locale,
   orderId: OrderId,
   provider: PaymentProvider,
-  outcome?: "cancelled"
+  outcome?: "cancelled",
+  passReturnTarget?: PaymentReturnTarget
 ) => Effect.Effect<string, CheckoutError> = Effect.fn(
   "getCheckoutPayReturnUrl"
 )(
-  function* (locale, orderId, provider, outcome) {
+  function* (locale, orderId, provider, outcome, passReturnTarget) {
     const origin = yield* getWorkspaceRuntimeCallbackOrigin;
 
     return yield* Effect.try({
@@ -55,6 +60,9 @@ const getCheckoutPayReturnUrl: (
           origin
         );
         if (outcome) url.searchParams.set("outcome", outcome);
+        if (passReturnTarget) {
+          url.searchParams.set(passPaymentReturnTargetParam, passReturnTarget);
+        }
         if (provider === "nexi") appendVercelPreviewProtectionBypass(url);
         return url.toString();
       },
@@ -117,6 +125,7 @@ export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
       | { readonly details?: never; readonly admitProvider: AdmitHostedAttempt }
     ) & {
       readonly kind: Kind;
+      readonly passReturnTarget?: PaymentReturnTarget;
       readonly correlationId: string;
       readonly customer: PaymentCustomer;
       readonly retriedAttempt?: RetriedPaymentAttempt | undefined;
@@ -143,16 +152,21 @@ export const startPaymentSession = Effect.fn("startPaymentSession")(function* <
     });
   }
   const notificationUrl = yield* getNotificationUrl(provider);
+  const passReturnTarget =
+    input.kind === "pass-purchase" ? input.passReturnTarget : undefined;
   const resultUrl = yield* getCheckoutPayReturnUrl(
     input.locale,
     input.orderId,
-    provider
+    provider,
+    undefined,
+    passReturnTarget
   );
   const cancelUrl = yield* getCheckoutPayReturnUrl(
     input.locale,
     input.orderId,
     provider,
-    "cancelled"
+    "cancelled",
+    passReturnTarget
   );
   const prepared = yield* adapter.prepareSession({
     amount: input.amount,

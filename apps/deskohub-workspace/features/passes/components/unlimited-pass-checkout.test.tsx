@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
+import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import { type OrderId, orderIdSchema } from "@/features/order";
 import { currencyCZK } from "@/shared/money/currencies";
 import {
@@ -638,6 +639,253 @@ test("a reload during Continue retries the committed gift and a date change supe
   expect(reloaded.queryByRole("button", { name: /pay/i })).toBeNull();
 });
 
+test("a linked gift keeps its recipient and original order until Continue succeeds", async () => {
+  const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000004");
+  const response = Promise.withResolvers<{ data: typeof readyCheckout }>();
+  const beginCheckout = mock(() => response.promise);
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        initialHandoff={{ token: "opaque", orderId, predecessorOrderIds: [] }}
+        draft={{ kind: "resume", orderId, holderEmail }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  expect(view.getByDisplayValue(holderEmail)).toBeDefined();
+  const name = view.getByRole<HTMLInputElement>("textbox", {
+    name: recipientNameLabel,
+  });
+  fireEvent.change(name, { target: { value: "   " } });
+  fireEvent.submit(name.form!);
+  expect(await view.findByText("Enter the recipient’s name.")).toBeDefined();
+  expect(beginCheckout).not.toHaveBeenCalled();
+
+  enterRecipientName(view);
+  fireEvent.submit(name.form!);
+  await waitFor(() =>
+    expect(beginCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderId,
+        holderEmail,
+        recipientName,
+        handoffToken: "opaque",
+      })
+    )
+  );
+  expect(checkoutUrl().searchParams.get("handoff")).toBe("opaque");
+  await act(async () => response.resolve({ data: readyCheckout }));
+  expect(await view.findByRole("button", { name: /pay/i })).toBeDefined();
+  expect(checkoutUrl().searchParams.get("order")).toBe(orderId);
+  expect(checkoutUrl().searchParams.get("handoff")).toBeNull();
+});
+
+test("a gift can reopen Choose before Continue creates an order", () => {
+  const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000005");
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        initialHandoff={{ token: "opaque", orderId, predecessorOrderIds: [] }}
+        draft={{ kind: "resume", orderId, holderEmail }}
+      />
+    </QueryProvider>
+  );
+  fireEvent.click(
+    view.getByRole("button", {
+      name: m.reservationSelectionChange({}, { locale }),
+    })
+  );
+  const params = checkoutUrl().searchParams;
+  expect(params.get("handoff")).toBe("opaque");
+  expect(params.get("startDate")).toBe(openSpaceStart);
+  expect(params.get("step")).toBeNull();
+  expect(params.get("order")).toBeNull();
+});
+
+test("an edited gift saves its replacement link before admission and preserves the capacity retry", async () => {
+  const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000006");
+  const predecessorOrderId = orderIdSchema.make(
+    "018f8000-0000-7000-8000-000000000007"
+  );
+  const retryOrderId = orderIdSchema.make(
+    "018f8000-0000-7000-8000-000000000008"
+  );
+  const replacementEmail = testEmailAddress("edited-unlimited-recipient");
+  const beginCheckout = mock(
+    async (input: {
+      orderId: OrderId;
+      handoffToken?: string;
+      holderEmail?: string;
+    }) => {
+      if (input.handoffToken === "original") {
+        return {
+          data: {
+            status: "handoff_updated" as const,
+            handoff: {
+              token: "replacement",
+              orderId: input.orderId,
+              predecessorOrderIds: [predecessorOrderId, orderId],
+            },
+          },
+        };
+      }
+      expect(checkoutUrl().searchParams.get("handoff")).toBe("replacement");
+      return {
+        data: {
+          status: "capacity_unavailable" as const,
+          blockingDates: [],
+          handoff: {
+            token: "retry",
+            orderId: retryOrderId,
+            predecessorOrderIds: [predecessorOrderId],
+          },
+        },
+      };
+    }
+  );
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        initialHandoff={{
+          token: "original",
+          orderId,
+          predecessorOrderIds: [predecessorOrderId],
+        }}
+        draft={{ kind: "resume", orderId, holderEmail }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  fireEvent.change(
+    view.getByLabelText(m.entryPackCheckoutHolderEmail({}, { locale })),
+    {
+      target: { value: replacementEmail },
+    }
+  );
+  enterRecipientName(view);
+  fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  await waitFor(() =>
+    expect(checkoutUrl().searchParams.get("handoff")).toBe("retry")
+  );
+  const replacementOrderId = beginCheckout.mock.calls[0]?.[0].orderId;
+  expect(replacementOrderId).not.toBe(orderId);
+  expect(beginCheckout.mock.calls.map(([input]) => input)).toEqual([
+    expect.objectContaining({
+      orderId: replacementOrderId,
+      holderEmail: replacementEmail,
+      handoffToken: "original",
+    }),
+    expect.objectContaining({
+      orderId: replacementOrderId,
+      holderEmail: replacementEmail,
+      handoffToken: "replacement",
+    }),
+  ]);
+  expect(checkoutUrl().searchParams.get("order")).toBeNull();
+  expect(checkoutUrl().searchParams.get("step")).toBeNull();
+});
+
+test("editing Unlimited Details continues to the original order's payment status", async () => {
+  const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000009");
+  const statusPath = `/en-US/reservation/status/${orderId}`;
+  const assign = spyOn(window.location, "assign").mockImplementation(() => {});
+  const beginCheckout = mock(async () => ({
+    data: { status: "status" as const, statusPath },
+  }));
+  try {
+    const view = render(
+      <QueryProvider>
+        <UnlimitedPassCheckout
+          {...base}
+          initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+          draft={{ kind: "replace", orderId }}
+          beginCheckout={beginCheckout}
+        />
+      </QueryProvider>
+    );
+    fireEvent.click(view.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith(statusPath));
+    expect(beginCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        supersedeOrderId: orderId,
+        supersedeOrderIds: [orderId],
+      })
+    );
+  } finally {
+    assign.mockRestore();
+  }
+});
+
+test("retrying an Unlimited draft preserves only unresolved legacy predecessors", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const editedOrderId = orderIdSchema.make(crypto.randomUUID());
+  const earlierOrderId = orderIdSchema.make(crypto.randomUUID());
+  const legacyOrderId = orderIdSchema.make(crypto.randomUUID());
+  let retired = [editedOrderId, legacyOrderId];
+  const beginCheckout = mock(async (_input: { orderId: OrderId }) => {
+    const retiredPredecessorOrderIds = retired;
+    retired = [];
+    return { data: { ...readyCheckout, retiredPredecessorOrderIds } };
+  });
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        draft={{
+          kind: "submitted",
+          orderId,
+          supersedeOrderId: editedOrderId,
+          predecessorOrderIds: [editedOrderId, earlierOrderId, legacyOrderId],
+          legacyPredecessorOrderIds: [legacyOrderId],
+        }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  const proceed = () =>
+    fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  proceed();
+  await view.findByRole("button", { name: /pay/i });
+  expect(beginCheckout).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      orderId,
+      supersedeOrderId: editedOrderId,
+      supersedeOrderIds: [editedOrderId, earlierOrderId, legacyOrderId],
+      legacyPredecessorOrderIds: [legacyOrderId],
+    })
+  );
+  expect(checkoutUrl().searchParams.get("supersedeOrder")).toBeNull();
+  expect(checkoutUrl().searchParams.get("predecessorMode")).toBe("history");
+  expect(checkoutUrl().searchParams.has("legacyPredecessorOrder")).toBe(false);
+  expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
+    earlierOrderId,
+  ]);
+  fireEvent.click(
+    view.getByRole("button", {
+      name: new RegExp(m.unlimitedPassCheckoutHolder({}, { locale }), "i"),
+    })
+  );
+  proceed();
+  await view.findByRole("button", { name: /pay/i });
+  expect(beginCheckout).toHaveBeenCalledTimes(2);
+  expect(beginCheckout).toHaveBeenLastCalledWith(
+    expect.objectContaining({ orderId, supersedeOrderIds: [earlierOrderId] })
+  );
+  expect(beginCheckout.mock.calls[1]?.[0]).not.toHaveProperty(
+    "supersedeOrderId"
+  );
+  expect(beginCheckout.mock.calls[1]?.[0]).not.toHaveProperty(
+    "legacyPredecessorOrderIds"
+  );
+});
+
 test("Unlimited gift requires a private name and clears it when returning to self-purchase", async () => {
   const beginCheckout = mock(async () => ({ data: readyCheckout }));
   const view = render(
@@ -1140,7 +1388,7 @@ test("an expired status-originated payment retry returns to that same order", as
       <QueryProvider>
         <UnlimitedPassCheckout
           {...base}
-          retryPayment={{
+          initialPayment={{
             orderId,
             selection: {
               tier: "open-space",
@@ -1148,6 +1396,9 @@ test("an expired status-originated payment retry returns to that same order", as
               startDate: openSpaceStart,
             },
             state: {
+              priorPaymentAttemptId: paymentAttemptIdSchema.make(
+                "018f8000-0000-7000-8000-000000000003"
+              ),
               validFrom: openSpaceStart,
               lastUsableDate: "2026-11-30",
               billing: { purpose: "personal", invoice: "none" },

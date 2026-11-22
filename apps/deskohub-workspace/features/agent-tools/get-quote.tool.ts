@@ -4,47 +4,117 @@ import { getReservationQuoteDiscount } from "@/features/checkout/reservation-quo
 import { m } from "@/features/i18n";
 import type { QuoteSelection } from "@/features/reservation/backend/booking-selection";
 import { getShareableReservationUrl } from "@/features/reservation/backend/shareable-reservation-url";
+import { getFirstInvalidFieldPath } from "@/shared/utils/schema-issue";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
   agentToolLocaleField,
   defineAgentTool,
+  defineMixedAccessAgentTool,
   getAgentToolLocale,
 } from "./agent-tool";
 import { AgentToolError } from "./agent-tool-error";
 import { toAgentToolMoney } from "./agent-tool-money";
 import { type GetQuoteResult, getQuoteResultSchema } from "./get-quote.schema";
 import {
+  getFundedReservationUrl,
+  passFundingField,
+  passFundingScope,
+  quoteWithEntryPack,
+  requireAgentPassesOpen,
+  withoutPassFunding,
+} from "./pass-funding";
+import {
   completeSelectionFields,
   resolveQuoteSelection,
 } from "./quote-selection";
 
-const inputSchema = Schema.Struct({
+const ordinaryInput = Schema.Struct({
   ...completeSelectionFields,
   locale: agentToolLocaleField,
+});
+const inputSchema = Schema.Struct({
+  ...ordinaryInput.fields,
+  pass_id: passFundingField,
 });
 
 type GetQuoteInput = typeof inputSchema.Type;
 
-export const getQuoteTool = defineAgentTool({
+const quoteToolDefinition = {
   name: "get_quote",
   title: "Quote a Deskohub Workspace booking",
   description:
     "Prices a complete selection anonymously: a cowork tier and date, a meeting-room start time and duration, or office dates and seats. The total includes any public sale running at the moment of the quote, and the reservation link opens the booking page prefilled. The website confirms the price when the customer books; this tool does not check availability.",
-  access: "public",
   readOnly: true,
   unavailableCode: "quote_unavailable",
   input: inputSchema,
   output: getQuoteResultSchema,
-  run: Effect.fn("agentTools.getQuote")((input) =>
-    Effect.succeed({ input }).pipe(
-      Effect.let("locale", ({ input }) => getAgentToolLocale(input)),
-      Effect.bind("now", () => currentInstant),
-      Effect.bind("selection", resolveQuoteSelection),
+} as const;
+
+const resolveSelection = (input: GetQuoteInput) =>
+  Effect.succeed({ input }).pipe(
+    Effect.let("locale", ({ input }) => getAgentToolLocale(input)),
+    Effect.bind("now", () => currentInstant),
+    Effect.bind("selection", resolveQuoteSelection)
+  );
+
+const quoteOrdinaryBooking = Effect.fn("agentTools.getQuote")(
+  (input: GetQuoteInput) =>
+    resolveSelection(input).pipe(
       Effect.bind("pricing", priceQuoteSelection),
       Effect.map(toQuoteResult)
     )
-  ),
+);
+
+const priceFundedBooking = Effect.fn("agentTools.getFundedQuote")(
+  (input: GetQuoteInput) => {
+    const passId = input.pass_id;
+    if (input.family !== "cowork" || passId === undefined) {
+      return Effect.fail(AgentToolError.invalidInput("pass_id"));
+    }
+    return requireAgentPassesOpen.pipe(
+      Effect.andThen(resolveSelection(input)),
+      Effect.bind("pricing", ({ selection, locale }) =>
+        Effect.all({
+          advertised: quoteWithEntryPack({ selection, locale, passId }),
+          reservationUrl: getFundedReservationUrl(selection, passId),
+        })
+      )
+    );
+  }
+);
+
+export const getQuoteTool = defineMixedAccessAgentTool({
+  ...quoteToolDefinition,
+  scopeWhenArgument: passFundingScope,
+  run: quoteOrdinaryBooking,
+  runWithGrant: (input) =>
+    priceFundedBooking(input).pipe(Effect.map(toQuoteResult)),
 });
+
+export const getOrdinaryQuoteTool = withoutPassFunding(
+  getQuoteTool,
+  ordinaryInput
+);
+
+export const getBrowserPassQuoteTool = defineAgentTool({
+  ...quoteToolDefinition,
+  access: "public",
+  run: (input: GetQuoteInput) =>
+    priceFundedBooking(input).pipe(Effect.map(toQuoteResult)),
+});
+
+/** The mounted browser form needs this proof for its Server Action. */
+export const getBrowserPassPreparationQuote = (input: Schema.Json) =>
+  Schema.decodeUnknownEffect(inputSchema)(input).pipe(
+    Effect.mapError(({ issue }) =>
+      AgentToolError.invalidInput(getFirstInvalidFieldPath(issue))
+    ),
+    Effect.flatMap(priceFundedBooking),
+    Effect.map((quote) => ({
+      ...toQuoteResult(quote),
+      advertised_price_token: quote.pricing.advertised.advertisedPriceToken,
+    }))
+  );
 
 const priceQuoteSelection = ({
   selection,
@@ -70,7 +140,15 @@ const toQuoteResult = ({
   readonly input: GetQuoteInput;
   readonly locale: ReturnType<typeof getAgentToolLocale>;
   readonly now: Temporal.Instant;
-  readonly pricing: Effect.Success<ReturnType<typeof priceQuoteSelection>>;
+  readonly pricing: {
+    readonly advertised: {
+      readonly quote: Pick<
+        Effect.Success<ReturnType<typeof buildAdvertisedPrice>>["quote"],
+        "payment"
+      >;
+    };
+    readonly reservationUrl: string;
+  };
 }): GetQuoteResult => {
   const { expectedPrice, undiscountedPrice } = advertised.quote.payment;
 

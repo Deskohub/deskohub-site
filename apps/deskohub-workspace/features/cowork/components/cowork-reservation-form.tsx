@@ -104,7 +104,7 @@ import { formatMoney, type Money } from "@/shared/money/money";
 import { cn } from "@/shared/utils";
 import {
   type CoworkEntryPacks,
-  entryPackCoversDate,
+  entryPackIsAvailableOn,
   getEntryPackCoworkTier,
   getOfferedEntryPack,
   type InitialCoworkEntryPack,
@@ -279,7 +279,7 @@ export function CoworkReservationForm({
         appliedPack.id === rejectedPackId ||
         (workstationCovered && !selectedMonitorOption) ||
         getEntryPackCoworkTier(appliedPack.tier) !== selectedTier ||
-        !entryPackCoversDate(appliedPack, selection.date) ||
+        !entryPackIsAvailableOn(appliedPack, selection.date) ||
         bookingPasses?.claimedDates.some((date) => date === selection.date)));
   const offeredPack =
     bookingPasses &&
@@ -320,6 +320,19 @@ export function CoworkReservationForm({
     setPackSelection({ kind: "card" });
     updatePassInUrl();
   };
+  const applyEntryPack = (passId: OrderId) => {
+    const candidate = bookingPasses?.packs.find(({ id }) => id === passId);
+    if (
+      appliedPack?.id === passId ||
+      !candidate ||
+      !entryPackIsAvailableOn(candidate, form.getValues("date"))
+    ) {
+      return false;
+    }
+    setPackSelection({ kind: "applied", packId: passId });
+    updatePassInUrl(passId);
+    return true;
+  };
   const changeUncoveredOption = (change: () => void) => {
     setCardChange(() => change);
   };
@@ -338,6 +351,7 @@ export function CoworkReservationForm({
 
   return (
     <ReservationCheckoutForm
+      applyEntryPack={applyEntryPack}
       checkoutCustomer={checkoutCustomer}
       advertisedPrice={
         appliedPack
@@ -388,14 +402,7 @@ export function CoworkReservationForm({
             <CoworkEntryPackBanner
               applying={Boolean(appliedPack)}
               locale={locale}
-              onAction={
-                appliedPack
-                  ? payByCard
-                  : () => {
-                      setPackSelection({ kind: "applied", packId: pack.id });
-                      updatePassInUrl(pack.id);
-                    }
-              }
+              onAction={appliedPack ? payByCard : () => applyEntryPack(pack.id)}
               pack={pack}
             />
           )
@@ -597,6 +604,7 @@ export function CoworkReservationForm({
                 ? new Set([
                     ...selectionAvailability.unavailableDates,
                     ...(bookingPasses?.claimedDates ?? []),
+                    ...(appliedPack.unavailableDates ?? []),
                   ])
                 : selectionAvailability.unavailableDates
             }

@@ -30,6 +30,7 @@ import { getOfficeCheckoutSummary } from "@/features/checkout/checkout-summary-o
 import { buildOfficeReservationQuote } from "@/features/checkout/reservation-quote-office";
 import { getReservationQuoteDiscount } from "@/features/checkout/reservation-quote-schema";
 import { m } from "@/features/i18n";
+import { type OrderId, orderIdSchema } from "@/features/order";
 import type { PreparePayStateInput } from "@/features/reservation/actions/prepare-pay-state.schema";
 import type { CheckoutSubmission } from "@/features/reservation/components/use-reservation-checkout";
 import { getOfficeAdvertisedPriceRequest } from "@/features/reservation/office-advertised-price";
@@ -56,6 +57,7 @@ import {
   agentToolEventStream,
   installFakeModelContext,
   mockAgentToolEndpoint,
+  publishedFundedQuoteTool,
   publishedQuoteTool,
   recordUnhandledRejections,
 } from "./webmcp.test-utils";
@@ -138,12 +140,21 @@ const contactResolver: Resolver<HarnessValues> = async (values) => {
 };
 
 /** Availability for the watched date settles a moment after it changes. */
-function useHarnessAvailability(date: string, unavailableDates: string[]) {
+function useHarnessAvailability(
+  date: string,
+  unavailableDates: string[],
+  onPendingAvailability?: (date: string, settle: () => void) => void
+) {
   const [settledDate, setSettledDate] = useState(date);
   useEffect(() => {
-    const timer = setTimeout(() => setSettledDate(date), 5);
+    const settle = () => setSettledDate(date);
+    if (onPendingAvailability) {
+      onPendingAvailability(date, settle);
+      return;
+    }
+    const timer = setTimeout(settle, 5);
     return () => clearTimeout(timer);
-  }, [date]);
+  }, [date, onPendingAvailability]);
   return {
     isPending: settledDate !== date,
     unavailableMessage:
@@ -183,18 +194,26 @@ const getHarnessCheckoutCustomer = ({
  * `signedOut` types them before the email verification instead.
  */
 function Harness({
+  availablePackId,
+  initialPackId,
   existingCustomer,
+  onPendingAvailability,
   typed = {},
   signedOut = false,
   kind = "cowork",
   priceError = false,
+  resolver = contactResolver,
   unavailableDates = [],
 }: {
+  readonly availablePackId?: OrderId;
+  readonly initialPackId?: OrderId;
   readonly existingCustomer?: ReservationExistingCustomerForm;
+  readonly onPendingAvailability?: (date: string, settle: () => void) => void;
   readonly kind?: HarnessKind;
   readonly typed?: Partial<Pick<HarnessValues, "name" | "email" | "phone">>;
   readonly signedOut?: boolean;
   readonly priceError?: boolean;
+  readonly resolver?: Resolver<HarnessValues>;
   readonly unavailableDates?: string[];
 }) {
   const checkoutCustomer = getHarnessCheckoutCustomer({
@@ -211,22 +230,33 @@ function Harness({
       name: existingCustomer?.contact.name ?? typed.name ?? "",
       phone: existingCustomer?.contact.phone ?? typed.phone ?? "",
     },
-    resolver: contactResolver,
+    resolver,
   });
   useEffect(() => {
     harnessForm = form;
   }, [form]);
   const date = useWatch({ control: form.control, name: "date" });
+  const [appliedPackId, setAppliedPackId] = useState(initialPackId);
 
   return (
     <ReservationCheckoutForm
+      {...(appliedPackId && { entryPackId: appliedPackId })}
+      applyEntryPack={(id) => {
+        if (id !== availablePackId || id === appliedPackId) return false;
+        setAppliedPackId(id);
+        return true;
+      }}
       advertisedPrice={{
         isError: priceError,
         isFetching: false,
         retry: () => undefined,
         token: `signed-price-${date}`,
       }}
-      availability={useHarnessAvailability(date, unavailableDates)}
+      availability={useHarnessAvailability(
+        date,
+        unavailableDates,
+        onPendingAvailability
+      )}
       checkoutCustomer={checkoutCustomer}
       form={form}
       getReservation={({ date: reservationDate, email, name, phone }) =>
@@ -322,18 +352,20 @@ let executeAsync: Mock<
 >;
 
 const quoteEndpoint = (quote: Schema.JsonObject) =>
-  mockAgentToolEndpoint(({ params }) =>
-    params.name === "get_quote"
-      ? agentToolEventStream({ structuredContent: quote })
-      : agentToolEventStream({ structuredContent: {} })
-  );
+  mockAgentToolEndpoint(({ path, params }) => {
+    if (path === "/api/mcp/web/prepare-quote") return Response.json({ quote });
+    return agentToolEventStream({
+      structuredContent: params.name === "get_quote" ? quote : {},
+    });
+  });
 
 const renderForm = async (
   props: Parameters<typeof Harness>[0] = {},
-  Page: typeof Harness = Harness
+  Page: typeof Harness = Harness,
+  publishedQuote = publishedQuoteTool
 ) => {
   const view = render(<Page {...props} />);
-  act(() => publishQuoteTool(publishedQuoteTool));
+  act(() => publishQuoteTool(publishedQuote));
   await waitFor(() => expect(modelContext.registered.has(toolName)).toBe(true));
   return view;
 };
@@ -465,6 +497,174 @@ describe("prepare_reservation site tool", () => {
       marketingConsent: "not_submitted",
     });
     expect(workspaceRouterPush).toHaveBeenCalledWith(payPath);
+  });
+
+  test("submits a matching applied pack with the sealed browser quote and returns only the safe summary", async () => {
+    const passId = orderIdSchema.make("11111111-1111-4111-8111-111111111111");
+    const token = "synthetic-sealed-funding";
+    endpoint.restore();
+    endpoint = quoteEndpoint({
+      ...quoteFor("cowork", "2099-07-31"),
+      total: { amount: 0, currency: "CZK" },
+      advertised_price_token: token,
+    });
+    await renderForm(
+      { existingCustomer: accountCustomer(), availablePackId: passId },
+      Harness,
+      publishedFundedQuoteTool
+    );
+    const result = await runTool({
+      family: "cowork",
+      date: "2099-07-31",
+      pass_id: passId,
+    });
+
+    expect(endpoint.requests.at(-1)?.path).toBe("/api/mcp/web/prepare-quote");
+    expect(executeAsync).toHaveBeenCalledTimes(1);
+    expect(lastPrepareInput()).toMatchObject({
+      advertisedPriceToken: token,
+      entryPackId: passId,
+      siteToolEntryPackQuote: true,
+      customer: "account",
+    });
+    expect(result).toMatchObject({
+      status: "ready",
+      summary: { total: { amount: 0, currency: "CZK" } },
+    });
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(JSON.stringify(result)).not.toContain(
+      accountCustomer().contact.email
+    );
+  });
+
+  test("stops before consenting or submitting if the form cannot apply the quoted pack", async () => {
+    const passId = orderIdSchema.make("11111111-1111-4111-8111-111111111111");
+    endpoint.restore();
+    endpoint = quoteEndpoint({
+      ...quoteFor("cowork", "2099-07-31"),
+      advertised_price_token: "synthetic-sealed-funding",
+    });
+    await renderForm(
+      { existingCustomer: accountCustomer() },
+      Harness,
+      publishedFundedQuoteTool
+    );
+    const result = await runTool({
+      family: "cowork",
+      date: "2099-07-31",
+      pass_id: passId,
+      marketingConsent: true,
+    });
+
+    expect(result).toMatchObject({ error: { code: "selection_unavailable" } });
+    expect(harnessForm?.getValues("marketingConsent")).toBe(false);
+    expect(executeAsync).not.toHaveBeenCalled();
+  });
+
+  test("leaves an applied pack intact when a preparation omits pass_id", async () => {
+    const passId = orderIdSchema.make("11111111-1111-4111-8111-111111111111");
+    await renderForm(
+      { existingCustomer: accountCustomer(), initialPackId: passId },
+      Harness,
+      publishedFundedQuoteTool
+    );
+    const result = await runTool({
+      family: "cowork",
+      date: "2099-07-31",
+      marketingConsent: true,
+    });
+
+    expect(result).toMatchObject({ error: { code: "selection_unavailable" } });
+    expect(endpoint.requests.at(-1)?.path).toBe("/api/mcp");
+    expect(harnessForm?.getValues("marketingConsent")).toBe(false);
+    expect(executeAsync).not.toHaveBeenCalled();
+  });
+
+  test("never reuses a cached checkout for a site tool's new selection", async () => {
+    workspaceUseAction.mockImplementation((() => ({
+      executeAsync,
+      isExecuting: false,
+      hasSucceeded: true,
+      input: { reservation: { kind: "cowork", date: "2099-07-30" } },
+      result: {
+        data: {
+          status: "ready",
+          redirectUrl: payPath,
+          expiresAt: payExpiresAt,
+        },
+      },
+    })) as never);
+    await renderForm({ existingCustomer: accountCustomer() });
+    const result = await runTool({ family: "cowork", date: "2099-07-31" });
+    expect(result).toMatchObject({ error: { code: "checkout_failed" } });
+    expect(executeAsync).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain(payPath);
+  });
+
+  test.each(["ordinary", "funded"] as const)(
+    "stops %s preparation when the customer edits the date during the availability check",
+    async (funding) => {
+      const requestedDate = "2099-07-31";
+      const editedDate = "2099-08-01";
+      const checkingQuote = Promise.withResolvers<void>();
+      const settleEditedDate = Promise.withResolvers<() => void>();
+      const passId = orderIdSchema.make("11111111-1111-4111-8111-111111111111");
+      const funded = funding === "funded";
+      if (funded) {
+        endpoint.restore();
+        endpoint = quoteEndpoint({
+          ...quoteFor("cowork", requestedDate),
+          advertised_price_token: "synthetic-sealed-funding",
+        });
+      }
+      const view = await renderForm(
+        {
+          existingCustomer: accountCustomer(),
+          availablePackId: passId,
+          onPendingAvailability: (date, settle) => {
+            if (date === requestedDate) checkingQuote.resolve();
+            if (date === editedDate) settleEditedDate.resolve(settle);
+          },
+        },
+        Harness,
+        funded ? publishedFundedQuoteTool : undefined
+      );
+      const result = runTool({
+        family: "cowork",
+        date: requestedDate,
+        ...(funded && { pass_id: passId }),
+        marketingConsent: true,
+      });
+      await checkingQuote.promise;
+      act(() => harnessForm?.setValue("date", editedDate));
+      act(await settleEditedDate.promise);
+
+      expect(await result).toMatchObject({
+        error: { code: "selection_unavailable" },
+      });
+      expect(view.getByTestId("date").textContent).toBe(editedDate);
+      expect(harnessForm?.getValues("marketingConsent")).toBe(false);
+      expect(executeAsync).not.toHaveBeenCalled();
+    }
+  );
+
+  test("checks the settled selection again after asynchronous validation", async () => {
+    const validating = Promise.withResolvers<void>();
+    const finishValidation = Promise.withResolvers<void>();
+    const resolver: Resolver<HarnessValues> = async (...args) => {
+      validating.resolve();
+      await finishValidation.promise;
+      return contactResolver(...args);
+    };
+    endpoint.restore();
+    endpoint = quoteEndpoint(quoteFor("cowork", "2099-07-30"));
+    await renderForm({ existingCustomer: accountCustomer(), resolver });
+    const result = runTool({ family: "cowork", date: "2099-07-30" });
+    await validating.promise;
+    act(() => harnessForm?.setValue("date", "2099-07-31"));
+    finishValidation.resolve();
+    expect(await result).toMatchObject({ error: { code: "checkout_failed" } });
+    expect(executeAsync).not.toHaveBeenCalled();
   });
 
   test.each([

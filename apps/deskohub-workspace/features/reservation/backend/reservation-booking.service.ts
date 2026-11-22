@@ -34,6 +34,7 @@ import {
   type PriceVerdict,
   toPayStateHoldExpiresAt,
 } from "@/features/checkout/backend/checkout";
+import { AdvertisedPriceMismatchError } from "@/features/checkout/backend/checkout/advertised-price-mismatch";
 import {
   deriveCheckoutAttemptKeys,
   deriveCheckoutSessionKeys,
@@ -62,10 +63,7 @@ import {
   ensureOfficeReservationsEnabled,
   OfficeReleaseGate,
 } from "@/features/office/backend/office-release-gate";
-import {
-  EntryPackUnavailableError,
-  loadEntryPackRedemption,
-} from "@/features/passes/backend/entry-pack-redemption";
+import { EntryPackUnavailableError } from "@/features/passes/backend/entry-pack-redemption";
 import { ReferralService } from "@/features/referrals";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import {
@@ -106,6 +104,7 @@ import {
   instantStringSchema,
   temporalInstantToIsoString,
 } from "@/shared/utils/temporal";
+import { resolveEntryPackBooking } from "./entry-pack-booking";
 import {
   getOfficeAccessEndsAt,
   validateSubmittedOfficePeople,
@@ -124,6 +123,8 @@ export type PayStateSubmission = Omit<
     MarketingConsentGrantSource,
     "site_tool" | "customer_app"
   >;
+  /** API and agent submissions affirm the pack shown in their signed quote. */
+  readonly requireEntryPackQuote?: true;
 };
 
 /** The services each caller provides per request for its own channel. */
@@ -262,6 +263,9 @@ const prepareAdvertisement = Effect.fn("preparePayState.prepareAdvertisement")(
     const advertisement = yield* openSubmittedAdvertisedPriceState(
       input.advertisedPriceToken
     );
+    if (advertisement.kind === "cowork" && advertisement.quote.entryPack) {
+      return yield* AdvertisedPriceMismatchError.inputMismatch();
+    }
     const pricing = yield* CheckoutPricingService;
     return yield* pricing.affirmAdvertisement({
       advertisement,
@@ -740,23 +744,17 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
           if (
             !db ||
             reviewAccount ||
-            Option.isSome(bookingAgent) ||
             input.customer !== "account" ||
             reservation.kind !== "cowork"
           ) {
             return yield* new EntryPackUnavailableError({});
           }
-          const entryPack = yield* loadEntryPackRedemption(db, {
+          const entryPack = yield* resolveEntryPackBooking({
+            db,
+            reservation,
             passId: entryPackId,
             holderAccountId: accountId,
-            date: reservation.date,
           });
-          const coveredTier =
-            entryPack.tier === "reserved-desk-workstation"
-              ? reservation.entryTier === "reserved-desk" &&
-                Boolean(reservation.monitorOption)
-              : entryPack.tier === reservation.entryTier;
-          if (!coveredTier) return yield* new EntryPackUnavailableError({});
           return { entryPack, reservation };
         });
         yield* Match.value(input.reservation).pipe(
@@ -777,6 +775,16 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
           });
         }
 
+        const entryPackPrice = entryPackBooking
+          ? yield* quoteCoworkEntryPackForContinue({
+              ...entryPackBooking,
+              advertisedPriceToken: input.advertisedPriceToken,
+              locale: input.locale,
+              requireEntryPackQuote:
+                input.requireEntryPackQuote === true ||
+                Option.isSome(bookingAgent),
+            })
+          : undefined;
         const accountCustomer = yield* resolveAccountCustomer({
           input,
           bookingAgent,
@@ -816,8 +824,8 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
         // Submission locks the price: calendar sales are evaluated at this
         // booking moment here and at every later checkout re-check.
         const bookedAt = yield* currentInstant;
-        const checkoutPricing = entryPackBooking
-          ? { kind: "entry-pack" as const, ...entryPackBooking }
+        const checkoutPricing = entryPackPrice
+          ? { kind: "entry-pack" as const, price: entryPackPrice }
           : {
               kind: "card" as const,
               advertisement: yield* advertiseAt(bookedAt),
@@ -871,16 +879,14 @@ const prepareSubmission = Effect.fn("prepareWorkspacePayState.submission")(
           at: Temporal.Instant
         ) {
           if (checkoutPricing.kind === "entry-pack") {
-            const { entryPack } = checkoutPricing;
-            return yield* quoteCoworkEntryPackForContinue({
+            const { price } = checkoutPricing;
+            return {
+              ...price,
               reservation: {
-                ...checkoutPricing.reservation,
+                ...price.reservation,
                 ...accountCustomer?.contact,
               },
-              entryPack,
-              advertisedPriceToken: input.advertisedPriceToken,
-              locale: input.locale,
-            });
+            };
           }
           return yield* quotePreparedReservation({
             advertisement: at.equals(bookedAt)

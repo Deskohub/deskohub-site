@@ -3,6 +3,7 @@ import "@/shared/testing/workspace-test-env";
 import { describe, expect, test } from "bun:test";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Effect, Layer } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
 import type { PaymentReturnTarget } from "@/features/checkout/payment-return-target";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { handleCheckoutPaymentReturn } from "./checkout-payment-return-route.server";
@@ -40,7 +41,12 @@ const invoke = async (
       `https://deskohub.test/en-US/checkout/pay/return/order-id${search}`
     ),
     { params: Promise.resolve(params) }
-  ).pipe(Effect.provide(reservations), Effect.runPromise);
+  ).pipe(
+    Effect.provide(
+      Layer.merge(reservations, Layer.mock(WorkspaceDatabase, {}))
+    ),
+    Effect.runPromise
+  );
   return { response, lookups };
 };
 
