@@ -12,7 +12,6 @@ import {
   passReminderPageSize,
 } from "@/features/passes/backend/pass-reminder-reads.service";
 import { getPassReminderDueAt } from "@/features/passes/pass-reminder-schedule";
-import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import { AudienceScope } from "../../backend/audience-evaluation-context";
 import { CampaignCandidateRepository } from "../../backend/campaign-candidate.repository";
@@ -79,8 +78,8 @@ const triggerKind = (product: Subject["kind"]) =>
     ? ("entry-pack-expiring" as const)
     : ("unlimited-ending" as const);
 
-const stillDueToday = (subject: Subject, now: Temporal.Instant) =>
-  getWorkspaceDate(now).equals(Temporal.PlainDate.from(subject.dueDate)) &&
+// A persisted unit retains the original fire, even when delivery crosses midnight.
+const fireHasPassed = (subject: Subject, now: Temporal.Instant) =>
   Temporal.Instant.compare(getPassReminderDueAt(subject.dueDate), now) <= 0;
 
 const receiptKey = ({ passId }: PassSubject) => `pass-reminder:${passId}`;
@@ -291,7 +290,7 @@ export const makePassReminderIntakeHandler = Effect.gen(function* () {
         const subject = unit.subject;
         if (
           unit.campaignId !== subject.campaignId ||
-          !stillDueToday(subject, now) ||
+          !fireHasPassed(subject, now) ||
           !(yield* gateDecision)
         )
           return Fetched.None();
@@ -315,7 +314,7 @@ export const makePassReminderIntakeHandler = Effect.gen(function* () {
         if (
           fetched._tag === "None" ||
           !(yield* gateDecision) ||
-          !stillDueToday(unit.subject, now)
+          !fireHasPassed(unit.subject, now)
         )
           return empty;
         const { campaignId, versionId, kind, dueDate } = unit.subject;

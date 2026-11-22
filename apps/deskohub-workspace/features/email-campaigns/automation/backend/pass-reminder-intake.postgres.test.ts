@@ -15,14 +15,17 @@ import {
   automationScenarioLayer,
   makeEngineDotypos,
   makeEngineFixtures,
-  planAndProcess,
   runEngineAt,
 } from "./automation-engine-scenario.test-utils";
 import {
   automationFlowFixture,
   automationLifecycleTestKit,
 } from "./automation-lifecycle.test-utils";
-import { makeAutomationUnitQueueFake } from "./automation-unit-queue.test-utils";
+import { AutomationPlanner } from "./automation-planner.service";
+import {
+  drainAutomationUnitQueue,
+  makeAutomationUnitQueueFake,
+} from "./automation-unit-queue.test-utils";
 import { PassReminderWritesOpen } from "./pass-reminder-write-policy";
 
 const database = await createWorkspacePostgresSuiteDatabase(
@@ -97,7 +100,7 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     return { id, holder };
   };
 
-  const seedVersion = async () => {
+  const seedVersion = async (draftFlow = flow) => {
     const { campaignId } = await kit.seedDraft();
     const permit = Effect.provideService(
       PassReminderWritesOpen,
@@ -105,7 +108,9 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     );
     await kit.run(
       kit
-        .lifecycle((lifecycle) => lifecycle.updateFlow({ campaignId, flow }))
+        .lifecycle((lifecycle) =>
+          lifecycle.updateFlow({ campaignId, flow: draftFlow })
+        )
         .pipe(permit)
     );
     const previewId = await kit.seedPreview(campaignId, {
@@ -127,7 +132,7 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     return campaignId;
   };
 
-  test("plans each eligible pass independently at 10:00 and keeps its identity on replans", async () => {
+  test("plans the 10:00 occurrence and processes its retained passes after Prague midnight", async () => {
     const eligible = await fixtures.addCustomer("eligible");
     const noConsent = await fixtures.addCustomer("no-consent", {
       consent: false,
@@ -138,8 +143,12 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     await seedPass(noConsent);
     await seedPass(unclaimedGift, true);
     const editedCampaign = await seedVersion();
-    await seedVersion();
-    const resumedCampaign = await seedVersion();
+    const resumedCampaign = await seedVersion(
+      automationFlowFixture({
+        trigger: { _tag: "UnlimitedEnding" },
+        steps: [{ _tag: "Send", id: "send" }],
+      })
+    );
     const { rows: versionsAtFire } = await pool.query(
       "select active_version_id from email_campaign_automations where campaign_id = $1",
       [editedCampaign]
@@ -164,16 +173,16 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
         )
       ),
     });
-    const tick = (open: boolean) =>
-      planAndProcess(queue).pipe(
+    const plan = (open: boolean) =>
+      Effect.flatMap(AutomationPlanner, (planner) => planner.plan).pipe(
         Effect.provideService(PassReminderWritesOpen, Effect.succeed(open))
       );
     expect(
-      (await runEngineAt(tick(true), layer, dueAt.subtract({ minutes: 1 })))
-        .summary.intake.unitsPlanned
+      (await runEngineAt(plan(true), layer, dueAt.subtract({ minutes: 1 })))
+        .intake.unitsPlanned
     ).toBe(0);
     expect(
-      (await runEngineAt(tick(false), layer, dueAt)).summary.intake.unitsPlanned
+      (await runEngineAt(plan(false), layer, dueAt)).intake.unitsPlanned
     ).toBe(0);
     const afterFire = dueAt.add({ minutes: 5 });
     const nextFlow = automationFlowFixture({
@@ -208,12 +217,12 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
       afterFire
     );
     expect(
-      (await runEngineAt(tick(true), layer, dueAt.add({ minutes: 15 }))).summary
-        .intake.unitsPlanned
-    ).toBe(2);
+      (await runEngineAt(plan(true), layer, dueAt.add({ minutes: 15 }))).intake
+        .unitsPlanned
+    ).toBe(1);
     expect(
-      (await runEngineAt(tick(true), layer, dueAt.add({ minutes: 30 }))).summary
-        .intake.unitsPlanned
+      (await runEngineAt(plan(true), layer, dueAt.add({ minutes: 30 }))).intake
+        .unitsPlanned
     ).toBe(0);
     const { rows: pages } = await pool.query(
       `select campaign_id, subject->>'versionId' as version_id
@@ -226,6 +235,12 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     expect(
       pages.some(({ campaign_id }) => campaign_id === resumedCampaign)
     ).toBe(false);
+    const afterMidnight = dueAt.add({ hours: 15 });
+    expect(new Set(queue.pending().map(({ unitId }) => unitId)).size).toBe(1);
+    await runEngineAt(drainAutomationUnitQueue(queue), layer, afterMidnight);
+    expect(
+      (await runEngineAt(plan(true), layer, afterMidnight)).intake.unitsPlanned
+    ).toBe(0);
     const { rows } = await pool.query(
       `select trigger_pass_id, pass_reminder_context, dotypos_customer_id, step_id
        from email_campaign_automation_runs where trigger_pass_id is not null`
