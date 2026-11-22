@@ -507,6 +507,30 @@ describe("batch failover", () => {
     expect(outcome).toBe(error);
   });
 
+  test("a batch with a request guard stays with the first provider", async () => {
+    const error = providerLevel("posthog");
+    const second = scriptedProvider("resend", () => "accept");
+
+    const outcome = await runWithEmail(
+      Effect.gen(function* () {
+        const email = yield* EmailServiceTag;
+        return yield* email.sendBatch(recipients.slice(0, 1), {
+          idempotencyKey: "guarded",
+          beforeRequest: () => Effect.void,
+        });
+      }).pipe(Effect.flip),
+      chains({
+        marketing: [
+          failingProvider("posthog", error).provider,
+          second.provider,
+        ],
+      })
+    );
+
+    expect(outcome).toBe(error);
+    expect(second.batches).toEqual([]);
+  });
+
   test("after a fallback, a whole-batch failure comes back per message", async () => {
     const error = new NetworkError({ message: "timed out", code: "timeout" });
 

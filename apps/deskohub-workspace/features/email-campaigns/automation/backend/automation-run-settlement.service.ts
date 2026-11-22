@@ -18,6 +18,7 @@ import {
   type AutomationRunEnding,
   AutomationRunTransitions,
 } from "./automation-run-transitions";
+import { passReminderWithdrawnCode } from "./pass-reminder-delivery";
 
 export interface IAutomationRunSettlement {
   /**
@@ -73,6 +74,8 @@ type SendingRun = {
   readonly runId: AutomationRunId;
   readonly recipientStatus: CampaignRecipientStatus;
   readonly skipReason: CampaignRecipientSkipReason | null;
+  readonly failureCode: string | null;
+  readonly triggerPassId: string | null;
 };
 
 /** The send's `sending` runs with their recipients, in id order. */
@@ -83,6 +86,8 @@ const sendingRuns = (sendId: CampaignSendId) =>
         runId: emailCampaignAutomationRuns.id,
         recipientStatus: emailCampaignRecipients.status,
         skipReason: emailCampaignRecipients.skipReason,
+        failureCode: emailCampaignRecipients.failureCode,
+        triggerPassId: emailCampaignAutomationRuns.triggerPassId,
       })
       .from(emailCampaignAutomationRuns)
       .innerJoin(
@@ -151,10 +156,12 @@ const recipientEnding = (run: SendingRun): Option.Option<AutomationRunEnding> =>
       )
     ),
     Match.when("failed", () =>
-      Option.some<AutomationRunEnding>({
-        outcome: "failed",
-        reason: "delivery-refused",
-      })
+      Option.some<AutomationRunEnding>(
+        run.triggerPassId !== null &&
+          run.failureCode === passReminderWithdrawnCode
+          ? { outcome: "withdrawn" }
+          : { outcome: "failed", reason: "delivery-refused" }
+      )
     ),
     Match.when("pending", () => Option.none()),
     Match.exhaustive

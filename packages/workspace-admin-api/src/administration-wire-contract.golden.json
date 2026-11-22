@@ -26890,7 +26890,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -26936,7 +26938,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -27256,7 +27260,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -27302,7 +27308,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -28352,7 +28360,9 @@
                               "reservation-cancelled",
                               "reservation-started",
                               "reservation-finished",
-                              "account-created"
+                              "account-created",
+                              "entry-pack-expiring",
+                              "unlimited-ending"
                             ]
                           },
                           "frequency": {
@@ -28626,7 +28636,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -28672,7 +28684,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -28994,7 +29008,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -29040,7 +29056,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -29362,7 +29380,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -29408,7 +29428,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -29708,7 +29730,9 @@
                                 "reservation-cancelled",
                                 "reservation-started",
                                 "reservation-finished",
-                                "account-created"
+                                "account-created",
+                                "entry-pack-expiring",
+                                "unlimited-ending"
                               ]
                             },
                             "frequency": {
@@ -29958,7 +29982,9 @@
                               "reservation-cancelled",
                               "reservation-started",
                               "reservation-finished",
-                              "account-created"
+                              "account-created",
+                              "entry-pack-expiring",
+                              "unlimited-ending"
                             ]
                           },
                           "frequency": {
@@ -30997,7 +31023,9 @@
                                 "reservation-cancelled",
                                 "reservation-started",
                                 "reservation-finished",
-                                "account-created"
+                                "account-created",
+                                "entry-pack-expiring",
+                                "unlimited-ending"
                               ]
                             },
                             "triggerAt": {
@@ -31322,7 +31350,9 @@
                           "reservation-cancelled",
                           "reservation-started",
                           "reservation-finished",
-                          "account-created"
+                          "account-created",
+                          "entry-pack-expiring",
+                          "unlimited-ending"
                         ]
                       },
                       "triggerAt": {
@@ -35648,9 +35678,51 @@
               "_tag"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "_tag": {
+                "type": "string",
+                "enum": [
+                  "EntryPackExpiring"
+                ]
+              },
+              "copyVersion": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              }
+            },
+            "required": [
+              "_tag"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "_tag": {
+                "type": "string",
+                "enum": [
+                  "UnlimitedEnding"
+                ]
+              },
+              "copyVersion": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              }
+            },
+            "required": [
+              "_tag"
+            ],
+            "additionalProperties": false
           }
         ],
-        "description": "A Prague-time calendar schedule, or a reservation booked, cancelled, started or finished (optionally for one product), or an account created."
+        "description": "A Prague-time calendar schedule, reservation activity, account creation, or a cowork pass nearing the end of its validity."
       },
       "AutomationVersionNumber": {
         "type": "integer",

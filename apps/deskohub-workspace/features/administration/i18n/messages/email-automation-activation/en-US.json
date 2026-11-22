@@ -14,6 +14,7 @@
   "emailAutomationActivationColumnTriggered": "Triggered",
   "emailAutomationActivationDryRunFailed": "The dry run couldn't start. Try again.",
   "emailAutomationActivationEmailTitle": "Email",
+  "emailAutomationActivationExampleEmailTitle": "Example email",
   "emailAutomationActivationEntrantsTitle": "Who would enter at the next fire, {fire}",
   "emailAutomationActivationExplainReplay": "A dry run replays the last 30 days of trigger events on the current working copy and shows who would have been sent the email, and when. Nothing is sent.",
   "emailAutomationActivationExplainSchedule": "A dry run shows who would enter at the next scheduled fire and which of them pass the conditions now. Nothing is sent.",

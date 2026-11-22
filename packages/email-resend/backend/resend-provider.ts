@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import {
+  type EmailBatchOptions,
   EmailDeliveryIdSchema,
   type EmailMessage,
   type EmailProvider,
   type EmailSendError,
   type EmailSendResult,
   EmailServiceError,
+  emailRequestFingerprint,
   NetworkError,
 } from "@deskohub/email";
 import type { ProviderRequestPolicy } from "@deskohub/provider-request";
@@ -216,6 +218,39 @@ const toResendEmail = (message: EmailMessage) => ({
   tags: toResendTags(message),
 });
 
+const toResendWireEmail = (message: EmailMessage) => {
+  const { replyTo, ...email } = toResendEmail(message);
+  return { ...email, reply_to: replyTo };
+};
+
+const postResend = async (
+  url: string,
+  headers: Headers,
+  body: string,
+  signal: AbortSignal
+): Promise<ResendResponse<unknown>> => {
+  // The SDK logs raw provider error bodies outside production.
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body,
+    signal,
+    redirect: "error",
+  });
+  const answer: unknown = await response.json().catch(() => null);
+  if (response.ok) return { data: answer, error: null };
+  return {
+    data: null,
+    error: {
+      statusCode: response.status,
+      name:
+        typeof answer === "object" && answer !== null && "name" in answer
+          ? answer.name
+          : undefined,
+    },
+  };
+};
+
 /**
  * Resend accepted the request but its response is unreadable, so whether it
  * delivered is unknown.
@@ -240,6 +275,31 @@ export interface ResendEmailProviderConfig {
 export const resendIdempotencyMismatchCode =
   "resend-idempotency-payload-mismatch";
 
+const classifyResendDurableRefusal = (error: unknown): EmailSendError => {
+  const status = getResendErrorStatusCode(error);
+  if (
+    status === 409 &&
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "invalid_idempotent_request"
+  ) {
+    return new NetworkError({
+      message: "Resend reports a different request for the idempotency key",
+      code: resendIdempotencyMismatchCode,
+      failureKind: "unknown-outcome",
+    });
+  }
+  return status !== undefined &&
+    [400, 401, 403, 404, 405, 422, 429].includes(status)
+    ? classifyResendError(error)
+    : new NetworkError({
+        message: "Resend acceptance is unknown",
+        code: status === undefined ? "resend-unclassified" : `http-${status}`,
+        failureKind: "unknown-outcome",
+      });
+};
+
 /**
  * Prepares one POST /emails request, without provider-side retry orchestration.
  * The caller must durably register its identity before sending. A failure
@@ -257,8 +317,7 @@ export const makeResendEmailAttempt = ({
       readonly attachments?: never;
     }
   ) => {
-    const { replyTo, ...email } = toResendEmail(message);
-    const body = JSON.stringify({ ...email, reply_to: replyTo });
+    const body = JSON.stringify(toResendWireEmail(message));
     const headers = new Headers({
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
@@ -278,60 +337,9 @@ export const makeResendEmailAttempt = ({
     return {
       identity,
       send: requestResend(
-        async (signal) => {
-          // The SDK logs raw provider error bodies outside production.
-          const response = await fetch(url, {
-            method: "POST",
-            headers,
-            body,
-            signal,
-            redirect: "error",
-          });
-          const answer: unknown = await response.json().catch(() => null);
-          if (response.ok) return { data: answer, error: null };
-
-          return {
-            data: null,
-            error: {
-              statusCode: response.status,
-              name:
-                typeof answer === "object" &&
-                answer !== null &&
-                "name" in answer
-                  ? answer.name
-                  : undefined,
-            },
-          };
-        },
+        (signal) => postResend(url, headers, body, signal),
         policy,
-        (error) => {
-          const status = getResendErrorStatusCode(error);
-          if (
-            status === 409 &&
-            typeof error === "object" &&
-            error !== null &&
-            "name" in error &&
-            error.name === "invalid_idempotent_request"
-          ) {
-            return new NetworkError({
-              message:
-                "Resend reports a different request for the idempotency key",
-              code: resendIdempotencyMismatchCode,
-              failureKind: "unknown-outcome",
-            });
-          }
-          return status !== undefined &&
-            [400, 401, 403, 404, 405, 422, 429].includes(status)
-            ? classifyResendError(error)
-            : new NetworkError({
-                message: "Resend acceptance is unknown",
-                code:
-                  status === undefined
-                    ? "resend-unclassified"
-                    : `http-${status}`,
-                failureKind: "unknown-outcome",
-              });
-        }
+        classifyResendDurableRefusal
       ).pipe(
         Effect.flatMap((response) =>
           decodeDeliveryId(
@@ -358,6 +366,61 @@ export const makeResendEmailAttempt = ({
   };
 };
 
+const resendBatchAnswer = Schema.Struct({
+  data: Schema.Array(Schema.Struct({ id: Schema.Unknown })),
+});
+
+const requestGuardedResendBatch = Effect.fn("resend.requestGuardedBatch")(
+  function* (input: {
+    readonly resend: Resend;
+    readonly credential: string | undefined;
+    readonly messages: readonly EmailMessage[];
+    readonly idempotencyKey: string | undefined;
+    readonly beforeRequest: NonNullable<EmailBatchOptions["beforeRequest"]>;
+    readonly policy: ProviderRequestPolicy;
+  }) {
+    if (!input.idempotencyKey || !input.credential) {
+      return yield* resendMessageRefusal(
+        "resend-guarded-request-not-configured"
+      );
+    }
+
+    const url = `${input.resend.baseUrl}/emails/batch`;
+    const body = JSON.stringify(input.messages.map(toResendWireEmail));
+    const headers = new Headers({
+      "Content-Type": "application/json",
+      "Idempotency-Key": input.idempotencyKey,
+      "User-Agent": input.resend.userAgent,
+      "X-Batch-Validation": "strict",
+    });
+    // Hash the serialized body and actual route. Authentication is bound by
+    // the credential used as the digest key.
+    yield* input.beforeRequest(
+      emailRequestFingerprint(
+        ["resend", "POST", url, [...headers], body],
+        input.credential
+      )
+    );
+    headers.set("Authorization", `Bearer ${input.credential}`);
+
+    const data = yield* requestResend(
+      (signal) => postResend(url, headers, body, signal),
+      input.policy,
+      classifyResendDurableRefusal
+    );
+    return yield* Schema.decodeUnknownEffect(resendBatchAnswer)(data).pipe(
+      Effect.mapError(
+        () =>
+          new NetworkError({
+            message: "Resend batch response was unreadable",
+            code: "invalid-response",
+            failureKind: "unknown-outcome",
+          })
+      )
+    );
+  }
+);
+
 /**
  * Sends through Resend. A single send retries a transport failure, a server
  * failure, or a 409 under its idempotency key, with a jittered exponential
@@ -370,7 +433,8 @@ export const makeResendEmailProvider = ({
   apiKey,
   timeouts,
 }: ResendEmailProviderConfig): EmailProvider => {
-  const resend = new Resend(apiKey);
+  const credential = apiKey || process.env.RESEND_API_KEY;
+  const resend = new Resend(credential);
   const sendPolicy = resendRetryPolicy.withAttemptTimeout(timeouts.send);
   const batchPolicy = resendRetryPolicy.withAttemptTimeout(timeouts.batch);
 
@@ -467,14 +531,24 @@ export const makeResendEmailProvider = ({
           size: messages.length,
         });
 
-        const data = yield* requestResend(
-          (signal) =>
-            resend.batch.send(messages.map(toResendEmail), {
-              idempotencyKey: getResendIdempotencyKey(options.idempotencyKey),
-              signal,
-            }),
-          batchPolicy
-        );
+        const idempotencyKey = getResendIdempotencyKey(options.idempotencyKey);
+        const data = yield* options.beforeRequest
+          ? requestGuardedResendBatch({
+              resend,
+              credential,
+              messages,
+              idempotencyKey,
+              beforeRequest: options.beforeRequest,
+              policy: batchPolicy,
+            })
+          : requestResend(
+              (signal) =>
+                resend.batch.send(messages.map(toResendEmail), {
+                  idempotencyKey,
+                  signal,
+                }),
+              batchPolicy
+            );
 
         const ids = data?.data ?? [];
         if (ids.length !== messages.length) {

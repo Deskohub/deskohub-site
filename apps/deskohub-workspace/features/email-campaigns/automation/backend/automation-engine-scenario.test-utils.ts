@@ -15,7 +15,7 @@ import { makeEmailProviderFake } from "@deskohub/email/testing";
 import { testEmailAddress } from "@deskohub/test-email";
 import { emailAutomationTickMinutes } from "@deskohub/workspace-admin-api";
 import { eq, sql } from "drizzle-orm";
-import { Deferred, Effect, Fiber, Layer, Result, Struct } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option, Result, Struct } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
@@ -24,6 +24,8 @@ import {
   workspaceReservations,
 } from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
+import { PassReminderReads } from "@/features/passes/backend/pass-reminder-reads.service";
 import { ReservationActivitySweep } from "@/features/reservation/backend/reservation-activity-sweep.service";
 import {
   type WorkspaceReservationId,
@@ -87,6 +89,7 @@ import { makeConditionHandler } from "./condition";
 import { makeDeliverHandler } from "./deliver";
 import { makeFireChunkHandler } from "./fire-chunk";
 import { makeIntakeHandler } from "./intake";
+import { makePassReminderIntakeHandler } from "./pass-reminder-intake";
 import { makeSweepPageHandler } from "./sweep-page";
 
 // ---------------------------------------------------------------------------
@@ -313,6 +316,7 @@ const unitHandlerMakers = {
   "sweep-page": makeSweepPageHandler,
   preview: makePreviewUnitHandler,
   intake: makeIntakeHandler,
+  "pass-reminder-intake": makePassReminderIntakeHandler,
   "fire-chunk": makeFireChunkHandler,
   condition: makeConditionHandler,
   deliver: makeDeliverHandler,
@@ -341,6 +345,8 @@ export const automationScenarioLayer = async (input: {
   readonly limits?: { readonly total: number; readonly deliver: number };
   readonly reconcile?: boolean;
   readonly deploymentEnvironment?: "production" | "development";
+  readonly passReminderReads?: Layer.Layer<PassReminderReads>;
+  readonly passReminderGate?: Layer.Layer<CoworkPassesReleaseGate>;
 }) => {
   const database = input.database.layer;
   const base = Layer.merge(database, input.dotypos.layer);
@@ -360,17 +366,14 @@ export const automationScenarioLayer = async (input: {
   const evaluationFacts = AutomationEvaluationFacts.Default.pipe(
     Layer.provide(base)
   );
+  const emailConfig = Layer.succeed(CampaignEmailConfig, {
+    deploymentEnvironment: input.deploymentEnvironment ?? "development",
+    from: { email: testEmailAddress("campaigns") },
+    replyTo: { email: testEmailAddress("hello") },
+    adminInbox: testEmailAddress("admin"),
+  });
   const delivery = campaignDeliveryTestLayer(
-    Layer.mergeAll(
-      input.dotypos.layer,
-      resend.layer,
-      Layer.succeed(CampaignEmailConfig, {
-        deploymentEnvironment: input.deploymentEnvironment ?? "development",
-        from: { email: testEmailAddress("campaigns") },
-        replyTo: { email: testEmailAddress("hello") },
-        adminInbox: testEmailAddress("admin"),
-      })
-    )
+    Layer.mergeAll(input.dotypos.layer, resend.layer, emailConfig)
   ).pipe(Layer.provide(database));
   const dependencies = Layer.mergeAll(
     base,
@@ -379,6 +382,13 @@ export const automationScenarioLayer = async (input: {
     conditionEvaluation,
     evaluationFacts,
     delivery,
+    emailConfig,
+    input.passReminderGate ?? CoworkPassesReleaseGate.fromDecision(false),
+    input.passReminderReads ??
+      Layer.succeed(PassReminderReads, {
+        listDue: () => Effect.succeed([]),
+        readDue: () => Effect.succeed(Option.none()),
+      }),
     AutomationRunSettlement.Default,
     ReservationActivitySweep.Default
   );

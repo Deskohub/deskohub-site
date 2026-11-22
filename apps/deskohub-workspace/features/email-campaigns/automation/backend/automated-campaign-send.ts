@@ -24,6 +24,7 @@ import {
 } from "../../backend/campaign-batch-delivery.service";
 import type { CampaignDeliveryAttempt } from "../../backend/campaign-send-queue.service";
 import { sendAutomationVersion } from "../../backend/campaign-send-selection";
+import type { CampaignLocalizedContent } from "../../body/campaign-content";
 import type { CampaignId, CampaignSendId } from "../../campaign-identifiers";
 import type { AutomationVersionId } from "../automation-identifiers";
 
@@ -154,6 +155,7 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
     readonly recipients: readonly BatchRecipient[];
     readonly profiles: BatchProfiles;
     readonly at: Temporal.Instant;
+    readonly content?: CampaignLocalizedContent;
   }): Effect.Effect<void, DatabaseQueryError, WorkspaceTransaction> =>
     db
       .insert(emailCampaignRecipients)
@@ -168,7 +170,13 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
         Effect.andThen(deliveredAttempt(input.sendId)),
         Effect.flatMap((send) =>
           batches.prepare({
-            send,
+            send: input.content
+              ? {
+                  ...send,
+                  guarded: true,
+                  campaign: { ...send.campaign, content: input.content },
+                }
+              : send,
             recipients: input.recipients,
             profiles: Option.some(input.profiles),
           })
@@ -203,50 +211,38 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
    * is `Unconfirmed`. A send already completed requests nothing. An unknown
    * outcome fails, so the unit retries the replay.
    */
-  const submit = (input: {
-    readonly sendId: CampaignSendId;
-    readonly profiles: Option.Option<BatchProfiles>;
-  }): Effect.Effect<
-    AutomatedSendSubmission,
-    CampaignDeliveryIncomplete | DatabaseQueryError
-  > =>
-    uncompletedAutomatedCampaign(input.sendId).pipe(
-      Effect.flatMap(
-        Option.match({
-          // Completed meanwhile: nothing is left to settle.
-          onNone: () =>
-            Effect.succeed<AutomatedSendSubmission>(
-              AutomatedSendSubmission.AlreadyCompleted()
-            ),
-          onSome: (campaign) =>
-            batches.listRequested(automatedAttempt(input.sendId)).pipe(
-              Effect.flatMap((requested) =>
-                Effect.forEach(requested, (batch) =>
-                  batches
-                    .request(
-                      batchRequest({
-                        send: { ...automatedAttempt(input.sendId), campaign },
-                        batch,
-                        profiles: input.profiles,
-                      })
-                    )
-                    .pipe(
-                      Effect.map(
-                        (outcome): RequestedBatchOutcome => ({ batch, outcome })
-                      )
-                    )
-                )
-              ),
-              Effect.map(
-                (submitted): AutomatedSendSubmission =>
-                  AutomatedSendSubmission.Submitted({ batches: submitted })
-              )
-            ),
-        })
-      ),
-      Effect.annotateLogs({ sendId: input.sendId }),
-      Effect.withSpan("AutomatedCampaignSend.submit")
-    );
+  const submit = Effect.fn("AutomatedCampaignSend.submit")(
+    function* (input: {
+      readonly sendId: CampaignSendId;
+      readonly profiles: Option.Option<BatchProfiles>;
+      readonly requestPassReminder?: (
+        send: DeliveredAttempt,
+        batch: PersistedBatch
+      ) => Effect.Effect<
+        BatchOutcome,
+        CampaignDeliveryIncomplete | DatabaseQueryError
+      >;
+    }) {
+      const campaign = yield* uncompletedAutomatedCampaign(input.sendId);
+      if (Option.isNone(campaign))
+        return AutomatedSendSubmission.AlreadyCompleted();
+
+      const attempt = automatedAttempt(input.sendId);
+      const send = { ...attempt, campaign: campaign.value };
+      const requested = yield* batches.listRequested(attempt);
+      const submitted = yield* Effect.forEach(requested, (batch) => {
+        const request = input.requestPassReminder
+          ? input.requestPassReminder(send, batch)
+          : batches.request(
+              batchRequest({ send, batch, profiles: input.profiles })
+            );
+        return request.pipe(Effect.map((outcome) => ({ batch, outcome })));
+      });
+      return AutomatedSendSubmission.Submitted({ batches: submitted });
+    },
+    (effect, input) =>
+      effect.pipe(Effect.annotateLogs({ sendId: input.sendId }))
+  );
 
   /**
    * §5.9 step 4, in the caller's transaction: records a submitted send's

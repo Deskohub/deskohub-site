@@ -24,7 +24,13 @@ export const readsTriggeringVisit = (kind: AutomationTriggerKind): boolean =>
       () => true
     ),
     Match.when(
-      Match.is("reservation-cancelled", "schedule", "account-created"),
+      Match.is(
+        "reservation-cancelled",
+        "schedule",
+        "account-created",
+        "entry-pack-expiring",
+        "unlimited-ending"
+      ),
       () => false
     ),
     Match.exhaustive
@@ -48,7 +54,13 @@ export const withdrawnByCancellation = (kind: AutomationTriggerKind): boolean =>
       () => true
     ),
     Match.when(
-      Match.is("reservation-cancelled", "schedule", "account-created"),
+      Match.is(
+        "reservation-cancelled",
+        "schedule",
+        "account-created",
+        "entry-pack-expiring",
+        "unlimited-ending"
+      ),
       () => false
     ),
     Match.exhaustive
@@ -97,7 +109,15 @@ export const withdrawnByWorkspaceCancellation = (
       "reservation-cancelled",
       () => !Option.exists(cancelledAt, (at) => at.equals(trigger.at))
     ),
-    Match.when(Match.is("schedule", "account-created"), () => false),
+    Match.when(
+      Match.is(
+        "schedule",
+        "account-created",
+        "entry-pack-expiring",
+        "unlimited-ending"
+      ),
+      () => false
+    ),
     Match.exhaustive
   );
 };
@@ -118,7 +138,9 @@ const triggeringMoment = (
         "reservation-booked",
         "reservation-cancelled",
         "schedule",
-        "account-created"
+        "account-created",
+        "entry-pack-expiring",
+        "unlimited-ending"
       ),
       () => Option.none()
     ),

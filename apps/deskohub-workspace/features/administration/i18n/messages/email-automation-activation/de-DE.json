@@ -14,6 +14,7 @@
   "emailAutomationActivationColumnTriggered": "Ausgelöst",
   "emailAutomationActivationDryRunFailed": "Der Testlauf konnte nicht gestartet werden. Versuchen Sie es erneut.",
   "emailAutomationActivationEmailTitle": "E-Mail",
+  "emailAutomationActivationExampleEmailTitle": "Beispiel-E-Mail",
   "emailAutomationActivationEntrantsTitle": "Wer bei der nächsten Ausführung am {fire} aufgenommen würde",
   "emailAutomationActivationExplainReplay": "Der Testlauf spielt die auslösenden Ereignisse der letzten 30 Tage mit der aktuellen Arbeitsversion erneut ab und zeigt, wem und wann die E-Mail gesendet worden wäre. Es wird nichts gesendet.",
   "emailAutomationActivationExplainSchedule": "Der Testlauf zeigt, wer bei der nächsten geplanten Ausführung aufgenommen würde und wer davon die Bedingungen jetzt erfüllt. Es wird nichts gesendet.",

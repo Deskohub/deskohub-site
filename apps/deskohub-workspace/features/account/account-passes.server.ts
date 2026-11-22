@@ -26,10 +26,8 @@ import {
   getEntryPackLastUsableDate,
 } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
-import {
-  getCoworkReservationPath,
-  reservationStatusPath,
-} from "@/features/reservation/routes";
+import { getEntryPackBookingPath } from "@/features/passes/routes";
+import { reservationStatusPath } from "@/features/reservation/routes";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import {
   formatInstantDate,
@@ -184,7 +182,7 @@ function toAccountEntryPack(
       pack.entriesLeft > 0 &&
       (pack.giftIssuedAt === null || pack.giftClaimedAt !== null) &&
       pack.giftPaymentIsUsable && {
-        bookPath: `${getCoworkReservationPath(locale)}?${new URLSearchParams({ pass: pack.id })}`,
+        bookPath: getEntryPackBookingPath(locale, pack.id),
       }),
   };
 }

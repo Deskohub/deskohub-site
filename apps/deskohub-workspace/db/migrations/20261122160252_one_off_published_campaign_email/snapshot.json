@@ -1,9 +1,9 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "4f2b98a2-9304-4287-939b-2efef9543315",
+  "id": "beb08a09-b39f-44de-8993-20650172b038",
   "prevIds": [
-    "808dac01-ef42-4f90-9e77-f8922cee5e81"
+    "feda084c-e03a-4aac-bf01-d202922e6fa1"
   ],
   "ddl": [
     {
@@ -3856,6 +3856,32 @@
       "generated": null,
       "identity": null,
       "name": "trigger_reservation_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "email_campaign_automation_runs"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "trigger_pass_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "email_campaign_automation_runs"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "pass_reminder_context",
       "entityType": "columns",
       "schema": "public",
       "table": "email_campaign_automation_runs"
@@ -14738,6 +14764,55 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "campaign_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "dotypos_customer_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"status\" <> 'ended' and \"trigger_pass_id\" is null",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "email_campaign_automation_runs_one_open_customer_run_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "email_campaign_automation_runs"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "trigger_pass_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"trigger_pass_id\" is not null",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "email_campaign_automation_runs_one_pass_run_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "email_campaign_automation_runs"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "due_at",
           "isExpression": false,
           "asc": true,
@@ -18728,6 +18803,23 @@
       "table": "email_campaign_automation_runs"
     },
     {
+      "nameExplicit": false,
+      "columns": [
+        "trigger_pass_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "pass_purchases",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "email_campaign_automation_runs_uvm3UnjpWtuk_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "email_campaign_automation_runs"
+    },
+    {
       "nameExplicit": true,
       "columns": [
         "version_id",
@@ -22238,7 +22330,7 @@
       "table": "email_campaign_automation_run_events"
     },
     {
-      "value": "\"trigger_kind\" in ('schedule', 'reservation-booked', 'reservation-cancelled', 'reservation-started', 'reservation-finished', 'account-created')",
+      "value": "\"trigger_kind\" in ('schedule', 'reservation-booked', 'reservation-cancelled', 'reservation-started', 'reservation-finished', 'account-created', 'entry-pack-expiring', 'unlimited-ending')",
       "name": "email_campaign_automation_runs_trigger_kind_check",
       "entityType": "checks",
       "schema": "public",
@@ -22268,6 +22360,13 @@
     {
       "value": "(\"trigger_kind\" like 'reservation-%') = (\"trigger_reservation_id\" is not null)",
       "name": "email_campaign_automation_runs_trigger_check",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "email_campaign_automation_runs"
+    },
+    {
+      "value": "(\"trigger_kind\" in ('entry-pack-expiring', 'unlimited-ending')) = (\"trigger_pass_id\" is not null) and (\"trigger_pass_id\" is null) = (\"pass_reminder_context\" is null)",
+      "name": "email_campaign_automation_runs_pass_trigger_check",
       "entityType": "checks",
       "schema": "public",
       "table": "email_campaign_automation_runs"

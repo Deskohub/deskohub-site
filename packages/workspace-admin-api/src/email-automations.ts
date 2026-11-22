@@ -45,7 +45,12 @@ const reservationTriggerFields = {
   product: Schema.optionalKey(ReservationProductFilter),
 };
 
-/** What starts a run: a calendar schedule or one of five customer events. */
+const passReminderTriggerFields = {
+  /** Stored on published flows so later copy revisions don't change a run. */
+  copyVersion: Schema.optionalKey(Schema.Literal(1)),
+};
+
+/** What starts a run: a calendar schedule, customer event, or pass reminder. */
 export const AutomationTrigger = Schema.Union([
   Schema.TaggedStruct("Schedule", { calendar: CalendarExpression }),
   Schema.TaggedStruct("ReservationBooked", reservationTriggerFields),
@@ -53,10 +58,12 @@ export const AutomationTrigger = Schema.Union([
   Schema.TaggedStruct("ReservationStarted", reservationTriggerFields),
   Schema.TaggedStruct("ReservationFinished", reservationTriggerFields),
   Schema.TaggedStruct("AccountCreated", {}),
+  Schema.TaggedStruct("EntryPackExpiring", passReminderTriggerFields),
+  Schema.TaggedStruct("UnlimitedEnding", passReminderTriggerFields),
 ]).annotate({
   identifier: "AutomationTrigger",
   description:
-    "A Prague-time calendar schedule, or a reservation booked, cancelled, started or finished (optionally for one product), or an account created.",
+    "A Prague-time calendar schedule, reservation activity, account creation, or a cowork pass nearing the end of its validity.",
 });
 export type AutomationTrigger = typeof AutomationTrigger.Type;
 
@@ -216,6 +223,8 @@ export const automationTriggerKinds = [
   "reservation-started",
   "reservation-finished",
   "account-created",
+  "entry-pack-expiring",
+  "unlimited-ending",
 ] as const;
 export const AutomationTriggerKind = Schema.Literals(automationTriggerKinds);
 export type AutomationTriggerKind = typeof AutomationTriggerKind.Type;

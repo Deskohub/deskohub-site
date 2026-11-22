@@ -164,7 +164,8 @@ export const sendBatchThroughChain = (
     const results: EmailBatchResult[] = [];
     let pending = messages.map((_, index) => index);
 
-    const providers = options.replay ? chain.slice(0, 1) : chain;
+    const providers =
+      options.replay || options.beforeRequest ? chain.slice(0, 1) : chain;
     for (const [providerIndex, provider] of providers.entries()) {
       if (pending.length === 0) break;
       const next = providers[providerIndex + 1];
@@ -172,6 +173,9 @@ export const sendBatchThroughChain = (
         provider.sendBatch(
           pending.map((index) => messages[index]!),
           {
+            ...(options.beforeRequest && {
+              beforeRequest: options.beforeRequest,
+            }),
             idempotencyKey: fallbackIdempotencyKey(
               options,
               providerIndex,

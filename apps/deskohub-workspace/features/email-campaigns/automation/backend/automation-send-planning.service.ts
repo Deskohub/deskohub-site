@@ -13,6 +13,7 @@ import type {
 } from "../automation-identifiers";
 import type { AutomationTriggerKind } from "../automation-states";
 import { readsTriggeringVisit } from "../automation-trigger-verification";
+import { isPassReminderKind } from "../automation-triggers";
 import { lockAutomationForEngine } from "./automation-lifecycle-lock";
 import { planAutomationRunUnits } from "./automation-run-units";
 
@@ -66,7 +67,14 @@ export const planDeliverRuns = (
   ready: readonly DeliverStepRun[],
   at: Temporal.Instant
 ) => {
-  const planned = Object.values(Arr.groupBy(ready, (run) => run.versionId))
+  // A send records one recipient row per customer. Each pass needs its own
+  // send, even when two pass runs target the same customer.
+  const byDelivery = Map.groupBy(ready, (run) =>
+    isPassReminderKind(run.triggerKind)
+      ? `pass:${run.id}`
+      : `version:${run.versionId}`
+  );
+  const planned = [...byDelivery.values()]
     .flatMap((ofVersion) => Arr.chunksOf(ofVersion, deliverUnitRunLimit))
     .map((chunk) => {
       const runIds = chunk.map((run) => run.id);
@@ -80,6 +88,7 @@ export const planDeliverRuns = (
             readsTriggeringVisit(run.triggerKind)
           ).length,
           customers: chunk.length,
+          readsPassDeskLabel: chunk[0].triggerKind === "unlimited-ending",
           at,
         }),
       };

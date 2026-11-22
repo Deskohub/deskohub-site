@@ -15,6 +15,7 @@ export {
   EmailProviders,
   type EmailStream,
 } from "./backend/email-providers";
+export { emailRequestFingerprint } from "./backend/email-request-fingerprint";
 export {
   internalRecipientForOrigin,
   staffEmailSubject,

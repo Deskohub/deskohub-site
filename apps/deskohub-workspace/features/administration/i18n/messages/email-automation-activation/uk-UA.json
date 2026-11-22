@@ -14,6 +14,7 @@
   "emailAutomationActivationColumnTriggered": "Запущено",
   "emailAutomationActivationDryRunFailed": "Не вдалося почати пробне виконання. Спробуйте ще раз.",
   "emailAutomationActivationEmailTitle": "Лист",
+  "emailAutomationActivationExampleEmailTitle": "Зразок листа",
   "emailAutomationActivationEntrantsTitle": "Хто потрапив би до наступного запуску: {fire}",
   "emailAutomationActivationExplainReplay": "Пробне виконання відтворює події запуску за останні 30 днів на поточній робочій версії й показує, кому та коли було б надіслано лист. Нічого не надсилається.",
   "emailAutomationActivationExplainSchedule": "Пробне виконання показує, хто потрапив би до наступного запланованого запуску і хто з них зараз відповідає умовам. Нічого не надсилається.",
