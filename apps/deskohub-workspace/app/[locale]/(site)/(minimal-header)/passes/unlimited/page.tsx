@@ -59,6 +59,8 @@ type Query = Parameters<typeof readUnlimitedPassSelection>[0] & {
   readonly submittedOrder?: string | string[];
   readonly supersedeOrder?: string | string[];
   readonly predecessorOrder?: string | string[];
+  readonly legacyPredecessorOrder?: string | string[];
+  readonly predecessorMode?: string | string[];
   readonly renew?: string | string[];
   readonly handoff?: string | string[];
 };
@@ -111,18 +113,29 @@ async function leaveUnavailableOrder(orderId: OrderId): Promise<never> {
 function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
   if (
     query.submittedOrder !== undefined ||
-    query.predecessorOrder !== undefined
+    query.predecessorOrder !== undefined ||
+    query.legacyPredecessorOrder !== undefined ||
+    query.predecessorMode !== undefined
   ) {
-    const { submittedOrder, predecessorOrder, supersedeOrder } = query;
-    const ids = Array.isArray(predecessorOrder)
-      ? predecessorOrder
-      : [predecessorOrder].filter((id) => id !== undefined);
+    const {
+      submittedOrder,
+      predecessorOrder,
+      legacyPredecessorOrder,
+      predecessorMode,
+      supersedeOrder,
+    } = query;
+    const ids = [predecessorOrder ?? []].flat();
+    const legacyIds = [legacyPredecessorOrder ?? []].flat();
     const isOrderId = Schema.is(orderIdSchema);
     if (
       query.order !== undefined ||
       (query.step !== undefined && query.step !== "details") ||
+      (predecessorMode !== undefined &&
+        (ids.length === 0 || predecessorMode !== "history")) ||
       ids.length > unlimitedCheckoutPredecessorLimit ||
-      !ids.every(isOrderId)
+      legacyIds.length > ids.length ||
+      !ids.every(isOrderId) ||
+      !legacyIds.every(isOrderId)
     )
       notFound();
     const predecessorOrderIds = [
@@ -134,9 +147,27 @@ function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
       supersedeOrderId = orderIdSchema.make(supersedeOrder.toLowerCase());
       if (!predecessorOrderIds.includes(supersedeOrderId)) notFound();
     }
+    // Shipped links used the same list for edits and leftover cleanup history.
+    const legacyPredecessorOrderIds =
+      legacyPredecessorOrder === undefined &&
+      predecessorMode === undefined &&
+      !supersedeOrderId
+        ? predecessorOrderIds
+        : [
+            ...new Set(
+              legacyIds.map((id) => orderIdSchema.make(id.toLowerCase()))
+            ),
+          ];
+    if (
+      !legacyPredecessorOrderIds.every((id) => predecessorOrderIds.includes(id))
+    )
+      notFound();
     const predecessors = {
       predecessorOrderIds,
       ...(supersedeOrderId && { supersedeOrderId }),
+      ...(legacyPredecessorOrderIds.length > 0 && {
+        legacyPredecessorOrderIds,
+      }),
     };
     if (submittedOrder === undefined) return { kind: "edit", ...predecessors };
     if (!isOrderId(submittedOrder)) notFound();

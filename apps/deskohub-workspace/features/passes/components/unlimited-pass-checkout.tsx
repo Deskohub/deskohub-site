@@ -386,11 +386,16 @@ export function UnlimitedPassCheckout({
       }
       const supersedeOrderId =
         order?.kind === "edit" ? order.supersedeOrderId : order?.orderId;
+      const legacyPredecessorOrderIds =
+        order?.kind === "edit" || order?.kind === "submitted"
+          ? order.legacyPredecessorOrderIds
+          : undefined;
       submission = {
         kind: "submitted",
         orderId: orderIdSchema.make(crypto.randomUUID()),
         predecessorOrderIds,
         ...(supersedeOrderId && { supersedeOrderId }),
+        ...(legacyPredecessorOrderIds && { legacyPredecessorOrderIds }),
       };
     }
     submittedHolder.current = { email: holderEmail };
@@ -405,7 +410,8 @@ export function UnlimitedPassCheckout({
       setOrder(order);
     };
     const beginSubmission = async (attempt: SubmittedOrder) => {
-      const { supersedeOrderId } = attempt;
+      const { supersedeOrderId, legacyPredecessorOrderIds, ...previous } =
+        attempt;
       const send = () =>
         beginCheckout({
           orderId: attempt.orderId,
@@ -415,6 +421,7 @@ export function UnlimitedPassCheckout({
           ...(supersedeOrderId && { supersedeOrderId }),
           ...(attempt.predecessorOrderIds.length > 0 && {
             supersedeOrderIds: attempt.predecessorOrderIds,
+            ...(legacyPredecessorOrderIds && { legacyPredecessorOrderIds }),
           }),
           buyerEmail: buyer.email,
           ...(activeHandoff && { handoffToken: activeHandoff.token }),
@@ -440,14 +447,20 @@ export function UnlimitedPassCheckout({
       }
       const retired = result.data?.retiredPredecessorOrderIds;
       if (detailRevision.current === revision && retired?.length) {
+        const predecessorOrderIds = attempt.predecessorOrderIds.filter(
+          (orderId) => !retired.includes(orderId)
+        );
+        const unretiredLegacyOrderIds = legacyPredecessorOrderIds?.filter(
+          (orderId) => predecessorOrderIds.includes(orderId)
+        );
         submission = {
-          kind: "submitted",
-          orderId: attempt.orderId,
-          predecessorOrderIds: attempt.predecessorOrderIds.filter(
-            (orderId) => !retired.includes(orderId)
-          ),
+          ...previous,
+          predecessorOrderIds,
           ...(supersedeOrderId &&
             !retired.includes(supersedeOrderId) && { supersedeOrderId }),
+          ...(unretiredLegacyOrderIds?.length && {
+            legacyPredecessorOrderIds: unretiredLegacyOrderIds,
+          }),
         };
         saveOrder(submission);
       }
@@ -463,7 +476,7 @@ export function UnlimitedPassCheckout({
           unlimitedCheckoutPredecessorLimit
       ) {
         submission = {
-          kind: "submitted",
+          ...submission,
           orderId: orderIdSchema.make(crypto.randomUUID()),
           supersedeOrderId: submission.orderId,
           predecessorOrderIds: [
@@ -507,7 +520,11 @@ export function UnlimitedPassCheckout({
       ) {
         const retryHandoff = result.data.handoff;
         setHandoff(retryHandoff);
-        const { predecessorOrderIds: remaining, supersedeOrderId } = submission;
+        const {
+          predecessorOrderIds: remaining,
+          supersedeOrderId,
+          legacyPredecessorOrderIds,
+        } = submission;
         let edit: UnlimitedPassOrderLink | undefined;
         if (retryHandoff) {
           edit = { kind: "resume", orderId: retryHandoff.orderId };
@@ -516,6 +533,7 @@ export function UnlimitedPassCheckout({
             kind: "edit",
             predecessorOrderIds: remaining,
             ...(supersedeOrderId && { supersedeOrderId }),
+            ...(legacyPredecessorOrderIds && { legacyPredecessorOrderIds }),
           };
         }
         setOrder(edit);
@@ -698,9 +716,12 @@ function editOrder(
   order?: UnlimitedPassOrderLink
 ): UnlimitedPassOrderLink | undefined {
   if (!order || order.kind === "edit" || order.kind === "replace") return order;
+  const legacyPredecessorOrderIds =
+    order.kind === "submitted" ? order.legacyPredecessorOrderIds : undefined;
   return {
     kind: "edit",
     predecessorOrderIds: getUnlimitedCheckoutPredecessors(order),
     supersedeOrderId: order.orderId,
+    ...(legacyPredecessorOrderIds && { legacyPredecessorOrderIds }),
   };
 }

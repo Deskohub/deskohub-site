@@ -325,6 +325,7 @@ test("reload before commit retains submitted and predecessor IDs without restori
       kind: "submitted",
       orderId: submittedOrder,
       predecessorOrderIds: [unresolvedOrder, ownedOrder],
+      legacyPredecessorOrderIds: [unresolvedOrder, ownedOrder],
     },
     initialDetails: {
       tier: "open-space",
@@ -335,6 +336,34 @@ test("reload before commit retains submitted and predecessor IDs without restori
   });
   expect(props.draft).not.toHaveProperty("holderEmail");
   expect(props.draft).not.toHaveProperty("supersedeOrderId");
+});
+
+test("a shipped edit link preserves ambiguous predecessors without prefilling account data", async () => {
+  const query = { ...selectionQuery, predecessorOrder: ownedOrder };
+  const shipped = await renderContent(query);
+  expect(shipped.props.children.props.draft).toEqual({
+    kind: "edit",
+    predecessorOrderIds: [ownedOrder],
+    legacyPredecessorOrderIds: [ownedOrder],
+  });
+  const modern = await renderContent({ ...query, predecessorMode: "history" });
+  expect(modern.props.children.props.draft).toEqual({
+    kind: "edit",
+    predecessorOrderIds: [ownedOrder],
+  });
+  const editedOrder = crypto.randomUUID();
+  const mixed = await renderContent({
+    ...query,
+    predecessorOrder: [editedOrder, ownedOrder],
+    supersedeOrder: editedOrder,
+    legacyPredecessorOrder: ownedOrder,
+  });
+  expect(mixed.props.children.props.draft).toEqual({
+    kind: "edit",
+    predecessorOrderIds: [editedOrder, ownedOrder],
+    supersedeOrderId: editedOrder,
+    legacyPredecessorOrderIds: [ownedOrder],
+  });
 });
 
 test("reload distinguishes an owned self-purchase from a submission that has not committed", async () => {

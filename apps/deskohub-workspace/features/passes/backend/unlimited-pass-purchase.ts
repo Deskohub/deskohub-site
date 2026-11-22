@@ -213,6 +213,7 @@ type UnlimitedPassPurchaseInput = {
   readonly referralCode?: CanonicalPromotionCode;
   readonly supersedeOrderId?: OrderId;
   readonly supersedeOrderIds?: readonly OrderId[];
+  readonly legacyPredecessorOrderIds?: readonly OrderId[];
   readonly continueFromHandoff?: true;
   readonly requireGiftRecipientName?: true;
 };
@@ -260,6 +261,9 @@ export const beginUnlimitedPassPurchase = Effect.fn(
       .map((id) => orderIdSchema.make(id.toLowerCase()))
   );
   priorOrderIds.delete(orderIdSchema.make(input.orderId.toLowerCase()));
+  const legacyPredecessorOrderIds = new Set(
+    input.legacyPredecessorOrderIds?.map((id) => id.toLowerCase())
+  );
   const retiredPredecessorOrderIds: OrderId[] = [];
   const outcome = yield* Effect.result(
     Effect.gen(function* () {
@@ -287,10 +291,11 @@ export const beginUnlimitedPassPurchase = Effect.fn(
               session.accountId,
               "unlimited"
             );
-            // The open web form carries earlier failed attempts alongside the draft it edits.
+            // Shipped links did not label the edited draft in their predecessor list.
             if (
               prior &&
               !input.continueFromHandoff &&
+              !legacyPredecessorOrderIds.has(priorOrderId) &&
               priorOrderId !== replacedOrderId &&
               isEndedUnpaidPaymentState(prior.order.paymentState) &&
               !isVoidedUnlimitedDraft(prior)
