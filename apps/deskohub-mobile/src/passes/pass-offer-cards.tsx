@@ -1,13 +1,15 @@
 import type { CustomerPassCatalog } from "@deskohub/workspace-customer-api";
 import { useRouter } from "expo-router";
-import { StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 import Svg, { Line } from "react-native-svg";
 import type { CoworkDraft } from "../booking/selection/cowork-selection";
 import type { PragueDate } from "../booking/selection/prague-date";
 import { useAppLocale } from "../i18n/locale-context";
 import { m } from "../i18n/messages";
+import { iconHiddenProps } from "../ui/icon";
 import { ScreenReaderHeading } from "../ui/screen-reader-heading";
 import { color, space } from "../ui/tokens";
+import { useViewport, wideGutter } from "../ui/viewport";
 import { coworkPassTier } from "./entry-pack-booking";
 import { passDate } from "./pass-copy";
 import { UnlimitedCredential } from "./pass-offer-credential";
@@ -58,7 +60,7 @@ export function PassOfferCards({
         {unlimited !== undefined && (
           <UnlimitedCredential
             tagline={
-              draft.tier === "open-space"
+              unlimited.product.tier === "open-space"
                 ? m.passes_offer_unlimited_access(
                     { days: unlimited.validityDays },
                     { locale }
@@ -77,16 +79,20 @@ export function PassOfferCards({
   );
 }
 
-/** The 2 dp dotted rule across the form's full width, gutters included. */
+/**
+ * The 2 dp dotted rule across the booking form's full width, its gutters
+ * included (the booking step's scroll content sits on the screen gutter).
+ */
 function DottedRule() {
+  const { isWide } = useViewport();
   return (
-    <View style={styles.rule}>
-      <Svg
-        width="100%"
-        height={2}
-        aria-hidden
-        importantForAccessibility="no-hide-descendants"
-      >
+    <View
+      style={[
+        styles.rule,
+        { marginHorizontal: -(isWide ? wideGutter : space.gutter) },
+      ]}
+    >
+      <Svg width="100%" height={2} {...iconHiddenProps(Platform.OS)}>
         <Line
           x1="0"
           y1="1"
@@ -103,6 +109,6 @@ function DottedRule() {
 
 const styles = StyleSheet.create({
   offers: { paddingBottom: space.lg, paddingTop: space.md },
-  rule: { marginBottom: space.md, marginHorizontal: -space.gutter },
+  rule: { marginBottom: space.md },
   cards: { gap: 10 },
 });

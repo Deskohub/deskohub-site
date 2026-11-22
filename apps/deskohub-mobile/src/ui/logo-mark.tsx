@@ -1,4 +1,6 @@
+import { Platform } from "react-native";
 import Svg, { Path } from "react-native-svg";
+import { iconHiddenProps } from "./icon";
 
 /**
  * The Deskohub die's faces without its outline, in one colour
@@ -17,8 +19,7 @@ export function LogoMark({
       width={width}
       height={logoMarkHeight(width)}
       viewBox={`0 0 ${logoWidth} ${logoHeight}`}
-      aria-hidden
-      importantForAccessibility="no-hide-descendants"
+      {...iconHiddenProps(Platform.OS)}
     >
       <Path d={facets} fill={color} fillRule="evenodd" />
     </Svg>

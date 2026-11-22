@@ -220,8 +220,8 @@ test("at 200% text the stub widens and the ticket keeps every label", () => {
           (style) =>
             typeof style === "object" &&
             style !== null &&
-            "width" in style &&
-            style.width === 104
+            "minWidth" in style &&
+            style.minWidth === 104
         )
     );
     expect(stub).toBeDefined();

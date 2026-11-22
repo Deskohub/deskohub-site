@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import {
   type LayoutRectangle,
+  Platform,
   Pressable,
   StyleSheet,
   useWindowDimensions,
@@ -9,6 +10,7 @@ import {
 import Svg, { ClipPath, Defs, G, Line, Path, Rect } from "react-native-svg";
 import { useAppLocale } from "../i18n/locale-context";
 import { m } from "../i18n/messages";
+import { iconHiddenProps } from "../ui/icon";
 import { LogoMarkShape, logoMarkHeight } from "../ui/logo-mark";
 import { Text } from "../ui/text";
 import { color, space } from "../ui/tokens";
@@ -30,6 +32,9 @@ export function EntryPackTicket({
   const locale = useAppLocale();
   const { fontScale } = useWindowDimensions();
   const [frame, setFrame] = useState<LayoutRectangle>();
+  // The stub's drawn width: at least its share of the ticket, wider when a
+  // translation's unit needs the room.
+  const [stubFrame, setStubFrame] = useState<LayoutRectangle>();
   const stub = fontScale >= largeText ? largeStub : regularStub;
   const stubWidth = Math.max(stub.min, (frame?.width ?? 0) * stub.share);
   const [smaller, larger] = sizes;
@@ -44,11 +49,11 @@ export function EntryPackTicket({
       onLayout={({ nativeEvent }) => setFrame(nativeEvent.layout)}
       style={({ pressed }) => [styles.ticket, pressed && styles.pressed]}
     >
-      {frame !== undefined && (
+      {frame !== undefined && stubFrame !== undefined && (
         <TicketArtwork
           width={frame.width}
           height={frame.height}
-          fold={frame.width - stubWidth}
+          fold={stubFrame.x}
         />
       )}
       <View style={styles.body}>
@@ -74,14 +79,15 @@ export function EntryPackTicket({
         />
       </View>
       <View
+        onLayout={({ nativeEvent }) => setStubFrame(nativeEvent.layout)}
         style={[
           styles.stub,
-          { width: stubWidth, paddingHorizontal: stub.padding },
+          { minWidth: stubWidth, paddingHorizontal: stub.padding },
         ]}
       >
         <Text
           variant="offerCount"
-          style={styles.count}
+          style={[styles.count, { maxWidth: stubWidth - 2 * stub.padding }]}
           textBreakStrategy="balanced"
         >
           {count}
@@ -129,8 +135,7 @@ function TicketArtwork({
       width={width}
       height={height}
       pointerEvents="none"
-      aria-hidden
-      importantForAccessibility="no-hide-descendants"
+      {...iconHiddenProps(Platform.OS)}
     >
       <Defs>
         <ClipPath id={paper}>
@@ -215,16 +220,19 @@ const accentWidth = 4;
 const perforationInset = 11;
 
 /**
- * The oversized logo behind the ticket, as the board places it: its width
- * follows the card's, it is centred just right of the fold so the stub cuts
- * it, and its apex stays 22 dp from the top whatever the card's height.
+ * The oversized logo behind the ticket, placed as the board places it. The
+ * board sizes a square from a reference width that follows the card's, fits
+ * the logo's full height into it, and puts the square so the logo straddles
+ * the fold; the logo's apex stays about 22 dp from the top whatever the
+ * card's height.
  */
 const watermark = (width: number, fold: number) => {
   const reference = Math.min(152, Math.max(85, 0.37 * width));
-  const markWidth = 42 + 1.542 * reference;
+  const square = (21 + 0.771 * reference) / 0.2725;
+  const markWidth = square / logoMarkHeight(1);
   return {
-    x: fold + 16 - markWidth / 2,
-    y: 22 - 0.03 * logoMarkHeight(markWidth),
+    x: fold - 5 - 0.771 * reference - 0.229 * square + (square - markWidth) / 2,
+    y: 22 - 0.21 * square,
     width: markWidth,
   };
 };

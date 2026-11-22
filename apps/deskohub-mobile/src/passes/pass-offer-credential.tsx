@@ -1,5 +1,6 @@
 import { useId } from "react";
 import {
+  Platform,
   Pressable,
   type StyleProp,
   StyleSheet,
@@ -19,6 +20,7 @@ import Svg, {
 } from "react-native-svg";
 import { useAppLocale } from "../i18n/locale-context";
 import { m } from "../i18n/messages";
+import { iconHiddenProps } from "../ui/icon";
 import { LogoMarkShape, logoMarkHeight } from "../ui/logo-mark";
 import { Text } from "../ui/text";
 import { color, radius, shadow, space } from "../ui/tokens";
@@ -81,7 +83,7 @@ export function UnlimitedCredential({
         </View>
       </View>
       <View style={styles.footer}>
-        <Text variant="hint" style={styles.expiry}>
+        <Text variant="offerExpiry" style={styles.expiry}>
           {m.passes_offer_unlimited_expiry({ date: expiry }, { locale })}
         </Text>
         <PassOfferAction
@@ -106,8 +108,7 @@ function CredentialBackground() {
       width="100%"
       height="100%"
       pointerEvents="none"
-      aria-hidden
-      importantForAccessibility="no-hide-descendants"
+      {...iconHiddenProps(Platform.OS)}
     >
       <Defs>
         <LinearGradient id={`${id}-face`} x1="0" y1="0" x2="0.37" y2="0.93">
@@ -155,7 +156,7 @@ function GradientBar({
   const id = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   return (
     <View style={style}>
-      <Svg width="100%" height="100%" aria-hidden>
+      <Svg width="100%" height="100%" {...iconHiddenProps(Platform.OS)}>
         <Defs>
           <LinearGradient id={id} x1="0" y1="0" x2="1" y2="0.27">
             <Stop offset="0" stopColor={from} />
@@ -202,12 +203,7 @@ function CredentialMark({ size }: { readonly size: number }) {
     }
   );
   return (
-    <Svg
-      width={size}
-      height={height}
-      aria-hidden
-      importantForAccessibility="no-hide-descendants"
-    >
+    <Svg width={size} height={height} {...iconHiddenProps(Platform.OS)}>
       <Defs>
         <LinearGradient id={`${id}-tint`} x1="0" y1="0" x2="0.74" y2="0.67">
           <Stop offset="0" stopColor={color.credentialBadgeStart} />

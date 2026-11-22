@@ -297,6 +297,8 @@ export const typeScale = {
   offerTitle: brandText(22, 25, 700, -0.9),
   /** The visit count on the Entry pack ticket's stub. */
   offerCount: brandText(20, 22, 700, -0.8),
+  /** The date of expiry on the Unlimited pass credential, in regular weight. */
+  offerExpiry: brandText(12, 16, 400),
 } as const;
 
 export type TypeVariant = keyof typeof typeScale;

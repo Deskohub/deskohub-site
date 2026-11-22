@@ -512,7 +512,7 @@
   "passes_offer_unlimited_issuer": "Deskohub Workspace",
   "passes_offer_unlimited_seat": "आपकी अपनी स्थायी सीट",
   "passes_offer_unlimited_access": "{days} दिनों तक असीमित प्रवेश",
-  "passes_offer_unlimited_expiry": "समाप्ति तिथि: {date}",
+  "passes_offer_unlimited_expiry": "समाप्ति की तारीख: {date}",
   "passes_offer_unlimited_action": "पास चुनें",
   "passes_upcoming": "आगामी",
   "passes_used": "{count} इस्तेमाल की गईं",
