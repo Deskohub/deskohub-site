@@ -8,6 +8,7 @@ import {
   AdministrationCampaignAudienceId,
   AdministrationCampaignId,
 } from "./campaign-identifiers";
+import { DhwVersion } from "./dhw-version";
 import {
   AutomationActivateInput,
   AutomationDetail,
@@ -233,15 +234,18 @@ export const emailCampaignOperations = defineOperations({
   }),
 });
 
+/** Requires a stable dhw release that decodes both pass reminder triggers. */
+const passReminderDhwVersion = DhwVersion.make("1.40.0");
+
 /** The operations on automated campaigns and their engine. */
 export const emailAutomationOperations = defineOperations({
   getAutomation: query({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: CampaignRef,
     output: AutomationDetail,
   }),
   updateAutomationFlow: mutation({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: AutomationFlowUpdate,
     output: AutomationDetail,
   }),
@@ -258,32 +262,32 @@ export const emailAutomationOperations = defineOperations({
   }),
   /** A retried activation returns the version the first one published. */
   activateAutomation: mutation({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: AutomationActivateInput,
     output: AutomationVersionSummary,
   }),
   pauseAutomation: mutation({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: CampaignRef,
     output: AutomationDetail,
   }),
   resumeAutomation: mutation({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: CampaignRef,
     output: AutomationDetail,
   }),
   archiveAutomation: mutation({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: CampaignRef,
     output: AutomationDetail,
   }),
   listAutomationVersions: query({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: CampaignRef,
     output: Schema.Array(AutomationVersionSummary),
   }),
   getAutomationVersion: query({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: AutomationVersionRef,
     output: AutomationVersionDetail,
   }),
@@ -293,12 +297,12 @@ export const emailAutomationOperations = defineOperations({
     output: AutomationRunStats,
   }),
   listAutomationRuns: query({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: AutomationRunListInput,
     output: AutomationRunPage,
   }),
   getAutomationRun: query({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: AutomationRunRef,
     output: AutomationRunDetail,
   }),
