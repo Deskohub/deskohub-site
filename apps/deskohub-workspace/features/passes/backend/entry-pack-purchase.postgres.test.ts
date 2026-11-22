@@ -1551,6 +1551,20 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         redirectUrl: "https://nexi.test/payment",
       });
       expect(purchase.providerOrders).toHaveLength(1);
+      purchase.abandonProviderOrder();
+      const pending = await api.handle(
+        customerApiRequest({ method: "GET", path })
+      );
+      expect(await pending.json()).toMatchObject({
+        status: "pending",
+        paymentUrl: "https://nexi.test/payment",
+      });
+      const privatePage = await otherBuyer.handle(
+        customerApiRequest({ method: "GET", path })
+      );
+      expect(await privatePage.json()).toEqual({
+        _tag: "CustomerPassNotFound",
+      });
     });
 
     test("customer Pay verifies the buyer, current consent and price before opening Nexi", async () => {
