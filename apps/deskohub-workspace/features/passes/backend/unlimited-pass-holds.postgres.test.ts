@@ -1289,6 +1289,19 @@ it("uses the website's dates, holds and fresh Pay continuation for an Unlimited 
         yield* readOwnedPassPurchaseStatusPath(orderId, accountId, "unlimited")
       ).toBe(`/en-US/reservation/status/${orderId}`);
       const statusPath = `/en-US/reservation/status/${orderId}`;
+      const webReplacement = yield* beginUnlimitedPassPurchaseWithDisposition({
+        orderId: replacementOrderId,
+        supersedeOrderId: orderId,
+        supersedeOrderIds: [orderId, supersedeOrderId],
+        locale: "en-US",
+        selection: editedSelection,
+      });
+      expect(webReplacement).toEqual({
+        outcome: Result.fail(
+          expect.objectContaining({ reason: "payment-in-progress", orderId })
+        ),
+        retiredPredecessorOrderIds: [],
+      });
       expect(
         yield* startPurchase({
           orderId: replacementOrderId,

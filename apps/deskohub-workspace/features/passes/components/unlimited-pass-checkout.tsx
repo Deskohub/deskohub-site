@@ -95,6 +95,7 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
     locale: Locale;
     selection: UnlimitedPassSelection;
     renewsPassId?: OrderId;
+    supersedeOrderId?: OrderId;
     supersedeOrderIds?: readonly OrderId[];
     buyerEmail: string;
     holderEmail?: string;
@@ -401,13 +402,15 @@ export function UnlimitedPassCheckout({
       setOrder(order);
     };
     const beginSubmission = async (attempt: SubmittedOrder) => {
+      const [supersedeOrderId] = attempt.predecessorOrderIds;
       const send = () =>
         beginCheckout({
           orderId: attempt.orderId,
           locale,
           selection,
           ...(renewsPassId && { renewsPassId }),
-          ...(attempt.predecessorOrderIds.length > 0 && {
+          ...(supersedeOrderId && {
+            supersedeOrderId,
             supersedeOrderIds: attempt.predecessorOrderIds,
           }),
           buyerEmail: buyer.email,

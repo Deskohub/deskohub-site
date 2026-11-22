@@ -214,6 +214,7 @@ type UnlimitedPassPurchaseInput = {
   readonly supersedeOrderId?: OrderId;
   readonly supersedeOrderIds?: readonly OrderId[];
   readonly continueFromHandoff?: true;
+  readonly requireGiftRecipientName?: true;
 };
 
 const requireUnpaidUnlimitedOrder = Effect.fnUntraced(function* (
@@ -239,6 +240,19 @@ export const beginUnlimitedPassPurchase = Effect.fn(
   const session = yield* current.requireActive;
   const accounts = yield* CustomerAccountSections;
   const { db } = yield* WorkspaceDatabase;
+  const holderEmail = input.holderEmail?.trim().toLowerCase();
+  const giftEmail =
+    holderEmail && holderEmail !== session.email.toLowerCase()
+      ? holderEmail
+      : undefined;
+  const requireGiftDetails =
+    giftEmail &&
+    input.requireGiftRecipientName &&
+    input.recipientName === undefined
+      ? Effect.fail(
+          new EntryPackPurchaseError({ reason: "holder-unavailable" })
+        )
+      : Effect.void;
   const replacedOrderId = input.supersedeOrderId?.toLowerCase();
   const priorOrderIds = new Set(
     [replacedOrderId, ...(input.supersedeOrderIds ?? [])]
@@ -284,6 +298,7 @@ export const beginUnlimitedPassPurchase = Effect.fn(
               return;
             }
             yield* requireUnpaidUnlimitedOrder(prior);
+            yield* requireGiftDetails;
             if (!prior) {
               yield* retireUnrecordedUnlimitedDraft(
                 session.accountId,
@@ -314,7 +329,8 @@ export const beginUnlimitedPassPurchase = Effect.fn(
           { passPurchaseOrderId: priorOrderId }
         );
       }
-      return yield* continueUnlimitedPassPurchase(input, session);
+      yield* requireGiftDetails;
+      return yield* continueUnlimitedPassPurchase(input, session, giftEmail);
     })
   );
   return { outcome, retiredPredecessorOrderIds };
@@ -324,16 +340,12 @@ const continueUnlimitedPassPurchase = Effect.fn(
   "continueUnlimitedPassPurchase"
 )(function* (
   input: UnlimitedPassPurchaseInput,
-  session: CustomerAccountSession
+  session: CustomerAccountSession,
+  giftEmail: string | undefined
 ) {
   const current = yield* CurrentCustomerAccount;
   const accounts = yield* CustomerAccountSections;
   const { db, transaction } = yield* WorkspaceDatabase;
-  const holderEmail = input.holderEmail?.trim().toLowerCase();
-  const giftEmail =
-    holderEmail && holderEmail !== session.email.toLowerCase()
-      ? holderEmail
-      : undefined;
   if (input.renewsPassId && giftEmail) {
     return yield* new UnlimitedPassAdmissionError({
       reason: "renewal-unavailable",

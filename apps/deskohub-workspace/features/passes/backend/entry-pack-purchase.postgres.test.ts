@@ -1651,6 +1651,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         body: ReturnType<typeof input> & {
           expectedBuyerAccountId?: string;
           supersedeOrderId?: string;
+          holderEmail?: string;
         }
       ) =>
         customerApiRequest({ method: "POST", path: "/passes/purchases", body });
@@ -1721,6 +1722,16 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
 
       // Keep the next window disjoint so capacity/overlap cannot mask an extra order.
       const later = { ...input(40), supersedeOrderId: draft.orderId };
+      const giftReplacement = {
+        ...later,
+        holderEmail: testEmailAddress("replacement-gift"),
+      };
+      const incompleteGift = await api.handle(begin(giftReplacement));
+      expect(incompleteGift.status).toBe(409);
+      expect(await incompleteGift.json()).toEqual({
+        _tag: "CustomerPassPurchaseRefused",
+        reason: "holder-unavailable",
+      });
       const otherBuyer = payment.customerApi({
         ...session,
         accountId: customerAccountIdSchema.make(crypto.randomUUID()),
@@ -1796,6 +1807,9 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       };
       expect(await refused.json()).toEqual(recovery);
       expect(await (await api.handle(begin(later))).json()).toEqual(recovery);
+      const giftWithoutName = await api.handle(begin(giftReplacement));
+      expect(giftWithoutName.status).toBe(409);
+      expect(await giftWithoutName.json()).toEqual(recovery);
       const status = await api.handle(
         customerApiRequest({ method: "GET", path })
       );

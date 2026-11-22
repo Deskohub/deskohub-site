@@ -791,25 +791,32 @@ test("an edited gift saves its replacement link before admission and preserves t
   expect(checkoutUrl().searchParams.get("step")).toBeNull();
 });
 
-test("an open Unlimited Details form navigates to the paid order's status", async () => {
+test("editing Unlimited Details continues to the original order's payment status", async () => {
   const orderId = orderIdSchema.make("018f8000-0000-7000-8000-000000000009");
   const statusPath = `/en-US/reservation/status/${orderId}`;
   const assign = spyOn(window.location, "assign").mockImplementation(() => {});
+  const beginCheckout = mock(async () => ({
+    data: { status: "status" as const, statusPath },
+  }));
   try {
     const view = render(
       <QueryProvider>
         <UnlimitedPassCheckout
           {...base}
           initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
-          draft={{ kind: "resume", orderId }}
-          beginCheckout={async () => ({
-            data: { status: "status", statusPath },
-          })}
+          draft={{ kind: "replace", orderId }}
+          beginCheckout={beginCheckout}
         />
       </QueryProvider>
     );
     fireEvent.click(view.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith(statusPath));
+    expect(beginCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        supersedeOrderId: orderId,
+        supersedeOrderIds: [orderId],
+      })
+    );
   } finally {
     assign.mockRestore();
   }

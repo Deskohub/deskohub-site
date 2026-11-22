@@ -85,7 +85,7 @@ const readPaymentDisclosure = Effect.fn("passes.readPaymentDisclosure")(
 const beginUnlimitedOrder = Effect.fn("passes.beginUnlimitedOrder")(function* (
   input: BeginPassPurchaseInput,
   selection: UnlimitedPassSelection,
-  { accountId, email }: CustomerAccountSession
+  { accountId }: CustomerAccountSession
 ) {
   const { orderId, supersedeOrderId } = input;
   if (
@@ -105,19 +105,16 @@ const beginUnlimitedOrder = Effect.fn("passes.beginUnlimitedOrder")(function* (
       : yield* Schema.decodeEffect(reservationCustomerEmailSchema)(
           input.holderEmail
         );
-  const gift = holderEmail && holderEmail.toLowerCase() !== email.toLowerCase();
   const recipientName =
     input.recipientName === undefined
       ? undefined
       : yield* Schema.decodeEffect(
           unlimitedGiftRecipientNameSchema(input.locale)
         )(input.recipientName);
-  if (gift && recipientName === undefined) {
-    return yield* new EntryPackPurchaseError({ reason: "holder-unavailable" });
-  }
   const { outcome } = yield* beginUnlimitedPassPurchase({
     ...input,
     selection,
+    requireGiftRecipientName: true,
     ...(holderEmail !== undefined && { holderEmail }),
     ...(recipientName !== undefined && { recipientName }),
   });
