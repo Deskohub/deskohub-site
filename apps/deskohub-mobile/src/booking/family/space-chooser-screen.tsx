@@ -1,9 +1,14 @@
+import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
 import { useRouter } from "expo-router";
 import { useAppLocale } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
+import { EntryPackOfferLink } from "../../passes/entry-pack-offer-link";
+import { passCatalogAtom } from "../../passes/pass-reads";
 import { Masthead } from "../../ui/masthead";
 import { ScrollScreen } from "../../ui/scroll-screen";
 import { bookFamilyHref } from "../booking-routes";
+import { defaultCoworkDraft } from "../selection/cowork-selection";
 import { BookingGate } from "./booking-gate";
 import { BookingOfferingsView } from "./booking-offerings-view";
 import { SpaceCards, SpaceCardsSkeleton } from "./space-cards";
@@ -17,6 +22,7 @@ import { spaceCards } from "./space-chooser";
 export function SpaceChooserScreen() {
   const locale = useAppLocale();
   const router = useRouter();
+  const passes = useAtomValue(passCatalogAtom);
   return (
     <ScrollScreen
       contentWidth="wide"
@@ -39,6 +45,14 @@ export function SpaceChooserScreen() {
               cards={spaceCards(catalog.offerings)}
               locale={locale}
               onOpen={(family) => router.push(bookFamilyHref(family))}
+              afterCowork={
+                AsyncResult.isSuccess(passes) ? (
+                  <EntryPackOfferLink
+                    catalog={passes.value}
+                    draft={defaultCoworkDraft(catalog.offerings)}
+                  />
+                ) : undefined
+              }
             />
           )}
         </BookingOfferingsView>

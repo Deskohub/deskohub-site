@@ -102,10 +102,12 @@ export function SpaceCards({
   cards,
   locale,
   onOpen,
+  afterCowork,
 }: {
   readonly cards: ReadonlyArray<SpaceCard>;
   readonly locale: AppLocale;
   readonly onOpen: (family: CustomerReservationFamily) => void;
+  readonly afterCowork?: ReactNode;
 }) {
   const { isWide, pair, expanded } = useSpaceGrid();
   const rows = spaceRows(cards, pair, expanded);
@@ -118,6 +120,7 @@ export function SpaceCards({
           wide={isWide}
           locale={locale}
           onOpen={onOpen}
+          afterCowork={afterCowork}
         />
       ))}
     </View>
@@ -129,27 +132,46 @@ function SpaceCardRow({
   wide,
   locale,
   onOpen,
+  afterCowork,
 }: {
   readonly row: SpaceRow;
   readonly wide: boolean;
   readonly locale: AppLocale;
   readonly onOpen: (family: CustomerReservationFamily) => void;
+  readonly afterCowork?: ReactNode;
 }) {
   if (row.length === 1) {
-    return <FullCard card={row[0]} locale={locale} onOpen={onOpen} />;
+    return (
+      <>
+        <FullCard card={row[0]} locale={locale} onOpen={onOpen} />
+        {row[0].family === "cowork" && afterCowork}
+      </>
+    );
   }
+  const pairStyle = [styles.pair, wide && styles.wideGap];
   return (
-    <View style={[styles.pair, wide && styles.wideGap]}>
-      {row.map((card) => (
-        <HalfCard
-          key={card.family}
-          card={card}
-          wide={wide}
-          locale={locale}
-          onOpen={onOpen}
-        />
-      ))}
-    </View>
+    <>
+      <View style={pairStyle}>
+        {row.map((card) => (
+          <HalfCard
+            key={card.family}
+            card={card}
+            wide={wide}
+            locale={locale}
+            onOpen={onOpen}
+          />
+        ))}
+      </View>
+      {afterCowork && row.some(({ family }) => family === "cowork") && (
+        <View style={pairStyle}>
+          {row.map(({ family }) => (
+            <View key={family} style={styles.half}>
+              {family === "cowork" && afterCowork}
+            </View>
+          ))}
+        </View>
+      )}
+    </>
   );
 }
 
