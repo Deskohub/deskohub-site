@@ -612,19 +612,36 @@ describe("reservation stay and payment", () => {
     }
   );
 
+  const needsCowork = m.emailCampaignsAudienceReservationCountStayNeedsCowork(
+    {},
+    { locale: "en-US" }
+  );
+  const needsVisitDate =
+    m.emailCampaignsAudienceReservationCountStayNeedsVisitDate(
+      {},
+      { locale: "en-US" }
+    );
+
   test.each([
-    ["without the cowork product", { stay: "day" }],
+    ["without the cowork product", { stay: "day" }, needsCowork],
     [
       "with another product",
       { stay: "day", product: { family: "office", properties: [] } },
+      needsCowork,
     ],
     [
       "by booking date",
       { stay: "overnight", product: cowork, dateBasis: "booking" },
+      needsVisitDate,
+    ],
+    [
+      "by booking date without the cowork product",
+      { stay: "day", dateBasis: "booking" },
+      needsVisitDate,
     ],
   ] as const)(
     "explains a stay %s, which the condition rejects",
-    (_case, params) => {
+    (_case, params, message) => {
       const condition = reservationCount(params);
       expect(
         Result.isFailure(
@@ -638,20 +655,9 @@ describe("reservation stay and payment", () => {
       const alert = view.container.ownerDocument.getElementById(
         select.getAttribute("aria-describedby") ?? ""
       );
-      expect(alert?.textContent).toBe(
-        stay?.invalid?.(condition.params as never)
-      );
+      expect(alert?.textContent).toBe(message);
     }
   );
-
-  test("explains a booking-date stay apart from a missing product", () => {
-    const booking = reservationCount({ stay: "day", dateBasis: "booking" });
-    const visit = reservationCount({ stay: "day" });
-
-    expect(stay?.invalid?.(booking.params as never)).not.toBe(
-      stay?.invalid?.(visit.params as never)
-    );
-  });
 
   test("a cowork stay by visit date has no error", () => {
     const condition = reservationCount({
