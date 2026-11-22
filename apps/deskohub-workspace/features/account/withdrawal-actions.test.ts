@@ -4,6 +4,7 @@ import "@/shared/testing/workspace-test-env";
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { Context, Effect, Layer } from "effect";
 import { m } from "@/features/i18n";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
   WithdrawalNameRequiredError,
   WithdrawalRefundChangedError,
@@ -22,6 +23,16 @@ mock.module(
   () => ({
     WithdrawalReleaseGateRequest: WithdrawalReleaseGate.fromEvaluation(
       Effect.suspend(() => Effect.succeed(released))
+    ),
+  })
+);
+
+let passesReleased = true;
+mock.module(
+  "@/features/passes/backend/cowork-passes-release-gate.server",
+  () => ({
+    CoworkPassesReleaseGateRequest: CoworkPassesReleaseGate.fromEvaluation(
+      Effect.suspend(() => Effect.succeed(passesReleased))
     ),
   })
 );
@@ -105,11 +116,14 @@ Object.assign(WithdrawalService, {
   }),
 });
 
+const reservation = { kind: "reservation", orderId: "reservation-1" } as const;
+
 const importActions = () => import("./withdrawal-actions");
 
 describe("withdrawal actions", () => {
   beforeEach(() => {
     released = true;
+    passesReleased = true;
     profileNamed = true;
     calls.length = 0;
     contractKinds.length = 0;
@@ -122,14 +136,14 @@ describe("withdrawal actions", () => {
 
   test("refuse as unavailable while the function isn't released, before any withdrawal work", async () => {
     released = false;
-    const { quoteReservationWithdrawal, withdrawFromReservation } =
+    const { quoteContractWithdrawal, withdrawFromContract } =
       await importActions();
 
-    const quote = await quoteReservationWithdrawal({
-      orderId: "reservation-1",
+    const quote = await quoteContractWithdrawal({
+      contract: reservation,
     });
-    const withdrawal = await withdrawFromReservation({
-      orderId: "reservation-1",
+    const withdrawal = await withdrawFromContract({
+      contract: reservation,
     });
 
     const unavailable = m.accountUnavailableDescription(
@@ -142,14 +156,14 @@ describe("withdrawal actions", () => {
   });
 
   test("quote and withdraw for the session's account while released", async () => {
-    const { quoteReservationWithdrawal, withdrawFromReservation } =
+    const { quoteContractWithdrawal, withdrawFromContract } =
       await importActions();
 
-    const quote = await quoteReservationWithdrawal({
-      orderId: "reservation-1",
+    const quote = await quoteContractWithdrawal({
+      contract: reservation,
     });
-    const withdrawal = await withdrawFromReservation({
-      orderId: "reservation-1",
+    const withdrawal = await withdrawFromContract({
+      contract: reservation,
     });
 
     expect(quote.data).toMatchObject({
@@ -171,38 +185,58 @@ describe("withdrawal actions", () => {
     ]);
   });
 
-  test("quote and submit an Unlimited pass through the same release and session checks", async () => {
-    const { quoteUnlimitedPassWithdrawal, withdrawFromUnlimitedPass } =
-      await importActions();
-    const orderId = crypto.randomUUID();
-    released = false;
-    const withheld = await quoteUnlimitedPassWithdrawal({ orderId });
-    expect(withheld.serverError).toBe(
-      m.accountUnavailableDescription({}, { locale: "en-US" })
-    );
-    expect(contractKinds).toEqual([]);
+  test.each(["entry-pack", "unlimited-pass"] as const)(
+    "quotes and submits %s for the session account only while both gates are open",
+    async (kind) => {
+      const { quoteContractWithdrawal, withdrawFromContract } =
+        await importActions();
+      const orderId = crypto.randomUUID();
+      const contract = { kind, orderId };
+      const unavailable = m.accountUnavailableDescription(
+        {},
+        { locale: "en-US" }
+      );
 
-    released = true;
-    const quote = await quoteUnlimitedPassWithdrawal({ orderId });
-    expect(quote.data).toMatchObject({ status: "available" });
-    const result = await withdrawFromUnlimitedPass({
-      orderId,
-      refundTermsKey: "full",
-    });
-    expect(result.data).toMatchObject({ status: "withdrawn" });
-    expect(contractKinds).toEqual(["unlimited-pass", "unlimited-pass"]);
-    expect(calls).toEqual([
-      `quote @test/account-id ${orderId}`,
-      `withdraw @test/account-id ${orderId}`,
-    ]);
-  });
+      released = false;
+      expect((await quoteContractWithdrawal({ contract })).serverError).toBe(
+        unavailable
+      );
+      expect((await withdrawFromContract({ contract })).serverError).toBe(
+        unavailable
+      );
+
+      released = true;
+      passesReleased = false;
+      expect((await quoteContractWithdrawal({ contract })).serverError).toBe(
+        unavailable
+      );
+      expect((await withdrawFromContract({ contract })).serverError).toBe(
+        unavailable
+      );
+      expect(calls).toEqual([]);
+
+      passesReleased = true;
+      const quote = await quoteContractWithdrawal({ contract });
+      expect(quote.data).toMatchObject({ status: "available" });
+      const result = await withdrawFromContract({
+        contract,
+        refundTermsKey: "full",
+      });
+      expect(result.data).toMatchObject({ status: "withdrawn" });
+      expect(contractKinds).toEqual([kind, kind]);
+      expect(calls).toEqual([
+        `quote @test/account-id ${orderId}`,
+        `withdraw @test/account-id ${orderId}`,
+      ]);
+    }
+  );
 
   test("pass the typed name to the withdrawal", async () => {
     profileNamed = false;
-    const { withdrawFromReservation } = await importActions();
+    const { withdrawFromContract } = await importActions();
 
-    const withdrawal = await withdrawFromReservation({
-      orderId: "reservation-1",
+    const withdrawal = await withdrawFromContract({
+      contract: reservation,
       customerName: "Sam Typed",
     });
 
@@ -214,19 +248,19 @@ describe("withdrawal actions", () => {
 
   test("answer that the statement needs a name when neither the profile nor the customer gave one", async () => {
     profileNamed = false;
-    const { withdrawFromReservation } = await importActions();
+    const { withdrawFromContract } = await importActions();
 
-    const withdrawal = await withdrawFromReservation({
-      orderId: "reservation-1",
+    const withdrawal = await withdrawFromContract({
+      contract: reservation,
     });
 
     expect(withdrawal.data).toEqual({ status: "name_required" });
   });
 
   test("returns a fresh quote when the submitted refund terms changed", async () => {
-    const { withdrawFromReservation } = await importActions();
-    const result = await withdrawFromReservation({
-      orderId: "reservation-1",
+    const { withdrawFromContract } = await importActions();
+    const result = await withdrawFromContract({
+      contract: reservation,
       refundTermsKey: "stale",
     });
     expect(result.data).toMatchObject({
@@ -237,10 +271,10 @@ describe("withdrawal actions", () => {
 
   test("refuse a signed-out request without touching withdrawals", async () => {
     currentUser = Effect.succeed(null);
-    const { withdrawFromReservation } = await importActions();
+    const { withdrawFromContract } = await importActions();
 
-    const withdrawal = await withdrawFromReservation({
-      orderId: "reservation-1",
+    const withdrawal = await withdrawFromContract({
+      contract: reservation,
     });
 
     expect(withdrawal.serverError).toBeString();

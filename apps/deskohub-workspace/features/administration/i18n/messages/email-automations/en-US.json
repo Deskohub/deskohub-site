@@ -23,6 +23,8 @@
   "emailAutomationsStatusDraft": "Draft",
   "emailAutomationsStatusPaused": "Paused",
   "emailAutomationsTriggerAccountCreated": "Account created",
+  "emailAutomationsTriggerEntryPackExpiring": "Entry pack expiring",
+  "emailAutomationsTriggerUnlimitedEnding": "Unlimited pass ending",
   "emailAutomationsTriggerReservationBooked": "Reservation booked",
   "emailAutomationsTriggerReservationCancelled": "Reservation cancelled",
   "emailAutomationsTriggerReservationFinished": "Reservation finished",

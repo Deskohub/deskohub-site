@@ -8,7 +8,11 @@ import {
   test,
 } from "bun:test";
 import { createHash } from "node:crypto";
-import { continuesEmailChain } from "@deskohub/email";
+import {
+  continuesEmailChain,
+  EmailServiceError,
+  emailRequestFingerprint,
+} from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
 import {
   ConfigProvider,
@@ -65,6 +69,7 @@ let batchSend = mock<BatchSendImplementation>(async () => ({
 mock.module("resend", () => ({
   Resend: class {
     baseUrl = "https://resend.synthetic.invalid";
+    userAgent = "resend-node:synthetic-test";
     emails = { send: send };
     batch = { send: batchSend };
   },
@@ -175,6 +180,47 @@ describe("single durable Resend attempt", () => {
     );
   });
   afterEach(() => providerFetch.mockRestore());
+
+  test("a guarded replay cannot dispatch after the effective Resend credential changes", async () => {
+    providerFetch.mockResolvedValue(
+      Response.json({ data: [{ id: "resend-id" }] })
+    );
+    let pinned: string | undefined;
+    const refused = new EmailServiceError("Guarded request changed");
+    const options = {
+      idempotencyKey: "same-guarded-key",
+      beforeRequest: (fingerprint: string) =>
+        Effect.suspend(() => {
+          pinned ??= fingerprint;
+          return fingerprint === pinned ? Effect.void : Effect.fail(refused);
+        }),
+    };
+
+    const error = await runProvider(
+      Effect.gen(function* () {
+        const original = yield* resendProvider;
+        yield* original.sendBatch([message], options);
+        const timeouts = yield* deploymentResendRequestTimeouts;
+        const rotated = makeResendEmailProvider({
+          apiKey: "rotated-test-key",
+          timeouts,
+        });
+        return yield* rotated.sendBatch([message], options).pipe(Effect.flip);
+      })
+    );
+
+    expect(error).toBe(refused);
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+    const [url, request] = providerFetch.mock.calls[0] ?? [];
+    const headers = new Headers(request?.headers);
+    headers.delete("Authorization");
+    expect(pinned).toBe(
+      emailRequestFingerprint(
+        ["resend", "POST", url, [...headers], request?.body],
+        "api-key"
+      )
+    );
+  });
 
   test("identifies the exact POST body, provider credential and idempotency key", async () => {
     const request = prepare()(invitation);
@@ -770,7 +816,12 @@ describe("ResendEmailProvider", () => {
       [
         400,
         "Batch request failed",
-        { _tag: "EmailServiceError", failureKind: "message", code: "http-400" },
+        {
+          _tag: "EmailServiceError",
+          failureKind: "message",
+          code: "http-400",
+          definitivelyUnsent: true,
+        },
       ],
       [
         422,
@@ -821,6 +872,33 @@ describe("ResendEmailProvider", () => {
       expect(batchSend).toHaveBeenCalledTimes(1);
     }
   });
+
+  test.each([
+    [undefined, "invalid response", "resend-invalid"],
+    [408, "request timeout", "http-408"],
+  ] as const)(
+    "a batch error with status %s does not prove non-delivery",
+    async (statusCode, message, code) => {
+      batchSend = mock<BatchSendImplementation>(async () => ({
+        error: { message, ...(statusCode !== undefined && { statusCode }) },
+      }));
+      const result = await runProvider(
+        Effect.flatMap(resendProvider, (provider) =>
+          settle(
+            provider.sendBatch(batchMessages, {
+              idempotencyKey: "campaign-batch-key",
+            })
+          )
+        )
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "EmailServiceError", code },
+      });
+      if (result._tag === "Failure")
+        expect(result.failure).not.toHaveProperty("definitivelyUnsent");
+    }
+  );
 
   test("treats a batch response with fewer IDs than messages as unconfirmed", async () => {
     batchSend = mock<BatchSendImplementation>(async () => ({

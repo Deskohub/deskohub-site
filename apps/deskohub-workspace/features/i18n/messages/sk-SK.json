@@ -177,6 +177,13 @@
   "withdrawalRefusedPerformanceStarted": "Celá rezervácia už začala, preto od nej nemožno odstúpiť.",
   "withdrawalRefusedAlreadyWithdrawn": "Odstúpenie od tejto rezervácie už evidujeme. Potvrdenie nájdeš v e-maile.",
   "withdrawalRefusedNotFound": "Túto rezerváciu sme v tvojom účte nenašli.",
+  "withdrawalPassRefusedNotWithdrawable": "Online možno odstúpiť iba od zaplateného a potvrdeného nákupu.",
+  "withdrawalPassRefusedBusinessPurpose": "Pas bol kúpený pre firmu, takže sa naň právo na odstúpenie nevzťahuje.",
+  "withdrawalPassRefusedPerformanceStarted": "Pas už bol využitý v plnom rozsahu, takže od zmluvy nemožno odstúpiť.",
+  "withdrawalPassRefusedNotFound": "Nákup pasu sme v tvojom účte nenašli.",
+  "passStatusWithdrawalRefund": "Celková suma na vrátenie za toto odstúpenie je {amount}.",
+  "passWithdrawalRefundTotal": "Spolu na vrátenie",
+  "passWithdrawalRefundNote": "Do tejto sumy sa započítava aj to, čo sme ti už vrátili. Prípadný zvyšok ti vrátime do 14 dní na pôvodný spôsob platby.",
   "withdrawalLoadFailed": "Podrobnosti odstúpenia sa nepodarilo načítať. Skús to znova.",
   "withdrawalSubmitFailed": "Odstúpenie sa nepodarilo odoslať. Skús to znova.",
   "withdrawalRetry": "Skúsiť znova",
@@ -1870,6 +1877,52 @@
   "entryPackCheckoutTermsChanged": "Podmienky sa zmenili. Pred platbou si prečítajte aktuálne znenie a znova ho potvrďte.",
   "passEntryPack": "Balík vstupov",
   "passUnlimited": "Neobmedzený pas",
+  "passReminderGreeting": "Ahoj {firstName},",
+  "passReminderGreetingUnnamed": "Dobrý deň,",
+  "passReminderEntryPackSubject": [
+    {
+      "declarations": [
+        "input remaining",
+        "local remainingPlural = remaining: plural",
+        "local remainingNumber = remaining: number"
+      ],
+      "selectors": ["remainingPlural"],
+      "match": {
+        "remainingPlural=one": "V balíku ti zostáva {remainingNumber} vstup",
+        "remainingPlural=few": "V balíku ti zostávajú {remainingNumber} vstupy",
+        "remainingPlural=many": "V balíku ti zostáva {remainingNumber} vstupu",
+        "remainingPlural=other": "V balíku ti zostáva {remainingNumber} vstupov"
+      }
+    }
+  ],
+  "passReminderEntryPackPreheader": "Tvoj balík ({tier}) končí {endsOn}.",
+  "passReminderEntryPackBody": [
+    {
+      "declarations": [
+        "input remaining",
+        "input total",
+        "local remainingPlural = remaining: plural",
+        "local remainingNumber = remaining: number",
+        "local totalNumber = total: number"
+      ],
+      "selectors": ["remainingPlural"],
+      "match": {
+        "remainingPlural=one": "Tvoj balík vstupov ({tier}) končí <strong>{endsOn}</strong>. Ešte môžeš využiť <strong>{remainingNumber} z {totalNumber} vstupov</strong>. Vyber si dni, aby ti vstupy neprepadli.",
+        "remainingPlural=few": "Tvoj balík vstupov ({tier}) končí <strong>{endsOn}</strong>. Ešte môžeš využiť <strong>{remainingNumber} z {totalNumber} vstupov</strong>. Vyber si dni, aby ti vstupy neprepadli.",
+        "remainingPlural=many": "Tvoj balík vstupov ({tier}) končí <strong>{endsOn}</strong>. Ešte môžeš využiť <strong>{remainingNumber} z {totalNumber} vstupov</strong>. Vyber si dni, aby ti vstupy neprepadli.",
+        "remainingPlural=other": "Tvoj balík vstupov ({tier}) končí <strong>{endsOn}</strong>. Ešte môžeš využiť <strong>{remainingNumber} z {totalNumber} vstupov</strong>. Vyber si dni, aby ti vstupy neprepadli."
+      }
+    }
+  ],
+  "passReminderEntryPackBook": "Rezervovať deň",
+  "passReminderEntryPackExpiry": "Vstupy, na ktoré dovtedy nemáš rezerváciu, s balíkom prepadnú.",
+  "passReminderUnlimitedSubject": "Tvoj neobmedzený pas končí {endsOn}",
+  "passReminderUnlimitedPreheader": "Predĺž si pas o ďalších {days} dní.",
+  "passReminderUnlimitedPreheaderWithDesk": "Predĺž si pas a {deskLabel} ti zostane na ďalších {days} dní.",
+  "passReminderUnlimitedBody": "Tvoj neobmedzený pas ({tier}) končí <strong>{endsOn}</strong>. Predĺž si ho teraz a ďalších {days} dní sa začne hneď potom, {renewalStartsOn}.",
+  "passReminderUnlimitedBodyWithDesk": "Tvoj neobmedzený pas ({tier}) končí <strong>{endsOn}</strong>. Predĺž si ho teraz a ďalších {days} dní sa začne hneď potom, {renewalStartsOn}. Zostane ti <strong>{deskLabel}</strong>.",
+  "passReminderUnlimitedRenew": "Predĺžiť o {days} dní",
+  "passReminderUnlimitedDeskFallback": "Ak už pri predĺžení nebude {deskLabel} k dispozícii, pridelíme ti iný stôl.",
   "unlimitedPassRenew": "Predĺžiť pas",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Rezervovaný stôl",

@@ -5,6 +5,7 @@ import {
   describe,
   expect,
   mock,
+  spyOn,
   test,
 } from "bun:test";
 import type {
@@ -144,6 +145,66 @@ describe("AutomationPreviewPage activation gate", () => {
     });
   });
 
+  test("labels an expired pass forecast as past, with Activate disabled", async () => {
+    const asOf = "2020-10-05T08:00:00.000Z";
+    loadAutomationDryRun.mockImplementation(async () =>
+      automationDryRunFixture({ kind: "schedule", asOf, nextFires: [asOf] })
+    );
+    const view = await renderPage(automationDetailFixture());
+
+    expect(
+      view.getByText(m.emailAutomationActivationPastFireTitle({}, { locale }))
+    ).not.toBeNull();
+    expect(controls(view).activate?.hasAttribute("disabled")).toBe(true);
+  });
+
+  test.each([
+    ["still ahead", { milliseconds: -1 }, true],
+    ["reached", { milliseconds: 0 }, false],
+  ] as const)(
+    "gates a Ready pass forecast whose fire is %s once the report loads",
+    async (_, offset, current) => {
+      const asOf = "2030-10-05T08:00:00.000Z";
+      const fire = Temporal.Instant.from(asOf);
+      // The port answered Ready a second before the fire.
+      const clock = spyOn(Temporal.Now, "instant").mockReturnValue(
+        fire.subtract({ seconds: 1 })
+      );
+      try {
+        loadAutomationDryRun.mockImplementation(async () => {
+          clock.mockReturnValue(fire.add(offset));
+          return automationDryRunFixture({
+            kind: "schedule",
+            asOf,
+            nextFires: [asOf],
+          });
+        });
+        const view = await renderPage(
+          automationDetailFixture({
+            activation: ready,
+            trigger: { kind: "entry-pack-expiring", frequency: null },
+          })
+        );
+        const shown = controls(view);
+
+        expect(shown.activate?.hasAttribute("disabled")).toBe(!current);
+        expect(shown.runAgain !== null).toBe(current);
+        expect(shown.run !== null).toBe(!current);
+        expect(
+          view.queryByText(m.emailAutomationActivationReady({}, { locale })) !==
+            null
+        ).toBe(current);
+        expect(
+          view.queryByText(
+            m.emailAutomationActivationPastFireTitle({}, { locale })
+          ) !== null
+        ).toBe(!current);
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  );
+
   test("follows the port's readiness rather than judging the flow itself", async () => {
     const withoutFlow = await renderPage(
       automationDetailFixture({ flow: null, trigger: null, activation: ready })
@@ -231,6 +292,11 @@ describe("AutomationPreviewPage activation gate", () => {
       { kind: "account-created", frequency: null },
       m.emailAutomationActivationExplainReplay,
     ],
+    [
+      "pass reminder",
+      { kind: "entry-pack-expiring", frequency: null },
+      m.emailAutomationActivationExplainPassForecast,
+    ],
   ] as const)(
     "explains what a %s trigger's dry run evaluates",
     async (_, trigger, explanation) => {
@@ -264,6 +330,16 @@ describe("AutomationPreviewPage activation gate", () => {
     expect(
       view.queryByText(m.emailAutomationActivationJobSuperseded({}, { locale }))
     ).toBeNull();
+  });
+
+  test("allows refreshing a completed pass reminder forecast", async () => {
+    const view = await renderPage(
+      automationDetailFixture({
+        activation: ready,
+        trigger: { kind: "entry-pack-expiring", frequency: null },
+      })
+    );
+    expect(controls(view).runAgain).not.toBeNull();
   });
 
   test("says a newer job superseded this one", async () => {

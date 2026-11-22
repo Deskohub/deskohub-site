@@ -1,37 +1,25 @@
 import {
   and,
-  desc,
   eq,
   exists,
   gte,
   isNotNull,
   isNull,
-  ne,
-  not,
   notInArray,
   or,
   sql,
 } from "drizzle-orm";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
+import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import {
-  WorkspaceDatabase,
-  type WorkspaceDatabaseClient,
-  WorkspaceTransaction,
-} from "@/db/database.service";
-import {
-  legalEvidenceEvents,
-  orders,
   passPurchases,
-  paymentAttempts,
   unlimitedPassDayMoves,
   workspaceReservations,
 } from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
-import { paymentSubmitLegalEvidenceSource } from "@/features/checkout/legal-evidence";
-import { m } from "@/features/i18n";
 import { getConsumerWithdrawalPeriodCutoff } from "@/features/legal/early-performance";
-import { type OrderId, orderIdSchema } from "@/features/order";
+import type { OrderId } from "@/features/order";
 import { getCoworkReservationInterval } from "@/features/reservation/cowork-reservation";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import {
@@ -43,89 +31,22 @@ import {
 import type { WithdrawalAssessment } from "@/features/withdrawal/withdrawal-assessment";
 import { currencyCZK } from "@/shared/money/currencies";
 import { type Money, sameMoneyUnit } from "@/shared/money/money";
-import { formatPlainDateRange } from "@/shared/utils/date-time-format";
 import { type PlainDate, plainDateStringSchema } from "@/shared/utils/temporal";
 import { type PassTier, unlimitedPassDays } from "../pass-offer";
-import { getPassTierName } from "../pass-offer.i18n";
 import {
   getUnlimitedPassEndDate,
   getUnlimitedPassWithdrawal,
 } from "../unlimited-pass";
-import { hasPendingPassChange } from "./pass-administration-pending";
+import { getPassWithdrawalLabel } from "./pass-withdrawal-label";
+import {
+  decodePassWithdrawalOrderId,
+  markPassWithdrawalRefund,
+  paidPassAmount,
+  readPaidPassForWithdrawal,
+  readPassEarlyPerformanceConsent,
+} from "./pass-withdrawal-payment";
 
 const kind = "unlimited-pass" as const;
-const decodeOrderId = Schema.decodeOption(orderIdSchema);
-
-const readPaidUnlimitedPass = (
-  db: WorkspaceDatabaseClient,
-  id: OrderId,
-  buyerAccountId: CustomerAccountId
-) =>
-  db
-    .select({
-      status: passPurchases.status,
-      tier: passPurchases.tier,
-      validFrom: passPurchases.validFrom,
-      validUntil: passPurchases.validUntil,
-      buyerConfirmationDeliveredAt: passPurchases.buyerConfirmationDeliveredAt,
-      attemptId: paymentAttempts.id,
-      paidValue: paymentAttempts.amountValue,
-      exponent: paymentAttempts.amountExponent,
-      currency: paymentAttempts.currency,
-    })
-    .from(passPurchases)
-    .innerJoin(orders, eq(orders.id, passPurchases.id))
-    .innerJoin(
-      paymentAttempts,
-      and(
-        eq(paymentAttempts.id, orders.activePaymentAttemptId),
-        eq(paymentAttempts.orderId, orders.id),
-        eq(paymentAttempts.state, "paid")
-      )
-    )
-    .where(
-      and(
-        eq(passPurchases.id, id),
-        eq(passPurchases.product, "unlimited"),
-        eq(passPurchases.buyerAccountId, buyerAccountId),
-        eq(orders.kind, "pass-purchase"),
-        eq(orders.paymentState, "paid")
-      )
-    );
-
-const paidAmountOf = (pass: {
-  readonly paidValue: number;
-  readonly exponent: number;
-  readonly currency: string;
-}): Money => ({
-  value: pass.paidValue,
-  exponent: pass.exponent,
-  currency: pass.currency,
-});
-
-const readEarlyPerformanceConsent = Effect.fnUntraced(function* (
-  db: WorkspaceDatabaseClient,
-  orderId: OrderId
-) {
-  const [terms] = yield* db
-    .select({ acknowledgements: legalEvidenceEvents.acknowledgements })
-    .from(legalEvidenceEvents)
-    .where(
-      and(
-        eq(legalEvidenceEvents.orderId, orderId),
-        eq(legalEvidenceEvents.documentKey, "termsAndConditions"),
-        eq(legalEvidenceEvents.source, paymentSubmitLegalEvidenceSource),
-        eq(legalEvidenceEvents.accepted, true)
-      )
-    )
-    .orderBy(desc(legalEvidenceEvents.acceptedAt))
-    .limit(1);
-  if (!terms) return undefined;
-  return (
-    terms.acknowledgements?.earlyPerformanceConsent === true &&
-    terms.acknowledgements.unlimitedPassEarlyStartRequested === true
-  );
-});
 
 type UnlimitedWithdrawalTerms = WithdrawalAssessment &
   ({ readonly withdrawable: false } | { readonly accessEndsOn: PlainDate });
@@ -189,26 +110,6 @@ const assessUnlimitedPassWithdrawal = (input: {
   };
 };
 
-export const lockUnlimitedPassOrderForWithdrawal = Effect.fn(
-  "lockUnlimitedPassOrderForWithdrawal"
-)(function* (contractId: string) {
-  const id = decodeOrderId(contractId);
-  if (Option.isNone(id)) return undefined;
-  const { db } = yield* WorkspaceTransaction;
-  const [order] = yield* db
-    .select({ id: orders.id })
-    .from(orders)
-    .where(
-      and(
-        eq(orders.id, id.value),
-        eq(orders.kind, "pass-purchase"),
-        not(hasPendingPassChange(db, orders.id))
-      )
-    )
-    .for("no key update");
-  return order?.id;
-});
-
 /** The cutoff and refund obligation commit with the buyer's statement. */
 export const recordUnlimitedPassWithdrawal = Effect.fn(
   "recordUnlimitedPassWithdrawal"
@@ -220,23 +121,14 @@ export const recordUnlimitedPassWithdrawal = Effect.fn(
   readonly refundAmount: Money;
 }) {
   const { db } = yield* WorkspaceTransaction;
-  const [pending] = yield* db
-    .select({ id: passPurchases.id })
-    .from(passPurchases)
-    .where(
-      and(
-        eq(passPurchases.id, input.orderId),
-        hasPendingPassChange(db, input.orderId)
-      )
-    );
-  if (pending) return;
-  const [pass] = yield* readPaidUnlimitedPass(
+  const [pass] = yield* readPaidPassForWithdrawal(
     db,
     input.orderId,
-    input.accountId
+    input.accountId,
+    "unlimited"
   ).for("no key update", { of: passPurchases });
   if (pass?.status !== "active") return;
-  const paid = paidAmountOf(pass);
+  const paid = paidPassAmount(pass);
   if (
     !sameMoneyUnit(paid, currencyCZK(0)) ||
     !sameMoneyUnit(paid, input.paidAmount) ||
@@ -244,9 +136,10 @@ export const recordUnlimitedPassWithdrawal = Effect.fn(
   ) {
     return;
   }
-  const earlyPerformanceConsent = yield* readEarlyPerformanceConsent(
+  const earlyPerformanceConsent = yield* readPassEarlyPerformanceConsent(
     db,
-    input.orderId
+    input.orderId,
+    "unlimited"
   );
   if (earlyPerformanceConsent === undefined) return;
   const terms = assessUnlimitedPassWithdrawal({
@@ -267,27 +160,7 @@ export const recordUnlimitedPassWithdrawal = Effect.fn(
     .update(passPurchases)
     .set({ status: "withdrawn", accessEndsOn })
     .where(eq(passPurchases.id, input.orderId));
-  if (refund.value > 0) {
-    // A separate refund obligation on the same payment may already be larger.
-    const target = sql`case
-      when ${paymentAttempts.refundState} = 'required' and ${paymentAttempts.refundTargetValue} is null
-      then ${paymentAttempts.amountValue}
-      else greatest(coalesce(${paymentAttempts.refundTargetValue}, 0), ${refund.value})
-    end`;
-    yield* db
-      .update(paymentAttempts)
-      .set({
-        refundState: sql`case when ${paymentAttempts.refundedAmountValue} >= ${target} then 'refunded' else 'required' end`,
-        refundTargetValue: target,
-        updatedAt: input.submittedAt,
-      })
-      .where(
-        and(
-          eq(paymentAttempts.id, pass.attemptId),
-          ne(paymentAttempts.provider, "internal")
-        )
-      );
-  }
+  yield* markPassWithdrawalRefund(pass.attemptId, refund, input.submittedAt);
   return periodEndsAt;
 });
 
@@ -304,15 +177,16 @@ export class UnlimitedPassWithdrawals extends Context.Service<
         kind,
         find: Effect.fn("UnlimitedPassWithdrawals.find")(
           function* ({ contractId, accountId, locale }) {
-            const id = decodeOrderId(contractId);
+            const id = decodePassWithdrawalOrderId(contractId);
             if (Option.isNone(id)) return Option.none();
-            const [pass] = yield* readPaidUnlimitedPass(
+            const [pass] = yield* readPaidPassForWithdrawal(
               db,
               id.value,
-              accountId
+              accountId,
+              "unlimited"
             );
             if (!pass) return Option.none();
-            const paid = paidAmountOf(pass);
+            const paid = paidPassAmount(pass);
             if (!sameMoneyUnit(paid, currencyCZK(0))) return Option.none();
             const snapshot = yield* snapshots.findPassPurchase(pass.attemptId);
             if (
@@ -322,24 +196,12 @@ export class UnlimitedPassWithdrawals extends Context.Service<
               return Option.none();
             }
             const business = snapshot.billing.purpose === "business";
-            const earlyPerformanceConsent = yield* readEarlyPerformanceConsent(
-              db,
-              id.value
-            );
+            const earlyPerformanceConsent =
+              yield* readPassEarlyPerformanceConsent(db, id.value, "unlimited");
             if (earlyPerformanceConsent === undefined) return Option.none();
-            const start = Temporal.PlainDate.from(pass.validFrom);
-            const dates = formatPlainDateRange({
-              locale,
-              start,
-              end: start.add({ days: unlimitedPassDays - 1 }),
-            });
             return Option.some<WithdrawableContract>({
               ref: { kind, id: id.value },
-              label: [
-                m.passUnlimited({}, { locale }),
-                getPassTierName(pass.tier, locale),
-                dates,
-              ].join(" · "),
+              label: getPassWithdrawalLabel(pass, locale),
               paidAmount: paid,
               assess: (now) => {
                 if (pass.status !== "active") {
@@ -370,7 +232,7 @@ export class UnlimitedPassWithdrawals extends Context.Service<
         cancel: Effect.fn("UnlimitedPassWithdrawals.cancel")(function* ({
           contractId,
         }) {
-          const id = decodeOrderId(contractId);
+          const id = decodePassWithdrawalOrderId(contractId);
           if (Option.isNone(id)) {
             return yield* new ContractCancellationError({
               kind,

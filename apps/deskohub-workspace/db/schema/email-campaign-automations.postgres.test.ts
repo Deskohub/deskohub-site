@@ -85,6 +85,21 @@ describe.skipIf(!testDatabase)(
         ]
       );
 
+    test("keeps one open customer run after removing the old conflict target", async () => {
+      const { campaignId, versionId } = await automatedCampaign();
+      const id = customerId("legacy-writer");
+      const write = () =>
+        pool.query(
+          `insert into email_campaign_automation_runs
+           (campaign_id, version_id, dotypos_customer_id, trigger_kind, trigger_at, status, step_id, phase, step_entered_at, due_at)
+         values ($1, $2, $3, 'account-created', now(), 'active', 'send', 'ready', now(), now())
+         on conflict do nothing returning id`,
+          [campaignId, versionId, id]
+        );
+      const results = await Promise.all([write(), write()]);
+      expect(results.map((result) => result.rowCount).sort()).toEqual([0, 1]);
+    });
+
     test("rejects every update and delete of a published version", async () => {
       const { versionId } = await automatedCampaign();
       const immutable = { code: "55000" };

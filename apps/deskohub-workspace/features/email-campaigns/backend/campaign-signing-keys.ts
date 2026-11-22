@@ -12,7 +12,7 @@ import { CampaignSigningKeyInvalid } from "../errors";
  * signature.
  */
 export const loadCampaignSigningKeys = (
-  purpose: "confirmation-code" | "unsubscribe-token"
+  purpose: "confirmation-code" | "unsubscribe-token" | "recipient-payload"
 ) =>
   Config.String("BETTER_AUTH_SECRETS").pipe(
     Effect.map(parseBetterAuthSecrets),

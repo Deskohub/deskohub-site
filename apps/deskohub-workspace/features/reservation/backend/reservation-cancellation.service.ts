@@ -1,6 +1,7 @@
 import { DotyposService } from "@deskohub/dotypos";
 import { Context, Data, Effect, Layer } from "effect";
 import { administrationForcedPaymentCancellationFailureCode } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
+import type { EntryPackWithdrawalCancellation } from "@/features/passes/backend/entry-pack-redemption";
 import {
   type RequestedCancellationCause,
   type RequestedCancellationRefund,
@@ -16,6 +17,7 @@ import {
   canCancelReservation,
   REQUESTED_CANCELLATION_RETRY_AFTER_MS,
 } from "@/features/reservation/reservation-cancellation-policy";
+import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 
 export type ReservationCancellationFailureReason =
   | "not_found"
@@ -44,6 +46,8 @@ class ReservationCancellationError extends Data.TaggedError(
 export type ReservationCancellationInput = {
   readonly reservationId: WorkspaceReservationId;
   readonly cause: RequestedCancellationCause;
+  /** The withdrawn pass that funded this booking, when cancelling its claim. */
+  readonly entryPackWithdrawal?: EntryPackWithdrawalCancellation;
   /** An administrator's override that cancels a pending payment too. */
   readonly force?: boolean;
   /** What the payment owes back; absent, the whole Nexi payment is owed. */
@@ -89,7 +93,8 @@ export class ReservationCancellation extends Context.Service<
       const claimCancellation = Effect.fnUntraced(function* (
         current: WorkspaceReservation,
         cause: RequestedCancellationCause,
-        forcedPendingPayment: boolean
+        forcedPendingPayment: boolean,
+        entryPackWithdrawal: EntryPackWithdrawalCancellation | undefined
       ) {
         const pendingPaymentCancellation = getPendingPaymentCancellation(
           current,
@@ -99,6 +104,7 @@ export class ReservationCancellation extends Context.Service<
           .claimRequestedCancellation({
             id: current.id,
             cause,
+            entryPackWithdrawal,
             ...(pendingPaymentCancellation && {
               pendingPaymentCancellation,
             }),
@@ -236,7 +242,8 @@ export class ReservationCancellation extends Context.Service<
             if (current.reservationState === "cancelled") {
               if (
                 input.cause === "customer_withdrawal" &&
-                current.cancellationCause !== input.cause
+                current.cancellationCause !== input.cause &&
+                !input.entryPackWithdrawal
               ) {
                 return yield* new ReservationCancellationError({
                   code: "not_cancellable",
@@ -284,7 +291,8 @@ export class ReservationCancellation extends Context.Service<
             const claimed = yield* claimCancellation(
               current,
               input.cause,
-              forcedPendingPayment
+              forcedPendingPayment,
+              input.entryPackWithdrawal
             );
 
             if (details.providerStatus !== "CANCELLED") {
@@ -300,7 +308,9 @@ export class ReservationCancellation extends Context.Service<
               claimed,
               input.cause,
               administrationForceCancellation,
-              input.refund
+              input.entryPackWithdrawal
+                ? { targetValue: "full", releasesPromotions: false }
+                : input.refund
             );
 
             return { outcome: "cancelled", reservation: details } as const;
@@ -315,6 +325,12 @@ export class ReservationCancellation extends Context.Service<
         ),
       } satisfies IReservationCancellation;
     })
+  );
+
+  static Live = this.Default.pipe(
+    Layer.provide(WorkspaceReservationService.Live),
+    Layer.provide(WorkspaceReservationRepository.Live),
+    Layer.provide(WorkspaceDotyposLayer)
   );
 }
 

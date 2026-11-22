@@ -43,7 +43,7 @@ export const unlimitedPassProductKeySchema = Schema.TemplateLiteral([
   passTierSchema,
 ]);
 
-type PassProduct = EntryPackProduct | UnlimitedPassProduct;
+export type PassProduct = EntryPackProduct | UnlimitedPassProduct;
 
 export const getPassProductKey = (product: PassProduct) =>
   product.kind === "entry-pack"

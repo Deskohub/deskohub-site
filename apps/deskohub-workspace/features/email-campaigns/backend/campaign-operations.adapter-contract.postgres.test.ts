@@ -25,13 +25,17 @@ import { NodeCrypto, NodeHttpServer } from "@effect/platform-node";
 import { Effect, Layer, Option } from "effect";
 import { HttpRouter } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
+import * as nextCache from "next/cache";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { cliSessions } from "@/db/schema";
 import type { AdministratorAccountActor } from "@/features/administrators/account-role";
 import { mockAdministratorAccess } from "@/features/administrators/server/administrator-access.test-utils";
 import type { CampaignId } from "@/features/email-campaigns/campaign-identifiers";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
+import { recordNextCache } from "@/shared/testing/next-cache-recorder.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import type { AutomationPreviewId } from "../automation/automation-identifiers";
 import { richCampaignBodies } from "../body/campaign-body-document.test-utils";
 
 /**
@@ -53,7 +57,15 @@ if (testDatabase) {
     workspaceDatabaseLayer: testDatabase.layer,
   }));
 }
+// Pass reminder writes are released here, without reading the live flag.
+mock.module("../automation/backend/pass-reminder-release", () => ({
+  CoworkPassesReleaseGateForReminders: CoworkPassesReleaseGate.fromEvaluation(
+    Effect.succeed(true)
+  ),
+}));
 mock.module("next/cache", () => ({
+  ...nextCache,
+  ...recordNextCache().module,
   revalidatePath: () => undefined,
   revalidateTag: () => undefined,
 }));
@@ -98,6 +110,11 @@ type AdapterContractCase<Name extends CampaignOperationName> = {
   readonly title: string;
   /** Revokes the seeded administrator's grant for this case. */
   readonly revokeAdministrator?: true;
+  /**
+   * Another active campaign holds the pass reminder trigger of the automated
+   * campaign, which is a ready draft or was paused before the other took over.
+   */
+  readonly triggerHeldWhile?: "draft" | "paused";
   readonly input: (seeded: Seeded) => OperationInput<Registry[Name]>;
   readonly expect:
     | { readonly _tag: "Success"; readonly output?: unknown }
@@ -131,6 +148,11 @@ const twiceHourlyFlow = {
 const czechContent = {
   "cs-CZ": { subject: "Novinky", preheader: "", bodyMarkdown: "# Ahoj" },
 };
+/** "When an Entry pack is expiring, send." */
+const passReminderFlow = {
+  trigger: { _tag: "EntryPackExpiring" },
+  steps: [{ _tag: "Send", id: "send" }],
+} as const;
 /** Both locales with bodies as the editor holds them. */
 const editorContent = {
   "cs-CZ": {
@@ -548,6 +570,15 @@ const cases: AdapterContractCases<Registry> = {
       }),
       expect: failure("OperationConflict", "automation-draft-changed"),
     },
+    {
+      title: "refuses a trigger another active campaign holds",
+      triggerHeldWhile: "draft",
+      input: ({ automatedDraftId, readyPreviewId }) => ({
+        campaignId: automatedDraftId,
+        previewId: readyPreviewId,
+      }),
+      expect: failure("OperationConflict", "automation-trigger-in-use"),
+    },
   ],
   pauseAutomation: [
     {
@@ -561,6 +592,12 @@ const cases: AdapterContractCases<Registry> = {
       title: "refuses to resume a draft",
       input: ({ automatedDraftId }) => ({ campaignId: automatedDraftId }),
       expect: failure("OperationConflict", "automation-status-conflict"),
+    },
+    {
+      title: "refuses a trigger another active campaign took over",
+      triggerHeldWhile: "paused",
+      input: ({ automatedDraftId }) => ({ campaignId: automatedDraftId }),
+      expect: failure("OperationConflict", "automation-trigger-in-use"),
     },
   ],
   archiveAutomation: [
@@ -846,7 +883,7 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
   /** Saves the working copy as an administrator would; returns its hash. */
   const saveAutomationFlow = async (
     campaignId: string,
-    flow: typeof twiceHourlyFlow
+    flow: typeof twiceHourlyFlow | typeof passReminderFlow
   ) => {
     const { AutomationLifecycle } = await import(
       "../automation/backend/automation-lifecycle.service"
@@ -876,6 +913,76 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
           AutomationLifecycle.Live.pipe(Layer.provide(testDatabase.layer)),
           testDatabase.layer
         )
+      ),
+      Effect.runPromise
+    );
+  };
+
+  /** Gives the automated campaign's trigger to another active campaign. */
+  const holdTrigger = async (seeded: Seeded, whileIt: "draft" | "paused") => {
+    const { AutomationLifecycle } = await import(
+      "../automation/backend/automation-lifecycle.service"
+    );
+    const { nextPassReminderPreviewOccurrence } = await import(
+      "../automation/backend/automation-pass-reminder-preview"
+    );
+    const { fireAt } = nextPassReminderPreviewOccurrence(
+      passReminderFlow.trigger,
+      Temporal.Now.instant()
+    );
+    const campaignId = seeded.automatedDraftId as CampaignId;
+    const previewId = seeded.readyPreviewId as AutomationPreviewId;
+    await pool.query(
+      "update email_campaign_automation_previews set draft_hash = $2, as_of = $3 where id = $1",
+      [
+        previewId,
+        await saveAutomationFlow(campaignId, passReminderFlow),
+        fireAt.toString(),
+      ]
+    );
+
+    const holderId = crypto.randomUUID() as CampaignId;
+    const holderPreviewId = crypto.randomUUID() as AutomationPreviewId;
+    await pool.query(
+      `insert into email_campaigns (id, title, purpose, template_key, content, audience_id, delivery, status)
+       select $2, 'Trigger holder', purpose, template_key, content, audience_id, delivery, status
+         from email_campaigns where id = $1`,
+      [campaignId, holderId]
+    );
+    await pool.query(
+      "insert into email_campaign_automations (campaign_id) values ($1)",
+      [holderId]
+    );
+    await pool.query(
+      `insert into email_campaign_automation_previews
+         (id, campaign_id, draft_hash, kind, status, as_of, units_total, units_done, completed_at) values
+         ($1, $2, $3, 'schedule', 'completed', $4, 1, 1, now())`,
+      [
+        holderPreviewId,
+        holderId,
+        await saveAutomationFlow(holderId, passReminderFlow),
+        fireAt.toString(),
+      ]
+    );
+
+    await AutomationLifecycle.pipe(
+      Effect.flatMap((lifecycle) => {
+        const activateHolder = lifecycle.activate({
+          campaignId: holderId,
+          previewId: holderPreviewId,
+          activatedBy: null,
+        });
+        return whileIt === "draft"
+          ? activateHolder
+          : lifecycle
+              .activate({ campaignId, previewId, activatedBy: null })
+              .pipe(
+                Effect.andThen(lifecycle.pause(campaignId)),
+                Effect.andThen(activateHolder)
+              );
+      }),
+      Effect.provide(
+        AutomationLifecycle.Live.pipe(Layer.provide(testDatabase.layer))
       ),
       Effect.runPromise
     );
@@ -1066,6 +1173,9 @@ describe.skipIf(!testDatabase)("campaign operation adapters", () => {
         const seeded = seedIds();
         for (const [adapter, run] of Object.entries(harnesses)) {
           await seed(seeded);
+          if (contractCase.triggerHeldWhile) {
+            await holdTrigger(seeded, contractCase.triggerHeldWhile);
+          }
           const outcome = await withAdministrator(
             contractCase.revokeAdministrator === true,
             () => run(name, contractCase.input(seeded))

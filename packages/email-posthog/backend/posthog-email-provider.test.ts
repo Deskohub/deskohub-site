@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import type { EmailMessage } from "@deskohub/email";
+import {
+  EmailConfigTag,
+  EmailDeliveryIdSchema,
+  type EmailMessage,
+  EmailProviders,
+  EmailServiceError,
+  EmailServiceTag,
+} from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Exit } from "effect";
+import { Effect, Exit } from "effect";
 import {
   accepted,
   connection,
@@ -675,6 +682,141 @@ describe("PostHog email batches", () => {
       status: "failed",
       error: { failureKind: "provider", code: "throttled" },
     });
+  });
+
+  test("checks admission again before a batch message's provider retry", async () => {
+    let admitted = true;
+    const fake = makeFakePostHog(() => {
+      admitted = false;
+      return refused(429, "throttled", { "Retry-After": "1" });
+    });
+    const stopped = new EmailServiceError("Delivery admission closed");
+    const { exit } = await runAgainst(
+      fake,
+      provider.sendBatch([batchMessage(0)], {
+        idempotencyKey: "guarded-batch",
+        beforeRequest: () =>
+          Effect.suspend(() => (admitted ? Effect.void : Effect.fail(stopped))),
+      }),
+      production
+    );
+    expect(fake.requests).toHaveLength(1);
+    expect(successOf(exit)[0]).toMatchObject({
+      status: "failed",
+      error: stopped,
+    });
+  });
+
+  test("keeps a guarded request unknown when a retry refuses an earlier ambiguous POST", async () => {
+    const fake = makeFakePostHog((index) =>
+      index === 0 ? { fails: "network" } : refused(422, "recipient_suppressed")
+    );
+    const { exit } = await runAgainst(
+      fake,
+      provider.sendBatch([batchMessage(0)], {
+        idempotencyKey: "guarded-uncertain",
+        beforeRequest: () => Effect.void,
+      }),
+      production
+    );
+    expect(fake.requests).toHaveLength(2);
+    expect(successOf(exit)[0]).toMatchObject({
+      status: "failed",
+      error: { _tag: "NetworkError", failureKind: "unknown-outcome" },
+    });
+  });
+
+  test("allows a first batch with admission to fall back after PostHog exhausts 503 retries", async () => {
+    const fake = makeFakePostHog(() => refused(503, "delivery_unavailable"));
+    const sent = {
+      id: EmailDeliveryIdSchema.make("synthetic-resend-delivery"),
+      status: "sent" as const,
+      timestamp: new Date(),
+      provider: "resend",
+    };
+    const { exit } = await runAgainst(
+      fake,
+      Effect.gen(function* () {
+        const email = yield* EmailServiceTag;
+        return yield* email.sendBatch([batchMessage(0)], {
+          idempotencyKey: "offer-batch-fallback",
+          allowFallbackWithAdmission: true,
+          beforeRequest: () => Effect.void,
+        });
+      }).pipe(
+        Effect.provide(EmailServiceTag.Default),
+        Effect.provideService(EmailConfigTag, {
+          defaultFrom: { email: sender },
+        }),
+        Effect.provideService(EmailProviders, {
+          transactional: [],
+          marketingCategories: new Set(["email-campaign"]),
+          marketing: [
+            provider,
+            {
+              name: "resend",
+              send: () => Effect.succeed(sent),
+              sendBatch: (messages) => Effect.succeed(messages.map(() => sent)),
+            },
+          ],
+        })
+      ),
+      production
+    );
+    expect(fake.requests).toHaveLength(3);
+    expect(successOf(exit)).toEqual([sent]);
+  });
+
+  test("interrupts an admission check at the batch deadline before any POST", async () => {
+    const fake = makeFakePostHog(() => accepted("unexpected-id"));
+    let interrupted = false;
+    const { exit } = await runAgainst(
+      fake,
+      provider.sendBatch([batchMessage(0)], {
+        idempotencyKey: "guarded-deadline",
+        beforeRequest: () =>
+          Effect.never.pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                interrupted = true;
+              })
+            )
+          ),
+      }),
+      production
+    );
+    expect(fake.requests).toHaveLength(0);
+    expect(interrupted).toBe(true);
+    expect(successOf(exit)[0]).toMatchObject({ status: "failed" });
+  });
+
+  test("the request fingerprint covers the actual PostHog recipient identity", async () => {
+    const fingerprints: string[] = [];
+    const fake = makeFakePostHog(() => accepted("accepted-id"));
+    const options = {
+      idempotencyKey: "same-batch-key",
+      beforeRequest: (fingerprint: string) =>
+        Effect.sync(() => {
+          fingerprints.push(fingerprint);
+        }),
+    };
+    for (const recipientIdentity of [
+      "synthetic-person",
+      "synthetic-person",
+      undefined,
+    ]) {
+      await runAgainst(
+        fake,
+        provider.sendBatch(
+          [{ ...batchMessage(0), recipientIdentity }],
+          options
+        ),
+        production
+      );
+    }
+    expect(fingerprints).toHaveLength(3);
+    expect(fingerprints[0]).toBe(fingerprints[1]);
+    expect(fingerprints[2]).not.toBe(fingerprints[1]);
   });
 
   test("stops retrying when a later Retry-After would end past the batch deadline", async () => {

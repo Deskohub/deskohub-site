@@ -2,12 +2,15 @@ import type { DotyposService } from "@deskohub/dotypos";
 import type { EmailServiceTag } from "@deskohub/email";
 import { Layer } from "effect";
 import type { WorkspaceDatabase } from "@/db/database.service";
+import { CustomerValues } from "@/features/emails/values/customer";
+import { syntheticEmailCustomer } from "@/features/emails/values/preparation/synthetic-email-customer";
 import { AnalyticsConsentLedger } from "@/features/legal/backend/analytics-consent-ledger";
 import { MarketingConsentLedger } from "@/features/legal/backend/marketing-consent-ledger";
 import { MarketingManagementService } from "@/features/legal/backend/marketing-management.service";
 import { CampaignBatchDelivery } from "./campaign-batch-delivery.service";
 import { CampaignDeliveryService } from "./campaign-delivery.service";
 import type { CampaignEmailConfig } from "./campaign-email.config";
+import { campaignOfferPreparationLayers } from "./campaign-personalized-delivery";
 import { CampaignRecipientAnalyticsIdentity } from "./campaign-recipient-analytics-identity.service";
 import { CampaignUnsubscribeService } from "./campaign-unsubscribe.service";
 
@@ -28,12 +31,16 @@ export const campaignDeliveryTestLayer = <E, R>(
     AnalyticsConsentLedger,
     never,
     WorkspaceDatabase
-  > = AnalyticsConsentLedger.Default
+  > = AnalyticsConsentLedger.Default,
+  customers: Layer.Layer<CustomerValues> = CustomerValues.Synthetic(
+    syntheticEmailCustomer
+  )
 ) => {
   const batches = CampaignBatchDelivery.Default.pipe(
     Layer.provide(
       Layer.mergeAll(
         dependencies,
+        campaignOfferPreparationLayers(customers),
         CampaignRecipientAnalyticsIdentity.Default.pipe(
           Layer.provide(analyticsConsent)
         ),

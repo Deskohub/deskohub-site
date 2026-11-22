@@ -51,6 +51,7 @@ import {
   type AutomationWorkUnitStatus,
   automationWorkUnitStatuses,
 } from "@/features/email-campaigns/automation/automation-work-units";
+import type { PassReminderContext } from "@/features/email-campaigns/automation/pass-reminder-context";
 import type {
   CampaignLocalizedContent,
   CampaignPurpose,
@@ -63,6 +64,7 @@ import type {
   CampaignSendId,
 } from "@/features/email-campaigns/campaign-identifiers";
 import type { CampaignRecipientSkipReason } from "@/features/email-campaigns/campaign-states";
+import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import type { CustomerEventId } from "@/shared/backend/customer-events/customer-event";
 import { instant } from "../instant";
@@ -77,6 +79,7 @@ import {
   emailCampaigns,
 } from "./email-campaigns";
 import { emails } from "./emails";
+import { passPurchases } from "./pass-purchases";
 import { quotedSqlList } from "./sql-list";
 import { workspaceReservations } from "./workspace-reservations";
 
@@ -312,6 +315,12 @@ export const emailCampaignAutomationRuns = pgTable(
     triggerReservationId: text("trigger_reservation_id")
       .references(() => workspaceReservations.id)
       .$type<WorkspaceReservationId>(),
+    triggerPassId: text("trigger_pass_id")
+      .references(() => passPurchases.id)
+      .$type<OrderId>(),
+    passReminderContext: jsonb(
+      "pass_reminder_context"
+    ).$type<PassReminderContext>(),
     status: text("status").notNull().$type<AutomationRunState>(),
     /** The current step; the last step once ended. */
     stepId: text("step_id").notNull().$type<AutomationStepId>(),
@@ -349,9 +358,12 @@ export const emailCampaignAutomationRuns = pgTable(
         emailCampaignRecipients.dotyposCustomerId,
       ],
     }),
-    uniqueIndex("email_campaign_automation_runs_one_open_run_idx")
+    uniqueIndex("email_campaign_automation_runs_one_open_customer_run_idx")
       .on(t.campaignId, t.dotyposCustomerId)
-      .where(sql`${t.status} <> 'ended'`),
+      .where(sql`${t.status} <> 'ended' and ${t.triggerPassId} is null`),
+    uniqueIndex("email_campaign_automation_runs_one_pass_run_idx")
+      .on(t.triggerPassId)
+      .where(sql`${t.triggerPassId} is not null`),
     index("email_campaign_automation_runs_due_idx")
       .on(t.dueAt)
       .where(sql`${t.status} = 'active'`),
@@ -394,6 +406,10 @@ export const emailCampaignAutomationRuns = pgTable(
     check(
       "email_campaign_automation_runs_trigger_check",
       sql`(${t.triggerKind} like 'reservation-%') = (${t.triggerReservationId} is not null)`
+    ),
+    check(
+      "email_campaign_automation_runs_pass_trigger_check",
+      sql`(${t.triggerKind} in ('entry-pack-expiring', 'unlimited-ending')) = (${t.triggerPassId} is not null) and (${t.triggerPassId} is null) = (${t.passReminderContext} is null)`
     ),
   ]
 );

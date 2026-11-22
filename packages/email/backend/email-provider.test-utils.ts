@@ -5,11 +5,13 @@ import {
   type EmailSendResult,
 } from "../types/email.types";
 import {
+  type EmailBatchOptions,
   type EmailProvider,
   type EmailSendError,
   EmailServiceError,
 } from "./capabilities";
 import { EmailProviders } from "./email-providers";
+import { emailRequestFingerprint } from "./email-request-fingerprint";
 import { NetworkError } from "./network-error";
 
 /**
@@ -87,10 +89,20 @@ export const makeEmailProviderFake = ({
   const request = (
     operation: keyof typeof accepted,
     messages: readonly EmailMessage[],
-    key?: string
+    key?: string,
+    beforeProviderRequest?: EmailBatchOptions["beforeRequest"]
   ) =>
     refuseAttachments(messages).pipe(
       Effect.andThen(Effect.promise(() => beforeRequest())),
+      Effect.andThen(
+        Effect.suspend(
+          () =>
+            beforeProviderRequest?.(
+              emailRequestFingerprint([name, operation, key, messages]),
+              messages.map((_, position) => position)
+            ) ?? Effect.void
+        )
+      ),
       Effect.andThen(
         Effect.suspend(
           (): Effect.Effect<readonly EmailSendResult[], EmailSendError> => {
@@ -172,7 +184,12 @@ export const makeEmailProviderFake = ({
         Effect.map((results) => results[0]!)
       ),
     sendBatch: (messages, options) =>
-      request("sendBatch", messages, options.idempotencyKey),
+      request(
+        "sendBatch",
+        messages,
+        options.idempotencyKey,
+        options.beforeRequest
+      ),
   };
 
   return {

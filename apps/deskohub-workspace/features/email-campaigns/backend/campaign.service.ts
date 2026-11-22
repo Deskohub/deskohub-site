@@ -1,6 +1,10 @@
 import "server-only";
 
-import type { CampaignPatchInput } from "@deskohub/workspace-admin-api";
+import {
+  AutomationTrigger,
+  type CampaignPatchInput,
+  type EmailId,
+} from "@deskohub/workspace-admin-api";
 import { and, desc, eq, ne, notExists, or } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
 import { Context, Effect, Layer, Option, Schema } from "effect";
@@ -19,6 +23,10 @@ import {
   isSavedAudienceFilter,
 } from "../audience-filter-usage";
 import { validateStoredAutomationFlow } from "../automation/backend/automation-working-copy";
+import {
+  ensurePassReminderPurpose,
+  ensurePassReminderWritesAllowed,
+} from "../automation/backend/pass-reminder-write-policy";
 import type {
   AutomationCalendarNeverOccurs,
   AutomationFlowInvalid,
@@ -57,8 +65,15 @@ import {
   type CampaignLocaleContentMissing,
   CampaignNotFound,
   CampaignPublished,
+  CampaignPublishedEmailInvalid,
   CampaignReadOnly,
 } from "../errors";
+import {
+  getCampaignEmailPublication,
+  getLinkedCampaignEmail,
+  getLinkedCampaignEmails,
+  lockCampaignEmailPublication,
+} from "./campaign-published-email";
 
 type Campaign = CampaignRow;
 
@@ -74,6 +89,7 @@ type CampaignDraftInput = {
   readonly templateKey: CampaignTemplateKey;
   readonly content: CampaignLocalizedContent;
   readonly audienceId: CampaignAudienceId | null;
+  readonly emailId?: EmailId | null;
 };
 
 type CampaignEdit = {
@@ -85,7 +101,8 @@ type CampaignWriteError =
   | CampaignAudienceArchived
   | AudienceFilterContextInvalid
   | CampaignContentInvalid
-  | CampaignImageNotUploaded;
+  | CampaignImageNotUploaded
+  | CampaignPublishedEmailInvalid;
 
 /** The automation row of an automated campaign, as a copy inherits it. */
 type AutomationWorkingCopy = Pick<
@@ -98,8 +115,13 @@ type CampaignTransactionError = EffectDrizzleQueryError | SqlError.SqlError;
 type CampaignEditError =
   | CampaignNotFound
   | CampaignReadOnly
+  | AutomationFlowInvalid
   | CampaignWriteError
   | CampaignTransactionError;
+
+const decodeStoredTrigger = Schema.decodeUnknownOption(
+  Schema.Struct({ trigger: AutomationTrigger })
+);
 
 /** One-off campaigns are editable in Draft, automated ones until archived. */
 const isEditable = (campaign: Campaign) =>
@@ -116,6 +138,15 @@ const editable = or(
 );
 
 export interface ICampaignService {
+  readonly getPublishedEmail: (
+    emailId: EmailId
+  ) => ReturnType<typeof getCampaignEmailPublication>;
+  readonly getLinkedEmail: (
+    campaign: CampaignRow
+  ) => ReturnType<typeof getLinkedCampaignEmail>;
+  readonly getLinkedEmails: (
+    campaigns: readonly CampaignRow[]
+  ) => ReturnType<typeof getLinkedCampaignEmails>;
   readonly list: Effect.Effect<readonly Campaign[], EffectDrizzleQueryError>;
   readonly get: (
     campaignId: CampaignId
@@ -324,6 +355,12 @@ export class CampaignService extends Context.Service<
             Option.getOrNull
           )
         );
+        if (Option.isSome(flow)) {
+          yield* ensurePassReminderWritesAllowed(
+            flow.value.trigger,
+            source.purpose
+          );
+        }
         const audience =
           source.audienceId === null
             ? Option.none()
@@ -340,6 +377,7 @@ export class CampaignService extends Context.Service<
             purpose: source.purpose,
             templateKey: source.templateKey,
             content: source.content,
+            emailId: source.emailId,
             audienceId: assignable ? source.audienceId : null,
             delivery: source.delivery,
             status: "draft",
@@ -410,29 +448,60 @@ export class CampaignService extends Context.Service<
           })
         );
 
-      /** The campaign's content, locked until the transaction ends. */
-      const lockContent = (campaignId: CampaignId) =>
+      /** The campaign's draft, locked until the transaction ends. */
+      const lockDraft = (campaignId: CampaignId) =>
         Effect.flatMap(WorkspaceTransaction, ({ db }) =>
           db
-            .select({ content: emailCampaigns.content })
+            .select()
             .from(emailCampaigns)
             .where(eq(emailCampaigns.id, campaignId))
             .for("update")
-            .pipe(
-              Effect.map((rows) =>
-                Option.map(Option.fromNullishOr(rows[0]), (row) => row.content)
-              )
-            )
+            .pipe(Effect.map((rows) => Option.fromNullishOr(rows[0])))
         );
+
+      const selectPublishedEmail = Effect.fn(
+        "CampaignService.selectPublishedEmail"
+      )(function* (
+        emailId: EmailId,
+        delivery: CampaignDelivery,
+        content?: CampaignLocalizedContent
+      ) {
+        if (delivery !== "once")
+          return yield* new CampaignPublishedEmailInvalid({
+            reason: "automated",
+          });
+        if (content && Object.keys(content).length > 0)
+          return yield* new CampaignPublishedEmailInvalid({
+            reason: "inline-content",
+          });
+        const publication = yield* lockCampaignEmailPublication(emailId);
+        if (!publication)
+          return yield* new CampaignPublishedEmailInvalid({
+            reason: "unavailable",
+          });
+        return {
+          emailId,
+          purpose: publication.document.purpose,
+          templateKey: publication.document.templateKey,
+          content: {},
+        };
+      });
 
       /** Inserts a Draft, and an automated one's automation row with no flow. */
       const insertDraft = Effect.fn("CampaignService.insertDraft")(function* (
         input: CampaignDraftInput & { readonly delivery: CampaignDelivery }
       ) {
         yield* lockAssignableAudience(input.audienceId);
+        const selection = input.emailId
+          ? yield* selectPublishedEmail(
+              input.emailId,
+              input.delivery,
+              input.content
+            )
+          : undefined;
         const [campaign] = yield* db
           .insert(emailCampaigns)
-          .values({ ...input, status: "draft" })
+          .values({ ...input, ...selection, status: "draft" })
           .returning();
         if (input.delivery === "automated") {
           yield* db
@@ -443,10 +512,20 @@ export class CampaignService extends Context.Service<
       });
 
       /** Writes an edit if the campaign is still editable once locked. */
-      const writeEdit = Effect.fn("CampaignService.writeEdit")(function* ({
-        campaignId,
-        ...changes
-      }: CampaignEdit) {
+      const writeEdit = Effect.fn("CampaignService.writeEdit")(function* (
+        { campaignId, ...changes }: CampaignEdit,
+        automation: Option.Option<AutomationWorkingCopy>
+      ) {
+        if (changes.purpose !== undefined) {
+          const flow = Option.flatMap(automation, ({ flow }) =>
+            decodeStoredTrigger(flow)
+          );
+          if (Option.isSome(flow))
+            yield* ensurePassReminderPurpose(
+              flow.value.trigger,
+              changes.purpose
+            );
+        }
         if (changes.audienceId !== undefined) {
           yield* lockAssignableAudience(changes.audienceId);
         }
@@ -472,22 +551,35 @@ export class CampaignService extends Context.Service<
         const { content } = edit;
         yield* validateContent(content);
         return yield* transaction(
-          lockAutomation(edit.campaignId, "update").pipe(
-            Effect.andThen(
-              content === undefined
-                ? Effect.void
-                : lockContent(edit.campaignId).pipe(
-                    Effect.flatMap(
-                      Option.match({
-                        onNone: () => Effect.void,
-                        onSome: (current) =>
-                          requireUploadedImages(content, current),
-                      })
-                    )
-                  )
-            ),
-            Effect.andThen(writeEdit(edit))
-          )
+          Effect.gen(function* () {
+            const automation = yield* lockAutomation(edit.campaignId, "update");
+            const locked = yield* lockDraft(edit.campaignId);
+            if (Option.isNone(locked) || !isEditable(locked.value))
+              return Option.none<Campaign>();
+            const current = locked.value;
+            if (
+              isOnceCampaign(current) &&
+              current.emailId &&
+              edit.emailId === undefined &&
+              (edit.content !== undefined ||
+                edit.purpose !== undefined ||
+                edit.templateKey !== undefined)
+            ) {
+              return yield* new CampaignPublishedEmailInvalid({
+                reason: "inline-content",
+              });
+            }
+            const selection = edit.emailId
+              ? yield* selectPublishedEmail(
+                  edit.emailId,
+                  current.delivery,
+                  content
+                )
+              : undefined;
+            if (content !== undefined && !selection)
+              yield* requireUploadedImages(content, current.content);
+            return yield* writeEdit({ ...edit, ...selection }, automation);
+          })
         ).pipe(Effect.flatMap(requireEdited(edit.campaignId)));
       });
 
@@ -502,21 +594,33 @@ export class CampaignService extends Context.Service<
         }: CampaignPatchInput & {
           readonly content: CampaignContentChanges;
         }) {
-          yield* lockAutomation(edit.campaignId, "update");
-          const current = yield* lockContent(edit.campaignId);
+          const automation = yield* lockAutomation(edit.campaignId, "update");
+          const current = yield* lockDraft(edit.campaignId);
           if (Option.isNone(current)) return Option.none<Campaign>();
+          if (
+            isOnceCampaign(current.value) &&
+            current.value.emailId &&
+            edit.emailId === undefined
+          )
+            return yield* new CampaignPublishedEmailInvalid({
+              reason: "inline-content",
+            });
           const content = yield* changeCampaignContent({
             campaignId: edit.campaignId,
-            current: current.value,
+            current: current.value.content,
             changes,
           });
           yield* validateContent(content);
-          yield* requireUploadedImages(content, current.value);
-          return yield* writeEdit({ ...edit, content });
+          yield* requireUploadedImages(content, current.value.content);
+          return yield* writeEdit({ ...edit, content }, automation);
         }
       );
 
       return {
+        getPublishedEmail: (emailId) =>
+          getCampaignEmailPublication(db, emailId),
+        getLinkedEmail: (campaign) => getLinkedCampaignEmail(db, campaign),
+        getLinkedEmails: (campaigns) => getLinkedCampaignEmails(db, campaigns),
         list: db
           .select()
           .from(emailCampaigns)
@@ -537,6 +641,13 @@ export class CampaignService extends Context.Service<
           content,
           ...edit
         }) {
+          if (edit.emailId) {
+            if (content && Object.keys(content).length > 0)
+              return yield* new CampaignPublishedEmailInvalid({
+                reason: "inline-content",
+              });
+            return yield* update(edit);
+          }
           if (content === undefined) return yield* update(edit);
           return yield* transaction(patchContent({ ...edit, content })).pipe(
             Effect.flatMap(requireEdited(edit.campaignId))

@@ -94,6 +94,11 @@ export const administrationAreas = {
     href: administrationHref("/[locale]/admin/email-campaigns"),
     label: m.shellBreadcrumbCampaigns,
     pages: {
+      library: {
+        href: administrationHref("/[locale]/admin/email-campaigns/library"),
+        label: m.emailsLibraryHeading,
+        record: { label: m.shellBreadcrumbCampaignEmail },
+      },
       new: {
         href: administrationHref("/[locale]/admin/email-campaigns/new"),
         label: m.shellBreadcrumbNewCampaign,

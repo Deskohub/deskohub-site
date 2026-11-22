@@ -85,6 +85,8 @@
   "emailAutomationFlowConditionTitle": "Kontrola zákazníka",
   "emailAutomationFlowDiscard": "Zahodit",
   "emailAutomationFlowEventAccountCreatedDescription": "Nový zákazník si založí účet ve Workspace.",
+  "emailAutomationFlowEventEntryPackExpiringDescription": "Balíček se zbývajícími vstupy končí za 7 kalendářních dnů.",
+  "emailAutomationFlowEventUnlimitedEndingDescription": "Paušál Unlimited končí za 5 kalendářních dnů.",
   "emailAutomationFlowEventBookedDescription": "Rezervace zákazníka je ve Workspace potvrzená.",
   "emailAutomationFlowEventCancelledDescription": "Zákazník zruší rezervaci ve Workspace.",
   "emailAutomationFlowEventFinishedDescription": "Uplynul konec rezervace zákazníka.",

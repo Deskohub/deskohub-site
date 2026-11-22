@@ -91,6 +91,14 @@ replay never sends the same message through a second provider (campaign
 replay rules: `deskohub-workspace-domain` skill,
 `references/email-campaigns.md`). The chain adds no retries.
 
+A batch with `beforeRequest` stays with its first provider unless it also sets
+`allowFallbackWithAdmission`. Then each provider asks admission again. If a
+fallback provider's admission refuses part of its request with
+`deniedPositions` (places in the positions it was given) and admitted nothing
+in that call, the denied messages fail and the never-dispatched rest goes out
+under its own subset key. The first provider, a replay, and a call with an
+admitted request are never repacked.
+
 A batch call fails as a whole only when its first provider failed the whole
 batch and nothing fell through. Once anything fell through, the failed
 subset goes to the next provider per message, and remaining failures come

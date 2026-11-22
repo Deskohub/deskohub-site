@@ -16,6 +16,7 @@ import { validateCalendarExpression } from "@/shared/utils/calendar-expression";
 import { type AudienceFilter, audienceFilterSchema } from "../audience-filter";
 import { audienceFilterUsage } from "../audience-filter-usage";
 import type { CampaignAudienceId, CampaignId } from "../campaign-identifiers";
+import { isPassReminderTrigger } from "./automation-triggers";
 import {
   AutomationCalendarNeverOccurs,
   AutomationFlowInvalid,
@@ -155,16 +156,22 @@ const flowCalendars = (
  * The flow with each calendar in canonical order, so equal flows store and
  * hash alike.
  */
+const canonicalTrigger = (trigger: AutomationTrigger): AutomationTrigger => {
+  if (trigger._tag === "Schedule") {
+    return {
+      ...trigger,
+      calendar: canonicalCalendarExpression(trigger.calendar),
+    };
+  }
+  if (isPassReminderTrigger(trigger))
+    return { ...trigger, copyVersion: trigger.copyVersion ?? 1 };
+  return trigger;
+};
+
 export const canonicalAutomationFlow = (
   flow: AutomationFlow
 ): AutomationFlow => ({
-  trigger:
-    flow.trigger._tag === "Schedule"
-      ? {
-          ...flow.trigger,
-          calendar: canonicalCalendarExpression(flow.trigger.calendar),
-        }
-      : flow.trigger,
+  trigger: canonicalTrigger(flow.trigger),
   steps: flow.steps.map((step) =>
     step._tag === "Wait" && step.wait._tag === "Calendar"
       ? {

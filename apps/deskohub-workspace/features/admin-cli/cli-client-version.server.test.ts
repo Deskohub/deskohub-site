@@ -37,6 +37,16 @@ const groupMinimums: Partial<Record<string, DhwVersion>> = {
   automations: automationsMinimumDhwVersion,
 };
 const endpointMinimums: Partial<Record<string, DhwVersion>> = {
+  "automations.getAutomation": DhwVersion.make("1.40.0"),
+  "automations.updateAutomationFlow": DhwVersion.make("1.40.0"),
+  "automations.activateAutomation": DhwVersion.make("1.40.0"),
+  "automations.pauseAutomation": DhwVersion.make("1.40.0"),
+  "automations.resumeAutomation": DhwVersion.make("1.40.0"),
+  "automations.archiveAutomation": DhwVersion.make("1.40.0"),
+  "automations.listAutomationVersions": DhwVersion.make("1.40.0"),
+  "automations.getAutomationVersion": DhwVersion.make("1.40.0"),
+  "automations.listAutomationRuns": DhwVersion.make("1.40.0"),
+  "automations.getAutomationRun": DhwVersion.make("1.40.0"),
   "administration.listInvoices": invoicesMinimumDhwVersion,
   "administration.getInvoice": invoicesMinimumDhwVersion,
   "administration.getReservation": reservationsMinimumDhwVersion,

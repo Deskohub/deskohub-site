@@ -85,6 +85,8 @@
   "emailAutomationFlowConditionTitle": "Kunden prüfen",
   "emailAutomationFlowDiscard": "Verwerfen",
   "emailAutomationFlowEventAccountCreatedDescription": "Ein neuer Kunde erstellt ein Workspace-Konto.",
+  "emailAutomationFlowEventEntryPackExpiringDescription": "Ein Paket mit ungenutzten Eintritten läuft in 7 Kalendertagen ab.",
+  "emailAutomationFlowEventUnlimitedEndingDescription": "Ein Unlimited-Pass endet in 5 Kalendertagen.",
   "emailAutomationFlowEventBookedDescription": "Die Reservierung eines Kunden wird im Workspace bestätigt.",
   "emailAutomationFlowEventCancelledDescription": "Ein Kunde storniert eine Reservierung im Workspace.",
   "emailAutomationFlowEventFinishedDescription": "Das Ende der Reservierung eines Kunden ist erreicht.",

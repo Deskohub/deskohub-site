@@ -4,11 +4,13 @@ import {
   type CampaignOperations as CampaignOperationRegistry,
   type CampaignTemplatePreviewInputType,
   campaignOperations,
+  type EmailDocument,
   OperationConflict,
   OperationInputInvalid,
 } from "@deskohub/workspace-admin-api";
 import { Context, Effect, Layer, Match, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
+import type { CampaignRow } from "@/db/schema";
 import {
   type AdministrationOperationPort,
   makeAdministrationOperationPort,
@@ -17,6 +19,7 @@ import {
 } from "@/features/administration/administration-operation-port";
 import { AccountRoleGrants } from "@/features/administrators/backend/account-role-grants.service";
 import { CurrentAdministrator } from "@/features/administrators/backend/current-administrator";
+import type { Locale } from "@/features/i18n";
 import { type AudienceFilter, audienceFilterSchema } from "../audience-filter";
 import { previewCalendarExpression } from "../automation/automation-calendar-preview";
 import {
@@ -36,6 +39,7 @@ import {
 } from "../body/campaign-content-codec";
 import { campaignTemplates } from "../body/campaign-templates";
 import { renderCampaignEmailPreview } from "../campaign-email";
+import { campaignContentLocaleOrder } from "../recipient-locale";
 import { CampaignService } from "./campaign.service";
 import { CampaignAudienceService } from "./campaign-audience.service";
 import {
@@ -53,6 +57,7 @@ import {
   toAdministrationCampaignSummary,
   toAdministrationSendStatus,
 } from "./campaign-operation-projections";
+import { sampleCampaignEmailContent } from "./campaign-published-email";
 import { CampaignRecipientService } from "./campaign-recipient.service";
 import { CampaignSendService } from "./campaign-send.service";
 import { CampaignSendStatusService } from "./campaign-send-status.service";
@@ -156,7 +161,10 @@ const makeCampaignOperationHandlers = Effect.gen(function* () {
    * saved campaign.
    */
   const loadPreviewSource = (
-    preview: CampaignTemplatePreviewInputType["preview"]
+    preview: Extract<
+      CampaignTemplatePreviewInputType["preview"],
+      { readonly _tag: "Content" | "UnfinishedContent" }
+    >
   ) =>
     Match.value(preview).pipe(
       Match.tagsExhaustive({
@@ -168,20 +176,95 @@ const makeCampaignOperationHandlers = Effect.gen(function* () {
           readCampaignDraftContent({ [locale]: content }).pipe(
             Effect.map((read) => ({ purpose, content: read }))
           ),
-        Campaign: ({ campaignId }) => campaigns.get(campaignId),
-      }),
-      Effect.flatMap(({ purpose, content }) => {
-        const localeContent = content[preview.locale];
-        return localeContent === undefined
-          ? Effect.fail(
-              new OperationInputInvalid({
-                code: "content-locale-missing",
-                message: `The campaign has no ${preview.locale} content.`,
-              })
-            )
-          : Effect.succeed({ purpose, content: localeContent });
       })
     );
+
+  const renderPublishedEmail = Effect.fn(
+    "CampaignOperations.renderPublishedEmail"
+  )(function* (
+    publication: { readonly document: EmailDocument } | undefined,
+    locale: Locale
+  ) {
+    if (!publication)
+      return yield* new OperationInputInvalid({
+        code: "published-email-invalid",
+        message: "Select an available published marketing email.",
+      });
+    const content = yield* sampleCampaignEmailContent(
+      publication.document,
+      locale
+    );
+    const rendered = yield* renderCampaignEmailPreview({
+      templateKey: publication.document.templateKey,
+      purpose: publication.document.purpose,
+      locale,
+      content,
+    });
+    return { ...rendered, preheader: content.preheader };
+  });
+
+  const previewCampaignTemplate = Effect.fn(
+    "CampaignOperations.previewCampaignTemplate"
+  )(function* ({ templateKey, preview }: CampaignTemplatePreviewInputType) {
+    const { locale } = preview;
+    if (preview._tag === "PublishedEmail") {
+      const publication = yield* campaigns.getPublishedEmail(preview.emailId);
+      return yield* renderPublishedEmail(publication, locale);
+    }
+    const source = yield* preview._tag === "Campaign"
+      ? campaigns.get(preview.campaignId).pipe(
+          Effect.map((campaign) => ({
+            purpose: campaign.purpose,
+            content: campaign.content,
+            campaign,
+          }))
+        )
+      : loadPreviewSource(preview).pipe(
+          Effect.map((inline) => ({ ...inline, campaign: undefined }))
+        );
+    if (source.campaign?.emailId)
+      return yield* renderPublishedEmail(
+        yield* campaigns.getLinkedEmail(source.campaign),
+        locale
+      );
+    const content = source.content[locale];
+    if (!content)
+      return yield* new OperationInputInvalid({
+        code: "content-locale-missing",
+        message: `The campaign has no ${locale} content.`,
+      });
+    return yield* renderCampaignEmailPreview({
+      templateKey,
+      locale,
+      content,
+      purpose: source.purpose,
+    });
+  });
+
+  const withLinkedLocales = <T extends { readonly locales: readonly Locale[] }>(
+    campaign: CampaignRow,
+    projected: T
+  ) =>
+    campaign.emailId
+      ? campaigns.getLinkedEmail(campaign).pipe(
+          Effect.map((publication) => ({
+            ...projected,
+            locales: linkedLocales(publication),
+          }))
+        )
+      : Effect.succeed(projected);
+
+  const linkedLocales = (
+    publication: Effect.Success<ReturnType<typeof campaigns.getLinkedEmail>>
+  ) =>
+    publication
+      ? campaignContentLocaleOrder.filter((locale) =>
+          Object.hasOwn(publication.document.translations, locale)
+        )
+      : [];
+
+  const campaignDetail = (campaign: CampaignRow) =>
+    withLinkedLocales(campaign, toAdministrationCampaignDetail(campaign));
 
   /** Who the campaign's audience reaches now, as the real send would. */
   const previewCampaignRecipients = Effect.fn(
@@ -256,29 +339,41 @@ const makeCampaignOperationHandlers = Effect.gen(function* () {
           description,
         }))
       ),
-    previewCampaignTemplate: ({ templateKey, preview }) =>
-      loadPreviewSource(preview).pipe(
-        Effect.flatMap(({ purpose, content }) =>
-          renderCampaignEmailPreview({
-            templateKey,
-            purpose,
-            locale: preview.locale,
-            content,
-          })
-        )
-      ),
+    previewCampaignTemplate,
     listCampaigns: () =>
       campaigns.list.pipe(
-        Effect.map((rows) => rows.map(toAdministrationCampaignSummary))
+        Effect.flatMap((rows) => {
+          if (!rows.some(({ emailId }) => emailId)) {
+            return Effect.succeed(rows.map(toAdministrationCampaignSummary));
+          }
+          return campaigns.getLinkedEmails(rows).pipe(
+            Effect.map((publications) =>
+              rows.map((campaign) => {
+                const summary = toAdministrationCampaignSummary(campaign);
+                return campaign.emailId
+                  ? {
+                      ...summary,
+                      locales: linkedLocales(publications.get(campaign.id)),
+                    }
+                  : summary;
+              })
+            )
+          );
+        })
       ),
     getCampaign: ({ campaignId }) =>
-      campaigns
-        .get(campaignId)
-        .pipe(Effect.map(toAdministrationCampaignDetail)),
+      campaigns.get(campaignId).pipe(Effect.flatMap(campaignDetail)),
     getCampaignEditorContent: ({ campaignId }) =>
       campaigns
         .get(campaignId)
-        .pipe(Effect.map(toAdministrationCampaignEditorContent)),
+        .pipe(
+          Effect.flatMap((campaign) =>
+            withLinkedLocales(
+              campaign,
+              toAdministrationCampaignEditorContent(campaign)
+            )
+          )
+        ),
     createCampaign: ({ campaign }) =>
       readCampaignContent(campaign.content).pipe(
         Effect.flatMap((content) =>
@@ -288,17 +383,16 @@ const makeCampaignOperationHandlers = Effect.gen(function* () {
             templateKey: campaign.templateKey,
             audienceId: campaign.audienceId,
             delivery: campaign.delivery ?? "once",
+            ...(campaign.emailId && { emailId: campaign.emailId }),
             content,
           })
         ),
-        Effect.map(toAdministrationCampaignDetail)
+        Effect.flatMap(campaignDetail)
       ),
     updateCampaign: (input) =>
-      campaigns.patch(input).pipe(Effect.map(toAdministrationCampaignDetail)),
+      campaigns.patch(input).pipe(Effect.flatMap(campaignDetail)),
     duplicateCampaign: ({ campaignId }) =>
-      campaigns
-        .duplicate(campaignId)
-        .pipe(Effect.map(toAdministrationCampaignDetail)),
+      campaigns.duplicate(campaignId).pipe(Effect.flatMap(campaignDetail)),
     deleteCampaign: ({ campaignId }) =>
       campaigns.delete(campaignId).pipe(Effect.as({ id: campaignId })),
     previewCampaignRecipients: ({ campaignId }) =>

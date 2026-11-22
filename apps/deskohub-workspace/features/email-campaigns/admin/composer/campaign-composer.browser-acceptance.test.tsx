@@ -27,8 +27,16 @@ const nextModuleStubs: Readonly<Record<string, string>> = {
     export const unstable_rethrow = (error) => { throw error; };
   `,
   "../use-campaign-operation": `
-    export function useCampaignOperation() {
-      return { execute() {}, isExecuting: false };
+    export function useCampaignOperation(operation, callbacks) {
+      return { execute(input) {
+        if (operation === "previewCampaignTemplate" && input.preview._tag === "PublishedEmail")
+          callbacks.onSuccess({
+            subject: "Synthetic cowork offer",
+            preheader: "A coworking invitation",
+            html: "<p>SAMPLE CODE</p>",
+            text: "SAMPLE CODE"
+          }, input);
+      }, isExecuting: false };
     }
   `,
   "../editor/campaign-body-editor": `
@@ -90,7 +98,8 @@ afterAll(async () => {
 
 const openCampaignComposer = async (
   viewport: { readonly height: number; readonly width: number },
-  locale: Locale = "en-US"
+  locale: Locale = "en-US",
+  published = false
 ) => {
   if (!browser)
     throw new Error("The CampaignComposer browser has not launched.");
@@ -100,7 +109,7 @@ const openCampaignComposer = async (
   });
   await page.route(`${harnessOrigin}/**`, (route) =>
     route.fulfill({
-      body: `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="campaign-composer-test-root" data-locale="${locale}"></div></body></html>`,
+      body: `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="campaign-composer-test-root" data-locale="${locale}" data-published="${published ? "yes" : ""}"></div></body></html>`,
       contentType: "text/html",
     })
   );
@@ -112,6 +121,42 @@ const openCampaignComposer = async (
     .waitFor({ state: "visible" });
   return page;
 };
+
+test.skipIf(!chromiumAvailable)(
+  "selects a published marketing email and shows its sample preview",
+  async () => {
+    const page = await openCampaignComposer(desktopViewport, "en-US", true);
+    try {
+      await page.getByRole("combobox", { name: "Email content" }).click();
+      await page
+        .getByRole("option", { name: "Published cowork offer" })
+        .click();
+      await page.getByText("Synthetic cowork offer", { exact: true }).waitFor();
+      await page
+        .frameLocator("iframe")
+        .getByText("SAMPLE CODE", { exact: true })
+        .waitFor();
+      expect(
+        await page
+          .getByText(
+            "This email is sent only to recipients who have opted in to marketing.",
+            { exact: true }
+          )
+          .isVisible()
+      ).toBe(true);
+      expect(await page.getByRole("group", { name: "Purpose" }).count()).toBe(
+        0
+      );
+      await page.getByRole("combobox", { name: "Email content" }).click();
+      await page.getByRole("option", { name: "Write in campaign" }).click();
+      expect(
+        await page.getByRole("group", { name: "Purpose" }).isVisible()
+      ).toBe(true);
+    } finally {
+      await page.close();
+    }
+  }
+);
 
 /**
  * Where the campaign actions and the preview's language controls sit after

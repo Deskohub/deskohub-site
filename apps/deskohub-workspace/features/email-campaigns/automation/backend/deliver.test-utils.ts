@@ -43,6 +43,7 @@ import {
   drainAutomationUnitQueue,
   makeAutomationUnitQueueFake,
 } from "./automation-unit-queue.test-utils";
+import type { PassReminderRun } from "./pass-reminder-delivery";
 
 /** A Dotypos profile with a test-domain email. */
 export const deliverProfile = (
@@ -97,7 +98,9 @@ export const seedDeliverAutomation = async (
 };
 
 /** A send-ready run to seed, with its triggering reservation if any. */
-export type SeedSendReadyRun = {
+export type SeedSendReadyRun = Partial<
+  Pick<PassReminderRun, "triggerPassId" | "passReminderContext">
+> & {
   readonly customer: DotyposCustomerId;
   readonly triggerKind?: AutomationTriggerKind;
   readonly reservationId?: WorkspaceReservationId;
@@ -127,6 +130,8 @@ export const seedSendReadyRuns = async (
           triggerKind: run.triggerKind ?? "account-created",
           triggerAt: run.triggerAt ?? input.at,
           triggerReservationId: run.reservationId ?? null,
+          triggerPassId: run.triggerPassId ?? null,
+          passReminderContext: run.passReminderContext ?? null,
           status: "active" as const,
           stepId: (input.stepId ?? "send") as never,
           phase: "ready" as const,
@@ -200,11 +205,16 @@ export const seedDeliverReservations = async (
  * send planning live, over the given Dotypos profiles and a Resend
  * stand-in. A failed delivery is redelivered at once, within the same drain.
  */
-export const makeDeliverEngine = async (input: {
-  readonly database: WorkspacePostgresSuiteDatabase;
-  readonly customers: readonly DotyposCustomer[];
-  readonly deploymentEnvironment?: "production" | "development";
-}) => {
+export const makeDeliverEngine = async (
+  input: Pick<
+    Parameters<typeof automationScenarioLayer>[0],
+    "passReminderReads" | "passReminderGate"
+  > & {
+    readonly database: WorkspacePostgresSuiteDatabase;
+    readonly customers: readonly DotyposCustomer[];
+    readonly deploymentEnvironment?: "production" | "development";
+  }
+) => {
   const dotypos = makeEngineDotypos();
   dotypos.setCustomers(input.customers);
   const resend = makeResendFake();
@@ -217,6 +227,8 @@ export const makeDeliverEngine = async (input: {
     kinds: ["deliver"],
     planning: ["sends"],
     deploymentEnvironment: input.deploymentEnvironment,
+    passReminderReads: input.passReminderReads,
+    passReminderGate: input.passReminderGate,
   });
 
   const runAt = <A, E>(

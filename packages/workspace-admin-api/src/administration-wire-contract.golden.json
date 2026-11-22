@@ -21496,6 +21496,7 @@
                 "members": [
                   null,
                   null,
+                  null,
                   null
                 ]
               }
@@ -21595,6 +21596,9 @@
                     "type": "object",
                     "properties": {
                       "subject": {
+                        "type": "string"
+                      },
+                      "preheader": {
                         "type": "string"
                       },
                       "html": {
@@ -21914,6 +21918,38 @@
                         "locale"
                       ],
                       "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "_tag": {
+                          "type": "string",
+                          "enum": [
+                            "PublishedEmail"
+                          ]
+                        },
+                        "emailId": {
+                          "$ref": "#/components/schemas/EmailId"
+                        },
+                        "locale": {
+                          "type": "string",
+                          "enum": [
+                            "en-US",
+                            "cs-CZ",
+                            "de-DE",
+                            "uk-UA",
+                            "sk-SK",
+                            "vi-VN",
+                            "hi-IN"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "_tag",
+                        "emailId",
+                        "locale"
+                      ],
+                      "additionalProperties": false
                     }
                   ]
                 }
@@ -22039,6 +22075,9 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "emailId": {
+                          "$ref": "#/components/schemas/EmailId"
                         },
                         "locales": {
                           "type": "array",
@@ -22283,6 +22322,9 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
                       },
                       "locales": {
                         "type": "array",
@@ -22694,6 +22736,9 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
                       },
                       "locales": {
                         "type": "array",
@@ -23192,6 +23237,9 @@
                           }
                         ]
                       },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
+                      },
                       "locales": {
                         "type": "array",
                         "items": {
@@ -23504,6 +23552,9 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "emailId": {
+                          "$ref": "#/components/schemas/EmailId"
                         },
                         "content": {
                           "type": "object",
@@ -24145,6 +24196,9 @@
                           }
                         ]
                       },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
+                      },
                       "locales": {
                         "type": "array",
                         "items": {
@@ -24439,6 +24493,16 @@
                       "anyOf": [
                         {
                           "$ref": "#/components/schemas/CampaignAudienceId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "emailId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/EmailId"
                         },
                         {
                           "type": "null"
@@ -24965,6 +25029,9 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
                       },
                       "locales": {
                         "type": "array",
@@ -26652,7 +26719,8 @@
                                             "missing-email",
                                             "invalid-email",
                                             "consent-withdrawn",
-                                            "outside-test-domain"
+                                            "outside-test-domain",
+                                            "missing-email-language"
                                           ]
                                         },
                                         {
@@ -26809,7 +26877,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -26823,7 +26891,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -26890,7 +26958,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -26936,7 +27006,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -27175,7 +27247,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -27189,7 +27261,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -27256,7 +27328,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -27302,7 +27376,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -28289,7 +28365,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -28303,7 +28379,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -28352,7 +28428,9 @@
                               "reservation-cancelled",
                               "reservation-started",
                               "reservation-finished",
-                              "account-created"
+                              "account-created",
+                              "entry-pack-expiring",
+                              "unlimited-ending"
                             ]
                           },
                           "frequency": {
@@ -28545,7 +28623,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -28559,7 +28637,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -28626,7 +28704,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -28672,7 +28752,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -28913,7 +28995,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -28927,7 +29009,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -28994,7 +29076,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -29040,7 +29124,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -29281,7 +29367,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -29295,7 +29381,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -29362,7 +29448,9 @@
                                   "reservation-cancelled",
                                   "reservation-started",
                                   "reservation-finished",
-                                  "account-created"
+                                  "account-created",
+                                  "entry-pack-expiring",
+                                  "unlimited-ending"
                                 ]
                               },
                               "frequency": {
@@ -29408,7 +29496,9 @@
                                       "reservation-cancelled",
                                       "reservation-started",
                                       "reservation-finished",
-                                      "account-created"
+                                      "account-created",
+                                      "entry-pack-expiring",
+                                      "unlimited-ending"
                                     ]
                                   },
                                   "frequency": {
@@ -29643,7 +29733,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -29657,7 +29747,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -29708,7 +29798,9 @@
                                 "reservation-cancelled",
                                 "reservation-started",
                                 "reservation-finished",
-                                "account-created"
+                                "account-created",
+                                "entry-pack-expiring",
+                                "unlimited-ending"
                               ]
                             },
                             "frequency": {
@@ -29887,7 +29979,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -29901,7 +29993,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -29958,7 +30050,9 @@
                               "reservation-cancelled",
                               "reservation-started",
                               "reservation-finished",
-                              "account-created"
+                              "account-created",
+                              "entry-pack-expiring",
+                              "unlimited-ending"
                             ]
                           },
                           "frequency": {
@@ -30811,7 +30905,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -30825,7 +30919,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -30997,7 +31091,9 @@
                                 "reservation-cancelled",
                                 "reservation-started",
                                 "reservation-finished",
-                                "account-created"
+                                "account-created",
+                                "entry-pack-expiring",
+                                "unlimited-ending"
                               ]
                             },
                             "triggerAt": {
@@ -31228,7 +31324,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -31242,7 +31338,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.40.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -31322,7 +31418,9 @@
                           "reservation-cancelled",
                           "reservation-started",
                           "reservation-finished",
-                          "account-created"
+                          "account-created",
+                          "entry-pack-expiring",
+                          "unlimited-ending"
                         ]
                       },
                       "triggerAt": {
@@ -35648,9 +35746,51 @@
               "_tag"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "_tag": {
+                "type": "string",
+                "enum": [
+                  "EntryPackExpiring"
+                ]
+              },
+              "copyVersion": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              }
+            },
+            "required": [
+              "_tag"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "_tag": {
+                "type": "string",
+                "enum": [
+                  "UnlimitedEnding"
+                ]
+              },
+              "copyVersion": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              }
+            },
+            "required": [
+              "_tag"
+            ],
+            "additionalProperties": false
           }
         ],
-        "description": "A Prague-time calendar schedule, or a reservation booked, cancelled, started or finished (optionally for one product), or an account created."
+        "description": "A Prague-time calendar schedule, reservation activity, account creation, or a cowork pass nearing the end of its validity."
       },
       "AutomationVersionNumber": {
         "type": "integer",
@@ -36482,6 +36622,11 @@
         "type": "string",
         "minLength": 1,
         "description": "Opaque table identifier assigned by Dotypos."
+      },
+      "EmailId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Reusable email identity, independent of the campaigns using it."
       },
       "GoogleCalendarEventId": {
         "type": "string",

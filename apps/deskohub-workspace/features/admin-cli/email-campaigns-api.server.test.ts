@@ -632,7 +632,7 @@ describe("campaign admin API", () => {
                   complained: 0,
                   failed: 0,
                   unconfirmed: 1,
-                  skipped: 1,
+                  skipped: 2,
                 },
                 recipients: [
                   {
@@ -649,6 +649,14 @@ describe("campaign admin API", () => {
                     skipReason: "consent-withdrawn",
                     statusUpdatedAt: createdAt,
                   },
+                  {
+                    dotyposCustomerId:
+                      AdministrationDotyposCustomerId.make("1003"),
+                    locale: "en-US",
+                    status: "skipped",
+                    skipReason: "missing-email-language",
+                    statusUpdatedAt: createdAt,
+                  },
                 ],
               })
             ),
@@ -661,7 +669,7 @@ describe("campaign admin API", () => {
       sendId: "send-1",
       createdAt: "2026-10-14T08:00:00Z",
       completedAt: null,
-      counts: { delivered: 1, unconfirmed: 1, skipped: 1 },
+      counts: { delivered: 1, unconfirmed: 1, skipped: 2 },
       recipients: [
         {
           customerId,
@@ -675,6 +683,13 @@ describe("campaign admin API", () => {
           locale: "en-US",
           status: "skipped",
           skipReason: "consent-withdrawn",
+          statusUpdatedAt: "2026-10-14T08:00:00Z",
+        },
+        {
+          customerId: "1003",
+          locale: "en-US",
+          status: "skipped",
+          skipReason: null,
           statusUpdatedAt: "2026-10-14T08:00:00Z",
         },
       ],

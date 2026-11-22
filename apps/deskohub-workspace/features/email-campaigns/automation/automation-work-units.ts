@@ -8,6 +8,7 @@ import { Schema } from "effect";
 export const automationWorkUnitKinds = [
   "sweep-page",
   "intake",
+  "pass-reminder-intake",
   "fire-chunk",
   "condition",
   "deliver",
@@ -43,6 +44,7 @@ export type AutomationWorkUnitStatus =
 export const automationWorkUnitPriorities = {
   "sweep-page": 1,
   intake: 2,
+  "pass-reminder-intake": 2,
   deliver: 3,
   condition: 4,
   preview: 5,

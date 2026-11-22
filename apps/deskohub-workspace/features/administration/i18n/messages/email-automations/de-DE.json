@@ -23,6 +23,8 @@
   "emailAutomationsStatusDraft": "Entwurf",
   "emailAutomationsStatusPaused": "Pausiert",
   "emailAutomationsTriggerAccountCreated": "Erstellung des Kontos",
+  "emailAutomationsTriggerEntryPackExpiring": "Eintrittspaket läuft ab",
+  "emailAutomationsTriggerUnlimitedEnding": "Unlimited-Pass läuft ab",
   "emailAutomationsTriggerReservationBooked": "Bestätigung der Reservierung",
   "emailAutomationsTriggerReservationCancelled": "Stornierung der Reservierung",
   "emailAutomationsTriggerReservationFinished": "Ende der Reservierung",

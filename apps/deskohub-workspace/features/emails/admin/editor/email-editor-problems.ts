@@ -275,6 +275,10 @@ export const emailEditorProblems = ({
           : block(componentId, field)),
         message: m.emailsEditorProblemDestinationInvalid({}, { locale }),
       }),
+      OfferBookingLinkInvalid: ({ componentId }) => ({
+        ...block(componentId, "href"),
+        message: m.emailsEditorProblemOfferBookingLinkInvalid({}, { locale }),
+      }),
       ImageSourceInvalid: ({ componentId }) => ({
         ...block(componentId, "src"),
         message: m.emailsEditorProblemImageSourceInvalid({}, { locale }),

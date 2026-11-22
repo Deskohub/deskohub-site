@@ -114,6 +114,10 @@ export const emailCampaigns = pgTable(
       sql`${t.purpose} in (${quotedSqlList(campaignPurposes)})`
     ),
     check(
+      "email_campaigns_published_email_check",
+      sql`${t.delivery} <> 'once' or ${t.emailId} is null or (${t.purpose} = 'marketing' and ${t.content} = '{}'::jsonb)`
+    ),
+    check(
       "email_campaigns_delivery_check",
       sql`${t.delivery} in (${quotedSqlList(campaignDeliveries)})`
     ),
@@ -224,6 +228,8 @@ export const emailCampaignRecipients = pgTable(
     /** The delivery attempt that last queued this recipient. */
     deliveryAttempt: integer("delivery_attempt").notNull().default(1),
     providerMessageId: text("provider_message_id"),
+    /** Keyed fingerprint of the personalized message, shared by every attempt. */
+    payloadFingerprint: sensitiveText("payload_fingerprint"),
     /**
      * The last provider error code while delivery leaves the recipient
      * undelivered (`failed` or `unconfirmed`); cleared once it is sent or

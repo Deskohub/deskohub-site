@@ -1134,6 +1134,17 @@ describe("value blocks", () => {
     await type(href, "https://deskohub.test/book");
     expect(form().structure?.[0]?.href).toBe("https://deskohub.test/book");
     expect(href.hasAttribute("aria-invalid")).toBe(false);
+    const prefill = view.getByRole("switch", {
+      name: m.emailsEditorBlockPrefillDiscountCode({}, { locale }),
+    });
+    expect(prefill.getAttribute("aria-checked")).toBe("false");
+    await act(async () => fireEvent.click(prefill));
+    expect(form().structure?.[0]?.prefillDiscountCode).toBe(true);
+    expect(href.getAttribute("aria-invalid")).toBe("true");
+    await type(href, "https://workspace.deskohub.cz/reservation/cowork");
+    expect(href.hasAttribute("aria-invalid")).toBe(false);
+    await act(async () => fireEvent.click(prefill));
+    expect(form().structure?.[0]).not.toHaveProperty("prefillDiscountCode");
   });
 });
 

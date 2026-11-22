@@ -10,6 +10,7 @@ import {
   type EmailSendFailure,
   type EmailSendResult,
   EmailServiceError,
+  emailRequestFingerprint,
   NetworkError,
 } from "@deskohub/email";
 import {
@@ -103,6 +104,7 @@ export const makePostHogEmailProvider = (
         const deadline =
           (yield* Clock.currentTimeMillis) + Duration.toMillis(batchDeadline);
         const stopped = yield* Ref.make(false);
+        const { beforeRequest, allowFallbackWithAdmission } = options;
 
         const sendOne = Effect.fn("PostHogEmailProvider.sendBatchMessage")(
           function* (message: EmailMessage, index: number) {
@@ -125,6 +127,10 @@ export const makePostHogEmailProvider = (
                   email,
                   idempotencyKey,
                   deadline,
+                  beforeRequest: beforeRequest
+                    ? (fingerprint) => beforeRequest(fingerprint, [index])
+                    : undefined,
+                  allowFallbackWithAdmission,
                 }).pipe(
                   Effect.timeoutOrElse({
                     duration: Duration.millis(remaining),
@@ -322,6 +328,11 @@ const isRetryableAnswer = (failure: PostHogSendAttemptFailure) =>
   (failure.status === 409 && failure.code === "idempotency_key_in_flight") ||
   (failure.status !== undefined && failure.status >= 500);
 
+const attemptMayHaveQueued = (failure: PostHogSendAttemptFailure) =>
+  failure.kind !== "answered" ||
+  (failure.status !== undefined && failure.status >= 500) ||
+  (failure.status === 409 && failure.code === "idempotency_key_in_flight");
+
 const SendAnswerSchema = Schema.Struct({ message_id: EmailDeliveryIdSchema });
 
 const requestSend = ({
@@ -329,12 +340,18 @@ const requestSend = ({
   email,
   idempotencyKey,
   deadline,
+  beforeRequest,
+  allowFallbackWithAdmission,
 }: {
   readonly config: PostHogEmailProviderConfig;
   readonly email: PostHogEmail;
   readonly idempotencyKey: string;
   /** The batch deadline in epoch milliseconds; a lone send has none. */
   readonly deadline?: number;
+  readonly beforeRequest?:
+    | ((fingerprint: string) => Effect.Effect<void, EmailSendError>)
+    | undefined;
+  readonly allowFallbackWithAdmission?: boolean | undefined;
 }) =>
   Effect.gen(function* () {
     const policy = postHogEmailRetryPolicy.withAttemptTimeout(
@@ -349,6 +366,13 @@ const requestSend = ({
       HttpClientRequest.setHeader("Idempotency-Key", idempotencyKey),
       HttpClientRequest.bodyJsonUnsafe(email)
     );
+    const admit =
+      beforeRequest?.(
+        emailRequestFingerprint(
+          [providerName, request.url, idempotencyKey, email],
+          Redacted.value(config.secretKey)
+        )
+      ) ?? Effect.void;
 
     const answeredAttempt = (accepted: Ref.Ref<boolean>) =>
       httpClient.execute(request).pipe(
@@ -396,8 +420,10 @@ const requestSend = ({
 
     // Once PostHog answered 2xx, a body that fails or times out leaves the
     // email possibly queued, so the attempt is not retried or handed on.
+    let mayHaveQueued = false;
     const attempt = Effect.gen(function* () {
       const accepted = yield* Ref.make(false);
+      yield* admit;
       return yield* answeredAttempt(accepted).pipe(
         Effect.catch((failure) =>
           Effect.flatMap(Ref.get(accepted), (wasAccepted) =>
@@ -410,16 +436,48 @@ const requestSend = ({
                 : failure
             )
           )
+        ),
+        Effect.tapError((failure) =>
+          Effect.sync(() => {
+            if (beforeRequest) mayHaveQueued ||= attemptMayHaveQueued(failure);
+          })
         )
       );
     });
 
     const body = yield* attempt.pipe(
-      policy.retryWhileHonoringDelay(isRetryableAttempt, {
-        requestedDelay: (failure) => failure.retryAfter,
-        maxRequestedDelay: postHogEmailMaxRetryAfter,
-      }),
-      Effect.mapError(toEmailSendError)
+      policy.retryWhileHonoringDelay<
+        PostHogSendAttemptFailure | EmailSendError
+      >(
+        (failure) =>
+          failure._tag === "PostHogSendAttemptFailure" &&
+          isRetryableAttempt(failure),
+        {
+          requestedDelay: (failure) =>
+            failure._tag === "PostHogSendAttemptFailure"
+              ? failure.retryAfter
+              : undefined,
+          maxRequestedDelay: postHogEmailMaxRetryAfter,
+        }
+      ),
+      Effect.mapError((failure) => {
+        const error =
+          failure._tag === "PostHogSendAttemptFailure"
+            ? toEmailSendError(failure)
+            : failure;
+        const allowsFallback =
+          allowFallbackWithAdmission && error.failureKind === "provider";
+        return mayHaveQueued &&
+          error.failureKind !== "unknown-outcome" &&
+          !allowsFallback
+          ? new NetworkError({
+              message:
+                "An earlier guarded PostHog request may have queued the email",
+              code: error.code,
+              failureKind: "unknown-outcome",
+            })
+          : error;
+      })
     );
 
     const answer = yield* Schema.decodeEffect(

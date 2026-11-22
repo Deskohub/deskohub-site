@@ -175,6 +175,13 @@
   "withdrawalRefusedPerformanceStarted": "All of the reservation has already started, so you can't withdraw from it.",
   "withdrawalRefusedAlreadyWithdrawn": "We've already received your withdrawal from this reservation. You'll find the confirmation in your email.",
   "withdrawalRefusedNotFound": "We couldn't find this reservation in your account.",
+  "withdrawalPassRefusedNotWithdrawable": "You can only withdraw online from a paid, confirmed purchase.",
+  "withdrawalPassRefusedBusinessPurpose": "This pass was bought for a business, so the right of withdrawal doesn't apply.",
+  "withdrawalPassRefusedPerformanceStarted": "The pass has been fully used, so you can't withdraw from it.",
+  "withdrawalPassRefusedNotFound": "We couldn't find this pass purchase in your account.",
+  "passStatusWithdrawalRefund": "The total refund for this withdrawal is {amount}.",
+  "passWithdrawalRefundTotal": "Total refund",
+  "passWithdrawalRefundNote": "Any amount already refunded counts toward this total. We'll send any remaining refund to your original payment method within 14 days.",
   "withdrawalLoadFailed": "We couldn't load the withdrawal details. Try again.",
   "withdrawalSubmitFailed": "We couldn't submit your withdrawal. Try again.",
   "withdrawalRetry": "Try again",
@@ -1834,6 +1841,48 @@
   "entryPackCheckoutTermsChanged": "The terms changed. Review the current terms and confirm them again before paying.",
   "passEntryPack": "Entry pack",
   "passUnlimited": "Unlimited pass",
+  "passReminderGreeting": "Hi {firstName},",
+  "passReminderGreetingUnnamed": "Hello,",
+  "passReminderEntryPackSubject": [
+    {
+      "declarations": [
+        "input remaining",
+        "local remainingPlural = remaining: plural",
+        "local remainingNumber = remaining: number"
+      ],
+      "selectors": ["remainingPlural"],
+      "match": {
+        "remainingPlural=one": "{remainingNumber} entry left on your Entry pack",
+        "remainingPlural=other": "{remainingNumber} entries left on your Entry pack"
+      }
+    }
+  ],
+  "passReminderEntryPackPreheader": "Your {tier} pack ends on {endsOn}.",
+  "passReminderEntryPackBody": [
+    {
+      "declarations": [
+        "input remaining",
+        "input total",
+        "local remainingPlural = remaining: plural",
+        "local remainingNumber = remaining: number",
+        "local totalNumber = total: number"
+      ],
+      "selectors": ["remainingPlural"],
+      "match": {
+        "remainingPlural=one": "Your {tier} Entry pack ends on <strong>{endsOn}</strong>, and <strong>{remainingNumber} of its {totalNumber} entries</strong> is still unused. Pick your days now so they don’t go to waste.",
+        "remainingPlural=other": "Your {tier} Entry pack ends on <strong>{endsOn}</strong>, and <strong>{remainingNumber} of its {totalNumber} entries</strong> are still unused. Pick your days now so they don’t go to waste."
+      }
+    }
+  ],
+  "passReminderEntryPackBook": "Book a day",
+  "passReminderEntryPackExpiry": "Entries that aren’t booked by then expire with the pack.",
+  "passReminderUnlimitedSubject": "Your Unlimited pass ends on {endsOn}",
+  "passReminderUnlimitedPreheader": "Renew now for the next {days} days.",
+  "passReminderUnlimitedPreheaderWithDesk": "Renew now to keep {deskLabel} for the next {days} days.",
+  "passReminderUnlimitedBody": "Your {tier} Unlimited pass ends on <strong>{endsOn}</strong>. Renew now and your next {days} days start right after, on {renewalStartsOn}.",
+  "passReminderUnlimitedBodyWithDesk": "Your {tier} Unlimited pass ends on <strong>{endsOn}</strong>. Renew now and your next {days} days start right after, on {renewalStartsOn}, at <strong>{deskLabel}</strong>.",
+  "passReminderUnlimitedRenew": "Renew for {days} days",
+  "passReminderUnlimitedDeskFallback": "If {deskLabel} is no longer free when you renew, we’ll assign you another desk.",
   "unlimitedPassRenew": "Renew pass",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Reserved Desk",

@@ -35,6 +35,12 @@ export class EmailServiceError extends Data.TaggedError("EmailServiceError")<{
   readonly provider?: string;
   readonly failureKind: EmailFailureKind;
   readonly code?: string;
+  readonly definitivelyUnsent?: true;
+  /**
+   * Set by `beforeRequest`: the entries of its `messagePositions` argument
+   * it refuses, by their place in that argument.
+   */
+  readonly deniedPositions?: readonly number[];
 }> {
   constructor(
     message: string,
@@ -43,6 +49,8 @@ export class EmailServiceError extends Data.TaggedError("EmailServiceError")<{
     classification?: {
       readonly failureKind?: EmailFailureKind;
       readonly code?: string;
+      readonly definitivelyUnsent?: true;
+      readonly deniedPositions?: readonly number[];
     }
   ) {
     super({
@@ -51,6 +59,10 @@ export class EmailServiceError extends Data.TaggedError("EmailServiceError")<{
       provider,
       failureKind: classification?.failureKind ?? "message",
       code: classification?.code,
+      ...(classification?.definitivelyUnsent && { definitivelyUnsent: true }),
+      ...(classification?.deniedPositions && {
+        deniedPositions: classification.deniedPositions,
+      }),
     });
   }
 }
@@ -70,6 +82,18 @@ export const continuesEmailChain = (error: EmailSendError): boolean =>
 /** Options of one batch request; the key stays the same across retries. */
 export interface EmailBatchOptions {
   readonly idempotencyKey: string;
+  /** Admits each attempt by fingerprint and positions in this batch. Uses the first provider by default. */
+  readonly beforeRequest?: (
+    fingerprint: string,
+    messagePositions: readonly number[]
+  ) => Effect.Effect<void, EmailSendError>;
+  /**
+   * Allows the normal provider chain while checking admission at each
+   * provider. When a fallback provider fails its batch with a denial naming
+   * some of the request (`deniedPositions`) and admitted no request, those
+   * messages fail and the never-dispatched rest is sent under its subset key.
+   */
+  readonly allowFallbackWithAdmission?: boolean;
   /**
    * A repeat of a request whose outcome is unknown. Each message stays with
    * the first provider in its chain: a provider-level failure is returned as
@@ -94,6 +118,8 @@ export interface EmailProvider {
    * `EmailSendFailure`, one that answers per request fails as a whole. A
    * provider that accepted the key once returns the same result for a
    * repeated request instead of sending again.
+   * A guarded provider invokes `beforeRequest` immediately before each
+   * attempt with the fingerprint and positions of the messages it will dispatch.
    */
   readonly sendBatch: (
     messages: readonly EmailMessage[],

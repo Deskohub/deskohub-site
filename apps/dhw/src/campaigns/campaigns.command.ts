@@ -162,6 +162,9 @@ const formatCampaignDetail = (
     `Template\t${campaign.templateKey}`,
     `Status\t${campaign.status}`,
     `Audience\t${campaign.audienceId ?? "None"}`,
+    ...(campaign.emailId === undefined
+      ? []
+      : [`Published email\t${campaign.emailId}`]),
     `Updated\t${campaign.updatedAt}`,
     ...campaignContentEntries(campaign).flatMap(([locale, content]) => [
       "",

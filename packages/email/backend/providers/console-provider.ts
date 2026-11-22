@@ -6,6 +6,7 @@ import {
   type EmailSendResult,
 } from "../../types/email.types";
 import type { EmailProvider } from "../capabilities";
+import { emailRequestFingerprint } from "../email-request-fingerprint";
 
 const recipientAddresses = (message: EmailMessage): readonly string[] =>
   Array.isArray(message.to)
@@ -106,9 +107,15 @@ export const ConsoleEmailProvider: EmailProvider = {
     return result;
   }),
 
-  sendBatch: Effect.fn("consoleEmailProvider.sendBatch")(function* (messages) {
-    return yield* Effect.forEach(messages, (message) =>
-      ConsoleEmailProvider.send(message)
-    );
-  }),
+  sendBatch: Effect.fn("consoleEmailProvider.sendBatch")(
+    function* (messages, options) {
+      yield* options.beforeRequest?.(
+        emailRequestFingerprint(["console", options.idempotencyKey, messages]),
+        messages.map((_, position) => position)
+      ) ?? Effect.void;
+      return yield* Effect.forEach(messages, (message) =>
+        ConsoleEmailProvider.send(message)
+      );
+    }
+  ),
 };

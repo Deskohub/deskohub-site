@@ -22,6 +22,8 @@
   "emailAutomationsStatusDraft": "Bản nháp",
   "emailAutomationsStatusPaused": "Đã tạm dừng",
   "emailAutomationsTriggerAccountCreated": "Tạo tài khoản",
+  "emailAutomationsTriggerEntryPackExpiring": "Gói lượt vào sắp hết hạn",
+  "emailAutomationsTriggerUnlimitedEnding": "Gói Unlimited sắp hết hạn",
   "emailAutomationsTriggerReservationBooked": "Xác nhận đặt chỗ",
   "emailAutomationsTriggerReservationCancelled": "Hủy đặt chỗ",
   "emailAutomationsTriggerReservationFinished": "Kết thúc đặt chỗ",

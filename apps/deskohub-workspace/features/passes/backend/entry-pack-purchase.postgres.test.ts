@@ -25,8 +25,9 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { passPurchases, promotionCodes, vouchers } from "@/db/schema";
+import { orders, passPurchases, promotionCodes, vouchers } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
+import { env } from "@/env";
 import {
   CurrentCustomerAccount,
   requireVerifiedIdentity,
@@ -83,6 +84,14 @@ import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservatio
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import { deliveryReportHandlers } from "@/shared/backend/email/delivery-report-handlers";
+import { ingestDeliveryReport } from "@/shared/backend/email/delivery-reports";
+import {
+  resendEmailEvent,
+  signedResendWebhookRequest,
+  syntheticWebhookSecret,
+} from "@/shared/backend/email/delivery-reports.test-utils";
+import { ResendWebhookConfig } from "@/shared/backend/email/resend-webhook.config";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId as accountId } from "@/shared/testing/workspace-fixtures.test-utils";
@@ -2375,6 +2384,118 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           )
         ).rows
       ).toEqual([{ provider: "internal", amount_value: 0, state: "redeemed" }]);
+    });
+
+    test("records the earliest verified buyer confirmation delivery for the current paid Entry pack attempt", async () => {
+      const db = database!;
+      const payment = await integration(db, 2_000);
+      const readPurchase = () =>
+        Effect.runPromise(
+          Effect.flatMap(WorkspaceDatabase, ({ db }) =>
+            db
+              .select({
+                attemptId: orders.activePaymentAttemptId,
+                deliveredAt: passPurchases.buyerConfirmationDeliveredAt,
+              })
+              .from(passPurchases)
+              .innerJoin(orders, eq(orders.id, passPurchases.id))
+              .where(eq(passPurchases.id, payment.orderId))
+          ).pipe(
+            Effect.map(([purchase]) => purchase!),
+            Effect.provide(db.layer)
+          )
+        );
+      await payment.pay();
+      const staleAttempt = (await readPurchase()).attemptId!;
+      await payment.notify("failure");
+      payment.confirmProviderOrderEnded();
+      await payment.pay(undefined, await payment.retryApproval());
+      const currentAttempt = (await readPurchase()).attemptId!;
+      expect(currentAttempt).not.toBe(staleAttempt);
+
+      const tags = {
+        category: "entry_pack_purchase",
+        orderId: payment.orderId,
+        paymentAttemptId: currentAttempt,
+        deploymentEnvironment: env.VERCEL_ENV,
+      };
+      const webhookSecret = syntheticWebhookSecret();
+      const webhookServices = Layer.merge(
+        db.layer,
+        Layer.succeed(ResendWebhookConfig, {
+          apiKey: "re_test",
+          deploymentEnvironment: tags.deploymentEnvironment,
+          webhookSecret,
+        })
+      );
+      const start = Temporal.Instant.fromEpochMilliseconds(Date.now());
+      const report = (
+        minutes: number,
+        reportTags: Record<string, string> = tags,
+        type = "email.delivered"
+      ) => {
+        const { request } = signedResendWebhookRequest({
+          secret: webhookSecret,
+          payload: resendEmailEvent({
+            type,
+            emailId: "entry-pack-confirmation-email",
+            createdAt: start.add({ minutes }).toString(),
+            tags: reportTags,
+          }),
+        });
+        return Effect.runPromise(
+          ingestDeliveryReport(request, deliveryReportHandlers).pipe(
+            Effect.provide(webhookServices)
+          )
+        );
+      };
+      const purchaseNotCurrent = {
+        status: "ignored",
+        reason: "purchase_not_current",
+      };
+
+      expect(await report(1)).toEqual(purchaseNotCurrent);
+      await payment.notify("success", 1);
+      expect(payment.mail).toHaveLength(1);
+      expect(payment.mail[0]).toMatchObject({
+        idempotencyKey: `entry-pack-purchase:${payment.orderId}`,
+        tags: [tags.category],
+        sensitiveContent: true,
+      });
+      expect(payment.mail[0]?.metadata).toEqual({
+        orderId: tags.orderId,
+        paymentAttemptId: tags.paymentAttemptId,
+        deploymentEnvironment: tags.deploymentEnvironment,
+      });
+      expect(
+        await report(2, { ...tags, paymentAttemptId: staleAttempt })
+      ).toEqual(purchaseNotCurrent);
+      expect(
+        await report(3, { ...tags, category: "unlimited_pass_purchase" })
+      ).toEqual(purchaseNotCurrent);
+      expect(await report(4, { category: tags.category })).toEqual({
+        status: "ignored",
+        reason: "deployment_environment_missing",
+      });
+      expect(
+        await report(4, {
+          category: tags.category,
+          deploymentEnvironment: tags.deploymentEnvironment,
+          orderId: tags.orderId,
+        })
+      ).toEqual({ status: "ignored", reason: "metadata_missing" });
+      expect(await report(5, tags, "email.bounced")).toEqual({
+        status: "ignored",
+        reason: "non_delivery_event",
+      });
+      expect((await readPurchase()).deliveredAt).toBeNull();
+
+      expect(await report(10)).toEqual({ status: "processed" });
+      expect(await report(8)).toEqual({ status: "processed" });
+      expect(await report(12)).toEqual({ status: "processed" });
+      expect((await readPurchase()).deliveredAt?.toString()).toBe(
+        start.add({ minutes: 8 }).toString()
+      );
     });
 
     test("fulfills simultaneous gifts when the pool has one lock permit", async () => {

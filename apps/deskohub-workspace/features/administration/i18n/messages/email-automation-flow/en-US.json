@@ -85,6 +85,8 @@
   "emailAutomationFlowConditionTitle": "Check the customer",
   "emailAutomationFlowDiscard": "Discard",
   "emailAutomationFlowEventAccountCreatedDescription": "A new customer creates a Workspace account.",
+  "emailAutomationFlowEventEntryPackExpiringDescription": "An Entry pack with unused entries expires in 7 calendar days.",
+  "emailAutomationFlowEventUnlimitedEndingDescription": "An Unlimited pass ends in 5 calendar days.",
   "emailAutomationFlowEventBookedDescription": "A customer's reservation is confirmed in Workspace.",
   "emailAutomationFlowEventCancelledDescription": "A customer cancels a reservation in Workspace.",
   "emailAutomationFlowEventFinishedDescription": "The end time of a customer's reservation has passed.",

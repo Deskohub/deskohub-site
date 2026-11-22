@@ -5,12 +5,16 @@ import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
 import { NodeCrypto } from "@effect/platform-node";
 import { Cause, Effect, Exit, Layer } from "effect";
 import { TestClock } from "effect/testing";
+import { emailDocumentFixture } from "@/features/emails/body/email-document.test-utils";
 import {
   holdPostgresTransaction,
   waitForPostgresLockWaiter,
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
-import { hashCampaignContent } from "../body/campaign-content-hash";
+import {
+  hashCampaignContent,
+  hashCampaignEmailVersion,
+} from "../body/campaign-content-hash";
 import type { CampaignId } from "../campaign-identifiers";
 import { CampaignService } from "./campaign.service";
 import { CampaignConfirmationCodeService } from "./campaign-confirmation-code.service";
@@ -374,6 +378,67 @@ describe.skipIf(!testDatabase)(
       expect(failure(await confirm(campaign.id, code))).toMatchObject({
         reason: "content-changed",
       });
+    });
+
+    test("requires a fresh test for a later publication and freezes the tested version", async () => {
+      const campaign = await createDraft();
+      const [{ id: emailId }] = (
+        await testDatabase.pool.query<{ id: string }>(
+          "insert into emails (title) values ('Cowork offer') returning id"
+        )
+      ).rows;
+      try {
+        await testDatabase.pool.query(
+          "update email_campaigns set email_id = $2, purpose = 'marketing', content = '{}' where id = $1",
+          [campaign.id, emailId]
+        );
+        const publish = async (version: number) => {
+          const [{ id }] = (
+            await testDatabase.pool.query<{
+              id: Parameters<typeof hashCampaignEmailVersion>[0];
+            }>(
+              "insert into email_versions (email_id, version_number, document, required_value_names) values ($1, $2, $3, '{}') returning id",
+              [emailId, version, emailDocumentFixture]
+            )
+          ).rows;
+          const issued = await runAt(
+            { seconds: 0 },
+            Effect.flatMap(CampaignConfirmationCodeService, (codes) =>
+              codes.issue({
+                campaignId: campaign.id,
+                contentHash: hashCampaignEmailVersion(id),
+              })
+            )
+          );
+          if (Exit.isFailure(issued)) throw Cause.squash(issued.cause);
+          return { id, code: issued.value.code };
+        };
+        const first = await publish(1);
+        // A publication without a matching test invalidates the earlier code.
+        await testDatabase.pool.query(
+          "insert into email_versions (email_id, version_number, document, required_value_names) values ($1, 2, $2, '{}')",
+          [emailId, emailDocumentFixture]
+        );
+        expect(failure(await confirm(campaign.id, first.code))).toMatchObject({
+          _tag: "CampaignConfirmationRejected",
+          reason: "content-changed",
+        });
+        const tested = await publish(3);
+        const result = await confirm(campaign.id, tested.code);
+        expect(Exit.isSuccess(result)).toBe(true);
+        const frozen = await testDatabase.pool.query<{
+          frozen_email_version_id: string;
+        }>(
+          "select frozen_email_version_id from email_campaign_sends where campaign_id = $1",
+          [campaign.id]
+        );
+        expect(frozen.rows[0]?.frozen_email_version_id).toBe(tested.id);
+      } finally {
+        await testDatabase.pool.query(
+          "update email_campaigns set email_id = null where id = $1",
+          [campaign.id]
+        );
+      }
     });
 
     test("refuses codes for a campaign that left Draft", async () => {
