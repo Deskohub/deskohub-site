@@ -846,6 +846,8 @@
   "reservations_people_change_message": "Xin chào,\n\nTôi muốn thay đổi người tham gia cho đặt chỗ văn phòng riêng {reference} vào {date}.\n\nThêm:\n\nXóa:\n",
   "reservations_section_past": "Đã qua",
   "reservations_show_all_past": "Xem tất cả đặt chỗ đã qua",
+  "reservations_save_with_passes": "Tiết kiệm với gói lượt vào và thẻ",
+  "reservations_pricing_open_failed": "Không mở được trang. Hãy thử lại.",
   "reservations_nothing_upcoming": "Không có lịch sắp tới",
   "reservations_none_yet": "Chưa có đặt chỗ nào",
   "reservations_pin_after_payment": "Mã PIN sau khi thanh toán",

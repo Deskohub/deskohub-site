@@ -864,6 +864,8 @@
   "reservations_people_change_message": "Добрий день!\n\nХочу змінити, хто прийде за моїм бронюванням приватного офісу {reference} на {date}.\n\nДодати:\n\nВидалити:\n",
   "reservations_section_past": "Минулі",
   "reservations_show_all_past": "Показати всі минулі бронювання",
+  "reservations_save_with_passes": "Заощаджуйте з пакетами й абонементами",
+  "reservations_pricing_open_failed": "Не вдалося відкрити сторінку. Спробуйте ще раз.",
   "reservations_nothing_upcoming": "Нічого не заплановано",
   "reservations_none_yet": "Ще немає бронювань",
   "reservations_pin_after_payment": "PIN після оплати",

@@ -852,6 +852,8 @@
   "reservations_people_change_message": "Hallo,\n\nich möchte ändern, wer zu meiner Reservierung des privaten Büros {reference} am {date} kommt.\n\nHinzufügen:\n\nEntfernen:\n",
   "reservations_section_past": "Vergangen",
   "reservations_show_all_past": "Alle vergangenen Buchungen anzeigen",
+  "reservations_save_with_passes": "Mit Paketen und Pässen sparen",
+  "reservations_pricing_open_failed": "Die Seite ließ sich nicht öffnen. Versuch es erneut.",
   "reservations_nothing_upcoming": "Nichts geplant",
   "reservations_none_yet": "Noch keine Reservierungen",
   "reservations_pin_after_payment": "PIN nach der Zahlung",

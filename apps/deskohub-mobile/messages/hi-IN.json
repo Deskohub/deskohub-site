@@ -852,6 +852,8 @@
   "reservations_people_change_message": "नमस्ते,\n\nकृपया मेरी निजी ऑफ़िस बुकिंग {reference} ({date}) में आने वालों की सूची बदल दें।\n\nजोड़ें:\n\nहटाएँ:\n",
   "reservations_section_past": "पिछली",
   "reservations_show_all_past": "सभी पिछली बुकिंग दिखाएँ",
+  "reservations_save_with_passes": "पैक और पास के साथ बचत करें",
+  "reservations_pricing_open_failed": "पेज नहीं खुल सका। फिर से कोशिश करें।",
   "reservations_nothing_upcoming": "कुछ भी आगे नहीं है",
   "reservations_none_yet": "अभी कोई बुकिंग नहीं",
   "reservations_pin_after_payment": "भुगतान के बाद PIN",
