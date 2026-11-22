@@ -15,13 +15,14 @@ import {
 import { makeInMemoryDotypos } from "@deskohub/dotypos/testing";
 import { EmailDeliveryIdSchema } from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Deferred, Effect, Fiber, Layer, Result, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   customerAccounts,
+  customerEvents,
   orders,
   passPurchases,
   paymentAttempts,
@@ -52,6 +53,8 @@ import { type OrderId, orderIdSchema } from "@/features/order";
 import { GoogleCalendarWorkspaceLimitationsService } from "@/features/reservation/backend/google-calendar-workspace-limitations.service";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import { getCurrentWorkspaceDate } from "@/features/reservation/reservation-date";
+import { rejectCustomerEventInserts } from "@/shared/backend/customer-events/customer-event-outbox.test-utils";
+import { CustomerEventReconciler } from "@/shared/backend/customer-events/customer-event-reconciler";
 import {
   deliveryReportEmailId,
   deliveryReportEventId,
@@ -2686,6 +2689,284 @@ it("adopts an ambiguous POST, reconfirms all days, then retains today on release
         ...provider.service,
         createReservation,
       })
+    )
+  );
+});
+
+/** Holds every day of a pass starting tomorrow and pays for it. */
+const paidUnlimitedPurchase = Effect.fnUntraced(function* () {
+  const start = getCurrentWorkspaceDate().add({ days: 1 });
+  const purchase = yield* record(start);
+  yield* createUnlimitedPassHolds(purchase);
+  yield* reconfirmUnlimitedPassHolds(purchase);
+  const now = Temporal.Now.instant();
+  const { db } = yield* WorkspaceDatabase;
+  const attemptId = paymentAttemptIdSchema.make(crypto.randomUUID());
+  yield* db.insert(paymentAttempts).values({
+    id: attemptId,
+    orderId: purchase.id,
+    provider: "mock",
+    providerOrderId: attemptId,
+    state: "paid",
+    amountValue: 599_000,
+    amountExponent: 2,
+    currency: "CZK",
+  });
+  yield* db
+    .update(orders)
+    .set({
+      paymentState: "paid",
+      activePaymentAttemptId: attemptId,
+      paidAt: now,
+      updatedAt: now,
+    })
+    .where(eq(orders.id, purchase.id));
+  yield* settlePassPurchase(purchase.id);
+  return { purchase, start };
+});
+
+const readPassDayEvents = Effect.fnUntraced(function* (orderId: OrderId) {
+  const { db } = yield* WorkspaceDatabase;
+  const ids = (yield* readUnlimitedPassDays(orderId)).map(({ id }) => id);
+  const events = yield* db
+    .select({
+      kind: customerEvents.kind,
+      occurredAt: customerEvents.occurredAt,
+      dotyposCustomerId: customerEvents.dotyposCustomerId,
+      workspaceReservationId: customerEvents.workspaceReservationId,
+    })
+    .from(customerEvents)
+    .where(inArray(customerEvents.workspaceReservationId, ids));
+  return events
+    .map((event) => ({ ...event, occurredAt: event.occurredAt.toString() }))
+    .sort((a, b) =>
+      `${a.kind}${a.workspaceReservationId}${a.occurredAt}`.localeCompare(
+        `${b.kind}${b.workspaceReservationId}${b.occurredAt}`
+      )
+    );
+});
+
+const reconcileCustomerEvents = CustomerEventReconciler.use(
+  (reconciler) => reconciler.reconcile
+);
+
+it("records each pass day's booking and booked cancellation as the reconciler would", async () => {
+  const provider = makeInMemoryDotypos({});
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { purchase, start } = yield* paidUnlimitedPurchase();
+      yield* confirmUnlimitedPassDays(purchase);
+      const confirmed = yield* readUnlimitedPassDays(purchase.id);
+      const booked = confirmed.map((day) => ({
+        kind: "reservation-booked",
+        occurredAt: day.reservationConfirmedAt?.toString(),
+        dotyposCustomerId: customerId,
+        workspaceReservationId: day.id,
+      }));
+      expect(booked.every(({ occurredAt }) => occurredAt)).toBe(true);
+      expect(yield* readPassDayEvents(purchase.id)).toEqual(
+        expect.arrayContaining(booked)
+      );
+      expect(yield* readPassDayEvents(purchase.id)).toHaveLength(
+        unlimitedPassDays
+      );
+
+      // A retried confirmation is a no-op and records nothing new.
+      yield* confirmUnlimitedPassDays(purchase);
+      expect(yield* readPassDayEvents(purchase.id)).toHaveLength(
+        unlimitedPassDays
+      );
+
+      const withdrawn = {
+        ...purchase,
+        status: "withdrawn" as const,
+        accessEndsOn: date(start.add({ days: 1 })),
+      };
+      yield* releaseUnlimitedPassDays(withdrawn);
+      yield* releaseUnlimitedPassDays(withdrawn);
+      const released = yield* readUnlimitedPassDays(purchase.id);
+      expect(released[0]?.reservationState).toBe("confirmed");
+      const cancelled = released.slice(1).map((day) => ({
+        kind: "reservation-cancelled",
+        occurredAt: day.reservationCancelledAt?.toString(),
+        dotyposCustomerId: customerId,
+        workspaceReservationId: day.id,
+      }));
+      expect(cancelled.every(({ occurredAt }) => occurredAt)).toBe(true);
+      const written = yield* readPassDayEvents(purchase.id);
+      expect(written).toHaveLength(2 * unlimitedPassDays - 1);
+      expect(written).toEqual(
+        expect.arrayContaining([...booked, ...cancelled])
+      );
+
+      // The repair scan finds nothing missing beside the writer.
+      expect(yield* reconcileCustomerEvents).toEqual({
+        booked: 0,
+        cancelled: 0,
+        accountCreated: 0,
+      });
+      expect(yield* readPassDayEvents(purchase.id)).toEqual(written);
+
+      // Without the writer's rows, the scan reconstructs the same events.
+      const { db } = yield* WorkspaceDatabase;
+      yield* db.delete(customerEvents);
+      yield* reconcileCustomerEvents;
+      expect(yield* readPassDayEvents(purchase.id)).toEqual(written);
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(CustomerEventReconciler.Default, database!.layer)
+      ),
+      Effect.provideService(DotyposService, provider.service)
+    )
+  );
+});
+
+it("commits a pass day's booking or cancellation only with its event", async () => {
+  const provider = makeInMemoryDotypos({});
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { purchase, start } = yield* paidUnlimitedPurchase();
+      const days = yield* readUnlimitedPassDays(purchase.id);
+      const rejectBooked = yield* Effect.promise(() =>
+        rejectCustomerEventInserts(
+          database!.pool,
+          `new.kind = 'reservation-booked'`
+        )
+      );
+      const failed = yield* Effect.result(confirmUnlimitedPassDays(purchase));
+      yield* Effect.promise(rejectBooked);
+      expect(Result.isFailure(failed)).toBe(true);
+      expect(yield* readPassDayEvents(purchase.id)).toEqual([]);
+      expect(
+        (yield* readUnlimitedPassDays(purchase.id)).every(
+          (day) =>
+            day.reservationState === "confirming" &&
+            day.reservationConfirmedAt === null
+        )
+      ).toBe(true);
+
+      yield* confirmUnlimitedPassDays(purchase);
+      expect(yield* readPassDayEvents(purchase.id)).toHaveLength(
+        unlimitedPassDays
+      );
+
+      const rejectCancelled = yield* Effect.promise(() =>
+        rejectCustomerEventInserts(
+          database!.pool,
+          `new.kind = 'reservation-cancelled'`
+        )
+      );
+      const withdrawn = {
+        ...purchase,
+        status: "withdrawn" as const,
+        accessEndsOn: date(start.add({ days: 1 })),
+      };
+      yield* releaseUnlimitedPassDays(withdrawn);
+      yield* Effect.promise(rejectCancelled);
+      const unreleased = yield* readUnlimitedPassDays(purchase.id);
+      expect(
+        unreleased
+          .slice(1)
+          .every(
+            (day) =>
+              day.reservationState === "cancelling" &&
+              day.reservationCancelledAt === null
+          )
+      ).toBe(true);
+      expect(yield* readPassDayEvents(purchase.id)).toHaveLength(
+        unlimitedPassDays
+      );
+
+      // The retried release commits each cancellation with its event.
+      yield* releaseUnlimitedPassDays(withdrawn);
+      const released = yield* readUnlimitedPassDays(purchase.id);
+      expect(
+        released.slice(1).every((day) => day.reservationState === "cancelled")
+      ).toBe(true);
+      expect(yield* readPassDayEvents(purchase.id)).toEqual(
+        expect.arrayContaining(
+          released.slice(1).map((day) => ({
+            kind: "reservation-cancelled",
+            occurredAt: day.reservationCancelledAt?.toString(),
+            dotyposCustomerId: customerId,
+            workspaceReservationId: day.id,
+          }))
+        )
+      );
+      expect(days.map(({ id }) => id)).toEqual(released.map(({ id }) => id));
+    }).pipe(
+      Effect.provide(database!.layer),
+      Effect.provideService(DotyposService, provider.service)
+    )
+  );
+});
+
+it("records no event for an unbooked release or a superseded confirmation", async () => {
+  const provider = makeInMemoryDotypos({});
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      // Holds released before payment were never booked.
+      const unpaid = yield* record(getCurrentWorkspaceDate().add({ days: 40 }));
+      yield* createUnlimitedPassHolds(unpaid);
+      yield* releaseUnlimitedPassDays(unpaid);
+      const released = yield* readUnlimitedPassDays(unpaid.id);
+      expect(
+        released.every(
+          (day) =>
+            day.reservationState === "cancelled" &&
+            day.reservationCancelledAt !== null &&
+            day.reservationConfirmedAt === null
+        )
+      ).toBe(true);
+      expect(yield* readPassDayEvents(unpaid.id)).toEqual([]);
+
+      // A day another writer moved on while the provider confirmed it keeps
+      // its state, and the stale confirmation records nothing.
+      const { purchase } = yield* paidUnlimitedPurchase();
+      const [superseded] = yield* readUnlimitedPassDays(purchase.id);
+      const outcome = yield* Effect.result(
+        confirmUnlimitedPassDays(purchase).pipe(
+          Effect.provideService(DotyposService, {
+            ...provider.service,
+            confirmReservation: (id) =>
+              provider.service
+                .confirmReservation(id)
+                .pipe(
+                  Effect.tap(() =>
+                    id === superseded?.dotyposReservationId
+                      ? Effect.promise(() =>
+                          database!.pool.query(
+                            "update workspace_reservations set reservation_state = 'cancelling' where id = $1",
+                            [superseded.id]
+                          )
+                        )
+                      : Effect.void
+                  )
+                ),
+          })
+        )
+      );
+      expect(Result.isSuccess(outcome)).toBe(true);
+      const events = yield* readPassDayEvents(purchase.id);
+      expect(events).toHaveLength(unlimitedPassDays - 1);
+      expect(
+        events.some(
+          ({ workspaceReservationId }) =>
+            workspaceReservationId === superseded?.id
+        )
+      ).toBe(false);
+
+      // The repair scan agrees that neither pass is missing an event.
+      expect(yield* reconcileCustomerEvents).toEqual({
+        booked: 0,
+        cancelled: 0,
+        accountCreated: 0,
+      });
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(CustomerEventReconciler.Default, database!.layer)
+      ),
+      Effect.provideService(DotyposService, provider.service)
     )
   );
 });
