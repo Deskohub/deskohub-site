@@ -532,36 +532,49 @@ describe("batch failover", () => {
   });
 
   test("a guarded batch can check admission again on allowed provider fallback", async () => {
-    const first = failingProvider("posthog", providerLevel("posthog"));
+    const transactional = scriptedProvider("transactional", () => "accept");
+    const first = scriptedProvider("posthog", firstAnswer);
     const second = scriptedProvider("resend", () => "accept");
-    const admitted: string[] = [];
+    const admitted: [string, readonly number[]][] = [];
     const withAdmission = (provider: EmailProvider): EmailProvider => ({
       ...provider,
       sendBatch: (messages, options) =>
-        (options.beforeRequest?.(provider.name) ?? Effect.void).pipe(
-          Effect.andThen(provider.sendBatch(messages, options))
-        ),
+        (
+          options.beforeRequest?.(
+            provider.name,
+            messages.map((_, position) => position)
+          ) ?? Effect.void
+        ).pipe(Effect.andThen(provider.sendBatch(messages, options))),
     });
     const results = await runWithEmail(
       Effect.flatMap(EmailServiceTag, (email) =>
-        email.sendBatch(recipients, {
+        email.sendBatch([message, ...recipients], {
           idempotencyKey: "recheck-on-fallback",
           allowFallbackWithAdmission: true,
-          beforeRequest: (fingerprint) =>
-            Effect.sync(() => void admitted.push(fingerprint)),
+          beforeRequest: (fingerprint, positions) =>
+            Effect.sync(() => void admitted.push([fingerprint, positions])),
         })
       ),
       chains({
+        transactional: [withAdmission(transactional.provider)],
         marketing: [
           withAdmission(first.provider),
           withAdmission(second.provider),
         ],
       })
     );
-    expect(admitted).toEqual(["posthog", "resend"]);
-    expect(results.map(({ status, provider }) => [status, provider])).toEqual(
-      recipients.map(() => ["sent", "resend"])
-    );
+    expect(admitted).toEqual([
+      ["transactional", [0]],
+      ["posthog", [1, 2, 3, 4]],
+      ["resend", [2]],
+    ]);
+    expect(results.map(({ status, provider }) => [status, provider])).toEqual([
+      ["sent", "transactional"],
+      ["sent", "posthog"],
+      ["sent", "resend"],
+      ["failed", "posthog"],
+      ["failed", "posthog"],
+    ]);
   });
 
   test("after a fallback, a whole-batch failure comes back per message", async () => {

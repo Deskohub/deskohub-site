@@ -402,7 +402,8 @@ const requestGuardedResendBatch = Effect.fn("resend.requestGuardedBatch")(
       emailRequestFingerprint(
         ["resend", "POST", url, [...headers], body],
         input.credential
-      )
+      ),
+      input.messages.map((_, position) => position)
     );
     headers.set("Authorization", `Bearer ${input.credential}`);
 

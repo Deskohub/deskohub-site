@@ -1294,7 +1294,6 @@ export class CampaignBatchDelivery extends Context.Service<
         type Decision =
           | "unrequested"
           | "admitted"
-          | "denied"
           | Extract<BatchOutcome, { _tag: "Replanned" | "Unconfirmed" }>;
         const state = yield* Ref.make<
           Result.Result<
@@ -1305,7 +1304,10 @@ export class CampaignBatchDelivery extends Context.Service<
         const denied = new EmailServiceError(
           "Campaign offer request admission failed"
         );
-        const beforeRequest = () =>
+        const beforeRequest: NonNullable<EmailBatchOptions["beforeRequest"]> = (
+          _fingerprint,
+          requestPositions
+        ) =>
           gate.withPermit(
             Effect.gen(function* () {
               const result = yield* Ref.get(state);
@@ -1314,13 +1316,26 @@ export class CampaignBatchDelivery extends Context.Service<
               if (previous !== "unrequested" && previous !== "admitted")
                 return yield* denied;
               const canReplan = mode === "first" && previous === "unrequested";
-              const identities = yield* analyticsIdentity.forRecipients(
-                batch.dotyposCustomerIds
+              // Before any request, validate the whole persisted batch. Once
+              // dispatch starts, check only the recipients this request can reach.
+              const positions =
+                previous === "unrequested"
+                  ? [...batch.dotyposCustomerIds.keys()]
+                  : requestPositions;
+              const customerIds = positions.map(
+                (position) => batch.dotyposCustomerIds[position]
               );
+              if (
+                !customerIds.length ||
+                !customerIds.every((id) => id !== undefined)
+              )
+                return yield* denied;
+              const identities =
+                yield* analyticsIdentity.forRecipients(customerIds);
               const eligibility = readCampaignOfferEligibility(db, {
                 sendId: batch.sendId,
                 versionId: publication.versionId,
-                customerIds: batch.dotyposCustomerIds,
+                customerIds,
               });
               const decision = yield* Effect.result(
                 personalized.withLease(
@@ -1328,7 +1343,7 @@ export class CampaignBatchDelivery extends Context.Service<
                     const byId = new Map(
                       (yield* eligibility).map((row) => [row.customerId, row])
                     );
-                    const ineligible = batch.dotyposCustomerIds.flatMap(
+                    const ineligible = customerIds.flatMap(
                       (customerId, index): RecipientRequestDenial[] => {
                         const row = byId.get(customerId);
                         let reason:
@@ -1340,7 +1355,7 @@ export class CampaignBatchDelivery extends Context.Service<
                           reason = "offer-unavailable";
                         else if (
                           identities.get(customerId) !==
-                          messages[index]?.recipientIdentity
+                          messages[positions[index]!]?.recipientIdentity
                         )
                           reason = "recipient-payload-changed";
                         if (!reason) return [];
@@ -1365,18 +1380,18 @@ export class CampaignBatchDelivery extends Context.Service<
                   })
                 )
               );
-              yield* Ref.set(state, decision);
-              if (Result.isFailure(decision) || decision.success !== "admitted")
+              if (Result.isFailure(decision)) {
+                yield* Ref.set(state, Result.fail(decision.failure));
                 return yield* denied;
+              }
+              if (decision.success === "denied") return yield* denied;
+              yield* Ref.set(state, Result.succeed(decision.success));
+              if (decision.success !== "admitted") return yield* denied;
             })
           );
         const result = yield* Effect.result(request(beforeRequest));
         const admission = yield* Effect.fromResult(yield* Ref.get(state));
-        if (
-          admission !== "unrequested" &&
-          admission !== "admitted" &&
-          admission !== "denied"
-        )
+        if (admission !== "unrequested" && admission !== "admitted")
           return admission;
         return yield* Effect.fromResult(result);
       });
@@ -1586,7 +1601,10 @@ export class CampaignBatchDelivery extends Context.Service<
             email
               .sendBatch(messages, {
                 ...(beforeRequest && { beforeRequest }),
-                ...(personalized && { allowFallbackWithAdmission: true }),
+                ...(personalized &&
+                  input.request === "first" && {
+                    allowFallbackWithAdmission: true,
+                  }),
                 idempotencyKey: campaignDeliveryBatchIdempotencyKey(
                   input.batch
                 ),

@@ -179,6 +179,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
     let answer: "accept" | "interrupt" | "refuse" | "opaque-refusal" = "accept";
     let customerValuesAvailable = true;
     let beforeProviderRequest: (() => Promise<unknown>) | undefined;
+    let afterFirstRecipientRequest: (() => Promise<unknown>) | undefined;
     let interruptedBeforeAdmission = false;
     let sendPaused:
       | {
@@ -209,8 +210,41 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
           const before = beforeProviderRequest;
           beforeProviderRequest = undefined;
           if (before) yield* Effect.promise(before);
+          const afterFirst = afterFirstRecipientRequest;
+          afterFirstRecipientRequest = undefined;
+          if (afterFirst && options.beforeRequest) {
+            const admit = options.beforeRequest;
+            return yield* Effect.forEach(messages, (message, index) =>
+              admit(`synthetic-recipient-${index}`, [index]).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    requests.push({
+                      key: options.idempotencyKey,
+                      messages: [message],
+                      replay: options.replay ?? false,
+                    });
+                  })
+                ),
+                Effect.andThen(
+                  index === 0 ? Effect.promise(afterFirst) : Effect.void
+                ),
+                Effect.as(acceptance(`synthetic-${index}`)),
+                Effect.catch((error) =>
+                  Effect.succeed({
+                    status: "failed" as const,
+                    provider: "test",
+                    timestamp: new Date(),
+                    error,
+                  })
+                )
+              )
+            );
+          }
           if (options.beforeRequest)
-            yield* options.beforeRequest("synthetic-provider-fingerprint");
+            yield* options.beforeRequest(
+              "synthetic-provider-fingerprint",
+              messages.map((_, index) => index)
+            );
           requests.push({
             key: options.idempotencyKey,
             messages,
@@ -550,6 +584,13 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
           );
         };
       },
+      disableFirstCodeAfterRequest: () => {
+        afterFirstRecipientRequest = () =>
+          pool.query(
+            "update discount_codes set enabled = false where id in (select code_id from discount_code_customers where dotypos_customer_id = $1)",
+            [recipients[0]!.dotyposCustomerId]
+          );
+      },
       interruptBeforeAdmission: () => {
         interruptedBeforeAdmission = true;
       },
@@ -884,6 +925,18 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       [run.sendId]
     );
     expect(unresolved.rowCount).toBe(2);
+  });
+
+  test("disabling an already dispatched offer keeps the next recipient deliverable", async () => {
+    const run = await setup("admitted-peer");
+    run.disableFirstCodeAfterRequest();
+    expect(Exit.isSuccess(await run.deliver())).toBe(true);
+    expect(run.requests.map(({ messages }) => messages.length)).toEqual([1, 1]);
+    const delivered = await pool.query(
+      "select 1 from email_campaign_recipients where send_id = $1 and status = 'sent'",
+      [run.sendId]
+    );
+    expect(delivered.rowCount).toBe(2);
   });
 
   test("a competing delivery cannot issue a second set of codes or request a second batch", async () => {

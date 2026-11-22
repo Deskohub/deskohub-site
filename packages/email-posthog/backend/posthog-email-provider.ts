@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   continuesEmailChain,
-  type EmailBatchOptions,
   type EmailBatchResult,
   EmailDeliveryIdSchema,
   type EmailMessage,
@@ -105,6 +104,7 @@ export const makePostHogEmailProvider = (
         const deadline =
           (yield* Clock.currentTimeMillis) + Duration.toMillis(batchDeadline);
         const stopped = yield* Ref.make(false);
+        const { beforeRequest, allowFallbackWithAdmission } = options;
 
         const sendOne = Effect.fn("PostHogEmailProvider.sendBatchMessage")(
           function* (message: EmailMessage, index: number) {
@@ -127,7 +127,10 @@ export const makePostHogEmailProvider = (
                   email,
                   idempotencyKey,
                   deadline,
-                  beforeRequest: options.beforeRequest,
+                  beforeRequest: beforeRequest
+                    ? (fingerprint) => beforeRequest(fingerprint, [index])
+                    : undefined,
+                  allowFallbackWithAdmission,
                 }).pipe(
                   Effect.timeoutOrElse({
                     duration: Duration.millis(remaining),
@@ -338,13 +341,17 @@ const requestSend = ({
   idempotencyKey,
   deadline,
   beforeRequest,
+  allowFallbackWithAdmission,
 }: {
   readonly config: PostHogEmailProviderConfig;
   readonly email: PostHogEmail;
   readonly idempotencyKey: string;
   /** The batch deadline in epoch milliseconds; a lone send has none. */
   readonly deadline?: number;
-  readonly beforeRequest?: EmailBatchOptions["beforeRequest"];
+  readonly beforeRequest?:
+    | ((fingerprint: string) => Effect.Effect<void, EmailSendError>)
+    | undefined;
+  readonly allowFallbackWithAdmission?: boolean | undefined;
 }) =>
   Effect.gen(function* () {
     const policy = postHogEmailRetryPolicy.withAttemptTimeout(
@@ -458,7 +465,11 @@ const requestSend = ({
           failure._tag === "PostHogSendAttemptFailure"
             ? toEmailSendError(failure)
             : failure;
-        return mayHaveQueued && error.failureKind !== "unknown-outcome"
+        const allowsFallback =
+          allowFallbackWithAdmission && error.failureKind === "provider";
+        return mayHaveQueued &&
+          error.failureKind !== "unknown-outcome" &&
+          !allowsFallback
           ? new NetworkError({
               message:
                 "An earlier guarded PostHog request may have queued the email",

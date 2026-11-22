@@ -110,7 +110,8 @@ export const ConsoleEmailProvider: EmailProvider = {
   sendBatch: Effect.fn("consoleEmailProvider.sendBatch")(
     function* (messages, options) {
       yield* options.beforeRequest?.(
-        emailRequestFingerprint(["console", options.idempotencyKey, messages])
+        emailRequestFingerprint(["console", options.idempotencyKey, messages]),
+        messages.map((_, position) => position)
       ) ?? Effect.void;
       return yield* Effect.forEach(messages, (message) =>
         ConsoleEmailProvider.send(message)
