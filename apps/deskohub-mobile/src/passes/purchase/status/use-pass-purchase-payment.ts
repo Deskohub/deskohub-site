@@ -20,7 +20,10 @@ import {
   openPassPaymentAtom,
   submitPassPurchaseAtom,
 } from "../pass-purchase-requests";
-import { readPassPurchaseStatus } from "./pass-purchase-status-state";
+import {
+  type PassPurchaseStatusCheck,
+  readPassPurchaseStatus,
+} from "./pass-purchase-status-state";
 
 type RetryDetails = NonNullable<CustomerPassPurchaseStatus["retry"]>;
 
@@ -151,7 +154,9 @@ const retryFailureMessage = (
         case "consent-required":
           return m.pass_purchase_status_retry_changed({}, { locale });
         case "quote-expired":
-          return m.pass_purchase_status_expired({}, { locale });
+          return m.pass_purchase_status_quote_expired({}, { locale });
+        case "holds-unavailable":
+          return m.pass_purchase_status_hold_unavailable({}, { locale });
         default:
           return m.booking_checkout_retry_service_unavailable({}, { locale });
       }
@@ -170,7 +175,7 @@ const retryFailureMessage = (
 export function usePassPurchasePayment(
   orderId: string,
   locale: AppLocale,
-  checkStatus: (afterPayment: boolean) => void
+  checkStatus: (kind: PassPurchaseStatusCheck) => void
 ) {
   const confirm = useAtomSet(checkPurchaseAtom, { mode: "promiseExit" });
   const submit = useAtomSet(submitPassPurchaseAtom, { mode: "promiseExit" });
@@ -208,7 +213,7 @@ export function usePassPurchasePayment(
       const current = await confirm({ orderId, locale });
       if (!owns()) return;
       if (Exit.isFailure(current)) {
-        checkStatus(false);
+        checkStatus("manual");
         return;
       }
       await action(current.value, owns);
@@ -232,7 +237,7 @@ export function usePassPurchasePayment(
         if (availablePassPurchaseRetry(purchase)) {
           setNotice(m.pass_purchase_status_retry_changed({}, { locale }));
         }
-        checkStatus(false);
+        checkStatus("manual");
         return;
       }
       const payment = await submit({ orderId, payload, owns });
@@ -242,12 +247,11 @@ export function usePassPurchasePayment(
           Cause.findErrorOption(payment.cause)
         );
         if (failure?._tag === "CustomerWriteUnconfirmed") {
-          setNotice(m.pass_purchase_status_checking({}, { locale }));
-          checkStatus(true);
+          checkStatus("unconfirmed");
         } else {
           setNotice(retryFailureMessage(failure, locale));
           if (failure?._tag === "CustomerPassPurchaseRefused")
-            checkStatus(false);
+            checkStatus("manual");
         }
         return;
       }
@@ -255,7 +259,7 @@ export function usePassPurchasePayment(
         case "pricing_changed":
         case "terms_changed":
           setNotice(m.pass_purchase_status_retry_changed({}, { locale }));
-          checkStatus(false);
+          checkStatus("manual");
           return;
         case "hosted": {
           const opened = await open({
@@ -271,14 +275,14 @@ export function usePassPurchasePayment(
         case "pending":
           break;
       }
-      checkStatus(true);
+      checkStatus("after-payment");
     });
 
   const continuePayment = (kind: PurchaseContinuation["kind"]) =>
     run(async (purchase, owns) => {
       const action = availablePassPurchaseContinuation(purchase);
       if (!action || action.kind !== kind) {
-        checkStatus(false);
+        checkStatus("manual");
         return;
       }
       const opened =
@@ -297,7 +301,7 @@ export function usePassPurchasePayment(
                     if (state === "background") backgrounded = true;
                     if (state !== "active" || !backgrounded) return;
                     draftReturn.current?.();
-                    if (owns()) checkStatus(true);
+                    if (owns()) checkStatus("after-payment");
                   }
                 );
                 draftReturn.current = () => {
@@ -311,7 +315,7 @@ export function usePassPurchasePayment(
       if (opened._tag === "Success" && opened.value === "external") return;
       draftReturn.current?.();
       if (opened._tag === "Failure") browserNotice();
-      checkStatus(true);
+      checkStatus("after-payment");
     });
 
   return { busy, notice, retry, continuePayment, abandon };

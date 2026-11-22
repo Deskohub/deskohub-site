@@ -333,6 +333,8 @@
   "pass_purchase_status_check_again": "Zkontrolovat znovu",
   "pass_purchase_status_done": "Hotovo",
   "pass_purchase_status_retry_changed": "Cena nebo podmínky se změnily. Než platbu zkusíš znovu, zkontroluj je.",
+  "pass_purchase_status_quote_expired": "Platnost cenové nabídky vypršela.",
+  "pass_purchase_status_hold_unavailable": "Pracovní místo pro tuto permanentku už ve vybraných termínech není dostupné.",
   "reservations_status_title": "Rezervace",
   "reservations_access_title": "Přístupový PIN",
   "account_placeholder": "Tuhle obrazovku brzy doplníme.",

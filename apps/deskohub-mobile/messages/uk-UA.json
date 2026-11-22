@@ -335,6 +335,8 @@
   "pass_purchase_status_check_again": "Перевірити ще раз",
   "pass_purchase_status_done": "Готово",
   "pass_purchase_status_retry_changed": "Ціна або умови змінилися. Перегляньте їх перед повторною оплатою.",
+  "pass_purchase_status_quote_expired": "Строк дії цінової пропозиції минув.",
+  "pass_purchase_status_hold_unavailable": "Робоче місце для цього абонемента більше недоступне на вибрані дати.",
   "reservations_status_title": "Бронювання",
   "reservations_access_title": "PIN доступу",
   "account_placeholder": "Цей екран незабаром зʼявиться.",

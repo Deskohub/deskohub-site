@@ -331,6 +331,8 @@
   "pass_purchase_status_check_again": "Check again",
   "pass_purchase_status_done": "Done",
   "pass_purchase_status_retry_changed": "The price or terms changed. Review them before trying the payment again.",
+  "pass_purchase_status_quote_expired": "This price quote has expired.",
+  "pass_purchase_status_hold_unavailable": "The desk for this pass is no longer available on the selected dates.",
   "reservations_status_title": "Reservation",
   "reservations_access_title": "Access PIN",
   "account_placeholder": "This screen is coming soon.",

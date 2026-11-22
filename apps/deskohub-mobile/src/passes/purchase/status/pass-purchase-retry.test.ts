@@ -1,5 +1,8 @@
 import { expect, mock, spyOn, test } from "bun:test";
-import type { CustomerPassPurchaseStatus } from "@deskohub/workspace-customer-api";
+import type {
+  CustomerPassPurchaseRefused,
+  CustomerPassPurchaseStatus,
+} from "@deskohub/workspace-customer-api";
 import { RegistryContext } from "@effect/atom-react";
 import { Effect, Layer } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -22,6 +25,7 @@ import {
 import { m } from "../../../i18n/messages";
 import { clientRoot } from "../../../testing/client-root";
 import { expoRouterStandIn } from "../../../testing/expo-router-stand-in";
+import type { PassPurchaseStatusCheck } from "./pass-purchase-status-state";
 
 mock.module("expo-router", () =>
   expoRouterStandIn({
@@ -186,7 +190,7 @@ function setupAction(
     failure,
   }: {
     readonly pauseAt?: "session" | "dispatch";
-    readonly failure?: "refused" | "unconfirmed";
+    readonly failure?: CustomerPassPurchaseRefused["reason"] | "unconfirmed";
   } = {}
 ) {
   const actionPaused = Promise.withResolvers<void>();
@@ -198,7 +202,7 @@ function setupAction(
   let cookieReads = 0;
   const workspace = FakeWorkspace.forKind("linked");
   const { accountId, account } = workspace.data;
-  const checks: boolean[] = [];
+  const checks: PassPurchaseStatusCheck[] = [];
   const posts: string[] = [];
   const client = HttpClient.make((request, url) =>
     Effect.gen(function* () {
@@ -224,11 +228,11 @@ function setupAction(
       if (request.method === "POST") {
         posts.push(url.pathname);
         if (failure === "unconfirmed") return answer({}, 502);
-        return failure === "refused"
+        return failure
           ? answer(
               {
                 _tag: "CustomerPassPurchaseRefused",
-                reason: "payment-in-progress",
+                reason: failure,
               },
               409
             )
@@ -261,13 +265,9 @@ function setupAction(
   );
   let payment: ReturnType<typeof usePassPurchasePayment> | undefined;
   function Screen() {
-    payment = usePassPurchasePayment(
-      purchase.orderId,
-      "en-US",
-      (afterPayment) => {
-        checks.push(afterPayment);
-      }
-    );
+    payment = usePassPurchasePayment(purchase.orderId, "en-US", (kind) => {
+      checks.push(kind);
+    });
     return null;
   }
   return {
@@ -386,7 +386,7 @@ test("Android draft launch only checks status after the app returns", async () =
     onChange?.("active");
     onChange?.("background");
     onChange?.("active");
-    expect(action.checks).toEqual([true]);
+    expect(action.checks).toEqual(["after-payment"]);
     expect(remove).toHaveBeenCalledTimes(1);
   } finally {
     listen.mockRestore();
@@ -394,20 +394,25 @@ test("Android draft launch only checks status after the app returns", async () =
   }
 });
 
-test("a definitive payment refusal explains why and checks status without settlement polling", async () => {
-  const action = setupAction(status, { failure: "refused" });
-  try {
-    await action.mount();
-    await act(async () => action.payment().retry(approved));
-    expect(action.posts).toHaveLength(1);
-    expect(action.payment().notice).toBe(
-      m.reservations_payment_retry_settling({}, { locale: "en-US" })
-    );
-    expect(action.checks).toEqual([false]);
-  } finally {
-    await action.dispose();
+test.each([
+  ["payment-in-progress", m.reservations_payment_retry_settling],
+  ["quote-expired", m.pass_purchase_status_quote_expired],
+  ["holds-unavailable", m.pass_purchase_status_hold_unavailable],
+] as const)(
+  "the %s refusal explains why and checks status without settlement polling",
+  async (failure, message) => {
+    const action = setupAction(status, { failure });
+    try {
+      await action.mount();
+      await act(async () => action.payment().retry(approved));
+      expect(action.posts).toHaveLength(1);
+      expect(action.payment().notice).toBe(message({}, { locale: "en-US" }));
+      expect(action.checks).toEqual(["manual"]);
+    } finally {
+      await action.dispose();
+    }
   }
-});
+);
 
 test("an uncertain dispatched payment starts settlement reconciliation", async () => {
   const action = setupAction(status, { failure: "unconfirmed" });
@@ -415,10 +420,7 @@ test("an uncertain dispatched payment starts settlement reconciliation", async (
     await action.mount();
     await act(async () => action.payment().retry(approved));
     expect(action.posts).toHaveLength(1);
-    expect(action.checks).toEqual([true]);
-    expect(action.payment().notice).toBe(
-      m.pass_purchase_status_checking({}, { locale: "en-US" })
-    );
+    expect(action.checks).toEqual(["unconfirmed"]);
   } finally {
     await action.dispose();
   }

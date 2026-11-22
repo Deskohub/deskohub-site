@@ -331,6 +331,8 @@
   "pass_purchase_status_check_again": "Erneut prüfen",
   "pass_purchase_status_done": "Fertig",
   "pass_purchase_status_retry_changed": "Der Preis oder die Bedingungen haben sich geändert. Prüfe sie, bevor du erneut bezahlst.",
+  "pass_purchase_status_quote_expired": "Dieses Preisangebot ist abgelaufen.",
+  "pass_purchase_status_hold_unavailable": "Der Arbeitsplatz für diesen Pass ist an den ausgewählten Tagen nicht mehr verfügbar.",
   "reservations_status_title": "Reservierung",
   "reservations_access_title": "Zugangs-PIN",
   "account_placeholder": "Diese Ansicht kommt bald.",

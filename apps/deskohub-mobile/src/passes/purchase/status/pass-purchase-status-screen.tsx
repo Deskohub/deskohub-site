@@ -73,10 +73,10 @@ export function PassPurchaseStatusScreen({
   );
   const progress = useAtomValue(atoms.status);
   const requestRefresh = useAtomSet(atoms.refresh);
-  const payment = usePassPurchasePayment(orderId, locale, (afterPayment) => {
+  const payment = usePassPurchasePayment(orderId, locale, (kind) => {
     requestRefresh(({ revision }) => ({
       revision: revision + 1,
-      afterPayment,
+      kind,
     }));
   });
   const shown = Option.getOrUndefined(AsyncResult.value(progress));
@@ -91,6 +91,12 @@ export function PassPurchaseStatusScreen({
   const failure =
     outcome && Result.isFailure(outcome) ? outcome.failure : undefined;
   const title = confirmed && statusTitle(confirmed, locale);
+  const unconfirmedNotice =
+    shown?.unconfirmed && confirmed?.status !== "checking"
+      ? m.pass_purchase_status_checking({}, { locale })
+      : undefined;
+  const paymentNotice =
+    confirmed?.status === "paid" ? undefined : payment.notice;
   useLiveRegionAnnouncement(focused ? title : undefined, "polite");
 
   let message: string | undefined;
@@ -111,7 +117,7 @@ export function PassPurchaseStatusScreen({
     if (!focused || !shown || reading || payment.busy) return;
     requestRefresh((current) =>
       current.revision === shown.refresh
-        ? { revision: current.revision + 1, afterPayment: false }
+        ? { revision: current.revision + 1, kind: "manual" }
         : current
     );
   };
@@ -132,10 +138,7 @@ export function PassPurchaseStatusScreen({
             : undefined)
         }
       />
-      <Notice
-        tone="warning"
-        message={confirmed?.status === "paid" ? undefined : payment.notice}
-      />
+      <Notice tone="warning" message={unconfirmedNotice ?? paymentNotice} />
       <RefreshingIndicator
         refreshing={confirmed !== undefined && reading === "manual"}
         label={m.account_refreshing({}, { locale })}

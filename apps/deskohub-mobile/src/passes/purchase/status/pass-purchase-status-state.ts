@@ -58,6 +58,7 @@ interface StatusProgress {
   readonly attempts: number;
   readonly reading: "manual" | "automatic" | false;
   readonly polling: boolean;
+  readonly unconfirmed: boolean;
   readonly outcome?: StatusRead | undefined;
   readonly confirmed?: CustomerPassPurchaseStatus | undefined;
 }
@@ -71,9 +72,14 @@ const canKeepConfirmed = (failure: StatusReadFailure) =>
       (failure.reason._tag === "StatusCodeError" &&
         failure.reason.response.status >= 500)));
 
+export type PassPurchaseStatusCheck =
+  | "manual"
+  | "after-payment"
+  | "unconfirmed";
+
 interface StatusRefresh {
   readonly revision: number;
-  readonly afterPayment: boolean;
+  readonly kind: PassPurchaseStatusCheck;
 }
 
 const statusUpdates = (
@@ -96,21 +102,20 @@ const statusUpdates = (
           };
           yield* Queue.offer(queue, state);
           const outcome = yield* Effect.result(read);
-          const confirmed = Result.match(outcome, {
-            onSuccess: (status) => status,
-            onFailure: (failure) =>
-              canKeepConfirmed(failure) ? state.confirmed : undefined,
-          });
+          const fresh = Result.isSuccess(outcome) ? outcome.success : undefined;
+          const retain =
+            Result.isFailure(outcome) && canKeepConfirmed(outcome.failure);
+          const settling =
+            fresh?.status === "pending" || fresh?.status === "checking";
           state = {
             ...state,
             outcome,
-            confirmed,
+            confirmed: fresh ?? (retain ? state.confirmed : undefined),
             reading: false,
-            polling:
-              state.polling &&
-              Result.isSuccess(outcome) &&
-              (outcome.success.status === "pending" ||
-                outcome.success.status === "checking"),
+            polling: state.polling && settling,
+            unconfirmed:
+              state.unconfirmed &&
+              (retain || settling || fresh?.status === "not_started"),
           };
           yield* Queue.offer(queue, state);
         });
@@ -147,7 +152,10 @@ export const makePassPurchaseStatusAtoms = (
   foreground = appForegroundAtom
 ) => {
   const focused = Atom.make(false);
-  const refresh = Atom.make<StatusRefresh>({ revision: 0, afterPayment });
+  const refresh = Atom.make<StatusRefresh>({
+    revision: 0,
+    kind: afterPayment ? "after-payment" : "manual",
+  });
   const status = customerDataRuntime.atom((get) => {
     const active = get(focused) && get(foreground);
     const request = get(refresh);
@@ -163,11 +171,17 @@ export const makePassPurchaseStatusAtoms = (
         refresh: request.revision,
         attempts: 0,
         reading: false,
-        polling: request.afterPayment,
+        polling: request.kind !== "manual",
+        unconfirmed: request.kind === "unconfirmed",
       })
     );
-    if (request.afterPayment && start.refresh !== request.revision) {
-      start = { ...start, attempts: 0, polling: true };
+    if (request.kind !== "manual" && start.refresh !== request.revision) {
+      start = {
+        ...start,
+        attempts: 0,
+        polling: true,
+        unconfirmed: start.unconfirmed || request.kind === "unconfirmed",
+      };
     }
     return statusUpdates(
       readPassPurchaseStatus(orderId, locale),

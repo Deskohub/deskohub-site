@@ -28,7 +28,10 @@ import {
   fakeWorkspaceOrigin,
 } from "../../../customer-api/testing/fake-workspace";
 import { eventually, quietly } from "../../../testing/eventually";
-import { makePassPurchaseStatusAtoms } from "./pass-purchase-status-state";
+import {
+  makePassPurchaseStatusAtoms,
+  type PassPurchaseStatusCheck,
+} from "./pass-purchase-status-state";
 
 const orderId = "836223a1-29fd-4c4f-b876-49782ae18eda";
 const errorTags = {
@@ -133,10 +136,10 @@ function setup({
     device,
     focus: (focused: boolean) => registry.set(atoms.focused, focused),
     foreground: (active: boolean) => registry.set(foreground, active),
-    refresh: (afterPayment = false) =>
+    refresh: (kind: PassPurchaseStatusCheck = "manual") =>
       registry.update(atoms.refresh, ({ revision }) => ({
         revision: revision + 1,
-        afterPayment,
+        kind,
       })),
     fromRuntime,
     current,
@@ -341,10 +344,31 @@ test("a new payment attempt restarts settlement polling after the last attempt f
     await status.settled(1, "failed");
     await status.fromRuntime(TestClock.adjust("30 seconds"));
     expect(status.calls).toHaveLength(1);
-    status.refresh(true);
+    status.refresh("after-payment");
     await status.settled(2, "pending");
     await status.fromRuntime(TestClock.adjust("3 seconds"));
     await status.settled(3, "paid");
+  } finally {
+    status.dispose();
+  }
+});
+
+test("an uncertain write warning clears once settlement confirms a refund", async () => {
+  const status = setup({ answers: ["failed", "checking", "refunded", 429] });
+  try {
+    status.focus(true);
+    await status.settled(1, "failed");
+    status.refresh("unconfirmed");
+    await status.settled(2, "checking");
+    expect(status.current()?.unconfirmed).toBe(true);
+    await status.fromRuntime(TestClock.adjust("3 seconds"));
+    await status.settled(3, "refunded");
+    expect(status.current()?.unconfirmed).toBe(false);
+    expect(status.current()?.confirmed?.status).toBe("refunded");
+    status.refresh();
+    await status.settled(4, "CustomerRateLimited");
+    expect(status.current()?.unconfirmed).toBe(false);
+    expect(status.current()?.confirmed?.status).toBe("refunded");
   } finally {
     status.dispose();
   }

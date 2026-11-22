@@ -331,6 +331,8 @@
   "pass_purchase_status_check_again": "फिर से जाँचें",
   "pass_purchase_status_done": "हो गया",
   "pass_purchase_status_retry_changed": "कीमत या शर्तें बदल गई हैं। फिर से भुगतान करने से पहले उन्हें देख लें।",
+  "pass_purchase_status_quote_expired": "इस मूल्य प्रस्ताव की अवधि समाप्त हो गई है।",
+  "pass_purchase_status_hold_unavailable": "इस पास के लिए चुनी गई तारीखों पर डेस्क अब उपलब्ध नहीं है।",
   "reservations_status_title": "बुकिंग",
   "reservations_access_title": "प्रवेश PIN",
   "account_placeholder": "यह स्क्रीन जल्द आ रही है।",
