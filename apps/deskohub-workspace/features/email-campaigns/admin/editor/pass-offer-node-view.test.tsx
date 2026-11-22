@@ -165,6 +165,35 @@ describe("PassOfferNodeView", () => {
     ]);
   });
 
+  test("switching away from the Entry pack and back forgets its size", async () => {
+    const rendered = await renderEditor(bodyWithCard(entryPackCard));
+    const dialog = await openEditing(rendered);
+
+    for (const product of [
+      customerMessages.passUnlimited({}, { locale }),
+      customerMessages.passEntryPack({}, { locale }),
+    ]) {
+      await act(async () => {
+        fireEvent.click(choice(dialog, product)!);
+      });
+    }
+    expect(
+      choice(dialog, m.emailCampaignsPassOfferSizeDefault({}, { locale }))
+        ?.checked
+    ).toBe(true);
+    await clickIn(dialog, m.emailCampaignsPassOfferUpdate({}, { locale }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog") === null).toBe(true)
+    );
+    expect(cardsOf(rendered.changes.at(-1))).toEqual([
+      {
+        type: "passOffer",
+        attrs: { ...entryPackCard, size: null },
+      },
+    ]);
+  });
+
   test("refuses a detail without a headline and a text that's too long", async () => {
     const rendered = await renderEditor(bodyWithCard(entryPackCard));
     const dialog = await openEditing(rendered);

@@ -145,7 +145,11 @@ export function PassOfferDialog({
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent locale={locale}>
+      {/* The form is taller than a phone held sideways: scroll, so its actions stay reachable. */}
+      <DialogContent
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto"
+        locale={locale}
+      >
         <DialogHeader>
           <DialogTitle>
             {editing
