@@ -29,7 +29,7 @@ export interface CalendarDay {
   readonly day: number;
   readonly state: CalendarDayState;
   readonly today: boolean;
-  /** The day's place in the highlighted range, when it's a bookable day in it. */
+  /** The day's place in the highlighted range, when that range includes it. */
   readonly range: Option.Option<CalendarRangePart>;
   /** The day the customer tapped to learn why it's unavailable. */
   readonly focused: boolean;
@@ -39,6 +39,8 @@ export interface CalendarDay {
 export interface CalendarRange {
   readonly start: PragueDate;
   readonly end: PragueDate;
+  /** Coverage includes dates that can't begin a new booking or pass. */
+  readonly kind?: "coverage";
 }
 
 export interface MonthCalendarModel {
@@ -53,7 +55,10 @@ export interface MonthCalendarModel {
 const monthIndex = ({ year, month }: PragueMonth) => year * 12 + month - 1;
 
 /** `month` moved into the months from `earliest`'s to `latest`'s. */
-const withinDates = (month: PragueMonth, dates: DateChoice): PragueMonth => {
+const withinDates = (
+  month: PragueMonth,
+  dates: Pick<DateChoice, "earliest" | "latest">
+): PragueMonth => {
   const first = monthOf(dates.earliest);
   const last = monthOf(dates.latest);
   if (monthIndex(month) < monthIndex(first)) return first;
@@ -109,7 +114,10 @@ export const monthCalendarModel = ({
   readonly range?: CalendarRange;
   readonly focused?: PragueDate;
 }): MonthCalendarModel => {
-  const month = withinDates(requested, dates);
+  const coverage = range?.kind === "coverage";
+  const latest =
+    coverage && range.end > dates.latest ? range.end : dates.latest;
+  const month = withinDates(requested, { earliest: dates.earliest, latest });
   return {
     month,
     weeks: monthWeeks(month).map((week) =>
@@ -121,13 +129,16 @@ export const monthCalendarModel = ({
             day: Number(date.slice(8)),
             state,
             today: date === today,
-            range: bookable(state) ? rangePart(date, range) : Option.none(),
+            range:
+              coverage || bookable(state)
+                ? rangePart(date, range)
+                : Option.none(),
             focused: date === focused,
           };
         })
       )
     ),
     canGoPrevious: monthIndex(month) > monthIndex(monthOf(dates.earliest)),
-    canGoNext: monthIndex(month) < monthIndex(monthOf(dates.latest)),
+    canGoNext: monthIndex(month) < monthIndex(monthOf(latest)),
   };
 };

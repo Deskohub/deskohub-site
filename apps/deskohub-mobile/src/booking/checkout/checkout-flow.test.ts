@@ -36,6 +36,7 @@ import { completeFakePayment } from "../testing/fake-payment-gateway";
 import {
   pricedLines,
   sampleOfferings,
+  samplePrices,
   sampleSummary,
   withReservedDeskOvernightStay,
 } from "../testing/sample-booking-catalog";
@@ -62,7 +63,9 @@ afterEach(() => {
  * with the screen in view until the test moves it with `setFocused`.
  */
 const startFlow = async (
-  arrange: (checkout: FakeCheckout) => Promise<void> = async () => undefined
+  arrange: (checkout: FakeCheckout) => Promise<void> = async () => undefined,
+  buildRequest: (checkout: FakeCheckout) => CheckoutRequest = (checkout) =>
+    checkout.request()
 ) => {
   const checkout = await makeFakeCheckout();
   harnesses.push(checkout);
@@ -75,7 +78,7 @@ const startFlow = async (
   const setInViewNow = (focused: boolean) => {
     inViewNow = focused;
   };
-  const atom = checkoutFlowAtom(checkout.request(), focus, () => inViewNow);
+  const atom = checkoutFlowAtom(buildRequest(checkout), focus, () => inViewNow);
   const unmount = checkout.registry.mount(atom);
   cleanups.push(unmount);
   const controller = () => checkoutController(checkout.registry.get(atom));
@@ -238,6 +241,77 @@ describe("useCheckoutFlow's flow", () => {
     });
     expect(reportedBeforeOpening).toBe(true);
   });
+
+  test("redeems the selected Entry pack on the booking checkout path", async () => {
+    const funding = {
+      kind: "entry" as const,
+      passId: "642ef6b9-48aa-495f-83a8-9a53f4791692",
+    };
+    const flow = await startFlow(undefined, (checkout) =>
+      checkout.request({
+        family: "cowork",
+        tier: "open-space",
+        date: checkout.booking.dateIn(20),
+        coffee: false,
+        funding,
+      })
+    );
+    await toReview(flow);
+    await pay(flow);
+    await flow.untilState("Done");
+
+    const create = flow.checkout.booking.calls.find(
+      (call) => call.endpoint === "createCheckout"
+    );
+    expect(create?.input.selection.funding).toEqual(funding);
+    expect(flow.checkout.browser.opened).toEqual([]);
+  });
+
+  test.each([
+    {
+      selection: { tier: "open-space", coffee: true } as const,
+      crowns: samplePrices.coffee,
+    },
+    {
+      selection: { tier: "reserved-desk", monitorOption: "2x27-qhd" } as const,
+      crowns: samplePrices.workstation,
+    },
+  ])(
+    "retains Entry pack funding while charging for the selected add-on",
+    async ({ selection, crowns }) => {
+      const funding = {
+        kind: "entry" as const,
+        passId: "642ef6b9-48aa-495f-83a8-9a53f4791692",
+      };
+      const flow = await startFlow(undefined, (checkout) =>
+        checkout.request({
+          family: "cowork",
+          date: checkout.booking.dateIn(20),
+          ...selection,
+          funding,
+        })
+      );
+      await toReview(flow);
+      const review = await flow.untilState("Review");
+      expect(review.checkout.summary.total.value).toBe(crowns * 100);
+      flow
+        .controller()
+        .send(CheckoutEvent.CodeChanged({ input: fakeBookingCodes.free }));
+      flow.controller().send(CheckoutEvent.ApplyCode());
+      await pay(flow);
+      await flow.untilState("Paying");
+
+      const create = flow.checkout.booking.calls.find(
+        (call) => call.endpoint === "createCheckout"
+      );
+      expect(create?.input.selection).toMatchObject({ ...selection, funding });
+      expect(
+        flow.checkout.booking.calls.some(
+          ({ endpoint }) => endpoint === "applyCheckoutDiscountCode"
+        )
+      ).toBe(false);
+    }
+  );
 
   test("each details submission is a new checkout attempt", async () => {
     const flow = await startFlow();

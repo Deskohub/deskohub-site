@@ -274,6 +274,35 @@ describe("monthCalendarModel", () => {
     expect(day && Option.isNone(day.range)).toBe(true);
   });
 
+  test("coverage includes unavailable starts and extends into later months", () => {
+    const input = {
+      dates: dateChoice("2026-11-24", "2026-11-30", ["2026-11-29"]),
+      selected: "2026-11-28",
+      range: { kind: "coverage", start: "2026-11-28", end: "2026-12-27" },
+    } as const;
+    const november = monthCalendarModel({
+      ...input,
+      month: { year: 2026, month: 11 },
+    });
+    expect(november.canGoNext).toBe(true);
+    expect(days(november).get("2026-11-29")).toMatchObject({
+      state: "unavailable",
+      range: Option.some("middle"),
+    });
+
+    const december = monthCalendarModel({
+      ...input,
+      month: { year: 2026, month: 12 },
+    });
+    expect(december.month).toEqual({ year: 2026, month: 12 });
+    expect(december.canGoNext).toBe(false);
+    expect(days(december).get("2026-12-27")).toMatchObject({
+      state: "outside-range",
+      range: Option.some("end"),
+    });
+    expect(days(december).get("2026-12-28")?.range).toEqual(Option.none());
+  });
+
   test("focuses only the focused day, leaving its state as it is", () => {
     const november = days(
       monthCalendarModel({

@@ -36,6 +36,7 @@ export interface AccountIdentity {
  * the screen words it.
  */
 export type AccountRowSubtitle =
+  | { readonly kind: "passes"; readonly count: number }
   | { readonly kind: "language" }
   | { readonly kind: "security"; readonly passkeys: number }
   | { readonly kind: "assistants"; readonly connected: number }
@@ -95,7 +96,8 @@ const identityOf = (account: CustomerAccountState): AccountIdentity => {
 const subtitleOf = (
   section: AccountRowSection,
   account: CustomerAccountState,
-  firstGroupedWithLegal: boolean
+  firstGroupedWithLegal: boolean,
+  release: AccountRelease | undefined
 ): AccountRowSubtitle | undefined => {
   switch (section) {
     case "language":
@@ -132,6 +134,10 @@ const subtitleOf = (
     case "legal":
       // Marketing emails need a profile, so before it the row names no part.
       return firstGroupedWithLegal ? undefined : { kind: "legal" };
+    case "passes": {
+      const count = release?.passes?.activeCount;
+      return count === undefined ? undefined : { kind: "passes", count };
+    }
     case "profile":
     case "payment-methods":
     case "invoices":
@@ -160,7 +166,7 @@ export const accountRootModel = (
     section !== "danger" &&
     (completionCard || section !== "legal");
   const row = (section: AccountRowSection): AccountRow => {
-    const subtitle = subtitleOf(section, account, completionCard);
+    const subtitle = subtitleOf(section, account, completionCard, release);
     return subtitle === undefined ? { section } : { section, subtitle };
   };
   const rowsWhere = (keep: (section: AccountRowSection) => boolean) =>

@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { CustomerReservationFamily } from "@deskohub/workspace-customer-api";
+import { Pressable } from "react-native";
 import { m } from "../../i18n/messages";
 import { formatMoney } from "../../i18n/money-format";
 import {
@@ -55,6 +56,25 @@ describe("SpaceCards", () => {
       "meeting-room",
       "cowork",
     ]);
+  });
+
+  test("places the pass link immediately after the Cowork desk", () => {
+    const tree = hostTree(
+      elementTree(SpaceCards, {
+        cards: spaceCards(catalog),
+        locale: "en-US",
+        onOpen: () => undefined,
+        afterCowork: <Pressable accessibilityLabel="Entry packs" />,
+      })
+    );
+    const buttons = findAll(tree, "Pressable");
+    const link = buttons.findIndex(
+      ({ props }) => props.accessibilityLabel === "Entry packs"
+    );
+    expect(link).toBeGreaterThan(0);
+    expect(buttons[link - 1]?.props.accessibilityLabel).toContain(
+      "Cowork desk"
+    );
   });
 
   test("draws the office and meeting room as half cards over a full-width cowork card", () => {

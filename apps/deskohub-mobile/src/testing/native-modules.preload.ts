@@ -1,5 +1,5 @@
 import { mock } from "bun:test";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Component, createContext, useContext } from "react";
 import { postHogStandIn } from "./posthog-stand-in";
 import { TestWindowDimensions } from "./window-dimensions";
@@ -199,6 +199,7 @@ mock.module("expo-linking", () => ({
 
 mock.module("expo-crypto", () => ({
   CryptoDigestAlgorithm: { SHA256: "SHA-256" },
+  randomUUID,
   getRandomBytes: (count: number) => new Uint8Array(randomBytes(count)),
   digest: async (_algorithm: string, data: Uint8Array) => {
     const digest = createHash("sha256").update(data).digest();

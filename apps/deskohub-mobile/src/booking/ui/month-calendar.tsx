@@ -70,7 +70,8 @@ const weekKey = (week: ReadonlyArray<Option.Option<CalendarDay>>) =>
  * months the dates span and follows the selection to its month; it never
  * picks a date itself. Past days are greyed, unavailable days struck
  * through, `today` ringed, and a `range` banded from its first to its last
- * day. With `onUnavailablePress`, tapping an unavailable day reports it
+ * day. A coverage range extends the pages without adding selectable days.
+ * With `onUnavailablePress`, tapping an unavailable day reports it
  * instead of selecting it, so the screen can focus it (`focusedDate`) and
  * explain it in the box under the grid (`dayInfo`).
  */
@@ -86,6 +87,7 @@ export function MonthCalendar({
   disabled = false,
   today,
   range,
+  coveredDayLabel,
   focusedDate,
   onUnavailablePress,
   dayInfo,
@@ -107,6 +109,8 @@ export function MonthCalendar({
   readonly today?: PragueDate;
   /** An inclusive span of days to highlight, such as an office booking's. */
   readonly range?: CalendarRange;
+  /** Follows the date of a covered day for assistive technology. */
+  readonly coveredDayLabel?: string;
   /** The unavailable day the customer tapped, ringed while `dayInfo` explains it. */
   readonly focusedDate?: PragueDate;
   /** Makes unavailable days tappable; never selects them. */
@@ -143,12 +147,19 @@ export function MonthCalendar({
     timeZone: "UTC",
   });
   const todayLabel = m.booking_calendar_today_day({}, { locale });
-  const dayLabel = ({ date, state, today: isToday }: CalendarDay) => {
+  const coverage = range?.kind === "coverage";
+  const dayLabel = ({
+    date,
+    state,
+    today: isToday,
+    range: part,
+  }: CalendarDay) => {
     const [year = 0, month = 1, day = 1] = date.split("-").map(Number);
     return [
       dayName.format(utcNoon(year, month, day)),
       isToday && todayLabel,
       state === "unavailable" && unavailableLabel,
+      coverage && Option.isSome(part) && coveredDayLabel,
     ]
       .filter(Boolean)
       .join(", ");
@@ -219,7 +230,8 @@ export function MonthCalendar({
                   role="button"
                   aria-label={dayLabel(day)}
                   aria-selected={
-                    day.state === "selected" || Option.isSome(day.range)
+                    day.state === "selected" ||
+                    (!coverage && Option.isSome(day.range))
                   }
                   aria-disabled={inert}
                   disabled={inert}
@@ -229,7 +241,11 @@ export function MonthCalendar({
                   style={styles.cell}
                 >
                   {({ pressed }) => (
-                    <CalendarDayCell day={day} pressed={pressed && !inert} />
+                    <CalendarDayCell
+                      day={day}
+                      pressed={pressed && !inert}
+                      coverage={coverage}
+                    />
                   )}
                 </Pressable>
               );
@@ -276,12 +292,16 @@ export function MonthCalendar({
 function CalendarDayCell({
   day,
   pressed,
+  coverage,
 }: {
   readonly day: CalendarDay;
   readonly pressed: boolean;
+  readonly coverage: boolean;
 }) {
   const part = Option.getOrUndefined(day.range);
-  const filled = day.state === "selected" || part === "start" || part === "end";
+  const filled =
+    day.state === "selected" ||
+    (!coverage && (part === "start" || part === "end"));
   return (
     <>
       {part !== undefined && (

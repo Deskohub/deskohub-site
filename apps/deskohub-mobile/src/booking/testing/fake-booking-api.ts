@@ -1377,9 +1377,11 @@ type SelectionQuery = Omit<typeof CustomerBookingSelectionQuery.Type, "locale">;
 /** The selection a quote's query string names. */
 const selectionOfQuery = ({
   coffee,
+  passId,
   ...fields
 }: SelectionQuery): CustomerBookingSelection => ({
   ...fields,
+  ...(passId !== undefined && { funding: { kind: "entry", passId } }),
   ...(coffee === undefined ? {} : { coffee: coffee === "true" }),
 });
 

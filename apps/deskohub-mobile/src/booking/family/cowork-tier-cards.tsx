@@ -64,6 +64,7 @@ export interface CoworkTierCard {
   readonly name: string;
   /** Today's advertised price per day. */
   readonly price: Money;
+  readonly entryPrice?: string;
   /** The regular price, struck above it, while a sale lowers it. */
   readonly was?: Money;
   readonly description: string;
@@ -132,13 +133,17 @@ export function CoworkTierCards({
               <RadioMark checked={checked} disabled={disabled} />
             </TierCardTop>
             <View style={styles.panel}>
-              {card.unavailable === undefined ? (
-                <TierPrice card={card} locale={locale} />
-              ) : (
+              {card.unavailable !== undefined && (
                 <Text variant="subhead" tone="warning">
                   {card.unavailable}
                 </Text>
               )}
+              {card.unavailable === undefined &&
+                (card.entryPrice === undefined ? (
+                  <TierPrice card={card} locale={locale} />
+                ) : (
+                  <Text variant="subhead">{card.entryPrice}</Text>
+                ))}
             </View>
             <Text variant="bodySmall" style={styles.description}>
               <Text style={styles.highlight}>{card.description}</Text>

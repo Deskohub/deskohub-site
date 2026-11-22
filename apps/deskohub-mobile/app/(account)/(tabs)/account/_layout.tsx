@@ -73,6 +73,10 @@ export default function AccountSectionsLayout() {
           }}
         />
         <Stack.Screen
+          name="passes"
+          options={{ title: m.account_section_passes({}, { locale }) }}
+        />
+        <Stack.Screen
           name="profile"
           options={{
             title: m.account_section_profile({}, { locale }),

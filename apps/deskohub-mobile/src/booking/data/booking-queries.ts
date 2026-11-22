@@ -233,9 +233,10 @@ export const quoteRefreshInterval = Duration.minutes(4);
 
 /** The selection as a quote's query string carries it. */
 const quoteQuery = ({ selection, locale, earlySetup }: BookingQuoteRequest) => {
-  const { coffee, ...fields } = withoutAbsentOptions(selection);
+  const { coffee, funding, ...fields } = withoutAbsentOptions(selection);
   return {
     ...fields,
+    ...(funding && { passId: funding.passId }),
     ...(coffee === undefined
       ? {}
       : { coffee: coffee ? ("true" as const) : ("false" as const) }),

@@ -218,7 +218,7 @@ export function ReviewStep({
                   />
                 </View>
               </Card>
-              {!view.retry && (
+              {!view.retry && selection.funding?.kind !== "entry" && (
                 <View style={styles.code}>
                   <CodeRow code={view.code} send={send} locale={locale} />
                 </View>
@@ -242,7 +242,7 @@ export function ReviewStep({
       <BookingBar
         locale={locale}
         contentWidth={contentWidth}
-        action={payAction(view, send, locale)}
+        action={payAction(view, selection, send, locale)}
         // With the keyboard up only the button rides above it.
         reason={
           keyboardShown
@@ -266,17 +266,28 @@ export function ReviewStep({
  */
 const payAction = (
   view: ReviewView,
+  selection: CustomerBookingSelection,
   send: Send,
   locale: AppLocale
 ): BookingBarAction => ({
-  label: payLabel(view, locale),
+  label: payLabel(view, selection, locale),
   onPress: () => send(CheckoutEvent.Pay()),
   disabled: !view.canPay,
   busy: view.submitting,
   icon: view.canPay ? Lock : undefined,
 });
 
-const payLabel = (view: ReviewView, locale: AppLocale) => {
+const payLabel = (
+  view: ReviewView,
+  selection: CustomerBookingSelection,
+  locale: AppLocale
+) => {
+  if (
+    selection.funding?.kind === "entry" &&
+    view.price.breakdown.total.value === 0
+  ) {
+    return m.booking_pass_redeem({}, { locale });
+  }
   if (view.submitting) return m.booking_checkout_paying({}, { locale });
   return view.retry
     ? m.booking_checkout_retry_pay({}, { locale })

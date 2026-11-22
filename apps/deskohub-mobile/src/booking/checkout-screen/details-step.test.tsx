@@ -192,6 +192,34 @@ describe("DetailsStep fields", () => {
     expect(emails).toHaveLength(1);
   });
 
+  test("an Entry pack checkout ignores a stored recipient and submits as the holder", () => {
+    const onContinue = mock(
+      (_details: Parameters<DetailsStepProps["onContinue"]>[0]) => undefined
+    );
+    const screen = screenOf({
+      holderOnly: true,
+      onContinue,
+      draft: { ...props().draft, bookingFor: "someone-else" },
+    });
+    const scroll = hostTree(scrollOf(screen));
+    expect(findAll(scroll, "Text").map(textOf)).not.toContain(
+      m.booking_details_who_someone_else({}, { locale })
+    );
+    expect(
+      findAll(scroll, "TextInput").map((input) => input.props.keyboardType)
+    ).not.toContain("email-address");
+
+    const bar = find(screen, BookingBar);
+    if (bar === undefined) throw new Error("no bar");
+    (bar.props as Parameters<typeof BookingBar>[0]).action.onPress();
+    expect(onContinue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bookingFor: "self",
+        contact: expect.objectContaining({ email: props().profile.self.email }),
+      })
+    );
+  });
+
   test("a saved address is offered without asking for one", () => {
     const saved = {
       address: Option.some({
