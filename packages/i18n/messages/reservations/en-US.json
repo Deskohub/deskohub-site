@@ -16,6 +16,7 @@
   "withdrawalPaidAmount": "Paid",
   "withdrawalRefundAmount": "We'll refund",
   "withdrawalStartedDays": "For started days ({started}/{total})",
+  "withdrawalStartedEntries": "For used entries ({count})",
   "withdrawalStartedHours": "For started hours ({started}/{total})",
   "withdrawalConfirmRefundNote": "To your original payment method within 14 days.",
   "withdrawalRefundChanged": "Your refund has changed. Review the new amount and confirm your withdrawal again.",

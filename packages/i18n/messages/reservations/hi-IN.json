@@ -16,6 +16,7 @@
   "withdrawalPaidAmount": "भुगतान किया गया",
   "withdrawalRefundAmount": "हम आपको लौटाएँगे",
   "withdrawalStartedDays": "शुरू हो चुके दिनों के लिए ({started}/{total})",
+  "withdrawalStartedEntries": "इस्तेमाल किए गए प्रवेशों के लिए ({count})",
   "withdrawalStartedHours": "शुरू हो चुके घंटों के लिए ({started}/{total})",
   "withdrawalConfirmRefundNote": "14 दिनों के भीतर आपके मूल भुगतान तरीके पर।",
   "withdrawalRefundChanged": "आपकी वापसी राशि बदल गई है। नई राशि देखें और अनुबंध से हटने की फिर से पुष्टि करें।",

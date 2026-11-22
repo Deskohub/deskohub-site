@@ -16,6 +16,7 @@
   "withdrawalPaidAmount": "Đã thanh toán",
   "withdrawalRefundAmount": "Chúng tôi hoàn lại",
   "withdrawalStartedDays": "Cho các ngày đã bắt đầu ({started}/{total})",
+  "withdrawalStartedEntries": "Cho các lượt vào đã sử dụng ({count})",
   "withdrawalStartedHours": "Cho các giờ đã bắt đầu ({started}/{total})",
   "withdrawalConfirmRefundNote": "Về phương thức thanh toán ban đầu trong vòng 14 ngày.",
   "withdrawalRefundChanged": "Số tiền hoàn lại đã thay đổi. Bạn hãy kiểm tra số tiền mới và xác nhận lại việc rút khỏi hợp đồng.",

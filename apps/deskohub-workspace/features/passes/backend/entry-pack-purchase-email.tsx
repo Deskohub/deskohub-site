@@ -19,8 +19,8 @@ import { reservationStatusPath } from "@/features/reservation/routes";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import { emailKindTags } from "@/shared/backend/email/email-kind";
 import { renderWorkspaceEmail } from "@/shared/backend/email/render-react-email";
+import { passConfirmationEmailKinds } from "./pass-confirmation-email-kind";
 import { createUnlimitedAccessUrl } from "./unlimited-access-capability";
-import { unlimitedConfirmationEmailKind } from "./unlimited-confirmation-email-kind";
 
 export const sendEntryPackPurchaseEmail = Effect.fn(
   "sendEntryPackPurchaseEmail"
@@ -84,13 +84,11 @@ export const sendEntryPackPurchaseEmail = Effect.fn(
       entryCount: purchase.entryCount,
     }),
     idempotencyKey: `entry-pack-purchase:${id}`,
-    ...(purchase.product === "unlimited"
-      ? emailKindTags(unlimitedConfirmationEmailKind, {
-          orderId: id,
-          paymentAttemptId: input.paymentAttemptId,
-          deploymentEnvironment: env.VERCEL_ENV,
-        })
-      : { tags: ["entry_pack_purchase"] }),
+    ...emailKindTags(passConfirmationEmailKinds[purchase.product], {
+      orderId: id,
+      paymentAttemptId: input.paymentAttemptId,
+      deploymentEnvironment: env.VERCEL_ENV,
+    }),
     sensitiveContent: true,
   });
 });

@@ -1,7 +1,7 @@
 import { type Money, moneyShareRoundedUp } from "@/shared/money/money";
 
 /** The unit a partial refund counts unused service in. */
-export type WithdrawalRefundUnit = "day" | "hour";
+export type WithdrawalRefundUnit = "day" | "hour" | "entry";
 
 /** How a withdrawal's refund relates to the amount paid. */
 export type WithdrawalRefundBasis =
@@ -9,11 +9,23 @@ export type WithdrawalRefundBasis =
   | {
       readonly kind: "partial";
       readonly unit: WithdrawalRefundUnit;
-      /** Units not yet started when the withdrawal was submitted. */
+      /** Units not counted as used when the withdrawal was submitted. */
       readonly unstarted: number;
       /** Units the contract covers. */
       readonly total: number;
     };
+
+/** Reservation interfaces count service time. Entry claims belong to packs. */
+export const reservationWithdrawalRefundBasis = (
+  basis: WithdrawalRefundBasis
+) => {
+  if (basis.kind === "full") return basis;
+  const { unit } = basis;
+  if (unit === "entry") {
+    throw new Error("A reservation withdrawal cannot count pack entries.");
+  }
+  return { ...basis, unit };
+};
 
 /** Why a contract can't be withdrawn from at the assessed instant. */
 export type WithdrawalRefusalReason =

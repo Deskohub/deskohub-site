@@ -16,6 +16,7 @@
   "withdrawalPaidAmount": "Zaplatené",
   "withdrawalRefundAmount": "Vrátime ti",
   "withdrawalStartedDays": "Za začaté dni ({started}/{total})",
+  "withdrawalStartedEntries": "Za využité vstupy ({count})",
   "withdrawalStartedHours": "Za začaté hodiny ({started}/{total})",
   "withdrawalConfirmRefundNote": "Na pôvodnú platobnú metódu do 14 dní.",
   "withdrawalRefundChanged": "Výška vrátenej sumy sa zmenila. Skontrolujte novú sumu a znova potvrďte odstúpenie.",

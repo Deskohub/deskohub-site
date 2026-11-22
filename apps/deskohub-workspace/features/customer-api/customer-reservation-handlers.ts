@@ -65,6 +65,7 @@ import {
   WithdrawalService,
 } from "@/features/withdrawal/backend/withdrawal.service";
 import { WithdrawalReleaseGate } from "@/features/withdrawal/backend/withdrawal-release-gate";
+import { reservationWithdrawalRefundBasis } from "@/features/withdrawal/withdrawal-assessment";
 import {
   toWithdrawalQuoteData,
   toWithdrawalReceiptData,
@@ -299,6 +300,9 @@ export const CustomerReservationsApiHandlers = HttpApiBuilder.group(
               Effect.map((quote): typeof CustomerWithdrawalQuote.Type => ({
                 ...toWithdrawalQuoteData(quote),
                 contractId: orderId,
+                refundBasis: reservationWithdrawalRefundBasis(
+                  quote.refundBasis
+                ),
               }))
             )
         )
@@ -399,7 +403,7 @@ const customerWithdrawalRefundChanged = (
     quote: {
       paidAmount,
       refundAmount,
-      refundBasis,
+      refundBasis: reservationWithdrawalRefundBasis(refundBasis),
       refundTermsKey,
       periodEndsAt,
     },

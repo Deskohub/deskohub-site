@@ -73,10 +73,10 @@ export type WithdrawalAvailability = {
 };
 
 /**
- * A reservation's online withdrawal as its status page shows it: the
+ * A contract's online withdrawal as its status page shows it: the
  * customer withdrew (with what it owes back), can withdraw now, or neither.
  */
-export type ReservationWithdrawalEntry =
+export type ContractWithdrawalEntry =
   | { readonly status: "withdrawn"; readonly refundAmount: Money }
   | { readonly status: "offered" }
   | { readonly status: "none" };

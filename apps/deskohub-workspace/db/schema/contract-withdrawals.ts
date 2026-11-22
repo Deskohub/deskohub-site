@@ -102,7 +102,13 @@ export const contractWithdrawals = pgTable(
     ),
     check(
       "contract_withdrawals_refund_basis_check",
-      sql`(${t.refundUnit} is null and ${t.refundUnstartedUnits} is null and ${t.refundTotalUnits} is null and ${t.refundAmountValue} = ${t.paidAmountValue}) or (${t.refundUnit} in ('day', 'hour') and (${t.refundUnstartedUnits} > 0 or (${t.contractKind} = 'unlimited-pass' and ${t.refundUnit} = 'day' and ${t.refundUnstartedUnits} = 0 and ${t.refundAmountValue} = 0)) and ${t.refundTotalUnits} > ${t.refundUnstartedUnits})`
+      sql`(${t.refundUnit} is null and ${t.refundUnstartedUnits} is null and ${t.refundTotalUnits} is null and ${t.refundAmountValue} = ${t.paidAmountValue})
+        or ((${t.refundUnit} in ('day', 'hour') or (${t.contractKind} = 'entry-pack' and ${t.refundUnit} = 'entry'))
+          and (${t.refundUnstartedUnits} > 0
+            or (((${t.contractKind} = 'unlimited-pass' and ${t.refundUnit} = 'day')
+              or (${t.contractKind} = 'entry-pack' and ${t.refundUnit} = 'entry'))
+              and ${t.refundUnstartedUnits} = 0 and ${t.refundAmountValue} = 0))
+          and ${t.refundTotalUnits} > ${t.refundUnstartedUnits})`
     ),
     check(
       "contract_withdrawals_settled_check",
