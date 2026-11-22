@@ -197,8 +197,10 @@ describe("app route tree", () => {
   test("app and web link paths match a screen's route pattern", () => {
     for (const link of [
       "deskohub://reservations/synthetic-order?after=payment",
+      "deskohub://passes/purchases/synthetic-order?after=payment",
       "deskohub://account/legal",
       "https://workspace.deskohub.cz/app/reservations/synthetic-order?after=payment",
+      "https://workspace.deskohub.cz/app/passes/purchases/synthetic-order?after=payment",
       "https://workspace.deskohub.cz/app/account/legal",
       "https://workspace.deskohub.cz/app/account",
       "/reservations/synthetic-order/access",
