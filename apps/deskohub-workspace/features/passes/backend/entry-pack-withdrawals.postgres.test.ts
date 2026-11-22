@@ -216,7 +216,7 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
     assessedAt?: Temporal.Instant
   ) =>
     run(
-      EntryPackWithdrawals.use((family) =>
+      Effect.flatMap(EntryPackWithdrawals, (family) =>
         family.find({ contractId: id, accountId, locale, assessedAt })
       )
     );
@@ -247,10 +247,12 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
   };
 
   const recordEffect = (input: Awaited<ReturnType<typeof statement>>) =>
-    WithdrawalRepository.use((repository) => repository.record(input));
+    Effect.flatMap(WithdrawalRepository, (repository) =>
+      repository.record(input)
+    );
 
   const cancel = (input: Awaited<ReturnType<typeof statement>>) =>
-    EntryPackWithdrawals.use((family) =>
+    Effect.flatMap(EntryPackWithdrawals, (family) =>
       family.cancel({
         contractId: input.contract.id,
         refundAmount: input.refundAmount,
@@ -269,7 +271,7 @@ describe.skipIf(!database)("Entry pack withdrawals on Postgres", () => {
 
   const providerRefund = (id: string, total: number) =>
     run(
-      PaymentRefundRepository.use((refunds) =>
+      Effect.flatMap(PaymentRefundRepository, (refunds) =>
         refunds.recordRefund({
           id,
           refundedAmountValue: total,
