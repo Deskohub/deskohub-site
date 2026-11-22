@@ -178,7 +178,10 @@ export function PassPurchaseStatusScreen({
       <Button
         label={m.pass_purchase_status_done({}, { locale })}
         variant="quiet"
-        onPress={onClose}
+        onPress={() => {
+          payment.abandon();
+          onClose();
+        }}
       />
     </ScrollScreen>
   );

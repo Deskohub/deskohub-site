@@ -3,7 +3,8 @@ import type {
   SubmitCustomerPassPurchase,
 } from "@deskohub/workspace-customer-api";
 import { useAtomSet } from "@effect/atom-react";
-import { Data, Effect, Exit } from "effect";
+import { Cause, Data, Effect, Exit, Option } from "effect";
+import type { Atom } from "effect/reactivity";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Platform } from "react-native";
@@ -102,20 +103,55 @@ export const passPurchaseResumeUrl = (path: string, origin: string) => {
   return url.origin === workspaceOrigin ? url.href : undefined;
 };
 
-const resumePassPurchaseAtom = customerDataRuntime.fn((path: string) =>
-  confirmPassPurchaseScope.pipe(
-    Effect.andThen(
-      Effect.tryPromise({
-        try: () => {
-          const url = passPurchaseResumeUrl(path, apiOrigin);
-          if (!url) throw new PassPurchaseResumeUnavailable();
-          return openSitePage(url);
-        },
-        catch: () => new PassPurchaseResumeUnavailable(),
-      })
+const resumePassPurchaseAtom = customerDataRuntime.fn(
+  ({ path, owns }: { path: string; owns: () => boolean }) =>
+    confirmPassPurchaseScope.pipe(
+      Effect.andThen(
+        Effect.tryPromise({
+          try: async () => {
+            const url = passPurchaseResumeUrl(path, apiOrigin);
+            if (!url) throw new PassPurchaseResumeUnavailable();
+            if (!owns()) return;
+            if (Platform.OS === "web") {
+              globalThis.location.assign(url);
+            } else {
+              await openSitePage(url);
+            }
+          },
+          catch: () => new PassPurchaseResumeUnavailable(),
+        })
+      )
     )
-  )
 );
+
+type RetryFailure = Atom.Failure<typeof submitPassPurchaseAtom>;
+
+const retryFailureMessage = (
+  failure: RetryFailure | undefined,
+  locale: AppLocale
+) => {
+  switch (failure?._tag) {
+    case "CustomerPassPurchaseRefused":
+      switch (failure.reason) {
+        case "payment-in-progress":
+          return m.reservations_payment_retry_settling({}, { locale });
+        case "consent-required":
+          return m.pass_purchase_status_retry_changed({}, { locale });
+        case "quote-expired":
+          return m.pass_purchase_status_expired({}, { locale });
+        default:
+          return m.booking_checkout_retry_service_unavailable({}, { locale });
+      }
+    case "CustomerPassNotFound":
+      return m.pass_purchase_status_not_found({}, { locale });
+    case "CustomerRateLimited":
+      return m.booking_checkout_retry_rate_limited({}, { locale });
+    case "CustomerSessionRequired":
+      return m.booking_checkout_retry_session_required({}, { locale });
+    default:
+      return m.booking_checkout_retry_service_unavailable({}, { locale });
+  }
+};
 
 /** Act on the current owned order and only while its screen owns the action. */
 export function usePassPurchasePayment(
@@ -183,28 +219,40 @@ export function usePassPurchasePayment(
         checkStatus(false);
         return;
       }
-      const payment = await submit({ orderId, payload });
+      const payment = await submit({ orderId, payload, owns });
       if (!owns()) return;
-      if (Exit.isSuccess(payment)) {
-        switch (payment.value.status) {
-          case "pricing_changed":
-          case "terms_changed":
-            setNotice(m.pass_purchase_status_retry_changed({}, { locale }));
+      if (Exit.isFailure(payment)) {
+        const failure = Option.getOrUndefined(
+          Cause.findErrorOption(payment.cause)
+        );
+        if (failure?._tag === "CustomerWriteUnconfirmed") {
+          checkStatus(true);
+        } else {
+          setNotice(retryFailureMessage(failure, locale));
+          if (failure?._tag === "CustomerPassPurchaseRefused")
             checkStatus(false);
-            return;
-          case "hosted": {
-            const opened = await open({
-              orderId,
-              redirectUrl: payment.value.redirectUrl,
-            });
-            if (!owns()) return;
-            if (Exit.isFailure(opened)) browserNotice();
-            break;
-          }
-          case "paid":
-          case "pending":
-            break;
         }
+        return;
+      }
+      switch (payment.value.status) {
+        case "pricing_changed":
+        case "terms_changed":
+          setNotice(m.pass_purchase_status_retry_changed({}, { locale }));
+          checkStatus(false);
+          return;
+        case "hosted": {
+          const opened = await open({
+            orderId,
+            redirectUrl: payment.value.redirectUrl,
+            owns,
+          });
+          if (!owns()) return;
+          if (Exit.isFailure(opened)) browserNotice();
+          break;
+        }
+        case "paid":
+        case "pending":
+          break;
       }
       checkStatus(true);
     });
@@ -218,12 +266,17 @@ export function usePassPurchasePayment(
       }
       const opened =
         action.kind === "resume"
-          ? await resume(action.path)
-          : await open({ orderId, redirectUrl: action.url });
+          ? await resume({ path: action.path, owns })
+          : await open({ orderId, redirectUrl: action.url, owns });
       if (!owns()) return;
       if (opened._tag === "Failure") browserNotice();
+      else if (action.kind === "resume" && Platform.OS === "web") return;
       checkStatus(true);
     });
 
-  return { busy, notice, retry, continuePayment };
+  const abandon = () => {
+    focus.current = undefined;
+  };
+
+  return { busy, notice, retry, continuePayment, abandon };
 }

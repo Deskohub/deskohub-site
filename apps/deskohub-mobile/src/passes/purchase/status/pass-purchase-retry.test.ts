@@ -1,14 +1,51 @@
-import { expect, mock, test } from "bun:test";
+import { expect, mock, spyOn, test } from "bun:test";
 import type { CustomerPassPurchaseStatus } from "@deskohub/workspace-customer-api";
+import { RegistryContext } from "@effect/atom-react";
+import { Effect, Layer } from "effect";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import { act, createElement, useEffect } from "react";
+import { Platform } from "react-native";
+import {
+  CustomerApi,
+  CustomerAuthApi,
+} from "../../../customer-api/customer-api.service";
+import { nativeCustomerApiTransport } from "../../../customer-api/platform-transports";
+import { makeCustomerDataRegistry } from "../../../customer-api/testing/customer-data-test-registry";
+import {
+  fakeCustomerDataLayer,
+  makeFakeDevice,
+} from "../../../customer-api/testing/fake-customer-data";
+import {
+  FakeWorkspace,
+  fakeWorkspaceOrigin,
+} from "../../../customer-api/testing/fake-workspace";
+import { m } from "../../../i18n/messages";
+import { clientRoot } from "../../../testing/client-root";
 import { expoRouterStandIn } from "../../../testing/expo-router-stand-in";
 
-mock.module("expo-router", () => expoRouterStandIn());
+mock.module("expo-router", () =>
+  expoRouterStandIn({
+    useFocusEffect: (callback) => useEffect(callback, [callback]),
+  })
+);
+const openSitePage = mock(async (_url: string) => ({
+  type: "opened" as const,
+}));
+mock.module("../../../routing/open-site-page", () => ({
+  appBrowserTabColors: {},
+  openSitePage,
+}));
+mock.module("../../../auth/auth-client", () => ({
+  apiOrigin: fakeWorkspaceOrigin,
+}));
 const {
   availablePassPurchaseContinuation,
   confirmedRetryPayload,
   passPurchaseResumeUrl,
+  usePassPurchasePayment,
 } = await import("./use-pass-purchase-payment");
 
+const root = clientRoot({ keepFetch: true });
 const amount = { value: 45_000, currency: "CZK", exponent: 2 } as const;
 const approved = {
   priorPaymentAttemptId: "previous-attempt",
@@ -134,4 +171,220 @@ test("resumes Pay only at an owned relative workspace path", () => {
   expect(
     passPurchaseResumeUrl("https://other.test/pay", origin)
   ).toBeUndefined();
+});
+
+const draft = {
+  ...status,
+  status: "not_started",
+  resumePath: "/cs-CZ/passes/pay",
+} as const;
+
+function setupAction(
+  purchase: CustomerPassPurchaseStatus,
+  {
+    pauseAt,
+    failure,
+  }: {
+    readonly pauseAt?: "session" | "dispatch";
+    readonly failure?: "refused" | "unconfirmed";
+  } = {}
+) {
+  const actionPaused = Promise.withResolvers<void>();
+  const releaseAction = Promise.withResolvers<void>();
+  const pause = Effect.promise(() => {
+    actionPaused.resolve();
+    return releaseAction.promise;
+  });
+  let cookieReads = 0;
+  const workspace = FakeWorkspace.forKind("linked");
+  const { accountId, account } = workspace.data;
+  const checks: boolean[] = [];
+  const posts: string[] = [];
+  const client = HttpClient.make((request, url) =>
+    Effect.gen(function* () {
+      const answer = (body: unknown, status = 200) =>
+        HttpClientResponse.fromWeb(request, Response.json(body, { status }));
+      if (url.pathname === "/api/auth/get-session") {
+        if (pauseAt === "session") yield* pause;
+        return answer({
+          session: {
+            id: "sample-session",
+            userId: accountId,
+            expiresAt: "2030-01-01T00:00:00Z",
+          },
+          user: {
+            id: accountId,
+            email: account.email,
+            emailVerified: true,
+            name: "",
+            locale: account.locale,
+          },
+        });
+      }
+      if (request.method === "POST") {
+        posts.push(url.pathname);
+        if (failure === "unconfirmed") return answer({}, 502);
+        return failure === "refused"
+          ? answer(
+              {
+                _tag: "CustomerPassPurchaseRefused",
+                reason: "payment-in-progress",
+              },
+              409
+            )
+          : answer({ status: "pending", statusUrl: purchase.statusPath });
+      }
+      return answer(purchase);
+    })
+  );
+  const registry = makeCustomerDataRegistry(
+    Layer.mergeAll(
+      fakeCustomerDataLayer({ workspace, device: makeFakeDevice() }),
+      Layer.fresh(
+        Layer.merge(CustomerApi.Default, CustomerAuthApi.Default)
+      ).pipe(
+        Layer.provide(
+          nativeCustomerApiTransport({
+            apiOrigin: fakeWorkspaceOrigin,
+            readSessionCookie: Effect.gen(function* () {
+              cookieReads += 1;
+              // The order read and account check each look up the cookie
+              // before the third lookup prepares the outgoing payment POST.
+              if (pauseAt === "dispatch" && cookieReads === 3) yield* pause;
+              return "deskohub.session_token=sample";
+            }),
+          })
+        ),
+        Layer.provide(Layer.succeed(HttpClient.HttpClient, client))
+      )
+    )
+  );
+  let payment: ReturnType<typeof usePassPurchasePayment> | undefined;
+  function Screen() {
+    payment = usePassPurchasePayment(
+      purchase.orderId,
+      "en-US",
+      (afterPayment) => {
+        checks.push(afterPayment);
+      }
+    );
+    return null;
+  }
+  return {
+    actionPaused: actionPaused.promise,
+    releaseAction: releaseAction.resolve,
+    checks,
+    posts,
+    payment: () => {
+      if (!payment) throw new Error("The screen has not mounted.");
+      return payment;
+    },
+    mount: () =>
+      root.render(
+        createElement(
+          RegistryContext.Provider,
+          { value: registry },
+          createElement(Screen)
+        )
+      ),
+    dispose: async () => {
+      releaseAction.resolve();
+      await root.render(null);
+      registry.dispose();
+    },
+  };
+}
+
+test.each(["session", "dispatch"] as const)(
+  "abandoning Retry during %s preparation sends no payment write",
+  async (pauseAt) => {
+    const action = setupAction(status, { pauseAt });
+    let ready: Promise<void> | undefined;
+    try {
+      await action.mount();
+      await act(async () => {
+        ready = action.payment().retry(approved);
+        await action.actionPaused;
+      });
+      action.payment().abandon();
+      await act(async () => {
+        action.releaseAction();
+        await ready;
+      });
+      expect(action.posts).toEqual([]);
+      expect(action.checks).toEqual([]);
+    } finally {
+      await action.dispose();
+    }
+  }
+);
+
+test("abandoning draft resume during account verification opens no browser", async () => {
+  openSitePage.mockClear();
+  const action = setupAction(draft, { pauseAt: "session" });
+  try {
+    await action.mount();
+    let ready: Promise<void> | undefined;
+    await act(async () => {
+      ready = action.payment().continuePayment("resume");
+      await action.actionPaused;
+    });
+    await root.render(null);
+    action.releaseAction();
+    await ready;
+    expect(openSitePage).not.toHaveBeenCalled();
+    expect(action.checks).toEqual([]);
+  } finally {
+    await action.dispose();
+  }
+});
+
+test("the PWA resumes the confirmed draft in the current tab", async () => {
+  openSitePage.mockClear();
+  const action = setupAction(draft);
+  const oldPlatform = Platform.OS;
+  Object.defineProperty(Platform, "OS", { value: "web" });
+  const assign = spyOn(globalThis.location, "assign").mockImplementation(
+    () => {}
+  );
+  try {
+    await action.mount();
+    await act(async () => action.payment().continuePayment("resume"));
+    expect(assign).toHaveBeenCalledWith(
+      `${fakeWorkspaceOrigin}${draft.resumePath}`
+    );
+    expect(openSitePage).not.toHaveBeenCalled();
+    expect(action.checks).toEqual([]);
+  } finally {
+    assign.mockRestore();
+    Object.defineProperty(Platform, "OS", { value: oldPlatform });
+    await action.dispose();
+  }
+});
+
+test("a definitive payment refusal explains why and checks status without settlement polling", async () => {
+  const action = setupAction(status, { failure: "refused" });
+  try {
+    await action.mount();
+    await act(async () => action.payment().retry(approved));
+    expect(action.posts).toHaveLength(1);
+    expect(action.payment().notice).toBe(
+      m.reservations_payment_retry_settling({}, { locale: "en-US" })
+    );
+    expect(action.checks).toEqual([false]);
+  } finally {
+    await action.dispose();
+  }
+});
+
+test("an uncertain dispatched payment starts settlement reconciliation", async () => {
+  const action = setupAction(status, { failure: "unconfirmed" });
+  try {
+    await action.mount();
+    await act(async () => action.payment().retry(approved));
+    expect(action.posts).toHaveLength(1);
+    expect(action.checks).toEqual([true]);
+  } finally {
+    await action.dispose();
+  }
 });
