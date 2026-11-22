@@ -64,6 +64,22 @@ describe("pass purchase requests", () => {
     expect(device.sessionChecks).toBe(1);
   });
 
+  test("an expired session cannot replay its pending purchase", async () => {
+    const { registry, workspace } = makeFakeCustomerData();
+    const unmount = registry.mount(beginPassPurchaseAtom);
+    workspace.signedIn = false;
+
+    registry.set(beginPassPurchaseAtom, { payload: initial });
+    const outcome = await settle(registry, beginPassPurchaseAtom);
+    unmount();
+
+    expect(outcome).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "CustomerSessionRequired" },
+    });
+    expect(workspace.calls.map(String)).toEqual(["getSession"]);
+  });
+
   test("the current account reaches the typed purchase endpoint after auth recheck", async () => {
     const { registry, workspace } = makeFakeCustomerData();
     const unmount = registry.mount(beginPassPurchaseAtom);
