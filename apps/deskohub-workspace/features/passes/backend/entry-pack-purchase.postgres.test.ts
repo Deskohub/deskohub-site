@@ -15,7 +15,7 @@ import {
 } from "@deskohub/nexi";
 import { testEmailAddress } from "@deskohub/test-email";
 import { eq } from "drizzle-orm";
-import { Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
@@ -58,6 +58,11 @@ import { LegalEvidenceEventRepository } from "@/features/checkout/backend/reposi
 import { PaymentAttemptRepository } from "@/features/checkout/backend/repositories/payment-attempt.repository";
 import { WebhookEventRepository } from "@/features/checkout/backend/repositories/webhook-event.repository";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import {
+  currentAccountResolving,
+  customerApiRequest,
+  makeCustomerApiTestServer,
+} from "@/features/customer-api/customer-api.test-utils";
 import { calculateDiscounts } from "@/features/discounts/calculator";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
@@ -88,6 +93,7 @@ import {
   purchaseStatus,
   startPurchase,
 } from "./customer-pass-purchase";
+import { customerPassPurchaseLayers } from "./customer-pass-purchase-layers";
 import {
   claimEntryPackGifts,
   queueEntryPackGiftResend,
@@ -836,6 +842,35 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         providerOrders,
         providerReturns,
         verifiedOrders,
+        customerApi: (viewer = session) => {
+          const withoutActor = Layer.effectContext(
+            Layer.build(services).pipe(
+              Effect.map(Context.omit(CurrentCustomerAccount))
+            )
+          );
+          return makeCustomerApiTestServer({
+            session: viewer,
+            reservations: {
+              currentAccount: currentAccountResolving((active) => ({
+                kind: "profile-missing",
+                session: active,
+                reviewMarker: "absent",
+              })),
+            },
+            passes: {
+              release: CoworkPassesReleaseGate.fromDecision(true),
+              database: db.layer,
+              purchases: {
+                ...customerPassPurchaseLayers,
+                begin: withoutActor,
+                payment: withoutActor,
+                status: ProviderPaymentFinalizationService.Default.pipe(
+                  Layer.provideMerge(withoutActor)
+                ),
+              },
+            },
+          });
+        },
         customerPay: (
           overrides: Partial<PayPassPurchaseInput> = {},
           viewer = session,
@@ -1404,6 +1439,80 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await payment.evidenceCount()).toBe(6);
       expect(payment.providerOrders).toHaveLength(3);
       await payment.notify("failure", 2);
+    });
+
+    test("the customer API starts an owned purchase and requires consent before the native payment handoff", async () => {
+      const purchase = await integration(database!, 20_000);
+      const api = purchase.customerApi();
+      const orderId = purchase.orderId;
+      const started = await api.handle(
+        customerApiRequest({
+          method: "POST",
+          path: "/passes/purchases",
+          body: {
+            orderId,
+            locale: "en-US",
+            product: { kind: "entry-pack", tier: "open-space", size: 5 },
+          },
+        })
+      );
+      expect(started.status).toBe(200);
+      const details = await started.json();
+      expect(details).toMatchObject({
+        orderId,
+        product: { kind: "entry-pack", tier: "open-space", size: 5 },
+        payPath: `/en-US/passes/entry-pack?order=${orderId}&step=pay`,
+        price: { fingerprint: purchase.initialFingerprint },
+      });
+      const path = `/passes/purchases/${orderId}`;
+      const status = await api.handle(
+        customerApiRequest({ method: "GET", path })
+      );
+      expect(await status.json()).toMatchObject({
+        orderId,
+        status: "not_started",
+        productKind: "entry-pack",
+      });
+      const otherBuyer = purchase.customerApi({
+        ...session,
+        accountId: customerAccountIdSchema.make(crypto.randomUUID()),
+      });
+      const hidden = await otherBuyer.handle(
+        customerApiRequest({ method: "GET", path })
+      );
+      expect(hidden.status).toBe(404);
+      expect(await hidden.json()).toEqual({ _tag: "CustomerPassNotFound" });
+
+      const submit = (accepted: boolean) =>
+        api.handle(
+          customerApiRequest({
+            method: "POST",
+            path: `${path}/payment`,
+            body: {
+              productKind: "entry-pack",
+              accepted,
+              acceptedDocuments: getEntryPackPaymentDisclosure(
+                "en-US"
+              ).documents.map(({ key, hash }) => ({ key, hash })),
+              displayedPriceFingerprint: purchase.initialFingerprint,
+              returnTarget: "native-app",
+            },
+          })
+        );
+      const missingConsent = await submit(false);
+      expect(missingConsent.status).toBe(409);
+      expect(await missingConsent.json()).toMatchObject({
+        reason: "consent-required",
+      });
+      expect(purchase.providerOrders).toHaveLength(0);
+      const paid = await submit(true);
+      expect(paid.status).toBe(200);
+      expect(await paid.json()).toEqual({
+        status: "hosted",
+        statusUrl: `deskohub://passes/purchases/${orderId}?after=payment`,
+        redirectUrl: "https://nexi.test/payment",
+      });
+      expect(purchase.providerOrders).toHaveLength(1);
     });
 
     test("customer Pay verifies the buyer, current consent and price before opening Nexi", async () => {

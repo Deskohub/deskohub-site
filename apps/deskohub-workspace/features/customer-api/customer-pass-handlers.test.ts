@@ -1,7 +1,10 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
+import { PostHogFeatureFlagEvaluationError } from "@deskohub/analytics-posthog/feature-flags/node";
+import { Effect, Layer } from "effect";
 import { releaseGateForRunOverFlags } from "@/features/feature-flags/backend/release-cohorts.test-utils";
+import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import {
   answerInEachReleaseCohort,
@@ -19,6 +22,27 @@ const passId = "019acbf0-0000-7000-8000-000000000011";
 
 describe("customer pass reads", () => {
   testCustomerEndpointGuards(catalog);
+
+  test("withholds the catalog when PostHog cannot evaluate the release", async () => {
+    const flags = Layer.mock(WorkspaceFeatureFlagService, {
+      isEnabled: () =>
+        Effect.fail(
+          new PostHogFeatureFlagEvaluationError({
+            message: "Fixture flag evaluation omitted the release.",
+          })
+        ),
+    });
+    const api = makeCustomerApiTestServer({
+      passes: {
+        release: releaseGateForRunOverFlags(CoworkPassesReleaseGate, flags),
+      },
+    });
+    const response = await api.handle(customerApiRequest(catalog));
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({
+      _tag: "CustomerPassesUnavailable",
+    });
+  });
 
   test("catalog answers only requests in the open release cohort", async () => {
     const answers = await answerInEachReleaseCohort({
