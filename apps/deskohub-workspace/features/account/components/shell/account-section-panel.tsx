@@ -85,7 +85,7 @@ export function AccountSectionPanel({
         // creating a scroll container, so it stays sticky.
         footer !== undefined &&
           footerLayout === "edge-to-edge" &&
-          "overflow-clip has-[>[data-footer-layout=edge-to-edge]:not(:empty)]:pb-0!",
+          "overflow-clip has-[>[data-footer-layout=edge-to-edge]>:not(template)]:pb-0!",
         className
       )}
       {...rest}
@@ -128,9 +128,10 @@ export function AccountSectionPanel({
               ),
               // Docks above the install bar or the safe area, whichever is
               // taller, since its tint would otherwise fill the safe area. A
-              // footer whose content renders nothing leaves the panel as is.
+              // footer that renders nothing, or is still streaming in (React
+              // holds its place with a `template`), leaves the panel as is.
               "edge-to-edge":
-                "bottom-[max(var(--install-bar-space,0px),env(safe-area-inset-bottom))] mt-[18px] -mx-5 empty:hidden @xl:-mx-8",
+                "bottom-[max(var(--install-bar-space,0px),env(safe-area-inset-bottom))] mt-[18px] -mx-5 not-has-[>:not(template)]:hidden @xl:-mx-8",
             }[footerLayout]
           )}
           data-footer-layout={footerLayout}

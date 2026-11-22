@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { type Browser, chromium, type Page } from "@playwright/test";
 import { renderToReadableStream } from "react-dom/server";
+import type { AccountPasses } from "@/features/account/account-passes.server";
 import type { CustomerReservationSummary } from "@/features/account/contracts";
 import { UnsavedChangesProvider } from "@/shared/components/unsaved-changes-guard";
 import { playwrightChromiumAvailable } from "@/shared/testing/playwright-browser";
@@ -11,7 +12,9 @@ const chromiumAvailable = await playwrightChromiumAvailable();
 const viewport = { width: 390, height: 844 };
 const safeAreaBottom = 34;
 let browser: Browser | undefined;
+let styles = "";
 let document = "";
+let streamingDocument = "";
 
 const pastVisits = Array.from(
   { length: 14 },
@@ -29,12 +32,11 @@ const pastVisits = Array.from(
   }
 );
 
-beforeAll(async () => {
-  if (!chromiumAvailable) return;
-  const stream = await renderToReadableStream(
+const renderHistory = (entryPacks: Promise<AccountPasses>) =>
+  renderToReadableStream(
     <UnsavedChangesProvider>
       <ReservationHistory
-        entryPacks={Promise.resolve({ held: [], boughtForOthers: [] })}
+        entryPacks={entryPacks}
         history={{
           kind: "available",
           groups: { current: [], past: pastVisits, unavailable: [] },
@@ -43,10 +45,35 @@ beforeAll(async () => {
       />
     </UnsavedChangesProvider>
   );
+
+const pageOf = (markup: string) =>
+  `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><style>${styles}</style></head><body><main class="px-4 pt-8 pb-64"><div class="@container min-w-0">${markup}</div></main></body></html>`;
+
+/** The markup React streams before the Entry pack read settles. */
+const shellOf = async (stream: ReadableStream<Uint8Array>) => {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let markup = "";
+  while (!markup.includes("data-footer-layout")) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    markup += decoder.decode(value, { stream: true });
+  }
+  await reader.cancel();
+  return markup;
+};
+
+beforeAll(async () => {
+  if (!chromiumAvailable) return;
+  styles = await compileWorkspaceAppStyles();
+  const stream = await renderHistory(
+    Promise.resolve({ held: [], boughtForOthers: [] })
+  );
   await stream.allReady;
-  const markup = await new Response(stream).text();
-  const styles = await compileWorkspaceAppStyles();
-  document = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><style>${styles}</style></head><body><main class="px-4 pt-8 pb-64"><div class="@container min-w-0">${markup}</div></main></body></html>`;
+  document = pageOf(await new Response(stream).text());
+  streamingDocument = pageOf(
+    await shellOf(await renderHistory(new Promise(() => {})))
+  );
   browser = await chromium.launch({ headless: true });
 });
 
@@ -126,6 +153,37 @@ test.skipIf(!chromiumAvailable)(
     expect(offer.y + offer.height).toBeLessThan(
       viewport.height - safeAreaBottom
     );
+    await page.close();
+  }
+);
+
+test.skipIf(!chromiumAvailable)(
+  "keeps the Past reservations panel's padding while the offer streams in",
+  async () => {
+    const page = await browser!.newPage({ viewport });
+    const panelState = () =>
+      page
+        .locator('[data-account-reservation-group="past"]')
+        .evaluate((panel) => {
+          const footer = panel.querySelector("[data-footer-layout]");
+          return {
+            padding: getComputedStyle(panel).paddingBottom,
+            footerShown: footer ? getComputedStyle(footer).display : "none",
+          };
+        });
+
+    await page.setContent(streamingDocument);
+    const streaming = await panelState();
+    expect(streamingDocument).toContain("<template");
+    expect(streaming.footerShown).toBe("none");
+    expect(streaming.padding).not.toBe("0px");
+
+    await page.setContent(document);
+    // React swaps the streamed offer into its placeholder after load.
+    await page.locator("[data-account-pass-savings]").waitFor();
+    const offered = await panelState();
+    expect(offered.footerShown).not.toBe("none");
+    expect(offered.padding).toBe("0px");
     await page.close();
   }
 );
