@@ -72,6 +72,12 @@ const canKeepConfirmed = (failure: StatusReadFailure) =>
       (failure.reason._tag === "StatusCodeError" &&
         failure.reason.response.status >= 500)));
 
+const lostPurchaseAccess = (failure: StatusReadFailure) =>
+  failure._tag === "CustomerSessionRequired" ||
+  failure._tag === "CustomerPassNotFound" ||
+  failure._tag === "CustomerAccountLinkRequired" ||
+  failure._tag === "CustomerPassesUnavailable";
+
 export type PassPurchaseStatusCheck =
   | "manual"
   | "after-payment"
@@ -107,15 +113,18 @@ const statusUpdates = (
             Result.isFailure(outcome) && canKeepConfirmed(outcome.failure);
           const settling =
             fresh?.status === "pending" || fresh?.status === "checking";
+          // A failed read cannot resolve a payment. Only an explicit
+          // loss of access makes it inappropriate to keep the warning.
+          const unresolved = Result.isFailure(outcome)
+            ? !lostPurchaseAccess(outcome.failure)
+            : settling || fresh?.status === "not_started";
           state = {
             ...state,
             outcome,
             confirmed: fresh ?? (retain ? state.confirmed : undefined),
             reading: false,
             polling: state.polling && settling,
-            unconfirmed:
-              state.unconfirmed &&
-              (retain || settling || fresh?.status === "not_started"),
+            unconfirmed: state.unconfirmed && unresolved,
           };
           yield* Queue.offer(queue, state);
         });

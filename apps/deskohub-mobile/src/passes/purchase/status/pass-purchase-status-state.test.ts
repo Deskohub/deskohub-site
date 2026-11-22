@@ -39,7 +39,10 @@ const errorTags = {
   404: "CustomerPassNotFound",
   429: "CustomerRateLimited",
 } as const;
-type TestAnswer = CustomerPassPurchaseStatus["status"] | keyof typeof errorTags;
+type TestAnswer =
+  | CustomerPassPurchaseStatus["status"]
+  | keyof typeof errorTags
+  | "truncated-json";
 
 function setup({
   answers,
@@ -55,6 +58,14 @@ function setup({
     Effect.sync(() => {
       const answer = answers[calls.length] ?? answers.at(-1) ?? answers[0];
       calls.push({ method: request.method, url: url.href });
+      if (answer === "truncated-json") {
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response('{"status":', {
+            headers: { "content-type": "application/json" },
+          })
+        );
+      }
       return HttpClientResponse.fromWeb(
         request,
         typeof answer === "number"
@@ -116,6 +127,7 @@ function setup({
     status:
       | CustomerPassPurchaseStatus["status"]
       | (typeof errorTags)[keyof typeof errorTags]
+      | "SchemaError"
   ) =>
     Effect.runPromise(
       eventually(
@@ -373,6 +385,32 @@ test("an uncertain write warning clears once settlement confirms a refund", asyn
     status.dispose();
   }
 });
+
+test.each([
+  ["refunded", "refunded"],
+  ["CustomerSessionRequired", 401],
+  ["CustomerPassNotFound", 404],
+] as const)(
+  "a truncated status response leaves payment uncertain until a fresh %s response",
+  async (expected, resolution) => {
+    const status = setup({
+      answers: ["failed", "truncated-json", resolution],
+      afterPayment: false,
+    });
+    try {
+      status.focus(true);
+      await status.settled(1, "failed");
+      status.refresh("unconfirmed");
+      await status.settled(2, "SchemaError");
+      expect(status.current()?.unconfirmed).toBe(true);
+      status.refresh();
+      await status.settled(3, expected);
+      expect(status.current()?.unconfirmed).toBe(false);
+    } finally {
+      status.dispose();
+    }
+  }
+);
 
 test("persistent pending payment uses a bounded number of automatic reads", async () => {
   const status = setup({ answers: ["pending"] });
