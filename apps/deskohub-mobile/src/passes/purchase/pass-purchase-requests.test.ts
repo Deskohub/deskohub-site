@@ -36,7 +36,7 @@ describe("pass purchase requests", () => {
       _tag: "Failure",
       failure: { _tag: "CustomerPassesUnavailable" },
     });
-    expect(workspace.calls).toEqual(["listPassOffers"]);
+    expect(workspace.calls.map(String)).toEqual(["listPassOffers"]);
   });
 
   test("does not send protected details under a different account", async () => {
@@ -59,7 +59,7 @@ describe("pass purchase requests", () => {
       _tag: "Failure",
       failure: { _tag: "CustomerSessionRequired" },
     });
-    expect(workspace.calls).toEqual(["getSession"]);
+    expect(workspace.calls.map(String)).toEqual(["getSession"]);
     expect(device.sessionChecks).toBe(1);
   });
 
@@ -75,7 +75,10 @@ describe("pass purchase requests", () => {
       _tag: "Failure",
       failure: { _tag: "CustomerPassesUnavailable" },
     });
-    expect(workspace.calls).toEqual(["getSession", "beginPassPurchase"]);
+    expect(workspace.calls.map(String)).toEqual([
+      "getSession",
+      "beginPassPurchase",
+    ]);
   });
 
   test("a hosted return resumes the buyer's pass order in the app", () => {

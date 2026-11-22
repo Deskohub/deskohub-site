@@ -53,7 +53,7 @@ export const unlimitedStartDatesAtom = Atom.family(
   (supersedeOrderId: string | undefined | false) =>
     customerDataRuntime.atom(
       supersedeOrderId === false
-        ? Effect.succeed(undefined)
+        ? Effect.undefined
         : passesApi.pipe(
             Effect.flatMap((api) =>
               api.getUnlimitedStartDates({

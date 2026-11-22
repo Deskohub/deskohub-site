@@ -8,7 +8,7 @@ import type {
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Cause, Exit, Option, Predicate } from "effect";
 import { AsyncResult } from "effect/reactivity";
-import { randomUUID } from "expo-crypto";
+import * as Crypto from "expo-crypto";
 import {
   Stack,
   useFocusEffect,
@@ -338,7 +338,7 @@ function PassPurchaseFlow({
         ? current.input
         : {
             ...content,
-            orderId: randomUUID(),
+            orderId: Crypto.randomUUID(),
             ...(kind === "unlimited" &&
               previousOrderId !== undefined && {
                 supersedeOrderId: previousOrderId,

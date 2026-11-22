@@ -61,7 +61,6 @@ export function PassPurchaseCode({
         onSubmitEditing={submit}
         returnKeyType="go"
         autoCapitalize="none"
-        autoCorrect={false}
         maxLength={64}
         editable={!busy}
       />

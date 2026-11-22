@@ -205,7 +205,6 @@ export function PassPurchaseDetails({
                 onChange({ ...details, holderEmail })
               }
               autoCapitalize="none"
-              autoCorrect={false}
               keyboardType="email-address"
               editable={!busy}
               error={
