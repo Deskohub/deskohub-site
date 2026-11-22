@@ -31,7 +31,7 @@ import type { Locale } from "@/features/i18n";
 import {
   type OrderId,
   orderFulfillmentStates,
-  orderPaymentStates,
+  reservationPaymentStates,
 } from "@/features/order";
 import type { AgentSelectionKey } from "@/features/reservation/backend/booking-agent";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
@@ -84,7 +84,7 @@ const reservationCancellationCauses = [
 export type ReservationCancellationCause =
   (typeof reservationCancellationCauses)[number];
 
-export const paymentStates = orderPaymentStates;
+export const paymentStates = reservationPaymentStates;
 
 export const fulfillmentStates = orderFulfillmentStates;
 

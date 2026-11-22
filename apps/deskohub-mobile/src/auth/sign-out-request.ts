@@ -27,20 +27,25 @@ export interface SignOutClient {
  * Ends `client`'s session while it holds the app's session write lock, so no
  * sign-in stores a session that the sign-out's answer would then clear.
  */
-export const signOutOf = (client: SignOutClient) =>
+export const signOutOf = (
+  client: SignOutClient,
+  withPreparation: (
+    request: Effect.Effect<void, SignOutFailure>
+  ) => Effect.Effect<void, SignOutFailure> = (request) => request
+) =>
   withSessionWriteLock(
-    abortableRequest(
-      (signal) => client.signOut({ fetchOptions: { signal } }),
-      () => new SignOutFailure()
-    ).pipe(
-      Effect.timeoutOrElse({
-        duration: signOutRequestBound,
-        orElse: () => Effect.fail(new SignOutFailure()),
-      })
+    withPreparation(
+      abortableRequest(
+        (signal) => client.signOut({ fetchOptions: { signal } }),
+        () => new SignOutFailure()
+      ).pipe(
+        Effect.timeoutOrElse({
+          duration: signOutRequestBound,
+          orElse: () => Effect.fail(new SignOutFailure()),
+        }),
+        Effect.flatMap(({ error }) =>
+          error === null ? Effect.void : Effect.fail(new SignOutFailure())
+        )
+      )
     )
-  ).pipe(
-    Effect.flatMap(({ error }) =>
-      error === null ? Effect.void : Effect.fail(new SignOutFailure())
-    ),
-    Effect.withSpan("Auth.signOut")
-  );
+  ).pipe(Effect.withSpan("Auth.signOut"));

@@ -5,6 +5,7 @@ import {
   DotyposService,
   type RestoreCancelledReservationResult,
 } from "@deskohub/dotypos";
+import { eq } from "drizzle-orm";
 import {
   Context,
   Data,
@@ -17,6 +18,7 @@ import {
 } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
+import { passEntryClaims, passPurchases } from "@/db/schema";
 import { WorkspaceLockSections } from "@/db/workspace-locks";
 import { AccountingDocumentSnapshots } from "@/features/accounting/backend/accounting-document-snapshots";
 import type { AdministrationActor } from "@/features/administrators/administration-source";
@@ -163,7 +165,7 @@ export class ReservationRestorationService extends Context.Service<
     Effect.gen(function* () {
       const access = yield* ReservationAccessService;
       const accountingSnapshots = yield* AccountingDocumentSnapshots;
-      const { transaction } = yield* WorkspaceDatabase;
+      const { db, transaction } = yield* WorkspaceDatabase;
       const advisoryLock = yield* WorkspaceDatabaseAdvisoryLock;
       const dotypos = yield* DotyposService;
       const emails = yield* WorkspaceReservationEmailService;
@@ -181,6 +183,38 @@ export class ReservationRestorationService extends Context.Service<
             restorationError("not_found")
           )
         );
+
+      const readRestorablePackFunding = Effect.fn("readRestorablePackFunding")(
+        function* (id: WorkspaceReservationId) {
+          const [funding] = yield* db
+            .select({
+              passId: passPurchases.id,
+              passStatus: passPurchases.status,
+              claimStatus: passEntryClaims.status,
+            })
+            .from(passEntryClaims)
+            .innerJoin(
+              passPurchases,
+              eq(passPurchases.id, passEntryClaims.passId)
+            )
+            .where(eq(passEntryClaims.reservationId, id))
+            .pipe(
+              Effect.mapError((cause) =>
+                restorationError("details_unavailable", cause)
+              )
+            );
+          if (
+            funding &&
+            (funding.claimStatus !== "consumed" ||
+              funding.passStatus === "cancelled" ||
+              funding.passStatus === "withdrawn" ||
+              funding.passStatus === "void")
+          ) {
+            return yield* restorationError("invalid_state");
+          }
+          return funding?.passId;
+        }
+      );
 
       /** Whether another reservation of the checkout session is active. */
       const hasActiveSuccessor = (reservation: WorkspaceReservation) =>
@@ -523,6 +557,9 @@ export class ReservationRestorationService extends Context.Service<
       }) =>
         transaction(
           Effect.succeed(input).pipe(
+            Effect.tap(({ reservationId }) =>
+              readRestorablePackFunding(reservationId)
+            ),
             Effect.bind("accessPlan", prepareAccess),
             Effect.bind("restored", confirmReservation),
             Effect.tap(({ restored, acknowledgeRefundedPayment }) =>
@@ -835,6 +872,9 @@ export class ReservationRestorationService extends Context.Service<
         }
       ) =>
         Effect.succeed(input).pipe(
+          Effect.bind("packId", ({ reservation }) =>
+            readRestorablePackFunding(reservation.id)
+          ),
           Effect.bind("cancellation", getRestorableCancellation),
           Effect.bind("dotyposReservation", ({ cancellation }) =>
             readDotyposReservation(cancellation.dotyposReservationId)
@@ -851,12 +891,29 @@ export class ReservationRestorationService extends Context.Service<
           Effect.bind("accessPlan", planRestoredAccess),
           Effect.tap(checkRefunds),
           Effect.flatMap((restoration) => {
-            const restore = Effect.succeed(restoration).pipe(
+            const performRestore = Effect.succeed(restoration).pipe(
+              Effect.tap(({ reservation }) =>
+                readRestorablePackFunding(reservation.id)
+              ),
               Effect.tap(requireTableAvailable),
               Effect.bind("audit", ({ actor }) => startReservationAudit(actor)),
               Effect.bind("dotyposRestore", restoreInDotypos),
               Effect.bind("recording", finalizeRestoration)
             );
+            const restore = restoration.packId
+              ? performRestore.pipe(
+                  WorkspaceLockSections.passPurchaseFulfillment(
+                    restoration.packId
+                  ),
+                  Effect.provideService(
+                    WorkspaceDatabaseAdvisoryLock,
+                    advisoryLock
+                  ),
+                  Effect.catchTag("SqlError", (cause) =>
+                    restorationError("dotypos_failed", cause)
+                  )
+                )
+              : performRestore;
             if (restoration.accessPlan === "not_needed") return restore;
 
             const { first, last } = getTouchedWorkspaceDateBounds({
@@ -913,7 +970,8 @@ const findRestorableCancellation = (
   hasActiveSuccessor: boolean
 ): Option.Option<RestorableCancellation> => {
   const { dotyposReservationId, reservationCancelledAt } = reservation;
-  return canRestoreReservation(reservation, { hasActiveSuccessor }) &&
+  return !reservation.passId &&
+    canRestoreReservation(reservation, { hasActiveSuccessor }) &&
     dotyposReservationId !== null &&
     reservationCancelledAt !== null
     ? Option.some({ cancelledAt: reservationCancelledAt, dotyposReservationId })

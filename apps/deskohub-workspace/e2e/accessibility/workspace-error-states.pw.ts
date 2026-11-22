@@ -4,9 +4,14 @@ import {
   expectAxeClean,
   openSettledPage,
 } from "./accessibility-audit";
-import { localFixtureSkipReason, sandboxSkipReason } from "./audit-target";
+import {
+  localFixtureSkipReason,
+  sandboxSkipReason,
+  seededAccountSkipReason,
+} from "./audit-target";
 import { accessibilityTest as test } from "./fixtures";
 import {
+  openMissingReservationStatus,
   openSignIn,
   reservationForms,
   statusOutcomes,
@@ -44,13 +49,24 @@ for (const locale of auditedLocales) {
       localDatabase,
       page,
     }, testInfo) => {
-      test.skip(
-        outcome !== "not_found" && localFixtureSkipReason !== undefined,
-        localFixtureSkipReason
-      );
+      test.skip(localFixtureSkipReason !== undefined, localFixtureSkipReason);
       await withStatusOutcome({ localDatabase, locale, outcome, page }, () =>
         expectAxeClean(page, testInfo)
       );
     });
   }
 }
+
+test.describe("missing reservation", () => {
+  test.skip(seededAccountSkipReason !== undefined, seededAccountSkipReason);
+
+  for (const locale of auditedLocales) {
+    test(`${locale} not_found reservation status has no detectable accessibility violations`, async ({
+      page,
+      seededAccounts,
+    }, testInfo) => {
+      await openMissingReservationStatus({ locale, page, seededAccounts });
+      await expectAxeClean(page, testInfo);
+    });
+  }
+});

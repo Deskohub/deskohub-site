@@ -21,6 +21,10 @@ mock.module("server-only", () => ({}));
 mock.module("next/server", () => ({ connection: () => Promise.resolve() }));
 let locale: Locale = "cs-CZ";
 
+mock.module("@/features/passes/admin/pass-page-data.server", () => ({
+  loadReservationPassLinks: () => Promise.resolve(undefined),
+}));
+
 mock.module("@/features/i18n/server/request-locale", () => ({
   getRequestLocale: () => Promise.resolve(locale),
 }));

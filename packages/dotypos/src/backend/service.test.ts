@@ -3294,6 +3294,298 @@ describe("DotyposService marked reservation transitions", () => {
   });
 });
 
+describe("DotyposService reservation customer reassignment", () => {
+  const input = {
+    reservationId: dotyposReservationId("reservation-id"),
+    expectedBooking: {
+      customerId: dotyposCustomerId("customer-id"),
+      tableId: dotyposTableId("table-id"),
+      startDate: new Date("2026-06-20T10:00:00.000Z"),
+      endDate: new Date("2026-06-20T12:00:00.000Z"),
+      seats: 2,
+    },
+    expectedNoteLine: "Unlimited booking marker",
+    customerId: dotyposCustomerId("-200000000000000001"),
+  };
+  const held = reservation({
+    status: "CONFIRMED",
+    note: `Internal note\n${input.expectedNoteLine}`,
+    versionDate: "2026-06-19T08:00:00.000100Z",
+  });
+  const assigned = {
+    ...held,
+    _customerId: input.customerId,
+    versionDate: "2026-06-19T08:00:00.000101Z",
+  };
+  const reassign = Effect.flatMap(DotyposService, (dotypos) =>
+    dotypos.reassignReservationCustomerIfMatches(input)
+  ).pipe(Effect.result);
+  const version = (record: ReservationWriteRecord, etag: string | undefined) =>
+    Response.json(record, etag ? { headers: { ETag: etag } } : undefined);
+
+  test.each([
+    ["already assigned", assigned, '"v2"', "Success"],
+    ["already assigned without ETag", assigned, undefined, "Success"],
+    [
+      "third holder",
+      { ...held, _customerId: "other" },
+      '"v1"',
+      "DotyposVersionConflict",
+    ],
+    [
+      "different reservation",
+      { ...held, id: "other" },
+      '"v1"',
+      "DotyposVersionConflict",
+    ],
+    [
+      "different table",
+      { ...held, _tableId: "other" },
+      '"v1"',
+      "DotyposVersionConflict",
+    ],
+    [
+      "different seats",
+      { ...held, seats: "3" },
+      '"v1"',
+      "DotyposVersionConflict",
+    ],
+    [
+      "different start in the same millisecond",
+      { ...held, startDate: "2026-06-20T10:00:00.000100Z" },
+      '"v1"',
+      "DotyposVersionConflict",
+    ],
+    [
+      "different end",
+      { ...held, endDate: "2026-06-20T13:00:00.000Z" },
+      '"v1"',
+      "DotyposVersionConflict",
+    ],
+    [
+      "NEW booking",
+      { ...held, status: "NEW" },
+      '"v1"',
+      "DotyposVersionConflict",
+    ],
+    [
+      "cancelled replay",
+      { ...assigned, status: "CANCELLED" },
+      '"v2"',
+      "DotyposVersionConflict",
+    ],
+    [
+      "marker substring",
+      { ...held, note: `prefix ${input.expectedNoteLine}` },
+      '"v1"',
+      "DotyposVersionConflict",
+    ],
+    ["missing ETag", held, undefined, "DotyposRejected"],
+    ["wildcard ETag", held, "*", "DotyposRejected"],
+    ["weak ETag", held, 'W/"v1"', "DotyposRejected"],
+    ["malformed quoted ETag", held, '"bad tag"', "DotyposRejected"],
+  ] as const)(
+    "reads %s without patching",
+    async (_label, record, etag, expected) => {
+      const fetchMock = mockDotyposFetch((request) =>
+        new URL(request.url).pathname === "/signin/token"
+          ? tokenResponse()
+          : version(record, etag)
+      );
+      const result = await runWithService(reassign, fetchMock);
+      if (expected === "Success") {
+        expect(result).toMatchObject({ _tag: "Success", success: assigned });
+      } else {
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            _tag: expected,
+            operation: "reassignReservationCustomerIfMatches",
+          },
+        });
+      }
+      expect(fetchMock.mock.calls.map(getMethod)).toEqual(["POST", "GET"]);
+    }
+  );
+
+  test.each([
+    {
+      label: "confirmed write",
+      receipt: "ok",
+      readback: assigned,
+      expected: "Success",
+    },
+    {
+      label: "confirmed write with omitted receipt ID",
+      receipt: "without-id",
+      readback: assigned,
+      expected: "Success",
+    },
+    {
+      label: "different reservation receipt with matching ETag",
+      receipt: "wrong-id",
+      readback: assigned,
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "lost reply without commit",
+      receipt: "lost",
+      readback: null,
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "PATCH response claiming a customer the GET does not hold",
+      receipt: "ok",
+      readback: held,
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "malformed receipt",
+      receipt: "malformed",
+      readback: null,
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "cancellation after PATCH",
+      receipt: "ok",
+      readback: { ...assigned, status: "CANCELLED" },
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "unrelated note change",
+      receipt: "ok",
+      readback: { ...assigned, note: input.expectedNoteLine },
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "unchanged ETag with target customer",
+      receipt: "ok",
+      readback: assigned,
+      receiptEtag: '"v1"',
+      readbackEtag: '"v1"',
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "receipt and readback share a malformed ETag",
+      receipt: "ok",
+      readback: assigned,
+      receiptEtag: '"bad tag"',
+      readbackEtag: '"bad tag"',
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "readback differs from acknowledged ETag",
+      receipt: "ok",
+      readback: assigned,
+      readbackEtag: '"v3"',
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "acknowledged without ETag",
+      receipt: "ok",
+      readback: assigned,
+      receiptEtag: null,
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "vanished booking",
+      receipt: "ok",
+      readback: null,
+      expected: "DotyposUncertain",
+    },
+    {
+      label: "concurrent write conflict",
+      receipt: "conflict",
+      readback: null,
+      expected: "DotyposVersionConflict",
+    },
+  ] as const)("$label sends one guarded PATCH", async (scenario) => {
+    const etag = '"v1"';
+    let reads = 0;
+    const fetchMock = mockDotyposFetch(async (request) => {
+      if (new URL(request.url).pathname === "/signin/token")
+        return tokenResponse();
+      expect(new URL(request.url).pathname).toBe(
+        `/clouds/${config.cloudId}/reservations/${input.reservationId}`
+      );
+      if (request.method === "GET") {
+        if (reads++ === 0) return version(held, etag);
+        return scenario.readback === null
+          ? new Response(null, { status: 404 })
+          : version(scenario.readback, scenario.readbackEtag ?? '"v2"');
+      }
+      expect(request.method).toBe("PATCH");
+      expect(request.headers.get("If-Match")).toBe(etag);
+      expect(await request.json()).toEqual({ _customerId: input.customerId });
+      if (scenario.receipt === "lost")
+        throw new TypeError("Synthetic lost response");
+      if (scenario.receipt === "conflict")
+        return new Response(null, { status: 412 });
+      if (scenario.receipt === "malformed") return Response.json({});
+      const { id, ...receipt } = assigned;
+      return version(
+        {
+          ...receipt,
+          versionDate: held.startDate,
+          ...(scenario.receipt !== "without-id" && {
+            id: scenario.receipt === "wrong-id" ? "other-reservation" : id,
+          }),
+        },
+        scenario.receiptEtag === null
+          ? undefined
+          : (scenario.receiptEtag ?? '"v2"')
+      );
+    });
+    const result = await runWithService(reassign, fetchMock);
+    if (scenario.expected === "Success") {
+      expect(result).toMatchObject({ _tag: "Success", success: assigned });
+    } else {
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: scenario.expected,
+          operation: "reassignReservationCustomerIfMatches",
+        },
+      });
+    }
+    expect(fetchMock.mock.calls.map(getMethod)).toEqual(
+      scenario.receipt === "ok" || scenario.receipt === "without-id"
+        ? ["POST", "GET", "PATCH", "GET"]
+        : ["POST", "GET", "PATCH"]
+    );
+  });
+
+  test("replays a lost committed PATCH through a read without writing again", async () => {
+    let current = held;
+    const fetchMock = mockDotyposFetch(async (request) => {
+      if (new URL(request.url).pathname === "/signin/token")
+        return tokenResponse();
+      if (request.method === "GET")
+        return version(current, current === held ? '"v1"' : '"v2"');
+      expect(request.method).toBe("PATCH");
+      expect(request.headers.get("If-Match")).toBe('"v1"');
+      expect(await request.json()).toEqual({ _customerId: input.customerId });
+      current = assigned;
+      throw new TypeError("Synthetic lost response");
+    });
+    const [first, replay] = await runWithService(
+      Effect.all([reassign, reassign]),
+      fetchMock
+    );
+    expect(first).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "DotyposUncertain", reason: "transport" },
+    });
+    expect(replay).toMatchObject({ _tag: "Success", success: assigned });
+    expect(fetchMock.mock.calls.map(getMethod)).toEqual([
+      "POST",
+      "GET",
+      "PATCH",
+      "GET",
+    ]);
+  });
+});
+
 describe("DotyposService reservation restore", () => {
   /** The booking `reservation()` holds by default. */
   const expectedBooking = {
@@ -5521,6 +5813,11 @@ describe("DotyposService creation retry guard", () => {
         repeat: "conditional",
         retry: "replay",
       },
+      "reservation.reassignCustomer": {
+        effect: "write",
+        repeat: "conditional",
+        retry: "none",
+      },
       "reservation.delete": {
         effect: "write",
         repeat: "unsafe",
@@ -5580,7 +5877,7 @@ describe("DotyposService creation retry guard", () => {
       "products.list": { effect: "read", repeat: "safe", retry: "transient" },
       "categories.list": { effect: "read", repeat: "safe", retry: "transient" },
     });
-    expect(Object.keys(dotyposRequestProfiles)).toHaveLength(23);
+    expect(Object.keys(dotyposRequestProfiles)).toHaveLength(24);
   });
 });
 

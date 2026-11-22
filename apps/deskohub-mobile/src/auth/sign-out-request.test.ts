@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Exit, Fiber, Option, Semaphore } from "effect";
+import { Deferred, Effect, Exit, Fiber, Option, Semaphore } from "effect";
 import { TestClock } from "effect/testing";
 import { SessionWriteLock, withSessionWriteLock } from "./session-write-lock";
 import {
@@ -53,6 +53,47 @@ const signIn = (steps: Array<string>) =>
   withSessionWriteLock(Effect.sync(() => steps.push("signed in")));
 
 describe("signOutOf", () => {
+  test("waits for local cleanup before the native client's cookie can clear", async () => {
+    const { client, steps, answer } = makeClient();
+    await onTestClock(
+      Effect.gen(function* () {
+        const erased = yield* Deferred.make<void>();
+        const prepare = Deferred.await(erased).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              steps.push("draft erased");
+            })
+          )
+        );
+        const signingOut = yield* Effect.forkChild(
+          signOutOf(client, (request) => Effect.andThen(prepare, request))
+        );
+        yield* Effect.yieldNow;
+        expect(steps).toEqual([]);
+        yield* Deferred.succeed(erased, undefined);
+        yield* Effect.yieldNow;
+        answer();
+        yield* Fiber.join(signingOut);
+      })
+    );
+    expect(steps).toEqual([
+      "draft erased",
+      "sign-out sent",
+      "sign-out answered",
+    ]);
+  });
+
+  test("a failed erase leaves the session available to retry sign-out", async () => {
+    const { client, steps } = makeClient();
+    const failure = new SignOutFailure();
+    const exit = await onTestClock(
+      Effect.exit(signOutOf(client, () => Effect.fail(failure)))
+    );
+
+    expect(failureOf(exit)).toBe(failure);
+    expect(steps).toEqual([]);
+  });
+
   test("a sign-in waits for the sign-out's answer, which can't clear it", async () => {
     const { client, steps, answer } = makeClient();
     await onTestClock(

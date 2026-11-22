@@ -81,6 +81,7 @@ export type {
   DotyposTable,
   DotyposTableGroupId,
   DotyposTableId,
+  ReassignDotyposReservationCustomerInput,
   RestoreDotyposReservationInput,
   SetMatchingDotyposReservationStatusInput,
   UpdateDotyposReservationInput,

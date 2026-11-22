@@ -1,18 +1,37 @@
 import { describe, expect, test } from "bun:test";
 import { RegistryContext } from "@effect/atom-react";
-import { Effect } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { AtomRegistry } from "effect/reactivity";
 import { renderToStaticMarkup } from "react-dom/server";
+import {
+  AccountExitFence,
+  type AccountSession,
+} from "../../customer-api/account-scoped-storage";
 import { accountAtom } from "../../customer-api/customer-data-runtime";
 import {
+  DeviceCapabilityFailed,
+  DeviceOnboardingDraft,
+} from "../../customer-api/device-capabilities";
+import { customerDataExitCleanup } from "../../customer-api/exit-cleanup";
+import {
+  makeCustomerDataRegistry,
   makeFakeCustomerData,
   settle,
 } from "../../customer-api/testing/customer-data-test-registry";
+import {
+  fakeCustomerDataLayer,
+  fakeDeviceCapabilities,
+} from "../../customer-api/testing/fake-customer-data";
 import { completeProfileAtom } from "../profile/profile-save";
 import {
   type CompletionRequiredAccount,
+  saveCompletionEditsAtom,
   useOnboardingDraft,
 } from "./onboarding-draft";
+import {
+  completionDraftRecoveryAtom,
+  setOnboardingSession,
+} from "./onboarding-edits";
 
 type OnboardingDraft = ReturnType<typeof useOnboardingDraft>;
 
@@ -40,8 +59,16 @@ const step = (name: string) => {
 };
 
 /** A completion-required account over a fake Workspace, with steps to mount. */
-const onboarding = async () => {
-  const { registry, workspace } = makeFakeCustomerData("completion-required");
+const onboarding = async (
+  {
+    registry,
+    workspace,
+    device,
+  }: Pick<
+    ReturnType<typeof makeFakeCustomerData>,
+    "registry" | "workspace" | "device"
+  > = makeFakeCustomerData("completion-required")
+) => {
   const read = await settle(registry, accountAtom);
   const account = read._tag === "Success" ? read.success : undefined;
   if (account?.kind !== "completion-required")
@@ -67,7 +94,22 @@ const onboarding = async () => {
     );
     show(...names);
   };
-  return { registry, workspace, show, submitted };
+  const saved = () => settle(registry, saveCompletionEditsAtom);
+  const restart = (session?: AccountSession) => {
+    registry.dispose();
+    return onboarding({
+      registry: makeCustomerDataRegistry(
+        fakeCustomerDataLayer({
+          workspace,
+          device,
+          ...(session && { session }),
+        })
+      ),
+      workspace,
+      device,
+    });
+  };
+  return { registry, workspace, device, show, submitted, saved, restart };
 };
 
 /** Edits the draft from step `name`, then shows the steps again. */
@@ -122,6 +164,213 @@ describe("onboarding draft", () => {
       firstName: "Jordan",
       lastName: "Sample",
     });
+  });
+
+  test("restarting restores the answers from both steps", async () => {
+    const before = await onboarding();
+    before.show("about-you");
+    editing(before.show)("about-you", { firstName: "Jordan" }, "billing");
+    editing(before.show)("billing", { billingKind: "personal", city: "Brno" });
+    await before.saved();
+    expect(Option.getOrThrow(before.device.onboardingDraft).draft).toContain(
+      "Jordan"
+    );
+
+    const after = await before.restart();
+    expect(Option.isSome(after.device.onboardingDraft)).toBe(true);
+    after.show("about-you", "billing");
+    expect(step("about-you").draft.firstName).toBe("Jordan");
+    expect(step("billing").draft.city).toBe("Brno");
+  });
+
+  test("reauthentication keeps the registry, retires old edits and saves the new session's answers", async () => {
+    const { workspace, device } = makeFakeCustomerData("completion-required");
+    let active = "first";
+    const open = () => {
+      const registry = makeCustomerDataRegistry(
+        fakeCustomerDataLayer({
+          workspace,
+          device,
+          onboardingSession: Effect.sync(() => active),
+        })
+      );
+      setOnboardingSession(registry, active);
+      return onboarding({ registry, workspace, device });
+    };
+    const app = await open();
+    app.show("about-you");
+    editing(app.show)("about-you", { firstName: "Previous" });
+    await app.saved();
+    const oldStep = step("about-you");
+
+    active = "second";
+    setOnboardingSession(app.registry, active);
+    app.show("about-you");
+    expect(step("about-you").draft.firstName).toBe("");
+    app.registry.refresh(accountAtom);
+    await settle(app.registry, accountAtom);
+    app.show("about-you");
+    editing(app.show)("about-you", { firstName: "Current" });
+    oldStep.change({ firstName: "Late edit" });
+    await app.saved();
+    app.registry.dispose();
+
+    const after = await open();
+    after.show("about-you");
+    expect(step("about-you").draft.firstName).toBe("Current");
+  });
+
+  test.each(["session confirmation", "protected storage"] as const)(
+    "an edit preserves recovered fields after delayed %s",
+    async (blocker) => {
+      const { workspace, device } = makeFakeCustomerData("completion-required");
+      let confirmed = true;
+      let failRead = false;
+      const normalDevice = fakeDeviceCapabilities(device);
+      const draftSlot = Layer.effect(
+        DeviceOnboardingDraft,
+        Effect.map(Effect.service(DeviceOnboardingDraft), (storage) => ({
+          ...storage,
+          read: Effect.suspend(() =>
+            failRead
+              ? Effect.fail(
+                  new DeviceCapabilityFailed({ capability: "storage" })
+                )
+              : storage.read
+          ),
+        }))
+      ).pipe(Layer.provide(normalDevice));
+      const open = () => {
+        const registry = makeCustomerDataRegistry(
+          fakeCustomerDataLayer({
+            workspace,
+            device,
+            onboardingSession: Effect.succeed("same"),
+            confirmOnboardingSession: () => Effect.sync(() => confirmed),
+            capabilities: Layer.merge(normalDevice, draftSlot),
+          })
+        );
+        setOnboardingSession(registry, "same");
+        return onboarding({ registry, workspace, device });
+      };
+      const before = await open();
+      before.show("about-you");
+      editing(before.show)("about-you", { firstName: "Jordan" });
+      await before.saved();
+      before.registry.dispose();
+      const savedDraft = device.onboardingDraft;
+      confirmed = blocker !== "session confirmation";
+      failRead = blocker === "protected storage";
+
+      const during = await open();
+      expect(during.registry.get(completionDraftRecoveryAtom)._tag).toBe(
+        "Failure"
+      );
+      during.show("billing");
+      step("billing").change({ billingKind: "personal", city: "Brno" });
+      expect(device.onboardingDraft).toEqual(savedDraft);
+
+      confirmed = true;
+      failRead = false;
+      during.registry.refresh(accountAtom);
+      await settle(during.registry, accountAtom);
+      expect(during.registry.get(completionDraftRecoveryAtom)._tag).toBe(
+        "Success"
+      );
+      during.show("billing");
+      editing(during.show)("billing", {
+        billingKind: "personal",
+        city: "Brno",
+      });
+      await during.saved();
+      during.registry.dispose();
+
+      const after = await open();
+      after.show("about-you", "billing");
+      expect(step("about-you").draft.firstName).toBe("Jordan");
+      expect(step("billing").draft.city).toBe("Brno");
+    }
+  );
+
+  test("a cold launch for an already-linked account erases the draft without opening onboarding", async () => {
+    const before = await onboarding();
+    before.show("about-you");
+    editing(before.show)("about-you", { firstName: "Jordan" });
+    await before.saved();
+    before.registry.dispose();
+
+    const { workspace } = makeFakeCustomerData("linked");
+    const registry = makeCustomerDataRegistry(
+      fakeCustomerDataLayer({ workspace, device: before.device })
+    );
+    const read = await settle(registry, accountAtom);
+    expect(read).toMatchObject({
+      _tag: "Success",
+      success: { kind: "linked" },
+    });
+    expect(before.device.onboardingDraft).toEqual(Option.none());
+  });
+
+  test.each([
+    ["another account", "new-account"],
+    ["a new sign-in of the same account", undefined],
+  ])(
+    "starting with %s discards the previous session's draft",
+    async (_, id) => {
+      const before = await onboarding();
+      before.show("about-you");
+      editing(before.show)("about-you", { firstName: "Jordan" });
+      await before.saved();
+
+      const after = await before.restart({
+        accountId: id ?? before.workspace.data.accountId,
+        sessionStartedAt: 1,
+      });
+      after.show("about-you");
+      expect(step("about-you").draft.firstName).toBe("");
+      expect(after.device.onboardingDraft).toEqual(Option.none());
+    }
+  );
+
+  test("sign-out removes the draft without an open onboarding view", async () => {
+    const initial = makeFakeCustomerData("completion-required");
+    const app = await onboarding(initial);
+    app.show("about-you");
+    editing(app.show)("about-you", { firstName: "Jordan" });
+    await app.saved();
+    expect(Option.isSome(initial.device.onboardingDraft)).toBe(true);
+
+    app.show();
+    app.registry.dispose();
+    await Effect.runPromise(
+      customerDataExitCleanup({
+        scope: "account",
+        accountId: initial.workspace.data.accountId,
+        sessionStartedAt: 0,
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            fakeDeviceCapabilities(initial.device),
+            Layer.succeed(AccountExitFence, initial.fence)
+          )
+        )
+      )
+    );
+    expect(initial.device.onboardingDraft).toEqual(Option.none());
+  });
+
+  test("finishing removes the saved draft even if the view closes and the account refresh fails", async () => {
+    const app = await onboarding();
+    app.show("about-you");
+    editing(app.show)("about-you", { firstName: "Jordan" });
+    await app.saved();
+    expect(Option.isSome(app.device.onboardingDraft)).toBe(true);
+    app.workspace.fail("getAccount", "rate-limited");
+
+    step("about-you").submit();
+    app.show();
+    await app.submitted();
+    expect(app.device.onboardingDraft).toEqual(Option.none());
   });
 
   test("switching billing kinds keeps the company typed earlier", async () => {
