@@ -63,7 +63,10 @@ import {
   withdrawnByCancellation,
   withdrawnByWorkspaceCancellation,
 } from "../automation-trigger-verification";
-import { automationTriggerKind } from "../automation-triggers";
+import {
+  automationTriggerKind,
+  isPassReminderTrigger,
+} from "../automation-triggers";
 import type { AutomationConditionAudienceMissing } from "../errors";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
 import {
@@ -276,14 +279,17 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
         )
       );
 
-  /** Customers the entry audience admits, reachable or not (§5.6). */
+  /** Customers admitted by the audience, with the preview's reachability rules. */
   const audienceMembers = (input: {
     readonly job: PreviewJob;
     readonly filter: AudienceFilter;
     readonly customers: readonly DotyposCustomerId[];
     readonly context: AudienceEvaluationContext;
     readonly source: AudienceFactSource;
-    readonly reachableOnly: boolean;
+    readonly selection:
+      | "audience"
+      | "reachable-mailboxes"
+      | "reachable-customers";
   }) =>
     recipients
       .resolve({
@@ -298,16 +304,14 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
           ({ recipients: reachable, exclusions, duplicates }) =>
             new Set<DotyposCustomerId>([
               ...reachable.map(({ dotyposCustomerId }) => dotyposCustomerId),
-              ...(input.reachableOnly
+              ...(input.selection === "audience"
+                ? exclusions.map(({ dotyposCustomerId }) => dotyposCustomerId)
+                : []),
+              ...(input.selection === "reachable-mailboxes"
                 ? []
-                : [
-                    ...exclusions.map(
-                      ({ dotyposCustomerId }) => dotyposCustomerId
-                    ),
-                    ...duplicates.flatMap(
-                      ({ duplicateCustomerIds }) => duplicateCustomerIds
-                    ),
-                  ]),
+                : duplicates.flatMap(
+                    ({ duplicateCustomerIds }) => duplicateCustomerIds
+                  )),
             ])
         ),
         Effect.mapError(evaluationFailure)
@@ -319,16 +323,18 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
    * exclusions and per-chunk email dedup, then simulated from `F` with
    * conditions on facts as they are now.
    */
-  const evaluateScheduleFire = (
+  const evaluateUpcomingFire = (
     job: PreviewJob,
     customers: readonly DotyposCustomerId[]
   ) => {
     const fireAt = job.preview.asOf;
+    const kind = automationTriggerKind(job.flow.trigger);
+    const passReminder = isPassReminderTrigger(job.flow.trigger);
     const contextAt = (now: Temporal.Instant): AudienceEvaluationContext => ({
       now,
       campaignId: Option.some(job.preview.campaignId),
       trigger: Option.some({
-        kind: "schedule",
+        kind,
         at: fireAt,
         reservationId: Option.none(),
       }),
@@ -372,11 +378,16 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
           customers,
           context: contextAt(now),
           source: planned.source,
-          reachableOnly: true,
+          selection: passReminder
+            ? "reachable-customers"
+            : "reachable-mailboxes",
         })
       ),
       Effect.bind("active", ({ members }) =>
-        openRunCustomers(job.preview.campaignId, [...members])
+        // Pass reminders forecast customers, while open runs belong to passes.
+        passReminder
+          ? Effect.succeed(new Set<DotyposCustomerId>())
+          : openRunCustomers(job.preview.campaignId, [...members])
       ),
       Effect.let("entrants", ({ members, active }) =>
         customers.filter((id) => members.has(id) && !active.has(id))
@@ -522,7 +533,7 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
               customers: [event.dotyposCustomerId],
               context: entryContext,
               source: planned.source,
-              reachableOnly: false,
+              selection: "audience",
             }).pipe(
               Effect.flatMap((members) =>
                 members.has(event.dotyposCustomerId)
@@ -706,7 +717,7 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
           );
 
   const evaluators = {
-    schedule: evaluateScheduleFire,
+    schedule: evaluateUpcomingFire,
     replay: evaluateReplay,
   } as const;
 
