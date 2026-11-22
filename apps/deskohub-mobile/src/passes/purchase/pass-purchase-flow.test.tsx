@@ -112,7 +112,26 @@ mock.module("./pass-purchase-details", () => ({
       type="button"
       id="gift"
       onClick={() =>
-        onChange({ ...details, gift: true, holderEmail: "gift@example.test" })
+        onChange({
+          ...details,
+          gift: true,
+          holderEmail: "gift@example.test",
+          invoice: {
+            ...details.invoice,
+            billing: "business",
+            company: {
+              legalName: "Synthetic Company",
+              companyId: "01234567",
+              vatId: "",
+              address: {
+                line1: "Example 1",
+                city: "Praha",
+                postalCode: "18000",
+                country: "CZ",
+              },
+            },
+          },
+        })
       }
     >
       Gift
@@ -341,7 +360,7 @@ for (const language of ["en-US", "cs-CZ"] as const) {
     });
     await render(
       <RegistryContext.Provider value={registry}>
-        <PassPurchaseScreen kind="entry-pack" />
+        <PassPurchaseScreen key={language} kind="entry-pack" />
       </RegistryContext.Provider>
     );
     await button("continue");
@@ -392,6 +411,11 @@ for (const language of ["en-US", "cs-CZ"] as const) {
         { key: "terms-and-conditions", hash: "updated-terms" },
         { key: "operating-rules", hash: "updated-rules" },
       ],
+      billing: {
+        purpose: "business",
+        invoice: "required",
+        buyer: { legalName: "Synthetic Company", companyId: "01234567" },
+      },
       returnTarget: "native-app",
     });
     const orderId = quote?.orderId;
