@@ -149,7 +149,10 @@ export interface IAutomationLifecycle {
     campaignId: CampaignId
   ) => Effect.Effect<
     AutomationDetail,
-    WorkingCopyError | AutomationArchived | AutomationStatusConflict
+    | WorkingCopyError
+    | AutomationArchived
+    | AutomationStatusConflict
+    | AutomationTriggerInUse
   >;
   /**
    * Any status → archived, for good (D12); active runs end `archived`.
@@ -782,8 +785,9 @@ type TransitionError =
   | DatabaseQueryError
   | AutomationArchived
   | AutomationFlowInvalid
-  | AutomationStatusConflict
-  | AutomationTriggerInUse;
+  | AutomationStatusConflict;
+
+type ResumeError = TransitionError | AutomationTriggerInUse;
 
 const ensureNotArchived = (copy: AutomationWorkingCopy) =>
   copy.campaign.status === "archived"
@@ -848,14 +852,10 @@ const pauseIn = ({
 const resumeIn = ({
   copy,
   now,
-}: TransitionInput): Effect.Effect<
-  void,
-  TransitionError,
-  WorkspaceTransaction
-> =>
+}: TransitionInput): Effect.Effect<void, ResumeError, WorkspaceTransaction> =>
   Effect.flatMap(
     WorkspaceTransaction,
-    ({ db }): Effect.Effect<void, TransitionError, WorkspaceTransaction> => {
+    ({ db }): Effect.Effect<void, ResumeError, WorkspaceTransaction> => {
       const campaignId = copy.campaign.id;
       switch (copy.campaign.status) {
         case "active":
