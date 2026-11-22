@@ -343,25 +343,38 @@ const activateIn = (input: {
     ),
     // 5. A retry returns the version it published.
     Effect.bind("latest", () => latestVersion(input.campaignId)),
-    Effect.flatMap(({ copy, publishable, flow, latest, now, preview }) => {
-      if (
-        Option.isSome(latest) &&
-        latest.value.draftHash === publishable.draftHash
-      ) {
-        return Effect.succeed(latest.value.id);
-      }
-      if (!previewIsCurrent(flow, preview.asOf, now)) {
-        return Effect.fail(new AutomationPreviewRequired(input));
-      }
-      return publishVersion({
+    Effect.flatMap(
+      ({
         copy,
         publishable,
         flow,
         latest,
-        activatedBy: input.activatedBy,
         now,
-      });
-    }),
+        preview,
+      }): Effect.Effect<
+        AutomationVersionId,
+        AutomationPreviewRequired | DatabaseQueryError,
+        WorkspaceTransaction
+      > => {
+        if (
+          Option.isSome(latest) &&
+          latest.value.draftHash === publishable.draftHash
+        ) {
+          return Effect.succeed(latest.value.id);
+        }
+        if (!previewIsCurrent(flow, preview.asOf, now)) {
+          return Effect.fail(new AutomationPreviewRequired(input));
+        }
+        return publishVersion({
+          copy,
+          publishable,
+          flow,
+          latest,
+          activatedBy: input.activatedBy,
+          now,
+        });
+      }
+    ),
     Effect.flatMap((versionId) =>
       selectVersions({
         campaignId: input.campaignId,
