@@ -5,6 +5,7 @@ import {
   type CustomerPassPurchase,
   type CustomerPassPurchasePrice,
   SubmitCustomerPassPurchase,
+  UpdateCustomerPassPurchasePrice,
 } from "@deskohub/workspace-customer-api";
 import { RegistryContext } from "@effect/atom-react";
 import { Context, Effect, Layer, Schema } from "effect";
@@ -124,16 +125,22 @@ mock.module("./pass-purchase-review", () => ({
   PassPurchaseReview: ({
     checked,
     onToggle,
+    onCode,
     quote,
   }: Parameters<typeof actualReview.PassPurchaseReview>[0]) => (
-    <button
-      type="button"
-      id="agreement"
-      aria-pressed={checked}
-      onClick={onToggle}
-    >
-      {quote.price.fingerprint}
-    </button>
+    <>
+      <button
+        type="button"
+        id="agreement"
+        aria-pressed={checked}
+        onClick={onToggle}
+      >
+        {quote.price.fingerprint}
+      </button>
+      <button type="button" id="apply-code" onClick={() => onCode("DEMO")}>
+        Apply code
+      </button>
+    </>
   ),
 }));
 
@@ -191,6 +198,7 @@ for (const language of ["en-US", "cs-CZ"] as const) {
     openHosted.mockClear();
     const workspace = FakeWorkspace.forKind("linked");
     const submitCalls: SubmitCustomerPassPurchase[] = [];
+    const codeUpdates: UpdateCustomerPassPurchasePrice[] = [];
     let quote: CustomerPassPurchase | undefined;
     const fixture = Layer.effect(
       HttpClient.HttpClient,
@@ -238,6 +246,28 @@ for (const language of ["en-US", "cs-CZ"] as const) {
                 },
               };
               return HttpClientResponse.fromWeb(request, Response.json(quote));
+            }
+            if (
+              url.pathname ===
+              `/api/customer/passes/purchases/${quote?.orderId}/price`
+            ) {
+              expect(request.method).toBe("PATCH");
+              const web = yield* HttpClientRequest.toWeb(request);
+              const body = yield* Effect.promise(() => web.json());
+              const update = yield* Schema.decodeUnknownEffect(
+                UpdateCustomerPassPurchasePrice
+              )(body);
+              codeUpdates.push(update);
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({
+                  status: "ready",
+                  price: {
+                    ...price(300000, "c"),
+                    appliedDiscountCode: update.submittedCode,
+                  },
+                })
+              );
             }
             if (
               url.pathname ===
@@ -324,6 +354,16 @@ for (const language of ["en-US", "cs-CZ"] as const) {
 
     expect((await button("continue")).disabled).toBe(true);
     await press("agreement");
+    await press("apply-code");
+    expect(codeUpdates).toEqual([
+      {
+        productKind: "entry-pack",
+        displayedPriceFingerprint: "a".repeat(64),
+        submittedCode: "DEMO",
+      },
+    ]);
+    expect((await button("continue")).disabled).toBe(true);
+    await press("agreement");
     await press("continue");
     expect((await button("agreement")).getAttribute("aria-pressed")).toBe(
       "false"
@@ -345,7 +385,7 @@ for (const language of ["en-US", "cs-CZ"] as const) {
       submitCalls.map(
         ({ displayedPriceFingerprint }) => displayedPriceFingerprint
       )
-    ).toEqual(["a".repeat(64), "b".repeat(64), "b".repeat(64)]);
+    ).toEqual(["c".repeat(64), "b".repeat(64), "b".repeat(64)]);
     expect(submitCalls[2]).toMatchObject({
       accepted: true,
       acceptedDocuments: [
