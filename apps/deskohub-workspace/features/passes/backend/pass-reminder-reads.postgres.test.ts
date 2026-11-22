@@ -15,6 +15,7 @@ import {
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import type { PassEntryClaimStatus } from "../pass";
 import {
+  type ListDuePassReminders,
   PassReminderReads,
   passReminderPageSize,
   type ReadDuePassReminder,
@@ -168,13 +169,20 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         holderAccountId: holder,
         holderVersion: 0,
       };
+      const beforeTen = {
+        ...packDue,
+        now: packDue.now.subtract({ milliseconds: 1 }),
+      };
+      const list = (input: ListDuePassReminders) =>
+        run(Effect.flatMap(PassReminderReads, (reads) => reads.listDue(input)));
 
-      expect(
-        await read({
-          ...target,
-          now: packDue.now.subtract({ milliseconds: 1 }),
-        })
-      ).toEqual(Option.none());
+      expect(await list(beforeTen)).toEqual([]);
+      expect(await list({ ...beforeTen, preview: true })).toMatchObject([
+        { passId, entriesLeft: 3 },
+      ]);
+      expect(await read({ ...target, now: beforeTen.now })).toEqual(
+        Option.none()
+      );
       expect(Option.getOrThrow(await read(target))).toMatchObject({
         kind: "entry-pack",
         packSize: 5,
@@ -191,6 +199,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         await seedClaim(passId, holder, "reserved");
       }
       expect(await read(target)).toEqual(Option.none());
+      expect(await list({ ...beforeTen, preview: true })).toEqual([]);
     });
 
     test("gift targeting follows the verified holder, current Dotypos link, version and pinned date", async () => {

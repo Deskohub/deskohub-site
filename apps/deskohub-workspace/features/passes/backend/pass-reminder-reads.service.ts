@@ -77,6 +77,8 @@ type PassReminderDue = {
 
 export type ListDuePassReminders = PassReminderDue & {
   readonly afterPassId?: OrderId;
+  /** Preview the date using current eligibility before the delivery time. */
+  readonly preview?: true;
 };
 
 export type ReadDuePassReminder = PassReminderDue &
@@ -146,9 +148,11 @@ const queryDuePasses = Effect.fn("PassReminderReads.queryDuePasses")(function* (
   const { kind, dueDate, now } = input;
   const { lastUsableDate, validUntil } = getPassReminderEndDates(kind, dueDate);
   const today = getWorkspaceDate(now);
+  const preview = !("passId" in input) && input.preview === true;
   if (
-    Temporal.Instant.compare(now, getPassReminderDueAt(dueDate)) < 0 ||
-    Temporal.PlainDate.compare(today, validUntil) >= 0
+    Temporal.PlainDate.compare(today, validUntil) >= 0 ||
+    (!preview &&
+      Temporal.Instant.compare(now, getPassReminderDueAt(dueDate)) < 0)
   ) {
     return [];
   }
