@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHmac } from "node:crypto";
+import type { EmailVersionId } from "@deskohub/workspace-admin-api";
 import { NodeCrypto } from "@effect/platform-node";
 import { and, eq, isNull } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
@@ -18,6 +19,7 @@ import { currentInstant } from "@/shared/utils/temporal";
 import {
   type CampaignContentHash,
   hashCampaignContent,
+  hashCampaignEmailVersion,
 } from "../body/campaign-content-hash";
 import {
   type CampaignConfirmationCode,
@@ -33,6 +35,7 @@ import {
   CampaignNotFound,
   CampaignReadOnly,
 } from "../errors";
+import { lockCampaignEmailPublication } from "./campaign-published-email";
 import { loadCampaignSigningKeys } from "./campaign-signing-keys";
 import {
   type CampaignSendFreeze,
@@ -276,6 +279,7 @@ export class CampaignConfirmationCodeService extends Context.Service<
         readonly campaign: CampaignRow;
         readonly codeHash: string;
         readonly contentHash: CampaignContentHash;
+        readonly frozenEmailVersionId: EmailVersionId | null;
         readonly now: Temporal.Instant;
       }) =>
         db
@@ -291,6 +295,7 @@ export class CampaignConfirmationCodeService extends Context.Service<
             Effect.as({
               _tag: "Confirm" as const,
               contentHash: input.contentHash,
+              frozenEmailVersionId: input.frozenEmailVersionId,
               now: input.now,
             })
           );
@@ -342,15 +347,35 @@ export class CampaignConfirmationCodeService extends Context.Service<
         OnceCampaignLifecycle.startSending({
           campaignId: input.campaignId,
           send: input.send,
-          check: (campaign) =>
-            Effect.succeed({ ...input, campaign }).pipe(
-              Effect.let("contentHash", ({ campaign }) =>
-                hashCampaignContent({
+          check: Effect.fnUntraced(function* (campaign) {
+            const publication = campaign.emailId
+              ? yield* lockCampaignEmailPublication(campaign.emailId)
+              : undefined;
+            if (
+              campaign.emailId &&
+              (!publication ||
+                campaign.purpose !== publication.document.purpose ||
+                campaign.templateKey !== publication.document.templateKey ||
+                Object.keys(campaign.content).length > 0)
+            ) {
+              return {
+                _tag: "Rejected" as const,
+                reason: "content-changed" as const,
+              };
+            }
+            const contentHash = publication
+              ? hashCampaignEmailVersion(publication.versionId)
+              : hashCampaignContent({
                   purpose: campaign.purpose,
                   templateKey: campaign.templateKey,
                   locales: campaign.content,
-                })
-              ),
+                });
+            return yield* Effect.succeed({
+              ...input,
+              campaign,
+              contentHash,
+              frozenEmailVersionId: publication?.versionId ?? null,
+            }).pipe(
               Effect.bind("now", () => currentInstant),
               Effect.bind("current", ({ campaignId }) =>
                 findCurrentCode(campaignId)
@@ -379,7 +404,8 @@ export class CampaignConfirmationCodeService extends Context.Service<
                   })
                 )
               )
-            ),
+            );
+          }),
         });
 
       return {

@@ -134,6 +134,45 @@ describe("renderEmailContent", () => {
     ).toMatchObject({ operationalReason: "You booked as Jana." });
   });
 
+  test("prefills the Workspace cowork booking link only when the Offer opts in", async () => {
+    const href =
+      "https://workspace.deskohub.cz/en-US/reservation/cowork?discountCode=old&discountCode=other&date=2027-01-01#visit";
+    const document = (prefillDiscountCode: boolean, destination = href) =>
+      Schema.decodeUnknownSync(EmailDocument)({
+        ...emailDocumentFixture,
+        structure: emailDocumentFixture.structure.map((component) =>
+          component._tag === "Offer"
+            ? { ...component, href: destination, prefillDiscountCode }
+            : component
+        ),
+      });
+    const buttonUrl = async (prefill: boolean) => {
+      const html = await renderHtml(
+        renderedContent("en-US", emailFixtureValues, document(prefill)).body
+      );
+      const link = html.match(
+        /href="(https:\/\/workspace\.deskohub\.cz\/[^"]+)"/
+      );
+      return new URL(link?.[1]?.replaceAll("&amp;", "&") ?? "");
+    };
+    const prefilled = await buttonUrl(true);
+    expect(prefilled.searchParams.getAll("discountCode")).toEqual([
+      "SAMPLE CODE",
+    ]);
+    expect(prefilled.searchParams.get("date")).toBe("2027-01-01");
+    expect(prefilled.hash).toBe("#visit");
+    expect((await buttonUrl(false)).href).toBe(href);
+    expect(
+      Result.isFailure(
+        rendered(
+          "en-US",
+          emailFixtureValues,
+          document(true, "https://deskohub.test/reservation/cowork")
+        )
+      )
+    ).toBe(true);
+  });
+
   test("shows a fallback in place of the value or the whole component", async () => {
     const content = renderedContent("en-US", {
       ...emailFixtureValues,

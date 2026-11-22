@@ -67,8 +67,6 @@ export type VoucherAvailability = PromotionAudienceAvailability & {
   readonly usedValue: number;
 };
 
-export const discountCodeQueryParam = "discountCode" as const;
-
 export class PromotionCodeConfigurationError extends Data.TaggedError(
   "PromotionCodeConfigurationError"
 )<{
@@ -252,3 +250,5 @@ const uppercaseAscii = (value: string) =>
   value.replace(/[a-z]/g, (character) =>
     String.fromCharCode(character.charCodeAt(0) - 32)
   );
+
+export { discountCodeQueryParam } from "@deskohub/workspace-admin-api/cowork-booking-link";

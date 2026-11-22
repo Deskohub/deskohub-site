@@ -92,13 +92,14 @@ type ResendResponse<A> = {
   readonly error: unknown;
 };
 
-const resendProviderRefusal = (code: string) =>
+const resendProviderRefusal = (code: string, definitivelyUnsent?: true) =>
   new EmailServiceError("Resend cannot send now", undefined, "resend", {
     failureKind: "provider",
     code,
+    ...(definitivelyUnsent && { definitivelyUnsent }),
   });
 
-const resendMessageRefusal = (code: string) =>
+const resendMessageRefusal = (code: string, definitivelyUnsent?: true) =>
   new EmailServiceError(
     "Resend rejected the email request",
     undefined,
@@ -106,6 +107,7 @@ const resendMessageRefusal = (code: string) =>
     {
       failureKind: "message",
       code,
+      ...(definitivelyUnsent && { definitivelyUnsent }),
     }
   );
 
@@ -123,6 +125,7 @@ const resendMessageRefusal = (code: string) =>
  * An error without a status is classified by its message: an
  * authentication or unverified-domain refusal is provider-level, any other
  * invalid or bad request is message-level, and the rest is a server failure.
+ * The message heuristic controls fallback without proving non-delivery.
  * Codes are `http-<status>` or `resend-<kind>`; the raw provider message is
  * discarded so spans and logs never carry it.
  */
@@ -157,8 +160,11 @@ const classifyResendError = (error: unknown): EmailSendError => {
     return new NetworkError({ message: "Resend network error", code });
   }
   return [401, 403, 404, 429].includes(statusCode)
-    ? resendProviderRefusal(code)
-    : resendMessageRefusal(code);
+    ? resendProviderRefusal(code, true)
+    : resendMessageRefusal(
+        code,
+        [400, 422].includes(statusCode) ? true : undefined
+      );
 };
 
 /**
@@ -396,7 +402,8 @@ const requestGuardedResendBatch = Effect.fn("resend.requestGuardedBatch")(
       emailRequestFingerprint(
         ["resend", "POST", url, [...headers], body],
         input.credential
-      )
+      ),
+      input.messages.map((_, position) => position)
     );
     headers.set("Authorization", `Bearer ${input.credential}`);
 
@@ -521,7 +528,7 @@ export const makeResendEmailProvider = ({
     sendBatch: Effect.fn("resend.sendBatch")(
       function* (messages, options) {
         if (messages.some((message) => message.attachments?.length)) {
-          return yield* resendMessageRefusal("attachments-unsupported");
+          return yield* resendMessageRefusal("attachments-unsupported", true);
         }
         yield* Effect.logInfo("Sending email batch via Resend", {
           category: messages[0]?.tags?.[0],

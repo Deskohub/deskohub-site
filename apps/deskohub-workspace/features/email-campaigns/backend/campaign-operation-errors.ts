@@ -48,6 +48,7 @@ import {
   type CampaignNotFound,
   type CampaignNotRetryable,
   CampaignPublished,
+  type CampaignPublishedEmailInvalid,
   CampaignReadOnly,
   type CampaignRecipientResolutionError,
   type CampaignRecipientsOutsideTestDomain,
@@ -98,6 +99,7 @@ export type CampaignOperationCause =
   | CampaignNotFound
   | CampaignNotRetryable
   | CampaignPublished
+  | CampaignPublishedEmailInvalid
   | CampaignReadOnly
   | CampaignRecipientResolutionError
   | CampaignRecipientsOutsideTestDomain
@@ -150,6 +152,21 @@ export const toOperationError = (
         new OperationNotFound({
           code: "audience-not-found",
           message: "The audience was not found.",
+          cause,
+        })
+    ),
+    Match.tag(
+      "CampaignPublishedEmailInvalid",
+      ({ reason }) =>
+        new OperationInputInvalid({
+          code: "published-email-invalid",
+          message: {
+            unavailable: "Select an available published marketing email.",
+            "inline-content":
+              "Choose a published email or enter campaign content.",
+            automated:
+              "Published emails can be selected for one-off campaigns.",
+          }[reason],
           cause,
         })
     ),
@@ -532,14 +549,18 @@ const toSendOperationError = (
           cause,
         })
     ),
-    Match.tag(
-      "CampaignNotRetryable",
-      ({ status }) =>
-        new OperationConflict({
-          code: "campaign-not-retryable",
-          message: `Only a failed campaign can be retried, and this one is ${status}.`,
-          cause,
-        })
+    Match.tag("CampaignNotRetryable", ({ status, reason }) =>
+      reason === "no-retryable-recipients"
+        ? new OperationConflict({
+            code: reason,
+            message: "No recipients can be retried with this selection.",
+            cause,
+          })
+        : new OperationConflict({
+            code: "campaign-not-retryable",
+            message: `Only a failed campaign can be retried, and this one is ${status}.`,
+            cause,
+          })
     ),
     Match.tag(
       "CampaignRecipientResolutionError",

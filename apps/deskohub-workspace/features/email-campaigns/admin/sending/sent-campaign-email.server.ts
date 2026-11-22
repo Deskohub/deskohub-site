@@ -12,6 +12,30 @@ import {
 const sentCampaignEmails = Effect.fn("loadSentCampaignEmails")(function* (
   campaign: AdministrationCampaignDetailType
 ) {
+  if (campaign.emailId) {
+    return yield* Effect.forEach(campaign.locales, (locale) =>
+      invokeCampaignOperation("previewCampaignTemplate", {
+        templateKey: campaign.templateKey,
+        preview: { _tag: "Campaign", campaignId: campaign.id, locale },
+      }).pipe(
+        Effect.map(({ subject, preheader, html }) => ({
+          locale,
+          subject,
+          preheader: preheader ?? "",
+          html,
+        })),
+        Effect.tapError((error) =>
+          Effect.logError("Sent campaign sample failed to render", error)
+        ),
+        Effect.orElseSucceed(() => ({
+          locale,
+          subject: "",
+          preheader: "",
+          html: undefined,
+        }))
+      )
+    );
+  }
   return yield* Effect.forEach(
     campaignLocaleEntries(campaign.content, campaignLocales),
     ([locale, content]) =>

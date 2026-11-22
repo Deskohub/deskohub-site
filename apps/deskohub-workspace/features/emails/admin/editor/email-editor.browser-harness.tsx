@@ -3,6 +3,7 @@ import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import {
   administrationInputParseOptions,
   EmailDraft,
+  EmailId,
 } from "@deskohub/workspace-admin-api";
 import { Schema } from "effect";
 import { useState } from "react";
@@ -10,6 +11,7 @@ import { createRoot } from "react-dom/client";
 import { FormProvider, useForm } from "react-hook-form";
 import type { Locale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
+import { ReusableEmailForm } from "../library/email-library-forms";
 import {
   fixtureDiscount,
   fixtureDraft,
@@ -142,4 +144,21 @@ function EmailEditorHarness() {
   );
 }
 
-createRoot(mountPoint).render(<EmailEditorHarness />);
+createRoot(mountPoint).render(
+  mountPoint.dataset.reusable ? (
+    <RouteLocaleProvider locale={locale}>
+      <main className="mx-auto max-w-[1400px] p-4">
+        <ReusableEmailForm
+          discounts={discounts}
+          draft={initialDraft}
+          emailId={EmailId.make("synthetic-reusable-email")}
+          imageCloudName={fixtureImageCloudName}
+          publishedImageSources={[]}
+          publishedVersion={null}
+        />
+      </main>
+    </RouteLocaleProvider>
+  ) : (
+    <EmailEditorHarness />
+  )
+);

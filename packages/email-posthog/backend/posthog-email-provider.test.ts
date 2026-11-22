@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { type EmailMessage, EmailServiceError } from "@deskohub/email";
+import {
+  EmailConfigTag,
+  EmailDeliveryIdSchema,
+  type EmailMessage,
+  EmailProviders,
+  EmailServiceError,
+  EmailServiceTag,
+} from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Exit } from "effect";
 import {
@@ -717,6 +724,47 @@ describe("PostHog email batches", () => {
       status: "failed",
       error: { _tag: "NetworkError", failureKind: "unknown-outcome" },
     });
+  });
+
+  test("allows a first batch with admission to fall back after PostHog exhausts 503 retries", async () => {
+    const fake = makeFakePostHog(() => refused(503, "delivery_unavailable"));
+    const sent = {
+      id: EmailDeliveryIdSchema.make("synthetic-resend-delivery"),
+      status: "sent" as const,
+      timestamp: new Date(),
+      provider: "resend",
+    };
+    const { exit } = await runAgainst(
+      fake,
+      Effect.gen(function* () {
+        const email = yield* EmailServiceTag;
+        return yield* email.sendBatch([batchMessage(0)], {
+          idempotencyKey: "offer-batch-fallback",
+          allowFallbackWithAdmission: true,
+          beforeRequest: () => Effect.void,
+        });
+      }).pipe(
+        Effect.provide(EmailServiceTag.Default),
+        Effect.provideService(EmailConfigTag, {
+          defaultFrom: { email: sender },
+        }),
+        Effect.provideService(EmailProviders, {
+          transactional: [],
+          marketingCategories: new Set(["email-campaign"]),
+          marketing: [
+            provider,
+            {
+              name: "resend",
+              send: () => Effect.succeed(sent),
+              sendBatch: (messages) => Effect.succeed(messages.map(() => sent)),
+            },
+          ],
+        })
+      ),
+      production
+    );
+    expect(fake.requests).toHaveLength(3);
+    expect(successOf(exit)).toEqual([sent]);
   });
 
   test("interrupts an admission check at the batch deadline before any POST", async () => {

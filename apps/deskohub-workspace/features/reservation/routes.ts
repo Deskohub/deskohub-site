@@ -1,8 +1,9 @@
+import { coworkReservationPath } from "@deskohub/workspace-admin-api/cowork-booking-link";
 import { Match } from "effect";
 import type { Locale } from "@/features/i18n";
 import type { ReservationOrderData } from "@/features/reservation/reservation-order";
 
-export const coworkReservationPath = "/reservation/cowork";
+export { coworkReservationPath };
 export const meetingRoomReservationPath = "/reservation/meeting-room";
 export const officeReservationPath = "/reservation/office";
 export const reservationAccessPath = "/reservation/access";

@@ -148,9 +148,11 @@ const recipientEnding = (run: SendingRun): Option.Option<AutomationRunEnding> =>
       Option.some<AutomationRunEnding>({ outcome: "unconfirmed" })
     ),
     Match.when("skipped", () =>
-      Option.map(
-        Option.fromNullishOr(run.skipReason),
-        (reason): AutomationRunEnding => ({ outcome: "skipped", reason })
+      Option.fromNullishOr(run.skipReason).pipe(
+        Option.filter((reason) => reason !== "missing-email-language"),
+        Option.map(
+          (reason): AutomationRunEnding => ({ outcome: "skipped", reason })
+        )
       )
     ),
     Match.when("failed", () =>

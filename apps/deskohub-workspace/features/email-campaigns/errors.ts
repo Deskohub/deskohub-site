@@ -230,6 +230,12 @@ export class CampaignContentMissing extends Data.TaggedError(
   readonly campaignId: CampaignId;
 }> {}
 
+export class CampaignPublishedEmailInvalid extends Data.TaggedError(
+  "CampaignPublishedEmailInvalid"
+)<{
+  readonly reason: "unavailable" | "inline-content" | "automated";
+}> {}
+
 /**
  * Recipients outside the content's locales would get the Czech fallback,
  * which the campaign lacks: it needs Czech content unless its audience is
@@ -279,6 +285,7 @@ export class CampaignNotRetryable extends Data.TaggedError(
 )<{
   readonly campaignId: CampaignId;
   readonly status: CampaignStatus;
+  readonly reason?: "no-retryable-recipients";
 }> {}
 
 /** Production campaign mail needs its sender and admin inbox configured. */

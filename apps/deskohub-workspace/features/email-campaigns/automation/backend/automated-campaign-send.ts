@@ -194,9 +194,12 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
         Effect.catchTags({
           DotyposUnavailable: Effect.die,
           DotyposRejected: Effect.die,
+          CampaignDeliveryIncomplete: Effect.die,
         }),
         Effect.flatMap((prepared) =>
-          batches.persist({ prepared, at: input.at })
+          batches
+            .persist({ prepared, at: input.at })
+            .pipe(Effect.catchTag("CampaignDeliveryIncomplete", Effect.die))
         ),
         Effect.asVoid,
         Effect.withSpan("AutomatedCampaignSend.persistBatch")

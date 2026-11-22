@@ -98,7 +98,8 @@ export const makeEmailProviderFake = ({
         Effect.suspend(
           () =>
             beforeProviderRequest?.(
-              emailRequestFingerprint([name, operation, key, messages])
+              emailRequestFingerprint([name, operation, key, messages]),
+              messages.map((_, position) => position)
             ) ?? Effect.void
         )
       ),

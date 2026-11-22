@@ -22,6 +22,8 @@ const campaignSaveFailureCopy: CampaignOperationFailureCopy = {
   codes: {
     "content-invalid": (locale) =>
       m.emailCampaignsComposerSaveContentInvalid({}, { locale }),
+    "published-email-invalid": (locale) =>
+      m.emailCampaignsComposerPublishedEmailInvalid({}, { locale }),
     "content-markdown-invalid": (locale) =>
       m.emailCampaignsComposerSaveContentInvalid({}, { locale }),
     "content-document-invalid": (locale) =>
@@ -117,6 +119,8 @@ export const useCampaignComposerSave = ({
     if (created) return;
     setSaveError(undefined);
     setSubmittedFields(values);
+    const emailId =
+      delivery === "once" ? values.emailId || undefined : undefined;
     const fields = {
       title: values.title.trim(),
       purpose: values.purpose,
@@ -127,7 +131,12 @@ export const useCampaignComposerSave = ({
       update.execute({
         ...fields,
         campaignId: campaign.id,
-        content: toAdministrationCampaignContentChange(values, editable),
+        ...(emailId
+          ? { emailId }
+          : {
+              ...(initialFields.emailId && { emailId: null }),
+              content: toAdministrationCampaignContentChange(values, editable),
+            }),
       });
     } else {
       create.execute({
@@ -135,7 +144,10 @@ export const useCampaignComposerSave = ({
         campaign: {
           ...fields,
           delivery,
-          content: toAdministrationCampaignContent(values, editable),
+          ...(emailId && { emailId }),
+          content: emailId
+            ? {}
+            : toAdministrationCampaignContent(values, editable),
         },
       });
     }

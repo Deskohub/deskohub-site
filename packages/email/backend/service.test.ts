@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   EMAIL_TEST_DOMAIN,
   resendSimulatorAddress,
@@ -529,6 +530,222 @@ describe("batch failover", () => {
 
     expect(outcome).toBe(error);
     expect(second.batches).toEqual([]);
+  });
+
+  test("a guarded batch can check admission again on allowed provider fallback", async () => {
+    const transactional = scriptedProvider("transactional", () => "accept");
+    const first = scriptedProvider("posthog", firstAnswer);
+    const second = scriptedProvider("resend", () => "accept");
+    const admitted: [string, readonly number[]][] = [];
+    const withAdmission = (provider: EmailProvider): EmailProvider => ({
+      ...provider,
+      sendBatch: (messages, options) =>
+        (
+          options.beforeRequest?.(
+            provider.name,
+            messages.map((_, position) => position)
+          ) ?? Effect.void
+        ).pipe(Effect.andThen(provider.sendBatch(messages, options))),
+    });
+    const results = await runWithEmail(
+      Effect.flatMap(EmailServiceTag, (email) =>
+        email.sendBatch([message, ...recipients], {
+          idempotencyKey: "recheck-on-fallback",
+          allowFallbackWithAdmission: true,
+          beforeRequest: (fingerprint, positions) =>
+            Effect.sync(() => void admitted.push([fingerprint, positions])),
+        })
+      ),
+      chains({
+        transactional: [withAdmission(transactional.provider)],
+        marketing: [
+          withAdmission(first.provider),
+          withAdmission(second.provider),
+        ],
+      })
+    );
+    expect(admitted).toEqual([
+      ["transactional", [0]],
+      ["posthog", [1, 2, 3, 4]],
+      ["resend", [2]],
+    ]);
+    expect(results.map(({ status, provider }) => [status, provider])).toEqual([
+      ["sent", "transactional"],
+      ["sent", "posthog"],
+      ["sent", "resend"],
+      ["failed", "posthog"],
+      ["failed", "posthog"],
+    ]);
+  });
+
+  test("a refused fallback admission resends only the still-admissible messages, under each subset's key", async () => {
+    const transactional = scriptedProvider("transactional", () => "accept");
+    const fallback = makeEmailProviderFake({ name: "resend" });
+    const asked: (readonly number[])[] = [];
+    const results = await runWithEmail(
+      Effect.flatMap(EmailServiceTag, (email) =>
+        email.sendBatch([message, ...recipients], {
+          idempotencyKey: "membership-drift",
+          allowFallbackWithAdmission: true,
+          beforeRequest: (_fingerprint, positions) =>
+            Effect.suspend(() => {
+              asked.push(positions);
+              // One more recipient becomes ineligible at each of two checks.
+              return asked.length <= 2
+                ? Effect.fail(
+                    new EmailServiceError("denied", undefined, undefined, {
+                      deniedPositions: [1],
+                    })
+                  )
+                : Effect.void;
+            }),
+        })
+      ),
+      chains({
+        transactional: [transactional.provider],
+        marketing: [
+          failingProvider("posthog", providerLevel("posthog")).provider,
+          fallback.provider,
+        ],
+      })
+    );
+
+    expect(asked).toEqual([
+      [1, 2, 3, 4],
+      [1, 3, 4],
+      [1, 4],
+    ]);
+    const subset = createHash("sha256").update("1:0,3").digest("hex");
+    expect(fallback.requests().map(({ key }) => key)).toEqual([
+      `membership-drift:marketing:fallback:${subset.slice(0, 16)}`,
+    ]);
+    expect(fallback.mailed()).toEqual(
+      [recipients[0]!, recipients[3]!].map(({ to }) => [to].flat()[0]!.email)
+    );
+    expect(results.map(({ status }) => status)).toEqual([
+      "sent",
+      "sent",
+      "failed",
+      "failed",
+      "sent",
+    ]);
+  });
+
+  test.each([
+    ["no position", []],
+    ["every position", [0, 1, 2, 3]],
+    ["a repeated position", [1, 1]],
+    ["a position outside the request", [4]],
+    ["a negative position", [-1]],
+    ["a fractional position", [0.5]],
+  ])(
+    "a fallback denial naming %s sends nothing",
+    async (_, deniedPositions) => {
+      const fallback = makeEmailProviderFake({ name: "resend" });
+      let checks = 0;
+      const results = await runWithEmail(
+        Effect.flatMap(EmailServiceTag, (email) =>
+          email.sendBatch(recipients, {
+            idempotencyKey: "invalid-denial",
+            allowFallbackWithAdmission: true,
+            beforeRequest: () =>
+              Effect.suspend(() => {
+                checks++;
+                return Effect.fail(
+                  new EmailServiceError("denied", undefined, undefined, {
+                    deniedPositions,
+                  })
+                );
+              }),
+          })
+        ),
+        chains({
+          marketing: [
+            failingProvider("posthog", providerLevel("posthog")).provider,
+            fallback.provider,
+          ],
+        })
+      );
+
+      expect(checks).toBe(1);
+      expect(fallback.requests()).toEqual([]);
+      expect(results.every(({ status }) => status === "failed")).toBe(true);
+    }
+  );
+
+  test("a denial after an admitted fallback attempt never repacks the batch", async () => {
+    const fallback = makeEmailProviderFake({ name: "resend" });
+    fallback.respondWith(() => "unavailable");
+    const retrying: EmailProvider = {
+      ...fallback.provider,
+      sendBatch: (messages, options) =>
+        fallback.provider
+          .sendBatch(messages, options)
+          .pipe(
+            Effect.catch(() => fallback.provider.sendBatch(messages, options))
+          ),
+    };
+    let checks = 0;
+    const results = await runWithEmail(
+      Effect.flatMap(EmailServiceTag, (email) =>
+        email.sendBatch(recipients, {
+          idempotencyKey: "dispatched-fallback",
+          allowFallbackWithAdmission: true,
+          beforeRequest: () =>
+            Effect.suspend(() =>
+              ++checks === 1
+                ? Effect.void
+                : Effect.fail(
+                    new EmailServiceError("denied", undefined, undefined, {
+                      deniedPositions: [0],
+                    })
+                  )
+            ),
+        })
+      ),
+      chains({
+        marketing: [
+          failingProvider("posthog", providerLevel("posthog")).provider,
+          retrying,
+        ],
+      })
+    );
+
+    expect(fallback.requests().map(({ key }) => key)).toEqual([
+      "dispatched-fallback",
+    ]);
+    expect(results.every(({ status }) => status === "failed")).toBe(true);
+  });
+
+  test.each([
+    ["a first provider", { allowFallbackWithAdmission: true }],
+    ["a replay", { allowFallbackWithAdmission: true, replay: true }],
+    ["a guard without fallback", {}],
+  ])("%s never repacks a denied batch", async (_, options) => {
+    const first = makeEmailProviderFake({ name: "posthog" });
+    const second = makeEmailProviderFake({ name: "resend" });
+    const denied = new EmailServiceError("denied", undefined, undefined, {
+      deniedPositions: [0],
+    });
+    let checks = 0;
+    const outcome = await runWithEmail(
+      Effect.flatMap(EmailServiceTag, (email) =>
+        email.sendBatch(recipients, {
+          ...options,
+          idempotencyKey: "pinned-batch",
+          beforeRequest: () =>
+            Effect.suspend(() => {
+              checks++;
+              return Effect.fail(denied);
+            }),
+        })
+      ).pipe(Effect.flip),
+      chains({ marketing: [first.provider, second.provider] })
+    );
+
+    expect(outcome).toBe(denied);
+    expect(checks).toBe(1);
+    expect([...first.requests(), ...second.requests()]).toEqual([]);
   });
 
   test("after a fallback, a whole-batch failure comes back per message", async () => {

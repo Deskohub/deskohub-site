@@ -194,11 +194,22 @@ const makeEmailService = (options: {
           });
 
           const results: EmailBatchResult[] = [];
+          const { beforeRequest } = batchOptions;
           for (const { route, indices } of groups) {
             const groupResults = yield* sendBatchThroughChain(
               chainOf(route),
               indices.map((index) => finalMessages[index]!),
-              { ...batchOptions, idempotencyKey: keyOf(route) },
+              {
+                ...batchOptions,
+                idempotencyKey: keyOf(route),
+                ...(beforeRequest && {
+                  beforeRequest: (fingerprint, positions) =>
+                    beforeRequest(
+                      fingerprint,
+                      positions.map((position) => indices[position]!)
+                    ),
+                }),
+              },
               context
             );
             for (const [position, index] of indices.entries()) {

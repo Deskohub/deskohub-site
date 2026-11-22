@@ -1,16 +1,19 @@
 import "server-only";
 
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
+import { WorkspaceDatabase } from "@/db/database.service";
 import { m } from "@/features/administration/i18n";
 import { runAdministrationPage } from "@/features/administrators/server/administration-request.server";
 import type { Locale } from "@/features/i18n";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
+import { listCampaignEmailPublications } from "../../backend/campaign-published-email";
 import { campaignBodyFormatVersion } from "../../body/campaign-body-document";
 import type {
   CampaignLocaleContent,
   CampaignTemplateKey,
 } from "../../body/campaign-content";
 import { renderCampaignEmailPreview } from "../../campaign-email";
+import { campaignContentLocaleOrder } from "../../recipient-locale";
 import { loadAudienceOptions } from "../audiences/audience-page-data.server";
 import {
   campaignOperationCapabilities,
@@ -109,18 +112,36 @@ const loadAdminInbox = invokeCampaignOperation("getCampaignSettings", {}).pipe(
   Effect.map(({ testSendInbox }) => testSendInbox)
 );
 
+const loadPublishedEmails = Effect.flatMap(WorkspaceDatabase, ({ db }) =>
+  listCampaignEmailPublications(db).pipe(
+    Effect.map((rows) =>
+      rows.map(({ emailId, title, document }) => ({
+        emailId,
+        title,
+        locales: campaignContentLocaleOrder.filter((locale) =>
+          Object.hasOwn(document.translations, locale)
+        ),
+      }))
+    )
+  )
+);
+
 const loadComposerOptions = () =>
   runAdministrationPage(
     "email-campaigns.admin.load-composer",
     Effect.promise(() => getRequestLocale()).pipe(
       Effect.flatMap((locale) =>
         Effect.all(
-          { templates: loadTemplates(locale), adminInbox: loadAdminInbox },
+          {
+            templates: loadTemplates(locale),
+            adminInbox: loadAdminInbox,
+            publishedEmails: loadPublishedEmails,
+          },
           { concurrency: "unbounded" }
         )
       )
     ),
-    campaignOperationCapabilities
+    Layer.merge(campaignOperationCapabilities, WorkspaceDatabase.Default)
   );
 
 /** Audiences, templates, and the test inbox the composer offers. */

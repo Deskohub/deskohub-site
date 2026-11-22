@@ -1,8 +1,10 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import type { EmailMessage, EmailRecipient } from "@deskohub/email";
 import { Data, Effect, Match } from "effect";
+import { isValidElement } from "react";
 import { Text } from "react-email";
 import { WorkspaceCampaignFooter } from "@/emails/_components/workspace-campaign-footer";
+import type { RenderedEmailContent } from "@/features/emails/body/email-content";
 import { type Locale, m } from "@/features/i18n";
 import { getRuntimeMarketingPreferencesPlaceholderUrl } from "@/features/legal/marketing-preferences-access-url";
 import { emailKindTags } from "@/shared/backend/email/email-kind";
@@ -71,7 +73,7 @@ export const CampaignEmailOccasion = Data.taggedEnum<CampaignEmailOccasion>();
 type CampaignEmailContent = {
   readonly templateKey: CampaignTemplateKey;
   readonly locale: Locale;
-  readonly content: CampaignLocaleContent;
+  readonly content: CampaignLocaleContent | RenderedEmailContent;
 };
 
 type CampaignSender = {
@@ -127,7 +129,11 @@ const renderCampaign = (
               )}
             </Text>
           )}
-          <CampaignBodyContent body={input.content.body} />
+          {isValidElement(input.content.body) ? (
+            input.content.body
+          ) : (
+            <CampaignBodyContent body={input.content.body} />
+          )}
         </>
       }
       footer={input.footer}
