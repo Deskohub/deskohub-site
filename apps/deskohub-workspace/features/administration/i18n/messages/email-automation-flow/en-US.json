@@ -91,7 +91,7 @@
   "emailAutomationFlowEventCancelledDescription": "A customer cancels a reservation in Workspace.",
   "emailAutomationFlowEventFinishedDescription": "The end time of a customer's reservation has passed.",
   "emailAutomationFlowEventKindLabel": "Which event starts a run",
-  "emailAutomationFlowEventProductHint": "Leave it on any product to start a run for every reservation.",
+  "emailAutomationFlowEventProductHint": "Leave product, stay and payment on any to start a run for every reservation.",
   "emailAutomationFlowEventStartedDescription": "The start time of a customer's reservation has passed.",
   "emailAutomationFlowInsertCondition": "Condition",
   "emailAutomationFlowInsertConditionDescription": "Check the customer at that moment.",

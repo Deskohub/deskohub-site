@@ -91,7 +91,7 @@
   "emailAutomationFlowEventCancelledDescription": "Zákazník zruší rezerváciu vo Workspace.",
   "emailAutomationFlowEventFinishedDescription": "Uplynul čas konca rezervácie zákazníka.",
   "emailAutomationFlowEventKindLabel": "Ktorá udalosť spúšťa beh",
-  "emailAutomationFlowEventProductHint": "Ak ponecháte akýkoľvek produkt, beh sa začne pri každej rezervácii.",
+  "emailAutomationFlowEventProductHint": "Ak ponecháte akýkoľvek produkt, pobyt aj platbu, beh sa začne pri každej rezervácii.",
   "emailAutomationFlowEventStartedDescription": "Uplynul čas začiatku rezervácie zákazníka.",
   "emailAutomationFlowInsertCondition": "Podmienka",
   "emailAutomationFlowInsertConditionDescription": "Skontroluje zákazníka v tej chvíli.",

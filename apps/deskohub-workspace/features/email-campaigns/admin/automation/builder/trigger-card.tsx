@@ -424,21 +424,16 @@ function ReservationTriggerQualifiers({
     individual: m.emailAutomationFlowTriggerPaymentIndividual({}, { locale }),
   } satisfies Record<ReservationPayment, string>;
   return (
-    <div className="space-y-3 rounded-lg border border-navy-blue/12 bg-navy-blue/[0.02] p-3">
-      <div className="space-y-1.5">
-        <ProductFilterControl
-          value={trigger.product}
-          onChange={(product) =>
-            onChange(withReservationQualifier(trigger, "product", product))
-          }
-          errorAt={(field) =>
-            errorAt(field === "" ? "product" : `product.${field}`)
-          }
-        />
-        <p className="text-navy-blue/55 text-xs leading-5">
-          {m.emailAutomationFlowEventProductHint({}, { locale })}
-        </p>
-      </div>
+    <div className="flex flex-col gap-3 rounded-lg border border-navy-blue/12 bg-navy-blue/[0.02] p-3">
+      <ProductFilterControl
+        value={trigger.product}
+        onChange={(product) =>
+          onChange(withReservationQualifier(trigger, "product", product))
+        }
+        errorAt={(field) =>
+          errorAt(field === "" ? "product" : `product.${field}`)
+        }
+      />
       <div className="grid gap-3 @lg:grid-cols-2">
         <QualifierSelect
           label={m.emailAutomationFlowTriggerStayLabel({}, { locale })}
@@ -469,9 +464,10 @@ function ReservationTriggerQualifiers({
             : undefined,
         ]}
       />
-      <p className="text-navy-blue/55 text-xs leading-5">
-        {m.emailAutomationFlowTriggerQualifiersHint({}, { locale })}
-      </p>
+      <div className="space-y-1 text-navy-blue/55 text-xs leading-5">
+        <p>{m.emailAutomationFlowEventProductHint({}, { locale })}</p>
+        <p>{m.emailAutomationFlowTriggerQualifiersHint({}, { locale })}</p>
+      </div>
     </div>
   );
 }
@@ -510,7 +506,10 @@ function QualifierSelect<Value extends string>({
       >
         <SelectTrigger
           aria-labelledby={labelId}
-          className={compactSelectClassName}
+          className={cn(
+            compactSelectClassName,
+            invalid && "border-burned-orange"
+          )}
           {...(errorId ? fieldErrorAttributes(errorId, invalid) : {})}
         >
           <SelectValue />

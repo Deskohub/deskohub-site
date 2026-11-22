@@ -91,7 +91,7 @@
   "emailAutomationFlowEventCancelledDescription": "Zákazník zruší rezervaci ve Workspace.",
   "emailAutomationFlowEventFinishedDescription": "Uplynul konec rezervace zákazníka.",
   "emailAutomationFlowEventKindLabel": "Která událost spouští běh",
-  "emailAutomationFlowEventProductHint": "Když ponecháte libovolný produkt, běh začne u každé rezervace.",
+  "emailAutomationFlowEventProductHint": "Když ponecháte libovolný produkt, pobyt i platbu, běh začne u každé rezervace.",
   "emailAutomationFlowEventStartedDescription": "Uplynul začátek rezervace zákazníka.",
   "emailAutomationFlowInsertCondition": "Podmínka",
   "emailAutomationFlowInsertConditionDescription": "Zkontroluje zákazníka v tu chvíli.",

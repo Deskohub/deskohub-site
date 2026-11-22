@@ -408,7 +408,10 @@ function ChoiceParamControl({
       <Select value={chosen ?? absentValue} onValueChange={pick}>
         <SelectTrigger
           aria-label={label}
-          className={compactSelectClassName}
+          className={cn(
+            compactSelectClassName,
+            invalid && "border-burned-orange"
+          )}
           {...fieldErrorAttributes(errorId, invalid)}
         >
           <SelectValue />

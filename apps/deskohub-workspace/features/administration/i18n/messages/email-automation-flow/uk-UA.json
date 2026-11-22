@@ -91,7 +91,7 @@
   "emailAutomationFlowEventCancelledDescription": "Клієнт скасовує бронювання у Workspace.",
   "emailAutomationFlowEventFinishedDescription": "Час завершення бронювання клієнта минув.",
   "emailAutomationFlowEventKindLabel": "Яка подія запускає виконання",
-  "emailAutomationFlowEventProductHint": "Якщо залишити будь-який продукт, виконання почнеться для кожного бронювання.",
+  "emailAutomationFlowEventProductHint": "Якщо залишити будь-який продукт, перебування й платіж, виконання почнеться для кожного бронювання.",
   "emailAutomationFlowEventStartedDescription": "Час початку бронювання клієнта минув.",
   "emailAutomationFlowInsertCondition": "Умова",
   "emailAutomationFlowInsertConditionDescription": "Перевіряє клієнта в цей момент.",

@@ -91,7 +91,7 @@
   "emailAutomationFlowEventCancelledDescription": "Khách hàng hủy đặt chỗ tại Workspace.",
   "emailAutomationFlowEventFinishedDescription": "Đã qua thời điểm kết thúc đặt chỗ của khách hàng.",
   "emailAutomationFlowEventKindLabel": "Sự kiện nào bắt đầu lượt chạy",
-  "emailAutomationFlowEventProductHint": "Nếu giữ lựa chọn sản phẩm bất kỳ, lượt chạy sẽ bắt đầu với mọi đặt chỗ.",
+  "emailAutomationFlowEventProductHint": "Nếu giữ lựa chọn bất kỳ cho sản phẩm, lưu trú và thanh toán, lượt chạy sẽ bắt đầu với mọi đặt chỗ.",
   "emailAutomationFlowEventStartedDescription": "Đã qua thời điểm bắt đầu đặt chỗ của khách hàng.",
   "emailAutomationFlowInsertCondition": "Điều kiện",
   "emailAutomationFlowInsertConditionDescription": "Kiểm tra khách hàng tại thời điểm đó.",

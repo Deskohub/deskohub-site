@@ -91,7 +91,7 @@
   "emailAutomationFlowEventCancelledDescription": "ग्राहक Workspace में बुकिंग रद्द करता है।",
   "emailAutomationFlowEventFinishedDescription": "ग्राहक की बुकिंग का समाप्ति समय बीत चुका है।",
   "emailAutomationFlowEventKindLabel": "कौन-सा इवेंट रन शुरू करता है",
-  "emailAutomationFlowEventProductHint": "प्रोडक्ट को “कोई भी प्रोडक्ट” पर छोड़ने से हर बुकिंग पर रन शुरू होगा।",
+  "emailAutomationFlowEventProductHint": "प्रोडक्ट, ठहराव और भुगतान को “कोई भी” पर छोड़ने से हर बुकिंग पर रन शुरू होगा।",
   "emailAutomationFlowEventStartedDescription": "ग्राहक की बुकिंग का शुरुआती समय बीत चुका है।",
   "emailAutomationFlowInsertCondition": "शर्त",
   "emailAutomationFlowInsertConditionDescription": "उस समय ग्राहक की जाँच करता है।",
