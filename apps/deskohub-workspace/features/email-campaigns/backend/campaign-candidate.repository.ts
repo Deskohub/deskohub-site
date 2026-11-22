@@ -6,6 +6,7 @@ import type {
 } from "@deskohub/dotypos";
 import type {
   AdministrationReservationStatusFilter,
+  ReservationPayment,
   ReservationProductFilterType,
 } from "@deskohub/workspace-admin-api";
 import {
@@ -45,6 +46,7 @@ import {
   reservationStatusCondition,
   undatedStatusChangeAt,
 } from "@/features/administration/reservation-status-condition";
+import type { WorkspaceCoworkProductTier } from "@/features/checkout/product-catalog";
 import { marketingConsentState } from "@/features/legal/backend/marketing-consent-ledger";
 import { loadEarlySetupDetails } from "@/features/reservation/backend/early-setup-details";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
@@ -54,7 +56,9 @@ import type { CampaignPurpose } from "../body/campaign-content";
 import type { CampaignId } from "../campaign-identifiers";
 import type { DatePeriodBounds } from "../date-period";
 import { sendAutomationVersion, sendPurpose } from "./campaign-send-selection";
+import { reservationPaymentCondition } from "./reservation-payment-condition";
 import { reservationProductCondition } from "./reservation-product-condition";
+import { loadCoworkTiers } from "./reservation-stay";
 
 /** What Workspace stores about one customer it knows. */
 export type CampaignCandidateFacts = {
@@ -88,6 +92,8 @@ export type CampaignReservationSelection = {
   readonly dotyposReservationIds?: readonly DotyposReservationId[];
   /** Limits the count to one product family and its catalog properties. */
   readonly product?: ReservationProductFilterType;
+  /** Limits the count to reservations paid this way. */
+  readonly payment?: ReservationPayment;
   /** Limits the count to these customers' reservations. */
   readonly customers?: readonly DotyposCustomerId[];
 };
@@ -161,11 +167,13 @@ const reservationSelection = ({
   asOf,
   dotyposReservationIds,
   product,
+  payment,
   customers,
 }: CampaignReservationSelection): SQL | undefined =>
   and(
     ofCustomers(workspaceReservations.dotyposCustomerId, customers),
     product && reservationProductCondition(product),
+    payment && reservationPaymentCondition(payment),
     status
       ? reservationStatusCondition(status, asOf)
       : bookedReservationConditionAt(asOf),
@@ -263,6 +271,17 @@ export interface ICampaignCandidateRepository {
     dotyposReservationIds: readonly DotyposReservationId[]
   ) => Effect.Effect<
     ReadonlyMap<DotyposReservationId, StoredWorkspaceReservationDetails>,
+    EffectDrizzleQueryError
+  >;
+  /**
+   * The stored tier of each Workspace-booked cowork reservation among these
+   * Dotypos reservations, by Dotypos ID: with the booked interval, it gives
+   * the visit's stay.
+   */
+  readonly coworkTiers: (
+    dotyposReservationIds: readonly DotyposReservationId[]
+  ) => Effect.Effect<
+    ReadonlyMap<DotyposReservationId, WorkspaceCoworkProductTier>,
     EffectDrizzleQueryError
   >;
   /**
@@ -511,6 +530,8 @@ export class CampaignCandidateRepository extends Context.Service<
         }),
         earlySetupDetails: (dotyposReservationIds) =>
           loadEarlySetupDetails(db, dotyposReservationIds),
+        coworkTiers: (dotyposReservationIds) =>
+          loadCoworkTiers(db, dotyposReservationIds),
         undatedStatusChanges: Effect.fn(
           "CampaignCandidateRepository.undatedStatusChanges"
         )(function* ({ statuses, customers }) {

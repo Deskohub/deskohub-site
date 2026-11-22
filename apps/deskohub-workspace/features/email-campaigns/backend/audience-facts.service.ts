@@ -230,7 +230,8 @@ export class AudienceFactsService extends Context.Service<
         );
 
       /**
-       * The visits dated in the bounds, by ID, with their selected date.
+       * The visits dated in the bounds, with their selected date and booked
+       * interval.
        * Dotypos holds an early-setup meeting room from before its booked
        * start, so the query starts that much earlier and the booked starts
        * decide what stays.
@@ -269,27 +270,32 @@ export class AudienceFactsService extends Context.Service<
                     Effect.flatMap(bookedIntervals)
                   )
           ),
-          Effect.map(
-            (visits) =>
-              new Map(
-                visits.flatMap(({ id, interval, cancelled }) => {
-                  const at =
-                    dateBasis === "visitEnd"
-                      ? interval.endsAt
-                      : interval.startsAt;
-                  return id !== undefined &&
-                    (includeCancelled || !cancelled) &&
-                    isWithinDatePeriodBounds(bounds, at)
-                    ? [[id, at] as const]
-                    : [];
-                })
-              )
+          Effect.map((visits) =>
+            visits.flatMap(({ id, interval, cancelled }) => {
+              const at =
+                dateBasis === "visitEnd" ? interval.endsAt : interval.startsAt;
+              return id !== undefined &&
+                (includeCancelled || !cancelled) &&
+                isWithinDatePeriodBounds(bounds, at)
+                ? [{ dotyposReservationId: id, interval, at }]
+                : [];
+            })
           )
         );
 
       /** Every visit that has begun by `asOf`, with its booked start, in one query. */
       const visitsBegunBy = (asOf: Temporal.Instant) =>
-        listVisitsIn({ startsAtOrBefore: asOf });
+        listVisitsIn({ startsAtOrBefore: asOf }).pipe(
+          Effect.map(
+            (visits) =>
+              new Map(
+                visits.map(
+                  ({ dotyposReservationId, at }) =>
+                    [dotyposReservationId, at] as const
+                )
+              )
+          )
+        );
 
       /**
        * Live visit reads: range queries, and the past visits of each
@@ -307,14 +313,9 @@ export class AudienceFactsService extends Context.Service<
           Effect.map((entries): VisitReads => {
             const byInstant = new Map(entries);
             return {
-              visitsIn: (bounds) =>
-                listVisitsIn(bounds).pipe(
-                  Effect.map((visits) => [...visits.keys()])
-                ),
+              visitsIn: (bounds) => listVisitsIn(bounds),
               visitEndsIn: (bounds, includeCancelled) =>
-                listVisitsIn(bounds, "visitEnd", includeCancelled).pipe(
-                  Effect.map((visits) => [...visits.keys()])
-                ),
+                listVisitsIn(bounds, "visitEnd", includeCancelled),
               pastVisits: (asOf) =>
                 byInstant.get(asOf.toString()) ?? visitsBegunBy(asOf),
             };
@@ -441,18 +442,18 @@ const fetchedVisitReads = (
   return {
     visitsIn: (bounds) =>
       Effect.succeed(
-        visits.flatMap(({ dotyposReservationId, startsAt }) =>
+        visits.flatMap(({ dotyposReservationId, startsAt, endsAt }) =>
           isWithinDatePeriodBounds(bounds, startsAt)
-            ? [dotyposReservationId]
+            ? [{ dotyposReservationId, interval: { startsAt, endsAt } }]
             : []
         )
       ),
     visitEndsIn: (bounds, includeCancelled) =>
       Effect.succeed(
-        visits.flatMap(({ dotyposReservationId, endsAt, status }) =>
+        visits.flatMap(({ dotyposReservationId, startsAt, endsAt, status }) =>
           (includeCancelled || status !== "cancelled") &&
           isWithinDatePeriodBounds(bounds, endsAt)
-            ? [dotyposReservationId]
+            ? [{ dotyposReservationId, interval: { startsAt, endsAt } }]
             : []
         )
       ),
