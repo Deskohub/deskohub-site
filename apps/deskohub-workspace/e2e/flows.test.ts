@@ -90,6 +90,20 @@ describe("PR description ## E2E flows parser", () => {
       installWebkit: false,
     });
 
+    // Valid GFM closing hash sequences on ATX level-two headings.
+    expect(parsePrBodyE2EFlows("## E2E flows ##\n- admin\n")).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "admin",
+    });
+    expect(
+      parsePrBodyE2EFlows("## E2E flows: ###   \n- `account`\n")
+    ).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "account",
+    });
+
     // Listing every individual flow normalizes to `all`.
     const everyFlowBody = `## E2E flows\n${workspaceE2EFlowIds.map((id) => `- ${id}`).join("\n")}\n`;
     expect(parsePrBodyE2EFlows(everyFlowBody)).toMatchObject({
@@ -100,9 +114,13 @@ describe("PR description ## E2E flows parser", () => {
     });
   });
 
-  test("ignores fake headings inside fenced and indented code blocks", () => {
+  test("ignores fake headings inside fenced, indented code blocks, and HTML comments", () => {
     const body = [
       "## Summary",
+      "<!--",
+      "## E2E flows",
+      "- none",
+      "-->",
       "```markdown",
       "## E2E flows",
       "- fake",
@@ -132,11 +150,21 @@ describe("PR description ## E2E flows parser", () => {
   test.each([
     ["missing section", "## Summary\nNo flows here"],
     ["level-three heading", "### E2E flows\n- none"],
+    ["closing hashes without preceding space", "## E2E flows##\n- none\n"],
+    [
+      "heading inside unclosed HTML comment",
+      "## Summary\n<!-- unclosed template comment\n## E2E flows\n- none\n",
+    ],
+    [
+      "heading inside inline unclosed HTML comment",
+      "## Summary <!-- unclosed\n## E2E flows\n- none\n",
+    ],
     [
       "indented code block only",
       "## Summary\n\n    ## E2E flows\n    - none\n",
     ],
     ["indented bullet inside section", "## E2E flows\n    - none\n"],
+    ["code block inside section", "## E2E flows\n```\n- admin\n```\n"],
     ["empty section", "## E2E flows\n\n<!-- only comment -->\n## Next\nText"],
     ["duplicate sections", "## E2E flows\n- admin\n## E2E flows\n- account"],
     ["unknown flow", "## E2E flows\n- checkout-magic"],
@@ -309,6 +337,52 @@ describe("commit status description encoding and coverage summary", () => {
     expect(afterFailure.latestRunState).toBe("failure");
     expect(afterFailure.passedFlows).toEqual(["email-campaigns"]);
     expect(afterFailure.realPassedFlows).toEqual(["email-campaigns"]);
+    expect(afterFailure.failedFlows).toEqual(["admin"]);
+
+    // An active rerun excludes older passes for the flow being rerun, while a
+    // superseded pending run does not erase an earlier pass.
+    const activeRerun = summarizeCommitStatuses([
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E is running [flows: admin]",
+        state: "pending",
+      },
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description:
+          "Protected preview E2E passed [flows: admin,email-campaigns]",
+        state: "success",
+      },
+    ]);
+    expect(activeRerun.latestRunKind).toBe("running");
+    expect(activeRerun.runningFlows).toEqual(["admin"]);
+    expect(activeRerun.realPassedFlows).toEqual(["email-campaigns"]);
+    expect(activeRerun.passedFlows).toEqual(["email-campaigns"]);
+
+    const supersededRerun = summarizeCommitStatuses([
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Superseded by a newer PR head before E2E finished",
+        state: "failure",
+      },
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E is running [flows: admin]",
+        state: "pending",
+      },
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E passed [flows: admin]",
+        state: "success",
+      },
+    ]);
+    expect(supersededRerun.latestRunKind).toBe("superseded");
+    expect(supersededRerun.realPassedFlows).toEqual(["admin"]);
 
     const partialAndCarried = summarizeCommitStatuses(
       [

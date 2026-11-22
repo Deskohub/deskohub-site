@@ -164,13 +164,79 @@ export const parseFlowsInput = (raw) => {
   return parseFlowTokens(parts);
 };
 
-// Per GFM, ATX headings allow at most 3 leading spaces; 4+ spaces or a leading
-// tab is an indented code block rather than a visible heading.
+// Per GFM Section 4.2, ATX headings allow at most 3 leading spaces and an
+// optional closing sequence of `#` preceded by spaces/tabs and followed only
+// by spaces/tabs. 4+ leading spaces or a leading tab is an indented code block.
+const stripClosingAtxHashes = (line) => line.replace(/[ \t]+#+[ \t]*$/, "");
 const sectionHeadingPattern = /^ {0,3}##[ \t]+e2e[ \t]+flows[ \t]*:?[ \t]*$/i;
-const anyHeadingPattern = /^ {0,3}#{1,6}[ \t]+/;
+const anyHeadingPattern = /^ {0,3}#{1,6}(?:[ \t]+.*|[ \t]*)$/;
 const fenceOpenPattern = /^ {0,3}(`{3,}|~{3,})/;
+const htmlCommentBlockStartPattern = /^ {0,3}<!--/;
 const indentedCodeLinePattern = /^(?: {4,}|\t)/;
 const bulletPattern = /^ {0,3}[-*][ \t]+`?([^\s`:]+)`?(?:[ \t]*:[ \t]*\S.*)?$/;
+
+/**
+ * Strips inline HTML comments (`<!-- ... -->`) outside backtick code spans,
+ * and reports whether an unclosed `<!--` remains open at end of line.
+ */
+const stripInlineHtmlComments = (line, inCommentStart) => {
+  let inComment = inCommentStart;
+  let out = "";
+  let i = 0;
+
+  while (i < line.length) {
+    if (inComment) {
+      const closeIndex = line.indexOf("-->", i);
+      if (closeIndex === -1) {
+        return { text: out, inComment: true };
+      }
+      i = closeIndex + 3;
+      inComment = false;
+      continue;
+    }
+
+    if (line[i] === "`") {
+      let tickEnd = i;
+      while (tickEnd < line.length && line[tickEnd] === "`") tickEnd += 1;
+      const tickCount = tickEnd - i;
+      const marker = "`".repeat(tickCount);
+      let search = tickEnd;
+      let closing = -1;
+      while (search < line.length) {
+        const candidate = line.indexOf(marker, search);
+        if (candidate === -1) break;
+        const beforeOk = candidate === 0 || line[candidate - 1] !== "`";
+        const afterOk =
+          candidate + tickCount >= line.length ||
+          line[candidate + tickCount] !== "`";
+        if (beforeOk && afterOk) {
+          closing = candidate;
+          break;
+        }
+        search = candidate + 1;
+      }
+      if (closing !== -1) {
+        out += line.slice(i, closing + tickCount);
+        i = closing + tickCount;
+        continue;
+      }
+      out += line.slice(i, tickEnd);
+      i = tickEnd;
+      continue;
+    }
+
+    if (line.startsWith("<!--", i)) {
+      inComment = true;
+      i += 4;
+      continue;
+    }
+
+    out += line[i];
+    i += 1;
+  }
+
+  return { text: out, inComment };
+};
 
 const scanVisibleLines = (lines) => {
   const visible = [];
@@ -178,9 +244,12 @@ const scanVisibleLines = (lines) => {
   let fenceLength = 0;
   let previousBlank = true;
   let inIndentedCode = false;
+  let inHtmlCommentBlock = false;
+  let inInlineComment = false;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+
     if (fenceChar) {
       const closePattern = new RegExp(
         `^ {0,3}${fenceChar}{${fenceLength},}[ \\t]*$`
@@ -190,7 +259,31 @@ const scanVisibleLines = (lines) => {
         fenceLength = 0;
         previousBlank = false;
       }
-      visible.push({ index, line, code: true });
+      visible.push({ index, line, visibleLine: "", hidden: true });
+      continue;
+    }
+
+    // GFM HTML block type 2 (`<!--` ... `-->`, or through EOF if unclosed).
+    if (inHtmlCommentBlock) {
+      if (line.includes("-->")) {
+        inHtmlCommentBlock = false;
+      }
+      previousBlank = false;
+      visible.push({ index, line, visibleLine: "", hidden: true });
+      continue;
+    }
+
+    if (inInlineComment) {
+      const stripped = stripInlineHtmlComments(line, true);
+      inInlineComment = stripped.inComment;
+      const isBlank = /^[ \t]*$/.test(stripped.text);
+      previousBlank = isBlank;
+      visible.push({
+        index,
+        line,
+        visibleLine: stripped.text,
+        hidden: isBlank,
+      });
       continue;
     }
 
@@ -198,12 +291,15 @@ const scanVisibleLines = (lines) => {
     if (fenceMatch) {
       const marker = fenceMatch[1];
       // Backtick info strings cannot contain backticks in GFM.
-      if (marker[0] !== "`" || !line.slice(fenceMatch[0].length).includes("`")) {
+      if (
+        marker[0] !== "`" ||
+        !line.slice(fenceMatch[0].length).includes("`")
+      ) {
         fenceChar = marker[0];
         fenceLength = marker.length;
         inIndentedCode = false;
         previousBlank = false;
-        visible.push({ index, line, code: true });
+        visible.push({ index, line, visibleLine: "", hidden: true });
         continue;
       }
     }
@@ -211,24 +307,56 @@ const scanVisibleLines = (lines) => {
     const isBlank = /^[ \t]*$/.test(line);
     if (isBlank) {
       previousBlank = true;
-      visible.push({ index, line, code: inIndentedCode });
+      visible.push({
+        index,
+        line,
+        visibleLine: "",
+        hidden: inIndentedCode,
+      });
       continue;
     }
 
-    if ((previousBlank || inIndentedCode) && indentedCodeLinePattern.test(line)) {
+    if (
+      (previousBlank || inIndentedCode) &&
+      indentedCodeLinePattern.test(line)
+    ) {
       inIndentedCode = true;
       previousBlank = false;
-      visible.push({ index, line, code: true });
+      visible.push({ index, line, visibleLine: "", hidden: true });
       continue;
     }
 
     inIndentedCode = false;
+
+    if (htmlCommentBlockStartPattern.test(line)) {
+      if (!line.includes("-->")) {
+        inHtmlCommentBlock = true;
+      }
+      previousBlank = false;
+      visible.push({ index, line, visibleLine: "", hidden: true });
+      continue;
+    }
+
+    const stripped = stripInlineHtmlComments(line, false);
+    inInlineComment = stripped.inComment;
     previousBlank = false;
-    visible.push({ index, line, code: false });
+    visible.push({
+      index,
+      line,
+      visibleLine: stripped.text,
+      hidden: false,
+    });
   }
 
   return visible;
 };
+
+const isVisibleSectionHeading = (entry) =>
+  !entry.hidden &&
+  sectionHeadingPattern.test(stripClosingAtxHashes(entry.visibleLine));
+
+const isVisibleAnyHeading = (entry) =>
+  !entry.hidden && anyHeadingPattern.test(entry.visibleLine);
 
 export const parsePrBodyE2EFlows = (body) => {
   const text = String(body ?? "").replace(/\r\n?/g, "\n");
@@ -237,7 +365,7 @@ export const parsePrBodyE2EFlows = (body) => {
   const headingIndices = [];
 
   for (const entry of scanned) {
-    if (!entry.code && sectionHeadingPattern.test(entry.line)) {
+    if (isVisibleSectionHeading(entry)) {
       headingIndices.push(entry.index);
     }
   }
@@ -260,19 +388,38 @@ export const parsePrBodyE2EFlows = (body) => {
   let end = lines.length;
   for (let index = start; index < scanned.length; index += 1) {
     const entry = scanned[index];
-    if (!entry.code && anyHeadingPattern.test(entry.line)) {
+    if (isVisibleAnyHeading(entry)) {
       end = index;
       break;
     }
   }
 
-  const sectionBody = lines
-    .slice(start, end)
-    .join("\n")
-    .replace(/<!--[\s\S]*?-->/g, "");
   const tokens = [];
 
-  for (const rawLine of sectionBody.split("\n")) {
+  for (let index = start; index < end; index += 1) {
+    const entry = scanned[index];
+    if (entry.hidden) {
+      // Allow HTML comment blocks inside the section, but reject indented code
+      // lines or fenced code blocks inside `## E2E flows`.
+      if (
+        indentedCodeLinePattern.test(entry.line) &&
+        !/^[ \t]*$/.test(entry.line)
+      ) {
+        return {
+          ok: false,
+          error: `Invalid indented line in \`## E2E flows\`: "${entry.line.trim()}". Use top-level bullet items like \`- admin\`, \`- all\`, or \`- none\`.`,
+        };
+      }
+      if (fenceOpenPattern.test(entry.line)) {
+        return {
+          ok: false,
+          error:
+            "Code blocks are not allowed inside `## E2E flows`. Use top-level bullet items like `- admin`, `- all`, or `- none`.",
+        };
+      }
+      continue;
+    }
+    const rawLine = entry.visibleLine;
     if (/^[ \t]*$/.test(rawLine)) continue;
     if (indentedCodeLinePattern.test(rawLine)) {
       return {
@@ -445,11 +592,14 @@ export const summarizeCommitStatuses = (
   let latestRunKind = null;
   let latestRunState = null;
   let runningFlowIds = [];
-  // Track the newest terminal verdict per flow so a later failure for a flow
-  // always invalidates an earlier pass for that flow.
+  let runningDescription = "";
+  let runningTargetUrl = "";
+  // Track the newest active/terminal verdict per flow so a newer failure OR an
+  // active rerun always invalidates an earlier pass for that flow.
   const decidedFlows = new Set();
   const realPassedFlowIds = [];
   const carriedPassedFlowIds = [];
+  const failedFlowIds = [];
   let carriedSourceSha = "";
 
   for (const status of relevant) {
@@ -504,6 +654,15 @@ export const summarizeCommitStatuses = (
         latestRunKind = "running";
         latestRunState = "pending";
         runningFlowIds = [...classified.selected];
+        runningDescription = String(status.description ?? "");
+        runningTargetUrl = String(status.target_url ?? "");
+        // Exclude older passes for flows actively being rerun so sync never
+        // restores an older pass over an in-flight rerun.
+        for (const flow of classified.selected) {
+          if (!decidedFlows.has(flow)) {
+            decidedFlows.add(flow);
+          }
+        }
       }
       continue;
     }
@@ -518,6 +677,7 @@ export const summarizeCommitStatuses = (
       for (const flow of classified.selected) {
         if (!decidedFlows.has(flow)) {
           decidedFlows.add(flow);
+          failedFlowIds.push(flow);
         }
       }
     }
@@ -525,6 +685,7 @@ export const summarizeCommitStatuses = (
 
   const realPassed = buildFlowSelection(realPassedFlowIds);
   const carriedPassed = buildFlowSelection(carriedPassedFlowIds);
+  const failed = buildFlowSelection(failedFlowIds);
   const allPassed = buildFlowSelection([
     ...realPassedFlowIds,
     ...carriedPassedFlowIds,
@@ -551,10 +712,14 @@ export const summarizeCommitStatuses = (
     realPassedFlowsCsv: realPassed.flows,
     carriedPassedFlows: carriedPassed.selected,
     carriedPassedFlowsCsv: carriedPassed.flows,
+    failedFlows: failed.selected,
+    failedFlowsCsv: failed.flows,
     carriedSourceSha,
     coverageSource,
     runningFlows: running.selected,
     runningFlowsCsv: running.flows,
+    runningDescription,
+    runningTargetUrl,
     anyPassed: allPassed.selected.length > 0,
   };
 };

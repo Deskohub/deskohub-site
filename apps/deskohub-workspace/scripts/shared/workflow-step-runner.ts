@@ -84,7 +84,7 @@ export const createWorkflowStepRunner = (prefix: string) => {
     const fixtureDir = join(dir, "fixtures");
     mkdirSync(bin, { recursive: true });
     mkdirSync(fixtureDir);
-    for (const [name, script] of Object.entries({ ...commands, gh: fakeGh })) {
+    for (const [name, script] of Object.entries({ gh: fakeGh, ...commands })) {
       writeFileSync(join(bin, name), script);
       chmodSync(join(bin, name), 0o755);
     }

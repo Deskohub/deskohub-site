@@ -93,11 +93,14 @@ switch (command) {
     }
 
     let missing = [];
+    let missingReal = [];
     let allCovered = false;
     let realCoversRequested = false;
     let carriedCoversRequested = false;
     let unionCoversRequested = false;
     let coveredByRunning = false;
+    let requestedHasFailed = false;
+    let requestedHasRunning = false;
     if (requestedRaw) {
       const parsedRequested = parseFlowsInput(requestedRaw);
       if (!parsedRequested.ok) {
@@ -105,10 +108,12 @@ switch (command) {
         process.exit(1);
       }
       missing = diffFlowIds(parsedRequested.selected, summary.passedFlows);
+      missingReal = diffFlowIds(
+        parsedRequested.selected,
+        summary.realPassedFlows
+      );
       allCovered = missing.length === 0;
-      realCoversRequested =
-        diffFlowIds(parsedRequested.selected, summary.realPassedFlows)
-          .length === 0;
+      realCoversRequested = missingReal.length === 0;
       carriedCoversRequested =
         summary.carriedSourceSha !== "" &&
         diffFlowIds(parsedRequested.selected, summary.carriedPassedFlows)
@@ -116,23 +121,35 @@ switch (command) {
       unionCoversRequested =
         diffFlowIds(parsedRequested.selected, union).length === 0;
       const inFlightCovered = unionFlowIds(
-        summary.passedFlows,
+        summary.realPassedFlows,
         summary.runningFlows
       );
       coveredByRunning =
         summary.latestRunKind === "running" &&
         diffFlowIds(parsedRequested.selected, inFlightCovered).length === 0;
+      const failedSet = new Set(summary.failedFlows);
+      const runningSet = new Set(summary.runningFlows);
+      requestedHasFailed = parsedRequested.selected.some((id) =>
+        failedSet.has(id)
+      );
+      requestedHasRunning = parsedRequested.selected.some((id) =>
+        runningSet.has(id)
+      );
     }
 
     writeJson({
       ...summary,
       missingFlows: missing,
       missingFlowsCsv: toCanonicalFlows(missing),
+      missingRealFlows: missingReal,
+      missingRealFlowsCsv: toCanonicalFlows(missingReal),
       allCovered,
       realCoversRequested,
       carriedCoversRequested,
       unionCoversRequested,
       coveredByRunning,
+      requestedHasFailed,
+      requestedHasRunning,
       unionFlows: union,
       unionFlowsCsv: toCanonicalFlows(union),
     });

@@ -17,6 +17,10 @@ const flowsCli = resolve(
   import.meta.dir,
   "../../../.github/actions/workspace-e2e-flows/cli.mjs"
 );
+const flowsPublish = resolve(
+  import.meta.dir,
+  "../../../.github/actions/workspace-e2e-flows/publish-status.mjs"
+);
 const validateJob = workflow.jobs["validate-pr-e2e-flows"];
 const validateStep = findStepByName(
   workflow,
@@ -88,11 +92,13 @@ const runSync = ({
     },
   ]),
   extraFixtures = {},
+  commands = {},
 }: {
   readonly body: string;
   readonly statuses?: readonly object[];
   readonly deployment?: GhFixtures;
   readonly extraFixtures?: GhFixtures;
+  readonly commands?: Readonly<Record<string, string>>;
 }) =>
   runStep(
     syncStep,
@@ -105,9 +111,10 @@ const runSync = ({
       ...extraFixtures,
     },
     {
-      FLOWS_CLI: flowsCli,
+      FLOWS_PUBLISH: flowsPublish,
       PR_NUMBER: String(prNumber),
-    }
+    },
+    commands
   );
 
 const statusPosts = (calls: readonly string[]) =>
@@ -117,8 +124,15 @@ const workflowDispatches = (calls: readonly string[]) =>
   calls.filter((call) => call.startsWith("workflow run workspace-e2e.yml"));
 
 describe("Workspace E2E PR flows sync workflow contract", () => {
-  test("splits least-privilege validation from internal PR sync and never checks out PR code", () => {
+  test("validates every open PR including drafts, forks, Dependabot, and synchronize pushes without checking out PR code", () => {
     expect(workflow.permissions).toEqual({});
+    expect(workflow.on?.pull_request_target?.types).toEqual([
+      "opened",
+      "edited",
+      "reopened",
+      "ready_for_review",
+      "synchronize",
+    ]);
     expect(validateJob?.permissions).toEqual({
       contents: "read",
       "pull-requests": "read",
@@ -149,15 +163,16 @@ describe("Workspace E2E PR flows sync workflow contract", () => {
     for (const guard of [
       "github.repository == 'totalolage/deskohub-site'",
       "github.event.pull_request.state == 'open'",
-      "github.event.pull_request.draft == false",
     ]) {
       expect(validateCondition).toContain(guard);
     }
+    expect(validateCondition).not.toContain("draft");
     expect(validateCondition).not.toContain("dependabot");
 
     const syncCondition = String(syncJob?.if);
     for (const guard of [
       "github.repository == 'totalolage/deskohub-site'",
+      "github.event.action != 'synchronize'",
       "github.event.pull_request.state == 'open'",
       "github.event.pull_request.draft == false",
       "github.event.pull_request.head.repo.full_name == github.repository",
@@ -176,6 +191,7 @@ describe("Workspace E2E PR flows sync workflow contract", () => {
         head: { ref: headRef, repo: { full_name: "fork/repo" }, sha: headSha },
       },
     ],
+    ["draft PR", { draft: true }],
     ["Dependabot PR", { user: { login: "dependabot[bot]" } }],
   ])(
     "validates ## E2E flows on %s without ever granting success or dispatching sync",
@@ -216,7 +232,7 @@ describe("Workspace E2E PR flows sync workflow contract", () => {
           },
         },
         {
-          FLOWS_CLI: flowsCli,
+          FLOWS_PUBLISH: flowsPublish,
           PR_NUMBER: String(prNumber),
         }
       );
@@ -291,6 +307,57 @@ describe("Workspace E2E PR flows sync step", () => {
     expect(statusPosts(passedRun.calls)[0]).toContain(
       "Vercel preview deployment failed"
     );
+  });
+
+  test("never restores an older pass over an active pending rerun for that flow", async () => {
+    const { calls, result } = await runSync({
+      body: "## E2E flows\n- admin\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E is running [flows: admin]",
+          state: "pending",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E passed [flows: admin]",
+          state: "success",
+        },
+      ],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(statusPosts(calls)).toEqual([]);
+    expect(workflowDispatches(calls)).toEqual([]);
+  });
+
+  test("dispatches only missing real-run flows when coverage is split between local and carried passes", async () => {
+    const { calls, result } = await runSync({
+      body: "## E2E flows\n- account\n- admin\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E passed [flows: admin]",
+          state: "success",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "Same tree as bbbbbbb, which passed E2E [flows: account]",
+          state: "success",
+        },
+      ],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(statusPosts(calls)).toHaveLength(1);
+    expect(statusPosts(calls)[0]).toContain("state=failure");
+    const dispatches = workflowDispatches(calls);
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]).toContain("flows=account");
+    expect(dispatches[0]).not.toContain("flows=none");
   });
 
   test("never restores green when a newer run failed a flow that had passed earlier", async () => {
@@ -431,8 +498,36 @@ describe("Workspace E2E PR flows sync step", () => {
     expect(dispatches[0]).toContain("flows=admin,email-campaigns");
   });
 
-  test("fails a skipped deployment when same-tree commit only passed a subset", async () => {
-    const { calls, result } = await runSync({
+  test("reuses a genuine partial pass on a same-tree commit and fails when requested flows are missing", async () => {
+    const covered = await runSync({
+      body: "## E2E flows\n- `admin`\n",
+      deployment: deploymentFixtures([
+        { description: "Skipped - Not affected", state: "inactive" },
+      ]),
+      extraFixtures: {
+        [`pulls/${prNumber}/commits`]: [
+          { commit: { tree: { sha: "tree-1" } }, sha: earlierSha },
+          { commit: { tree: { sha: "tree-1" } }, sha: headSha },
+        ],
+        [`commits/${earlierSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description:
+              "Protected preview E2E partial; more flows required [flows: admin]",
+            state: "failure",
+          },
+        ],
+      },
+    });
+    expect(covered.result.exitCode).toBe(0);
+    expect(statusPosts(covered.calls)).toHaveLength(1);
+    expect(statusPosts(covered.calls)[0]).toContain("state=success");
+    expect(statusPosts(covered.calls)[0]).toContain(
+      "Same tree as bbbbbbb, which passed E2E [flows: admin]"
+    );
+
+    const uncovered = await runSync({
       body: "## E2E flows\n- `admin`\n- `email-campaigns`\n",
       deployment: deploymentFixtures([
         { description: "Skipped - Not affected", state: "inactive" },
@@ -452,10 +547,60 @@ describe("Workspace E2E PR flows sync step", () => {
         ],
       },
     });
+    expect(uncovered.result.exitCode).toBe(0);
+    expect(statusPosts(uncovered.calls)).toHaveLength(1);
+    expect(statusPosts(uncovered.calls)[0]).toContain("state=failure");
+    expect(statusPosts(uncovered.calls)[0]).toContain(
+      "lacks required E2E flows"
+    );
+    expect(workflowDispatches(uncovered.calls)).toEqual([]);
+  });
+
+  test("restores pending if a concurrent rerun starts between sync read and status write", async () => {
+    const statefulGh = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+state_file="$GH_FIXTURES/state.txt"
+[[ -f "$state_file" ]] || echo "before" > "$state_file"
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  echo '{"number":${prNumber},"state":"open","draft":false,"user":{"login":"author"},"head":{"ref":"${headRef}","sha":"${headSha}","repo":{"full_name":"${repository}"}},"body":"## E2E flows\\n- admin\\n"}'
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"${previewUrl}/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${headSha}/statuses"* ]]; then
+  if [[ "$(cat "$state_file")" == "before" ]]; then
+    echo '[[{"id":10,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"Invalid or missing ## E2E flows in PR description; list valid flows, all, or none"},{"id":9,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
+  else
+    echo '[[{"id":12,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"},{"id":11,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"pending","description":"Protected preview E2E is running [flows: admin]"},{"id":9,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/statuses/${headSha}"* ]]; then
+  echo "after" > "$state_file"
+  echo '{"id":12}'
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const { calls, result } = await runSync({
+      body: "## E2E flows\n- admin\n",
+      commands: { gh: statefulGh },
+    });
     expect(result.exitCode).toBe(0);
-    expect(statusPosts(calls)).toHaveLength(1);
-    expect(statusPosts(calls)[0]).toContain("state=failure");
-    expect(statusPosts(calls)[0]).toContain("lacks required E2E flows");
-    expect(workflowDispatches(calls)).toEqual([]);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toContain("state=success");
+    expect(posts[1]).toContain("state=pending");
+    expect(posts[1]).toContain(
+      "description=Protected preview E2E is running [flows: admin]"
+    );
   });
 });

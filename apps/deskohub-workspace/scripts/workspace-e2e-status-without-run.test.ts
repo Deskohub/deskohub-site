@@ -13,6 +13,10 @@ const flowsCli = resolve(
   import.meta.dir,
   "../../../.github/actions/workspace-e2e-flows/cli.mjs"
 );
+const flowsPublish = resolve(
+  import.meta.dir,
+  "../../../.github/actions/workspace-e2e-flows/publish-status.mjs"
+);
 const targetStep = findStepByName(
   workflow,
   "Resolve eligible PR and immutable preview"
@@ -577,6 +581,7 @@ describe("Workspace E2E status after a failed resolution", () => {
       publishStep,
       { [`statuses/${targetSha}`]: [] },
       {
+        FLOWS_PUBLISH: flowsPublish,
         STATUS_DESCRIPTION: decided.outputs.description ?? fallbackDescription,
         STATUS_STATE: decided.outputs.state ?? "failure",
         TARGET_SHA: target.outputs.sha ?? "",
@@ -713,6 +718,57 @@ describe("Workspace E2E selective PR flows", () => {
     expect(outputs.description).toContain("lacks required E2E flows");
   });
 
+  test("reuses a genuine partial pass from a same-tree commit when it covers the requested flows", async () => {
+    const covered = await decideStatus(
+      "skipped",
+      {
+        commits: [
+          { sha: sha("b"), tree: "tree-same" },
+          { sha: targetSha, tree: "tree-same" },
+        ],
+        statuses: {
+          [sha("b")]: [
+            {
+              description:
+                "Protected preview E2E partial; more flows required [flows: admin]",
+              state: "failure",
+            },
+          ],
+        },
+      },
+      { FLOWS: "admin" }
+    );
+    expect(covered.result.exitCode).toBe(0);
+    expect(covered.outputs).toMatchObject({
+      description: "Same tree as bbbbbbb, which passed E2E [flows: admin]",
+      state: "success",
+    });
+
+    const uncovered = await decideStatus(
+      "skipped",
+      {
+        commits: [
+          { sha: sha("b"), tree: "tree-same" },
+          { sha: targetSha, tree: "tree-same" },
+        ],
+        statuses: {
+          [sha("b")]: [
+            {
+              description:
+                "Protected preview E2E partial; more flows required [flows: admin]",
+              state: "failure",
+            },
+          ],
+        },
+      },
+      { FLOWS: "admin,email-campaigns" }
+    );
+    expect(uncovered.result.exitCode).toBe(0);
+    expect(uncovered.outputs.state).toBe("failure");
+    expect(uncovered.outputs.description).toContain("lacks required E2E flows");
+    expect(uncovered.outputs.description).not.toContain("which failed E2E");
+  });
+
   test("unions newly passed flows with prior passing flows on the same SHA in publish-final-status", async () => {
     const { calls, result } = await runStep(
       finalStep,
@@ -721,6 +777,14 @@ describe("Workspace E2E selective PR flows", () => {
           body: "## E2E flows\n- `admin`\n- `email-campaigns`\n",
           head: { sha: targetSha },
         },
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
         [`commits/${targetSha}/statuses`]: [
           {
             context: "Workspace E2E",
@@ -735,7 +799,7 @@ describe("Workspace E2E selective PR flows", () => {
         ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
         ALLOCATION_SHARD: "1",
         FLOWS: "email-campaigns",
-        FLOWS_CLI: flowsCli,
+        FLOWS_PUBLISH: flowsPublish,
         PR_NUMBER: String(prNumber),
         STATUS_STATE: "success",
         TARGET_SHA: targetSha,
@@ -745,7 +809,8 @@ describe("Workspace E2E selective PR flows", () => {
     const e2ePost = calls.find(
       (call) =>
         call.includes(`statuses/${targetSha}`) &&
-        call.includes("context=Workspace E2E")
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
     );
     expect(e2ePost).toContain("state=success");
     expect(e2ePost).toContain(
@@ -774,9 +839,20 @@ describe("Workspace E2E selective PR flows", () => {
   });
 
   test("publishes partial failure when PR flows widened mid-run and later unions partial coverage to pass", async () => {
+    const deploymentOk = {
+      deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+      "deployments/11/statuses": [
+        {
+          description: "Deployment has completed",
+          environment_url: `${previewUrl}/`,
+          state: "success",
+        },
+      ],
+    };
     const partialRun = await runStep(
       finalStep,
       {
+        ...deploymentOk,
         [`pulls/${prNumber}`]: {
           body: "## E2E flows\n- admin\n- email-campaigns\n",
           head: { sha: targetSha },
@@ -788,7 +864,7 @@ describe("Workspace E2E selective PR flows", () => {
         ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
         ALLOCATION_SHARD: "1",
         FLOWS: "admin",
-        FLOWS_CLI: flowsCli,
+        FLOWS_PUBLISH: flowsPublish,
         PR_NUMBER: String(prNumber),
         STATUS_STATE: "success",
         TARGET_SHA: targetSha,
@@ -798,7 +874,8 @@ describe("Workspace E2E selective PR flows", () => {
     const partialPost = partialRun.calls.find(
       (call) =>
         call.includes(`statuses/${targetSha}`) &&
-        call.includes("context=Workspace E2E")
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
     );
     expect(partialPost).toContain("state=failure");
     expect(partialPost).toContain(
@@ -808,6 +885,7 @@ describe("Workspace E2E selective PR flows", () => {
     const completionRun = await runStep(
       finalStep,
       {
+        ...deploymentOk,
         [`pulls/${prNumber}`]: {
           body: "## E2E flows\n- admin\n- email-campaigns\n",
           head: { sha: targetSha },
@@ -827,7 +905,7 @@ describe("Workspace E2E selective PR flows", () => {
         ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
         ALLOCATION_SHARD: "1",
         FLOWS: "email-campaigns",
-        FLOWS_CLI: flowsCli,
+        FLOWS_PUBLISH: flowsPublish,
         PR_NUMBER: String(prNumber),
         STATUS_STATE: "success",
         TARGET_SHA: targetSha,
@@ -837,12 +915,70 @@ describe("Workspace E2E selective PR flows", () => {
     const completePost = completionRun.calls.find(
       (call) =>
         call.includes(`statuses/${targetSha}`) &&
-        call.includes("context=Workspace E2E")
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
     );
     expect(completePost).toContain("state=success");
     expect(completePost).toContain(
       "description=Protected preview E2E passed [flows: admin,email-campaigns]"
     );
+  });
+
+  test("refuses to publish success when deployment state cannot be read", async () => {
+    const finalUnreadable = await runStep(
+      finalStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- admin\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
+        ALLOCATION_SHARD: "1",
+        FLOWS: "admin",
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(finalUnreadable.result.exitCode).toBe(0);
+    const finalPost = finalUnreadable.calls.find(
+      (call) =>
+        call.includes(`statuses/${targetSha}`) &&
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
+    );
+    expect(finalPost).toContain("state=failure");
+    expect(finalPost).toContain("deployment state could not be verified");
+
+    const withoutRunUnreadable = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(withoutRunUnreadable.result.exitCode).toBe(0);
+    const withoutRunPost = withoutRunUnreadable.calls.find((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(withoutRunPost).toContain("state=failure");
+    expect(withoutRunPost).toContain("deployment state could not be verified");
   });
 
   test("reconciles live PR body and preview state before publish-status-without-run posts success", async () => {
@@ -853,6 +989,7 @@ describe("Workspace E2E selective PR flows", () => {
           body: "## E2E flows\n- admin\n",
           head: { sha: targetSha },
         },
+        [`commits/${targetSha}/statuses`]: [],
         deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
         "deployments/11/statuses": [
           {
@@ -864,7 +1001,7 @@ describe("Workspace E2E selective PR flows", () => {
         [`statuses/${targetSha}`]: {},
       },
       {
-        FLOWS_CLI: flowsCli,
+        FLOWS_PUBLISH: flowsPublish,
         PR_NUMBER: String(prNumber),
         STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
         STATUS_STATE: "success",
@@ -885,6 +1022,7 @@ describe("Workspace E2E selective PR flows", () => {
           body: "## E2E flows\n- none\n",
           head: { sha: targetSha },
         },
+        [`commits/${targetSha}/statuses`]: [],
         deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
         "deployments/11/statuses": [
           { description: "Deployment has failed", state: "failure" },
@@ -897,7 +1035,7 @@ describe("Workspace E2E selective PR flows", () => {
         [`statuses/${targetSha}`]: {},
       },
       {
-        FLOWS_CLI: flowsCli,
+        FLOWS_PUBLISH: flowsPublish,
         PR_NUMBER: String(prNumber),
         STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
         STATUS_STATE: "success",
@@ -910,5 +1048,73 @@ describe("Workspace E2E selective PR flows", () => {
     );
     expect(failedPost).toContain("state=failure");
     expect(failedPost).toContain("Vercel preview deployment failed");
+  });
+
+  test("catches an interleaved PR invalidation and validation failure during publish-final-status", async () => {
+    // Controlled interleaving: read 1 returns a valid PR body (`admin`), then
+    // before post 1 finishes, the PR body is invalidated and validation posts
+    // failure. Post-write verification must detect the race and publish failure
+    // last so Workspace E2E never stays green.
+    const statefulGh = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+state_file="$GH_FIXTURES/state.txt"
+[[ -f "$state_file" ]] || echo "before" > "$state_file"
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  if [[ "$(cat "$state_file")" == "before" ]]; then
+    echo '{"head":{"sha":"${targetSha}"},"body":"## E2E flows\\n- admin\\n"}'
+  else
+    echo '{"head":{"sha":"${targetSha}"},"body":"## Summary\\nRemoved flows"}'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"${previewUrl}/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${targetSha}/statuses"* ]]; then
+  if [[ "$(cat "$state_file")" == "before" ]]; then
+    echo '[[]]'
+  else
+    echo '[[{"id":200,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"},{"id":199,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"Invalid or missing ## E2E flows in PR description; list valid flows, all, or none"}]]'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/statuses/${targetSha}"* ]]; then
+  echo "after" > "$state_file"
+  echo '{"id":200}'
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const { calls, result } = await runStep(
+      finalStep,
+      {},
+      {
+        ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
+        ALLOCATION_SHARD: "1",
+        FLOWS: "admin",
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      },
+      { gh: statefulGh }
+    );
+    expect(result.exitCode).toBe(0);
+    const e2ePosts = calls.filter(
+      (call) =>
+        call.includes(`statuses/${targetSha}`) &&
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
+    );
+    expect(e2ePosts.length).toBeGreaterThanOrEqual(2);
+    expect(e2ePosts.at(-1)).toContain("state=failure");
+    expect(e2ePosts.at(-1)).toContain("Invalid or missing ## E2E flows");
   });
 });

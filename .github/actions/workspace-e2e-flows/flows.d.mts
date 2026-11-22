@@ -97,7 +97,9 @@ export type GitHubCommitStatusRecord = {
   readonly context?: string;
   readonly creator?: { readonly login?: string } | null;
   readonly description?: string;
+  readonly id?: number;
   readonly state?: string;
+  readonly target_url?: string;
 };
 
 export type CommitStatusFlowSummary = {
@@ -112,10 +114,14 @@ export type CommitStatusFlowSummary = {
   readonly realPassedFlowsCsv: string;
   readonly carriedPassedFlows: readonly WorkflowE2EFlowId[];
   readonly carriedPassedFlowsCsv: string;
+  readonly failedFlows: readonly WorkflowE2EFlowId[];
+  readonly failedFlowsCsv: string;
   readonly carriedSourceSha: string;
   readonly coverageSource: "carried" | "none" | "real";
   readonly runningFlows: readonly WorkflowE2EFlowId[];
   readonly runningFlowsCsv: string;
+  readonly runningDescription: string;
+  readonly runningTargetUrl: string;
   readonly anyPassed: boolean;
 };
 
