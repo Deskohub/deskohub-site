@@ -177,6 +177,18 @@ describe("PR description ## E2E flows parser", () => {
       "heading inside raw <div> HTML block",
       "<div>\n## E2E flows\n- none\n</div>\n",
     ],
+    [
+      "heading inside standalone type-7 HTML block immediately after a heading",
+      "# Summary\n<x-box>\n## E2E flows\n- admin\n</x-box>\n",
+    ],
+    [
+      "heading inside tag with > in double-quoted attribute",
+      '<span data-x="a>b">\n## E2E flows\n- admin\n</span>\n',
+    ],
+    [
+      "heading inside tag with > in single-quoted attribute",
+      "<span data-x='a>b'>\n## E2E flows\n- admin\n</span>\n",
+    ],
     ["raw HTML block inside section", "## E2E flows\n<pre>\n- none\n</pre>\n"],
     ["empty section", "## E2E flows\n\n<!-- only comment -->\n## Next\nText"],
     ["duplicate sections", "## E2E flows\n- admin\n## E2E flows\n- account"],
@@ -273,6 +285,7 @@ describe("commit status description encoding and coverage summary", () => {
     ]) {
       for (const kind of [
         "passed",
+        "restored",
         "partial",
         "running",
         "failed",
@@ -432,6 +445,56 @@ describe("commit status description encoding and coverage summary", () => {
         targetUrl: "https://github.com/owner/repo/actions/runs/200",
       },
     ]);
+
+    // A restored status is never treated as proof of a real run result, so an
+    // underlying real failure still governs.
+    const restoredOverFailure = summarizeCommitStatuses([
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E restored [flows: admin]",
+        state: "success",
+        target_url: "https://github.com/owner/repo/actions/runs/301",
+      },
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E failed [flows: admin]",
+        state: "failure",
+        target_url: "https://github.com/owner/repo/actions/runs/205",
+      },
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E passed [flows: admin]",
+        state: "success",
+        target_url: "https://github.com/owner/repo/actions/runs/100",
+      },
+    ]);
+    expect(restoredOverFailure.realPassedFlows).toEqual([]);
+    expect(restoredOverFailure.failedFlows).toEqual(["admin"]);
+
+    // A run whose final publisher emitted a metadata failure is terminated and
+    // must not remain in activeRuns.
+    const terminatedByMetadataError = summarizeCommitStatuses([
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description:
+          "Invalid or missing ## E2E flows in PR description; list valid flows, all, or none",
+        state: "failure",
+        target_url: "https://github.com/owner/repo/actions/runs/200",
+      },
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E is running [flows: admin]",
+        state: "pending",
+        target_url: "https://github.com/owner/repo/actions/runs/200",
+      },
+    ]);
+    expect(terminatedByMetadataError.runningFlows).toEqual([]);
+    expect(terminatedByMetadataError.activeRuns).toEqual([]);
 
     const partialAndCarried = summarizeCommitStatuses(
       [

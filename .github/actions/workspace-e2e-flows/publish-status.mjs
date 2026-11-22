@@ -9,16 +9,25 @@
  *    the current Vercel deployment's current status (never falling through from
  *    an unresolved deployment or treating lookup failure as valid), readable
  *    head commit-status history, and un-invalidated flow coverage.
- * 2. Every `success` write performs post-write verification against fresh PR,
- *    deployment, and commit-status reads while excluding all tentative writes
- *    from this process. If a concurrent edit, validation failure, deployment
- *    change, real run failure, or active rerun interleaved between read and
- *    write, it immediately applies the verified decision (preserving any
- *    dispatch action and preserving the active run's original `target_url`
- *    when restoring `pending`), or fails closed after bounded retries.
- * 3. Delayed failure paths (`publish-final-status` failure and
- *    `publish-status-without-run` failure) reconcile against the live PR
- *    selection while retaining any real run failure in commit-status history.
+ * 2. Restored passes use `Protected preview E2E restored` (`kind: "restored"`)
+ *    rather than `Protected preview E2E passed`, so persisted tentative writes
+ *    from a restoration can never be mistaken by a subsequent process for a
+ *    real `test-e2e` run result.
+ * 3. Every `success` write (and every mutable metadata failure write) performs
+ *    post-write verification against fresh PR, deployment, and commit-status
+ *    reads while excluding all tentative writes from this process. A tentative
+ *    `success` is NEVER left in place unless post-write verification
+ *    affirmatively confirms it; otherwise the applicable pending, undo, or
+ *    failure decision is published (preserving any `dispatchAction` and
+ *    preserving the active run's original `target_url` when restoring pending).
+ * 4. Outgoing carried (`same-tree-passed`) statuses filter out every flow that
+ *    failed or is actively running on the head SHA so a carried status never
+ *    advertises a head-failed or in-flight flow.
+ * 5. Delayed no-run failures only reconcile into success when their preserved
+ *    `STATUS_REASON` is explicitly a reconcilable metadata or deployment-state
+ *    reason (`invalid-pr-flows`, `manual-none-conflict`, `deployment-failed`,
+ *    `deployment-skipped`), never clearing exact-preview resolution errors from
+ *    an unrelated deployment.
  */
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -46,9 +55,18 @@ const STATUSES_UNAVAILABLE_DESCRIPTION =
   "Workspace E2E could not verify commit statuses; re-run the failed jobs";
 const RACE_FAILURE_DESCRIPTION =
   "Workspace E2E status raced with concurrent updates; re-run this check";
+const WAITING_FOR_PREVIEW_DESCRIPTION =
+  "Waiting for Vercel preview to resolve E2E";
 const PREVIEW_ENVIRONMENT =
   process.env.PREVIEW_ENVIRONMENT || "Preview – deskohub-workspace-site";
 const MAX_CAS_ATTEMPTS = 3;
+
+const RECONCILABLE_NO_RUN_REASONS = new Set([
+  "invalid-pr-flows",
+  "manual-none-conflict",
+  "deployment-failed",
+  "deployment-skipped",
+]);
 
 const repoSlug = process.env.GITHUB_REPOSITORY ?? "";
 const repoApi = `repos/${repoSlug}`;
@@ -200,8 +218,7 @@ const toCanonicalFlows = (flowIds) => {
 
 /**
  * Removes every tentative status posted by THIS process during the current CAS
- * loop so no retry can ever treat its own tentative `success` as proof of a
- * pass when another writer interleaved a failure or active rerun.
+ * loop so no retry can ever treat its own tentative write as proof of a pass.
  */
 const stripTentativePosts = (statuses, tentativePosts) => {
   if (!Array.isArray(statuses) || statuses.length === 0) return [];
@@ -242,24 +259,45 @@ const findActiveRunForFlows = (summary, flowIds) => {
 };
 
 /**
- * Evaluates a same-tree source commit's real runs against `requestedSelected`.
- * Preserves genuine partial passes and fails closed when a requested flow failed
- * or is still running.
+ * Filters a carried flow set against head-SHA failures and active reruns so an
+ * outgoing `same-tree-passed` status never advertises a flow that failed or is
+ * actively running on the head SHA.
  */
-const evaluateSameTreeCommit = (commitSha, commitStatuses, requestedSelected) => {
+const filterSafeCarriedFlows = (carriedFlows, headSummary) => {
+  const blocked = new Set([
+    ...headSummary.failedFlows,
+    ...headSummary.runningFlows,
+  ]);
+  return carriedFlows.filter((flow) => !blocked.has(flow));
+};
+
+/**
+ * Evaluates a same-tree source commit's real runs against `requestedSelected`,
+ * excluding any flow that failed or is actively running on the head SHA from
+ * the advertised carried flow set.
+ */
+const evaluateSameTreeCommit = (
+  commitSha,
+  commitStatuses,
+  requestedSelected,
+  headSummary
+) => {
   const summary = summarizeCommitStatuses(commitStatuses, {
     includeCarried: false,
   });
   if (summary.latestRunKind === "" || summary.latestRunKind === "superseded") {
     return null;
   }
-  const realMissing = diffFlowIds(requestedSelected, summary.realPassedFlows);
+  const safeCarried = headSummary
+    ? filterSafeCarriedFlows(summary.realPassedFlows, headSummary)
+    : summary.realPassedFlows;
+  const realMissing = diffFlowIds(requestedSelected, safeCarried);
   if (realMissing.length === 0) {
     return {
       state: "success",
       description: formatE2EStatusDescription({
         kind: "same-tree-passed",
-        flows: summary.realPassedFlowsCsv,
+        flows: toCanonicalFlows(safeCarried),
         sourceSha: commitSha,
       }),
     };
@@ -297,9 +335,12 @@ const evaluateSameTreeCommit = (commitSha, commitStatuses, requestedSelected) =>
 };
 
 /**
- * Executes a decide -> post -> post-write CAS verify loop so that no writer can
- * leave a stale `success` status after a concurrent PR edit, validation failure,
- * deployment change, real failure, or active rerun.
+ * Executes a decide -> post -> post-write CAS verify loop so that:
+ * - No writer can leave an unverified tentative `success` in place after a
+ *   concurrent PR edit, validation failure, deployment change, real failure,
+ *   or active rerun.
+ * - Mutable metadata failures (`verifyAfterPost: true`) also verify after
+ *   publication so a delayed failure cannot overwrite a concurrent correction.
  */
 const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
   const tentativePosts = [];
@@ -316,7 +357,41 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
     };
     const decision = decide(before);
     if (decision.skipPost) {
-      return decision;
+      if (tentativePosts.length === 0) {
+        return decision;
+      }
+      // We already posted a tentative status earlier in this loop and the fresh
+      // state no longer authorizes it. Never leave a tentative success behind.
+      if (decision.restorePendingDescription) {
+        const pendingTargetUrl = decision.restorePendingTargetUrl || runUrl;
+        postCommitStatus(sha, {
+          context: "Workspace E2E",
+          state: "pending",
+          description: decision.restorePendingDescription,
+          targetUrl: pendingTargetUrl,
+        });
+        return {
+          state: "pending",
+          description: decision.restorePendingDescription,
+          targetUrl: pendingTargetUrl,
+        };
+      }
+      if (decision.undoDecision) {
+        postCommitStatus(sha, {
+          context: "Workspace E2E",
+          state: decision.undoDecision.state,
+          description: decision.undoDecision.description,
+          targetUrl: decision.undoDecision.targetUrl || runUrl,
+        });
+        return decision.undoDecision;
+      }
+      postCommitStatus(sha, {
+        context: "Workspace E2E",
+        state: "failure",
+        description: RACE_FAILURE_DESCRIPTION,
+        targetUrl: runUrl,
+      });
+      return { state: "failure", description: RACE_FAILURE_DESCRIPTION };
     }
 
     const postTargetUrl = decision.targetUrl || runUrl;
@@ -327,7 +402,9 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       targetUrl: postTargetUrl,
     });
 
-    if (decision.state !== "success") {
+    const mustVerify =
+      decision.state === "success" || decision.verifyAfterPost === true;
+    if (!mustVerify) {
       return decision;
     }
 
@@ -338,8 +415,8 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       targetUrl: postTargetUrl,
     });
 
-    // Verify linearizability against fresh live state after every success write,
-    // excluding all tentative posts made by this process.
+    // Verify linearizability against fresh live state after writing, excluding
+    // all tentative posts made by this process.
     const rawAfter = readSnapshot();
     const after = {
       ...rawAfter,
@@ -360,15 +437,15 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       samePr &&
       sameDeployment &&
       !verifyDecision.skipPost &&
-      verifyDecision.state === "success" &&
+      verifyDecision.state === decision.state &&
       verifyDecision.description === decision.description
     ) {
       return decision;
     }
 
-    // If a concurrent active rerun appeared right beneath our tentative
-    // success, restore the pending running status preserving the active run's
-    // original target_url so that run still recognizes ownership when it ends.
+    // If a concurrent active rerun appeared right beneath our tentative write,
+    // restore the pending running status preserving the active run's original
+    // target_url so that run still recognizes ownership when it ends.
     if (verifyDecision.restorePendingDescription) {
       const pendingTargetUrl = verifyDecision.restorePendingTargetUrl || runUrl;
       postCommitStatus(sha, {
@@ -384,10 +461,15 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       };
     }
 
-    // If verification produced a non-success decision (for example a concurrent
-    // real run failure, PR invalidation, or widened flows requiring dispatch),
-    // apply that exact decision immediately and preserve its dispatchAction.
-    if (!verifyDecision.skipPost && verifyDecision.state !== "success") {
+    // If verification produced a non-success decision that does not itself
+    // require post-write verification (for example a concurrent real failure,
+    // PR invalidation, or widened flows requiring dispatch), apply it now and
+    // preserve its dispatchAction.
+    if (
+      !verifyDecision.skipPost &&
+      verifyDecision.state !== "success" &&
+      verifyDecision.verifyAfterPost !== true
+    ) {
       const finalTargetUrl = verifyDecision.targetUrl || runUrl;
       postCommitStatus(sha, {
         context: "Workspace E2E",
@@ -398,34 +480,34 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
       return verifyDecision;
     }
 
+    // If verification returned skipPost after we already wrote a tentative
+    // status, undo that tentative status immediately (never leave unauthorized
+    // tentative success in place!).
     if (verifyDecision.skipPost) {
-      if (
-        after.prOk &&
-        before.prOk &&
-        before.pr?.head?.sha === after.pr?.head?.sha &&
-        (before.pr?.body ?? "") === (after.pr?.body ?? "") &&
-        sameDeployment
-      ) {
-        return decision;
-      }
-      // PR became ineligible or state shifted without authorizing our tentative
-      // success: do not leave our tentative success on top if we cannot prove it.
-      if (!after.prOk) {
+      if (verifyDecision.undoDecision) {
         postCommitStatus(sha, {
           context: "Workspace E2E",
-          state: "failure",
-          description: PR_UNAVAILABLE_DESCRIPTION,
-          targetUrl: runUrl,
+          state: verifyDecision.undoDecision.state,
+          description: verifyDecision.undoDecision.description,
+          targetUrl: verifyDecision.undoDecision.targetUrl || runUrl,
         });
-        return { state: "failure", description: PR_UNAVAILABLE_DESCRIPTION };
+        return verifyDecision.undoDecision;
       }
-      // Re-run loop on the fresh snapshot if it changed.
-      pendingSnapshot = rawAfter;
-      continue;
+      if (decision.state !== "success") {
+        return decision;
+      }
+      postCommitStatus(sha, {
+        context: "Workspace E2E",
+        state: "failure",
+        description: RACE_FAILURE_DESCRIPTION,
+        targetUrl: runUrl,
+      });
+      return { state: "failure", description: RACE_FAILURE_DESCRIPTION };
     }
 
-    // Verification wants a different `success` description; reuse `rawAfter`
-    // (with tentativePosts stripped at the top of the next iteration).
+    // Verification produced a new decision (e.g. a different `success` after
+    // a concurrent fix to `none`, or a mutable failure): reuse `rawAfter` on
+    // the next attempt (with `tentativePosts` stripped at the top).
     pendingSnapshot = rawAfter;
   }
 
@@ -606,20 +688,32 @@ const runPublishFinalStatus = () => {
   });
 
   if (prNumber) {
+    const undoToFailure = {
+      state: "failure",
+      description: failedDescription,
+      targetUrl: runUrl,
+    };
     publishWithCasReconcile({
       sha: targetSha,
       readSnapshot,
       decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
         if (!prOk) {
-          return { skipPost: true };
+          return { skipPost: true, undoDecision: undoToFailure };
         }
         const headSha = String(pr?.head?.sha ?? "");
         if (/^[0-9a-f]{40}$/.test(headSha) && headSha !== targetSha) {
-          return { skipPost: true };
+          return { skipPost: true, undoDecision: undoToFailure };
         }
         const parsedPr = parsePrBodyE2EFlows(String(pr?.body ?? ""));
         if (!parsedPr.ok) {
-          return { skipPost: true };
+          return {
+            skipPost: true,
+            undoDecision: {
+              state: "failure",
+              description: INVALID_FLOWS_DESCRIPTION,
+              targetUrl: runUrl,
+            },
+          };
         }
         if (parsedPr.flows === "none") {
           if (deployment.state === "success" || deployment.state === "skipped") {
@@ -630,12 +724,12 @@ const runPublishFinalStatus = () => {
               }),
             };
           }
-          return { skipPost: true };
+          return { skipPost: true, undoDecision: undoToFailure };
         }
         if (deployment.state === "success" && statusesOk) {
-          // Ensure the failure we just posted is reflected even under read-after-write
-          // lag, while preserving server order if it is already present (so a newer
-          // foreign active run above it is still recognized).
+          // Ensure the failure we just posted is reflected even under
+          // read-after-write lag, while preserving server order if already
+          // present (so a newer foreign active run above it is still recognized).
           const alreadyRecorded = statuses.some(
             (status) =>
               status?.context === "Workspace E2E" &&
@@ -680,13 +774,13 @@ const runPublishFinalStatus = () => {
             return {
               state: "success",
               description: formatE2EStatusDescription({
-                kind: "passed",
+                kind: "restored",
                 flows: summary.realPassedFlowsCsv,
               }),
             };
           }
         }
-        return { skipPost: true };
+        return { skipPost: true, undoDecision: undoToFailure };
       },
     });
   }
@@ -704,6 +798,7 @@ const runPublishStatusWithoutRun = () => {
   const prNumber = process.env.PR_NUMBER ?? "";
   const statusState = process.env.STATUS_STATE ?? "failure";
   const statusDescription = process.env.STATUS_DESCRIPTION ?? "";
+  const statusReason = (process.env.STATUS_REASON ?? "").trim();
 
   if (!prNumber) {
     postCommitStatus(targetSha, {
@@ -734,16 +829,32 @@ const runPublishStatusWithoutRun = () => {
     };
   };
 
-  // Delayed failure path: reconcile against live PR, deployment, and commit
-  // status history so a stale failure (e.g. invalid metadata that was fixed to
-  // `none` while this job queued) never overwrites a valid live decision.
+  // Delayed failure path: ONLY reconcile failures whose recorded reason is
+  // explicitly a mutable metadata or deployment-state reason. Exact-preview
+  // resolution failures (such as `preview-record-mismatch` or `invalid-url`)
+  // are never cleared by an unrelated deployment on the same SHA.
   if (statusState !== "success") {
+    if (!RECONCILABLE_NO_RUN_REASONS.has(statusReason)) {
+      postCommitStatus(targetSha, {
+        context: "Workspace E2E",
+        state: statusState,
+        description: statusDescription,
+        targetUrl: runUrl,
+      });
+      return;
+    }
+
     publishWithCasReconcile({
       sha: targetSha,
       readSnapshot,
       decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
+        const defaultFailure = {
+          state: statusState,
+          description: statusDescription,
+          verifyAfterPost: true,
+        };
         if (!prOk) {
-          return { state: statusState, description: statusDescription };
+          return defaultFailure;
         }
         const headSha = String(pr?.head?.sha ?? "");
         if (/^[0-9a-f]{40}$/.test(headSha) && headSha !== targetSha) {
@@ -753,14 +864,15 @@ const runPublishStatusWithoutRun = () => {
           return {
             state: "failure",
             description: DEPLOYMENT_FAILED_DESCRIPTION,
+            verifyAfterPost: true,
           };
         }
         if (deployment.state !== "success" && deployment.state !== "skipped") {
-          return { state: statusState, description: statusDescription };
+          return defaultFailure;
         }
         const parsedPr = parsePrBodyE2EFlows(String(pr?.body ?? ""));
         if (!parsedPr.ok) {
-          return { state: statusState, description: statusDescription };
+          return defaultFailure;
         }
         if (parsedPr.flows === "none") {
           return {
@@ -772,25 +884,30 @@ const runPublishStatusWithoutRun = () => {
           const summary = summarizeCommitStatuses(statuses, {
             includeCarried: true,
           });
-          if (diffFlowIds(parsedPr.selected, summary.realPassedFlows).length === 0) {
+          if (
+            diffFlowIds(parsedPr.selected, summary.realPassedFlows).length === 0
+          ) {
             return {
               state: "success",
               description: formatE2EStatusDescription({
-                kind: "passed",
+                kind: "restored",
                 flows: summary.realPassedFlowsCsv,
               }),
             };
           }
-          const carriedCovers =
+          const safeCarried = filterSafeCarriedFlows(
+            summary.carriedPassedFlows,
+            summary
+          );
+          if (
             summary.carriedSourceSha !== "" &&
-            diffFlowIds(parsedPr.selected, summary.carriedPassedFlows).length ===
-              0;
-          if (carriedCovers) {
+            diffFlowIds(parsedPr.selected, safeCarried).length === 0
+          ) {
             return {
               state: "success",
               description: formatE2EStatusDescription({
                 kind: "same-tree-passed",
-                flows: summary.carriedPassedFlowsCsv,
+                flows: toCanonicalFlows(safeCarried),
                 sourceSha: summary.carriedSourceSha,
               }),
             };
@@ -814,7 +931,7 @@ const runPublishStatusWithoutRun = () => {
             };
           }
         }
-        return { state: statusState, description: statusDescription };
+        return defaultFailure;
       },
     });
     return;
@@ -889,7 +1006,13 @@ const runPublishStatusWithoutRun = () => {
             description: "Protected preview E2E failed on this commit",
           };
         }
-        const missing = diffFlowIds(parsedPr.selected, classified.selected);
+        // Exclude every head-failed or in-flight flow from the advertised
+        // carried set so this status can never cover a flow that failed on head.
+        const safeCarried = filterSafeCarriedFlows(
+          classified.selected,
+          summary
+        );
+        const missing = diffFlowIds(parsedPr.selected, safeCarried);
         if (missing.length > 0) {
           return {
             state: "failure",
@@ -897,7 +1020,14 @@ const runPublishStatusWithoutRun = () => {
               "PR E2E flows changed; same-tree commit lacks newly requested E2E flows",
           };
         }
-        return { state: "success", description: statusDescription };
+        return {
+          state: "success",
+          description: formatE2EStatusDescription({
+            kind: "same-tree-passed",
+            flows: toCanonicalFlows(safeCarried),
+            sourceSha: classified.sourceSha,
+          }),
+        };
       }
 
       return {
@@ -1023,6 +1153,10 @@ const runSyncPrFlows = () => {
       const requestedSelected = parsedPr.selected;
       const deploymentResolved =
         deployment.state === "success" || deployment.state === "skipped";
+      const pendingPreviewUndo = {
+        state: "pending",
+        description: WAITING_FOR_PREVIEW_DESCRIPTION,
+      };
 
       if (requestedFlows === "none") {
         if (deploymentResolved) {
@@ -1040,10 +1174,10 @@ const runSyncPrFlows = () => {
         ) {
           return {
             state: "pending",
-            description: "Waiting for Vercel preview to resolve E2E",
+            description: WAITING_FOR_PREVIEW_DESCRIPTION,
           };
         }
-        return { skipPost: true };
+        return { skipPost: true, undoDecision: pendingPreviewUndo };
       }
 
       const missingReal = diffFlowIds(requestedSelected, summary.realPassedFlows);
@@ -1058,16 +1192,18 @@ const runSyncPrFlows = () => {
               description: "Waiting for Vercel preview to run E2E",
             };
           }
-          return { skipPost: true };
+          return { skipPost: true, undoDecision: pendingPreviewUndo };
         }
         if (
           summary.latestState !== "success" ||
           summary.latestKind === "skipped-none"
         ) {
+          // Use `restored` (not `passed`) so persisted tentative writes from
+          // sync can never be mistaken by a later process for a real run pass.
           return {
             state: "success",
             description: formatE2EStatusDescription({
-              kind: "passed",
+              kind: "restored",
               flows: summary.realPassedFlowsCsv,
             }),
           };
@@ -1075,9 +1211,13 @@ const runSyncPrFlows = () => {
         return { skipPost: true };
       }
 
+      const safeCarried = filterSafeCarriedFlows(
+        summary.carriedPassedFlows,
+        summary
+      );
       const carriedCoversRequested =
         summary.carriedSourceSha !== "" &&
-        diffFlowIds(requestedSelected, summary.carriedPassedFlows).length === 0;
+        diffFlowIds(requestedSelected, safeCarried).length === 0;
       if (carriedCoversRequested) {
         if (!deploymentResolved) {
           if (
@@ -1089,7 +1229,7 @@ const runSyncPrFlows = () => {
               description: "Waiting for Vercel preview to run E2E",
             };
           }
-          return { skipPost: true };
+          return { skipPost: true, undoDecision: pendingPreviewUndo };
         }
         if (
           summary.latestState !== "success" ||
@@ -1099,7 +1239,7 @@ const runSyncPrFlows = () => {
             state: "success",
             description: formatE2EStatusDescription({
               kind: "same-tree-passed",
-              flows: summary.carriedPassedFlowsCsv,
+              flows: toCanonicalFlows(safeCarried),
               sourceSha: summary.carriedSourceSha,
             }),
           };
@@ -1220,7 +1360,8 @@ const runSyncPrFlows = () => {
           const result = evaluateSameTreeCommit(
             candidateSha,
             candidateStatusesRes.data,
-            requestedSelected
+            requestedSelected,
+            summary
           );
           if (result) {
             return result;
@@ -1243,7 +1384,7 @@ const runSyncPrFlows = () => {
           description: "Waiting for Vercel preview to run E2E",
         };
       }
-      return { skipPost: true };
+      return { skipPost: true, undoDecision: pendingPreviewUndo };
     },
   });
 

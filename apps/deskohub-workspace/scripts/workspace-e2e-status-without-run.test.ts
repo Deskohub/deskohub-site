@@ -572,6 +572,7 @@ describe("Workspace E2E status after a failed resolution", () => {
         FLOWS_CLI: flowsCli,
         PR_NUMBER: target.outputs.pr_number ?? "",
         RESOLUTION_ERROR: target.outputs.resolution_error ?? "",
+        RESOLUTION_ERROR_KIND: target.outputs.resolution_error_kind ?? "",
         TARGET_OUTCOME: target.result.exitCode === 0 ? "success" : "failure",
         TARGET_SHA: target.outputs.sha ?? "",
       }
@@ -582,7 +583,9 @@ describe("Workspace E2E status after a failed resolution", () => {
       { [`statuses/${targetSha}`]: [] },
       {
         FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: target.outputs.pr_number ?? "",
         STATUS_DESCRIPTION: decided.outputs.description ?? fallbackDescription,
+        STATUS_REASON: decided.outputs.reason ?? "",
         STATUS_STATE: decided.outputs.state ?? "failure",
         TARGET_SHA: target.outputs.sha ?? "",
       }
@@ -1256,6 +1259,7 @@ exit 1
         PR_NUMBER: String(prNumber),
         STATUS_DESCRIPTION:
           "Invalid or missing ## E2E flows in PR description; list valid flows, all, or none",
+        STATUS_REASON: "invalid-pr-flows",
         STATUS_STATE: "failure",
         TARGET_SHA: targetSha,
       }
@@ -1268,5 +1272,152 @@ exit 1
     expect(posts.at(-1)).toContain(
       "description=Protected preview E2E skipped [flows: none]"
     );
+  });
+
+  test("never clears a preview-record-mismatch failure using an unrelated succeeded deployment", async () => {
+    const mismatch = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [],
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION:
+          "No Vercel deployment record matches this preview yet; re-run the failed jobs of this Workspace E2E run",
+        STATUS_REASON: "preview-record-mismatch",
+        STATUS_STATE: "failure",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(mismatch.result.exitCode).toBe(0);
+    const posts = mismatch.calls.filter((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain("state=failure");
+    expect(posts[0]).toContain(
+      "No Vercel deployment record matches this preview yet"
+    );
+  });
+
+  test("reconciles a delayed metadata failure that raced with a concurrent fix to none", async () => {
+    const statefulGh = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+state_file="$GH_FIXTURES/state.txt"
+[[ -f "$state_file" ]] || echo "invalid" > "$state_file"
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  if [[ "$(cat "$state_file")" == "invalid" ]]; then
+    echo '{"head":{"sha":"${targetSha}"},"body":"## Summary\\nMissing flows"}'
+  else
+    echo '{"head":{"sha":"${targetSha}"},"body":"## E2E flows\\n- none\\n"}'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"${previewUrl}/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${targetSha}/statuses"* ]]; then
+  echo '[[]]'
+  exit 0
+fi
+if [[ "$*" == *"/statuses/${targetSha}"* ]]; then
+  if [[ "$*" == *"state=failure"* ]]; then
+    echo "fixed" > "$state_file"
+    echo '{"id":401}'
+  else
+    echo '{"id":402}'
+  fi
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const { calls, result } = await runStep(
+      publishStep,
+      {},
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION:
+          "Invalid or missing ## E2E flows in PR description; list valid flows, all, or none",
+        STATUS_REASON: "invalid-pr-flows",
+        STATUS_STATE: "failure",
+        TARGET_SHA: targetSha,
+      },
+      { gh: statefulGh }
+    );
+    expect(result.exitCode).toBe(0);
+    const posts = calls.filter((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(posts).toHaveLength(2);
+    expect(posts[0]).toContain("state=failure");
+    expect(posts[1]).toContain("state=success");
+    expect(posts[1]).toContain(
+      "description=Protected preview E2E skipped [flows: none]"
+    );
+  });
+
+  test("strips head-failed flows from outgoing carried same-tree statuses", async () => {
+    const carried = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- webkit\n",
+          head: { sha: targetSha },
+        },
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          { description: "Skipped - Not affected", state: "inactive" },
+        ],
+        [`commits/${targetSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description: "Protected preview E2E failed [flows: admin]",
+            state: "failure",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION:
+          "Same tree as bbbbbbb, which passed E2E [flows: admin,webkit]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(carried.result.exitCode).toBe(0);
+    const posts = carried.calls.filter((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain("state=success");
+    expect(posts[0]).toContain(
+      "description=Same tree as bbbbbbb, which passed E2E [flows: webkit]"
+    );
+    expect(posts[0]).not.toContain("admin");
   });
 });

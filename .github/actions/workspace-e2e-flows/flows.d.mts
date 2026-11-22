@@ -55,6 +55,7 @@ export declare const formatE2EStatusDescription: (input: {
     | "failed"
     | "partial"
     | "passed"
+    | "restored"
     | "running"
     | "same-tree-passed"
     | "skipped-none";
@@ -75,6 +76,7 @@ export type ClassifiedE2EStatus =
         | "failed"
         | "partial"
         | "passed"
+        | "restored"
         | "running"
         | "skipped-none";
       readonly selected: readonly WorkflowE2EFlowId[];

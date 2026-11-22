@@ -170,6 +170,8 @@ export const parseFlowsInput = (raw) => {
 const stripClosingAtxHashes = (line) => line.replace(/[ \t]+#+[ \t]*$/, "");
 const sectionHeadingPattern = /^ {0,3}##[ \t]+e2e[ \t]+flows[ \t]*:?[ \t]*$/i;
 const anyHeadingPattern = /^ {0,3}#{1,6}(?:[ \t]+.*|[ \t]*)$/;
+const thematicBreakPattern =
+  /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
 const fenceOpenPattern = /^ {0,3}(`{3,}|~{3,})/;
 const indentedCodeLinePattern = /^(?: {4,}|\t)/;
 const bulletPattern = /^ {0,3}[-*][ \t]+`?([^\s`:]+)`?(?:[ \t]*:[ \t]*\S.*)?$/;
@@ -183,10 +185,13 @@ const htmlType4Start = /^ {0,3}<![A-Za-z]/;
 const htmlType5Start = /^ {0,3}<!\[CDATA\[/;
 const htmlType6Start =
   /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t]|\/?>|$)/i;
+// Per GFM §6.6 + §4.6 type 7: complete open tag (supporting single/double-quoted
+// attribute values that may contain `>`) or closing tag, followed only by
+// optional spaces/tabs. Cannot interrupt a paragraph.
 const htmlType7Start =
-  /^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[^\n>]*)?\/?>|<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$/;
+  /^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*[ \t]*\/?>|<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$/;
 
-const matchHtmlBlockStart = (line, previousBlank) => {
+const matchHtmlBlockStart = (line, inParagraph) => {
   if (htmlType1Start.test(line)) {
     return { kind: "html-raw", endPattern: htmlType1End };
   }
@@ -205,7 +210,7 @@ const matchHtmlBlockStart = (line, previousBlank) => {
   if (htmlType6Start.test(line)) {
     return { kind: "html-raw", endOnBlank: true };
   }
-  if (previousBlank && htmlType7Start.test(line)) {
+  if (!inParagraph && htmlType7Start.test(line)) {
     return { kind: "html-raw", endOnBlank: true };
   }
   return null;
@@ -279,6 +284,7 @@ const scanVisibleLines = (lines) => {
   let fenceChar = "";
   let fenceLength = 0;
   let previousBlank = true;
+  let inParagraph = false;
   let inIndentedCode = false;
   let htmlBlock = null;
   let inInlineComment = false;
@@ -296,6 +302,7 @@ const scanVisibleLines = (lines) => {
         fenceLength = 0;
         previousBlank = false;
       }
+      inParagraph = false;
       visible.push({
         index,
         line,
@@ -310,6 +317,7 @@ const scanVisibleLines = (lines) => {
       if (htmlBlock.endOnBlank && isBlank) {
         htmlBlock = null;
         previousBlank = true;
+        inParagraph = false;
         visible.push({
           index,
           line,
@@ -324,6 +332,7 @@ const scanVisibleLines = (lines) => {
         htmlBlock = null;
       }
       previousBlank = isBlank;
+      inParagraph = false;
       visible.push({
         index,
         line,
@@ -339,6 +348,7 @@ const scanVisibleLines = (lines) => {
       inInlineComment = stripped.inComment;
       const blankAfter = /^[ \t]*$/.test(stripped.text);
       previousBlank = blankAfter;
+      inParagraph = !blankAfter;
       visible.push({
         index,
         line,
@@ -361,6 +371,7 @@ const scanVisibleLines = (lines) => {
         fenceLength = marker.length;
         inIndentedCode = false;
         previousBlank = false;
+        inParagraph = false;
         visible.push({
           index,
           line,
@@ -374,6 +385,7 @@ const scanVisibleLines = (lines) => {
 
     if (isBlank) {
       previousBlank = true;
+      inParagraph = false;
       visible.push({
         index,
         line,
@@ -390,6 +402,7 @@ const scanVisibleLines = (lines) => {
     ) {
       inIndentedCode = true;
       previousBlank = false;
+      inParagraph = false;
       visible.push({
         index,
         line,
@@ -402,7 +415,7 @@ const scanVisibleLines = (lines) => {
 
     inIndentedCode = false;
 
-    const matchedHtml = matchHtmlBlockStart(line, previousBlank);
+    const matchedHtml = matchHtmlBlockStart(line, inParagraph);
     if (matchedHtml) {
       const endsOnSameLine =
         matchedHtml.endPattern && matchedHtml.endPattern.test(line);
@@ -410,6 +423,7 @@ const scanVisibleLines = (lines) => {
         htmlBlock = matchedHtml;
       }
       previousBlank = false;
+      inParagraph = false;
       visible.push({
         index,
         line,
@@ -423,6 +437,12 @@ const scanVisibleLines = (lines) => {
     const stripped = stripInlineHtmlComments(line, false);
     inInlineComment = stripped.inComment;
     previousBlank = false;
+    // Headings and thematic breaks do not open a paragraph, so a standalone
+    // GFM type-7 HTML tag on the immediately following line starts an HTML block.
+    inParagraph =
+      !anyHeadingPattern.test(stripped.text) &&
+      !thematicBreakPattern.test(stripped.text) &&
+      !/^[ \t]*$/.test(stripped.text);
     visible.push({
       index,
       line,
@@ -556,6 +576,9 @@ export const formatE2EStatusDescription = ({ kind, flows, sourceSha }) => {
   if (kind === "passed") {
     return formatScopeSuffix("Protected preview E2E passed", parsed.selected);
   }
+  if (kind === "restored") {
+    return formatScopeSuffix("Protected preview E2E restored", parsed.selected);
+  }
   if (kind === "partial") {
     return formatScopeSuffix(
       "Protected preview E2E partial; more flows required",
@@ -610,6 +633,11 @@ const statusPatterns = [
     kind: "passed",
     pattern:
       /^Protected preview E2E passed(?:\s+(\[(?:flows|codes):[^\]]+\]))?$/,
+  },
+  {
+    kind: "restored",
+    pattern:
+      /^Protected preview E2E restored(?:\s+(\[(?:flows|codes):[^\]]+\]))?$/,
   },
   {
     kind: "partial",
@@ -704,10 +732,15 @@ export const summarizeCommitStatuses = (
     const classified = classifyE2EStatusDescription(status.description);
     const targetUrl = String(status.target_url ?? "");
 
+    // Any non-pending status emitted by a workflow run terminates that run's
+    // earlier `running` entry, even when the final status reports a metadata
+    // or infrastructure failure (`kind: "other"`).
+    if (status.state !== "pending" && targetUrl) {
+      terminatedRunUrls.add(targetUrl);
+    }
+
     if (classified.kind === "superseded") {
-      if (targetUrl) {
-        terminatedRunUrls.add(targetUrl);
-      } else {
+      if (!targetUrl) {
         unscopedSupersededSeen = true;
       }
       if (latestRunKind === null) {
@@ -720,9 +753,6 @@ export const summarizeCommitStatuses = (
       (classified.kind === "passed" && status.state === "success") ||
       (classified.kind === "partial" && status.state === "failure")
     ) {
-      if (targetUrl) {
-        terminatedRunUrls.add(targetUrl);
-      }
       if (latestRunKind === null) {
         latestRunKind = classified.kind;
         latestRunState = status.state;
@@ -733,6 +763,11 @@ export const summarizeCommitStatuses = (
           realPassedFlowIds.push(flow);
         }
       }
+      continue;
+    }
+    // Restored statuses mirror earlier real runs and are never themselves
+    // authoritative proof of a real run result.
+    if (classified.kind === "restored") {
       continue;
     }
     if (
