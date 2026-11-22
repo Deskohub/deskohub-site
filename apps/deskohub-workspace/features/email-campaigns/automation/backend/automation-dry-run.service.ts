@@ -557,17 +557,18 @@ export class AutomationDryRun extends Context.Service<
 
       const start: IAutomationDryRun["start"] = Effect.fn(
         "AutomationDryRun.start"
-      )(function* (campaignId) {
-        const now = yield* currentInstant;
-        return yield* transaction(
+      )((campaignId) =>
+        transaction(
           Effect.Do.pipe(
             // Serialises concurrent starts, and with activation and archive.
             Effect.tap(() => lockAutomationForLifecycle(campaignId)),
+            Effect.bind("now", () => currentInstant),
             Effect.bind("copy", () => loadAutomationWorkingCopy(campaignId)),
             Effect.bind("draft", ({ copy }) => draftOf(copy)),
             Effect.let(
               "occurrence",
               ({
+                now,
                 draft: {
                   flow: { trigger },
                 },
@@ -576,7 +577,7 @@ export class AutomationDryRun extends Context.Service<
                   ? nextPassReminderPreviewOccurrence(trigger, now)
                   : undefined
             ),
-            Effect.bind("reusable", ({ draft, occurrence }) =>
+            Effect.bind("reusable", ({ draft, now, occurrence }) =>
               reusablePreview({
                 campaignId,
                 draftHash: draft.draftHash,
@@ -584,7 +585,7 @@ export class AutomationDryRun extends Context.Service<
                 occurrence,
               })
             ),
-            Effect.flatMap(({ draft, reusable, occurrence }) =>
+            Effect.flatMap(({ draft, now, reusable, occurrence }) =>
               Option.match(reusable, {
                 onSome: Effect.succeed,
                 onNone: () =>
@@ -603,8 +604,8 @@ export class AutomationDryRun extends Context.Service<
             ),
             Effect.map(previewStatus)
           )
-        );
-      });
+        )
+      );
 
       /** Names, emails and lifecycles of the page's customers, read live and never stored. */
       const hydrate = (
@@ -635,15 +636,12 @@ export class AutomationDryRun extends Context.Service<
       > =>
         Option.match(copy, {
           onNone: () => Effect.succeed([]),
-          onSome: ({ campaign, draftHash, flow }) => {
+          onSome: ({ campaign, flow }) => {
             const trigger = Option.getOrUndefined(flow)?.trigger;
             const passTrigger =
               trigger !== undefined && isPassReminderTrigger(trigger)
                 ? trigger
                 : undefined;
-            if (passTrigger && !Option.contains(draftHash, preview.draftHash)) {
-              return Effect.succeed([]);
-            }
             const localizedContent = campaignLocaleEntries(
               passTrigger
                 ? passReminderSampleContent(passTrigger, preview.asOf)
@@ -726,7 +724,11 @@ export class AutomationDryRun extends Context.Service<
               ),
               Effect.bind("copy", ({ preview }) =>
                 loadAutomationWorkingCopy(preview.campaignId).pipe(
-                  Effect.map(Option.some),
+                  Effect.map((copy) =>
+                    Option.filter(Option.some(copy), ({ draftHash }) =>
+                      Option.contains(draftHash, preview.draftHash)
+                    )
+                  ),
                   Effect.catchTags({
                     CampaignNotFound: () => Effect.succeed(Option.none()),
                     CampaignDeliveryMismatch: () =>
@@ -742,13 +744,8 @@ export class AutomationDryRun extends Context.Service<
           const schedule = Option.flatMap(copy, ({ flow }) =>
             Option.filter(flow, ({ trigger }) => trigger._tag === "Schedule")
           );
-          const passReminder = Option.exists(
-            copy,
-            ({ draftHash, flow }) =>
-              Option.contains(draftHash, preview.draftHash) &&
-              Option.exists(flow, ({ trigger }) =>
-                isPassReminderTrigger(trigger)
-              )
+          const passReminder = Option.exists(copy, ({ flow }) =>
+            Option.exists(flow, ({ trigger }) => isPassReminderTrigger(trigger))
           );
           const emails = yield* renderEmails(copy, preview).pipe(
             Effect.tapError((error) =>

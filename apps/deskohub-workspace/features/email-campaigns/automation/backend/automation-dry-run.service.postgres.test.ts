@@ -1904,17 +1904,25 @@ describe.skipIf(!testDatabase)(
     });
 
     describe("pass reminder triggers", () => {
-      const startReminder = (campaignId: CampaignId, at: Temporal.Instant) =>
+      const runAt = <A, E>(
+        operation: Effect.Effect<A, E, AutomationDryRun>,
+        at: Temporal.Instant
+      ) =>
         Effect.runPromise(
           TestClock.setTime(at.epochMilliseconds).pipe(
-            Effect.andThen(
-              Effect.flatMap(AutomationDryRun, (dryRun) =>
-                dryRun.start(campaignId)
-              )
-            ),
-            Effect.provideService(PassReminderWritesOpen, Effect.succeed(true)),
+            Effect.andThen(operation),
             Effect.provide(Layer.merge(dryRunLayer, TestClock.layer()))
           )
+        );
+
+      const startReminder = (campaignId: CampaignId, at: Temporal.Instant) =>
+        runAt(
+          Effect.flatMap(AutomationDryRun, (dryRun) =>
+            dryRun.start(campaignId)
+          ).pipe(
+            Effect.provideService(PassReminderWritesOpen, Effect.succeed(true))
+          ),
+          at
         );
 
       const seedPassHolder = async (
@@ -2118,12 +2126,39 @@ describe.skipIf(!testDatabase)(
             )
           ).toEqual([]);
 
-          const next = await startReminder(
-            campaignId,
-            fireAt.add({ seconds: 1 })
-          );
+          const later = fireAt.add({ seconds: 1 });
+          const next = await startReminder(campaignId, later);
           expect(next.previewId).not.toBe(started.previewId);
           expect(next.status).toBe("completed");
+          expect(
+            await runAt(
+              Effect.flatMap(AutomationDryRun, (dryRun) =>
+                dryRun.get({ previewId: started.previewId })
+              ),
+              later
+            )
+          ).toMatchObject({
+            asOf: report.asOf,
+            createdAt: report.createdAt,
+            nextFires: [report.asOf],
+          });
+
+          await editFlow(
+            campaignId,
+            decodeFlow({
+              trigger: { _tag: "Schedule", calendar: weekly("monday") },
+              steps: [send],
+            })
+          );
+          expect(await read(started.previewId)).toMatchObject({
+            asOf: report.asOf,
+            createdAt: report.createdAt,
+            counts: report.counts,
+            rows: report.rows,
+            nextFires: [],
+            frequency: null,
+            emails: [],
+          });
         });
       }
     });
