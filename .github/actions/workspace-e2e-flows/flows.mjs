@@ -164,24 +164,81 @@ export const parseFlowsInput = (raw) => {
   return parseFlowTokens(parts);
 };
 
-const sectionHeadingPattern = /^#{2,3}\s+e2e\s+flows\s*:?\s*$/i;
-const anyHeadingPattern = /^#{1,6}\s+/;
-const bulletPattern = /^\s*[-*]\s+`?([^\s`:]+)`?(?:\s*:\s*\S.*)?$/;
+// Per GFM, ATX headings allow at most 3 leading spaces; 4+ spaces or a leading
+// tab is an indented code block rather than a visible heading.
+const sectionHeadingPattern = /^ {0,3}##[ \t]+e2e[ \t]+flows[ \t]*:?[ \t]*$/i;
+const anyHeadingPattern = /^ {0,3}#{1,6}[ \t]+/;
+const fenceOpenPattern = /^ {0,3}(`{3,}|~{3,})/;
+const indentedCodeLinePattern = /^(?: {4,}|\t)/;
+const bulletPattern = /^ {0,3}[-*][ \t]+`?([^\s`:]+)`?(?:[ \t]*:[ \t]*\S.*)?$/;
+
+const scanVisibleLines = (lines) => {
+  const visible = [];
+  let fenceChar = "";
+  let fenceLength = 0;
+  let previousBlank = true;
+  let inIndentedCode = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (fenceChar) {
+      const closePattern = new RegExp(
+        `^ {0,3}${fenceChar}{${fenceLength},}[ \\t]*$`
+      );
+      if (closePattern.test(line)) {
+        fenceChar = "";
+        fenceLength = 0;
+        previousBlank = false;
+      }
+      visible.push({ index, line, code: true });
+      continue;
+    }
+
+    const fenceMatch = fenceOpenPattern.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      // Backtick info strings cannot contain backticks in GFM.
+      if (marker[0] !== "`" || !line.slice(fenceMatch[0].length).includes("`")) {
+        fenceChar = marker[0];
+        fenceLength = marker.length;
+        inIndentedCode = false;
+        previousBlank = false;
+        visible.push({ index, line, code: true });
+        continue;
+      }
+    }
+
+    const isBlank = /^[ \t]*$/.test(line);
+    if (isBlank) {
+      previousBlank = true;
+      visible.push({ index, line, code: inIndentedCode });
+      continue;
+    }
+
+    if ((previousBlank || inIndentedCode) && indentedCodeLinePattern.test(line)) {
+      inIndentedCode = true;
+      previousBlank = false;
+      visible.push({ index, line, code: true });
+      continue;
+    }
+
+    inIndentedCode = false;
+    previousBlank = false;
+    visible.push({ index, line, code: false });
+  }
+
+  return visible;
+};
 
 export const parsePrBodyE2EFlows = (body) => {
   const text = String(body ?? "").replace(/\r\n?/g, "\n");
   const lines = text.split("\n");
+  const scanned = scanVisibleLines(lines);
   const headingIndices = [];
 
-  let inFence = false;
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (!inFence && sectionHeadingPattern.test(line.trim())) {
-      headingIndices.push(index);
+  for (const entry of scanned) {
+    if (!entry.code && sectionHeadingPattern.test(entry.line)) {
+      headingIndices.push(entry.index);
     }
   }
 
@@ -201,14 +258,9 @@ export const parsePrBodyE2EFlows = (body) => {
 
   const start = headingIndices[0] + 1;
   let end = lines.length;
-  inFence = false;
-  for (let index = start; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (!inFence && anyHeadingPattern.test(line)) {
+  for (let index = start; index < scanned.length; index += 1) {
+    const entry = scanned[index];
+    if (!entry.code && anyHeadingPattern.test(entry.line)) {
       end = index;
       break;
     }
@@ -221,13 +273,19 @@ export const parsePrBodyE2EFlows = (body) => {
   const tokens = [];
 
   for (const rawLine of sectionBody.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) continue;
+    if (/^[ \t]*$/.test(rawLine)) continue;
+    if (indentedCodeLinePattern.test(rawLine)) {
+      return {
+        ok: false,
+        error: `Invalid indented line in \`## E2E flows\`: "${rawLine.trim()}". Use top-level bullet items like \`- admin\`, \`- all\`, or \`- none\`.`,
+      };
+    }
+    const line = rawLine.replace(/[ \t]+$/, "");
     const match = bulletPattern.exec(line);
     if (!match) {
       return {
         ok: false,
-        error: `Invalid entry in \`## E2E flows\`: "${line}". Use bullet items like \`- admin\`, \`- all\`, or \`- none\`.`,
+        error: `Invalid entry in \`## E2E flows\`: "${line.trim()}". Use bullet items like \`- admin\`, \`- all\`, or \`- none\`.`,
       };
     }
     tokens.push(match[1]);
@@ -259,6 +317,12 @@ export const formatE2EStatusDescription = ({ kind, flows, sourceSha }) => {
   }
   if (kind === "passed") {
     return formatScopeSuffix("Protected preview E2E passed", parsed.selected);
+  }
+  if (kind === "partial") {
+    return formatScopeSuffix(
+      "Protected preview E2E partial; more flows required",
+      parsed.selected
+    );
   }
   if (kind === "running") {
     return formatScopeSuffix(
@@ -292,7 +356,10 @@ const parseScopeTag = (tag) => {
   const codesMatch = /^\[codes:\s*([^\]]+)\]$/.exec(tag);
   if (codesMatch) {
     const codes = codesMatch[1].split(",").map((part) => part.trim());
-    if (codes.length === 0 || codes.some((code) => !flowIdByShortCode.has(code))) {
+    if (
+      codes.length === 0 ||
+      codes.some((code) => !flowIdByShortCode.has(code))
+    ) {
       return null;
     }
     return sortUniqueFlowIds(codes.map((code) => flowIdByShortCode.get(code)));
@@ -303,7 +370,13 @@ const parseScopeTag = (tag) => {
 const statusPatterns = [
   {
     kind: "passed",
-    pattern: /^Protected preview E2E passed(?:\s+(\[(?:flows|codes):[^\]]+\]))?$/,
+    pattern:
+      /^Protected preview E2E passed(?:\s+(\[(?:flows|codes):[^\]]+\]))?$/,
+  },
+  {
+    kind: "partial",
+    pattern:
+      /^Protected preview E2E partial; more flows required(?:\s+(\[(?:flows|codes):[^\]]+\]))?$/,
   },
   {
     kind: "running",
@@ -312,12 +385,13 @@ const statusPatterns = [
   },
   {
     kind: "failed",
-    pattern: /^Protected preview E2E failed(?:\s+(\[(?:flows|codes):[^\]]+\]))?$/,
+    pattern:
+      /^Protected preview E2E failed(?:\s+(\[(?:flows|codes):[^\]]+\]))?$/,
   },
   {
     kind: "carried-passed",
     pattern:
-      /^Same tree as [0-9a-f]{7}, which passed E2E(?:\s+(\[(?:flows|codes):[^\]]+\]))?$/,
+      /^Same tree as ([0-9a-f]{7}), which passed E2E(?:\s+(\[(?:flows|codes):[^\]]+\]))?$/,
   },
 ];
 
@@ -332,6 +406,11 @@ export const classifyE2EStatusDescription = (description) => {
   for (const { kind, pattern } of statusPatterns) {
     const match = pattern.exec(text);
     if (!match) continue;
+    if (kind === "carried-passed") {
+      const selected = parseScopeTag(match[2]);
+      if (selected === null) return { kind: "other" };
+      return { kind, selected, sourceSha: match[1] };
+    }
     const selected = parseScopeTag(match[1]);
     if (selected === null) return { kind: "other" };
     return { kind, selected };
@@ -366,7 +445,12 @@ export const summarizeCommitStatuses = (
   let latestRunKind = null;
   let latestRunState = null;
   let runningFlowIds = [];
-  const passedFlowIds = [];
+  // Track the newest terminal verdict per flow so a later failure for a flow
+  // always invalidates an earlier pass for that flow.
+  const decidedFlows = new Set();
+  const realPassedFlowIds = [];
+  const carriedPassedFlowIds = [];
+  let carriedSourceSha = "";
 
   for (const status of relevant) {
     const classified = classifyE2EStatusDescription(status.description);
@@ -378,14 +462,19 @@ export const summarizeCommitStatuses = (
       continue;
     }
     if (
-      classified.kind === "passed" &&
-      status.state === "success"
+      (classified.kind === "passed" && status.state === "success") ||
+      (classified.kind === "partial" && status.state === "failure")
     ) {
       if (latestRunKind === null) {
-        latestRunKind = "passed";
-        latestRunState = "success";
+        latestRunKind = classified.kind;
+        latestRunState = status.state;
       }
-      passedFlowIds.push(...classified.selected);
+      for (const flow of classified.selected) {
+        if (!decidedFlows.has(flow)) {
+          decidedFlows.add(flow);
+          realPassedFlowIds.push(flow);
+        }
+      }
       continue;
     }
     if (
@@ -397,7 +486,17 @@ export const summarizeCommitStatuses = (
         latestRunKind = "carried-passed";
         latestRunState = "success";
       }
-      passedFlowIds.push(...classified.selected);
+      let addedFromCarry = false;
+      for (const flow of classified.selected) {
+        if (!decidedFlows.has(flow)) {
+          decidedFlows.add(flow);
+          carriedPassedFlowIds.push(flow);
+          addedFromCarry = true;
+        }
+      }
+      if (addedFromCarry && !carriedSourceSha) {
+        carriedSourceSha = classified.sourceSha ?? "";
+      }
       continue;
     }
     if (classified.kind === "running" && status.state === "pending") {
@@ -416,20 +515,46 @@ export const summarizeCommitStatuses = (
         latestRunKind = "failed";
         latestRunState = status.state;
       }
+      for (const flow of classified.selected) {
+        if (!decidedFlows.has(flow)) {
+          decidedFlows.add(flow);
+        }
+      }
     }
   }
 
-  const passed = buildFlowSelection(passedFlowIds);
+  const realPassed = buildFlowSelection(realPassedFlowIds);
+  const carriedPassed = buildFlowSelection(carriedPassedFlowIds);
+  const allPassed = buildFlowSelection([
+    ...realPassedFlowIds,
+    ...carriedPassedFlowIds,
+  ]);
   const running = buildFlowSelection(runningFlowIds);
+  const coverageSource =
+    realPassed.selected.length > 0 && carriedPassedFlowIds.length === 0
+      ? "real"
+      : carriedPassedFlowIds.length > 0
+        ? "carried"
+        : "none";
+
   return {
     latestState: latest?.state ?? "",
     latestDescription: latest?.description ?? "",
+    latestKind: latest
+      ? classifyE2EStatusDescription(latest.description).kind
+      : "",
     latestRunKind: latestRunKind ?? "",
     latestRunState: latestRunState ?? "",
-    passedFlows: passed.selected,
-    passedFlowsCsv: passed.flows,
+    passedFlows: allPassed.selected,
+    passedFlowsCsv: allPassed.flows,
+    realPassedFlows: realPassed.selected,
+    realPassedFlowsCsv: realPassed.flows,
+    carriedPassedFlows: carriedPassed.selected,
+    carriedPassedFlowsCsv: carriedPassed.flows,
+    carriedSourceSha,
+    coverageSource,
     runningFlows: running.selected,
     runningFlowsCsv: running.flows,
-    anyPassed: passed.selected.length > 0,
+    anyPassed: allPassed.selected.length > 0,
   };
 };

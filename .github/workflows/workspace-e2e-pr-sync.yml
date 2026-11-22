@@ -1,13 +1,15 @@
 name: Workspace E2E PR flows
 
-# Validates the required `## E2E flows` section whenever a PR is opened,
-# edited, reopened, or marked ready for review, and immediately fails
-# `Workspace E2E` and dispatches missing flows when a PR edit adds flows
-# that have not passed on the current head SHA.
+# Validates the required `## E2E flows` section whenever an open non-draft PR
+# is opened, edited, reopened, or marked ready for review, and immediately
+# fails `Workspace E2E` and dispatches missing flows when an internal PR edit
+# adds flows that have not passed on the current head SHA.
 #
-# Runs on pull_request_target without ever checking out or executing PR code;
-# only internal, non-draft, non-Dependabot PRs in the source repository are
-# eligible.
+# Runs on pull_request_target without ever checking out or executing PR code.
+# Validation runs for every open non-draft PR (including forks and Dependabot)
+# with minimal permissions and never posts success for non-internal PRs.
+# Dispatching runs and resolving previews are restricted to internal,
+# non-draft, non-Dependabot PRs in the source repository.
 on:
   pull_request_target:
     types: [opened, edited, reopened, ready_for_review]
@@ -19,14 +21,111 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-pr-e2e-flows:
+    if: >-
+      github.repository == 'totalolage/deskohub-site' &&
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      eligible_internal: ${{ steps.validate.outputs.eligible_internal }}
+      head_ref: ${{ steps.validate.outputs.head_ref }}
+      head_sha: ${{ steps.validate.outputs.head_sha }}
+      requested_flows: ${{ steps.validate.outputs.requested_flows }}
+    steps:
+      # Only the workflow commit's flow parser is checked out, never PR code.
+      - name: Checkout E2E flow parser for validation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workspace-e2e-flows
+          persist-credentials: false
+          sparse-checkout: .github/actions/workspace-e2e-flows
+
+      - name: Validate PR description E2E flows
+        id: validate
+        env:
+          FLOWS_CLI: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/cli.mjs
+          GH_TOKEN: ${{ github.token }}
+          INVALID_FLOWS_DESCRIPTION: 'Invalid or missing ## E2E flows in PR description; list valid flows, all, or none'
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          repo="repos/$GITHUB_REPOSITORY"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          pr="$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "$repo/pulls/$PR_NUMBER")"
+          if ! jq -e '.state == "open" and .draft == false' <<<"$pr" >/dev/null; then
+            echo "PR #$PR_NUMBER is no longer an open non-draft PR"
+            echo "eligible_internal=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          head_sha="$(jq -r '.head.sha' <<<"$pr")"
+          head_ref="$(jq -r '.head.ref' <<<"$pr")"
+          pr_body="$(jq -r '.body // ""' <<<"$pr")"
+
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "PR #$PR_NUMBER head SHA is invalid" >&2
+            exit 1
+          fi
+          if ! git check-ref-format --branch "$head_ref" >/dev/null; then
+            echo "PR #$PR_NUMBER head ref is invalid" >&2
+            exit 1
+          fi
+
+          if ! parsed="$(PR_BODY="$pr_body" node "$FLOWS_CLI" parse-pr-body)"; then
+            error_message="$(jq -r '.error // "Invalid ## E2E flows section"' <<<"$parsed" 2>/dev/null || echo "Invalid ## E2E flows section")"
+            echo "$error_message" >&2
+            echo "Workspace E2E flow check failed for PR #$PR_NUMBER: $error_message" >> "$GITHUB_STEP_SUMMARY"
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "$repo/statuses/$head_sha" \
+              -f state=failure \
+              -f context='Workspace E2E' \
+              -f description="$INVALID_FLOWS_DESCRIPTION" \
+              -f target_url="$run_url" \
+              >/dev/null
+            exit 1
+          fi
+
+          requested_flows="$(jq -r '.flows' <<<"$parsed")"
+          eligible_internal="false"
+          if jq -e \
+            --arg repo "$GITHUB_REPOSITORY" \
+            '.head.repo.full_name == $repo and
+             .user.login != "dependabot[bot]" and
+             (.head.ref | startswith("dependabot/") | not)' \
+            <<<"$pr" >/dev/null; then
+            eligible_internal="true"
+          fi
+
+          {
+            echo "eligible_internal=$eligible_internal"
+            echo "head_ref=$head_ref"
+            echo "head_sha=$head_sha"
+            echo "requested_flows=$requested_flows"
+          } >> "$GITHUB_OUTPUT"
+          echo "PR #$PR_NUMBER requests Workspace E2E flows: \`$requested_flows\`" >> "$GITHUB_STEP_SUMMARY"
+
   sync-pr-e2e-flows:
+    needs: validate-pr-e2e-flows
     if: >-
       github.repository == 'totalolage/deskohub-site' &&
       github.event.pull_request.state == 'open' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
-      !startsWith(github.event.pull_request.head.ref, 'dependabot/')
+      !startsWith(github.event.pull_request.head.ref, 'dependabot/') &&
+      needs.validate-pr-e2e-flows.outputs.eligible_internal == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -114,9 +213,13 @@ jobs:
           summary="$(REQUESTED_FLOWS="$requested_flows" INCLUDE_CARRIED=true node "$FLOWS_CLI" summarize-statuses <<<"$statuses")"
           latest_state="$(jq -r '.latestState' <<<"$summary")"
           latest_description="$(jq -r '.latestDescription' <<<"$summary")"
-          passed_flows_csv="$(jq -r '.passedFlowsCsv' <<<"$summary")"
+          latest_kind="$(jq -r '.latestKind' <<<"$summary")"
+          real_passed_flows_csv="$(jq -r '.realPassedFlowsCsv' <<<"$summary")"
+          carried_passed_flows_csv="$(jq -r '.carriedPassedFlowsCsv' <<<"$summary")"
+          carried_source_sha="$(jq -r '.carriedSourceSha' <<<"$summary")"
           missing_flows_csv="$(jq -r '.missingFlowsCsv' <<<"$summary")"
-          all_covered="$(jq -r '.allCovered' <<<"$summary")"
+          real_covers_requested="$(jq -r '.realCoversRequested' <<<"$summary")"
+          carried_covers_requested="$(jq -r '.carriedCoversRequested' <<<"$summary")"
           covered_by_running="$(jq -r '.coveredByRunning' <<<"$summary")"
 
           deployment_state="pending"
@@ -135,10 +238,17 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "$repo/deployments/$deployment_id/statuses")"
             resolved="$(jq -r '
-              (first(.[] | select(.state == "success" and (.environment_url // "") != "")) | "success \(.environment_url | rtrimstr("/"))") //
-              (first(.[] | select(.state == "inactive" and .description == "Skipped - Not affected")) | "skipped") //
-              (first(.[] | select(.state == "failure" or .state == "error")) | "failed") //
-              "pending"' <<<"$deployment_statuses")"
+              first(.[] |
+                if .state == "success" and (.environment_url // "") != "" then
+                  "success \(.environment_url | rtrimstr("/"))"
+                elif .state == "inactive" and .description == "Skipped - Not affected" then
+                  "skipped"
+                elif .state == "failure" or .state == "error" then
+                  "failed"
+                else
+                  empty
+                end
+              ) // "pending"' <<<"$deployment_statuses")"
             if [[ "$resolved" != "pending" ]]; then
               deployment_state="${resolved%% *}"
               if [[ "$deployment_state" == "success" ]]; then
@@ -148,11 +258,15 @@ jobs:
             fi
           done < <(jq -r '.[] | select(.creator.login == "vercel[bot]") | .id' <<<"$deployments")
 
+          # A failed deployment always takes precedence over every flow selection,
+          # including `none` and previously passed flows.
+          if [[ "$deployment_state" == "failed" ]]; then
+            post_status "$head_sha" failure 'Vercel preview deployment failed; fix or redeploy it to run E2E'
+            exit 0
+          fi
+
           if [[ "$requested_flows" == "none" ]]; then
             case "$deployment_state" in
-              failed)
-                post_status "$head_sha" failure 'Vercel preview deployment failed; fix or redeploy it to run E2E'
-                ;;
               success | skipped)
                 if [[ "$latest_state" != "success" ]]; then
                   skip_description="$(STATUS_KIND=skipped-none node "$FLOWS_CLI" format-status)"
@@ -168,9 +282,17 @@ jobs:
             exit 0
           fi
 
-          if [[ "$all_covered" == "true" ]]; then
-            if [[ "$latest_state" != "success" ]]; then
-              restored="$(STATUS_KIND=passed FLOWS="$passed_flows_csv" node "$FLOWS_CLI" format-status)"
+          if [[ "$real_covers_requested" == "true" ]]; then
+            if [[ "$latest_state" != "success" || "$latest_kind" == "skipped-none" ]]; then
+              restored="$(STATUS_KIND=passed FLOWS="$real_passed_flows_csv" node "$FLOWS_CLI" format-status)"
+              post_status "$head_sha" success "$restored"
+            fi
+            exit 0
+          fi
+
+          if [[ "$carried_covers_requested" == "true" ]]; then
+            if [[ "$latest_state" != "success" || "$latest_kind" == "skipped-none" ]]; then
+              restored="$(STATUS_KIND=same-tree-passed FLOWS="$carried_passed_flows_csv" SOURCE_SHA="$carried_source_sha" node "$FLOWS_CLI" format-status)"
               post_status "$head_sha" success "$restored"
             fi
             exit 0
@@ -215,8 +337,8 @@ jobs:
                   "$repo/commits/$sha/statuses?per_page=100" | jq 'add')"
                 commit_summary="$(REQUESTED_FLOWS="$requested_flows" node "$FLOWS_CLI" summarize-statuses <<<"$commit_statuses")"
                 run_state="$(jq -r '.latestRunState' <<<"$commit_summary")"
-                commit_covered="$(jq -r '.allCovered' <<<"$commit_summary")"
-                commit_passed_csv="$(jq -r '.passedFlowsCsv' <<<"$commit_summary")"
+                commit_covered="$(jq -r '.realCoversRequested' <<<"$commit_summary")"
+                commit_passed_csv="$(jq -r '.realPassedFlowsCsv' <<<"$commit_summary")"
                 case "$run_state" in
                   success)
                     if [[ "$commit_covered" == "true" ]]; then
@@ -238,9 +360,6 @@ jobs:
                 esac
               done
               post_status "$head_sha" failure 'Vercel skipped this SHA and no E2E-tested commit has its tree; deploy its Workspace preview'
-              ;;
-            failed)
-              post_status "$head_sha" failure 'Vercel preview deployment failed; fix or redeploy it to run E2E'
               ;;
             pending)
               if [[ "$latest_state" == "failure" && "$latest_description" == "$INVALID_FLOWS_DESCRIPTION" ]]; then

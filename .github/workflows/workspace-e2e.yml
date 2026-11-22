@@ -231,6 +231,13 @@ jobs:
               echo "pr_number=$pr_number"
             } >> "$GITHUB_OUTPUT"
 
+            if ! parsed_pr_flows="$(PR_BODY="$pr_body" node "$FLOWS_CLI" parse-pr-body)"; then
+              parse_error="$(jq -r '.error // "Invalid ## E2E flows section"' <<<"$parsed_pr_flows" 2>/dev/null || echo "Invalid ## E2E flows section")"
+              fail "PR #$pr_number has invalid or missing ## E2E flows: $parse_error" \
+                'Invalid or missing ## E2E flows in PR description; list valid flows, all, or none'
+            fi
+
+            pr_requested_flows="$(jq -r '.flows' <<<"$parsed_pr_flows")"
             if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
               if [[ -z "$INPUT_FLOWS" ]]; then
                 parsed_flows='{"ok":true,"flows":"all","runE2E":true,"installWebkit":true}'
@@ -239,12 +246,13 @@ jobs:
                 fail "Invalid flows input for PR #$pr_number: $parse_error" \
                   'Invalid flows input; pass valid E2E flow IDs, all, or none'
               fi
-            else
-              if ! parsed_flows="$(PR_BODY="$pr_body" node "$FLOWS_CLI" parse-pr-body)"; then
-                parse_error="$(jq -r '.error // "Invalid ## E2E flows section"' <<<"$parsed_flows" 2>/dev/null || echo "Invalid ## E2E flows section")"
-                fail "PR #$pr_number has invalid or missing ## E2E flows: $parse_error" \
-                  'Invalid or missing ## E2E flows in PR description; list valid flows, all, or none'
+              dispatch_flows="$(jq -r '.flows' <<<"$parsed_flows")"
+              if [[ "$dispatch_flows" == "none" && "$pr_requested_flows" != "none" ]]; then
+                fail "Manual dispatch asked for flows=none while PR #$pr_number requests $pr_requested_flows" \
+                  'Manual flows=none dispatch conflicts with ## E2E flows in PR description'
               fi
+            else
+              parsed_flows="$parsed_pr_flows"
             fi
 
             resolved_flows="$(jq -r '.flows' <<<"$parsed_flows")"
@@ -603,6 +611,18 @@ jobs:
           fi
           echo "Checked out exact deployment SHA $actual_sha"
 
+      # Pre-rollout PR heads ignore WORKSPACE_E2E_FLOWS and always run WebKit.
+      # Check as data so WebKit is still restored and installed on those heads.
+      - name: Check exact-SHA flow-selection support
+        id: flow-support
+        run: |
+          set -euo pipefail
+          if [[ -f apps/deskohub-workspace/e2e/flows.ts ]]; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # The job's local actions come from the workflow commit, never from the
       # exact-SHA checkout.
       - name: Checkout workflow actions
@@ -727,7 +747,7 @@ jobs:
       # Workspace's exact Playwright pin as data, so it runs before any
       # exact-SHA code. On a miss, the install step below downloads WebKit.
       - name: Restore Workspace Playwright WebKit
-        if: needs.resolve-target.outputs.install_webkit == 'true'
+        if: needs.resolve-target.outputs.install_webkit == 'true' || steps.flow-support.outputs.supported != 'true'
         uses: ./.workspace-e2e-coordinator/.github/actions/restore-playwright-webkit
 
       - name: Install repository dependencies
@@ -855,7 +875,7 @@ jobs:
       # downloads the browser only when "Restore Workspace Playwright WebKit"
       # found no entry.
       - name: Install Workspace Playwright WebKit
-        if: needs.resolve-target.outputs.install_webkit == 'true'
+        if: needs.resolve-target.outputs.install_webkit == 'true' || steps.flow-support.outputs.supported != 'true'
         working-directory: apps/deskohub-workspace
         run: bun ./node_modules/@playwright/test/cli.js install --with-deps webkit
 
@@ -1043,10 +1063,14 @@ jobs:
   publish-final-status:
     needs: [resolve-target, fill-bun-package-cache, test-e2e]
     if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true'
+    concurrency:
+      group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+      deployments: read
       pull-requests: read
       statuses: write
     steps:
@@ -1067,34 +1091,112 @@ jobs:
           FLOWS: ${{ needs.resolve-target.outputs.flows }}
           FLOWS_CLI: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/cli.mjs
           GH_TOKEN: ${{ github.token }}
+          INVALID_FLOWS_DESCRIPTION: 'Invalid or missing ## E2E flows in PR description; list valid flows, all, or none'
           PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
+          PREVIEW_ENVIRONMENT: 'Preview – deskohub-workspace-site'
           STATUS_STATE: ${{ needs.test-e2e.result == 'success' && 'success' || 'failure' }}
           SUPERSEDED_DESCRIPTION: Superseded by a newer PR head before E2E finished
           TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
         run: |
           set -euo pipefail
+          repo="repos/$GITHUB_REPOSITORY"
+          e2e_state="$STATUS_STATE"
+          effective_flows="${FLOWS:-all}"
+
+          latest_deployment_state() {
+            local sha="$1"
+            local deployments deployment_id deployment_statuses resolved
+            deployments="$(gh api --method GET \
+              -H "Accept: application/vnd.github+json" \
+              "$repo/deployments" \
+              -f sha="$sha" \
+              -f environment="$PREVIEW_ENVIRONMENT" \
+              -f per_page=100)" || { echo "pending"; return 0; }
+            while IFS= read -r deployment_id; do
+              if [[ -z "$deployment_id" ]]; then
+                continue
+              fi
+              deployment_statuses="$(gh api \
+                -H "Accept: application/vnd.github+json" \
+                "$repo/deployments/$deployment_id/statuses")" || continue
+              resolved="$(jq -r '
+                first(.[] |
+                  if .state == "success" and (.environment_url // "") != "" then
+                    "success"
+                  elif .state == "inactive" and .description == "Skipped - Not affected" then
+                    "skipped"
+                  elif .state == "failure" or .state == "error" then
+                    "failed"
+                  else
+                    empty
+                  end
+                ) // "pending"' <<<"$deployment_statuses")"
+              if [[ "$resolved" != "pending" ]]; then
+                echo "$resolved"
+                return 0
+              fi
+            done < <(jq -r '.[] | select(.creator.login == "vercel[bot]") | .id' <<<"$deployments")
+            echo "pending"
+          }
+
           if [[ "$STATUS_STATE" == "success" ]]; then
-            if [[ -z "${FLOWS:-}" || "$FLOWS" == "all" ]]; then
-              description='Protected preview E2E passed'
-            else
+            prior_statuses="[]"
+            if [[ "$effective_flows" != "all" ]]; then
               prior_statuses="$(gh api --paginate --slurp \
-                "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/statuses?per_page=100" | \
-                jq 'add')"
-              union_flows="$(ADDED_FLOWS="$FLOWS" node "$FLOWS_CLI" summarize-statuses <<<"$prior_statuses" | jq -r '.unionFlowsCsv')"
-              description="$(STATUS_KIND=passed FLOWS="$union_flows" node "$FLOWS_CLI" format-status)"
+                "$repo/commits/$TARGET_SHA/statuses?per_page=100" | jq 'add')"
+            fi
+            pr="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "$repo/pulls/$PR_NUMBER")"
+            head_sha="$(jq -r '.head.sha' <<<"$pr")"
+            pr_body="$(jq -r '.body // ""' <<<"$pr")"
+
+            if [[ "$head_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" != "$TARGET_SHA" ]]; then
+              # The head moved after this run passed; preserve this SHA's real
+              # pass without evaluating the newer head's PR body against it.
+              if [[ "$effective_flows" == "all" ]]; then
+                description='Protected preview E2E passed'
+              else
+                union_flows="$(ADDED_FLOWS="$effective_flows" node "$FLOWS_CLI" summarize-statuses <<<"$prior_statuses" | jq -r '.unionFlowsCsv')"
+                description="$(STATUS_KIND=passed FLOWS="$union_flows" node "$FLOWS_CLI" format-status)"
+              fi
+            else
+              deployment_state="$(latest_deployment_state "$TARGET_SHA")"
+              if [[ "$deployment_state" == "failed" ]]; then
+                e2e_state="failure"
+                description='Vercel preview deployment failed; fix or redeploy it to run E2E'
+              elif ! parsed_pr="$(PR_BODY="$pr_body" node "$FLOWS_CLI" parse-pr-body)"; then
+                e2e_state="failure"
+                description="$INVALID_FLOWS_DESCRIPTION"
+              else
+                requested_flows="$(jq -r '.flows' <<<"$parsed_pr")"
+                summary="$(ADDED_FLOWS="$effective_flows" REQUESTED_FLOWS="$requested_flows" node "$FLOWS_CLI" summarize-statuses <<<"$prior_statuses")"
+                union_flows="$(jq -r '.unionFlowsCsv' <<<"$summary")"
+                union_covers="$(jq -r '.unionCoversRequested' <<<"$summary")"
+                if [[ "$union_covers" == "true" ]]; then
+                  if [[ "$union_flows" == "all" ]]; then
+                    description='Protected preview E2E passed'
+                  else
+                    description="$(STATUS_KIND=passed FLOWS="$union_flows" node "$FLOWS_CLI" format-status)"
+                  fi
+                else
+                  e2e_state="failure"
+                  description="$(STATUS_KIND=partial FLOWS="$union_flows" node "$FLOWS_CLI" format-status)"
+                fi
+              fi
             fi
           else
-            if [[ -z "${FLOWS:-}" || "$FLOWS" == "all" ]]; then
+            if [[ "$effective_flows" == "all" ]]; then
               description='Protected preview E2E failed'
             else
-              description="$(STATUS_KIND=failed FLOWS="$FLOWS" node "$FLOWS_CLI" format-status)"
+              description="$(STATUS_KIND=failed FLOWS="$effective_flows" node "$FLOWS_CLI" format-status)"
             fi
             # A superseded run stopped itself, so its failure says nothing
             # about this code. Statuses are per SHA, so this never touches
             # the newer head's status.
             head_sha="$(gh api \
               -H "Accept: application/vnd.github+json" \
-              "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" | \
+              "$repo/pulls/$PR_NUMBER" | \
               jq -r '.head.sha')" || head_sha=""
             if [[ "$head_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" != "$TARGET_SHA" ]]; then
               description="$SUPERSEDED_DESCRIPTION"
@@ -1104,8 +1206,8 @@ jobs:
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -f state="$STATUS_STATE" \
+            "$repo/statuses/$TARGET_SHA" \
+            -f state="$e2e_state" \
             -f context='Workspace E2E' \
             -f description="$description" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
@@ -1113,7 +1215,7 @@ jobs:
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+            "$repo/statuses/$TARGET_SHA" \
             -f state="$STATUS_STATE" \
             -f context='Workspace E2E allocation' \
             -f description="$ALLOCATION_DESCRIPTION" \
@@ -1130,26 +1232,121 @@ jobs:
       (needs.resolve-target.result != 'success' ||
        needs.resolve-target.outputs.deployment != 'success' ||
        needs.resolve-target.outputs.run_e2e != 'true')
+    concurrency:
+      group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+      deployments: read
+      pull-requests: read
       statuses: write
     steps:
+      - name: Checkout E2E flow parser for status without run
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workspace-e2e-flows
+          persist-credentials: false
+          sparse-checkout: .github/actions/workspace-e2e-flows
+
       - name: Publish status without an E2E run
         env:
+          FLOWS_CLI: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/cli.mjs
           GH_TOKEN: ${{ github.token }}
+          INVALID_FLOWS_DESCRIPTION: 'Invalid or missing ## E2E flows in PR description; list valid flows, all, or none'
+          PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
+          PREVIEW_ENVIRONMENT: 'Preview – deskohub-workspace-site'
           STATUS_DESCRIPTION: ${{ needs.resolve-target.outputs.status_description || 'Workspace E2E could not resolve this preview; re-run the failed jobs of this Workspace E2E run' }}
           STATUS_STATE: ${{ needs.resolve-target.outputs.status_state || 'failure' }}
           TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
         run: |
           set -euo pipefail
+          repo="repos/$GITHUB_REPOSITORY"
+          e2e_state="$STATUS_STATE"
+          description="$STATUS_DESCRIPTION"
+
+          if [[ "$e2e_state" == "success" ]]; then
+            if [[ -z "${PR_NUMBER:-}" ]]; then
+              e2e_state="failure"
+              description='Workspace E2E could not verify PR state; re-run the failed jobs'
+            else
+              pr="$(gh api \
+                -H "Accept: application/vnd.github+json" \
+                "$repo/pulls/$PR_NUMBER")"
+              head_sha="$(jq -r '.head.sha' <<<"$pr")"
+              pr_body="$(jq -r '.body // ""' <<<"$pr")"
+
+              if [[ "$head_sha" == "$TARGET_SHA" ]]; then
+                deployment_state="pending"
+                deployments="$(gh api --method GET \
+                  -H "Accept: application/vnd.github+json" \
+                  "$repo/deployments" \
+                  -f sha="$TARGET_SHA" \
+                  -f environment="$PREVIEW_ENVIRONMENT" \
+                  -f per_page=100)" || deployments="[]"
+                while IFS= read -r deployment_id; do
+                  if [[ -z "$deployment_id" ]]; then
+                    continue
+                  fi
+                  deployment_statuses="$(gh api \
+                    -H "Accept: application/vnd.github+json" \
+                    "$repo/deployments/$deployment_id/statuses")" || continue
+                  resolved="$(jq -r '
+                    first(.[] |
+                      if .state == "success" and (.environment_url // "") != "" then
+                        "success"
+                      elif .state == "inactive" and .description == "Skipped - Not affected" then
+                        "skipped"
+                      elif .state == "failure" or .state == "error" then
+                        "failed"
+                      else
+                        empty
+                      end
+                    ) // "pending"' <<<"$deployment_statuses")"
+                  if [[ "$resolved" != "pending" ]]; then
+                    deployment_state="$resolved"
+                    break
+                  fi
+                done < <(jq -r '.[] | select(.creator.login == "vercel[bot]") | .id' <<<"$deployments")
+
+                if [[ "$deployment_state" == "failed" ]]; then
+                  e2e_state="failure"
+                  description='Vercel preview deployment failed; fix or redeploy it to run E2E'
+                elif ! parsed_pr="$(PR_BODY="$pr_body" node "$FLOWS_CLI" parse-pr-body)"; then
+                  e2e_state="failure"
+                  description="$INVALID_FLOWS_DESCRIPTION"
+                else
+                  requested_flows="$(jq -r '.flows' <<<"$parsed_pr")"
+                  classified="$(STATUS_DESCRIPTION="$description" REQUESTED_FLOWS="$requested_flows" node "$FLOWS_CLI" classify-status)"
+                  status_kind="$(jq -r '.kind' <<<"$classified")"
+                  covers_requested="$(jq -r '.coversRequested' <<<"$classified")"
+                  if [[ "$status_kind" == "skipped-none" ]]; then
+                    if [[ "$requested_flows" != "none" ]]; then
+                      e2e_state="failure"
+                      description='PR E2E flows changed; run Workspace E2E for the newly requested flows'
+                    fi
+                  elif [[ "$status_kind" == "carried-passed" ]]; then
+                    if [[ "$covers_requested" != "true" ]]; then
+                      e2e_state="failure"
+                      description='PR E2E flows changed; same-tree commit lacks newly requested E2E flows'
+                    fi
+                  else
+                    e2e_state="failure"
+                    description='Workspace E2E status could not be verified; re-run the failed jobs'
+                  fi
+                fi
+              fi
+            fi
+          fi
+
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -f state="$STATUS_STATE" \
+            "$repo/statuses/$TARGET_SHA" \
+            -f state="$e2e_state" \
             -f context='Workspace E2E' \
-            -f description="$STATUS_DESCRIPTION" \
+            -f description="$description" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             >/dev/null

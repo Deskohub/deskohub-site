@@ -16,6 +16,10 @@ import {
 const workflow = parseWorkflow(
   resolve(import.meta.dir, "../../../.github/workflows/workspace-e2e.yml")
 );
+const flowsCli = resolve(
+  import.meta.dir,
+  "../../../.github/actions/workspace-e2e-flows/cli.mjs"
+);
 const testJob = workflow.jobs["test-e2e"];
 const guardJob = workflow.jobs["cancel-superseded-run"];
 const headCheckStep = findStepByName(
@@ -45,7 +49,12 @@ afterAll(cleanup);
 const prNumber = "7";
 const shaA = "a".repeat(40);
 const shaB = "b".repeat(40);
-const headIsB = { [`pulls/${prNumber}`]: { head: { sha: shaB } } };
+const headIsB = {
+  [`pulls/${prNumber}`]: {
+    body: "## E2E flows\n- all\n",
+    head: { sha: shaB },
+  },
+};
 const ownCancel = `actions/runs/${workflowStepRunId}/cancel`;
 const testJobCompleted = {
   [`actions/runs/${workflowStepRunId}/attempts/1/jobs`]: {
@@ -93,16 +102,28 @@ const guard = (targetSha: string, fixtures: GhFixtures = headIsB) =>
     { POLL_SECONDS: "0", PR_NUMBER: prNumber, TARGET_SHA: targetSha }
   );
 
-const publishFinal = (targetSha: string, state: "failure" | "success") =>
+const publishFinal = (
+  targetSha: string,
+  state: "failure" | "success",
+  extraFixtures: GhFixtures = {},
+  envOverrides: Readonly<Record<string, string>> = {}
+) =>
   runStep(
     finalStep,
-    { ...headIsB, [`statuses/${shaA}`]: {}, [`statuses/${shaB}`]: {} },
+    {
+      ...headIsB,
+      [`statuses/${shaA}`]: {},
+      [`statuses/${shaB}`]: {},
+      ...extraFixtures,
+    },
     {
       ALLOCATION_DESCRIPTION: "Workspace E2E shard allocation failed",
       ALLOCATION_SHARD: "",
+      FLOWS_CLI: flowsCli,
       PR_NUMBER: prNumber,
       STATUS_STATE: state,
       TARGET_SHA: targetSha,
+      ...envOverrides,
     }
   );
 
@@ -169,10 +190,23 @@ describe("Workspace E2E run superseded before its test job", () => {
   test("keeps a pass that finished before the head moved", async () => {
     const { calls } = await publishFinal(shaA, "success");
     const [e2e] = statusPosts(calls);
+    expect(e2e).toContain(`statuses/${shaA}`);
+    expect(e2e).toContain("state=success");
     expect(e2e).toContain("description=Protected preview E2E passed");
-    expect(calls.some((call) => call.includes(`pulls/${prNumber}`))).toBe(
-      false
-    );
+  });
+
+  test("blocks green on the current head if the PR description became invalid mid-run", async () => {
+    const { calls, result } = await publishFinal(shaB, "success", {
+      [`pulls/${prNumber}`]: {
+        body: "## Summary\nRemoved E2E flows",
+        head: { sha: shaB },
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    const [e2e] = statusPosts(calls);
+    expect(e2e).toContain(`statuses/${shaB}`);
+    expect(e2e).toContain("state=failure");
+    expect(e2e).toContain("Invalid or missing ## E2E flows");
   });
 
   test("reports a current head's failure as a failed run", async () => {

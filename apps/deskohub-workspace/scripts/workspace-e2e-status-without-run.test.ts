@@ -717,6 +717,10 @@ describe("Workspace E2E selective PR flows", () => {
     const { calls, result } = await runStep(
       finalStep,
       {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- `admin`\n- `email-campaigns`\n",
+          head: { sha: targetSha },
+        },
         [`commits/${targetSha}/statuses`]: [
           {
             context: "Workspace E2E",
@@ -743,8 +747,168 @@ describe("Workspace E2E selective PR flows", () => {
         call.includes(`statuses/${targetSha}`) &&
         call.includes("context=Workspace E2E")
     );
+    expect(e2ePost).toContain("state=success");
     expect(e2ePost).toContain(
       "description=Protected preview E2E passed [flows: admin,email-campaigns]"
     );
+  });
+
+  test("fails closed on manual workflow_dispatch when the PR description is invalid or conflicts with flows=none", async () => {
+    const invalidBody = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [{ ...pullRequest, body: "## Summary\nNo flows section" }],
+      { EVENT_NAME: "workflow_dispatch", INPUT_FLOWS: "admin" }
+    );
+    expect(invalidBody.result.exitCode).not.toBe(0);
+    expect(invalidBody.outputs.resolution_error).toContain("## E2E flows");
+
+    const noneConflict = await resolveTarget(
+      "success",
+      deploymentSucceeded,
+      [{ ...pullRequest, body: "## E2E flows\n- admin\n" }],
+      { EVENT_NAME: "workflow_dispatch", INPUT_FLOWS: "none" }
+    );
+    expect(noneConflict.result.exitCode).not.toBe(0);
+    expect(noneConflict.outputs.resolution_error).toContain("flows=none");
+  });
+
+  test("publishes partial failure when PR flows widened mid-run and later unions partial coverage to pass", async () => {
+    const partialRun = await runStep(
+      finalStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- admin\n- email-campaigns\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
+        ALLOCATION_SHARD: "1",
+        FLOWS: "admin",
+        FLOWS_CLI: flowsCli,
+        PR_NUMBER: String(prNumber),
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(partialRun.result.exitCode).toBe(0);
+    const partialPost = partialRun.calls.find(
+      (call) =>
+        call.includes(`statuses/${targetSha}`) &&
+        call.includes("context=Workspace E2E")
+    );
+    expect(partialPost).toContain("state=failure");
+    expect(partialPost).toContain(
+      "description=Protected preview E2E partial; more flows required [flows: admin]"
+    );
+
+    const completionRun = await runStep(
+      finalStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- admin\n- email-campaigns\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description:
+              "Protected preview E2E partial; more flows required [flows: admin]",
+            state: "failure",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
+        ALLOCATION_SHARD: "1",
+        FLOWS: "email-campaigns",
+        FLOWS_CLI: flowsCli,
+        PR_NUMBER: String(prNumber),
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(completionRun.result.exitCode).toBe(0);
+    const completePost = completionRun.calls.find(
+      (call) =>
+        call.includes(`statuses/${targetSha}`) &&
+        call.includes("context=Workspace E2E")
+    );
+    expect(completePost).toContain("state=success");
+    expect(completePost).toContain(
+      "description=Protected preview E2E passed [flows: admin,email-campaigns]"
+    );
+  });
+
+  test("reconciles live PR body and preview state before publish-status-without-run posts success", async () => {
+    const editedAwayFromNone = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- admin\n",
+          head: { sha: targetSha },
+        },
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_CLI: flowsCli,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(editedAwayFromNone.result.exitCode).toBe(0);
+    const post = editedAwayFromNone.calls.find((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(post).toContain("state=failure");
+    expect(post).toContain("PR E2E flows changed");
+
+    const failedDeployment = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: targetSha },
+        },
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          { description: "Deployment has failed", state: "failure" },
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_CLI: flowsCli,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(failedDeployment.result.exitCode).toBe(0);
+    const failedPost = failedDeployment.calls.find((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(failedPost).toContain("state=failure");
+    expect(failedPost).toContain("Vercel preview deployment failed");
   });
 });

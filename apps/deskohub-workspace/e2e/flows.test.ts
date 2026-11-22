@@ -81,7 +81,7 @@ describe("PR description ## E2E flows parser", () => {
       installWebkit: true,
     });
 
-    expect(parsePrBodyE2EFlows("### E2E Flows:\n- none\n")).toMatchObject({
+    expect(parsePrBodyE2EFlows("## E2E Flows:\n- none\n")).toMatchObject({
       ok: true,
       kind: "none",
       flows: "none",
@@ -100,13 +100,21 @@ describe("PR description ## E2E flows parser", () => {
     });
   });
 
-  test("ignores fake headings inside fenced code blocks", () => {
+  test("ignores fake headings inside fenced and indented code blocks", () => {
     const body = [
       "## Summary",
       "```markdown",
       "## E2E flows",
       "- fake",
       "```",
+      "~~~md",
+      "## E2E flows",
+      "- fake-tilde",
+      "~~~",
+      "",
+      "    ## E2E flows",
+      "    - none",
+      "",
       "## E2E flows",
       "- `webkit`",
       "## Notes",
@@ -123,6 +131,12 @@ describe("PR description ## E2E flows parser", () => {
 
   test.each([
     ["missing section", "## Summary\nNo flows here"],
+    ["level-three heading", "### E2E flows\n- none"],
+    [
+      "indented code block only",
+      "## Summary\n\n    ## E2E flows\n    - none\n",
+    ],
+    ["indented bullet inside section", "## E2E flows\n    - none\n"],
     ["empty section", "## E2E flows\n\n<!-- only comment -->\n## Next\nText"],
     ["duplicate sections", "## E2E flows\n- admin\n## E2E flows\n- account"],
     ["unknown flow", "## E2E flows\n- checkout-magic"],
@@ -218,6 +232,7 @@ describe("commit status description encoding and coverage summary", () => {
     ]) {
       for (const kind of [
         "passed",
+        "partial",
         "running",
         "failed",
         "same-tree-passed",
@@ -248,7 +263,7 @@ describe("commit status description encoding and coverage summary", () => {
     });
   });
 
-  test("unions passed flows across runs and tracks in-flight running flows", () => {
+  test("unions passed flows across runs, tracks in-flight flows, and lets a newer failure override an older pass", () => {
     const summary = summarizeCommitStatuses([
       {
         context: "Workspace E2E",
@@ -275,5 +290,48 @@ describe("commit status description encoding and coverage summary", () => {
       "admin",
       "email-campaigns",
     ]);
+
+    const afterFailure = summarizeCommitStatuses([
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description: "Protected preview E2E failed [flows: admin]",
+        state: "failure",
+      },
+      {
+        context: "Workspace E2E",
+        creator: { login: "github-actions[bot]" },
+        description:
+          "Protected preview E2E passed [flows: admin,email-campaigns]",
+        state: "success",
+      },
+    ]);
+    expect(afterFailure.latestRunState).toBe("failure");
+    expect(afterFailure.passedFlows).toEqual(["email-campaigns"]);
+    expect(afterFailure.realPassedFlows).toEqual(["email-campaigns"]);
+
+    const partialAndCarried = summarizeCommitStatuses(
+      [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "Protected preview E2E partial; more flows required [flows: admin]",
+          state: "failure",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "Same tree as bbbbbbb, which passed E2E [flows: email-campaigns]",
+          state: "success",
+        },
+      ],
+      { includeCarried: true }
+    );
+    expect(partialAndCarried.realPassedFlows).toEqual(["admin"]);
+    expect(partialAndCarried.carriedPassedFlows).toEqual(["email-campaigns"]);
+    expect(partialAndCarried.carriedSourceSha).toBe("bbbbbbb");
+    expect(partialAndCarried.passedFlows).toEqual(["admin", "email-campaigns"]);
   });
 });

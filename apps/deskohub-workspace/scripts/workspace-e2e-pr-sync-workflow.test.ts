@@ -17,6 +17,11 @@ const flowsCli = resolve(
   import.meta.dir,
   "../../../.github/actions/workspace-e2e-flows/cli.mjs"
 );
+const validateJob = workflow.jobs["validate-pr-e2e-flows"];
+const validateStep = findStepByName(
+  workflow,
+  "Validate PR description E2E flows"
+);
 const syncJob = workflow.jobs["sync-pr-e2e-flows"];
 const syncStep = findStepByName(
   workflow,
@@ -55,6 +60,22 @@ const deploymentFixtures = (
   deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
   "deployments/11/statuses": statuses,
 });
+
+const runValidate = (
+  body: string,
+  prOverride: Partial<ReturnType<typeof makePr>> = {}
+) =>
+  runStep(
+    validateStep,
+    {
+      [`pulls/${prNumber}`]: { ...makePr(body), ...prOverride },
+      [`statuses/${headSha}`]: {},
+    },
+    {
+      FLOWS_CLI: flowsCli,
+      PR_NUMBER: String(prNumber),
+    }
+  );
 
 const runSync = ({
   body,
@@ -96,8 +117,14 @@ const workflowDispatches = (calls: readonly string[]) =>
   calls.filter((call) => call.startsWith("workflow run workspace-e2e.yml"));
 
 describe("Workspace E2E PR flows sync workflow contract", () => {
-  test("never checks out PR code and runs only for eligible internal PRs", () => {
+  test("splits least-privilege validation from internal PR sync and never checks out PR code", () => {
     expect(workflow.permissions).toEqual({});
+    expect(validateJob?.permissions).toEqual({
+      contents: "read",
+      "pull-requests": "read",
+      statuses: "write",
+    });
+    expect(syncJob?.needs).toBe("validate-pr-e2e-flows");
     expect(syncJob?.permissions).toEqual({
       actions: "write",
       contents: "read",
@@ -105,17 +132,30 @@ describe("Workspace E2E PR flows sync workflow contract", () => {
       "pull-requests": "read",
       statuses: "write",
     });
-    const checkouts = (syncJob?.steps ?? []).filter((step) =>
-      (step.uses ?? "").startsWith("actions/checkout@")
-    );
-    expect(checkouts).toHaveLength(1);
-    expect(checkouts[0]?.with?.ref).toContain("github.workflow_sha");
-    expect(checkouts[0]?.with?.["persist-credentials"]).toBe(false);
-    expect(checkouts[0]?.with?.["sparse-checkout"]).toBe(
-      ".github/actions/workspace-e2e-flows"
-    );
 
-    const jobCondition = String(syncJob?.if);
+    for (const job of [validateJob, syncJob]) {
+      const checkouts = (job?.steps ?? []).filter((step) =>
+        (step.uses ?? "").startsWith("actions/checkout@")
+      );
+      expect(checkouts).toHaveLength(1);
+      expect(checkouts[0]?.with?.ref).toContain("github.workflow_sha");
+      expect(checkouts[0]?.with?.["persist-credentials"]).toBe(false);
+      expect(checkouts[0]?.with?.["sparse-checkout"]).toBe(
+        ".github/actions/workspace-e2e-flows"
+      );
+    }
+
+    const validateCondition = String(validateJob?.if);
+    for (const guard of [
+      "github.repository == 'totalolage/deskohub-site'",
+      "github.event.pull_request.state == 'open'",
+      "github.event.pull_request.draft == false",
+    ]) {
+      expect(validateCondition).toContain(guard);
+    }
+    expect(validateCondition).not.toContain("dependabot");
+
+    const syncCondition = String(syncJob?.if);
     for (const guard of [
       "github.repository == 'totalolage/deskohub-site'",
       "github.event.pull_request.state == 'open'",
@@ -123,10 +163,37 @@ describe("Workspace E2E PR flows sync workflow contract", () => {
       "github.event.pull_request.head.repo.full_name == github.repository",
       "github.event.pull_request.user.login != 'dependabot[bot]'",
       "!startsWith(github.event.pull_request.head.ref, 'dependabot/')",
+      "needs.validate-pr-e2e-flows.outputs.eligible_internal == 'true'",
     ]) {
-      expect(jobCondition).toContain(guard);
+      expect(syncCondition).toContain(guard);
     }
   });
+
+  test.each([
+    [
+      "fork PR",
+      {
+        head: { ref: headRef, repo: { full_name: "fork/repo" }, sha: headSha },
+      },
+    ],
+    ["Dependabot PR", { user: { login: "dependabot[bot]" } }],
+  ])(
+    "validates ## E2E flows on %s without ever granting success or dispatching sync",
+    async (_label, override) => {
+      const invalid = await runValidate("## Summary\nMissing flows", override);
+      expect(invalid.result.exitCode).not.toBe(0);
+      expect(statusPosts(invalid.calls)).toHaveLength(1);
+      expect(statusPosts(invalid.calls)[0]).toContain("state=failure");
+      expect(statusPosts(invalid.calls)[0]).toContain(
+        "Invalid or missing ## E2E flows"
+      );
+
+      const validNone = await runValidate("## E2E flows\n- none\n", override);
+      expect(validNone.result.exitCode).toBe(0);
+      expect(validNone.outputs.eligible_internal).toBe("false");
+      expect(statusPosts(validNone.calls)).toEqual([]);
+    }
+  );
 
   test.each([
     [
@@ -138,7 +205,7 @@ describe("Workspace E2E PR flows sync workflow contract", () => {
     ["draft PR", { draft: true }],
     ["Dependabot PR", { user: { login: "dependabot[bot]" } }],
   ])(
-    "exits cleanly without posting statuses for an ineligible %s",
+    "sync exits cleanly without posting statuses for an ineligible %s",
     async (_label, override) => {
       const { calls, result } = await runStep(
         syncStep,
@@ -185,18 +252,104 @@ describe("Workspace E2E PR flows sync step", () => {
     expect(workflowDispatches(calls)).toEqual([]);
   });
 
-  test("never turns a failed deployment green even when PR declares none", async () => {
-    const { calls, result } = await runSync({
+  test("gives a newer failed deployment status precedence over older success for both none and passed flows", async () => {
+    const failedAfterSuccess = deploymentFixtures([
+      { description: "Deployment has failed", state: "failure" },
+      {
+        description: "Deployment has completed",
+        environment_url: `${previewUrl}/`,
+        state: "success",
+      },
+    ]);
+
+    const noneRun = await runSync({
       body: "## E2E flows\n- none\n",
-      deployment: deploymentFixtures([
-        { description: "Deployment has failed", state: "failure" },
-      ]),
+      deployment: failedAfterSuccess,
+    });
+    expect(noneRun.result.exitCode).toBe(0);
+    expect(statusPosts(noneRun.calls)).toHaveLength(1);
+    expect(statusPosts(noneRun.calls)[0]).toContain("state=failure");
+    expect(statusPosts(noneRun.calls)[0]).toContain(
+      "Vercel preview deployment failed"
+    );
+
+    const passedRun = await runSync({
+      body: "## E2E flows\n- admin\n",
+      deployment: failedAfterSuccess,
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E passed [flows: admin]",
+          state: "success",
+        },
+      ],
+    });
+    expect(passedRun.result.exitCode).toBe(0);
+    expect(statusPosts(passedRun.calls)).toHaveLength(1);
+    expect(statusPosts(passedRun.calls)[0]).toContain("state=failure");
+    expect(statusPosts(passedRun.calls)[0]).toContain(
+      "Vercel preview deployment failed"
+    );
+  });
+
+  test("never restores green when a newer run failed a flow that had passed earlier", async () => {
+    const { calls, result } = await runSync({
+      body: "## E2E flows\n- admin\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E failed [flows: admin]",
+          state: "failure",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E passed [flows: admin]",
+          state: "success",
+        },
+      ],
     });
     expect(result.exitCode).toBe(0);
     const posts = statusPosts(calls);
     expect(posts).toHaveLength(1);
     expect(posts[0]).toContain("state=failure");
-    expect(posts[0]).toContain("Vercel preview deployment failed");
+    const dispatches = workflowDispatches(calls);
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]).toContain("flows=admin");
+  });
+
+  test("preserves same-tree provenance when restoring carried coverage after an edit", async () => {
+    const { calls, result } = await runSync({
+      body: "## E2E flows\n- admin\n",
+      deployment: deploymentFixtures([
+        { description: "Skipped - Not affected", state: "inactive" },
+      ]),
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "Same tree as bbbbbbb lacks required E2E flows; deploy its Workspace preview",
+          state: "failure",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Same tree as bbbbbbb, which passed E2E [flows: admin]",
+          state: "success",
+        },
+      ],
+    });
+    expect(result.exitCode).toBe(0);
+    const posts = statusPosts(calls);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain("state=success");
+    expect(posts[0]).toContain(
+      "description=Same tree as bbbbbbb, which passed E2E [flows: admin]"
+    );
+    expect(posts[0]).not.toContain("Protected preview E2E passed");
   });
 
   test("fails Workspace E2E and dispatches only newly added flows when PR body widens after a pass", async () => {

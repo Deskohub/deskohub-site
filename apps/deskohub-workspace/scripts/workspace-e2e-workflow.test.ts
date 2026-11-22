@@ -341,10 +341,16 @@ describe("workspace E2E workflow", () => {
       "cancel-superseded-run": { actions: "write", "pull-requests": "read" },
       "publish-final-status": {
         contents: "read",
+        deployments: "read",
         "pull-requests": "read",
         statuses: "write",
       },
-      "publish-status-without-run": { contents: "read", statuses: "write" },
+      "publish-status-without-run": {
+        contents: "read",
+        deployments: "read",
+        "pull-requests": "read",
+        statuses: "write",
+      },
     });
   });
 
@@ -418,7 +424,16 @@ describe("workspace E2E workflow", () => {
       "needs.resolve-target.outputs.deployment == 'success'"
     );
     for (const [name, job] of Object.entries(doc.jobs)) {
-      if (name !== "test-e2e") {
+      if (name === "test-e2e") continue;
+      if (
+        name === "publish-final-status" ||
+        name === "publish-status-without-run"
+      ) {
+        expect(job.concurrency?.["cancel-in-progress"]).toBe(false);
+        expect(job.concurrency?.group).toBe(
+          `workspace-e2e-status-\${{ needs.resolve-target.outputs.pr_number }}-\${{ needs.resolve-target.outputs.sha }}`
+        );
+      } else {
         expect(job.concurrency).toBeUndefined();
       }
     }
@@ -1007,16 +1022,22 @@ describe("workspace E2E workflow", () => {
     expect(restoreIndex).toBeLessThan(
       steps.indexOf(stepByName("Install repository dependencies"))
     );
-    // When webkit is selected, restore runs first and install installs WebKit's
-    // system packages and downloads the browser only on a cache miss.
+    // When webkit is selected, or when the checked-out commit predates flow
+    // selection (no apps/deskohub-workspace/e2e/flows.ts), restore runs first
+    // and install installs WebKit's system packages and downloads the browser
+    // only on a cache miss.
+    const flowSupport = stepByName("Check exact-SHA flow-selection support");
+    expect(steps.indexOf(flowSupport)).toBeGreaterThan(
+      steps.indexOf(stepByName("Confirm checked-out commit"))
+    );
+    expect(steps.indexOf(flowSupport)).toBeLessThan(restoreIndex);
+    expect(flowSupport.run).not.toMatch(/\bbunx?\b|\bnode\b|\bnpx\b/);
     const install = stepByName("Install Workspace Playwright WebKit");
     expect(steps.indexOf(install)).toBeGreaterThan(restoreIndex);
-    expect(restore.if).toBe(
-      "needs.resolve-target.outputs.install_webkit == 'true'"
-    );
-    expect(install.if).toBe(
-      "needs.resolve-target.outputs.install_webkit == 'true'"
-    );
+    const expectedCondition =
+      "needs.resolve-target.outputs.install_webkit == 'true' || steps.flow-support.outputs.supported != 'true'";
+    expect(restore.if).toBe(expectedCondition);
+    expect(install.if).toBe(expectedCondition);
     expect(install.run).toContain("install --with-deps webkit");
   });
 

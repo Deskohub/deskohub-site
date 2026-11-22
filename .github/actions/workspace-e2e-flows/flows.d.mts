@@ -53,6 +53,7 @@ export declare const parsePrBodyE2EFlows: (
 export declare const formatE2EStatusDescription: (input: {
   readonly kind:
     | "failed"
+    | "partial"
     | "passed"
     | "running"
     | "same-tree-passed"
@@ -65,9 +66,14 @@ export type ClassifiedE2EStatus =
   | { readonly kind: "superseded" }
   | { readonly kind: "other" }
   | {
+      readonly kind: "carried-passed";
+      readonly selected: readonly WorkflowE2EFlowId[];
+      readonly sourceSha: string;
+    }
+  | {
       readonly kind:
-        | "carried-passed"
         | "failed"
+        | "partial"
         | "passed"
         | "running"
         | "skipped-none";
@@ -97,10 +103,17 @@ export type GitHubCommitStatusRecord = {
 export type CommitStatusFlowSummary = {
   readonly latestState: string;
   readonly latestDescription: string;
+  readonly latestKind: string;
   readonly latestRunKind: string;
   readonly latestRunState: string;
   readonly passedFlows: readonly WorkflowE2EFlowId[];
   readonly passedFlowsCsv: string;
+  readonly realPassedFlows: readonly WorkflowE2EFlowId[];
+  readonly realPassedFlowsCsv: string;
+  readonly carriedPassedFlows: readonly WorkflowE2EFlowId[];
+  readonly carriedPassedFlowsCsv: string;
+  readonly carriedSourceSha: string;
+  readonly coverageSource: "carried" | "none" | "real";
   readonly runningFlows: readonly WorkflowE2EFlowId[];
   readonly runningFlowsCsv: string;
   readonly anyPassed: boolean;

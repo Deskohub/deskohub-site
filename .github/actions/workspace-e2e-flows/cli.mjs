@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import {
+  classifyE2EStatusDescription,
   diffFlowIds,
   formatE2EStatusDescription,
   parseFlowsInput,
@@ -40,6 +41,30 @@ switch (command) {
     if (!result.ok) process.exit(1);
     break;
   }
+  case "classify-status": {
+    const classified = classifyE2EStatusDescription(
+      process.env.STATUS_DESCRIPTION ?? ""
+    );
+    const requestedRaw = (process.env.REQUESTED_FLOWS ?? "").trim();
+    let coversRequested = false;
+    if (requestedRaw) {
+      const parsedRequested = parseFlowsInput(requestedRaw);
+      if (!parsedRequested.ok) {
+        process.stderr.write(`${parsedRequested.error}\n`);
+        process.exit(1);
+      }
+      if ("selected" in classified) {
+        coversRequested =
+          diffFlowIds(parsedRequested.selected, classified.selected).length ===
+          0;
+      }
+    }
+    writeJson({
+      ...classified,
+      coversRequested,
+    });
+    break;
+  }
   case "format-status": {
     const description = formatE2EStatusDescription({
       kind: process.env.STATUS_KIND ?? "",
@@ -57,8 +82,21 @@ switch (command) {
     const requestedRaw = (process.env.REQUESTED_FLOWS ?? "").trim();
     const addedRaw = (process.env.ADDED_FLOWS ?? "").trim();
 
+    let union = summary.realPassedFlows;
+    if (addedRaw) {
+      const parsedAdded = parseFlowsInput(addedRaw);
+      if (!parsedAdded.ok) {
+        process.stderr.write(`${parsedAdded.error}\n`);
+        process.exit(1);
+      }
+      union = unionFlowIds(summary.realPassedFlows, parsedAdded.selected);
+    }
+
     let missing = [];
     let allCovered = false;
+    let realCoversRequested = false;
+    let carriedCoversRequested = false;
+    let unionCoversRequested = false;
     let coveredByRunning = false;
     if (requestedRaw) {
       const parsedRequested = parseFlowsInput(requestedRaw);
@@ -68,6 +106,15 @@ switch (command) {
       }
       missing = diffFlowIds(parsedRequested.selected, summary.passedFlows);
       allCovered = missing.length === 0;
+      realCoversRequested =
+        diffFlowIds(parsedRequested.selected, summary.realPassedFlows)
+          .length === 0;
+      carriedCoversRequested =
+        summary.carriedSourceSha !== "" &&
+        diffFlowIds(parsedRequested.selected, summary.carriedPassedFlows)
+          .length === 0;
+      unionCoversRequested =
+        diffFlowIds(parsedRequested.selected, union).length === 0;
       const inFlightCovered = unionFlowIds(
         summary.passedFlows,
         summary.runningFlows
@@ -77,21 +124,14 @@ switch (command) {
         diffFlowIds(parsedRequested.selected, inFlightCovered).length === 0;
     }
 
-    let union = summary.passedFlows;
-    if (addedRaw) {
-      const parsedAdded = parseFlowsInput(addedRaw);
-      if (!parsedAdded.ok) {
-        process.stderr.write(`${parsedAdded.error}\n`);
-        process.exit(1);
-      }
-      union = unionFlowIds(summary.passedFlows, parsedAdded.selected);
-    }
-
     writeJson({
       ...summary,
       missingFlows: missing,
       missingFlowsCsv: toCanonicalFlows(missing),
       allCovered,
+      realCoversRequested,
+      carriedCoversRequested,
+      unionCoversRequested,
       coveredByRunning,
       unionFlows: union,
       unionFlowsCsv: toCanonicalFlows(union),
