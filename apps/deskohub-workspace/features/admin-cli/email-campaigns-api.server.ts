@@ -1,8 +1,10 @@
 import {
   AdminCliCampaignsApi,
+  type AdministrationCampaignSendStatusResultType,
   operationGroupHandlers,
   WorkspaceAdminApi,
 } from "@deskohub/workspace-admin-api";
+import { Effect } from "effect";
 import { cliCampaignOperationInvoker } from "./cli-campaign-operations.server";
 
 /**
@@ -13,5 +15,21 @@ import { cliCampaignOperationInvoker } from "./cli-campaign-operations.server";
 export const AdminCliCampaignsApiHandlers = operationGroupHandlers(
   WorkspaceAdminApi,
   AdminCliCampaignsApi,
-  cliCampaignOperationInvoker
+  cliCampaignOperationInvoker,
+  {
+    getCampaignSendStatus: (
+      result: AdministrationCampaignSendStatusResultType
+    ) =>
+      Effect.succeed({
+        send: result.send && {
+          ...result.send,
+          // Released CLI binaries decode skip reasons as a closed set.
+          recipients: result.send.recipients.map((recipient) =>
+            recipient.skipReason === "missing-email-language"
+              ? { ...recipient, skipReason: null }
+              : recipient
+          ),
+        },
+      }),
+  }
 );

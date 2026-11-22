@@ -21496,6 +21496,7 @@
                 "members": [
                   null,
                   null,
+                  null,
                   null
                 ]
               }
@@ -21595,6 +21596,9 @@
                     "type": "object",
                     "properties": {
                       "subject": {
+                        "type": "string"
+                      },
+                      "preheader": {
                         "type": "string"
                       },
                       "html": {
@@ -21914,6 +21918,38 @@
                         "locale"
                       ],
                       "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "_tag": {
+                          "type": "string",
+                          "enum": [
+                            "PublishedEmail"
+                          ]
+                        },
+                        "emailId": {
+                          "$ref": "#/components/schemas/EmailId"
+                        },
+                        "locale": {
+                          "type": "string",
+                          "enum": [
+                            "en-US",
+                            "cs-CZ",
+                            "de-DE",
+                            "uk-UA",
+                            "sk-SK",
+                            "vi-VN",
+                            "hi-IN"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "_tag",
+                        "emailId",
+                        "locale"
+                      ],
+                      "additionalProperties": false
                     }
                   ]
                 }
@@ -22039,6 +22075,9 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "emailId": {
+                          "$ref": "#/components/schemas/EmailId"
                         },
                         "locales": {
                           "type": "array",
@@ -22283,6 +22322,9 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
                       },
                       "locales": {
                         "type": "array",
@@ -22694,6 +22736,9 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
                       },
                       "locales": {
                         "type": "array",
@@ -23192,6 +23237,9 @@
                           }
                         ]
                       },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
+                      },
                       "locales": {
                         "type": "array",
                         "items": {
@@ -23504,6 +23552,9 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "emailId": {
+                          "$ref": "#/components/schemas/EmailId"
                         },
                         "content": {
                           "type": "object",
@@ -24145,6 +24196,9 @@
                           }
                         ]
                       },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
+                      },
                       "locales": {
                         "type": "array",
                         "items": {
@@ -24439,6 +24493,16 @@
                       "anyOf": [
                         {
                           "$ref": "#/components/schemas/CampaignAudienceId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "emailId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/EmailId"
                         },
                         {
                           "type": "null"
@@ -24965,6 +25029,9 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "emailId": {
+                        "$ref": "#/components/schemas/EmailId"
                       },
                       "locales": {
                         "type": "array",
@@ -26652,7 +26719,8 @@
                                             "missing-email",
                                             "invalid-email",
                                             "consent-withdrawn",
-                                            "outside-test-domain"
+                                            "outside-test-domain",
+                                            "missing-email-language"
                                           ]
                                         },
                                         {
@@ -28147,6 +28215,9 @@
                               ]
                             },
                             "subject": {
+                              "type": "string"
+                            },
+                            "preheader": {
                               "type": "string"
                             },
                             "html": {
@@ -36554,6 +36625,11 @@
         "type": "string",
         "minLength": 1,
         "description": "Opaque table identifier assigned by Dotypos."
+      },
+      "EmailId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Reusable email identity, independent of the campaigns using it."
       },
       "GoogleCalendarEventId": {
         "type": "string",

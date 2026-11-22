@@ -10,6 +10,7 @@ import {
   AdministrationCampaignPurpose,
 } from "./campaign-locale-and-purpose";
 import { DhwVersion } from "./dhw-version";
+import { EmailId } from "./email-identifiers";
 import {
   AdministrationDotyposCustomerId,
   CliInputInvalid,
@@ -520,5 +521,3 @@ export const campaignErrors = [
  * operation, reads included, requires it.
  */
 export const campaignsMinimumDhwVersion = DhwVersion.make("1.31.0");
-
-import { EmailId } from "./email-identifiers";
