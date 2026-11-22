@@ -1325,6 +1325,7 @@
   "accountReservationsOtherTitle": "तारीख़ के बिना बुकिंग",
   "accountReservationsCurrentEmpty": "आपकी कोई मौजूदा या आने वाली बुकिंग नहीं है।",
   "accountReservationsPastEmpty": "अभी तक आपकी कोई पिछली बुकिंग नहीं है।",
+  "accountReservationsPassSavingsLink": "पैक और पास के साथ बचत करें",
   "accountReservationsUnavailableTitle": "बुकिंग का इतिहास कुछ समय के लिए उपलब्ध नहीं है",
   "accountReservationsProviderUnavailable": "हमारा बुकिंग सिस्टम उपलब्ध नहीं है। आपकी प्रोफ़ाइल अब भी उपलब्ध है, कृपया बाद में फिर से कोशिश करें।",
   "accountReservationOtherProduct": "Workspace में बुकिंग",

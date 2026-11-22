@@ -1325,6 +1325,7 @@
   "accountReservationsOtherTitle": "Reservierungen ohne Datumsangabe",
   "accountReservationsCurrentEmpty": "Du hast keine aktuellen oder bevorstehenden Reservierungen.",
   "accountReservationsPastEmpty": "Du hast noch keine vergangenen Reservierungen.",
+  "accountReservationsPassSavingsLink": "Mit Paketen und Pässen sparen",
   "accountReservationsUnavailableTitle": "Der Reservierungsverlauf ist vorübergehend nicht verfügbar",
   "accountReservationsProviderUnavailable": "Unser Reservierungssystem ist nicht erreichbar. Dein Profil bleibt verfügbar. Versuch es bitte später noch einmal.",
   "accountReservationOtherProduct": "Reservierung im Workspace",

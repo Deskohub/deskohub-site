@@ -8,7 +8,7 @@ import {
   mock,
   test,
 } from "bun:test";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import type { ComponentPropsWithoutRef } from "react";
 import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
 import { type Locale, m } from "@/features/i18n";
@@ -71,6 +71,7 @@ mock.module(
 
 const { ReservationHistory } = await import("./reservation-history");
 const { AccountUnlimitedPassCard } = await import("./account-unlimited-pass");
+const { PassSavingsFooter } = await import("./pass-savings-footer");
 
 const renderHistory = (locale: Locale, history: CustomerReservationHistory) =>
   render(<ReservationHistory history={history} locale={locale} />);
@@ -956,5 +957,121 @@ describe("ReservationHistory", () => {
     ).toBeNull();
     expect(view.queryByRole("link")).toBeNull();
     expect(view.queryByRole("button")).toBeNull();
+  });
+
+  describe("packs and passes offer", () => {
+    const paidVisit = reservation({
+      id: "paid-visit",
+      product: { kind: "cowork", tier: "basic" },
+      startsAt: "2026-08-21T08:00:00Z",
+      endsAt: "2026-08-21T16:00:00Z",
+      paidIndividually: true,
+    });
+    const historyOf = (
+      past: readonly CustomerReservationSummary[]
+    ): CustomerReservationHistory => ({
+      kind: "available",
+      groups: { current: [], past: [...past], unavailable: [] },
+    });
+    const noPacks = { held: [], boughtForOthers: [] };
+    const pastFooter = (view: ReturnType<typeof render>) =>
+      view.container.querySelector(
+        '[data-account-reservation-group="past"] > [data-footer-layout]'
+      );
+    const renderOffer = async (
+      props: Partial<Parameters<typeof ReservationHistory>[0]>
+    ) => {
+      const view = render(
+        <UnsavedChangesProvider>
+          <ReservationHistory
+            history={historyOf([paidVisit])}
+            locale="en-US"
+            {...props}
+          />
+        </UnsavedChangesProvider>
+      );
+      await act(async () => {
+        await props.entryPacks;
+      });
+      return view;
+    };
+
+    test("docks the Pricing link in the Past reservations panel's sticky edge-to-edge footer", async () => {
+      const view = await renderOffer({ entryPacks: Promise.resolve(noPacks) });
+
+      const footer = pastFooter(view);
+      expect(footer?.getAttribute("data-footer-layout")).toBe("edge-to-edge");
+      expect(footer?.className).toContain("sticky");
+      expect(footer?.className).toContain(
+        "bottom-[var(--install-bar-space,0px)]"
+      );
+      const link = view.getByRole("link", {
+        name: m.accountReservationsPassSavingsLink({}, { locale: "en-US" }),
+      });
+      expect(footer?.contains(link)).toBe(true);
+      expect(link.getAttribute("href")).toBe("/en-US/pricing");
+    });
+
+    test("leaves the footer empty when the customer doesn't fit the offer", async () => {
+      const cases = {
+        "held usable Entry pack": {
+          entryPacks: Promise.resolve({
+            held: [
+              {
+                position: 1,
+                tier: "Basic",
+                entryCount: 5,
+                entriesLeft: 2,
+                lastUsableDay: "Feb 1, 2027",
+                status: "active" as const,
+              },
+            ],
+            boughtForOthers: [],
+          }),
+        },
+        "Entry pack funded visit only": {
+          entryPacks: Promise.resolve(noPacks),
+          history: historyOf([
+            { ...paidVisit, paidIndividually: undefined, paidWithEntryPack: true },
+          ]),
+        },
+      };
+
+      for (const [name, props] of Object.entries(cases)) {
+        const view = await renderOffer(props);
+        expect({ name, links: view.queryAllByRole("link").length }).toEqual({
+          name,
+          links: 0,
+        });
+        expect(pastFooter(view)?.childElementCount).toBe(0);
+        cleanup();
+      }
+    });
+
+    test("never offers packs and passes while passes aren't released", () => {
+      const view = render(
+        <UnsavedChangesProvider>
+          <ReservationHistory history={historyOf([paidVisit])} locale="en-US" />
+        </UnsavedChangesProvider>
+      );
+
+      expect(pastFooter(view)).toBeNull();
+      expect(view.queryAllByRole("link")).toHaveLength(0);
+    });
+
+    test("shows the product marks before the label, hidden from assistive technology", () => {
+      const view = render(
+        <UnsavedChangesProvider>
+          <PassSavingsFooter
+            locale="en-US"
+            marks={<span data-testid="product-marks" />}
+          />
+        </UnsavedChangesProvider>
+      );
+
+      const marks = view.getByTestId("product-marks").parentElement;
+      expect(marks?.getAttribute("aria-hidden")).toBe("true");
+      expect(view.getByRole("link").firstElementChild).toBe(marks);
+    });
   });
 });

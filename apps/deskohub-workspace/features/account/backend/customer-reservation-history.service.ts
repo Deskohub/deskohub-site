@@ -11,6 +11,8 @@ import {
   eq,
   exists,
   inArray,
+  isNull,
+  notExists,
   or,
   sql,
 } from "drizzle-orm";
@@ -20,6 +22,7 @@ import type { SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   passEntryClaims,
+  paymentAttempts,
   unlimitedPassDayMoves,
   workspaceReservations,
 } from "@/db/schema";
@@ -104,6 +107,8 @@ type ReservationRow = {
   readonly reservationPurpose: (typeof workspaceReservations.$inferSelect)["reservationPurpose"];
   readonly paidAt: (typeof workspaceReservations.$inferSelect)["paidAt"];
   readonly paidWithEntryPack: boolean;
+  /** See `CustomerReservationSummary.paidIndividually`. */
+  readonly paidIndividually: boolean;
   readonly unlimitedPassDay: boolean;
 };
 
@@ -273,6 +278,7 @@ const toReservationSummary = (
     id: row?.id ?? reservation.id,
     ...(row?.id && { workspaceReservationId: row.id }),
     ...(row?.paidWithEntryPack && { paidWithEntryPack: true }),
+    ...(row?.paidIndividually && { paidIndividually: true }),
     ...(party && { party }),
     product: getReservationProduct(row),
     ...getBookedStartFields(reservation, booked),
@@ -486,6 +492,10 @@ export type ReservationHistoryOptions = {
    * names passes false to skip the read.
    */
   readonly includePartyNames?: boolean;
+  /**
+   * Whether to mark how each booking was paid for: from an Entry pack, or on
+   * its own with money. Pass reads are released with the passes.
+   */
   readonly includeEntryPackPayment?: boolean;
   /** The language of the reservations' product names; the default locale when absent. */
   readonly locale?: Locale;
@@ -591,6 +601,40 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
                     eq(passEntryClaims.status, "consumed")
                   )
                 )
+            )}`
+          : sql<boolean>`false`,
+        paidIndividually: includeEntryPackPayment
+          ? sql<boolean>`${and(
+              isNull(workspaceReservations.passId),
+              eq(workspaceReservations.paymentState, "paid"),
+              exists(
+                db
+                  .select({ id: paymentAttempts.id })
+                  .from(paymentAttempts)
+                  .where(
+                    and(
+                      eq(
+                        paymentAttempts.id,
+                        workspaceReservations.activePaymentAttemptId
+                      ),
+                      eq(paymentAttempts.state, "paid"),
+                      // Internal attempts settle a zero total, such as a
+                      // fully discounted or Entry pack funded booking.
+                      sql`${paymentAttempts.amountValue} > 0`
+                    )
+                  )
+              ),
+              notExists(
+                db
+                  .select({ reservationId: passEntryClaims.reservationId })
+                  .from(passEntryClaims)
+                  .where(
+                    and(
+                      eq(passEntryClaims.reservationId, workspaceReservations.id),
+                      eq(passEntryClaims.status, "consumed")
+                    )
+                  )
+              )
             )}`
           : sql<boolean>`false`,
       })
