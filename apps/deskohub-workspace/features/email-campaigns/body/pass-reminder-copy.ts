@@ -1,6 +1,7 @@
 import { type Locale, m } from "@/features/i18n";
 import { type PassTier, unlimitedPassDays } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
+import { formatCount } from "@/shared/utils/number";
 import type { PlainDate } from "@/shared/utils/temporal";
 import {
   type CampaignBodyDocument,
@@ -111,10 +112,11 @@ export const renderPassReminderCopyV1 = (
 
   const deskLabel =
     input.tier === "open-space" ? undefined : input.deskLabel?.trim();
+  const days = formatCount(unlimitedPassDays, locale);
   const renewal = {
     tier,
     endsOn,
-    days: unlimitedPassDays,
+    days,
     renewalStartsOn: formatReminderDate(input.renewalStartsOn, locale),
   };
   const details = deskLabel
@@ -127,18 +129,12 @@ export const renderPassReminderCopyV1 = (
   return {
     subject: m.passReminderUnlimitedSubject({ endsOn }, options),
     preheader: deskLabel
-      ? m.passReminderUnlimitedPreheaderWithDesk(
-          { days: unlimitedPassDays, deskLabel },
-          options
-        )
-      : m.passReminderUnlimitedPreheader({ days: unlimitedPassDays }, options),
+      ? m.passReminderUnlimitedPreheaderWithDesk({ days, deskLabel }, options)
+      : m.passReminderUnlimitedPreheader({ days }, options),
     body: body(
       greeting,
       emphasizedParagraph(details, deskLabel),
-      actionButton(
-        m.passReminderUnlimitedRenew({ days: unlimitedPassDays }, options),
-        actionUrl
-      ),
+      actionButton(m.passReminderUnlimitedRenew({ days }, options), actionUrl),
       ...(deskLabel
         ? [
             paragraph(

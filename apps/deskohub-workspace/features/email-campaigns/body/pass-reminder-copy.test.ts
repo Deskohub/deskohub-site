@@ -179,6 +179,12 @@ describe("pass reminder campaign copy v1", () => {
     );
   });
 
+  test("formats the expiry date in the recipient's locale", async () => {
+    const email = await render({ ...entryPack, locale: "de-DE" });
+
+    expect(email.html).toContain("<strong>Do., 14. Januar</strong>");
+  });
+
   test("uses the singular for one remaining entry", async () => {
     const email = await render({
       ...entryPack,
