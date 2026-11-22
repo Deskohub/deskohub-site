@@ -57,6 +57,7 @@ import { Notice } from "../../ui/notice";
 import { ScrollScreen } from "../../ui/scroll-screen";
 import { color, space } from "../../ui/tokens";
 import { QuietUpdateOffer } from "../../updates/update-offer-card";
+import { passCatalogAtom } from "../pass-reads";
 import { PassChoose } from "./choose/pass-choose";
 import { hasPassLegalDocuments } from "./pass-purchase-agreement";
 import {
@@ -68,7 +69,6 @@ import {
 import {
   beginPassPurchaseAtom,
   openPassPaymentAtom,
-  passOffersAtom,
   passPaymentPayload,
   passPurchaseStatusHref,
   submitPassPurchaseAtom,
@@ -131,9 +131,9 @@ export function PassPurchaseScreen({ kind }: { readonly kind: PurchaseKind }) {
   const params = useLocalSearchParams();
   const prefill = readPassPurchasePrefill(kind, params);
   const account = useAtomValue(accountAtom);
-  const catalog = useAtomValue(passOffersAtom);
+  const catalog = useAtomValue(passCatalogAtom);
   const refreshAccount = useAtomRefresh(accountAtom);
-  const refreshCatalog = useAtomRefresh(passOffersAtom);
+  const refreshCatalog = useAtomRefresh(passCatalogAtom);
 
   if (!AsyncResult.isSuccess(catalog) || !AsyncResult.isSuccess(account)) {
     return (

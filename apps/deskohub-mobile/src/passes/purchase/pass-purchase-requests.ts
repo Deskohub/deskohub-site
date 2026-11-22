@@ -44,13 +44,6 @@ export const confirmPassPurchaseScope = Effect.Do.pipe(
   customerRead({ accountRead: false })
 );
 
-export const passOffersAtom = customerDataRuntime.atom(
-  passesApi.pipe(
-    Effect.flatMap((api) => api.listPassOffers({})),
-    customerRead({ accountRead: false })
-  )
-);
-
 export const unlimitedStartDatesAtom = Atom.family(
   (supersedeOrderId: string | undefined | false) =>
     customerDataRuntime.atom(
@@ -107,7 +100,16 @@ export const beginPassPurchaseAtom = customerDataRuntime.fn(
   }: {
     payload: BeginCustomerPassPurchase;
     owns?: () => boolean;
-  }) => writePass((passes) => passes.beginPassPurchase({ payload }), owns)
+  }) =>
+    Effect.flatMap(Effect.service(CustomerAccountScope), ({ accountId }) =>
+      writePass(
+        (passes) =>
+          passes.beginPassPurchase({
+            payload: { ...payload, expectedBuyerAccountId: accountId },
+          }),
+        owns
+      )
+    )
 );
 
 export const submitPassPurchaseAtom = customerDataRuntime.fn(

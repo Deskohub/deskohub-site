@@ -13,9 +13,9 @@ import {
   makeFakeDevice,
 } from "../../customer-api/testing/fake-customer-data";
 import { FakeWorkspace } from "../../customer-api/testing/fake-workspace";
+import { passCatalogAtom } from "../pass-reads";
 import {
   beginPassPurchaseAtom,
-  passOffersAtom,
   passPaymentPayload,
   passPaymentReturnUrl,
   passPurchaseStatusHref,
@@ -33,7 +33,7 @@ const initial: BeginCustomerPassPurchase = {
 describe("pass purchase requests", () => {
   test("honors a closed release gate on the typed customer route", async () => {
     const { registry, workspace } = makeFakeCustomerData();
-    expect(await settle(registry, passOffersAtom)).toMatchObject({
+    expect(await settle(registry, passCatalogAtom)).toMatchObject({
       _tag: "Failure",
       failure: { _tag: "CustomerPassesUnavailable" },
     });

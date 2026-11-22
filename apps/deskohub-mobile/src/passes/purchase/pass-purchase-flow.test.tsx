@@ -165,7 +165,7 @@ mock.module("./pass-purchase-review", () => ({
   ),
 }));
 
-const { passOffersAtom } = await import("./pass-purchase-requests");
+const { passCatalogAtom } = await import("../pass-reads");
 const { PassPurchaseScreen } = await import("./pass-purchase-screen");
 const { render, container } = clientRoot({ keepFetch: true });
 const money = (value: number) => ({ value, currency: "CZK", exponent: 2 });
@@ -284,6 +284,9 @@ for (const { language, kind } of [
                     }
               );
               expect(payload.locale).toBe(language);
+              expect(body).toMatchObject({
+                expectedBuyerAccountId: workspace.data.accountId,
+              });
               expect(payload.holderEmail).toBe("gift@example.test");
               beginCalls.push(payload);
               quote = {
@@ -418,7 +421,7 @@ for (const { language, kind } of [
     expect(await settle(registry, accountAtom)).toMatchObject({
       _tag: "Success",
     });
-    expect(await settle(registry, passOffersAtom)).toMatchObject({
+    expect(await settle(registry, passCatalogAtom)).toMatchObject({
       _tag: "Success",
     });
     await render(
@@ -442,8 +445,8 @@ for (const { language, kind } of [
 
     catalogAvailable = false;
     await act(async () => {
-      registry.refresh(passOffersAtom);
-      expect(await settle(registry, passOffersAtom)).toMatchObject({
+      registry.refresh(passCatalogAtom);
+      expect(await settle(registry, passCatalogAtom)).toMatchObject({
         _tag: "Success",
         success: { entryPacks: [] },
       });
@@ -456,8 +459,8 @@ for (const { language, kind } of [
       expect(container().querySelector("#choice")).not.toBeNull();
       catalogAvailable = true;
       await act(async () => {
-        registry.refresh(passOffersAtom);
-        await settle(registry, passOffersAtom);
+        registry.refresh(passCatalogAtom);
+        await settle(registry, passCatalogAtom);
       });
       await press("continue");
       await press("continue");
