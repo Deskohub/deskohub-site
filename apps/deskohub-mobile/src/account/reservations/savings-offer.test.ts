@@ -35,6 +35,7 @@ const entryPack = (
   entriesLeft: 3,
   status: "active",
   bookedDates: [],
+  bookFrom: "2026-11-23",
   ...change,
 });
 
@@ -82,15 +83,27 @@ describe("showsSavingsOffer", () => {
     }
   });
 
-  test("visits booked by or for someone else don't count", () => {
+  test("visits booked for someone else don't count", () => {
     expect(
       shows({
         past: [
-          visit("by", { party: { kind: "booked-by", authorName: "A" } }),
           visit("for", { party: { kind: "booked-for", customerName: null } }),
         ],
       })
     ).toBe(false);
+  });
+
+  test("visits another account booked for this one count", () => {
+    expect(
+      shows({
+        past: [visit("by", { party: { kind: "booked-by", authorName: "A" } })],
+      })
+    ).toBe(true);
+    expect(
+      shows({
+        past: [visit("by", { party: { kind: "booked-by-deleted-account" } })],
+      })
+    ).toBe(true);
   });
 
   test("meeting rooms and offices don't count", () => {
@@ -114,8 +127,10 @@ describe("showsSavingsOffer", () => {
     expect(shows({ held: [entryPack()] })).toBe(false);
   });
 
-  test("a used-up, expired or ended Entry pack doesn't", () => {
+  test("a used-up, expired, ended or unbookable Entry pack doesn't", () => {
     expect(shows({ held: [entryPack({ entriesLeft: 0 })] })).toBe(true);
+    // An unclaimed or unpaid gift, or no free date left: nothing to book.
+    expect(shows({ held: [entryPack({ bookFrom: undefined })] })).toBe(true);
     for (const status of ["depleted", "expired", "ended"] as const) {
       expect(shows({ held: [entryPack({ status, entriesLeft: 2 })] })).toBe(
         true

@@ -26,16 +26,23 @@ export interface SavingsOfferFacts {
   readonly entryPackFunded: ReadonlySet<CustomerReservationOrderId> | undefined;
 }
 
-/** Whether a pass still covers the account's next visits. */
+/**
+ * Whether a pass still covers the account's next visits: an Entry pack
+ * while it can book (the Workspace gives a usable pack, its gift claimed
+ * and paid, a first date to book from), an Unlimited pass until it ends.
+ */
 const covers = (pass: HeldPass): boolean =>
   pass.kind === "entry-pack"
-    ? pass.status === "active" && pass.entriesLeft > 0
+    ? pass.status === "active" &&
+      pass.entriesLeft > 0 &&
+      pass.bookFrom !== undefined
     : pass.status === "active" || pass.status === "upcoming";
 
 /**
- * A visit the account booked and paid for itself: a confirmed coworking
- * order of its own, not paid with an Entry pack. A row without an order is
- * Dotypos-only, which shows nothing about how it was paid.
+ * A paid coworking visit of the account's own: confirmed, not one it booked
+ * for someone else (one booked for it by another account counts), and not
+ * paid with an Entry pack. A row without an order is Dotypos-only, which
+ * shows nothing about how it was paid.
  */
 const paidIndividually = (
   row: ReservationListRow,
@@ -43,7 +50,7 @@ const paidIndividually = (
 ): boolean =>
   row.product.kind === "cowork" &&
   row.status === "confirmed" &&
-  row.party === undefined &&
+  row.party?.kind !== "booked-for" &&
   Option.exists(
     reservationStatusTarget(row),
     (orderId) => !entryPackFunded.has(orderId)

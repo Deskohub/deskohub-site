@@ -231,7 +231,10 @@ export function StickyFooterGroup({
   );
 }
 
-/** The pinned footers over the bottom of a `ScrollScreen`. */
+/**
+ * The pinned footers over the bottom of a `ScrollScreen`, on a paper band
+ * that hides the content scrolling between them and the screen's bottom.
+ */
 function PinnedFooters({
   footers,
   bottom,
@@ -243,6 +246,8 @@ function PinnedFooters({
 }) {
   return (
     <PinnedCopyContext value={true}>
+      {/* The content stops above the pinned footers, as above a bar. */}
+      <View aria-hidden style={[styles.belowPinned, { height: bottom }]} />
       {Array.from(footers, ([key, pinned]) => (
         <View
           key={key}
@@ -535,6 +540,14 @@ const styles = StyleSheet.create({
   clearance: { height: mastheadOverlap - space.md },
   coveredFooter: { opacity: 0 },
   pinned: { position: "absolute" },
+  belowPinned: {
+    backgroundColor: color.paper,
+    bottom: 0,
+    left: 0,
+    pointerEvents: "none",
+    position: "absolute",
+    right: 0,
+  },
   refresh: {
     alignItems: "center",
     left: 0,
