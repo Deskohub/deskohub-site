@@ -240,6 +240,7 @@ const readPassAccount = CurrentCustomerAccount.pipe(
 );
 const passOperations: string[] = [];
 const signedFundedQuote = "synthetic-advertised-funding-proof";
+let purchaseNeedsDetails = false;
 const testPassLayer = Layer.mock(CustomerPasses, {
   list: () =>
     readPassAccount.pipe(
@@ -278,6 +279,12 @@ const testPassLayer = Layer.mock(CustomerPasses, {
     readPassAccount.pipe(
       Effect.map(() => {
         passOperations.push("purchase");
+        if (purchaseNeedsDetails) {
+          return {
+            status: "details_required" as const,
+            checkoutPath: `/en-US/passes/${product.kind}?handoff=fixture-handoff`,
+          };
+        }
         return {
           status: "ready" as const,
           orderId,
@@ -288,32 +295,35 @@ const testPassLayer = Layer.mock(CustomerPasses, {
     ),
 });
 
+const fakeEntryPackAdvertisement = ({
+  reservation,
+  passId,
+}: Parameters<typeof entryPackBooking.buildEntryPackBookingQuote>[0]) =>
+  Effect.gen(function* () {
+    passOperations.push("quote");
+    const { accountId } = yield* readPassAccount;
+    if (
+      accountId !== agentAccountId ||
+      passId !== testEntryPackId ||
+      reservation.kind !== "cowork"
+    ) {
+      return yield* new EntryPackUnavailableError({});
+    }
+    const quote = yield* buildCoworkReservationQuote(reservation, {
+      entryPack: { passId, tier: "open-space" },
+    });
+    return {
+      kind: "cowork" as const,
+      quote,
+      summary: getCoworkCheckoutSummary(reservation, quote),
+      advertisedPriceToken: signedFundedQuote,
+    };
+  });
+
 mock.module("@/features/reservation/backend/entry-pack-booking", () => ({
   ...entryPackBooking,
-  buildEntryPackBookingQuote: ({
-    reservation,
-    passId,
-  }: Parameters<typeof entryPackBooking.buildEntryPackBookingQuote>[0]) =>
-    Effect.gen(function* () {
-      passOperations.push("quote");
-      const { accountId } = yield* readPassAccount;
-      if (
-        accountId !== agentAccountId ||
-        passId !== testEntryPackId ||
-        reservation.kind !== "cowork"
-      ) {
-        return yield* new EntryPackUnavailableError({});
-      }
-      const quote = yield* buildCoworkReservationQuote(reservation, {
-        entryPack: { passId, tier: "open-space" },
-      });
-      return {
-        kind: "cowork" as const,
-        quote,
-        summary: getCoworkCheckoutSummary(reservation, quote),
-        advertisedPriceToken: signedFundedQuote,
-      };
-    }),
+  buildEntryPackBookingQuote: fakeEntryPackAdvertisement,
+  buildEntryPackHoldAdvertisement: fakeEntryPackAdvertisement,
 }));
 
 const preparePayStateModule = await import(
@@ -533,6 +543,7 @@ describe("cowork passes through agent transports", () => {
 
   beforeEach(() => {
     passRelease = "open";
+    purchaseNeedsDetails = false;
     passOperations.length = 0;
     bookingCalls.length = 0;
     browserSessionReads = 0;
@@ -731,6 +742,21 @@ describe("cowork passes through agent transports", () => {
     expect(JSON.stringify([list, access, purchase])).not.toContain(
       fakeAccountUser(agentAccountId).email
     );
+  });
+
+  test("keeps the buyer details handoff query on a locale-agnostic URL", async () => {
+    purchaseNeedsDetails = true;
+    const { result } = await readJsonRpc(
+      await postRpc(
+        "tools/call",
+        { name: "start_pass_purchase", arguments: packProduct },
+        { authorization: "Bearer pass-grant" }
+      )
+    );
+
+    const url = new URL(result.structuredContent.pay_url);
+    expect(url.pathname).toBe("/passes/entry-pack");
+    expect(url.searchParams.get("handoff")).toBe("fixture-handoff");
   });
 
   test("requires a same-origin live browser session, keeps private responses uncached, and rejects the wrong holder", async () => {

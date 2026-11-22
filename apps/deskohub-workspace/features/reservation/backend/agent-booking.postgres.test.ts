@@ -11,9 +11,9 @@ import {
 import { EmailRecipientDomainServiceMock } from "@deskohub/email/backend/recipient-domain.service.mock";
 import { testEmailAddress } from "@deskohub/test-email";
 import { asc, eq } from "drizzle-orm";
-import { Effect, Layer, Result, Schema } from "effect";
+import { Effect, Layer, Option, Result, Schema } from "effect";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
-import { workspaceReservations } from "@/db/schema";
+import { passEntryClaims, workspaceReservations } from "@/db/schema";
 import type {
   CustomerAgentClientId,
   CustomerAgentGrant,
@@ -21,9 +21,12 @@ import type {
 import { customerAgentClientIdSchema } from "@/features/account/backend/auth/customer-agent-authorization.service";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { CustomerAccountContactService } from "@/features/account/backend/customer-account-contact.service";
+import { CustomerAccountSections } from "@/features/account/backend/customer-account-sections";
 import { makeCustomerAccountSections } from "@/features/account/backend/customer-account-sections.test-utils";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { inMemoryCustomerAgentCallServices } from "@/features/agent-tools/agent-tools.test-utils";
+import { startReservationTool } from "@/features/agent-tools/start-reservation.tool";
 import { recordCheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service.mock";
 import {
   buildAdvertisedPriceState,
@@ -46,6 +49,8 @@ import {
   MarketingConsentLedger,
 } from "@/features/legal/backend/marketing-consent-ledger";
 import { OfficeReleaseGate } from "@/features/office/backend/office-release-gate";
+import { orderIdSchema } from "@/features/order";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { WithheldReferralService } from "@/features/referrals/referral.service.mock";
 import { ReferralReleaseGate } from "@/features/referrals/referral-release-gate";
 import { RememberedReferral } from "@/features/referrals/remembered-referral.service";
@@ -142,6 +147,12 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
     email: testEmailAddress("agent-booking"),
     phone: "+420 777 123 456",
   };
+  const session = {
+    accountId,
+    email: reservationCustomerEmailSchema.make(contact.email),
+    deletionRequested: false,
+    ...testSessionProfile,
+  };
   const recordMarketingConsent = mock(
     (_grant: Parameters<IMarketingConsentLedger["record"]>[0]) => Effect.void
   );
@@ -167,24 +178,23 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
     ),
   };
 
-  const currentAccount = Layer.mock(CurrentCustomerAccount, {
+  const account = {
+    requireActive: Effect.succeed(session),
     peek: Effect.succeed({
-      kind: "linked",
-      session: {
-        accountId,
-        email: reservationCustomerEmailSchema.make(contact.email),
-        deletionRequested: false,
-        ...testSessionProfile,
-      },
-      reviewMarker: "absent",
+      kind: "linked" as const,
+      session,
+      reviewMarker: "absent" as const,
       account: { accountId, dotyposCustomerId },
       autoLinked: false,
     }),
-  });
-  const contacts = Layer.mock(CustomerAccountContactService, {
+  };
+  const currentAccount = Layer.mock(CurrentCustomerAccount, account);
+  const accountContact = {
+    current: Effect.succeed(contact),
     linkedContact: () =>
       Effect.succeed({ accountId, dotyposCustomerId, ...contact }),
-  });
+  };
+  const contacts = Layer.mock(CustomerAccountContactService, accountContact);
   const discounts = DiscountServiceMock({
     discoverAdvertisedDiscounts: ({ discountableSubtotal, product }) =>
       Effect.succeed({
@@ -214,6 +224,7 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
       }),
   });
   const services = Layer.mergeAll(
+    database.layer,
     WorkspaceDatabaseAdvisoryLock.makeLayer(database.databasePool),
     makeCustomerAccountSections({ session: {}, activityState: "active" }).layer,
     Layer.mergeAll(
@@ -429,5 +440,90 @@ describe.skipIf(!database)("prepareAgentPayState on Postgres", () => {
     expect(german.status).toBe("ready");
     expect(Result.isFailure(czech)).toBe(true);
     expect(Result.isFailure(czech) && czech.failure._tag).toBe("SchemaError");
+  });
+
+  test("the funded tool reuses the persisted claim and Pay link for the same OAuth client", async () => {
+    const passId = orderIdSchema.make(crypto.randomUUID());
+    await database.pool.query(
+      `insert into orders
+        (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at, fulfilled_at)
+        values ($1, 'pass-purchase', $2, 'paid', 'fulfilled', now(), now())`,
+      [passId, dotyposCustomerId]
+    );
+    await database.pool.query(
+      `insert into pass_purchases
+        (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
+        values ($1, $2, $2, 'entry-pack', 'open-space', 5, 'active', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
+      [passId, accountId]
+    );
+
+    const toolServices = Layer.mergeAll(
+      booking,
+      CoworkPassesReleaseGate.fromDecision(true)
+    );
+    const input = {
+      family: "cowork",
+      tier: "open-space",
+      date: "2099-06-22",
+      pass_id: passId,
+    };
+    const now = Temporal.Instant.from("2099-06-20T08:00:00Z");
+    const start = (clientId: CustomerAgentClientId) =>
+      CustomerAccountSections.pipe(
+        Effect.flatMap((sections) =>
+          startReservationTool
+            .call(
+              input,
+              Option.some({
+                grant: {
+                  accountId,
+                  clientId,
+                  scopes: new Set(["reservations:create", "passes:manage"]),
+                },
+                accessToken: "synthetic-agent-token",
+              })
+            )
+            .pipe(
+              Effect.provide(
+                inMemoryCustomerAgentCallServices(() => ({
+                  currentAccount: account,
+                  contact: accountContact,
+                  sections,
+                }))
+              )
+            )
+        ),
+        Effect.provide(toolServices),
+        atInstant(now)
+      );
+
+    const creates = dotypos.createReservation.mock.calls.length;
+    const first = await Effect.runPromise(start(assistant));
+    expect(first).toMatchObject({
+      order_id: expect.any(String),
+      pay_url: expect.any(String),
+    });
+    const claims = () =>
+      database.db
+        .select()
+        .from(passEntryClaims)
+        .where(eq(passEntryClaims.passId, passId))
+        .pipe(Effect.runPromise);
+    const firstClaims = await claims();
+    expect(firstClaims).toEqual([
+      expect.objectContaining({ date: input.date, status: "reserved" }),
+    ]);
+    await expect(Effect.runPromise(start(assistant))).resolves.toEqual(first);
+
+    const other = await start(otherAssistant).pipe(
+      Effect.result,
+      Effect.runPromise
+    );
+    expect(other).toMatchObject({
+      _tag: "Failure",
+      failure: { details: { code: "selection_unavailable" } },
+    });
+    expect(await claims()).toEqual(firstClaims);
+    expect(dotypos.createReservation.mock.calls.length).toBe(creates + 1);
   });
 });

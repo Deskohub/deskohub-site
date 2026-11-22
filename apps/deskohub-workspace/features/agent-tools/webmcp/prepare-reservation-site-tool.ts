@@ -37,6 +37,7 @@ import type {
   SiteToolEntryPackQuote,
   SiteToolReservationForm,
   SiteToolReservationFormHandle,
+  SiteToolReservationIntent,
 } from "./use-prepare-reservation-site-tool";
 import type { ModelContext } from "./webmcp";
 
@@ -292,23 +293,20 @@ const awaitSettledReservationForm = ({
 }: PreparationRequest & { readonly link: URL; readonly locale: Locale }) =>
   Effect.sync(() => openReservationPage({ form, link, quote })).pipe(
     Effect.andThen(awaitReservationForm(quote.family)),
-    Effect.tap((matching) =>
-      settleSelection({ form: matching, link, entryPackQuote })
+    Effect.flatMap((matching) =>
+      settleSelection({ form: matching, link, entryPackQuote }).pipe(
+        Effect.map((selectionIsCurrent) => ({
+          settled: matching.current(),
+          intent: {
+            ...(entryPackQuote && { entryPackQuote }),
+            isCurrent: () =>
+              getReservationForm() === matching &&
+              matching.current().entryPackId === entryPackQuote?.passId &&
+              selectionIsCurrent(),
+          },
+        }))
+      )
     ),
-    Effect.map((matching) => {
-      const settled = matching.current();
-      const selectionIsCurrent = settled.captureSelection(link.searchParams);
-      return {
-        settled,
-        intent: {
-          ...(entryPackQuote && { entryPackQuote }),
-          isCurrent: () =>
-            getReservationForm() === matching &&
-            matching.current().entryPackId === entryPackQuote?.passId &&
-            selectionIsCurrent(),
-        },
-      };
-    }),
     Effect.timeoutOrElse({
       duration: formReadinessTimeout,
       orElse: () =>
@@ -366,17 +364,21 @@ const settleSelection = ({
 }) =>
   Effect.sync(() => {
     const current = form.current();
-    const changed = current.applySelection(link.searchParams);
-    const applied =
+    const selectionChanged = current.applySelection(link.searchParams);
+    const fundingChanged =
       entryPackQuote && current.applyEntryPack?.(entryPackQuote.passId);
-    return changed || applied === true;
+    return {
+      changed: selectionChanged || fundingChanged === true,
+      selectionIsCurrent: current.captureSelection(link.searchParams),
+    };
   }).pipe(
-    Effect.flatMap((changed) =>
+    Effect.flatMap(({ changed, selectionIsCurrent }) =>
       awaitReadiness(form).pipe(
         // A changed selection renders as pending before it settles.
         Effect.when(
           Effect.sync(() => changed || form.current().readiness.isPending)
-        )
+        ),
+        Effect.as(selectionIsCurrent)
       )
     )
   );
@@ -401,10 +403,12 @@ const awaitReadiness = (form: SiteToolReservationFormHandle) =>
 
 const stopUnlessBookable = ({
   entryPackQuote,
+  preparedForm,
   requestedOffice,
   settled,
 }: {
   readonly entryPackQuote?: SiteToolEntryPackQuote;
+  readonly preparedForm: { readonly intent: SiteToolReservationIntent };
   readonly requestedOffice: QuotedOfficeSelection | undefined;
   readonly settled: SiteToolReservationForm;
 }) => {
@@ -422,7 +426,17 @@ const stopUnlessBookable = ({
     );
   }
   return Option.match(getUnbookableResult(settled, requestedOffice), {
-    onNone: () => Effect.void,
+    onNone: () =>
+      preparedForm.intent.isCurrent()
+        ? Effect.void
+        : Effect.fail(
+            new PreparationStopped({
+              result: siteToolError(
+                "selection_unavailable",
+                m.reservationErrorMessage({}, { locale: settled.locale })
+              ),
+            })
+          ),
     onSome: (result) => Effect.fail(new PreparationStopped({ result })),
   });
 };

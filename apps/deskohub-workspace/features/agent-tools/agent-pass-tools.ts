@@ -160,10 +160,13 @@ const startPassPurchase = {
       })
       .pipe(Effect.provide(customerPassPurchaseLayers.agentStart));
     const origin = yield* getWorkspaceRuntimeCallbackOrigin;
-    const url = new URL(purchase.checkoutPath, origin).href;
+    const url = new URL(purchase.checkoutPath, origin);
+    if (purchase.status === "details_required") {
+      url.pathname = stripLocaleFromPathname(url.pathname, locales);
+    }
     return purchase.status === "status"
-      ? { status_url: url }
-      : { pay_url: url };
+      ? { status_url: url.href }
+      : { pay_url: url.href };
   }, Effect.mapError(AgentToolError.passesUnavailable)),
 } as const;
 

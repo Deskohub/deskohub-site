@@ -7,6 +7,7 @@ import {
   BookingSelectionRejected,
   type QuoteSelection,
 } from "@/features/reservation/backend/booking-selection";
+import { buildEntryPackHoldAdvertisement } from "@/features/reservation/backend/entry-pack-booking";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
@@ -20,7 +21,6 @@ import { CurrentCustomerAgentGrant } from "./customer-agent-caller";
 import {
   passFundingField,
   passFundingScope,
-  quoteWithEntryPack,
   requireAgentPassesOpen,
   withoutPassFunding,
 } from "./pass-funding";
@@ -102,11 +102,11 @@ export const startReservationTool = defineSignedInAgentTool({
         "advertised",
         Effect.fnUntraced(function* ({ input, locale, selection }) {
           if (input.pass_id !== undefined) {
-            return yield* quoteWithEntryPack({
-              selection,
+            return yield* buildEntryPackHoldAdvertisement({
+              reservation: selection.reservation,
               locale,
               passId: input.pass_id,
-            });
+            }).pipe(Effect.mapError(AgentToolError.passesUnavailable));
           }
           return yield* buildAdvertisedPrice(selection.request).pipe(
             Effect.mapError(
