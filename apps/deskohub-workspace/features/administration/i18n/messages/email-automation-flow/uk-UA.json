@@ -108,6 +108,27 @@
   "emailAutomationFlowSendSubjectLabel": "Тема — {language}",
   "emailAutomationFlowSendSubjectMissing": "Цією мовою ще немає вмісту",
   "emailAutomationFlowSendTitle": "Надсилання листа",
+  "emailAutomationFlowSendPoliciesTitle": "Правила доставки",
+  "emailAutomationFlowSendPoliciesNone": "Без правил доставки: лист надсилається в кожному виконанні, яке дійде до цього кроку.",
+  "emailAutomationFlowSendOncePerCustomerLabel": "Надсилати кожному клієнтові лише раз",
+  "emailAutomationFlowSendOncePerCustomerSummary": "Кожен клієнт отримає цей лист щонайбільше один раз; наступні виконання буде пропущено.",
+  "emailAutomationFlowSendGapLabel": "Чекати після одноразових кампаній",
+  "emailAutomationFlowSendGapDaysLabel": "Кількість днів очікування",
+  "emailAutomationFlowSendGapDaysError": "Введіть ціле число від 1 до {max}.",
+  "emailAutomationFlowSendGapSummary": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Надсилається не раніше ніж через {count} день після останнього листа одноразової кампанії клієнтові.",
+        "countPlural=few": "Надсилається не раніше ніж через {count} дні після останнього листа одноразової кампанії клієнтові.",
+        "countPlural=many": "Надсилається не раніше ніж через {count} днів після останнього листа одноразової кампанії клієнтові.",
+        "countPlural=other": "Надсилається не раніше ніж через {count} дня після останнього листа одноразової кампанії клієнтові."
+      }
+    }
+  ],
+  "emailAutomationFlowSendSkipPassHoldersLabel": "Пропускати власників абонементів",
+  "emailAutomationFlowSendSkipPassHoldersSummary": "Пропускає клієнтів, які під час надсилання мають чинний пакет відвідувань або активний чи майбутній абонемент Unlimited.",
   "emailAutomationFlowStatusArchived": "Цю автоматизацію архівовано, тому її сценарій доступний лише для перегляду.",
   "emailAutomationFlowStatusEmpty": "Ця автоматизація ще не має сценарію. Оберіть спосіб запуску та збережіть.",
   "emailAutomationFlowStatusPending": "Збережено. <link>Перегляньте й активуйте</link>, щоб зміни діяли для нових виконань.",

@@ -103,7 +103,10 @@ const knownEntryCopy = {
     plainCopy(m.emailAutomationRunsEventWoke({}, { locale })),
   deferred: (entry, { locale }) =>
     plainCopy(
-      m.emailAutomationRunsEventDeferred(
+      {
+        "trigger-not-reached": m.emailAutomationRunsEventDeferred,
+        "one-off-campaign-gap": m.emailAutomationRunsEventDeferredOneOffGap,
+      }[entry.detail.cause](
         { date: formatAdministrationDateTime(entry.detail.recheckAt, locale) },
         { locale }
       )

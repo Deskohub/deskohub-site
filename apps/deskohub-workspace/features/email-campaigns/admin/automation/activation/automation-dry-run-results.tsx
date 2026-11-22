@@ -41,6 +41,7 @@ import {
 } from "@/shared/components/ui/table";
 import { Tooltip } from "@/shared/components/ui/tooltip";
 import { formatCount } from "@/shared/utils/number";
+import { upperCaseFirst } from "@/shared/utils/text-case";
 import { isPassReminderTrigger } from "../../../automation/automation-triggers";
 import type {
   AutomationDryRunCustomerWithLifecycle,
@@ -48,6 +49,7 @@ import type {
 } from "../../../automation/backend/automation-dry-run.service";
 import { SentCampaignEmailPreview } from "../../sending/sent-campaign-email-preview";
 import { AutomationFrequencyBanner } from "../automation-frequency-banner";
+import { automationRunSkipReasonLabel } from "../run-log/automation-run-status";
 import { automationStepLabelOrId } from "../run-log/automation-step-label";
 
 const outcomeCopy = {
@@ -70,6 +72,10 @@ const outcomeCopy = {
   withdrawn: {
     tone: "neutral",
     label: m.emailAutomationActivationOutcomeWithdrawn,
+  },
+  skipped: {
+    tone: "neutral",
+    label: m.emailAutomationActivationOutcomeSkipped,
   },
   unavailable: {
     tone: "attention",
@@ -577,6 +583,14 @@ function OutcomeCell({
       {row.outcome !== "would-send" && row.stepId && (
         <span className="text-navy-blue/60 text-xs">
           {automationStepLabelOrId({ flow, stepId: row.stepId, locale })}
+        </span>
+      )}
+      {row.outcome === "skipped" && row.skipReason && (
+        <span className="text-navy-blue/60 text-xs">
+          {upperCaseFirst(
+            automationRunSkipReasonLabel(row.skipReason, locale),
+            locale
+          )}
         </span>
       )}
       {row.projected && (

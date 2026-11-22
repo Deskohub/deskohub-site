@@ -45,6 +45,7 @@
   "emailAutomationActivationOutcomeAlreadyActive": "Bereits im Durchlauf",
   "emailAutomationActivationOutcomeConditionFailed": "Durch Bedingung gestoppt",
   "emailAutomationActivationOutcomeNotInAudience": "Nicht in der Zielgruppe",
+  "emailAutomationActivationOutcomeSkipped": "Übersprungen",
   "emailAutomationActivationOutcomeUnavailable": "Nicht auswertbar",
   "emailAutomationActivationOutcomeWithdrawn": "Zurückgezogen",
   "emailAutomationActivationOutcomeWouldSend": "Würde gesendet",

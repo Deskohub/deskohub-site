@@ -45,6 +45,7 @@
   "emailAutomationActivationOutcomeAlreadyActive": "Đã trong lượt chạy",
   "emailAutomationActivationOutcomeConditionFailed": "Bị điều kiện chặn lại",
   "emailAutomationActivationOutcomeNotInAudience": "Ngoài nhóm người nhận",
+  "emailAutomationActivationOutcomeSkipped": "Đã bỏ qua",
   "emailAutomationActivationOutcomeUnavailable": "Không thể đánh giá",
   "emailAutomationActivationOutcomeWithdrawn": "Đã rút lại",
   "emailAutomationActivationOutcomeWouldSend": "Sẽ gửi",

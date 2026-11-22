@@ -1,14 +1,15 @@
 import type { DotyposCustomerLifecycle } from "@deskohub/dotypos";
 import {
-  AdministrationCampaignRecipientSkipReason,
   AutomationEngineHealth,
   AutomationRunDetail,
   type AutomationRunOutcome,
+  type AutomationRunSkipReason,
   type AutomationRunState,
   AutomationRunStats,
   AutomationRunSummary,
   AutomationRunTimelineEntry,
   automationRunOutcomes,
+  automationRunSkipReasons,
   automationRunStates,
 } from "@deskohub/workspace-admin-api";
 import { Schema } from "effect";
@@ -118,7 +119,7 @@ export const automationRunStatsFixture = ({
 > & {
   readonly byState?: Counts<AutomationRunState>;
   readonly byOutcome?: Counts<AutomationRunOutcome>;
-  readonly bySkipReason?: Counts<AdministrationCampaignRecipientSkipReason>;
+  readonly bySkipReason?: Counts<AutomationRunSkipReason>;
 } = {}): AutomationRunStats =>
   Schema.decodeUnknownSync(AutomationRunStats)({
     campaignId: fixtureCampaignId,
@@ -126,7 +127,7 @@ export const automationRunStatsFixture = ({
     byState: { ...zeroCounts(automationRunStates), ...byState },
     byOutcome: { ...zeroCounts(automationRunOutcomes), ...byOutcome },
     bySkipReason: {
-      ...zeroCounts(AdministrationCampaignRecipientSkipReason.literals),
+      ...zeroCounts(automationRunSkipReasons),
       ...bySkipReason,
     },
     ...overrides,

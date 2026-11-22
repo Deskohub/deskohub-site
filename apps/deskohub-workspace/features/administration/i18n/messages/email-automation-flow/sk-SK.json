@@ -108,6 +108,27 @@
   "emailAutomationFlowSendSubjectLabel": "Predmet – {language}",
   "emailAutomationFlowSendSubjectMissing": "V tomto jazyku zatiaľ nie je obsah",
   "emailAutomationFlowSendTitle": "Odoslanie e-mailu",
+  "emailAutomationFlowSendPoliciesTitle": "Pravidlá doručenia",
+  "emailAutomationFlowSendPoliciesNone": "Bez pravidiel doručenia: e-mail sa odošle v každom behu, ktorý dôjde k tomuto kroku.",
+  "emailAutomationFlowSendOncePerCustomerLabel": "Odoslať každému zákazníkovi iba raz",
+  "emailAutomationFlowSendOncePerCustomerSummary": "Každý zákazník dostane tento e-mail najviac raz; ďalšie behy sa preskočia.",
+  "emailAutomationFlowSendGapLabel": "Počkať po jednorazovej kampani",
+  "emailAutomationFlowSendGapDaysLabel": "Počet dní čakania",
+  "emailAutomationFlowSendGapDaysError": "Zadajte celé číslo od 1 do {max}.",
+  "emailAutomationFlowSendGapSummary": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Odošle sa najskôr {count} deň po poslednom e-maile jednorazovej kampane zákazníkovi.",
+        "countPlural=few": "Odošle sa najskôr {count} dni po poslednom e-maile jednorazovej kampane zákazníkovi.",
+        "countPlural=many": "Odošle sa najskôr {count} dňa po poslednom e-maile jednorazovej kampane zákazníkovi.",
+        "countPlural=other": "Odošle sa najskôr {count} dní po poslednom e-maile jednorazovej kampane zákazníkovi."
+      }
+    }
+  ],
+  "emailAutomationFlowSendSkipPassHoldersLabel": "Preskočiť držiteľov permanentiek",
+  "emailAutomationFlowSendSkipPassHoldersSummary": "Preskočí zákazníkov, ktorí majú pri odosielaní použiteľný balík vstupov alebo aktívny či nadchádzajúci paušál Unlimited.",
   "emailAutomationFlowStatusArchived": "Táto automatizácia je archivovaná, takže jej scenár možno iba zobraziť.",
   "emailAutomationFlowStatusEmpty": "Táto automatizácia zatiaľ nemá scenár. Vyberte spúšťač a uložte.",
   "emailAutomationFlowStatusPending": "Uložené. <link>Skontrolujte náhľad a aktivujte</link>, aby zmeny platili pre nové behy.",

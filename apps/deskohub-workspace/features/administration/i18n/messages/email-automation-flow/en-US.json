@@ -108,6 +108,25 @@
   "emailAutomationFlowSendSubjectLabel": "Subject in {language}",
   "emailAutomationFlowSendSubjectMissing": "No content in this language yet",
   "emailAutomationFlowSendTitle": "Send the email",
+  "emailAutomationFlowSendPoliciesTitle": "Delivery rules",
+  "emailAutomationFlowSendPoliciesNone": "No delivery rules: every run that reaches this step sends the email.",
+  "emailAutomationFlowSendOncePerCustomerLabel": "Send once per customer",
+  "emailAutomationFlowSendOncePerCustomerSummary": "Each customer gets this email at most once; later runs are skipped.",
+  "emailAutomationFlowSendGapLabel": "Wait after one-off campaigns",
+  "emailAutomationFlowSendGapDaysLabel": "Days to wait",
+  "emailAutomationFlowSendGapDaysError": "Enter a whole number from 1 to {max}.",
+  "emailAutomationFlowSendGapSummary": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Sends no sooner than {count} day after the customer's latest one-off campaign email.",
+        "countPlural=other": "Sends no sooner than {count} days after the customer's latest one-off campaign email."
+      }
+    }
+  ],
+  "emailAutomationFlowSendSkipPassHoldersLabel": "Skip pass holders",
+  "emailAutomationFlowSendSkipPassHoldersSummary": "Skips customers who hold a usable Entry pack or an active or upcoming Unlimited pass when the email goes out.",
   "emailAutomationFlowStatusArchived": "This automation is archived, so its flow is read-only.",
   "emailAutomationFlowStatusEmpty": "This automation has no flow yet. Choose its trigger, then save.",
   "emailAutomationFlowStatusPending": "Saved. <link>Preview and activate</link> to publish these changes to new runs.",

@@ -50,6 +50,15 @@ describe("parseAutomationRunFilters", () => {
     });
   });
 
+  test("parses the run-only skip reason as well as recipient ones", () => {
+    expect(
+      parseAutomationRunFilters({ skipReason: "already-sent-once" }).skipReason
+    ).toEqual(Option.some("already-sent-once"));
+    expect(
+      parseAutomationRunFilters({ skipReason: "pass-holder" }).skipReason
+    ).toEqual(Option.some("pass-holder"));
+  });
+
   test("uses the first value of a repeated parameter", () => {
     expect(
       parseAutomationRunFilters({ state: [" active ", "ended"] }).state

@@ -4,6 +4,7 @@ import { Result, Schema } from "effect";
 import { administrationInputParseOptions } from "./administration-input-parse-options";
 import {
   AutomationDetail,
+  AutomationDryRunRow,
   AutomationEngineHealth,
   AutomationFlow,
   AutomationFlowUpdate,
@@ -12,6 +13,10 @@ import {
   AutomationRunStats,
   AutomationRunSummary,
   AutomationRunTimelineEntry,
+  automationOneOffCampaignGapMaxDays,
+  automationRunEventDetails,
+  automationRunSkipReasons,
+  automationSendDeferralCauses,
   scheduleMinutesOffTick,
 } from "./email-automations";
 
@@ -112,6 +117,60 @@ describe("automation flow contract", () => {
   });
 });
 
+describe("Send delivery rules", () => {
+  const ruledSend = {
+    ...send,
+    oncePerCustomer: true,
+    oneOffCampaignGap: { days: 14 },
+    skipPassHolders: true,
+  };
+
+  test.each([
+    ["no rules", send],
+    ["every rule", ruledSend],
+    ["only the shortest gap", { ...send, oneOffCampaignGap: { days: 1 } }],
+    [
+      "only the gap, at its longest",
+      {
+        ...send,
+        oneOffCampaignGap: { days: automationOneOffCampaignGapMaxDays },
+      },
+    ],
+    ["only once per customer", { ...send, oncePerCustomer: true }],
+    ["only skipping pass holders", { ...send, skipPassHolders: true }],
+  ])("a Send step with %s round-trips byte for byte", (_, step) => {
+    const wire = flowOf([settle, step]);
+    const flow = Result.getOrThrow(decodeFlow(wire));
+
+    expect(JSON.stringify(Result.getOrThrow(encodeFlow(flow)))).toBe(
+      JSON.stringify(wire)
+    );
+  });
+
+  test("a Send step without rules encodes none of their keys", () => {
+    const flow = Result.getOrThrow(decodeFlow(flowOf([send])));
+    const [encoded] = Result.getOrThrow(encodeFlow(flow)).steps;
+
+    expect(Object.keys(encoded ?? {}).sort()).toEqual(["_tag", "id"]);
+  });
+
+  test.each([
+    ["a gap of 0 days", { oneOffCampaignGap: { days: 0 } }],
+    [
+      "a gap past the longest",
+      { oneOffCampaignGap: { days: automationOneOffCampaignGapMaxDays + 1 } },
+    ],
+    ["a gap of part of a day", { oneOffCampaignGap: { days: 1.5 } }],
+    ["a gap without days", { oneOffCampaignGap: {} }],
+    ["oncePerCustomer false", { oncePerCustomer: false }],
+    ["skipPassHolders false", { skipPassHolders: false }],
+  ])("rejects %s", (_, rule) => {
+    expect(Result.isFailure(decodeFlow(flowOf([{ ...send, ...rule }])))).toBe(
+      true
+    );
+  });
+});
+
 describe("automation operation inputs", () => {
   const decodeStrict = (schema: Schema.Decoder<unknown>, input: unknown) =>
     Schema.decodeUnknownResult(schema, administrationInputParseOptions)(input);
@@ -147,6 +206,13 @@ describe("automation operation inputs", () => {
         })
       )
     ).toEqual({ ...input, skipReason: "missing-email" });
+    for (const skipReason of ["pass-holder", "already-sent-once"]) {
+      expect(
+        Result.getOrThrow(
+          decodeStrict(AutomationRunListInput, { ...input, skipReason })
+        )
+      ).toEqual({ ...input, skipReason });
+    }
     for (const skipReason of ["evaluation-unavailable", "Missing-Email", ""]) {
       expect(
         Result.isFailure(
@@ -298,6 +364,53 @@ describe("automation responses", () => {
         })
       )
     ).toBe(true);
+  });
+
+  test("read every deferral cause and every run skip reason in timeline details", () => {
+    const recheckAt = "2026-10-19T12:00:00.000Z";
+
+    for (const cause of automationSendDeferralCauses) {
+      expect(
+        Schema.is(automationRunEventDetails.deferred)(
+          Schema.decodeUnknownSync(automationRunEventDetails.deferred)({
+            cause,
+            recheckAt,
+          })
+        )
+      ).toBe(true);
+    }
+    for (const reason of automationRunSkipReasons) {
+      expect(
+        Schema.decodeUnknownSync(automationRunEventDetails.skipped)({ reason })
+      ).toEqual({ reason });
+    }
+    expect(
+      Result.isFailure(
+        Schema.decodeUnknownResult(automationRunEventDetails.deferred)({
+          cause: "customer-busy",
+          recheckAt,
+        })
+      )
+    ).toBe(true);
+  });
+
+  test("decode a dry-run row's skip reason, and none from an older server", () => {
+    const decodeRow = Schema.decodeUnknownSync(AutomationDryRunRow);
+    const row = {
+      triggerAt: "2026-10-19T08:00:00.000Z",
+      customerId: "customer-1",
+      customerEventId: null,
+      stepId: "send",
+      sendAt: null,
+    };
+
+    expect(
+      decodeRow({ ...row, outcome: "skipped", skipReason: "already-sent-once" })
+        .skipReason
+    ).toBe("already-sent-once");
+    expect(decodeRow({ ...row, outcome: "condition-failed" }).skipReason).toBe(
+      null
+    );
   });
 
   test("decode an unknown or unreadable timeline entry as a generic one", () => {
