@@ -72,13 +72,13 @@ import {
 import { lockAutomationForLifecycle } from "./automation-lifecycle-lock";
 import { closePreview } from "./automation-previews";
 import { AutomationRunTransitions } from "./automation-run-transitions";
-
 import { releaseAutomationUnitSubjects } from "./automation-unit-planning";
 import { loadAutomationVersionActivations } from "./automation-version-activations";
 import {
   type AutomationWorkingCopy,
   loadAutomationWorkingCopy,
 } from "./automation-working-copy";
+import { ensurePassReminderWritesAllowed } from "./pass-reminder-write-policy";
 
 type WorkingCopyError =
   | CampaignNotFound
@@ -451,7 +451,8 @@ const validateActivation = (input: {
 
 /** The flow rules (§2, §3.3, §4.5) plus the database check of its references. */
 const validatePublishableFlow = (flow: AutomationFlow) =>
-  validateAutomationFlow(flow).pipe(
+  ensurePassReminderWritesAllowed(flow.trigger).pipe(
+    Effect.andThen(validateAutomationFlow(flow)),
     Effect.tap((validated) => ensureReferencesExist(validated))
   );
 

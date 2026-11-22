@@ -14,4 +14,6 @@ export const automationTriggerLabel = (
     "reservation-started": m.emailAutomationsTriggerReservationStarted,
     "reservation-finished": m.emailAutomationsTriggerReservationFinished,
     "account-created": m.emailAutomationsTriggerAccountCreated,
+    "entry-pack-expiring": m.emailAutomationsTriggerEntryPackExpiring,
+    "unlimited-ending": m.emailAutomationsTriggerUnlimitedEnding,
   })[kind]({}, { locale });

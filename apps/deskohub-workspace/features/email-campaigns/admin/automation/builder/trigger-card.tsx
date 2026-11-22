@@ -18,6 +18,7 @@ import { useRouteLocale } from "@/features/i18n/route-locale";
 import { ChoiceCard } from "@/shared/components/ui/choice-card";
 import { SegmentedControl } from "@/shared/components/ui/segmented-control";
 import { cn } from "@/shared/utils";
+import { isPassReminderKind } from "../../../automation/automation-triggers";
 import {
   FieldError,
   type FieldErrorLookup,
@@ -70,6 +71,14 @@ const eventTriggerPresentation = {
   "account-created": {
     icon: UserPlus,
     description: m.emailAutomationFlowEventAccountCreatedDescription,
+  },
+  "entry-pack-expiring": {
+    icon: CalendarClock,
+    description: m.emailAutomationFlowEventEntryPackExpiringDescription,
+  },
+  "unlimited-ending": {
+    icon: CalendarClock,
+    description: m.emailAutomationFlowEventUnlimitedEndingDescription,
   },
 } as const satisfies Record<
   EventTriggerKind,
@@ -312,6 +321,9 @@ function EventTriggerFields({
   const locale = useRouteLocale();
   const kindName = useId();
   const kind = eventTriggerKindOf(trigger);
+  const options = eventTriggerKinds.filter(
+    (option) => !isPassReminderKind(option) || option === kind
+  );
   return (
     <div className="space-y-4">
       <fieldset className="space-y-2">
@@ -319,7 +331,7 @@ function EventTriggerFields({
           {m.emailAutomationFlowEventKindLabel({}, { locale })}
         </legend>
         <div className="grid gap-2 @lg:grid-cols-2">
-          {eventTriggerKinds.map((option) => {
+          {options.map((option) => {
             const { icon: Icon, description } =
               eventTriggerPresentation[option];
             return (

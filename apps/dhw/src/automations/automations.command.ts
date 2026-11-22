@@ -206,7 +206,7 @@ const automationsFlowSetCommand = Command.make(
     campaignId: campaignIdArgument,
     flowFile: Flag.String("flow-file").pipe(
       Flag.withDescription(
-        "JSON file with the flow's trigger and steps; unknown keys are refused"
+        "JSON file with the flow's trigger and steps. Cowork pass reminder triggers require server support."
       )
     ),
   },

@@ -23,6 +23,8 @@
   "emailAutomationsStatusDraft": "ड्राफ़्ट",
   "emailAutomationsStatusPaused": "रोका गया",
   "emailAutomationsTriggerAccountCreated": "खाता बनना",
+  "emailAutomationsTriggerEntryPackExpiring": "एंट्री पैक की अवधि समाप्त होने वाली है",
+  "emailAutomationsTriggerUnlimitedEnding": "Unlimited पास की अवधि समाप्त होने वाली है",
   "emailAutomationsTriggerReservationBooked": "बुकिंग की पुष्टि",
   "emailAutomationsTriggerReservationCancelled": "बुकिंग का रद्दीकरण",
   "emailAutomationsTriggerReservationFinished": "बुकिंग की समाप्ति",

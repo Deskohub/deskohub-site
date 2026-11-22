@@ -85,6 +85,8 @@
   "emailAutomationFlowConditionTitle": "ग्राहक की जाँच",
   "emailAutomationFlowDiscard": "छोड़ें",
   "emailAutomationFlowEventAccountCreatedDescription": "कोई नया ग्राहक Workspace में खाता बनाता है।",
+  "emailAutomationFlowEventEntryPackExpiringDescription": "बचे हुए प्रवेश वाला एंट्री पैक 7 कैलेंडर दिनों में समाप्त होगा।",
+  "emailAutomationFlowEventUnlimitedEndingDescription": "Unlimited पास 5 कैलेंडर दिनों में समाप्त होगा।",
   "emailAutomationFlowEventBookedDescription": "Workspace में ग्राहक की बुकिंग की पुष्टि हो जाती है।",
   "emailAutomationFlowEventCancelledDescription": "ग्राहक Workspace में बुकिंग रद्द करता है।",
   "emailAutomationFlowEventFinishedDescription": "ग्राहक की बुकिंग का समाप्ति समय बीत चुका है।",

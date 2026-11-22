@@ -25,6 +25,8 @@
   "emailAutomationsStatusDraft": "Koncept",
   "emailAutomationsStatusPaused": "Pozastavené",
   "emailAutomationsTriggerAccountCreated": "Vytvorenie účtu",
+  "emailAutomationsTriggerEntryPackExpiring": "Platnosť balíka vstupov sa končí",
+  "emailAutomationsTriggerUnlimitedEnding": "Platnosť paušálu Unlimited sa končí",
   "emailAutomationsTriggerReservationBooked": "Potvrdenie rezervácie",
   "emailAutomationsTriggerReservationCancelled": "Zrušenie rezervácie",
   "emailAutomationsTriggerReservationFinished": "Koniec rezervácie",

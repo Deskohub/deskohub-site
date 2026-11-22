@@ -75,12 +75,12 @@ import {
   replayEventScope,
   selectReplayEvents,
 } from "./automation-previews";
-
 import { planAutomationUnits } from "./automation-unit-planning";
 import {
   type AutomationWorkingCopy,
   loadAutomationWorkingCopy,
 } from "./automation-working-copy";
+import { ensurePassReminderWritesAllowed } from "./pass-reminder-write-policy";
 
 /** How many next fires a schedule's dry run shows (§8.1). */
 const previewedFires = 5;
@@ -181,6 +181,9 @@ export class AutomationDryRun extends Context.Service<
                 ),
               onSome: Effect.succeed,
             })
+          ),
+          Effect.tap(({ flow }) =>
+            ensurePassReminderWritesAllowed(flow.trigger)
           ),
           Effect.bind("audience", () =>
             Option.match(copy.audience, {

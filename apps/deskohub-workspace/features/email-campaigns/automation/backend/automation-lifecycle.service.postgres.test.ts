@@ -125,6 +125,25 @@ describe.skipIf(!testDatabase)(
       return rows;
     };
 
+    test("reads the pass reminder trigger tags before the writer release permits saving them", async () => {
+      const { campaignId } = await seedDraft();
+      for (const tag of ["EntryPackExpiring", "UnlimitedEnding"] as const) {
+        const flow = automationFlowFixture({
+          trigger: { _tag: tag },
+          steps: [{ _tag: "Send", id: "send" }],
+        });
+        const error = await failure(
+          lifecycle((l) => l.updateFlow({ campaignId, flow }))
+        );
+        expect(error._tag).toBe("AutomationFlowInvalid");
+      }
+      const { rows } = await pool.query(
+        "select flow from email_campaign_automations where campaign_id = $1",
+        [campaignId]
+      );
+      expect(rows).toEqual([{ flow: null }]);
+    });
+
     describe("the preview gate (§7.5)", () => {
       test("refuses without a completed dry run of this campaign", async () => {
         const { campaignId } = await seedDraft({ flow: bookedSendFlow });

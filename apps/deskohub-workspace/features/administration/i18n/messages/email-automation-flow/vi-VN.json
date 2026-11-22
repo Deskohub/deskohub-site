@@ -85,6 +85,8 @@
   "emailAutomationFlowConditionTitle": "Kiểm tra khách hàng",
   "emailAutomationFlowDiscard": "Bỏ thay đổi",
   "emailAutomationFlowEventAccountCreatedDescription": "Khách hàng mới tạo tài khoản tại Workspace.",
+  "emailAutomationFlowEventEntryPackExpiringDescription": "Gói còn lượt chưa dùng sẽ hết hạn sau 7 ngày theo lịch.",
+  "emailAutomationFlowEventUnlimitedEndingDescription": "Gói Unlimited sẽ hết hạn sau 5 ngày theo lịch.",
   "emailAutomationFlowEventBookedDescription": "Đặt chỗ của khách hàng được xác nhận tại Workspace.",
   "emailAutomationFlowEventCancelledDescription": "Khách hàng hủy đặt chỗ tại Workspace.",
   "emailAutomationFlowEventFinishedDescription": "Đã qua thời điểm kết thúc đặt chỗ của khách hàng.",
