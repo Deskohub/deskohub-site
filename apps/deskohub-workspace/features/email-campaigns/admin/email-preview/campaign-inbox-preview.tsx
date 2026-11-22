@@ -71,7 +71,7 @@ export function CampaignInboxPreview({
               !updating && "invisible"
             )}
           >
-            <Loader2 className="size-3.5 animate-spin" />
+            <Loader2 className={cn("size-3.5", updating && "animate-spin")} />
             {updatingLabel}
           </span>
         )}
