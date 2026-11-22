@@ -825,7 +825,10 @@ describe.skipIf(!testDatabase)(
 
       const settleAttempt = async (
         reservationId: WorkspaceReservationId,
-        attempt: { readonly provider: "nexi" | "internal"; readonly amount: number }
+        attempt: {
+          readonly provider: "nexi" | "internal";
+          readonly amount: number;
+        }
       ) => {
         const attemptId = uniqueId();
         await testDatabase!.pool.query(
@@ -911,7 +914,8 @@ describe.skipIf(!testDatabase)(
         );
       const paidIndividuallyById = async (includeEntryPackPayment: boolean) => {
         const history = await loadHistory(includeEntryPackPayment);
-        if (history.kind !== "available") throw new Error("History unavailable");
+        if (history.kind !== "available")
+          throw new Error("History unavailable");
         return Object.fromEntries(
           history.groups.past.map((summary) => [
             summary.id,

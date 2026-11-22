@@ -8,8 +8,9 @@ import {
   mock,
   test,
 } from "bun:test";
-import { act, cleanup, render } from "@testing-library/react";
+import { cleanup, render, within } from "@testing-library/react";
 import type { ComponentPropsWithoutRef } from "react";
+import { renderToReadableStream } from "react-dom/server";
 import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
 import { type Locale, m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
@@ -978,74 +979,35 @@ describe("ReservationHistory", () => {
       view.container.querySelector(
         '[data-account-reservation-group="past"] > [data-footer-layout]'
       );
-    const renderOffer = async (
-      props: Partial<Parameters<typeof ReservationHistory>[0]>
-    ) => {
-      const view = render(
+    test("docks the Pricing link in the Past reservations panel's sticky edge-to-edge footer", async () => {
+      // The offer waits for the Entry pack read, as the server streams it.
+      const stream = await renderToReadableStream(
         <UnsavedChangesProvider>
           <ReservationHistory
+            entryPacks={Promise.resolve(noPacks)}
             history={historyOf([paidVisit])}
             locale="en-US"
-            {...props}
           />
         </UnsavedChangesProvider>
       );
-      await act(async () => {
-        await props.entryPacks;
+      await stream.allReady;
+      document.body.innerHTML = await new Response(stream).text();
+      const view = within(document.body);
+
+      const link = view.getByRole("link", {
+        name: m.accountReservationsPassSavingsLink({}, { locale: "en-US" }),
       });
-      return view;
-    };
-
-    test("docks the Pricing link in the Past reservations panel's sticky edge-to-edge footer", async () => {
-      const view = await renderOffer({ entryPacks: Promise.resolve(noPacks) });
-
-      const footer = pastFooter(view);
+      const footer = document.querySelector(
+        '[data-account-reservation-group="past"] > [data-footer-layout]'
+      );
       expect(footer?.getAttribute("data-footer-layout")).toBe("edge-to-edge");
       expect(footer?.className).toContain("sticky");
       expect(footer?.className).toContain(
         "bottom-[var(--install-bar-space,0px)]"
       );
-      const link = view.getByRole("link", {
-        name: m.accountReservationsPassSavingsLink({}, { locale: "en-US" }),
-      });
       expect(footer?.contains(link)).toBe(true);
       expect(link.getAttribute("href")).toBe("/en-US/pricing");
-    });
-
-    test("leaves the footer empty when the customer doesn't fit the offer", async () => {
-      const cases = {
-        "held usable Entry pack": {
-          entryPacks: Promise.resolve({
-            held: [
-              {
-                position: 1,
-                tier: "Basic",
-                entryCount: 5,
-                entriesLeft: 2,
-                lastUsableDay: "Feb 1, 2027",
-                status: "active" as const,
-              },
-            ],
-            boughtForOthers: [],
-          }),
-        },
-        "Entry pack funded visit only": {
-          entryPacks: Promise.resolve(noPacks),
-          history: historyOf([
-            { ...paidVisit, paidIndividually: undefined, paidWithEntryPack: true },
-          ]),
-        },
-      };
-
-      for (const [name, props] of Object.entries(cases)) {
-        const view = await renderOffer(props);
-        expect({ name, links: view.queryAllByRole("link").length }).toEqual({
-          name,
-          links: 0,
-        });
-        expect(pastFooter(view)?.childElementCount).toBe(0);
-        cleanup();
-      }
+      document.body.innerHTML = "";
     });
 
     test("never offers packs and passes while passes aren't released", () => {

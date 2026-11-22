@@ -108,7 +108,7 @@ describe("offersPassSavings", () => {
       visit({ paidIndividually: undefined, paidWithEntryPack: true }),
       visit({ paidIndividually: undefined }),
     ];
-    const cases: Record<string, readonly CustomerReservationSummary[]> = {
+    const cases = {
       "no reservations": [],
       "not individually paid": notIndividuallyPaid,
       cancelled: [visit({ status: "cancelled" })],
@@ -132,7 +132,7 @@ describe("offersPassSavings", () => {
       "booked by another account": [
         visit({ party: { kind: "booked-by", authorName: null } }),
       ],
-    };
+    } satisfies Record<string, readonly CustomerReservationSummary[]>;
 
     for (const [name, reservations] of Object.entries(cases)) {
       expect({ name, offered: offers({ reservations }) }).toEqual({
@@ -156,13 +156,7 @@ describe("offersPassSavings", () => {
   });
 
   test("hides the offer while the customer holds coverage", () => {
-    const coverage: Record<
-      string,
-      {
-        readonly entryPacks?: AccountPasses;
-        readonly unlimitedPasses?: AccountUnlimitedPasses;
-      }
-    > = {
+    const coverage = {
       "usable Entry pack": {
         entryPacks: { held: [entryPack()], boughtForOthers: [] },
       },
@@ -170,7 +164,13 @@ describe("offersPassSavings", () => {
       "upcoming Unlimited pass": {
         unlimitedPasses: [unlimitedPass("upcoming")],
       },
-    };
+    } satisfies Record<
+      string,
+      {
+        readonly entryPacks?: AccountPasses;
+        readonly unlimitedPasses?: AccountUnlimitedPasses;
+      }
+    >;
 
     for (const [name, held] of Object.entries(coverage)) {
       expect({
@@ -181,9 +181,9 @@ describe("offersPassSavings", () => {
   });
 
   test("keeps the offer hidden while coverage can't be read", () => {
-    expect(
-      offers({ reservations: [visit()], entryPacks: "unavailable" })
-    ).toBe(false);
+    expect(offers({ reservations: [visit()], entryPacks: "unavailable" })).toBe(
+      false
+    );
     expect(
       offers({ reservations: [visit()], unlimitedPasses: "unavailable" })
     ).toBe(false);

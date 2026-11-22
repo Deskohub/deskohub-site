@@ -630,7 +630,10 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
                   .from(passEntryClaims)
                   .where(
                     and(
-                      eq(passEntryClaims.reservationId, workspaceReservations.id),
+                      eq(
+                        passEntryClaims.reservationId,
+                        workspaceReservations.id
+                      ),
                       eq(passEntryClaims.status, "consumed")
                     )
                   )
