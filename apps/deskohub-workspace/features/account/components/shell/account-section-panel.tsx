@@ -63,14 +63,12 @@ export function AccountSectionPanel({
       header: "items-start pb-5",
       title: "text-[26px] tracking-[-0.025em]",
       body: "pt-7",
-      edgeFooter: "-mx-5 -mb-5 @xl:-mx-8 @xl:-mb-8",
     },
     compact: {
       section: "pb-4 @xl:pb-5",
       header: "items-center pb-4",
       title: "text-xl tracking-[-0.02em]",
       body: "pt-4 @xl:pt-8",
-      edgeFooter: "-mx-5 -mb-4 @xl:-mx-8 @xl:-mb-5",
     },
   }[size];
 
@@ -81,11 +79,13 @@ export function AccountSectionPanel({
         "min-w-0 rounded-2xl border bg-white p-5 text-navy-blue shadow-[0_18px_40px_-28px_rgba(0,2,79,0.45)] @xl:p-8 [&_input]:scroll-mb-[calc(12rem+env(safe-area-inset-bottom))] [&_select]:scroll-mb-[calc(12rem+env(safe-area-inset-bottom))]",
         tone.border,
         density.section,
-        // Clips an edge-to-edge footer to the rounded corners without
-        // creating a scroll container, so the footer stays sticky.
+        // An edge-to-edge footer with content takes the bottom padding's place,
+        // since a negative margin would push a docked sticky footer off
+        // screen. Clipping keeps it inside the rounded corners without
+        // creating a scroll container, so it stays sticky.
         footer !== undefined &&
           footerLayout === "edge-to-edge" &&
-          "overflow-clip",
+          "overflow-clip has-[>[data-footer-layout=edge-to-edge]:not(:empty)]:pb-0!",
         className
       )}
       {...rest}
@@ -127,7 +127,7 @@ export function AccountSectionPanel({
                 tone.divider
               ),
               // A footer whose content renders nothing leaves the panel as is.
-              "edge-to-edge": cn("mt-[18px] empty:hidden", density.edgeFooter),
+              "edge-to-edge": "mt-[18px] -mx-5 empty:hidden @xl:-mx-8",
             }[footerLayout]
           )}
           data-footer-layout={footerLayout}

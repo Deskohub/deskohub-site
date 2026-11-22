@@ -18,7 +18,7 @@ const visit = (
   overrides: Partial<CustomerReservationSummary> = {}
 ): CustomerReservationSummary => ({
   id: crypto.randomUUID(),
-  product: { kind: "cowork", tier: "basic" },
+  product: { kind: "cowork", tier: "open-space" },
   startsAt: "2026-11-10T08:00:00Z",
   endsAt: "2026-11-10T16:00:00Z",
   seats: 1,

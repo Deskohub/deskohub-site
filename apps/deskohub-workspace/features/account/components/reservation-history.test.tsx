@@ -963,7 +963,7 @@ describe("ReservationHistory", () => {
   describe("packs and passes offer", () => {
     const paidVisit = reservation({
       id: "paid-visit",
-      product: { kind: "cowork", tier: "basic" },
+      product: { kind: "cowork", tier: "open-space" },
       startsAt: "2026-08-21T08:00:00Z",
       endsAt: "2026-08-21T16:00:00Z",
       paidIndividually: true,
