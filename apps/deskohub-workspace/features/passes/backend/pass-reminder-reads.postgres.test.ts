@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { DotyposTableSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Option, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import {
   type CustomerAccountId,
   customerAccountIdSchema,
@@ -12,6 +13,7 @@ import {
   createWorkspacePostgresSuiteDatabase,
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 import type { PassEntryClaimStatus } from "../pass";
 import {
@@ -148,12 +150,35 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
     };
 
+    const seedDeskDays = (
+      passId: OrderId,
+      holder: CustomerAccountId,
+      assignments: readonly (readonly [serviceDate: string, deskId: string])[]
+    ) =>
+      database.pool.query(
+        `insert into workspace_reservations (checkout_attempt_key, pass_id, service_date,
+           pass_day_table_id, dotypos_customer_id, author_account_id, dotypos_reservation_id,
+           reservation_state, payment_state, fulfillment_state, paid_at, fulfilled_at,
+           reservation_details, locale)
+         select uuid_generate_v7(), $1, day, desk, 'synthetic', $2, uuid_generate_v7()::text,
+           'confirmed', 'paid', 'fulfilled', now(), now(), '{}', 'en-US'
+         from unnest($3::date[], $4::text[]) as days(day, desk)`,
+        [
+          passId,
+          holder,
+          assignments.map(([day]) => day),
+          assignments.map(([, desk]) => desk),
+        ]
+      );
+
     const read = (
       input: ReadDuePassReminder,
       tables?: Effect.Effect<(typeof table)[]>
     ) =>
       run(
-        Effect.flatMap(PassReminderReads, (reads) => reads.readDue(input)),
+        atInstant(input.now)(
+          Effect.flatMap(PassReminderReads, (reads) => reads.readDue(input))
+        ),
         tables
       );
 
@@ -277,16 +302,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         validFrom: "2026-11-03",
         validUntil: "2026-12-03",
       });
-      await database.pool.query(
-        `insert into workspace_reservations (checkout_attempt_key, pass_id, service_date,
-           pass_day_table_id, dotypos_customer_id, author_account_id, dotypos_reservation_id,
-           reservation_state, payment_state, fulfillment_state, paid_at, fulfilled_at,
-           reservation_details, locale)
-         select uuid_generate_v7(), $1, day::date, desk, 'synthetic', $2, uuid_generate_v7()::text,
-           'confirmed', 'paid', 'fulfilled', now(), now(), '{}', 'en-US'
-         from (values ('2026-11-04', '15'), ('2026-11-03', '14')) as days(day, desk)`,
-        [passId, holder]
-      );
+      await seedDeskDays(passId, holder, [
+        ["2026-11-04", "15"],
+        ["2026-11-03", "14"],
+      ]);
       const target = {
         ...unlimitedDue,
         passId,
@@ -366,15 +385,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         validFrom: "2026-11-03",
         validUntil: "2026-12-03",
       });
-      await database.pool.query(
-        `insert into workspace_reservations (checkout_attempt_key, pass_id, service_date,
-           pass_day_table_id, dotypos_customer_id, author_account_id, dotypos_reservation_id,
-           reservation_state, payment_state, fulfillment_state, paid_at, fulfilled_at,
-           reservation_details, locale)
-         values (uuid_generate_v7(), $1, '2026-11-03', '14', 'synthetic', $2,
-           uuid_generate_v7()::text, 'confirmed', 'paid', 'fulfilled', now(), now(), '{}', 'en-US')`,
-        [passId, holder]
-      );
+      await seedDeskDays(passId, holder, [["2026-11-03", "14"]]);
       const tables = Effect.promise(async () => {
         await database.pool.query(
           `insert into pass_administration_changes (request_id, pass_id, actor_account_id,
@@ -396,6 +407,34 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           tables
         )
       ).toEqual(Option.none());
+    });
+
+    test("a desk lookup that crosses the Prague expiry boundary invalidates delivery", async () => {
+      const holder = await seedAccount();
+      const passId = await seedPass({
+        holder,
+        kind: "unlimited",
+        tier: "reserved-desk",
+        validFrom: "2026-11-03",
+        validUntil: "2026-12-03",
+      });
+      await seedDeskDays(passId, holder, [["2026-11-03", "14"]]);
+      const lastMillisecond = Temporal.Instant.from("2026-12-02T22:59:59.999Z");
+      const target: ReadDuePassReminder = {
+        ...unlimitedDue,
+        now: lastMillisecond,
+        passId,
+        holderAccountId: holder,
+        holderVersion: 0,
+        includeDeskLabel: true,
+      };
+      expect(Option.getOrThrow(await read(target))).toMatchObject({
+        deskLabel: "Desk 14",
+      });
+      const crossesMidnight = TestClock.setTime(
+        lastMillisecond.add({ milliseconds: 1 }).epochMilliseconds
+      ).pipe(Effect.as([table]));
+      expect(await read(target, crossesMidnight)).toEqual(Option.none());
     });
 
     test("pages a family by pass ID without duplicates or missing eligible passes", async () => {

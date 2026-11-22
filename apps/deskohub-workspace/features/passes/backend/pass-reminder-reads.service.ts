@@ -32,7 +32,7 @@ import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { OrderId } from "@/features/order";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { getWorkspaceDate } from "@/features/reservation/reservation-date";
-import type { PlainDate } from "@/shared/utils/temporal";
+import { currentInstant, type PlainDate } from "@/shared/utils/temporal";
 import type { EntryPackSize, PassTier } from "../pass-offer";
 import {
   getPassReminderDueAt,
@@ -123,18 +123,33 @@ export class PassReminderReads extends Context.Service<
         return rows.flatMap((row) => toCandidate(row) ?? []);
       });
 
-      const readDue = Effect.fn("PassReminderReads.readDue")(function* (
-        input: ReadDuePassReminder
-      ) {
-        const [row] = yield* queryDuePasses(db, input);
-        if (!row) return Option.none<PassReminderCandidate>();
-        if (!row.deskId) return Option.fromNullishOr(toCandidate(row));
+      const readWithDeskLabel = Effect.fn(
+        "PassReminderReads.readWithDeskLabel"
+      )((input: ReadDuePassReminder) =>
+        Effect.Do.pipe(
+          Effect.bind("labels", () => loadDeskLabels),
+          // Both time and eligibility can change during the provider read.
+          Effect.bind("now", () => currentInstant),
+          Effect.bind("rows", ({ now }) =>
+            queryDuePasses(db, { ...input, now })
+          ),
+          Effect.map(({ rows: [row], labels }) =>
+            Option.fromNullishOr(row && toCandidate(row, labels))
+          )
+        )
+      );
 
-        const labels = yield* loadDeskLabels;
-        // Take the delivery snapshot after the advisory provider read.
-        const [latest] = yield* queryDuePasses(db, input);
-        return Option.fromNullishOr(latest && toCandidate(latest, labels));
-      });
+      const readDue = Effect.fn("PassReminderReads.readDue")(
+        (input: ReadDuePassReminder) =>
+          queryDuePasses(db, input).pipe(
+            Effect.flatMap(([row]) => {
+              if (row?.deskId) return readWithDeskLabel(input);
+              return Effect.succeed(
+                Option.fromNullishOr(row && toCandidate(row))
+              );
+            })
+          )
+      );
 
       return PassReminderReads.of({ listDue, readDue });
     })
