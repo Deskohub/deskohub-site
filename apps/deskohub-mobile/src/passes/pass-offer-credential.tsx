@@ -21,6 +21,7 @@ import Svg, {
 import { useAppLocale } from "../i18n/locale-context";
 import { m } from "../i18n/messages";
 import { iconHiddenProps } from "../ui/icon";
+import { followLinkOnEnter } from "../ui/link-activation";
 import { LogoMarkShape, logoMarkHeight } from "../ui/logo-mark";
 import { Text } from "../ui/text";
 import { color, radius, shadow, space } from "../ui/tokens";
@@ -48,6 +49,7 @@ export function UnlimitedCredential({
     <Pressable
       role="link"
       onPress={onPress}
+      onKeyDown={followLinkOnEnter(onPress)}
       style={({ pressed }) => [styles.credential, pressed && styles.pressed]}
     >
       <CredentialBackground />

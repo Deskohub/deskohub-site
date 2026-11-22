@@ -11,6 +11,7 @@ import Svg, { ClipPath, Defs, G, Line, Path, Rect } from "react-native-svg";
 import { useAppLocale } from "../i18n/locale-context";
 import { m } from "../i18n/messages";
 import { iconHiddenProps } from "../ui/icon";
+import { followLinkOnEnter } from "../ui/link-activation";
 import { LogoMarkShape, logoMarkHeight } from "../ui/logo-mark";
 import { Text } from "../ui/text";
 import { color, space } from "../ui/tokens";
@@ -46,6 +47,7 @@ export function EntryPackTicket({
     <Pressable
       role="link"
       onPress={onPress}
+      onKeyDown={followLinkOnEnter(onPress)}
       onLayout={({ nativeEvent }) => setFrame(nativeEvent.layout)}
       style={({ pressed }) => [styles.ticket, pressed && styles.pressed]}
     >

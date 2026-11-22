@@ -259,3 +259,27 @@ test("the Book chooser's Entry pack link still opens the pack purchase for its d
     params: { tier: "open-space" },
   });
 });
+
+test("Enter on a focused card follows it once, to the route a press opens", () => {
+  const draft = selectCoworkDate(
+    selectCoworkTier(openSpace, "reserved-desk"),
+    "2026-12-03"
+  );
+  for (const link of links(render({ draft }))) {
+    const pressed = press(link);
+    push.mockClear();
+    const onKeyDown = link.props.onKeyDown as (event: unknown) => void;
+    onKeyDown({ nativeEvent: { key: "Tab" }, preventDefault: () => {} });
+    expect(push).not.toHaveBeenCalled();
+    let prevented = false;
+    onKeyDown({
+      nativeEvent: { key: "Enter" },
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push.mock.calls[0]?.[0]).toEqual(pressed);
+    expect(prevented).toBe(true);
+  }
+});
