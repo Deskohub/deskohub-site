@@ -114,6 +114,10 @@ export const emailCampaigns = pgTable(
       sql`${t.purpose} in (${quotedSqlList(campaignPurposes)})`
     ),
     check(
+      "email_campaigns_published_email_check",
+      sql`${t.delivery} <> 'once' or ${t.emailId} is null or (${t.purpose} = 'marketing' and ${t.content} = '{}'::jsonb)`
+    ),
+    check(
       "email_campaigns_delivery_check",
       sql`${t.delivery} in (${quotedSqlList(campaignDeliveries)})`
     ),

@@ -1,6 +1,7 @@
 "use client";
 
 import { effectSchemaResolver } from "@deskohub/effect-schema-resolver";
+import type { EmailId } from "@deskohub/workspace-admin-api";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { m } from "@/features/administration/i18n";
@@ -39,6 +40,12 @@ export type CampaignComposerTemplate = {
   readonly previewHtml: string;
 };
 
+export type CampaignComposerPublishedEmail = {
+  readonly emailId: EmailId;
+  readonly title: string;
+  readonly locales: readonly Locale[];
+};
+
 /**
  * The saved campaign the composer edits, absent while creating one: a one-off
  * Draft, or an automated campaign's email and audience.
@@ -57,12 +64,14 @@ export function CampaignComposer({
   audiences,
   campaign,
   initialFields,
+  publishedEmails = [],
   templates,
 }: {
   readonly adminInbox: string | null;
   readonly audiences: readonly AudienceOption[];
   readonly campaign: CampaignComposerCampaign | undefined;
   readonly initialFields: CampaignComposerFields;
+  readonly publishedEmails?: readonly CampaignComposerPublishedEmail[];
   readonly templates: readonly CampaignComposerTemplate[];
 }) {
   const routeLocale = useRouteLocale();
@@ -70,21 +79,38 @@ export function CampaignComposer({
     resolver: effectSchemaResolver(createCampaignComposerFields(routeLocale)),
     defaultValues: initialFields,
   });
-  const [title, purpose, templateKey, audienceId, localeFields] = useWatch({
-    control: form.control,
-    name: ["title", "purpose", "templateKey", "audienceId", "locales"],
-  });
+  const [title, purpose, templateKey, audienceId, localeFields, emailId] =
+    useWatch({
+      control: form.control,
+      name: [
+        "title",
+        "purpose",
+        "templateKey",
+        "audienceId",
+        "locales",
+        "emailId",
+      ],
+    });
   const [selectedLocale, setSelectedLocale] = useState<Locale>(
     campaignFallbackLocale
   );
   /** Chosen while creating; a saved campaign's delivery never changes. */
   const [newDelivery, setNewDelivery] = useState<CampaignDelivery>("once");
   const delivery = campaign?.delivery ?? newDelivery;
+  const linkedEmailId = delivery === "once" ? emailId || undefined : undefined;
+  const publishedEmail = publishedEmails.find(
+    (option) => option.emailId === linkedEmailId
+  );
 
   const audience = audiences.find((option) => option.id === audienceId);
   const template = templates.find((option) => option.key === templateKey);
   const localeView = contentLocaleView(audience, selectedLocale, localeFields);
   const { editable, shown: locale } = localeView;
+  const publishedLocales = publishedEmail?.locales ?? [];
+  const previewLocale =
+    (publishedLocales.includes(selectedLocale)
+      ? selectedLocale
+      : publishedLocales[0]) ?? locale;
 
   const { created, creating, save, saveError, saving } =
     useCampaignComposerSave({
@@ -164,27 +190,31 @@ export function CampaignComposer({
                 delivery={delivery}
                 isNew={!campaign}
                 locale={routeLocale}
+                linkedEmailId={linkedEmailId}
                 onDeliveryChange={setNewDelivery}
                 template={template}
+                publishedEmails={publishedEmails}
                 templates={templates}
               />
             </ComposerSection>
-            <ComposerSection
-              title={m.emailCampaignsComposerContentSection(
-                {},
-                { locale: routeLocale }
-              )}
-            >
-              <CampaignContentTabs
-                audience={audience}
-                control={form.control}
-                localeFields={localeFields}
-                onLocaleChange={setSelectedLocale}
-                purpose={purpose}
-                routeLocale={routeLocale}
-                view={localeView}
-              />
-            </ComposerSection>
+            {!linkedEmailId && (
+              <ComposerSection
+                title={m.emailCampaignsComposerContentSection(
+                  {},
+                  { locale: routeLocale }
+                )}
+              >
+                <CampaignContentTabs
+                  audience={audience}
+                  control={form.control}
+                  localeFields={localeFields}
+                  onLocaleChange={setSelectedLocale}
+                  purpose={purpose}
+                  routeLocale={routeLocale}
+                  view={localeView}
+                />
+              </ComposerSection>
+            )}
           </form>
           {/* At the bottom of the page the grid pushes the sticky preview up;
               fitting it between its offset (8rem) and the page's bottom
@@ -192,11 +222,13 @@ export function CampaignComposer({
           <aside className="min-w-0 @5xl:sticky @5xl:top-32 @5xl:h-[calc(100dvh-10.25rem)]">
             <CampaignEmailPreview
               fields={localeFields[locale]}
-              locale={locale}
-              locales={editable}
+              linkedEmailId={publishedEmail?.emailId}
+              locale={previewLocale}
+              locales={linkedEmailId ? publishedLocales : editable}
               onLocaleChange={setSelectedLocale}
               purpose={purpose}
               templateKey={templateKey}
+              unavailablePublication={Boolean(linkedEmailId && !publishedEmail)}
             />
           </aside>
         </div>

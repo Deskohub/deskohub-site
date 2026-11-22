@@ -94,6 +94,7 @@ const resendProviderRefusal = (code: string) =>
   new EmailServiceError("Resend cannot send now", undefined, "resend", {
     failureKind: "provider",
     code,
+    definitivelyUnsent: true,
   });
 
 const resendMessageRefusal = (code: string) =>
@@ -104,6 +105,7 @@ const resendMessageRefusal = (code: string) =>
     {
       failureKind: "message",
       code,
+      definitivelyUnsent: true,
     }
   );
 

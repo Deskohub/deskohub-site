@@ -1,6 +1,9 @@
 import "server-only";
 
-import type { AutomationRunEventDetail } from "@deskohub/workspace-admin-api";
+import type {
+  AutomationRunEventDetail,
+  AdministrationCampaignRecipientSkipReasonType as CampaignRecipientSkipReason,
+} from "@deskohub/workspace-admin-api";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { Effect, Match } from "effect";
 import {
@@ -8,7 +11,6 @@ import {
   WorkspaceTransaction,
 } from "@/db/database.service";
 import { emailCampaignAutomationRuns } from "@/db/schema";
-import type { CampaignRecipientSkipReason } from "../../campaign-states";
 import type {
   AutomationRunId,
   AutomationStepId,

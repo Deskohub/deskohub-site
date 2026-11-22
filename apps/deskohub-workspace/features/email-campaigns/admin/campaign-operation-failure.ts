@@ -66,6 +66,8 @@ const sharedFailureCopy: FailureCopyByCode = {
     m.emailCampaignsSendingFailureNoRecipients({}, { locale }),
   "campaign-not-retryable": (locale) =>
     m.emailCampaignsSendingFailureNotRetryable({}, { locale }),
+  "no-retryable-recipients": (locale) =>
+    m.emailCampaignsSendingFailureNoRetryableRecipients({}, { locale }),
   "recipient-resolution-unavailable": (locale) =>
     m.emailCampaignsSendingFailureRecipientsUnavailable({}, { locale }),
   "email-delivery-failed": (locale) =>

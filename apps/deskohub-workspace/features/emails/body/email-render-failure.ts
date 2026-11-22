@@ -16,8 +16,13 @@ export class EmailValueMismatch extends Data.TaggedError("EmailValueMismatch")<{
   readonly name: EmailValueName;
 }> {}
 
+export class EmailOfferBookingLinkInvalid extends Data.TaggedError(
+  "EmailOfferBookingLinkInvalid"
+)<{ readonly componentId: string }> {}
+
 /** Why one language of an email couldn't render from the given values. */
 export type EmailRenderFailure =
   | EmailLanguageMissing
+  | EmailOfferBookingLinkInvalid
   | EmailValueMissing
   | EmailValueMismatch;

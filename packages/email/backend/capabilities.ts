@@ -35,6 +35,7 @@ export class EmailServiceError extends Data.TaggedError("EmailServiceError")<{
   readonly provider?: string;
   readonly failureKind: EmailFailureKind;
   readonly code?: string;
+  readonly definitivelyUnsent?: true;
 }> {
   constructor(
     message: string,
@@ -43,6 +44,7 @@ export class EmailServiceError extends Data.TaggedError("EmailServiceError")<{
     classification?: {
       readonly failureKind?: EmailFailureKind;
       readonly code?: string;
+      readonly definitivelyUnsent?: true;
     }
   ) {
     super({
@@ -51,6 +53,7 @@ export class EmailServiceError extends Data.TaggedError("EmailServiceError")<{
       provider,
       failureKind: classification?.failureKind ?? "message",
       code: classification?.code,
+      ...(classification?.definitivelyUnsent && { definitivelyUnsent: true }),
     });
   }
 }

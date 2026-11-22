@@ -17,7 +17,7 @@ const decodeEmail = Schema.decodeUnknownOption(reservationCustomerEmailSchema);
 /** Why the campaign can't reach a customer at their Dotypos profile email. */
 export type CampaignUnreachableReason = Exclude<
   CampaignRecipientSkipReason,
-  "consent-withdrawn" | "outside-test-domain"
+  "consent-withdrawn" | "outside-test-domain" | "missing-email-language"
 >;
 
 /**

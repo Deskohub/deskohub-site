@@ -49,6 +49,9 @@ import { OnceCampaignLifecycle } from "./once-campaign-lifecycle";
  */
 const deliveryStartBudget = Duration.seconds(120);
 
+/** Leaves room for each recipient's value preparation and its bounded retries. */
+const personalizedDeliveryBatchSize = 16;
+
 /**
  * A run gives up this long after it starts, inside the queue consumer's
  * 300-second limit. Its slowest batch can outlast the remaining time: a
@@ -124,6 +127,8 @@ export class CampaignDeliveryService extends Context.Service<
             purpose: emailCampaigns.purpose,
             templateKey: emailCampaigns.templateKey,
             content: emailCampaigns.content,
+            emailId: emailCampaigns.emailId,
+            versionId: emailCampaignSends.frozenEmailVersionId,
           })
           .from(emailCampaignSends)
           .innerJoin(
@@ -138,10 +143,22 @@ export class CampaignDeliveryService extends Context.Service<
             )
           )
           .pipe(
-            Effect.map(
-              ([campaign]): Option.Option<DeliveredCampaign> =>
-                Option.fromNullishOr(campaign)
-            )
+            Effect.flatMap(([row]) => {
+              if (!row) return Effect.succeedNone;
+              const { emailId, versionId, ...campaign } = row;
+              if (!emailId && !versionId) return Effect.succeedSome(campaign);
+              if (
+                !emailId ||
+                !versionId ||
+                campaign.purpose !== "marketing" ||
+                Object.keys(campaign.content).length > 0
+              )
+                return incomplete(attempt);
+              return Effect.succeedSome<DeliveredCampaign>({
+                ...campaign,
+                publication: { emailId, versionId },
+              });
+            })
           );
 
       const currentAttemptSend = (attempt: CampaignDeliveryAttempt) =>
@@ -268,7 +285,7 @@ export class CampaignDeliveryService extends Context.Service<
       );
 
       /** The next pending recipients no batch carries, in customer ID order. */
-      const nextUnbatchedRecipients = (attempt: CampaignDeliveryAttempt) =>
+      const nextUnbatchedRecipients = (attempt: AttemptContext) =>
         db
           .select({
             dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
@@ -283,7 +300,11 @@ export class CampaignDeliveryService extends Context.Service<
             )
           )
           .orderBy(asc(emailCampaignRecipients.dotyposCustomerId))
-          .limit(campaignDeliveryBatchSize);
+          .limit(
+            attempt.campaign.publication
+              ? personalizedDeliveryBatchSize
+              : campaignDeliveryBatchSize
+          );
 
       const countUnbatchedPending = (input: {
         readonly context: AttemptContext;
@@ -312,7 +333,16 @@ export class CampaignDeliveryService extends Context.Service<
       }) =>
         currentInstant.pipe(
           Effect.flatMap((at) =>
-            leasedTransaction(input.context, batches.settle({ ...input, at }))
+            leasedTransaction(
+              input.context,
+              batches.settle({
+                ...input,
+                at,
+                ...(input.context.campaign.publication && {
+                  personalized: true,
+                }),
+              })
+            )
           ),
           Effect.withSpan("CampaignDeliveryService.settleBatch")
         );
@@ -342,7 +372,13 @@ export class CampaignDeliveryService extends Context.Service<
             BatchRequest.Replay({
               send: input.context,
               batch: input.batch,
-              admit: ensureStartBudget(input.context),
+              admit: input.context.campaign.publication
+                ? ensureStartBudget(input.context).pipe(
+                    Effect.andThen(
+                      leasedTransaction(input.context, Effect.void)
+                    )
+                  )
+                : ensureStartBudget(input.context),
             })
           )
           .pipe(
@@ -434,12 +470,17 @@ export class CampaignDeliveryService extends Context.Service<
       const prepareNextBatch = (input: {
         readonly context: AttemptContext;
         readonly recipients: readonly BatchRecipient[];
-      }) =>
-        batches
+      }) => {
+        const publication = input.context.campaign.publication;
+        return batches
           .prepare({
             send: input.context,
             recipients: input.recipients,
             profiles: Option.none(),
+            ...(publication && {
+              withPreparationLease: (work) =>
+                leasedTransaction(input.context, work),
+            }),
           })
           .pipe(
             Effect.flatMap(
@@ -452,6 +493,15 @@ export class CampaignDeliveryService extends Context.Service<
                           BatchRequest.First({
                             batch,
                             messages: prepared.messages,
+                            ...(publication && {
+                              personalized: {
+                                send: input.context,
+                                admit: leasedTransaction(
+                                  input.context,
+                                  Effect.void
+                                ),
+                              },
+                            }),
                           })
                       )
                     )
@@ -465,6 +515,7 @@ export class CampaignDeliveryService extends Context.Service<
             }),
             Effect.withSpan("CampaignDeliveryService.prepareNextBatch")
           );
+      };
 
       /** Batches and sends the given recipients no batch carries yet. */
       const deliverBatch = (input: {

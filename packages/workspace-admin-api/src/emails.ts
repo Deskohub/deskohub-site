@@ -176,6 +176,7 @@ export const EmailBodyComponent = Schema.Union([
     value: EmailValueName,
     labelKey: key,
     href: destination,
+    prefillDiscountCode: Schema.optionalKey(Schema.Boolean),
   }),
 ]);
 export type EmailBodyComponent = typeof EmailBodyComponent.Type;
@@ -229,6 +230,7 @@ const draftComponent = Schema.Struct({
   src: Schema.optionalKey(Schema.String),
   altKey: Schema.optionalKey(Schema.String),
   href: Schema.optionalKey(Schema.String),
+  prefillDiscountCode: Schema.optionalKey(Schema.Boolean),
   align: Schema.optionalKey(Schema.Literals(["left", "center", "right"])),
   width: Schema.optionalKey(Schema.Int),
   labelKey: Schema.optionalKey(Schema.String),

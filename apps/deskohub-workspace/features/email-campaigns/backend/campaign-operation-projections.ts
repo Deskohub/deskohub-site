@@ -32,6 +32,7 @@ export const toAdministrationCampaignSummary = (
   delivery: campaign.delivery,
   status: campaign.status,
   audienceId: campaign.audienceId,
+  ...(campaign.emailId && { emailId: campaign.emailId }),
   locales: campaignContentLocales(campaign.content),
   createdAt: campaign.createdAt.toString(),
   updatedAt: campaign.updatedAt.toString(),

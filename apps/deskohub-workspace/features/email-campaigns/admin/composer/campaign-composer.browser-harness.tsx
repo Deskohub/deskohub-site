@@ -21,9 +21,22 @@ createRoot(mountPoint).render(
           audiences={[]}
           campaign={undefined}
           initialFields={newCampaignComposerFields}
+          publishedEmails={
+            mountPoint.dataset.published
+              ? [
+                  {
+                    emailId: EmailId.make("synthetic-published-offer"),
+                    title: "Published cowork offer",
+                    locales: ["en-US"],
+                  },
+                ]
+              : []
+          }
           templates={[]}
         />
       </AdministrationPage>
     </AdminShell>
   </RouteLocaleProvider>
 );
+
+import { EmailId } from "@deskohub/workspace-admin-api";
