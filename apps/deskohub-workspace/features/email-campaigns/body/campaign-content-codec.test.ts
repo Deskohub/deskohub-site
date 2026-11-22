@@ -217,6 +217,34 @@ describe("campaign body Markdown", () => {
     ]);
   });
 
+  test.each([
+    ["a fourth field", "[[pass: unlimited | Save | on visits | more]]"],
+    ["a word after the size", "[[pass: entry-pack 5 more | Save]]"],
+    ["a blank headline before a detail", "[[pass: unlimited |   | on visits]]"],
+  ])("refuses a pass offer line with %s", async (_name, bodyMarkdown) => {
+    const exit = await Effect.runPromiseExit(
+      readCampaignContent({ "en-US": { ...texts, bodyMarkdown } })
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+
+  test("refuses a stored pass offer text that Markdown couldn't keep", async () => {
+    const exit = await Effect.runPromiseExit(
+      readCampaignContent({
+        "en-US": {
+          ...texts,
+          bodyDocument: document({
+            type: "passOffer",
+            attrs: { product: "unlimited", headline: " Save " },
+          }),
+        },
+      })
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+
   test("refuses a pass offer with an unknown product instead of sending it as text", async () => {
     const exit = await Effect.runPromiseExit(
       readCampaignContent({

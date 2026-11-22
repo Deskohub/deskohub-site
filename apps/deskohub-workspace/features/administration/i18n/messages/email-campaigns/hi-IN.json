@@ -925,7 +925,7 @@
   "emailCampaignsBodyButtonHrefInvalid": "बटन का लिंक https: या mailto: पते पर होना चाहिए।",
   "emailCampaignsBodyPassOfferProductInvalid": "ऑफ़र कार्ड में प्रवेश पैक या असीमित पास होना चाहिए।",
   "emailCampaignsBodyPassOfferSizeInvalid": "केवल प्रवेश पैक कार्ड का आकार होता है: 5 या 10 प्रवेश।",
-  "emailCampaignsBodyPassOfferTextInvalid": "ऑफ़र कार्ड का शीर्षक और विवरण एक-एक पंक्ति में, अधिकतम {max} वर्णों का होना चाहिए।",
+  "emailCampaignsBodyPassOfferTextInvalid": "ऑफ़र कार्ड का शीर्षक और विवरण एक-एक पंक्ति में, अधिकतम {max} वर्णों का होना चाहिए, शुरू या अंत में खाली जगह के बिना।",
   "emailCampaignsBodyPassOfferDetailWithoutHeadline": "ऑफ़र कार्ड के विवरण के लिए शीर्षक ज़रूरी है।",
   "emailCampaignsBodyButtonLabelLineBreaks": "बटन के टेक्स्ट में पंक्ति केवल नई पंक्ति वाले कैरेक्टर (LF) से तोड़ी जा सकती है।",
   "emailCampaignsBodyButtonLabelMissing": "बटन में टेक्स्ट होना चाहिए।",

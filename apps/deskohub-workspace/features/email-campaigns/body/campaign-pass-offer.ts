@@ -33,9 +33,11 @@ export const campaignPassOfferText = (
   Predicate.isString(value) && value !== "" ? value : undefined;
 
 // Markdown spells a card `[[pass: product size | Headline | Detail]]` on its
-// own line; size, headline, and detail are optional. A backslash escapes the
-// next character, so `|`, `]`, backslashes, and line breaks can be text. Any
-// product word parses, so a typo fails validation instead of sending as text.
+// own line; size, headline, and detail are optional, and nothing else may
+// follow. Fields are trimmed, as stored texts never start or end with
+// whitespace. A backslash escapes the next character, so `|`, `]`,
+// backslashes, and line breaks can be text. Any product word parses, so a
+// typo fails validation instead of sending as text.
 const passOfferMarkdownPattern =
   /^\[\[pass:((?:\\[\s\S]|[^\\\]\n])*)\]\][^\S\n]*(?:\n|$)/;
 
@@ -107,10 +109,17 @@ export const CampaignPassOffer = Node.create({
     tokenize: (source) => {
       const match = passOfferMarkdownPattern.exec(source);
       if (!match) return undefined;
-      const [product = "", headline, detail] = passOfferFields(
-        match[1] ?? ""
-      ).map((field) => unescapePassOfferMarkdown(field.trim()));
-      const [productName, size] = product.split(/\s+/);
+      const fields = passOfferFields(match[1] ?? "").map((field) =>
+        unescapePassOfferMarkdown(field.trim())
+      );
+      const [product = "", headline, detail] = fields;
+      const [productName, size, ...extraWords] = product.split(/\s+/);
+      // Text past the known fields would vanish from the card; refuse it.
+      if (fields.length > 3 || extraWords.length > 0) {
+        throw new Error(
+          `A pass offer line takes a product, an optional size, a headline and a detail: ${match[0].trim()}`
+        );
+      }
       return {
         type: "passOffer",
         raw: match[0],

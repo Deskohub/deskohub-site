@@ -959,7 +959,7 @@
   "emailCampaignsBodyButtonHrefInvalid": "Tlačítko musí odkazovat na adresu https: nebo mailto:.",
   "emailCampaignsBodyPassOfferProductInvalid": "Karta nabídky musí ukazovat Balíček vstupů, nebo Neomezené členství.",
   "emailCampaignsBodyPassOfferSizeInvalid": "Velikost má jen karta Balíčku vstupů, a to 5, nebo 10 vstupů.",
-  "emailCampaignsBodyPassOfferTextInvalid": "Titulek i doplněk karty nabídky musí být jeden řádek o nejvýše {max} znacích.",
+  "emailCampaignsBodyPassOfferTextInvalid": "Titulek i doplněk karty nabídky musí být jeden řádek o nejvýše {max} znacích, bez mezer na začátku a na konci.",
   "emailCampaignsBodyPassOfferDetailWithoutHeadline": "Doplněk karty nabídky potřebuje titulek.",
   "emailCampaignsBodyButtonLabelLineBreaks": "Text tlačítka smí zalamovat řádky jen znakem nového řádku (LF).",
   "emailCampaignsBodyButtonLabelMissing": "Tlačítko musí mít text.",

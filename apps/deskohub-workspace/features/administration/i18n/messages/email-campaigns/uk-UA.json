@@ -993,7 +993,7 @@
   "emailCampaignsBodyButtonHrefInvalid": "Кнопка має посилатися на адресу https: або mailto:.",
   "emailCampaignsBodyPassOfferProductInvalid": "Картка пропозиції має показувати пакет відвідувань або безлімітний абонемент.",
   "emailCampaignsBodyPassOfferSizeInvalid": "Розмір має лише картка пакета відвідувань: 5 або 10 відвідувань.",
-  "emailCampaignsBodyPassOfferTextInvalid": "Заголовок і деталь картки пропозиції мають бути одним рядком до {max} символів.",
+  "emailCampaignsBodyPassOfferTextInvalid": "Заголовок і деталь картки пропозиції мають бути одним рядком до {max} символів, без пробілів на початку й у кінці.",
   "emailCampaignsBodyPassOfferDetailWithoutHeadline": "Для деталі картки пропозиції потрібен заголовок.",
   "emailCampaignsBodyButtonLabelLineBreaks": "Текст кнопки може переходити на новий рядок лише через символ нового рядка (LF).",
   "emailCampaignsBodyButtonLabelMissing": "Кнопка повинна мати текст.",

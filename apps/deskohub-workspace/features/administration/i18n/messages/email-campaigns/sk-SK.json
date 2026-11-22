@@ -993,7 +993,7 @@
   "emailCampaignsBodyButtonHrefInvalid": "Tlačidlo musí odkazovať na adresu https: alebo mailto:.",
   "emailCampaignsBodyPassOfferProductInvalid": "Karta ponuky musí zobrazovať Balík vstupov alebo Neobmedzený pas.",
   "emailCampaignsBodyPassOfferSizeInvalid": "Veľkosť má len karta Balíka vstupov, a to 5 alebo 10 vstupov.",
-  "emailCampaignsBodyPassOfferTextInvalid": "Titulok aj doplnok karty ponuky musia byť jeden riadok s najviac {max} znakmi.",
+  "emailCampaignsBodyPassOfferTextInvalid": "Titulok aj doplnok karty ponuky musia byť jeden riadok s najviac {max} znakmi, bez medzier na začiatku a na konci.",
   "emailCampaignsBodyPassOfferDetailWithoutHeadline": "Doplnok karty ponuky potrebuje titulok.",
   "emailCampaignsBodyButtonLabelLineBreaks": "Text tlačidla môže zalamovať riadky iba znakom nového riadka (LF).",
   "emailCampaignsBodyButtonLabelMissing": "Tlačidlo musí mať text.",

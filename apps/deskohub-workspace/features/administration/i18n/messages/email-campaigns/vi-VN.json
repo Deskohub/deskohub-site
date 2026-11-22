@@ -891,7 +891,7 @@
   "emailCampaignsBodyButtonHrefInvalid": "Nút phải liên kết đến địa chỉ https: hoặc mailto:.",
   "emailCampaignsBodyPassOfferProductInvalid": "Thẻ ưu đãi phải hiển thị Gói lượt vào hoặc Thẻ không giới hạn.",
   "emailCampaignsBodyPassOfferSizeInvalid": "Chỉ thẻ Gói lượt vào mới có kích thước: 5 hoặc 10 lượt.",
-  "emailCampaignsBodyPassOfferTextInvalid": "Tiêu đề và chi tiết của thẻ ưu đãi phải là một dòng, tối đa {max} ký tự.",
+  "emailCampaignsBodyPassOfferTextInvalid": "Tiêu đề và chi tiết của thẻ ưu đãi phải là một dòng, tối đa {max} ký tự, không có khoảng trắng ở đầu hoặc cuối.",
   "emailCampaignsBodyPassOfferDetailWithoutHeadline": "Chi tiết của thẻ ưu đãi cần có tiêu đề.",
   "emailCampaignsBodyButtonLabelLineBreaks": "Chữ trên nút chỉ được xuống dòng bằng ký tự dòng mới (LF).",
   "emailCampaignsBodyButtonLabelMissing": "Nút phải có chữ.",

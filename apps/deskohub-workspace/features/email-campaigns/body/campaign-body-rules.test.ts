@@ -313,6 +313,16 @@ describe("campaignBodyIssues per node", () => {
       { product: "unlimited", detail: "across 20 visits" },
       ["PassOfferDetailWithoutHeadline"],
     ],
+    [
+      "a padded headline",
+      { product: "unlimited", headline: " Save " },
+      ["PassOfferTextInvalid"],
+    ],
+    [
+      "a blank headline before a detail",
+      { product: "unlimited", headline: "  ", detail: "across 20 visits" },
+      ["PassOfferTextInvalid"],
+    ],
   ])("rejects a pass offer with %s", (_name, attrs, tags) => {
     expect(issues(doc(passOffer(attrs))).map(([tag]) => tag)).toEqual([
       ...tags,

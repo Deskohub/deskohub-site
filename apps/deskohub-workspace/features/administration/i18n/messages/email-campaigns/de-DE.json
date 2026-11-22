@@ -925,7 +925,7 @@
   "emailCampaignsBodyButtonHrefInvalid": "Eine Schaltfläche muss auf eine https:- oder mailto:-Adresse verweisen.",
   "emailCampaignsBodyPassOfferProductInvalid": "Eine Angebotskarte muss das Eintrittspaket oder den Unbegrenzten Pass zeigen.",
   "emailCampaignsBodyPassOfferSizeInvalid": "Nur eine Eintrittspaket-Karte hat eine Größe: 5 oder 10 Eintritte.",
-  "emailCampaignsBodyPassOfferTextInvalid": "Überschrift und Zusatz einer Angebotskarte dürfen je nur eine Zeile mit höchstens {max} Zeichen sein.",
+  "emailCampaignsBodyPassOfferTextInvalid": "Überschrift und Zusatz einer Angebotskarte dürfen je nur eine Zeile mit höchstens {max} Zeichen sein, ohne Leerzeichen am Anfang oder Ende.",
   "emailCampaignsBodyPassOfferDetailWithoutHeadline": "Ein Zusatz auf der Angebotskarte braucht eine Überschrift.",
   "emailCampaignsBodyButtonLabelLineBreaks": "Der Text einer Schaltfläche darf Zeilen nur mit einem Zeilenvorschub (LF) umbrechen.",
   "emailCampaignsBodyButtonLabelMissing": "Eine Schaltfläche braucht einen Text.",

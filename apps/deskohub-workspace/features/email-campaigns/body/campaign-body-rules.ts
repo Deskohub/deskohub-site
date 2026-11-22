@@ -38,7 +38,10 @@ export type CampaignBodyIssue = Data.TaggedEnum<{
   PassOfferProductInvalid: { readonly path: IssuePath };
   /** The size isn't an Entry pack size, or the card isn't an Entry pack. */
   PassOfferSizeInvalid: { readonly path: IssuePath };
-  /** A headline or detail isn't one short line of text. */
+  /**
+   * A headline or detail isn't one short line of text, or starts or ends
+   * with whitespace, which Markdown would drop.
+   */
   PassOfferTextInvalid: { readonly path: IssuePath };
   PassOfferDetailWithoutHeadline: { readonly path: IssuePath };
 }>;
@@ -71,7 +74,7 @@ export const englishCampaignBodyIssueMessage = (
     PassOfferSizeInvalid: () =>
       "Only an Entry pack offer takes a size, and it must be 5 or 10.",
     PassOfferTextInvalid: () =>
-      `A pass offer's headline and detail must each be one line of at most ${campaignPassOfferTextMaxLength} characters.`,
+      `A pass offer's headline and detail must each be one line of at most ${campaignPassOfferTextMaxLength} characters, without surrounding spaces.`,
     PassOfferDetailWithoutHeadline: () =>
       "A pass offer's detail needs a headline.",
   });
@@ -216,7 +219,8 @@ const isPassOfferTextValid = (
   value === null ||
   (Predicate.isString(value) &&
     value.length <= campaignPassOfferTextMaxLength &&
-    !/[\r\n]/.test(value));
+    !/[\r\n]/.test(value) &&
+    value.trim() === value);
 
 /**
  * What's wrong with a pass offer's attributes, if anything: a known product,

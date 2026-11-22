@@ -81,7 +81,6 @@ export function DiscountCodeEmailVoucher({
                     <tr>
                       <td
                         align="center"
-                        bgcolor="#ffffff"
                         style={{
                           backgroundColor: "#ffffff",
                           border: "1px solid #8bdac0",

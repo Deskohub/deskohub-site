@@ -41,41 +41,75 @@ type PassOfferCopy = {
 };
 
 /**
- * One cell's share of the card link. Classic Outlook ignores a link around a
- * table, so each cell links its own content, padding included, and the card
- * reads as one link wherever links wrap blocks.
+ * A card cell: the cell's table and its share of the card link. Classic
+ * Outlook ignores a link around a table, so each cell links its own content.
+ * The link fills its cell, padding included, even beside a taller cell: the
+ * cell's nominal height lets the link's percentage height resolve, and the
+ * link lays out as a table so its content stays vertically centred.
  */
-function CellLink({
+function LinkedCell({
+  align,
   children,
   color,
+  colSpan,
   href,
+  padding,
   skipInText = false,
   style,
+  width,
 }: {
+  readonly align?: "center" | "right";
   readonly children: ReactNode;
   readonly color: string;
+  readonly colSpan?: number;
   readonly href: string;
+  readonly padding: string;
   /** Decorative cells stay out of plain text, which keeps one card link. */
   readonly skipInText?: boolean;
+  /** The cell's own style, such as the ticket's perforation. */
   readonly style?: CSSProperties;
+  readonly width?: number;
 }) {
   return (
-    <Link
-      data-skip-in-text={skipInText ? "true" : undefined}
-      href={href}
-      style={{ color, display: "block", textDecoration: "none", ...style }}
+    <td
+      align={align}
+      colSpan={colSpan}
+      style={{ height: 1, ...(width && { width }), ...style }}
+      valign="middle"
+      width={width}
     >
-      {children}
-    </Link>
+      <Link
+        data-skip-in-text={skipInText ? "true" : undefined}
+        href={href}
+        style={{
+          color,
+          display: "table",
+          height: "100%",
+          textDecoration: "none",
+          width: "100%",
+        }}
+      >
+        <span
+          style={{
+            display: "table-cell",
+            padding,
+            textAlign: align ?? "left",
+            verticalAlign: "middle",
+          }}
+        >
+          {children}
+        </span>
+      </Link>
+    </td>
   );
 }
 
 /**
- * The product name, lead line, and detail line, as linked text. The lines are
- * inline text split by line breaks, which Outlook keeps inside the link and
- * plain text keeps as lines; each line's height sets its spacing.
+ * The product name, lead line, and detail line, as a linked cell. The lines
+ * are inline text split by line breaks, which Outlook keeps inside the link
+ * and plain text keeps as lines; each line's height sets its spacing.
  */
-function PassOfferText({
+function PassOfferTextCell({
   color,
   copy,
   detailColor,
@@ -89,51 +123,56 @@ function PassOfferText({
   readonly padding: string;
 }) {
   return (
-    <CellLink
-      color={color}
-      href={href}
-      style={{ fontSize: 0, lineHeight: 0, padding, textWrap: "balance" }}
-    >
+    <LinkedCell color={color} href={href} padding={padding}>
       <span
         style={{
-          color,
-          fontFamily,
-          fontSize: 14.5,
-          fontWeight: 700,
-          lineHeight: "19px",
+          display: "block",
+          fontSize: 0,
+          lineHeight: 0,
+          textWrap: "balance",
         }}
       >
-        {copy.name}
+        <span
+          style={{
+            color,
+            fontFamily,
+            fontSize: 14.5,
+            fontWeight: 700,
+            lineHeight: "19px",
+          }}
+        >
+          {copy.name}
+        </span>
+        <br />
+        <span
+          style={{
+            color,
+            fontFamily,
+            fontSize: 24,
+            fontWeight: 700,
+            letterSpacing: -0.4,
+            lineHeight: "31px",
+          }}
+        >
+          {copy.headline}
+        </span>
+        {copy.detail && (
+          <>
+            <br />
+            <span
+              style={{
+                color: detailColor,
+                fontFamily,
+                fontSize: 13,
+                lineHeight: "22px",
+              }}
+            >
+              {copy.detail}
+            </span>
+          </>
+        )}
       </span>
-      <br />
-      <span
-        style={{
-          color,
-          fontFamily,
-          fontSize: 24,
-          fontWeight: 700,
-          letterSpacing: -0.4,
-          lineHeight: "31px",
-        }}
-      >
-        {copy.headline}
-      </span>
-      {copy.detail && (
-        <>
-          <br />
-          <span
-            style={{
-              color: detailColor,
-              fontFamily,
-              fontSize: 13,
-              lineHeight: "22px",
-            }}
-          >
-            {copy.detail}
-          </span>
-        </>
-      )}
-    </CellLink>
+    </LinkedCell>
   );
 }
 
@@ -170,30 +209,24 @@ function EntryPackTicket({
     >
       <tbody>
         <tr>
-          <td valign="middle">
-            <PassOfferText
-              color={ink}
-              copy={copy}
-              detailColor="#6b3410"
-              href={href}
-              padding="15px 16px 15px 18px"
-            />
-          </td>
-          <td
+          <PassOfferTextCell
+            color={ink}
+            copy={copy}
+            detailColor="#6b3410"
+            href={href}
+            padding="15px 16px 15px 18px"
+          />
+          <LinkedCell
             align="center"
-            style={{ borderLeft: "1.5px dashed #9a4a1c", width: 64 }}
-            valign="middle"
+            color={ink}
+            href={href}
+            padding="14px 8px"
+            skipInText
+            style={{ borderLeft: "1.5px dashed #9a4a1c" }}
             width={64}
           >
-            <CellLink
-              color={ink}
-              href={href}
-              skipInText
-              style={{ padding: "14px 8px", textAlign: "center" }}
-            >
-              <EmailArrowBadge background="#652607" color="#fff2d4" />
-            </CellLink>
-          </td>
+            <EmailArrowBadge background="#652607" color="#fff2d4" />
+          </LinkedCell>
         </tr>
       </tbody>
     </table>
@@ -231,98 +264,94 @@ function UnlimitedPassCard({
     >
       <tbody>
         <tr>
-          <td colSpan={3}>
-            <CellLink
-              color={ink}
-              href={href}
-              skipInText
-              style={{ padding: "12px 22px 0 18px" }}
+          <LinkedCell
+            color={ink}
+            colSpan={3}
+            href={href}
+            padding="12px 22px 0 18px"
+            skipInText
+          >
+            <table
+              {...presentationTable}
+              style={{ width: "100%" }}
+              width="100%"
             >
-              <table
-                {...presentationTable}
-                style={{ width: "100%" }}
-                width="100%"
-              >
-                <tbody>
-                  <tr>
-                    <td
+              <tbody>
+                <tr>
+                  <td
+                    style={{
+                      color: "#fae8ee",
+                      fontFamily,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      lineHeight: "13px",
+                      paddingRight: 8,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {workspaceSiteConstants.brand.name}
+                  </td>
+                  <td style={{ width: "100%" }} valign="middle">
+                    <div
                       style={{
-                        color: "#fae8ee",
-                        fontFamily,
-                        fontSize: 11,
-                        fontWeight: 700,
-                        lineHeight: "13px",
-                        paddingRight: 8,
-                        whiteSpace: "nowrap",
+                        borderTop: "1px solid #a4536a",
+                        fontSize: 0,
+                        lineHeight: 0,
                       }}
-                    >
-                      {workspaceSiteConstants.brand.name}
-                    </td>
-                    <td style={{ width: "100%" }} valign="middle">
-                      <div
-                        style={{
-                          borderTop: "1px solid #a4536a",
-                          fontSize: 0,
-                          lineHeight: 0,
-                        }}
-                      />
-                    </td>
-                    <td style={{ paddingLeft: 8 }} valign="middle">
-                      <div
-                        style={{
-                          backgroundColor: "#ffc2cc",
-                          backgroundImage:
-                            "linear-gradient(105deg, #ffc2cc 0%, #d999bf 55%, #f3d9c6 100%)",
-                          borderRadius: 2,
-                          fontSize: 0,
-                          height: 4,
-                          lineHeight: 0,
-                          width: 28,
-                        }}
-                      />
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </CellLink>
-          </td>
+                    />
+                  </td>
+                  <td style={{ paddingLeft: 8 }} valign="middle">
+                    <div
+                      style={{
+                        backgroundColor: "#ffc2cc",
+                        backgroundImage:
+                          "linear-gradient(105deg, #ffc2cc 0%, #d999bf 55%, #f3d9c6 100%)",
+                        borderRadius: 2,
+                        fontSize: 0,
+                        height: 4,
+                        lineHeight: 0,
+                        width: 28,
+                      }}
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </LinkedCell>
         </tr>
         <tr>
-          <td style={{ width: 68 }} valign="middle" width={68}>
-            <CellLink
-              color={ink}
-              href={href}
-              skipInText
-              style={{ padding: "10px 0 15px 18px" }}
-            >
-              <Img
-                alt=""
-                height={58}
-                src={credentialUrl}
-                style={{ display: "block" }}
-                width={50}
-              />
-            </CellLink>
-          </td>
-          <td valign="middle">
-            <PassOfferText
-              color={ink}
-              copy={copy}
-              detailColor="#f6dce4"
-              href={href}
-              padding="10px 14px 15px"
+          <LinkedCell
+            color={ink}
+            href={href}
+            padding="10px 0 15px 18px"
+            skipInText
+            width={68}
+          >
+            <Img
+              alt=""
+              height={58}
+              src={credentialUrl}
+              style={{ display: "block" }}
+              width={50}
             />
-          </td>
-          <td align="right" style={{ width: 52 }} valign="middle" width={52}>
-            <CellLink
-              color={ink}
-              href={href}
-              skipInText
-              style={{ padding: "10px 22px 15px 0", textAlign: "right" }}
-            >
-              <EmailArrowBadge background="#ffdae6" color="#761730" />
-            </CellLink>
-          </td>
+          </LinkedCell>
+          <PassOfferTextCell
+            color={ink}
+            copy={copy}
+            detailColor="#f6dce4"
+            href={href}
+            padding="10px 14px 15px"
+          />
+          <LinkedCell
+            align="right"
+            color={ink}
+            href={href}
+            padding="10px 22px 15px 0"
+            skipInText
+            width={52}
+          >
+            <EmailArrowBadge background="#ffdae6" color="#761730" />
+          </LinkedCell>
         </tr>
       </tbody>
     </table>
