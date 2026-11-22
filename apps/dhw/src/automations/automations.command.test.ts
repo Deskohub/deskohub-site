@@ -571,7 +571,50 @@ describe("dhw automations show and dry-run", () => {
 
     expect(fake.errors).toEqual([]);
     expect(fake.output.join("\n")).toContain("customer-1\tAda");
+    expect(fake.output.join("\n")).not.toContain("each evaluated pass holder");
   });
+
+  test("dry-run explains pass holder counts and labels the example emails", async () => {
+    const dryRun = dryRunFor(hourly, "completed", { frequency: null });
+    const fake = makeAutomationLayer({
+      getAutomationDryRun: () => Effect.succeed(dryRun),
+    });
+
+    await runSuccess(["automations", "dry-run", campaignId], fake.layer);
+
+    expect(fake.output.join("\n")).toContain(
+      "The forecast counts each evaluated pass holder once, including those excluded or skipped. A holder may receive a separate reminder for each qualifying pass."
+    );
+    expect(fake.output.join("\n")).toContain("Example emails:");
+
+    const json = makeAutomationLayer({
+      getAutomationDryRun: () => Effect.succeed(dryRun),
+    });
+    await runSuccess(
+      ["automations", "dry-run", campaignId, "--json"],
+      json.layer
+    );
+    expect(json.output).toEqual([JSON.stringify(dryRun)]);
+  });
+
+  test.each([
+    ["previous draft", { nextFires: [], frequency: null }],
+    ["replay", { kind: "replay", nextFires: [], frequency: null }],
+  ] as const)(
+    "dry-run keeps the ordinary wording for a %s report",
+    async (_, overrides) => {
+      const fake = makeAutomationLayer({
+        getAutomationDryRun: () =>
+          Effect.succeed(dryRunFor(hourly, "completed", overrides)),
+      });
+
+      await runSuccess(["automations", "dry-run", campaignId], fake.layer);
+
+      const output = fake.output.join("\n");
+      expect(output).not.toContain("each evaluated pass holder");
+      expect(output).toContain("\nEmails:");
+    }
+  );
 
   test("dry-run marks rows that read reservation statuses approximately", async () => {
     const row = {
