@@ -64,10 +64,8 @@ function PurchaseButton({
     <Button asChild size="md" caps className="mt-3">
       <Link
         {...props}
-        aria-disabled={pending || undefined}
-        className={pending ? "pointer-events-none" : undefined}
         href={getUnlimitedPassPurchasePath(locale, { ...draft, tier })}
-        tabIndex={pending ? -1 : undefined}
+        inert={pending}
       >
         {children}
       </Link>

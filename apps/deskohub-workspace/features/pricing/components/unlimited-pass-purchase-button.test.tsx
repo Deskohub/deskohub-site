@@ -6,8 +6,11 @@ import {
 } from "@/shared/testing/workspace-component-test-env";
 
 registerWorkspaceComponentTestEnv();
-const { cleanup, render } = await import("@testing-library/react");
-const { renderToStaticMarkup } = await import("react-dom/server");
+const { act, cleanup, render, waitFor } = await import(
+  "@testing-library/react"
+);
+const { renderToString } = await import("react-dom/server");
+const { hydrateRoot } = await import("react-dom/client");
 const { UnlimitedPassPurchaseButton } = await import(
   "./unlimited-pass-purchase-button"
 );
@@ -67,27 +70,40 @@ test("links the plain tier when Pricing has no draft", () => {
   );
 });
 
-test("prerenders the plain tier link without reading the request query", () => {
+test("prerenders an inert plain tier link that hydrates into the draft link", async () => {
   workspaceUseSearchParams.mockImplementation(() => {
     throw new Error("The prerendered link must not read search params");
   });
   // A server render shows a suspended boundary's fallback: the plain link.
-  const html = renderToStaticMarkup(button("reserved-desk-workstation"));
-  const link = new DOMParser()
-    .parseFromString(html, "text/html")
-    .querySelector("a");
-  expect(link?.getAttribute("href")).toBe(
-    "/en-US/passes/unlimited?tier=reserved-desk-workstation"
+  const html = renderToString(button("open-space"));
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  document.body.append(container);
+  const pending = container.querySelector("a");
+  expect(pending?.getAttribute("href")).toBe(
+    "/en-US/passes/unlimited?tier=open-space"
   );
   // Until it hydrates, it can't be followed and drop the visitor's draft.
-  expect(link?.getAttribute("aria-disabled")).toBe("true");
-  expect(link?.getAttribute("tabindex")).toBe("-1");
-  expect(link?.classList.contains("pointer-events-none")).toBe(true);
-});
+  expect(pending?.hasAttribute("inert")).toBe(true);
 
-test("the hydrated link can be followed", () => {
-  const link = render(button("open-space")).getByRole("link");
-  expect(link.getAttribute("aria-disabled")).toBeNull();
-  expect(link.getAttribute("tabindex")).toBeNull();
-  expect(link.classList.contains("pointer-events-none")).toBe(false);
+  workspaceUseSearchParams.mockReset();
+  workspaceUseSearchParams.mockReturnValue(
+    new URLSearchParams("tier=open-space&coffee=true&startDate=2099-07-30")
+  );
+  const root = await act(async () =>
+    hydrateRoot(container, button("open-space"), {
+      onRecoverableError: () => {},
+    })
+  );
+  await waitFor(() => {
+    const link = container.querySelector("a");
+    expect(link?.hasAttribute("inert")).toBe(false);
+    expect(purchaseQuery(link?.getAttribute("href"))).toEqual({
+      tier: "open-space",
+      startDate: "2099-07-30",
+      coffee: "true",
+    });
+  });
+  await act(async () => root.unmount());
+  container.remove();
 });
