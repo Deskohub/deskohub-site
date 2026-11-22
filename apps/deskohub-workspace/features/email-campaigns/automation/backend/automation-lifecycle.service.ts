@@ -4,6 +4,7 @@ import {
   type AutomationActivationType as AutomationActivation,
   type AutomationDetailType as AutomationDetail,
   type AutomationFlowType as AutomationFlow,
+  type AutomationTriggerType as AutomationTrigger,
   type AutomationVersionDetailType as AutomationVersionDetail,
   type AutomationVersionSummaryType as AutomationVersionSummary,
   AutomationFlow as automationFlowContractSchema,
@@ -25,8 +26,11 @@ import {
 } from "@/db/schema";
 import { authUser } from "@/db/schema/auth";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import { WorkspaceLocks } from "@/db/workspace-locks";
 import type { CustomerAccountId } from "@/features/account/customer-account";
-import { currentInstant } from "@/shared/utils/temporal";
+import { getPassReminderDueAt } from "@/features/passes/pass-reminder-schedule";
+import { getWorkspaceDate } from "@/features/reservation/reservation-date";
+import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import type { AudienceFilter } from "../../audience-filter";
 import { ensureSavedAudienceFilter } from "../../audience-filter-usage";
 import type {
@@ -353,7 +357,7 @@ const activateIn = (input: {
         preview,
       }): Effect.Effect<
         AutomationVersionId,
-        AutomationPreviewRequired | DatabaseQueryError,
+        AutomationPreviewRequired | AutomationFlowInvalid | DatabaseQueryError,
         WorkspaceTransaction
       > => {
         if (
@@ -365,14 +369,27 @@ const activateIn = (input: {
         if (!previewIsCurrent(flow, preview.asOf, now)) {
           return Effect.fail(new AutomationPreviewRequired(input));
         }
-        return publishVersion({
-          copy,
-          publishable,
-          flow,
-          latest,
-          activatedBy: input.activatedBy,
-          now,
-        });
+        const activationTime =
+          copy.campaign.status === "paused"
+            ? Effect.succeed(now)
+            : passReminderOwnershipTime(input.campaignId, flow.trigger, now);
+        return activationTime.pipe(
+          Effect.filterOrFail(
+            (effectiveTime) =>
+              previewIsCurrent(flow, preview.asOf, effectiveTime),
+            () => new AutomationPreviewRequired(input)
+          ),
+          Effect.flatMap((effectiveTime) =>
+            publishVersion({
+              copy,
+              publishable,
+              flow,
+              latest,
+              activatedBy: input.activatedBy,
+              now: effectiveTime,
+            })
+          )
+        );
       }
     ),
     Effect.flatMap((versionId) =>
@@ -398,6 +415,59 @@ const previewIsCurrent = (
 ) =>
   !isPassReminderTrigger(flow.trigger) ||
   nextPassReminderPreviewOccurrence(flow.trigger, now).fireAt.equals(asOf);
+
+/** Check the published owner after the lock wait, in a fresh statement snapshot. */
+const passReminderOwnershipTime = Effect.fn(
+  "AutomationLifecycle.passReminderOwnershipTime"
+)(function* (
+  campaignId: CampaignId,
+  trigger: AutomationTrigger,
+  now: Temporal.Instant
+) {
+  if (!isPassReminderTrigger(trigger)) return now;
+  const { db } = yield* WorkspaceTransaction;
+  yield* WorkspaceLocks.passReminderCampaign(trigger._tag);
+  const [owner] = yield* db
+    .select({ id: emailCampaignAutomations.campaignId })
+    .from(emailCampaignAutomations)
+    .innerJoin(
+      emailCampaigns,
+      eq(emailCampaigns.id, emailCampaignAutomations.campaignId)
+    )
+    .innerJoin(
+      emailCampaignAutomationVersions,
+      eq(
+        emailCampaignAutomationVersions.id,
+        emailCampaignAutomations.activeVersionId
+      )
+    )
+    .where(
+      and(
+        ne(emailCampaignAutomations.campaignId, campaignId),
+        eq(emailCampaigns.status, "active"),
+        eq(emailCampaignAutomationVersions.purpose, "marketing"),
+        eq(emailCampaignAutomationVersions.triggerKind, trigger._tag)
+      )
+    )
+    .limit(1);
+  if (owner !== undefined) {
+    return yield* Effect.fail(
+      new AutomationFlowInvalid({
+        location: { _tag: "Trigger" },
+        message:
+          "Another active campaign already uses this pass reminder trigger.",
+      })
+    );
+  }
+
+  // Read the time after the wait. At the exact cutoff the previous owner
+  // may already have planned that occurrence.
+  const at = yield* lifecycleInstant;
+  const dueAt = getPassReminderDueAt(
+    plainDateStringSchema.make(getWorkspaceDate(at).toString())
+  );
+  return at.equals(dueAt) ? at.add({ microseconds: 1 }) : at;
+});
 
 /** The named dry run if it's a completed one for this campaign. */
 const completedPreview = (input: {
@@ -783,16 +853,26 @@ const resumeIn = ({
         case "draft":
           return Effect.fail(statusConflict(copy, "resume"));
         case "paused":
-          return loadAutomationVersionActivations(campaignId).pipe(
-            Effect.tap((versions) => {
+          return Effect.Do.pipe(
+            Effect.bind("versions", () =>
+              loadAutomationVersionActivations(campaignId)
+            ),
+            Effect.bind("resumedAt", ({ versions }) => {
               const active = versions.find(
                 ({ id }) => id === copy.automation.activeVersionId
               );
-              return active
-                ? ensurePassReminderWritesAllowed(active.trigger, "marketing")
-                : Effect.void;
+              return active === undefined
+                ? Effect.succeed(now)
+                : ensurePassReminderWritesAllowed(
+                    active.trigger,
+                    "marketing"
+                  ).pipe(
+                    Effect.andThen(
+                      passReminderOwnershipTime(campaignId, active.trigger, now)
+                    )
+                  );
             }),
-            Effect.flatMap((versions) =>
+            Effect.flatMap(({ versions, resumedAt }) =>
               Effect.all(
                 [
                   db
@@ -802,11 +882,11 @@ const resumeIn = ({
                   db
                     .update(emailCampaignAutomations)
                     .set({
-                      resumedAt: now,
-                      acceptingSince: now,
+                      resumedAt,
+                      acceptingSince: resumedAt,
                       // Fires that fell due while paused are never entered (D12).
                       nextFireAt: Option.getOrNull(
-                        nextFireAfter(versions, now)
+                        nextFireAfter(versions, resumedAt)
                       ),
                       updatedAt: sql`now()`,
                     })

@@ -3,7 +3,10 @@ import "@/shared/testing/workspace-test-env";
 import { afterAll, describe, expect, test } from "bun:test";
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import type { AutomationFlowType } from "@deskohub/workspace-admin-api";
-import { Effect } from "effect";
+import { Context, Deferred, Effect, Fiber } from "effect";
+import { SqlClient } from "effect/sql";
+import { TestClock } from "effect/testing";
+import { withPostgresAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   campaignContentFixture,
   seedAutomatedSend,
@@ -14,6 +17,7 @@ import type {
 } from "@/features/email-campaigns/campaign-identifiers";
 import {
   holdPostgresTransaction,
+  waitForAdvisoryLockWaiter,
   waitForPostgresLockWaiter,
 } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
@@ -145,6 +149,244 @@ describe.skipIf(!testDatabase)(
         [campaignId]
       );
       expect(rows).toEqual([{ flow: null }]);
+    });
+
+    describe("pass reminder campaign ownership", () => {
+      const permitPassReminders = Effect.provideService(
+        PassReminderWritesOpen,
+        Effect.succeed(true)
+      );
+
+      const previewPassReminder = async (
+        campaignId: CampaignId,
+        tag: "EntryPackExpiring" | "UnlimitedEnding",
+        at = now
+      ) => {
+        const trigger = { _tag: tag };
+        const flow = automationFlowFixture({
+          trigger,
+          steps: [{ _tag: "Send", id: "send" }],
+        });
+        await run(
+          lifecycle((service) => service.updateFlow({ campaignId, flow })).pipe(
+            permitPassReminders
+          ),
+          at
+        );
+        const previewId = await seedPreview(campaignId, {
+          status: "completed",
+        });
+        const { fireAt } = nextPassReminderPreviewOccurrence(trigger, at);
+        await pool.query(
+          "update email_campaign_automation_previews set as_of = $2 where id = $1",
+          [previewId, fireAt.toString()]
+        );
+        return lifecycle((service) =>
+          service.activate({ campaignId, previewId, activatedBy: null })
+        ).pipe(permitPassReminders);
+      };
+
+      test("allows one active campaign per kind and transfers ownership through pause and archive", async () => {
+        const first = (await seedDraft()).campaignId;
+        const replacement = (await seedDraft()).campaignId;
+        const unlimited = (await seedDraft()).campaignId;
+        const activateFirst = await previewPassReminder(
+          first,
+          "EntryPackExpiring"
+        );
+        const activateReplacement = await previewPassReminder(
+          replacement,
+          "EntryPackExpiring"
+        );
+        await run(activateFirst);
+        await run(await previewPassReminder(unlimited, "UnlimitedEnding"));
+        expect(await failure(activateReplacement)).toMatchObject({
+          _tag: "AutomationFlowInvalid",
+          location: { _tag: "Trigger" },
+        });
+        expect((await automationRow(replacement)).status).toBe("draft");
+        expect(await versionRows(replacement)).toEqual([]);
+
+        await run(lifecycle((service) => service.pause(first)));
+        await run(activateReplacement);
+        await run(
+          lifecycle((service) =>
+            service.updateFlow({ campaignId: first, flow: bookedSendFlow })
+          )
+        );
+        const resumeFirst = lifecycle((service) => service.resume(first)).pipe(
+          permitPassReminders
+        );
+        expect((await failure(resumeFirst))._tag).toBe("AutomationFlowInvalid");
+        expect((await automationRow(first)).status).toBe("paused");
+        await run(lifecycle((service) => service.archive(replacement)));
+        await run(resumeFirst);
+
+        const switchToUnlimited = await previewPassReminder(
+          first,
+          "UnlimitedEnding"
+        );
+        const beforeSwitch = await automationRow(first);
+        expect((await failure(switchToUnlimited))._tag).toBe(
+          "AutomationFlowInvalid"
+        );
+        expect(await automationRow(first)).toEqual(beforeSwitch);
+        expect(await versionRows(first)).toHaveLength(1);
+
+        await run(lifecycle((service) => service.pause(first)));
+        await run(switchToUnlimited);
+        expect(await versionRows(first)).toHaveLength(2);
+        expect((await failure(resumeFirst))._tag).toBe("AutomationFlowInvalid");
+        expect((await automationRow(first)).status).toBe("paused");
+        await run(lifecycle((service) => service.archive(unlimited)));
+      });
+
+      test("serializes competing activation transactions for the same kind", async () => {
+        const first = (await seedDraft()).campaignId;
+        const second = (await seedDraft()).campaignId;
+        const activateFirst = await previewPassReminder(
+          first,
+          "EntryPackExpiring"
+        );
+        const activateSecond = await previewPassReminder(
+          second,
+          "EntryPackExpiring"
+        );
+        const outcomes = await Promise.all([
+          run(Effect.result(activateFirst)),
+          run(Effect.result(activateSecond)),
+        ]);
+        expect(outcomes).toContainEqual(
+          expect.objectContaining({ _tag: "Success" })
+        );
+        expect(outcomes).toContainEqual(
+          expect.objectContaining({
+            _tag: "Failure",
+            failure: expect.objectContaining({ _tag: "AutomationFlowInvalid" }),
+          })
+        );
+        const campaigns = await Promise.all([
+          automationRow(first),
+          automationRow(second),
+        ]);
+        expect(campaigns.map(({ status }) => status).sort()).toEqual([
+          "active",
+          "draft",
+        ]);
+        await run(lifecycle((service) => service.archive(first)));
+        await run(lifecycle((service) => service.archive(second)));
+      });
+
+      test("rechecks the preview cutoff when ownership changes during an activation wait", async () => {
+        const owner = (await seedDraft()).campaignId;
+        const replacement = (await seedDraft()).campaignId;
+        const beforeCutoff = Temporal.Instant.from("2026-10-19T07:59:00Z");
+        const afterCutoff = beforeCutoff.add({ minutes: 2 });
+        await run(
+          await previewPassReminder(owner, "EntryPackExpiring", beforeCutoff),
+          beforeCutoff
+        );
+        const activateReplacement = await previewPassReminder(
+          replacement,
+          "EntryPackExpiring",
+          beforeCutoff
+        );
+        await run(
+          lifecycle((service) =>
+            service.updateFlow({ campaignId: owner, flow: bookedSendFlow })
+          ),
+          beforeCutoff
+        );
+        const editedPreview = await seedPreview(owner, { status: "completed" });
+        const lockKey = [
+          "email-pass-reminder-campaign",
+          "EntryPackExpiring",
+        ] as const;
+
+        const result = await run(
+          Effect.gen(function* () {
+            const held = yield* Deferred.make<void>();
+            const release = yield* Deferred.make<void>();
+            const holder = yield* Effect.forkChild(
+              withPostgresAdvisoryLock(
+                Context.get(
+                  testDatabase.databasePool.postgres,
+                  SqlClient.SqlClient
+                ),
+                lockKey,
+                Deferred.succeed(held, undefined).pipe(
+                  Effect.andThen(Deferred.await(release))
+                )
+              )
+            );
+            yield* Deferred.await(held);
+            const contender = yield* Effect.forkChild(
+              Effect.result(activateReplacement)
+            );
+            yield* Effect.promise(() =>
+              waitForAdvisoryLockWaiter(pool, lockKey)
+            );
+            yield* TestClock.setTime(afterCutoff.epochMilliseconds);
+            yield* lifecycle((service) =>
+              service.activate({
+                campaignId: owner,
+                previewId: editedPreview,
+                activatedBy: null,
+              })
+            );
+            yield* Deferred.succeed(release, undefined);
+            yield* Fiber.join(holder);
+            return yield* Fiber.join(contender);
+          }),
+          beforeCutoff
+        );
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "AutomationPreviewRequired" },
+        });
+        expect((await automationRow(replacement)).status).toBe("draft");
+        expect(await versionRows(replacement)).toEqual([]);
+      });
+
+      test("a replacement resumed at 10:00 cannot take the departing owner's occurrence", async () => {
+        const owner = (await seedDraft()).campaignId;
+        const replacement = (await seedDraft()).campaignId;
+        const cutoff = Temporal.Instant.from("2026-10-19T08:00:00Z");
+        const beforeCutoff = cutoff.subtract({ minutes: 1 });
+        await run(
+          await previewPassReminder(
+            replacement,
+            "EntryPackExpiring",
+            beforeCutoff
+          ),
+          beforeCutoff
+        );
+        await run(
+          lifecycle((service) => service.pause(replacement)),
+          beforeCutoff
+        );
+        await run(
+          await previewPassReminder(owner, "EntryPackExpiring", beforeCutoff),
+          beforeCutoff
+        );
+
+        await run(
+          lifecycle((service) => service.pause(owner)),
+          cutoff
+        );
+        await run(
+          lifecycle((service) => service.resume(replacement)).pipe(
+            permitPassReminders
+          ),
+          cutoff
+        );
+        const { rows } = await pool.query(
+          "select accepting_since > $2 as starts_after_cutoff from email_campaign_automations where campaign_id = $1",
+          [replacement, cutoff.toString()]
+        );
+        expect(rows).toEqual([{ starts_after_cutoff: true }]);
+        await run(lifecycle((service) => service.archive(replacement)));
+      });
     });
 
     describe("the preview gate (§7.5)", () => {

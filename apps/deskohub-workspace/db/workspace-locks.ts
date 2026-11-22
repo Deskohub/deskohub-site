@@ -134,6 +134,12 @@ export const WorkspaceLocks = {
       rank: 60,
       pair: ["email-automation-fire-entry", campaignId],
     }),
+  passReminderCampaign: (triggerKind: string): TransactionLock =>
+    take({
+      name: "passReminderCampaign",
+      rank: 61,
+      pair: ["email-pass-reminder-campaign", triggerKind],
+    }),
   requestBudget: (policyKey: string): TransactionLock =>
     take({
       name: "requestBudget",
