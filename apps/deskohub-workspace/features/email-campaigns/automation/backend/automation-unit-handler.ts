@@ -182,7 +182,10 @@ export interface AutomationUnitHandler<Subject, Fetched> {
     at: Temporal.Instant
   ) => Effect.Effect<
     ReadonlyArray<PlannedAutomationUnit>,
-    AutomationUnitDefect | AutomationUnitRecheckFailed | DatabaseQueryError,
+    | AutomationUnitDefect
+    | AutomationUnitFetchFailure
+    | AutomationUnitRecheckFailed
+    | DatabaseQueryError,
     WorkspaceTransaction
   >;
   /**
@@ -205,7 +208,10 @@ type AutomationUnitCommit = (
   at: Temporal.Instant
 ) => Effect.Effect<
   ReadonlyArray<PlannedAutomationUnit>,
-  AutomationUnitDefect | AutomationUnitRecheckFailed | DatabaseQueryError,
+  | AutomationUnitDefect
+  | AutomationUnitFetchFailure
+  | AutomationUnitRecheckFailed
+  | DatabaseQueryError,
   WorkspaceTransaction
 >;
 
