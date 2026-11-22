@@ -228,6 +228,7 @@ function PassPurchaseFlow({
   const working = useRef(false);
   const focused = useRef(false);
   const attempt = useRef<Attempt>(undefined);
+  const ownsView = () => focused.current;
   const datesAtom = unlimitedStartDatesAtom(
     kind === "unlimited" ? previousOrderId : false
   );
@@ -306,7 +307,7 @@ function PassPurchaseFlow({
     if (focused.current) router.replace(passPurchaseStatusHref(orderId));
   };
   const runAction = async (action: () => Promise<void>) => {
-    if (working.current) return;
+    if (working.current || !ownsView()) return;
     working.current = true;
     setBusy(true);
     try {
@@ -345,7 +346,7 @@ function PassPurchaseFlow({
               }),
           };
     attempt.current = { input, unconfirmed: false };
-    const exit = await begin(input);
+    const exit = await begin({ payload: input, owns: ownsView });
     if (!focused.current) return;
     if (Exit.isSuccess(exit)) {
       setPurchase({ quote: exit.value, billing: validated.billing });
@@ -380,6 +381,7 @@ function PassPurchaseFlow({
     setNotice(undefined);
     const exit = await updatePrice({
       orderId: quote.orderId,
+      owns: ownsView,
       payload: {
         productKind: quote.product.kind,
         displayedPriceFingerprint: quote.price.fingerprint,
@@ -417,6 +419,7 @@ function PassPurchaseFlow({
     const { quote, billing } = purchase;
     const exit = await submit({
       orderId: quote.orderId,
+      owns: ownsView,
       payload: passPaymentPayload(
         quote,
         billing,
@@ -462,6 +465,7 @@ function PassPurchaseFlow({
         await openPayment({
           orderId: quote.orderId,
           redirectUrl: exit.value.redirectUrl,
+          owns: ownsView,
         });
         showStatus(quote.orderId);
         return;

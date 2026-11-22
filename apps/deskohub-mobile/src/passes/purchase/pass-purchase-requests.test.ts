@@ -19,6 +19,7 @@ import {
   passPaymentPayload,
   passPaymentReturnUrl,
   passPurchaseStatusHref,
+  submitPassPurchaseAtom,
 } from "./pass-purchase-requests";
 
 const orderId = "01942447-f9dc-7000-8000-000000000001";
@@ -51,7 +52,7 @@ describe("pass purchase requests", () => {
     );
     const unmount = registry.mount(beginPassPurchaseAtom);
 
-    registry.set(beginPassPurchaseAtom, initial);
+    registry.set(beginPassPurchaseAtom, { payload: initial });
     const outcome = await settle(registry, beginPassPurchaseAtom);
     unmount();
 
@@ -67,7 +68,7 @@ describe("pass purchase requests", () => {
     const { registry, workspace } = makeFakeCustomerData();
     const unmount = registry.mount(beginPassPurchaseAtom);
 
-    registry.set(beginPassPurchaseAtom, initial);
+    registry.set(beginPassPurchaseAtom, { payload: initial });
     const outcome = await settle(registry, beginPassPurchaseAtom);
     unmount();
 
@@ -79,6 +80,27 @@ describe("pass purchase requests", () => {
       "getSession",
       "beginPassPurchase",
     ]);
+  });
+
+  test("rechecks ownership after auth and leaves when the buyer dismisses payment", async () => {
+    const { registry, workspace } = makeFakeCustomerData();
+    const unmount = registry.mount(submitPassPurchaseAtom);
+    registry.set(submitPassPurchaseAtom, {
+      orderId,
+      owns: () => false,
+      payload: {
+        productKind: "entry-pack",
+        accepted: true,
+        acceptedDocuments: [],
+        displayedPriceFingerprint: "a".repeat(64),
+      },
+    });
+    expect(await settle(registry, submitPassPurchaseAtom)).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "PassPurchaseViewChanged" },
+    });
+    expect(workspace.calls.map(String)).toEqual(["getSession"]);
+    unmount();
   });
 
   test("a hosted return resumes the buyer's pass order in the app", () => {
