@@ -8726,13 +8726,52 @@
         "type": "object",
         "properties": {
           "selection": {
-            "$ref": "#/components/schemas/CustomerBookingSelection"
+            "$ref": "#/components/schemas/CustomerReservationSelection"
           },
           "earlySetup": {
             "type": "boolean"
           }
         },
         "required": ["selection"],
+        "additionalProperties": false
+      },
+      "CustomerReservationSelection": {
+        "type": "object",
+        "properties": {
+          "family": {
+            "$ref": "#/components/schemas/CustomerReservationFamily"
+          },
+          "date": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "endDate": {
+            "$ref": "#/components/schemas/CustomerPlainDate"
+          },
+          "startTime": {
+            "$ref": "#/components/schemas/CustomerStartTime"
+          },
+          "duration": {
+            "$ref": "#/components/schemas/CustomerMeetingRoomDuration"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/CustomerBookableCoworkTier"
+          },
+          "monitorOption": {
+            "$ref": "#/components/schemas/CustomerMonitorOption"
+          },
+          "stay": {
+            "$ref": "#/components/schemas/CustomerCoworkStay"
+          },
+          "seats": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "coffee": {
+            "type": "boolean"
+          }
+        },
+        "required": ["family", "date"],
         "additionalProperties": false
       },
       "CustomerOrderFulfillmentStatus": {

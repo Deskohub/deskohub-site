@@ -97,7 +97,7 @@ const selectionFields = {
  * start and duration, or office dates and seats. The server checks it the way
  * the booking pages accept it.
  */
-export const CustomerBookingSelection = Schema.Struct({
+export const CustomerReservationSelection = Schema.Struct({
   ...selectionFields,
   /**
    * Office only: the number of seats. Defaults to 1. A checkout that sends
@@ -106,6 +106,11 @@ export const CustomerBookingSelection = Schema.Struct({
   seats: Schema.optionalKey(officeSeats),
   /** Cowork Open Space only: add coffee. Reserved Desk includes it. */
   coffee: Schema.optionalKey(Schema.Boolean),
+}).annotate({ identifier: "CustomerReservationSelection" });
+
+/** The selection a customer submits, including an optional funding choice. */
+export const CustomerBookingSelection = Schema.Struct({
+  ...CustomerReservationSelection.fields,
   /** Cowork only: book for the holder using one entry from this pack. */
   funding: Schema.optionalKey(
     Schema.Struct({ kind: Schema.Literal("entry"), passId })
