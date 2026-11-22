@@ -85,7 +85,7 @@ const readPaymentDisclosure = Effect.fn("passes.readPaymentDisclosure")(
 const beginUnlimitedOrder = Effect.fn("passes.beginUnlimitedOrder")(function* (
   input: BeginPassPurchaseInput,
   selection: UnlimitedPassSelection,
-  { accountId, email }: CustomerAccountSession
+  { accountId }: CustomerAccountSession
 ) {
   const { orderId, supersedeOrderId } = input;
   if (
@@ -105,23 +105,29 @@ const beginUnlimitedOrder = Effect.fn("passes.beginUnlimitedOrder")(function* (
       : yield* Schema.decodeEffect(reservationCustomerEmailSchema)(
           input.holderEmail
         );
-  const gift = holderEmail && holderEmail.toLowerCase() !== email.toLowerCase();
   const recipientName =
     input.recipientName === undefined
       ? undefined
       : yield* Schema.decodeEffect(
           unlimitedGiftRecipientNameSchema(input.locale)
         )(input.recipientName);
-  if (gift && recipientName === undefined) {
-    return yield* new EntryPackPurchaseError({ reason: "holder-unavailable" });
-  }
   const { outcome } = yield* beginUnlimitedPassPurchase({
     ...input,
     selection,
+    requireGiftRecipientName: true,
     ...(holderEmail !== undefined && { holderEmail }),
     ...(recipientName !== undefined && { recipientName }),
   });
-  return yield* Effect.fromResult(outcome);
+  return yield* Effect.fromResult(outcome).pipe(
+    Effect.catchTag("UnlimitedPassAdmissionError", ({ reason }) =>
+      Effect.fail(
+        new EntryPackPurchaseError({
+          reason:
+            reason === "holder-unavailable" ? reason : "purchase-conflict",
+        })
+      )
+    )
+  );
 });
 
 const beginPassOrder = Effect.fn("passes.beginPassOrder")(function* (
@@ -234,23 +240,26 @@ const startPurchaseDetails = Effect.fn("passes.startPurchaseDetails")(
 );
 
 const startPurchaseStatus = Effect.fn("passes.startPurchaseStatus")(function* (
-  input: BeginPassPurchaseInput
+  orderId: OrderId,
+  productKind: PassPurchaseProduct["kind"]
 ) {
   const actor = yield* CurrentCustomerAccount;
   const { accountId } = yield* actor.requireActive;
   const owned = yield* findOwnedPassPurchaseOrder(
-    input.orderId,
+    orderId,
     accountId,
-    input.product.kind
+    productKind
   );
   if (!owned) {
     return yield* new EntryPackPurchaseError({ reason: "purchase-conflict" });
   }
-  const orderId = owned.order.id;
-  const statusPath = getPassPurchaseStatusPath(owned.purchase.locale, orderId);
+  const statusPath = getPassPurchaseStatusPath(
+    owned.purchase.locale,
+    owned.order.id
+  );
   return {
     status: "status" as const,
-    orderId,
+    orderId: owned.order.id,
     checkoutPath: statusPath,
     statusPath,
   };
@@ -274,7 +283,10 @@ export const startPurchase = Effect.fn("passes.startPurchase")(
             case "holder-unavailable":
               return yield* startPurchaseDetails(input);
             case "payment-in-progress":
-              return yield* startPurchaseStatus(input);
+              return yield* startPurchaseStatus(
+                error.orderId ?? input.orderId,
+                input.product.kind
+              );
             default:
               return yield* error;
           }

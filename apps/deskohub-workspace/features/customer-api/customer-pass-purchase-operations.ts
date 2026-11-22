@@ -9,6 +9,7 @@ import {
   type UpdateCustomerPassPurchasePrice,
 } from "@deskohub/workspace-customer-api";
 import { Effect, Schema } from "effect";
+import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
 import { updateCustomerProfileSchema } from "@/features/account/contracts";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
 import type { Locale } from "@/features/i18n";
@@ -32,8 +33,23 @@ const unavailableDates = (dates: readonly (string | Temporal.PlainDate)[]) =>
 export const beginCustomerPassPurchase = Effect.fn(
   "customerApi.beginPassPurchase"
 )(function* (input: BeginCustomerPassPurchase) {
-  const { product, buyerProfile, orderId, supersedeOrderId, ...details } =
-    input;
+  const {
+    expectedBuyerAccountId,
+    product,
+    buyerProfile,
+    orderId,
+    supersedeOrderId,
+    ...details
+  } = input;
+  if (expectedBuyerAccountId !== undefined) {
+    const account = yield* CurrentCustomerAccount;
+    const { accountId } = yield* account.requireActive;
+    if (accountId !== expectedBuyerAccountId) {
+      return yield* new CustomerPassPurchaseRefused({
+        reason: "purchase-conflict",
+      });
+    }
+  }
   const selected =
     product.kind === "entry-pack"
       ? product
@@ -61,6 +77,15 @@ export const beginCustomerPassPurchase = Effect.fn(
     })
     .pipe(
       Effect.catchTags({
+        EntryPackPurchaseError: (error) =>
+          error.reason === "payment-in-progress" && error.orderId
+            ? Effect.fail(
+                new CustomerPassPurchaseRefused({
+                  reason: error.reason,
+                  orderId: error.orderId,
+                })
+              )
+            : Effect.fail(error),
         UnlimitedPassCapacityUnavailable: ({ blockingDates }) =>
           Effect.fail(unavailableDates(blockingDates)),
         UnlimitedPassDraftVoided: ({ blockingDates }) =>
