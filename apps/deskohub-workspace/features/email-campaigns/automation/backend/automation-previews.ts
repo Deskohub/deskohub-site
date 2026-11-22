@@ -380,6 +380,7 @@ const insertRows = (input: {
               outcome: row.outcome,
               stepId: row.stepId,
               sendAt: row.sendAt,
+              skipReason: row.skipReason,
               projected: row.projected,
               reservationStatusesApproximate:
                 row.reservationStatusesApproximate ?? false,

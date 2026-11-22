@@ -20,6 +20,7 @@ import {
   workspaceReservations,
 } from "@/db/schema";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import { customerHoldsCoveringPass } from "@/features/passes/backend/customer-pass-coverage";
 import {
   type ReservationVisit,
   ReservationVisits,
@@ -37,6 +38,7 @@ import {
   AudienceScope,
 } from "../../backend/audience-evaluation-context";
 import { CampaignCandidateRepository } from "../../backend/campaign-candidate.repository";
+import { consentingCampaignCustomers } from "../../backend/campaign-reachability";
 import { CampaignRecipientService } from "../../backend/campaign-recipient.service";
 import type { CampaignPurpose } from "../../body/campaign-content";
 import type { CampaignId } from "../../campaign-identifiers";
@@ -46,6 +48,11 @@ import {
   type ReplayedEvent,
   replayCustomerEvents,
   replayedFilter,
+  type SendGuardSkipReason,
+  type SendPolicyFacts,
+  type SendStep,
+  sendStepOf,
+  simulatedRunOutcome,
   simulateRun,
 } from "../automation-dry-run-simulation";
 import {
@@ -69,6 +76,7 @@ import {
 } from "../automation-triggers";
 import type { AutomationConditionAudienceMissing } from "../errors";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
+import { claimedCampaignCustomers } from "./automation-customer-claims";
 import {
   AutomationEvaluationFacts,
   type AutomationEvaluationPlan,
@@ -354,6 +362,7 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
       outcome,
       stepId: null,
       sendAt: null,
+      skipReason: null,
       projected: false,
     });
 
@@ -403,7 +412,10 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
           }).pipe(Effect.map((decided) => [step.id, decided] as const))
         ).pipe(Effect.map((entries) => new Map(entries)))
       ),
-      Effect.flatMap(({ now, members, active, decisions }) =>
+      Effect.bind("sendPolicyFacts", ({ now, entrants }) =>
+        sendPolicyFactsOf({ job, customers: entrants, now })
+      ),
+      Effect.flatMap(({ now, members, active, decisions, sendPolicyFacts }) =>
         Effect.forEach(customers, (customerId) => {
           if (!members.has(customerId)) {
             return Effect.succeed(row(customerId, entryRow("not-in-audience")));
@@ -418,15 +430,13 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
               Effect.succeed<AudienceFilterOutcome>(
                 decisions.get(step.id)?.get(customerId)?.outcome ?? "unknown"
               ),
+            sendPolicyFacts: sendPolicyFacts.get(customerId),
           }).pipe(
             Effect.map((end) =>
               row(customerId, {
                 triggerAt: fireAt,
                 customerEventId: null,
-                outcome: end.outcome,
-                stepId: end.stepId,
-                sendAt: end.outcome === "would-send" ? end.at : null,
-                projected: Temporal.Instant.compare(end.at, now) > 0,
+                ...simulatedRunOutcome(end, now),
               })
             )
           );
@@ -459,6 +469,9 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
         )
       ),
     ];
+    const replayedCustomers = new Set(
+      job.events.map((event) => event.dotyposCustomerId)
+    );
     const contextOf = (
       event: ReplayEvent,
       now: Temporal.Instant
@@ -510,8 +523,24 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
         undatedStatusChanges(planned.plan, customers)
       ),
       Effect.bind("now", () => currentInstant),
+      Effect.bind("sendPolicyFacts", ({ now }) =>
+        sendPolicyFactsOf({
+          job,
+          customers: customers.filter((customerId) =>
+            replayedCustomers.has(customerId)
+          ),
+          now,
+        })
+      ),
       Effect.flatMap(
-        ({ planned, visits, cancellations, undatedChanges, now }) => {
+        ({
+          planned,
+          visits,
+          cancellations,
+          undatedChanges,
+          now,
+          sendPolicyFacts,
+        }) => {
           const replay = (
             event: ReplayEvent,
             simulatedSends: readonly Temporal.Instant[]
@@ -550,6 +579,8 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
             simulateRun({
               steps: job.flow.steps,
               triggerAt: event.occurredAt,
+              sendPolicyFacts: sendPolicyFacts.get(event.dotyposCustomerId),
+              simulatedSends,
               evaluateCondition: (step, at) => {
                 // Conditions use facts as of the step, or now once it's past.
                 const evaluatedAt =
@@ -617,6 +648,7 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
                 ),
                 countsSimulatedSends,
               },
+              sendPolicyFacts: sendPolicyFacts.get(customerId),
               replay,
             }).pipe(
               Effect.map((replayed) =>
@@ -687,6 +719,106 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
             ),
             Effect.mapError(databaseFailure)
           );
+
+  /**
+   * Each customer's facts for the Send step's delivery policies, read only
+   * for the policies it carries: the once-ever claims and the one-off
+   * campaign emails in one query each, and for `skipPassHolders` the
+   * pre-submit check as it is now, consent first, then pass coverage for
+   * the customers who still consent.
+   */
+  const sendPolicyFactsOf = (input: {
+    readonly job: PreviewJob;
+    readonly customers: readonly DotyposCustomerId[];
+    readonly now: Temporal.Instant;
+  }): Effect.Effect<
+    ReadonlyMap<DotyposCustomerId, SendPolicyFacts>,
+    AutomationUnitFetchFailure
+  > => {
+    const send = sendStepOf(input.job.flow.steps);
+    const carries = (policy: (step: SendStep) => boolean) =>
+      input.customers.length > 0 && Option.exists(send, policy);
+    return Effect.all({
+      claimed: carries((step) => step.oncePerCustomer === true)
+        ? claimedCampaignCustomers(
+            db,
+            input.job.preview.campaignId,
+            input.customers
+          )
+        : Effect.succeed(new Set<DotyposCustomerId>()),
+      oneOffEmails: carries((step) => step.oneOffCampaignGap !== undefined)
+        ? candidates.latestOneOffMarketingEmails(input.customers)
+        : Effect.succeed(new Map<DotyposCustomerId, Temporal.Instant>()),
+      guardSkips: carries((step) => step.skipPassHolders === true)
+        ? guardSkipsOf(input)
+        : Effect.succeed(new Map<DotyposCustomerId, SendGuardSkipReason>()),
+    }).pipe(
+      Effect.map(
+        ({ claimed, oneOffEmails, guardSkips }) =>
+          new Map(
+            input.customers.map(
+              (customerId): [DotyposCustomerId, SendPolicyFacts] => {
+                const latest = oneOffEmails.get(customerId);
+                return [
+                  customerId,
+                  {
+                    claimed: claimed.has(customerId),
+                    oneOffCampaignEmails: latest === undefined ? [] : [latest],
+                    guardSkip: Option.fromUndefinedOr(
+                      guardSkips.get(customerId)
+                    ),
+                  },
+                ];
+              }
+            )
+          )
+      ),
+      Effect.mapError(databaseFailure)
+    );
+  };
+
+  /** Why the pre-submit check of `skipPassHolders` would skip each customer now. */
+  const guardSkipsOf = (input: {
+    readonly job: PreviewJob;
+    readonly customers: readonly DotyposCustomerId[];
+    readonly now: Temporal.Instant;
+  }) =>
+    consentingCampaignCustomers({
+      db,
+      purpose: input.job.purpose,
+      customerIds: input.customers,
+    }).pipe(
+      Effect.flatMap((consenting) =>
+        Effect.forEach(
+          input.customers,
+          (
+            customerId
+          ): Effect.Effect<
+            Option.Option<SendGuardSkipReason>,
+            DatabaseQueryError,
+            WorkspaceDatabase
+          > =>
+            consenting.has(customerId)
+              ? customerHoldsCoveringPass(customerId, input.now).pipe(
+                  Effect.map((covered) =>
+                    covered ? Option.some("pass-holder") : Option.none()
+                  )
+                )
+              : Effect.succeed(Option.some("consent-withdrawn"))
+        )
+      ),
+      Effect.map(
+        (skips) =>
+          new Map(
+            input.customers.flatMap((customerId, index) =>
+              Option.toArray(skips[index] ?? Option.none()).map(
+                (reason) => [customerId, reason] as const
+              )
+            )
+          )
+      ),
+      Effect.provideContext(context)
+    );
 
   /**
    * When Workspace cancelled each reservation, for the re-check of
@@ -978,6 +1110,7 @@ const unavailableRows = (
     outcome: "unavailable",
     stepId: null,
     sendAt: null,
+    skipReason: null,
     projected: false,
   } as const;
   return job.preview.kind === "schedule"
