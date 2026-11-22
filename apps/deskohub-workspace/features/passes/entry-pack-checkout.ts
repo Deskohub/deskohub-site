@@ -69,6 +69,10 @@ const submittedCode = Schema.optionalKey(
 const displayedPriceFingerprint = Schema.String.check(
   Schema.isPattern(/^[a-f0-9]{64}$/)
 );
+export const passCheckoutHandoffTokenMaxLength = 1024;
+export const passCheckoutHandoffTokenSchema = Schema.NonEmptyString.check(
+  Schema.isMaxLength(passCheckoutHandoffTokenMaxLength)
+);
 
 export const beginEntryPackCheckoutSchema = (locale: Locale) =>
   Schema.Struct({
@@ -77,6 +81,7 @@ export const beginEntryPackCheckoutSchema = (locale: Locale) =>
     buyerEmail: reservationCustomerEmailSchema,
     holderEmail: Schema.optionalKey(reservationCustomerEmailSchema),
     buyerProfile: Schema.optionalKey(updateCustomerProfileSchema(locale)),
+    handoffToken: Schema.optionalKey(passCheckoutHandoffTokenSchema),
   });
 
 export const repriceEntryPackCheckoutSchema = Schema.Struct({

@@ -1,13 +1,14 @@
 import { Effect, Match } from "effect";
 import { nativeApp } from "@/features/account";
 import type { PaymentReturnTarget } from "@/features/checkout/payment-return-target";
+import type { OrderId } from "@/features/order";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import { appendVercelPreviewProtectionBypass } from "./vercel-preview-protection-bypass";
 
 /**
  * Where a hosted payment's return sends the customer of an app checkout, and
- * the `statusUrl` its submission answers: the order's reservation screen in
+ * the `statusUrl` its submission answers: the order's status screen in
  * the native app (its custom scheme, which ends the app's payment browser
  * session) or in the web app under `/app/` on the Workspace origin. The
  * `after=payment` query tells the screen the customer just paid, so it polls
@@ -15,19 +16,26 @@ import { appendVercelPreviewProtectionBypass } from "./vercel-preview-protection
  */
 export const getPaymentReturnDestination = Effect.fn(
   "checkout.getPaymentReturnDestination"
-)(function* (input: {
-  readonly target: PaymentReturnTarget;
-  readonly orderId: WorkspaceReservationId;
-}) {
-  const reservationPath = `reservations/${encodeURIComponent(input.orderId)}?after=payment`;
+)(function* (
+  input: { readonly target: PaymentReturnTarget } & (
+    | {
+        readonly kind?: "reservation";
+        readonly orderId: WorkspaceReservationId;
+      }
+    | { readonly kind: "pass-purchase"; readonly orderId: OrderId }
+  )
+) {
+  const prefix =
+    input.kind === "pass-purchase" ? "passes/purchases" : "reservations";
+  const path = `${prefix}/${encodeURIComponent(input.orderId)}?after=payment`;
   return yield* Match.value(input.target).pipe(
     Match.when("native-app", () =>
-      Effect.succeed(`${nativeApp.scheme}://${reservationPath}`)
+      Effect.succeed(`${nativeApp.scheme}://${path}`)
     ),
     Match.when("web-app", () =>
       getWorkspaceRuntimeCallbackOrigin.pipe(
         Effect.map((origin) => {
-          const url = new URL(`/app/${reservationPath}`, origin);
+          const url = new URL(`/app/${path}`, origin);
           appendVercelPreviewProtectionBypass(url, { setBypassCookie: true });
           return url.toString();
         })

@@ -87,6 +87,12 @@ export type UnlimitedPassOrderLink =
 
 export const unlimitedCheckoutPredecessorLimit = 8;
 
+export type UnlimitedCheckoutHandoff = {
+  readonly token: string;
+  readonly orderId: OrderId;
+  readonly predecessorOrderIds: readonly OrderId[];
+};
+
 export function getUnlimitedCheckoutPredecessors(
   order?: UnlimitedPassOrderLink
 ) {

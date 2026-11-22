@@ -46,6 +46,7 @@ import { companyRegistrationIdSchema } from "@/features/accounting/billing-ident
 import { getInvoicePresentation } from "@/features/accounting/invoice-presentation";
 import { CurrentAdministrator } from "@/features/administrators/backend/current-administrator";
 import { CheckoutAnalytics } from "@/features/checkout/backend/analytics/checkout-analytics.service";
+import { handleCheckoutPaymentReturn } from "@/features/checkout/backend/checkout/checkout-payment-return-route.server";
 import { PaymentPageProviderStatus } from "@/features/checkout/backend/checkout/payment-page-provider-status";
 import { LatePaymentVerificationService } from "@/features/checkout/backend/payment/late-payment-verification.service";
 import { NexiWebhookService } from "@/features/checkout/backend/payment/nexi-webhook.service";
@@ -67,6 +68,7 @@ import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/wo
 import { m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
 import { findOrderKind } from "@/features/order/backend/order-kind";
+import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
 import type { ReservationBillingSelection } from "@/features/reservation/reservation-billing";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { currencyCZK } from "@/shared/money/currencies";
@@ -79,6 +81,13 @@ import { atInstant } from "@/shared/testing/workspace-test-clock.test-utils";
 import { applyPackAdjustment } from "../admin/apply-pass-adjustment";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate";
+import {
+  beginPurchase,
+  type PayPassPurchaseInput,
+  payPurchase,
+  purchaseStatus,
+  startPurchase,
+} from "./customer-pass-purchase";
 import {
   claimEntryPackGifts,
   queueEntryPackGiftResend,
@@ -94,12 +103,18 @@ import {
   getEntryPackPaymentDisclosure,
   getPassPurchasePriceFingerprint,
   payForEntryPack,
+  readEntryPackCheckoutPayment,
   readEntryPackPaymentRetry,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
 import { loadEntryPackRedemption } from "./entry-pack-redemption";
 import { settlePassPurchase } from "./entry-pack-settlement";
 import { loadEntryPackStatus } from "./entry-pack-status";
+import {
+  readPassCheckoutHandoff,
+  readPassCheckoutHandoffForPage,
+  sealPassCheckoutHandoff,
+} from "./pass-checkout-handoff";
 import { reconcilePassPurchases } from "./pass-purchase-reconciliation";
 
 describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
@@ -165,6 +180,104 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
           ),
       })
     );
+
+    test("customer Continue retains the same draft and initializes the owner's website Pay", async () => {
+      const db = database!;
+      const orderId = orderIdSchema.make(crypto.randomUUID());
+      const product = {
+        kind: "entry-pack",
+        tier: "open-space",
+        size: 5,
+      } as const;
+      const services = Layer.merge(db.layer, purchaseServices);
+      const request = { orderId, locale: "en-US", product } as const;
+      const begin = beginPurchase(request).pipe(Effect.provide(services));
+      const draft = await Effect.runPromise(begin);
+      expect(await Effect.runPromise(begin)).toEqual(draft);
+      expect(draft).toMatchObject({
+        orderId,
+        product,
+        payPath: `/en-US/passes/entry-pack?order=${orderId}&step=pay`,
+        statusPath: `/en-US/reservation/status/${orderId}`,
+        disclosure: getEntryPackPaymentDisclosure("en-US"),
+      });
+      expect(
+        await Effect.runPromise(
+          startPurchase(request).pipe(Effect.provide(services))
+        )
+      ).toEqual({
+        status: "ready",
+        orderId,
+        checkoutPath: draft.payPath,
+        statusPath: draft.statusPath,
+      });
+      const websitePay = await Effect.runPromise(
+        readEntryPackCheckoutPayment(orderId).pipe(Effect.provide(services))
+      );
+      expect(websitePay).toMatchObject({ kind: "ready", product });
+      expect(websitePay).not.toHaveProperty("priorPaymentAttemptId");
+      if (websitePay.kind !== "ready")
+        throw new Error("Expected a fresh draft");
+      expect(getPassPurchasePriceFingerprint(websitePay.quote)).toBe(
+        draft.price.fingerprint
+      );
+
+      const otherBuyer = Layer.mock(CurrentCustomerAccount, {
+        requireActive: Effect.succeed({
+          ...session,
+          accountId: customerAccountIdSchema.make(crypto.randomUUID()),
+        }),
+      });
+      await expect(
+        Effect.runPromise(
+          beginPurchase(request).pipe(
+            Effect.provide(otherBuyer),
+            Effect.provide(services)
+          )
+        )
+      ).rejects.toMatchObject({ reason: "purchase-conflict" });
+      await expect(
+        Effect.runPromise(
+          readEntryPackCheckoutPayment(orderId).pipe(
+            Effect.provide(otherBuyer),
+            Effect.provide(services)
+          )
+        )
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      const profileRequired = Layer.mock(CurrentCustomerAccount, {
+        requireActive: Effect.succeed(session),
+        peek: Effect.succeed({
+          kind: "unlinked",
+          session,
+          reviewMarker: "absent",
+        }),
+      });
+      const detailsOrderId = orderIdSchema.make(crypto.randomUUID());
+      const unavailable = await Effect.runPromise(
+        startPurchase({ ...request, orderId: detailsOrderId }).pipe(
+          Effect.provide(profileRequired),
+          Effect.provide(Layer.merge(services, SealedStateKeys.Default))
+        )
+      );
+      expect(unavailable.status).toBe("details_required");
+      const details = new URL(
+        unavailable.checkoutPath,
+        "https://deskohub.test"
+      );
+      expect(details.pathname).toBe("/en-US/passes/entry-pack");
+      expect(details.searchParams.get("step")).toBe("details");
+      expect(
+        await Effect.runPromise(
+          readPassCheckoutHandoff(details.searchParams.get("handoff")!).pipe(
+            Effect.provide(Layer.merge(services, SealedStateKeys.Default))
+          )
+        )
+      ).toMatchObject({
+        buyerAccountId: session.accountId,
+        orderId: detailsOrderId,
+        product,
+      });
+    });
 
     test("only the active buyer can resolve an Entry pack order's locale", async () => {
       const db = database!;
@@ -419,6 +532,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         )
       );
       const providerOrders: string[] = [];
+      const providerReturns: { resultUrl: string; cancelUrl: string }[] = [];
       const verifiedOrders: string[] = [];
       let captured = true;
       let priorClosureVerified = false;
@@ -509,9 +623,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         PaymentProvidersFromNexi.pipe(
           Layer.provide(
             Layer.mock(NexiService, {
-              createHostedPaymentPage: ({ orderId }) =>
+              createHostedPaymentPage: ({ orderId, resultUrl, cancelUrl }) =>
                 Effect.suspend(() => {
                   providerOrders.push(orderId);
+                  providerReturns.push({ resultUrl, cancelUrl });
                   if (failCreation) {
                     failCreation = false;
                     return Effect.fail(
@@ -719,7 +834,63 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             { signal }
           ),
         providerOrders,
+        providerReturns,
         verifiedOrders,
+        customerPay: (
+          overrides: Partial<PayPassPurchaseInput> = {},
+          viewer = session,
+          enabled = true
+        ) =>
+          payPurchase({
+            ...accept,
+            productKind: "entry-pack",
+            displayedPriceFingerprint:
+              getPassPurchasePriceFingerprint(initialQuote),
+            ...overrides,
+          }).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                Layer.mock(CurrentCustomerAccount, {
+                  requireActive: Effect.succeed(viewer),
+                }),
+                Layer.mock(WorkspaceFeatureFlagService, {
+                  isEnabled: () => Effect.succeed(enabled),
+                })
+              )
+            ),
+            Effect.provide(services)
+          ),
+        customerStatus: (viewer = session) =>
+          purchaseStatus(orderId).pipe(
+            Effect.provide(
+              Layer.mock(CurrentCustomerAccount, {
+                requireActive: Effect.succeed(viewer),
+              })
+            ),
+            Effect.provide(ProviderPaymentFinalizationService.Default),
+            Effect.provide(services)
+          ),
+        replayCustomerStart: () => {
+          const input = {
+            orderId,
+            locale: "en-US",
+            product: { kind: "entry-pack", tier: "open-space", size: 5 },
+          } as const;
+          return startPurchase(input).pipe(
+            Effect.provide(Layer.merge(services, SealedStateKeys.Default))
+          );
+        },
+        customerHandoff: () =>
+          sealPassCheckoutHandoff({
+            buyerAccountId: accountId,
+            orderId,
+            product: { kind: "entry-pack", tier: "open-space", size: 5 },
+          }).pipe(Effect.provide(SealedStateKeys.Default)),
+        reopenCustomerHandoff: (token: string) =>
+          readPassCheckoutHandoffForPage(token, "entry-pack").pipe(
+            Effect.map((draft) => draft?.statusPath),
+            Effect.provide(Layer.merge(services, SealedStateKeys.Default))
+          ),
         status: () =>
           Effect.runPromise(
             loadEntryPackStatus(orderId).pipe(
@@ -1233,6 +1404,145 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(await payment.evidenceCount()).toBe(6);
       expect(payment.providerOrders).toHaveLength(3);
       await payment.notify("failure", 2);
+    });
+
+    test("customer Pay verifies the buyer, current consent and price before opening Nexi", async () => {
+      const db = database!;
+      const purchase = await integration(db, 20_000);
+      const originalHandoff = await Effect.runPromise(
+        purchase.customerHandoff()
+      );
+      expect(
+        await Effect.runPromise(purchase.reopenCustomerHandoff(originalHandoff))
+      ).toBeUndefined();
+      expect(await Effect.runPromise(purchase.customerStatus())).toEqual({
+        orderId: purchase.orderId,
+        tier: "open-space",
+        entryCount: 5,
+        status: "not_started",
+      });
+      const otherBuyer = {
+        ...session,
+        accountId: customerAccountIdSchema.make(crypto.randomUUID()),
+      };
+      expect(
+        await Effect.runPromise(purchase.customerStatus(otherBuyer))
+      ).toEqual({ status: "not_found" });
+      for (const reason of [
+        purchase.customerPay({}, otherBuyer),
+        purchase.customerPay({}, session, false),
+      ]) {
+        await expect(Effect.runPromise(reason)).rejects.toMatchObject({
+          reason: "unavailable",
+        });
+      }
+      await expect(
+        Effect.runPromise(purchase.customerPay({ accepted: false }))
+      ).rejects.toMatchObject({ reason: "consent-required" });
+      expect(
+        await Effect.runPromise(purchase.customerPay({ acceptedDocuments: [] }))
+      ).toEqual({
+        status: "terms_changed",
+        disclosure: getEntryPackPaymentDisclosure("en-US"),
+      });
+      expect(
+        await Effect.runPromise(
+          purchase.customerPay({ displayedPriceFingerprint: "0".repeat(64) })
+        )
+      ).toMatchObject({
+        status: "pricing_changed",
+        price: { fingerprint: purchase.initialFingerprint },
+      });
+      expect(await purchase.evidenceCount()).toBe(0);
+      expect(purchase.providerOrders).toHaveLength(0);
+
+      const nativeDestination = `deskohub://passes/purchases/${purchase.orderId}?after=payment`;
+      expect(
+        await Effect.runPromise(
+          purchase.customerPay({ returnTarget: "native-app" })
+        )
+      ).toEqual({
+        status: "hosted",
+        statusUrl: nativeDestination,
+        redirectUrl: "https://nexi.test/payment",
+      });
+      expect(purchase.providerOrders).toHaveLength(1);
+      expect(await purchase.evidenceCount()).toBeGreaterThan(0);
+
+      const statusPath = `/en-US/reservation/status/${purchase.orderId}`;
+      const expectedStatus = {
+        status: "status",
+        orderId: purchase.orderId,
+        checkoutPath: statusPath,
+        statusPath,
+      };
+      expect(await Effect.runPromise(purchase.replayCustomerStart())).toEqual(
+        expectedStatus
+      );
+      const { resultUrl, cancelUrl } = purchase.providerReturns[0]!;
+      const reservations = Layer.mock(WorkspaceReservationRepository, {
+        findPaymentReturnTarget: () => Effect.succeed(undefined),
+      });
+      const invokeReturn = (url: string, orderId = purchase.orderId) =>
+        Effect.runPromise(
+          handleCheckoutPaymentReturn(new Request(url), {
+            params: Promise.resolve({ locale: "en-US", orderId }),
+          }).pipe(Effect.provide(Layer.merge(db.layer, reservations)))
+        );
+      for (const url of [resultUrl, cancelUrl]) {
+        const response = await invokeReturn(url);
+        expect(response.headers.get("location")).toBe(nativeDestination);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      }
+      const foreignDestination = new URL(resultUrl);
+      foreignDestination.searchParams.set(
+        "passReturnTarget",
+        "https://example.invalid"
+      );
+      const duplicateDestination = new URL(resultUrl);
+      duplicateDestination.searchParams.append("passReturnTarget", "web-app");
+      const siteStatus = new URL(
+        `/en-US/reservation/status/${purchase.orderId}`,
+        resultUrl
+      );
+      for (const destination of [foreignDestination, duplicateDestination]) {
+        expect(
+          (await invokeReturn(destination.toString())).headers.get("location")
+        ).toBe(siteStatus.toString());
+      }
+      const webAppDestination = new URL(resultUrl);
+      webAppDestination.searchParams.set("passReturnTarget", "web-app");
+      expect(
+        (await invokeReturn(webAppDestination.toString())).headers.get(
+          "location"
+        )
+      ).toBe(
+        new URL(
+          `/app/passes/purchases/${purchase.orderId}?after=payment`,
+          resultUrl
+        ).toString()
+      );
+      const unknownOrderId = orderIdSchema.make(crypto.randomUUID());
+      expect(
+        (await invokeReturn(resultUrl, unknownOrderId)).headers.get("location")
+      ).toBe(
+        new URL(
+          `/en-US/reservation/status/${unknownOrderId}`,
+          resultUrl
+        ).toString()
+      );
+      await purchase.notify("success");
+      expect(
+        await Effect.runPromise(purchase.reopenCustomerHandoff(originalHandoff))
+      ).toBe(statusPath);
+      expect(await Effect.runPromise(purchase.customerStatus())).toMatchObject({
+        status: "paid",
+      });
+      expect(await Effect.runPromise(purchase.replayCustomerStart())).toEqual(
+        expectedStatus
+      );
+      expect(purchase.providerOrders).toHaveLength(1);
     });
 
     test("retries only the failed internal invoice copy after confirming the purchase", async () => {

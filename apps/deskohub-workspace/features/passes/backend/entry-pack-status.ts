@@ -26,7 +26,8 @@ import { readEntryPackGiftState } from "./entry-pack-gift";
 
 const readOrderForViewer = Effect.fnUntraced(function* (
   orderId: OrderId,
-  accountId: CustomerAccountId
+  accountId: CustomerAccountId,
+  viewer: "buyer" | "site"
 ) {
   const { db } = yield* WorkspaceDatabase;
   const [row] = yield* db
@@ -71,15 +72,17 @@ const readOrderForViewer = Effect.fnUntraced(function* (
       and(
         eq(orders.kind, "pass-purchase"),
         eq(passPurchases.id, orderId),
-        or(
-          eq(passPurchases.buyerAccountId, accountId),
-          and(
-            eq(orders.paymentState, "complimentary"),
-            eq(orders.fulfillmentState, "fulfilled"),
-            eq(passPurchases.holderAccountId, accountId),
-            isNotNull(passPurchases.giftClaimedAt)
-          )
-        )
+        viewer === "buyer"
+          ? eq(passPurchases.buyerAccountId, accountId)
+          : or(
+              eq(passPurchases.buyerAccountId, accountId),
+              and(
+                eq(orders.paymentState, "complimentary"),
+                eq(orders.fulfillmentState, "fulfilled"),
+                eq(passPurchases.holderAccountId, accountId),
+                isNotNull(passPurchases.giftClaimedAt)
+              )
+            )
       )
     );
   return row;
@@ -88,7 +91,8 @@ const readOrderForViewer = Effect.fnUntraced(function* (
 const verificationDeadline = "40 seconds";
 
 export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
-  orderId: OrderId
+  orderId: OrderId,
+  viewer: "buyer" | "site" = "site"
 ) {
   const account = yield* CurrentCustomerAccount;
   const session = yield* Effect.option(account.requireActive);
@@ -101,7 +105,7 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
   }
 
   const { accountId } = session.value;
-  const stored = yield* readOrderForViewer(orderId, accountId);
+  const stored = yield* readOrderForViewer(orderId, accountId, viewer);
   if (!stored) return { status: "not_found" } as const;
 
   const { paymentState, attempt } = stored;
@@ -142,7 +146,7 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
   }
 
   const row = checkedPayment
-    ? yield* readOrderForViewer(orderId, accountId)
+    ? yield* readOrderForViewer(orderId, accountId, viewer)
     : stored;
   if (!row) return { status: "not_found" } as const;
 
@@ -226,7 +230,10 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
     }
 
     const { invitation, claimed } = yield* readEntryPackGiftState(orderId);
-    const email = yield* findPurchaseLoginEmail(row.holderAccountId);
+    const email =
+      viewer === "site"
+        ? yield* findPurchaseLoginEmail(row.holderAccountId)
+        : undefined;
     return {
       ...paid,
       gift: true,
@@ -288,6 +295,9 @@ export const loadEntryPackStatus = Effect.fn("loadEntryPackStatus")(function* (
         ? row.paymentState
         : "failed",
     retryPath,
+    ...(viewer === "buyer" &&
+      retryPath &&
+      row.attempt && { priorPaymentAttemptId: row.attempt.id }),
   } as const;
 });
 

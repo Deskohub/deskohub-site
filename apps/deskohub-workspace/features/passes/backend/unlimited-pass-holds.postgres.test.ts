@@ -43,6 +43,7 @@ import { testSessionProfile } from "@/features/account/backend/customer-authenti
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { WorkspaceTableAssignmentService } from "@/features/checkout/backend/reservation/workspace-table-assignment.service";
 import { paymentAttemptIdSchema } from "@/features/checkout/checkout-identifiers";
+import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { DiscountService } from "@/features/discounts/discount.service";
 import { WorkspaceFeatureFlagService } from "@/features/feature-flags/backend/workspace-feature-flag.service";
 import { orderIdSchema } from "@/features/order";
@@ -53,6 +54,7 @@ import {
   deliveryReportEmailId,
   deliveryReportEventId,
 } from "@/shared/backend/email/delivery-reports";
+import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { currencyCZK } from "@/shared/money/currencies";
 import { fixtureReservationAuthorId } from "@/shared/testing/workspace-fixtures.test-utils";
 import { waitForPostgresLockWaiter } from "@/shared/testing/workspace-postgres-lock-waiters.test-utils";
@@ -70,10 +72,17 @@ import { unlimitedPassDays } from "../pass-offer";
 import { passPurchaseQuoteCodec } from "../pass-purchase-quote";
 import { unlimitedCheckoutPredecessorLimit } from "../unlimited-pass-checkout";
 import {
+  beginPurchase,
+  purchaseStartDates,
+  startPurchase,
+} from "./customer-pass-purchase";
+import { readOwnedPassPurchaseStatusPath } from "./entry-pack-order";
+import {
   getPassPurchasePriceFingerprint,
   repriceEntryPackPurchase,
 } from "./entry-pack-purchase";
 import { settlePassPurchase } from "./entry-pack-settlement";
+import { readPassCheckoutHandoff } from "./pass-checkout-handoff";
 import { reconcileUnlimitedPassReleases } from "./pass-purchase-reconciliation";
 import { unlimitedConfirmationDeliveryReports } from "./unlimited-confirmation-delivery";
 import { getBookableUnlimitedStarts } from "./unlimited-pass-capacity";
@@ -1098,6 +1107,195 @@ function makeUnlimitedDraftProvider() {
     ],
   });
 }
+
+it("uses the website's dates, holds and fresh Pay continuation for an Unlimited purchase", async () => {
+  const accountId = newAccountId();
+  const holderAccountId = newAccountId();
+  const holderEmail = testEmailAddress("customer-unlimited-holder");
+  const provider = makeUnlimitedDraftProvider();
+  const services = unlimitedNewDraftLayer(
+    accountId,
+    testEmailAddress("customer-unlimited-buyer"),
+    provider.service
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* WorkspaceDatabase;
+      yield* db.insert(customerAccounts).values([
+        { id: accountId },
+        {
+          id: holderAccountId,
+          dotyposCustomerId: DotyposCustomerIdSchema.make(
+            "customer-pass-recipient"
+          ),
+        },
+      ]);
+      yield* db.insert(authUser).values({
+        id: holderAccountId,
+        email: holderEmail,
+        name: "Fixture Recipient",
+      });
+      const startDate = date(getCurrentWorkspaceDate().add({ days: 2 }));
+      const predecessor = yield* record(
+        Temporal.PlainDate.from(startDate),
+        accountId,
+        holderAccountId
+      );
+      yield* createUnlimitedPassHolds(predecessor);
+      const supersedeOrderId = predecessor.id;
+      const referralCode = canonicalPromotionCodeSchema.make("REFERRAL");
+      const availability = yield* purchaseStartDates({
+        startsOn: startDate,
+        supersedeOrderId,
+      });
+      expect(availability.status).toBe("ready");
+      if (availability.status !== "ready")
+        throw new Error("Expected start dates");
+      expect(availability.starts["reserved-desk"]).toContain(startDate);
+      const orderId = orderIdSchema.make(crypto.randomUUID());
+      const requested = {
+        orderId,
+        locale: "en-US" as const,
+        product: {
+          kind: "unlimited" as const,
+          selection: { tier: "reserved-desk" as const, startDate },
+        },
+        holderEmail,
+        supersedeOrderId,
+        referralCode,
+      };
+      const start = yield* startPurchase(requested);
+      expect(start.status).toBe("details_required");
+      expect(start.checkoutPath).not.toContain(holderEmail);
+      const details = new URL(start.checkoutPath, "https://deskohub.test");
+      expect(details.pathname).toBe("/en-US/passes/unlimited");
+      expect(details.searchParams.get("step")).toBe("details");
+      const handoff = readPassCheckoutHandoff(
+        details.searchParams.get("handoff")!
+      );
+      const anotherBuyer = Layer.mock(CurrentCustomerAccount, {
+        requireActive: Effect.succeed({
+          ...testSessionProfile,
+          accountId: holderAccountId,
+          email: holderEmail,
+          deletionRequested: false,
+        }),
+      });
+      expect(yield* handoff.pipe(Effect.provide(anotherBuyer))).toBeUndefined();
+      const fields = yield* handoff;
+      expect(fields).toMatchObject({
+        orderId,
+        holderEmail,
+        product: requested.product,
+        predecessorOrderIds: [supersedeOrderId],
+        referralCode,
+      });
+      if (!fields) throw new Error("Expected buyer-owned gift details");
+      const begin = beginPurchase({
+        ...fields,
+        locale: "en-US",
+        supersedeOrderId: fields.predecessorOrderIds?.[0],
+        recipientName: "Fixture Recipient",
+      });
+      const draft = yield* begin;
+      expect(draft.orderId).toBe(orderId);
+      const [purchase] = yield* db
+        .select({
+          holderAccountId: passPurchases.holderAccountId,
+          quote: passPurchases.quote,
+        })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, orderId));
+      expect(purchase?.holderAccountId).toBe(holderAccountId);
+      const quote = yield* Schema.decodeEffect(passPurchaseQuoteCodec)(
+        purchase!.quote
+      );
+      expect(quote.selection?.referralCode).toBe(referralCode);
+      const [retired] = yield* db
+        .select({ status: passPurchases.status })
+        .from(passPurchases)
+        .where(eq(passPurchases.id, supersedeOrderId));
+      expect(retired?.status).toBe("void");
+      expect(yield* begin).toEqual(draft);
+      expect(draft.payPath).toBe(
+        `/en-US/passes/unlimited?order=${orderId}&step=pay`
+      );
+      expect(draft.disclosure.earlyStartRequest).toBeDefined();
+      expect(
+        [...provider.reservations.values()].filter(
+          ({ status }) => status === "NEW"
+        )
+      ).toHaveLength(unlimitedPassDays);
+
+      const continuation = yield* loadUnlimitedCheckoutContinuation(
+        orderId,
+        "payment"
+      );
+      expect(continuation).toMatchObject({
+        kind: "pay",
+        payment: {
+          price: { fingerprint: draft.price.fingerprint },
+          disclosure: draft.disclosure,
+        },
+      });
+      if (continuation?.kind !== "pay") throw new Error("Expected fresh Pay");
+      expect(continuation.payment).not.toHaveProperty("priorPaymentAttemptId");
+      yield* expirePass(orderId);
+      expect(yield* Effect.result(begin)).toEqual(
+        Result.fail(expect.objectContaining({ reason: "payment-in-progress" }))
+      );
+      const replacementOrderId = orderIdSchema.make(crypto.randomUUID());
+      const editedSelection = {
+        tier: "reserved-desk" as const,
+        startDate: date(Temporal.PlainDate.from(startDate).add({ days: 1 })),
+      };
+      const editedDraft = {
+        orderId,
+        locale: "en-US" as const,
+        selection: editedSelection,
+        holderEmail,
+      };
+      const ordinary =
+        yield* beginUnlimitedPassPurchaseWithDisposition(editedDraft);
+      expect(ordinary.outcome).toEqual(
+        Result.fail(expect.objectContaining({ reason: "purchase-conflict" }))
+      );
+      for (const input of [
+        editedDraft,
+        {
+          ...editedDraft,
+          orderId: replacementOrderId,
+          holderEmail: testEmailAddress("unlimited-race-edited-recipient"),
+          supersedeOrderIds: [supersedeOrderId, orderId],
+        },
+      ]) {
+        const protectedResult =
+          yield* beginUnlimitedPassPurchaseWithDisposition({
+            ...input,
+            continueFromHandoff: true,
+          });
+        expect(protectedResult.outcome).toEqual(
+          Result.fail(
+            expect.objectContaining({
+              _tag: "UnlimitedPassHandoffPaymentStarted",
+              orderId,
+            })
+          )
+        );
+        expect(protectedResult.retiredPredecessorOrderIds).toEqual([]);
+      }
+      expect(
+        yield* readOwnedPassPurchaseStatusPath(orderId, accountId, "unlimited")
+      ).toBe(`/en-US/reservation/status/${orderId}`);
+      expect(
+        yield* db
+          .select({ id: orders.id })
+          .from(orders)
+          .where(eq(orders.id, replacementOrderId))
+      ).toEqual([]);
+    }).pipe(Effect.provide(Layer.merge(services, SealedStateKeys.Default)))
+  );
+});
 
 function unlimitedNewDraftLayer(
   accountId: ReturnType<typeof newAccountId>,

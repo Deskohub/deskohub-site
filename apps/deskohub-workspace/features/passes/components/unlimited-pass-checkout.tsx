@@ -19,12 +19,14 @@ import type {
   PassPurchaseBuyer,
   passPurchaseDetailsSchema,
 } from "../pass-purchase-details";
+import { withPassCheckoutHandoff } from "../routes";
 import type { UnlimitedPassSelection } from "../unlimited-pass";
 import {
   getUnlimitedCheckoutPredecessors,
   getUnlimitedPassChoosePath,
   getUnlimitedPassDetailsPath,
   getUnlimitedPassPayPath,
+  type UnlimitedCheckoutHandoff,
   type UnlimitedPassAvailabilityData,
   type UnlimitedPassOptions,
   type UnlimitedPassOrderLink,
@@ -73,7 +75,8 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
   readonly draft?: UnlimitedPassOrderLink & {
     readonly holderEmail?: string | null;
   };
-  readonly retryPayment?: {
+  readonly initialHandoff?: UnlimitedCheckoutHandoff;
+  readonly initialPayment?: {
     readonly orderId: OrderId;
     readonly selection: UnlimitedPassSelection;
     readonly state: PassPurchasePayState;
@@ -95,6 +98,7 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
     supersedeOrderIds?: readonly OrderId[];
     buyerEmail: string;
     holderEmail?: string;
+    handoffToken?: string;
     recipientName?: string;
     buyerProfile?: DetailsSchema["Type"]["buyerProfile"];
   }) => Promise<{
@@ -102,9 +106,12 @@ type UnlimitedPassCheckoutProps = PassPurchasePaymentActions & {
       | (Omit<PassPurchasePayState, "billing"> & { status: "ready" })
       | { status: "signed_out" | "terms_changed" }
       | { status: "purchase_error"; reason: string }
+      | { status: "status"; statusPath: string }
+      | { status: "handoff_updated"; handoff: UnlimitedCheckoutHandoff }
       | {
           status: "capacity_unavailable" | "draft_voided";
           blockingDates: readonly string[];
+          handoff?: UnlimitedCheckoutHandoff;
         }
     ) & { readonly retiredPredecessorOrderIds?: readonly OrderId[] };
     serverError?: string;
@@ -129,7 +136,8 @@ export function UnlimitedPassCheckout({
   renewsPassId,
   initialBounds,
   draft,
-  retryPayment,
+  initialHandoff,
+  initialPayment,
   discountCodeEntryEnabled,
   getAvailability,
   beginCheckout,
@@ -154,7 +162,13 @@ export function UnlimitedPassCheckout({
     );
   });
   const [step, setStep] = useState<CheckoutStep>(() => {
-    if (retryPayment) return { kind: "pay", retry: true, ...retryPayment };
+    if (initialPayment) {
+      return {
+        kind: "pay",
+        ...initialPayment,
+        ...(initialPayment.state.priorPaymentAttemptId && { retry: true }),
+      };
+    }
     if (initialDetails) return { kind: "details", selection: initialDetails };
     return { kind: "choose" };
   });
@@ -169,6 +183,7 @@ export function UnlimitedPassCheckout({
   );
   const [error, setError] = useState<string>();
   const [order, setOrder] = useState<UnlimitedPassOrderLink | undefined>(draft);
+  const [handoff, setHandoff] = useState(initialHandoff);
   const detailRevision = useRef(0);
   useEffect(
     () => () => {
@@ -209,20 +224,23 @@ export function UnlimitedPassCheckout({
       ? displayedMonth
       : undefined;
   const predecessorOrderIds = getUnlimitedCheckoutPredecessors(order);
+  const availabilityPredecessors = handoff
+    ? [...new Set([...handoff.predecessorOrderIds, ...predecessorOrderIds])]
+    : predecessorOrderIds;
   const availability = useQuery({
     queryKey: [
       "unlimited-pass-availability",
       locale,
       startsOn,
-      predecessorOrderIds,
+      availabilityPredecessors,
     ],
     queryFn: async () => {
       const fallback = m.reservationAvailabilityError({}, { locale });
       const result = await getAvailability({
         locale,
         ...(startsOn !== undefined && { startsOn }),
-        ...(predecessorOrderIds.length > 0 && {
-          supersedeOrderIds: predecessorOrderIds,
+        ...(availabilityPredecessors.length > 0 && {
+          supersedeOrderIds: availabilityPredecessors,
         }),
       }).catch(() => ({
         data: undefined,
@@ -258,19 +276,43 @@ export function UnlimitedPassCheckout({
     requestAnimationFrame(() => heading.current?.focus());
   };
 
+  const choosePath = (
+    options: UnlimitedPassOptions,
+    date: PlainDate | undefined,
+    order: UnlimitedPassOrderLink | undefined,
+    token?: string
+  ) => {
+    const path = getUnlimitedPassChoosePath(
+      locale,
+      options,
+      date,
+      token ? undefined : order,
+      renewsPassId
+    );
+    return token ? withPassCheckoutHandoff(path, token) : path;
+  };
+
+  const detailsPath = (
+    selection: UnlimitedPassSelection,
+    order: UnlimitedPassOrderLink | undefined,
+    token?: string
+  ) => {
+    const path = getUnlimitedPassDetailsPath(
+      locale,
+      selection,
+      token ? undefined : order,
+      renewsPassId
+    );
+    return token ? withPassCheckoutHandoff(path, token) : path;
+  };
+
   const goToChoose = () => {
     if (beginPending.current) return;
     if (detailsDraft.current) setDetails(detailsDraft.current());
     window.history.replaceState(
       null,
       "",
-      getUnlimitedPassChoosePath(
-        locale,
-        options,
-        startDate,
-        order,
-        renewsPassId
-      )
+      choosePath(options, startDate, order, handoff?.token)
     );
     focusStep({ kind: "choose" });
   };
@@ -283,7 +325,7 @@ export function UnlimitedPassCheckout({
       setError(m.actionFailedUnexpectedly({}, { locale }));
       return;
     }
-    const editedOrder = editOrder(order);
+    const editedOrder = handoff ? order : editOrder(order);
     setOrder(editedOrder);
     setError(undefined);
     setOptions(nextOptions);
@@ -292,13 +334,7 @@ export function UnlimitedPassCheckout({
     window.history.replaceState(
       null,
       "",
-      getUnlimitedPassChoosePath(
-        locale,
-        nextOptions,
-        date,
-        editedOrder,
-        renewsPassId
-      )
+      choosePath(nextOptions, date, editedOrder, handoff?.token)
     );
   };
 
@@ -309,7 +345,7 @@ export function UnlimitedPassCheckout({
     window.history.replaceState(
       null,
       "",
-      getUnlimitedPassDetailsPath(locale, selection, order, renewsPassId)
+      detailsPath(selection, order, handoff?.token)
     );
     focusStep({ kind: "details", selection });
   };
@@ -357,34 +393,45 @@ export function UnlimitedPassCheckout({
     const revision = ++detailRevision.current;
     beginPending.current = true;
     setBeginning(true);
+    let activeHandoff = handoff;
+    const submissionPath = (order: UnlimitedPassOrderLink) =>
+      detailsPath(selection, order, activeHandoff?.token);
     const saveOrder = (order: UnlimitedPassOrderLink) => {
-      window.history.replaceState(
-        null,
-        "",
-        getUnlimitedPassDetailsPath(locale, selection, order, renewsPassId)
-      );
+      window.history.replaceState(null, "", submissionPath(order));
       setOrder(order);
     };
     const beginSubmission = async (attempt: SubmittedOrder) => {
-      saveOrder(attempt);
-      const result = await beginCheckout({
-        orderId: attempt.orderId,
-        locale,
-        selection,
-        ...(renewsPassId && { renewsPassId }),
-        ...(attempt.predecessorOrderIds.length > 0 && {
-          supersedeOrderIds: attempt.predecessorOrderIds,
-        }),
-        buyerEmail: buyer.email,
-        ...(holderEmail !== undefined && { holderEmail }),
-        ...(holderEmail !== undefined &&
-          recipientName !== undefined && {
-            recipientName,
+      const send = () =>
+        beginCheckout({
+          orderId: attempt.orderId,
+          locale,
+          selection,
+          ...(renewsPassId && { renewsPassId }),
+          ...(attempt.predecessorOrderIds.length > 0 && {
+            supersedeOrderIds: attempt.predecessorOrderIds,
           }),
-        ...(values.buyerProfile !== undefined && {
-          buyerProfile: values.buyerProfile,
-        }),
-      });
+          buyerEmail: buyer.email,
+          ...(activeHandoff && { handoffToken: activeHandoff.token }),
+          ...(holderEmail !== undefined && { holderEmail }),
+          ...(holderEmail !== undefined &&
+            recipientName !== undefined && {
+              recipientName,
+            }),
+          ...(values.buyerProfile !== undefined && {
+            buyerProfile: values.buyerProfile,
+          }),
+        });
+      saveOrder(attempt);
+      let result = await send();
+      if (
+        detailRevision.current === revision &&
+        result.data?.status === "handoff_updated"
+      ) {
+        activeHandoff = result.data.handoff;
+        setHandoff(activeHandoff);
+        saveOrder(attempt);
+        result = await send();
+      }
       const retired = result.data?.retiredPredecessorOrderIds;
       if (detailRevision.current === revision && retired?.length) {
         submission = {
@@ -420,19 +467,18 @@ export function UnlimitedPassCheckout({
       const { orderId } = submission;
       if (result.data?.status === "signed_out") {
         window.location.assign(
-          getAccountSignInPath(
-            locale,
-            getUnlimitedPassDetailsPath(
-              locale,
-              selection,
-              submission,
-              renewsPassId
-            )
-          )
+          getAccountSignInPath(locale, submissionPath(submission))
         );
+      } else if (result.data?.status === "status") {
+        window.location.assign(result.data.statusPath);
       } else if (result.data?.status === "ready") {
+        const hadHandoff = activeHandoff !== undefined;
+        activeHandoff = undefined;
+        setHandoff(undefined);
         if (submission.predecessorOrderIds.length === 0) {
           saveOrder({ kind: "resume", orderId });
+        } else if (hadHandoff) {
+          saveOrder(submission);
         }
         setPaymentRequested(false);
         focusStep({
@@ -449,22 +495,21 @@ export function UnlimitedPassCheckout({
         result.data?.status === "capacity_unavailable" ||
         result.data?.status === "draft_voided"
       ) {
+        const retryHandoff = result.data.handoff;
+        setHandoff(retryHandoff);
         const remaining = submission.predecessorOrderIds;
-        const edit: UnlimitedPassOrderLink | undefined = remaining.length
-          ? { kind: "edit", predecessorOrderIds: remaining }
-          : undefined;
+        let edit: UnlimitedPassOrderLink | undefined;
+        if (retryHandoff) {
+          edit = { kind: "resume", orderId: retryHandoff.orderId };
+        } else if (remaining.length) {
+          edit = { kind: "edit", predecessorOrderIds: remaining };
+        }
         setOrder(edit);
         setStartDate(fixedStartDate);
         window.history.replaceState(
           null,
           "",
-          getUnlimitedPassChoosePath(
-            locale,
-            options,
-            fixedStartDate,
-            edit,
-            renewsPassId
-          )
+          choosePath(options, fixedStartDate, edit, retryHandoff?.token)
         );
         if (
           predecessorOrderIds.length === remaining.length &&
