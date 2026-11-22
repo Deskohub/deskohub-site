@@ -556,6 +556,8 @@
   "pass_choose_per_day": "{price} za deň",
   "pass_choose_saving": "O {price} menej ako za jeden deň",
   "pass_choose_start_date": "Dátum začiatku",
+  "pass_choose_calendar_covered": "deň v rámci pasu",
+  "pass_choose_calendar_unavailable": "nedá sa zvoliť ako dátum začiatku",
   "pass_choose_no_starts": "Pre tento výber nie sú k dispozícii žiadne dátumy začiatku.",
   "pass_choose_coffee": "Káva na {days} dní",
   "pass_choose_coffee_note": "Káva na každý deň platnosti pasu. Zľavy sa nevzťahujú na doplnky.",

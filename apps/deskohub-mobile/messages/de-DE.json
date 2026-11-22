@@ -552,6 +552,8 @@
   "pass_choose_per_day": "{price} pro Tag",
   "pass_choose_saving": "{price} günstiger als ein Einzeltag",
   "pass_choose_start_date": "Startdatum",
+  "pass_choose_calendar_covered": "im Pass enthalten",
+  "pass_choose_calendar_unavailable": "als Startdatum nicht verfügbar",
   "pass_choose_no_starts": "Für diese Auswahl sind keine Starttermine verfügbar.",
   "pass_choose_coffee": "Kaffee für {days} Tage",
   "pass_choose_coffee_note": "Kaffee an jedem Tag deines Passes. Rabatte gelten nicht für Extras.",

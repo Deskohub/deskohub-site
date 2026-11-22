@@ -552,6 +552,8 @@
   "pass_choose_per_day": "{price} a day",
   "pass_choose_saving": "{price} less than a single day",
   "pass_choose_start_date": "Start date",
+  "pass_choose_calendar_covered": "covered by this pass",
+  "pass_choose_calendar_unavailable": "unavailable as a start date",
   "pass_choose_no_starts": "There are no available start dates for this selection.",
   "pass_choose_coffee": "Coffee for {days} days",
   "pass_choose_coffee_note": "Coffee on every day of your pass. Discounts don’t apply to add-ons.",

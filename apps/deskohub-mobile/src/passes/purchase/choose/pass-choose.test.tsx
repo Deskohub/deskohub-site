@@ -254,12 +254,20 @@ describe("PassChoose", () => {
       ({ props }) => props["aria-label"]?.startsWith("Monday, November 2")
     );
     expect(day?.props.disabled).toBe(false);
+    expect(day?.props["aria-selected"]).toBe(false);
     day?.props.onPress?.(
       {} as Parameters<NonNullable<PressableProps["onPress"]>>[0]
     );
     expect(patches).toEqual([
       { startDate: "2026-11-02", monitorOption: undefined },
     ]);
+    const covered = findAll<PressableProps>(hostTree(tree), "Pressable").find(
+      ({ props }) => props["aria-label"]?.startsWith("Friday, November 6")
+    );
+    expect(covered?.props.disabled).toBe(true);
+    expect(covered?.props["aria-label"]).toContain(
+      m.pass_choose_calendar_covered({}, { locale: "en-US" })
+    );
   });
 
   test("shows loading while dates are pending and lets the calling screen show a failure", () => {

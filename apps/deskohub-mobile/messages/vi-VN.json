@@ -550,6 +550,8 @@
   "pass_choose_per_day": "{price} mỗi ngày",
   "pass_choose_saving": "Tiết kiệm {price} so với mua lẻ mỗi ngày",
   "pass_choose_start_date": "Ngày bắt đầu",
+  "pass_choose_calendar_covered": "trong thời hạn của thẻ",
+  "pass_choose_calendar_unavailable": "không thể chọn làm ngày bắt đầu",
   "pass_choose_no_starts": "Không có ngày bắt đầu còn chỗ cho lựa chọn này.",
   "pass_choose_coffee": "Cà phê trong {days} ngày",
   "pass_choose_coffee_note": "Có cà phê mỗi ngày trong thời hạn của thẻ. Ưu đãi không áp dụng cho dịch vụ bổ sung.",

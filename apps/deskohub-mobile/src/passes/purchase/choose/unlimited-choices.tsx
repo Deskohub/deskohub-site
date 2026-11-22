@@ -128,12 +128,17 @@ export function UnlimitedChoices({
           onSelect={selectDate}
           range={
             selected
-              ? { start: selected, end: addDays(selected, days - 1) }
+              ? {
+                  kind: "coverage",
+                  start: selected,
+                  end: addDays(selected, days - 1),
+                }
               : undefined
           }
+          coveredDayLabel={m.pass_choose_calendar_covered({}, { locale })}
           previousMonthLabel={m.booking_calendar_previous_month({}, { locale })}
           nextMonthLabel={m.booking_calendar_next_month({}, { locale })}
-          unavailableLabel={m.booking_calendar_unavailable_day({}, { locale })}
+          unavailableLabel={m.pass_choose_calendar_unavailable({}, { locale })}
         />
       ) : (
         !datesFailed && (

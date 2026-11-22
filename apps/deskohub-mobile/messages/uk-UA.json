@@ -556,6 +556,8 @@
   "pass_choose_per_day": "{price} за день",
   "pass_choose_saving": "На {price} дешевше за разовий день",
   "pass_choose_start_date": "Дата початку",
+  "pass_choose_calendar_covered": "день дії абонемента",
+  "pass_choose_calendar_unavailable": "недоступна як дата початку",
   "pass_choose_no_starts": "Для цього варіанта немає доступних дат початку.",
   "pass_choose_coffee": "Кава на {days} днів",
   "pass_choose_coffee_note": "Кава щодня протягом дії абонемента. Знижки не поширюються на додаткові послуги.",

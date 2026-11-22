@@ -552,6 +552,8 @@
   "pass_choose_per_day": "{price} प्रति दिन",
   "pass_choose_saving": "एक दिन की बुकिंग से {price} कम",
   "pass_choose_start_date": "शुरू होने की तारीख",
+  "pass_choose_calendar_covered": "इस पास में शामिल",
+  "pass_choose_calendar_unavailable": "शुरू होने की तारीख के रूप में उपलब्ध नहीं है",
   "pass_choose_no_starts": "इस विकल्प के लिए शुरू होने की कोई तारीख उपलब्ध नहीं है।",
   "pass_choose_coffee": "{days} दिनों के लिए कॉफ़ी",
   "pass_choose_coffee_note": "पास के हर दिन कॉफ़ी मिलेगी। अतिरिक्त सुविधाओं पर छूट लागू नहीं होती।",

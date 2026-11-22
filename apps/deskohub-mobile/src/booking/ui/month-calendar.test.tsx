@@ -139,6 +139,31 @@ describe("MonthCalendar", () => {
     ).toEqual([false, true, true, true, false]);
   });
 
+  test("coverage is announced without adding selected or selectable starts", () => {
+    const { tree } = calendar({
+      dates: {
+        earliest: "2026-11-18",
+        latest: "2026-11-20",
+        unavailable: new Set(["2026-11-20"]),
+      },
+      selected: "2026-11-19",
+      range: { kind: "coverage", start: "2026-11-19", end: "2026-12-18" },
+      coveredDayLabel: "covered",
+    });
+    expect(dayButton(tree, 19)?.props["aria-selected"]).toBe(true);
+    for (const day of [20, 21]) {
+      const button = dayButton(tree, day);
+      expect(button?.props["aria-selected"]).toBe(false);
+      expect(button?.props["aria-label"]).toContain("covered");
+      expect(button?.props.disabled).toBe(true);
+    }
+    expect(
+      buttons(hostTree(tree)).find(
+        ({ props }) => props["aria-label"] === "next"
+      )?.props.disabled
+    ).toBe(false);
+  });
+
   test("shows the day info in a live region kept mounted", () => {
     const live = (tree: ReactNode) =>
       findAll<{ "aria-live"?: string; children?: ReactNode }>(
