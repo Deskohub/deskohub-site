@@ -1,8 +1,12 @@
 import type { AutomationOneOffCampaignGapType as AutomationOneOffCampaignGap } from "@deskohub/workspace-admin-api";
-import { Option } from "effect";
+import { Data, Option } from "effect";
 import { workspaceSiteConstants } from "@/shared/utils";
 import { addCalendarDuration } from "@/shared/utils/temporal";
 import type { OneOffCampaignEmails } from "../backend/campaign-candidate.repository";
+import type {
+  AutomationRunSkipReason,
+  AutomationSendDeferralCause,
+} from "./automation-states";
 
 /**
  * When a Send's one-off campaign gap after the customer's latest one-off
@@ -48,3 +52,60 @@ export const oneOffCampaignGapHold = (input: {
 
 const laterInstant = (a: Temporal.Instant, b: Temporal.Instant) =>
   Temporal.Instant.compare(a, b) >= 0 ? a : b;
+
+/** What the deliver unit's commit does with one run (§5.9 step 2). */
+export type DeliverVerdict = Data.TaggedEnum<{
+  Send: Record<never, never>;
+  Withdraw: Record<never, never>;
+  Skip: { readonly reason: AutomationRunSkipReason };
+  Defer: {
+    readonly recheckAt: Temporal.Instant;
+    readonly cause: AutomationSendDeferralCause;
+  };
+}>;
+export const DeliverVerdict = Data.taggedEnum<DeliverVerdict>();
+
+/**
+ * One run's verdict from its trigger, its customer's once-per-customer
+ * claim and the one-off campaign gap: a withdrawn trigger withdraws it;
+ * otherwise a customer another run claimed skips it; otherwise a moved
+ * trigger or the gap defers it to the later of their rechecks.
+ */
+export const deliverVerdictOf = (input: {
+  readonly trigger: "send" | "withdraw" | "defer";
+  readonly claimed: boolean;
+  readonly gapHold: Option.Option<Temporal.Instant>;
+  readonly triggerRecheckAt: Temporal.Instant;
+}): DeliverVerdict => {
+  if (input.trigger === "withdraw") return DeliverVerdict.Withdraw();
+  if (input.claimed)
+    return DeliverVerdict.Skip({ reason: "already-sent-once" });
+  const deferrals = [
+    ...(input.trigger === "defer"
+      ? [
+          {
+            recheckAt: input.triggerRecheckAt,
+            cause: "trigger-not-reached" as const,
+          },
+        ]
+      : []),
+    ...Option.toArray(
+      Option.map(input.gapHold, (recheckAt) => ({
+        recheckAt,
+        cause: "one-off-campaign-gap" as const,
+      }))
+    ),
+  ];
+  const [first, ...rest] = deferrals;
+  if (first === undefined) return DeliverVerdict.Send();
+  // The later recheck wins; the gap names a tie.
+  return DeliverVerdict.Defer(
+    rest.reduce(
+      (later, deferral) =>
+        Temporal.Instant.compare(deferral.recheckAt, later.recheckAt) >= 0
+          ? deferral
+          : later,
+      first
+    )
+  );
+};

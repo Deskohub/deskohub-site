@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { Option } from "effect";
-import { oneOffCampaignGapHold } from "./automation-send-policies";
+import {
+  DeliverVerdict,
+  deliverVerdictOf,
+  oneOffCampaignGapHold,
+} from "./automation-send-policies";
 
 const instant = Temporal.Instant.from;
 const gap = { days: 14 };
@@ -71,5 +75,64 @@ describe("oneOffCampaignGapHold", () => {
     expect(
       oneOffCampaignGapHold({ emails: undefined, gap, at, inFlightRecheckAt })
     ).toEqual(Option.none());
+  });
+});
+
+describe("deliverVerdictOf", () => {
+  const triggerRecheckAt = instant("2026-10-20T08:15:00Z");
+  const gapEndsAt = instant("2026-11-03T08:00:00Z");
+  const verdict = (input: {
+    readonly trigger: "send" | "withdraw" | "defer";
+    readonly claimed?: boolean;
+    readonly gapHold?: Temporal.Instant;
+  }) => {
+    const judged = deliverVerdictOf({
+      trigger: input.trigger,
+      claimed: input.claimed ?? false,
+      gapHold: Option.fromNullishOr(input.gapHold),
+      triggerRecheckAt,
+    });
+    // Temporal instants all look equal to toEqual, so compare their text.
+    return judged._tag === "Defer"
+      ? { ...judged, recheckAt: judged.recheckAt.toString() }
+      : judged;
+  };
+
+  const deferral = (cause: "trigger-not-reached" | "one-off-campaign-gap") => ({
+    ...DeliverVerdict.Defer({ recheckAt: triggerRecheckAt, cause }),
+    recheckAt: triggerRecheckAt.toString(),
+  });
+
+  test("a withdrawn trigger withdraws the run before its claim or gap", () => {
+    expect(
+      verdict({ trigger: "withdraw", claimed: true, gapHold: gapEndsAt })
+    ).toEqual(DeliverVerdict.Withdraw());
+  });
+
+  test("a claimed customer skips the run before any deferral", () => {
+    expect(
+      verdict({ trigger: "defer", claimed: true, gapHold: gapEndsAt })
+    ).toEqual(DeliverVerdict.Skip({ reason: "already-sent-once" }));
+  });
+
+  test("a moved trigger and the gap defer the run to the later recheck", () => {
+    expect(verdict({ trigger: "defer", gapHold: gapEndsAt })).toEqual({
+      ...deferral("one-off-campaign-gap"),
+      recheckAt: gapEndsAt.toString(),
+    });
+    const earlierGap = instant("2026-10-20T08:05:00Z");
+    expect(verdict({ trigger: "defer", gapHold: earlierGap })).toEqual(
+      deferral("trigger-not-reached")
+    );
+  });
+
+  test("the gap names a tie with the moved trigger", () => {
+    expect(verdict({ trigger: "defer", gapHold: triggerRecheckAt })).toEqual(
+      deferral("one-off-campaign-gap")
+    );
+  });
+
+  test("a current trigger with no claim or gap sends", () => {
+    expect(verdict({ trigger: "send" })).toEqual(DeliverVerdict.Send());
   });
 });

@@ -21,7 +21,7 @@ import {
   workspaceReservations,
 } from "@/db/schema";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
-import { customerHoldsCoveringPass } from "@/features/passes/backend/customer-pass-coverage";
+import { customersHoldingCoveringPass } from "@/features/passes/backend/customer-pass-coverage";
 import {
   type ReservationVisit,
   ReservationVisits,
@@ -821,33 +821,25 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
       customerIds: input.customers,
     }).pipe(
       Effect.flatMap((consenting) =>
-        Effect.forEach(
-          input.customers,
-          (
-            customerId
-          ): Effect.Effect<
-            Option.Option<SendGuardSkipReason>,
-            DatabaseQueryError,
-            WorkspaceDatabase
-          > =>
-            consenting.has(customerId)
-              ? customerHoldsCoveringPass(customerId, input.now).pipe(
-                  Effect.map((covered) =>
-                    covered ? Option.some("pass-holder") : Option.none()
-                  )
+        customersHoldingCoveringPass(
+          input.customers.filter((customerId) => consenting.has(customerId)),
+          input.now
+        ).pipe(
+          Effect.map(
+            (holders) =>
+              new Map(
+                input.customers.flatMap(
+                  (customerId): [DotyposCustomerId, SendGuardSkipReason][] => {
+                    if (!consenting.has(customerId))
+                      return [[customerId, "consent-withdrawn"]];
+                    return holders.has(customerId)
+                      ? [[customerId, "pass-holder"]]
+                      : [];
+                  }
                 )
-              : Effect.succeed(Option.some("consent-withdrawn"))
-        )
-      ),
-      Effect.map(
-        (skips) =>
-          new Map(
-            input.customers.flatMap((customerId, index) =>
-              Option.toArray(skips[index] ?? Option.none()).map(
-                (reason) => [customerId, reason] as const
               )
-            )
           )
+        )
       ),
       Effect.provideContext(context)
     );

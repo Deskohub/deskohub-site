@@ -267,6 +267,72 @@ describe.skipIf(!database)(
         expect(await read.sends(campaignId)).toHaveLength(1);
       });
 
+      test("a claim another transaction commits after the verdict loses the send its insert", async () => {
+        const { campaignId } = await kit.seedActive(onceFlow, { at: start });
+        const customer = await fixtures.addCustomer("once-conflict");
+        await book(customer, "once-conflict-first", start);
+        await scenario.tick(start.add({ minutes: 1 }));
+        const [sent] = await runsOf(campaignId);
+        await pool.query(
+          "delete from email_campaign_automation_customer_claims where campaign_id = $1",
+          [campaignId]
+        );
+        // Mid-fetch, another transaction takes the claim and holds it
+        // uncommitted: the commit's verdict can't see it, and its claim
+        // insert waits on it.
+        const blocker = await pool.connect();
+        let blockerPid: number | undefined;
+        scenario.dotypos.onRequest(({ method }) =>
+          method !== "getCustomersByIds" || blockerPid !== undefined
+            ? Effect.void
+            : Effect.promise(async () => {
+                await blocker.query("begin");
+                await blocker.query(
+                  "insert into email_campaign_automation_customer_claims (campaign_id, dotypos_customer_id, run_id) values ($1, $2, $3)",
+                  [campaignId, customer, sent!.id]
+                );
+                const { rows } = await blocker.query(
+                  "select pg_backend_pid() as pid"
+                );
+                blockerPid = rows[0].pid;
+              })
+        );
+
+        try {
+          await book(customer, "once-conflict-second", start.add({ hours: 1 }));
+          const ticked = scenario.tick(start.add({ hours: 1, minutes: 1 }));
+          const waitsOnBlocker = async () =>
+            blockerPid !== undefined &&
+            (
+              await pool.query(
+                "select 1 from pg_stat_activity where $1 = any(pg_blocking_pids(pid))",
+                [blockerPid]
+              )
+            ).rows.length > 0;
+          const deadline = Date.now() + 20_000;
+          while (!(await waitsOnBlocker())) {
+            if (Date.now() > deadline)
+              throw new Error("The commit never waited on the held claim.");
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          await blocker.query("commit");
+          await ticked;
+        } finally {
+          await blocker.query("rollback").catch(() => undefined);
+          blocker.release();
+        }
+
+        expect((await runsOf(campaignId)).map((run) => run.reason)).toEqual([
+          null,
+          "already-sent-once",
+        ]);
+        expect(mailed()).toEqual([emailOf(customer)]);
+        expect(await read.sends(campaignId)).toHaveLength(1);
+        expect(await claimsOf(campaignId)).toEqual([
+          { customer, runId: sent!.id },
+        ]);
+      });
+
       test("an email the provider may have taken keeps the claim, so the next run is skipped", async () => {
         const { campaignId } = await kit.seedActive(onceFlow, { at: start });
         const customer = await fixtures.addCustomer("once-uncertain");

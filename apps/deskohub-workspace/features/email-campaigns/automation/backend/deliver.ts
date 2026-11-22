@@ -5,15 +5,7 @@ import {
   dotyposIdReadRequests,
 } from "@deskohub/dotypos";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
-import {
-  Array as Arr,
-  Data,
-  Effect,
-  Match,
-  Option,
-  Order,
-  Schema,
-} from "effect";
+import { Array as Arr, Effect, Match, Option, Order, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   emailCampaignAutomationCustomerClaims as customerClaims,
@@ -49,11 +41,11 @@ import {
   automationRunIdSchema,
   automationVersionIdSchema,
 } from "../automation-identifiers";
-import { oneOffCampaignGapHold } from "../automation-send-policies";
-import type {
-  AutomationRunSkipReason,
-  AutomationSendDeferralCause,
-} from "../automation-states";
+import {
+  deliverVerdictOf,
+  oneOffCampaignGapHold,
+} from "../automation-send-policies";
+import type { AutomationSendDeferralCause } from "../automation-states";
 import { automationTickAtOrBefore } from "../automation-ticks";
 import {
   readsTriggeringVisit,
@@ -405,7 +397,10 @@ export const makeDeliverHandler = Effect.gen(function* () {
 
   /**
    * §5.9 step 2: under the lifecycle lock and the triggering reservations'
-   * share locks, judges each run (`deliverVerdictOf`): ends withdrawn runs
+   * share locks, row-locks the unit's runs still ready in id order (§5.4)
+   * before any write, so a reclaimed worker committing the same unit takes
+   * them in the same order. It judges each locked run (`deliverVerdictOf`):
+   * ends withdrawn runs
    * and runs another run of the campaign already claimed, defers runs whose
    * trigger moved later or whom the one-off campaign gap holds, and
    * persists the rest as one send with batch 0, recording the send on the
@@ -436,6 +431,26 @@ export const makeDeliverHandler = Effect.gen(function* () {
           input.facts.runs.map((run) => run.triggerReservationId)
         )
       ),
+      Effect.bind("ready", () =>
+        db
+          .select({ id: runs.id })
+          .from(runs)
+          .where(
+            and(
+              inArray(
+                runs.id,
+                input.facts.runs.map((run) => run.id)
+              ),
+              eq(runs.status, expect.status),
+              eq(runs.stepId, expect.stepId),
+              eq(runs.phase, expect.phase),
+              eq(runs.workUnitId, expect.workUnitId)
+            )
+          )
+          .orderBy(asc(runs.id))
+          .for("update")
+          .pipe(Effect.map((locked) => new Set(locked.map(({ id }) => id))))
+      ),
       Effect.bind("claimed", () =>
         sendStep.oncePerCustomer
           ? claimedCampaignCustomers(db, input.facts.campaignId, customers)
@@ -446,33 +461,37 @@ export const makeDeliverHandler = Effect.gen(function* () {
           ? candidates.latestOneOffCampaignEmails({ customers, now: input.at })
           : Effect.succeed(new Map<DotyposCustomerId, OneOffCampaignEmails>())
       ),
-      Effect.let("verdicts", ({ cancellations, claimed, oneOffEmails }) =>
-        Arr.groupBy(
-          input.facts.runs.map((run) => ({
-            run,
-            verdict: deliverVerdictOf({
-              trigger: triggerVerdictOf({
+      Effect.let(
+        "verdicts",
+        ({ ready, cancellations, claimed, oneOffEmails }) =>
+          Arr.groupBy(
+            input.facts.runs
+              .flatMap((run) => (ready.has(run.id) ? [run] : []))
+              .map((run) => ({
                 run,
-                facts: input.facts,
-                cancellations,
-                at: input.at,
-              }),
-              claimed: claimed.has(run.dotyposCustomerId),
-              gapHold: Option.flatMap(
-                Option.fromNullishOr(sendStep.oneOffCampaignGap),
-                (gap) =>
-                  oneOffCampaignGapHold({
-                    emails: oneOffEmails.get(run.dotyposCustomerId),
-                    gap,
+                verdict: deliverVerdictOf({
+                  trigger: triggerVerdictOf({
+                    run,
+                    facts: input.facts,
+                    cancellations,
                     at: input.at,
-                    inFlightRecheckAt: triggerRecheckAt,
-                  })
-              ),
-              triggerRecheckAt,
-            }),
-          })),
-          ({ verdict }) => verdict._tag
-        )
+                  }),
+                  claimed: claimed.has(run.dotyposCustomerId),
+                  gapHold: Option.flatMap(
+                    Option.fromNullishOr(sendStep.oneOffCampaignGap),
+                    (gap) =>
+                      oneOffCampaignGapHold({
+                        emails: oneOffEmails.get(run.dotyposCustomerId),
+                        gap,
+                        at: input.at,
+                        inFlightRecheckAt: triggerRecheckAt,
+                      })
+                  ),
+                  triggerRecheckAt,
+                }),
+              })),
+            ({ verdict }) => verdict._tag
+          )
       ),
       Effect.tap(({ verdicts }) =>
         AutomationRunTransitions.end({
@@ -590,15 +609,14 @@ export const makeDeliverHandler = Effect.gen(function* () {
     );
 
   /**
-   * A once-per-customer send's claims (D2): row-locks the sendable runs in
-   * id order, then claims their customers in customer order. Returns the
-   * runs that won their claim; a run whose customer another run of the
-   * campaign claimed meanwhile ends `skipped / already-sent-once`. Without
-   * the policy every sendable run goes on.
+   * A once-per-customer send's claims (D2), for sendable runs the commit
+   * already row-locked: claims their customers in customer order. Returns
+   * the runs that won their claim; a run whose customer another run of the
+   * campaign claimed since the verdict ends `skipped / already-sent-once`.
+   * Without the policy every sendable run goes on.
    */
   const claimCustomers = Effect.fn("DeliverUnit.claimCustomers")(
     function* (input: {
-      readonly unit: ClaimedAutomationUnit<DeliverSubject>;
       readonly facts: DeliverFacts;
       readonly sendStep: SendStep;
       readonly expect: AutomationRunExpectation;
@@ -606,29 +624,12 @@ export const makeDeliverHandler = Effect.gen(function* () {
       readonly at: Temporal.Instant;
     }) {
       if (!input.sendStep.oncePerCustomer) return input.sendable;
-      const locked = yield* db
-        .select({ id: runs.id, dotyposCustomerId: runs.dotyposCustomerId })
-        .from(runs)
-        .where(
-          and(
-            inArray(
-              runs.id,
-              input.sendable.map((run) => run.id)
-            ),
-            eq(runs.status, "active"),
-            eq(runs.stepId, input.sendStep.id),
-            eq(runs.phase, "ready"),
-            eq(runs.workUnitId, input.unit.id)
-          )
-        )
-        .orderBy(asc(runs.id))
-        .for("update");
-      if (locked.length === 0) return [];
+      if (input.sendable.length === 0) return [];
       const claimed = yield* db
         .insert(customerClaims)
         .values(
           Arr.sort(
-            locked.map((run) => ({
+            input.sendable.map((run) => ({
               campaignId: input.facts.campaignId,
               dotyposCustomerId: run.dotyposCustomerId,
               runId: run.id,
@@ -637,7 +638,9 @@ export const makeDeliverHandler = Effect.gen(function* () {
             claimOrder
           )
         )
-        .onConflictDoNothing()
+        .onConflictDoNothing({
+          target: [customerClaims.campaignId, customerClaims.dotyposCustomerId],
+        })
         .returning({ runId: customerClaims.runId });
       const won = new Set(claimed.map(({ runId }) => runId));
       const winners = input.sendable.filter((run) => won.has(run.id));
@@ -905,63 +908,6 @@ const triggerVerdictOf = (input: {
     Match.when("withdrawn", () => "withdraw" as const),
     Match.when("moved", () => "defer" as const),
     Match.exhaustive
-  );
-};
-
-/** What the deliver unit's commit does with one run (§5.9 step 2). */
-type DeliverVerdict = Data.TaggedEnum<{
-  Send: Record<never, never>;
-  Withdraw: Record<never, never>;
-  Skip: { readonly reason: AutomationRunSkipReason };
-  Defer: {
-    readonly recheckAt: Temporal.Instant;
-    readonly cause: AutomationSendDeferralCause;
-  };
-}>;
-const DeliverVerdict = Data.taggedEnum<DeliverVerdict>();
-
-/**
- * One run's verdict from its trigger, its customer's once-per-customer
- * claim and the one-off campaign gap: a withdrawn trigger withdraws it;
- * otherwise a customer another run claimed skips it; otherwise a moved
- * trigger or the gap defers it to the later of their rechecks.
- */
-const deliverVerdictOf = (input: {
-  readonly trigger: "send" | "withdraw" | "defer";
-  readonly claimed: boolean;
-  readonly gapHold: Option.Option<Temporal.Instant>;
-  readonly triggerRecheckAt: Temporal.Instant;
-}): DeliverVerdict => {
-  if (input.trigger === "withdraw") return DeliverVerdict.Withdraw();
-  if (input.claimed)
-    return DeliverVerdict.Skip({ reason: "already-sent-once" });
-  const deferrals = [
-    ...(input.trigger === "defer"
-      ? [
-          {
-            recheckAt: input.triggerRecheckAt,
-            cause: "trigger-not-reached" as const,
-          },
-        ]
-      : []),
-    ...Option.toArray(
-      Option.map(input.gapHold, (recheckAt) => ({
-        recheckAt,
-        cause: "one-off-campaign-gap" as const,
-      }))
-    ),
-  ];
-  const [first, ...rest] = deferrals;
-  if (first === undefined) return DeliverVerdict.Send();
-  // The later recheck wins; the gap names a tie.
-  return DeliverVerdict.Defer(
-    rest.reduce(
-      (later, deferral) =>
-        Temporal.Instant.compare(deferral.recheckAt, later.recheckAt) >= 0
-          ? deferral
-          : later,
-      first
-    )
   );
 };
 

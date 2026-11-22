@@ -51,7 +51,13 @@ export type SendGuardSkipReason = Extract<
 export type SendPolicyFacts = {
   /** `oncePerCustomer`: a run of the campaign already holds the customer's claim. */
   readonly claimed: boolean;
-  /** `oneOffCampaignGap`: when the customer's one-off campaign emails went out, ascending. */
+  /**
+   * `oneOffCampaignGap`: when the customer's one-off campaign emails went
+   * out, ascending. One still in flight is projected as dispatched at its
+   * batch's request, or now while no requested batch carries it; live, the
+   * run waits for it with short rechecks and then holds the gap from the
+   * same instant, so the projection differs only if that email ends failed.
+   */
   readonly oneOffCampaignEmails: readonly Temporal.Instant[];
   /** `skipPassHolders`: why the pre-submit check skips the customer now. */
   readonly guardSkip: Option.Option<SendGuardSkipReason>;
