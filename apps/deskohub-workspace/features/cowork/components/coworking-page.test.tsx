@@ -228,6 +228,8 @@ describe("CoworkingPage pass comparison link", () => {
     );
 
     expect(passLinks(shell)).toEqual([]);
-    expect(shell.body.textContent).toContain("Add-on");
+    expect(
+      shell.querySelector('#coworking-desks p a[href="/en-US/pricing"]')
+    ).not.toBeNull();
   });
 });
