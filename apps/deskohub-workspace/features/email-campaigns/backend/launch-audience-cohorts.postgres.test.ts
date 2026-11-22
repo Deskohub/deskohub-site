@@ -333,18 +333,11 @@ describe.skipIf(!database)(
         "visitBookedAhead",
         "meetingRoomOnly"
       );
+      // Exact lists: customers without active marketing consent
+      // (withdrawnRecent, withdrawnNeverVisited, neverConsentedLapsed) are in
+      // neither group.
       expect(await recipientsAt(recent, launchAt)).toEqual(recentAtLaunch);
       expect(await recipientsAt(lapsed, launchAt)).toEqual(lapsedAtLaunch);
-      // Customers without active marketing consent are in neither group.
-      for (const name of [
-        "withdrawnRecent",
-        "withdrawnNeverVisited",
-        "neverConsentedLapsed",
-      ] as const) {
-        expect([...recentAtLaunch, ...lapsedAtLaunch]).not.toContain(
-          customerOf(name)
-        );
-      }
 
       // The lapsed group's first email: who it reached decides the follow-up.
       const { campaignId: lapsedEmail } = await seedCampaignSend(database.db, {
