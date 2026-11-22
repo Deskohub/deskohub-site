@@ -1,12 +1,16 @@
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import {
+  getCoworkReservationPath,
   reservationAccessPath,
   reservationStatusPath,
 } from "@/features/reservation/routes";
 
 export const entryPackCheckoutPath = "/passes/entry-pack";
 export const unlimitedPassCheckoutPath = "/passes/unlimited";
+
+export const getEntryPackBookingPath = (locale: Locale, passId: OrderId) =>
+  `${getCoworkReservationPath(locale)}?${new URLSearchParams({ pass: passId })}`;
 
 export const getPassPurchaseStatusPath = (locale: Locale, orderId: OrderId) =>
   `/${locale}${reservationStatusPath}/${orderId}`;
