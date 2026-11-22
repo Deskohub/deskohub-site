@@ -280,12 +280,20 @@ export function UnlimitedPassOfferCard({
                 "text-[#fae8ee] @max-[380px]:mt-1 @max-[380px]:leading-[1.24] @max-[320px]:text-[.82rem]"
               )}
             >
-              {tier === "open-space"
-                ? m.unlimitedPassOfferTaglineOpenSpace(
+              {
+                {
+                  "open-space": m.unlimitedPassOfferTaglineOpenSpace(
                     { days: unlimitedPassDays },
                     { locale }
-                  )
-                : m.unlimitedPassOfferTaglineReservedDesk({}, { locale })}
+                  ),
+                  "reserved-desk": m.unlimitedPassOfferTaglineReservedDesk(
+                    {},
+                    { locale }
+                  ),
+                  "reserved-desk-workstation":
+                    m.unlimitedPassOfferTaglineReservedDesk({}, { locale }),
+                }[tier]
+              }
             </p>
           </header>
           <footer className="col-span-full flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-[#f5c0d050] pt-2 text-[#ffdae6] @max-[380px]:pt-[7px]">

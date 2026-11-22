@@ -73,7 +73,21 @@ test("prerenders the plain tier link without reading the request query", () => {
   });
   // A server render shows a suspended boundary's fallback: the plain link.
   const html = renderToStaticMarkup(button("reserved-desk-workstation"));
-  expect(html).toContain(
-    'href="/en-US/passes/unlimited?tier=reserved-desk-workstation"'
+  const link = new DOMParser()
+    .parseFromString(html, "text/html")
+    .querySelector("a");
+  expect(link?.getAttribute("href")).toBe(
+    "/en-US/passes/unlimited?tier=reserved-desk-workstation"
   );
+  // Until it hydrates, it can't be followed and drop the visitor's draft.
+  expect(link?.getAttribute("aria-disabled")).toBe("true");
+  expect(link?.getAttribute("tabindex")).toBe("-1");
+  expect(link?.classList.contains("pointer-events-none")).toBe(true);
+});
+
+test("the hydrated link can be followed", () => {
+  const link = render(button("open-space")).getByRole("link");
+  expect(link.getAttribute("aria-disabled")).toBeNull();
+  expect(link.getAttribute("tabindex")).toBeNull();
+  expect(link.classList.contains("pointer-events-none")).toBe(false);
 });
