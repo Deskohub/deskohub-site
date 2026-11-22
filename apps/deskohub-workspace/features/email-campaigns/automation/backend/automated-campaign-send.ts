@@ -148,13 +148,17 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
    * §5.9 step 2, after the runs moved to `sending`: freezes their
    * recipients and persists them as batch 0 from the profiles the unit
    * read, before any request. The delivery recheck skips whoever fails it;
-   * rendering that fails fails the rest, as nothing was requested.
+   * rendering that fails fails the rest, as nothing was requested. A
+   * `guarded` batch can only be requested through a guard
+   * (`BatchRequest.Guarded`); `content` replaces the version's content
+   * with what the code renders for this send.
    */
   const persistBatch = (input: {
     readonly sendId: CampaignSendId;
     readonly recipients: readonly BatchRecipient[];
     readonly profiles: BatchProfiles;
     readonly at: Temporal.Instant;
+    readonly guarded?: true;
     readonly content?: CampaignLocalizedContent;
   }): Effect.Effect<void, DatabaseQueryError, WorkspaceTransaction> =>
     db
@@ -170,13 +174,13 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
         Effect.andThen(deliveredAttempt(input.sendId)),
         Effect.flatMap((send) =>
           batches.prepare({
-            send: input.content
-              ? {
-                  ...send,
-                  guarded: true,
-                  campaign: { ...send.campaign, content: input.content },
-                }
-              : send,
+            send: {
+              ...send,
+              ...(input.guarded && { guarded: input.guarded }),
+              ...(input.content && {
+                campaign: { ...send.campaign, content: input.content },
+              }),
+            },
             recipients: input.recipients,
             profiles: Option.some(input.profiles),
           })
@@ -210,14 +214,15 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
    * returns each batch's outcome for step 4. With the profiles the batch was
    * persisted from, it's the first request; without them it replays the
    * batch, re-reading its recipients, and past the replay window the batch
-   * is `Unconfirmed`. A send already completed requests nothing. An unknown
-   * outcome fails, so the unit retries the replay.
+   * is `Unconfirmed`. A guarded send's batches go through `requestGuarded`
+   * instead. A send already completed requests nothing. An unknown outcome
+   * fails, so the unit retries the replay.
    */
   const submit = Effect.fn("AutomatedCampaignSend.submit")(
     function* (input: {
       readonly sendId: CampaignSendId;
       readonly profiles: Option.Option<BatchProfiles>;
-      readonly requestPassReminder?: (
+      readonly requestGuarded?: (
         send: DeliveredAttempt,
         batch: PersistedBatch
       ) => Effect.Effect<
@@ -233,8 +238,8 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
       const send = { ...attempt, campaign: campaign.value };
       const requested = yield* batches.listRequested(attempt);
       const submitted = yield* Effect.forEach(requested, (batch) => {
-        const request = input.requestPassReminder
-          ? input.requestPassReminder(send, batch)
+        const request = input.requestGuarded
+          ? input.requestGuarded(send, batch)
           : batches.request(
               batchRequest({ send, batch, profiles: input.profiles })
             );

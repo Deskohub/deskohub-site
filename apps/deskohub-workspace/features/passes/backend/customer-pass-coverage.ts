@@ -35,7 +35,8 @@ export const customerHoldsCoveringPass = Effect.fn("customerHoldsCoveringPass")(
       .limit(1);
     if (account === undefined) return false;
 
-    const today = plainDateStringSchema.make(getWorkspaceDate(asOf).toString());
+    const date = getWorkspaceDate(asOf);
+    const today = plainDateStringSchema.make(date.toString());
     const [packs, unlimitedPasses] = yield* Effect.all(
       [listHeldEntryPacks(account.id), listHeldUnlimitedPasses(account.id)],
       { concurrency: "unbounded" }
@@ -44,7 +45,7 @@ export const customerHoldsCoveringPass = Effect.fn("customerHoldsCoveringPass")(
     return unlimitedPasses.some((pass) => {
       const issued =
         pass.paymentState === "paid" || pass.paymentState === "complimentary";
-      const accessDay = getUnlimitedPassAccessDay({ ...pass, date: today });
+      const accessDay = getUnlimitedPassAccessDay({ ...pass, date });
       const status = getUnlimitedDisplayStatus(pass, today, issued, accessDay);
       return status === "active" || status === "upcoming";
     });
