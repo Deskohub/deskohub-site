@@ -1,16 +1,13 @@
 import "server-only";
 
-import { and, asc, eq, isNotNull, ne, notInArray, or } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { cache } from "react";
 import { WorkspaceDatabase } from "@/db/database.service";
-import { orders, passPurchases, workspaceReservations } from "@/db/schema";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
-import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import { recoverEntryPackGiftClaims } from "@/features/passes/backend/entry-pack-gift";
-import { hasUnlimitedRenewalOverlap } from "@/features/passes/backend/unlimited-pass-window";
+import { listHeldUnlimitedPasses } from "@/features/passes/backend/held-unlimited-passes";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
 import {
   getUnlimitedAccessPath,
@@ -58,57 +55,6 @@ export type AccountUnlimitedPass = {
 export type AccountUnlimitedPasses =
   | readonly AccountUnlimitedPass[]
   | "unavailable";
-
-export const listHeldUnlimitedPasses = Effect.fn("listHeldUnlimitedPasses")(
-  function* (accountId: CustomerAccountId) {
-    const { db } = yield* WorkspaceDatabase;
-    return yield* db
-      .select({
-        orderId: passPurchases.id,
-        tier: passPurchases.tier,
-        buyerAccountId: passPurchases.buyerAccountId,
-        validFrom: passPurchases.validFrom,
-        validUntil: passPurchases.validUntil,
-        accessEndsOn: passPurchases.accessEndsOn,
-        status: passPurchases.status,
-        paidAt: orders.paidAt,
-        grantedAt: orders.fulfilledAt,
-        paymentState: orders.paymentState,
-        renewalOverlaps: hasUnlimitedRenewalOverlap,
-        deskId: workspaceReservations.passDayTableId,
-      })
-      .from(passPurchases)
-      .innerJoin(orders, eq(orders.id, passPurchases.id))
-      .leftJoin(
-        workspaceReservations,
-        and(
-          ne(passPurchases.tier, "open-space"),
-          eq(workspaceReservations.passId, passPurchases.id),
-          eq(workspaceReservations.serviceDate, passPurchases.validFrom)
-        )
-      )
-      .where(
-        and(
-          eq(passPurchases.product, "unlimited"),
-          eq(passPurchases.holderAccountId, accountId),
-          or(
-            eq(passPurchases.buyerAccountId, accountId),
-            isNotNull(passPurchases.giftClaimedAt)
-          ),
-          eq(orders.kind, "pass-purchase"),
-          or(
-            isNotNull(orders.paidAt),
-            and(
-              eq(orders.paymentState, "complimentary"),
-              eq(orders.fulfillmentState, "fulfilled")
-            )
-          ),
-          notInArray(passPurchases.status, ["pending_payment", "void"])
-        )
-      )
-      .orderBy(asc(passPurchases.validFrom), asc(passPurchases.id));
-  }
-);
 
 export const loadAccountUnlimitedPasses = Effect.fn(
   "loadAccountUnlimitedPasses"
