@@ -83,6 +83,22 @@ const outcomeCopy = {
   }
 >;
 
+/** A matching pass draft supplies its forecast date without a schedule frequency. */
+const isPassForecast = (dryRun: AutomationDryRunWithLifecycle) =>
+  dryRun.kind !== "replay" &&
+  dryRun.frequency === null &&
+  dryRun.nextFires.length === 1 &&
+  dryRun.nextFires[0] === dryRun.asOf;
+
+/**
+ * A pass forecast is past from its fire on, when activation takes the
+ * following day's instead.
+ */
+export const isPastPassForecast = (
+  dryRun: AutomationDryRunWithLifecycle,
+  now: Temporal.Instant
+) => isPassForecast(dryRun) && Temporal.Instant.compare(dryRun.asOf, now) <= 0;
+
 /** Why a page of the dry run has no rows: past the end, or none at all. */
 const noRowsLabel = ({
   cursor,
@@ -125,14 +141,8 @@ export function AutomationDryRunResults({
   readonly now: Temporal.Instant;
 }) {
   const replay = dryRun.kind === "replay";
-  // A matching pass draft supplies its forecast date without a schedule frequency.
-  const passForecast =
-    !replay &&
-    dryRun.frequency === null &&
-    dryRun.nextFires.length === 1 &&
-    dryRun.nextFires[0] === dryRun.asOf;
-  const pastForecast =
-    passForecast && Temporal.Instant.compare(dryRun.asOf, now) <= 0;
+  const passForecast = isPassForecast(dryRun);
+  const pastForecast = isPastPassForecast(dryRun, now);
   return (
     <div className="space-y-6">
       <DryRunSummary
