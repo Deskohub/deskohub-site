@@ -170,7 +170,7 @@ describe("automation admin API", () => {
   );
 
   test.each(["1.40.0", "1.40.0+pr.762.abc1234", "1.41.0"])(
-    "accepts dhw %s, the first release with pass reminder triggers or later",
+    "accepts dhw %s at or above the pass reminder minimum",
     async (dhwVersion) => {
       const detail = await callAutomationsApi(
         (client) => client.getAutomation({ params: { campaignId } }),

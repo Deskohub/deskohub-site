@@ -206,7 +206,7 @@ const automationsFlowSetCommand = Command.make(
     campaignId: campaignIdArgument,
     flowFile: Flag.String("flow-file").pipe(
       Flag.withDescription(
-        "JSON file with the flow's trigger and steps. Use EntryPackExpiring or UnlimitedEnding in a marketing campaign."
+        "JSON file with the flow's trigger and steps. EntryPackExpiring and UnlimitedEnding require a marketing campaign and Workspace support for pass reminder writes."
       )
     ),
   },

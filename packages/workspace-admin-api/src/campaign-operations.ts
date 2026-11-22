@@ -234,7 +234,7 @@ export const emailCampaignOperations = defineOperations({
   }),
 });
 
-/** First dhw release that can read and write the two pass triggers. */
+/** Requires a stable dhw release that decodes both pass reminder triggers. */
 const passReminderDhwVersion = DhwVersion.make("1.40.0");
 
 /** The operations on automated campaigns and their engine. */
