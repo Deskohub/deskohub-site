@@ -5,10 +5,11 @@ import {
   DotyposCustomerIdSchema,
   type DotyposService,
 } from "@deskohub/dotypos";
-import type {
-  AutomationConditionFilter,
-  AutomationFlowType as AutomationFlow,
-  AutomationStepType as AutomationStep,
+import {
+  type AutomationConditionFilter,
+  type AutomationFlowType as AutomationFlow,
+  type AutomationStepType as AutomationStep,
+  automationOneOffCampaignGapMaxDays,
 } from "@deskohub/workspace-admin-api";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { Data, Effect, Match, Option, Schema } from "effect";
@@ -413,7 +414,12 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
         ).pipe(Effect.map((entries) => new Map(entries)))
       ),
       Effect.bind("sendPolicyFacts", ({ now, entrants }) =>
-        sendPolicyFactsOf({ job, customers: entrants, now })
+        sendPolicyFactsOf({
+          job,
+          customers: entrants,
+          now,
+          since: oneOffCampaignEmailsSince(now),
+        })
       ),
       Effect.flatMap(({ now, members, active, decisions, sendPolicyFacts }) =>
         Effect.forEach(customers, (customerId) => {
@@ -530,6 +536,15 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
             replayedCustomers.has(customerId)
           ),
           now,
+          since: oneOffCampaignEmailsSince(
+            job.events
+              .map(({ occurredAt }) => occurredAt)
+              .reduce(
+                (earliest, at) =>
+                  Temporal.Instant.compare(at, earliest) < 0 ? at : earliest,
+                now
+              )
+          ),
         })
       ),
       Effect.flatMap(
@@ -721,6 +736,16 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
           );
 
   /**
+   * One-off emails before this can't hold a send simulated at or after
+   * `earliestSend`: the longest gap is 90 Prague days, and a day beyond
+   * covers a daylight saving change.
+   */
+  const oneOffCampaignEmailsSince = (earliestSend: Temporal.Instant) =>
+    earliestSend.subtract({
+      hours: 24 * (automationOneOffCampaignGapMaxDays + 1),
+    });
+
+  /**
    * Each customer's facts for the Send step's delivery policies, read only
    * for the policies it carries: the once-ever claims and the one-off
    * campaign emails in one query each, and for `skipPassHolders` the
@@ -731,6 +756,8 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
     readonly job: PreviewJob;
     readonly customers: readonly DotyposCustomerId[];
     readonly now: Temporal.Instant;
+    /** The earliest one-off email any simulated send could still be held by. */
+    readonly since: Temporal.Instant;
   }): Effect.Effect<
     ReadonlyMap<DotyposCustomerId, SendPolicyFacts>,
     AutomationUnitFetchFailure
@@ -747,8 +774,13 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
           )
         : Effect.succeed(new Set<DotyposCustomerId>()),
       oneOffEmails: carries((step) => step.oneOffCampaignGap !== undefined)
-        ? candidates.latestOneOffMarketingEmails(input.customers)
-        : Effect.succeed(new Map<DotyposCustomerId, Temporal.Instant>()),
+        ? candidates.oneOffCampaignEmails({
+            customers: input.customers,
+            since: input.since,
+          })
+        : Effect.succeed(
+            new Map<DotyposCustomerId, readonly Temporal.Instant[]>()
+          ),
       guardSkips: carries((step) => step.skipPassHolders === true)
         ? guardSkipsOf(input)
         : Effect.succeed(new Map<DotyposCustomerId, SendGuardSkipReason>()),
@@ -758,12 +790,11 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
           new Map(
             input.customers.map(
               (customerId): [DotyposCustomerId, SendPolicyFacts] => {
-                const latest = oneOffEmails.get(customerId);
                 return [
                   customerId,
                   {
                     claimed: claimed.has(customerId),
-                    oneOffCampaignEmails: latest === undefined ? [] : [latest],
+                    oneOffCampaignEmails: oneOffEmails.get(customerId) ?? [],
                     guardSkip: Option.fromUndefinedOr(
                       guardSkips.get(customerId)
                     ),
