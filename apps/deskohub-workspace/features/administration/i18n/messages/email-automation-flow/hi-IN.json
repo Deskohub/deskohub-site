@@ -108,6 +108,25 @@
   "emailAutomationFlowSendSubjectLabel": "विषय – {language}",
   "emailAutomationFlowSendSubjectMissing": "इस भाषा में अभी कोई सामग्री नहीं है",
   "emailAutomationFlowSendTitle": "Email भेजना",
+  "emailAutomationFlowSendPoliciesTitle": "डिलीवरी के नियम",
+  "emailAutomationFlowSendPoliciesNone": "डिलीवरी का कोई नियम नहीं: इस चरण तक पहुँचने वाला हर रन email भेजता है।",
+  "emailAutomationFlowSendOncePerCustomerLabel": "हर ग्राहक को केवल एक बार भेजें",
+  "emailAutomationFlowSendOncePerCustomerSummary": "हर ग्राहक को यह email अधिकतम एक बार मिलता है; बाद के रन छोड़ दिए जाते हैं।",
+  "emailAutomationFlowSendGapLabel": "एक बार भेजे जाने वाले अभियान के बाद रुकें",
+  "emailAutomationFlowSendGapDaysLabel": "रुकने के दिन",
+  "emailAutomationFlowSendGapDaysError": "1 से {max} तक की कोई पूर्ण संख्या दर्ज करें।",
+  "emailAutomationFlowSendGapSummary": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "ग्राहक को एक बार भेजे जाने वाले अभियान का आख़िरी email मिलने के कम से कम {count} दिन बाद भेजता है।",
+        "countPlural=other": "ग्राहक को एक बार भेजे जाने वाले अभियान का आख़िरी email मिलने के कम से कम {count} दिन बाद भेजता है।"
+      }
+    }
+  ],
+  "emailAutomationFlowSendSkipPassHoldersLabel": "पास धारकों को छोड़ें",
+  "emailAutomationFlowSendSkipPassHoldersSummary": "भेजते समय जिन ग्राहकों के पास इस्तेमाल योग्य एंट्री पैक या सक्रिय या आने वाला Unlimited पास है, उन्हें छोड़ देता है।",
   "emailAutomationFlowStatusArchived": "यह ऑटोमेशन संग्रहित है, इसलिए इसका वर्कफ़्लो केवल देखा जा सकता है।",
   "emailAutomationFlowStatusEmpty": "इस ऑटोमेशन का अभी कोई वर्कफ़्लो नहीं है। ट्रिगर चुनें और सहेजें।",
   "emailAutomationFlowStatusPending": "सहेजा गया। बदलाव नए रन पर लागू हों, इसके लिए <link>प्रीव्यू देखें और सक्रिय करें</link>।",

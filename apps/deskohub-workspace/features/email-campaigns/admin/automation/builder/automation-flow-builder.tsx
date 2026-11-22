@@ -250,7 +250,13 @@ export function AutomationFlowBuilder({
                     />
                   )}
                   {step._tag === "Send" && (
-                    <SendStepCard campaign={campaign} number={number} />
+                    <SendStepCard
+                      campaign={campaign}
+                      step={step}
+                      number={number}
+                      onChange={readOnly ? undefined : update}
+                      errorAt={(field) => errorAt(`${path}.${field}`)}
+                    />
                   )}
                 </li>
               </Fragment>

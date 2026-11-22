@@ -47,6 +47,11 @@ import { CalendarExpressionEditor } from "./calendar-expression-editor";
 import type { CalendarPreviewView } from "./calendar-preview";
 import { CalendarPreviewText } from "./calendar-preview-text";
 import { FlowCard } from "./flow-step-frame";
+import {
+  SendPolicyControls,
+  SendPolicySummary,
+  type SendStep,
+} from "./send-step-policies";
 import { useCalendarPreview } from "./use-calendar-preview";
 
 type ConditionStep = Extract<FlowStepValue, { _tag: "Condition" }>;
@@ -272,14 +277,22 @@ export function WaitStepCard({
 
 /**
  * The fixed last step (D14): sends the campaign's email and ends the run.
- * Its content is edited on the Email tab.
+ * Its content is edited on the Email tab; its delivery rules here. Without
+ * `onChange` the card shows the rules read-only.
  */
 export function SendStepCard({
   campaign,
+  step,
   number,
+  onChange,
+  errorAt,
 }: {
   readonly campaign: AdministrationCampaignDetail;
+  readonly step: SendStep;
   readonly number: number;
+  readonly onChange?: (step: SendStep) => void;
+  /** Errors at paths below the step. */
+  readonly errorAt: FieldErrorLookup;
 }) {
   const locale = useRouteLocale();
   return (
@@ -331,6 +344,10 @@ export function SendStepCard({
         {m.emailAutomationFlowSendEditEmail({}, { locale })}
         <ArrowRight className="h-4 w-4" aria-hidden />
       </AdministrationLink>
+      <SendPolicySummary step={step} />
+      {onChange && (
+        <SendPolicyControls step={step} onChange={onChange} errorAt={errorAt} />
+      )}
     </FlowCard>
   );
 }

@@ -7,7 +7,7 @@ import {
   mock,
   test,
 } from "bun:test";
-import { AdministrationCampaignRecipientSkipReason } from "@deskohub/workspace-admin-api";
+import { automationRunSkipReasons } from "@deskohub/workspace-admin-api";
 import { cleanup, render } from "@testing-library/react";
 import { Result } from "effect";
 import { m } from "@/features/administration/i18n";
@@ -169,7 +169,7 @@ describe("AutomationRunLogPage", () => {
 
     expect(optionValues("automation-run-skip-reason")).toEqual([
       "",
-      ...AdministrationCampaignRecipientSkipReason.literals,
+      ...automationRunSkipReasons,
     ]);
     expect(optionValues("automation-run-step")).toEqual([
       "",

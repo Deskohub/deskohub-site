@@ -108,6 +108,25 @@
   "emailAutomationFlowSendSubjectLabel": "Betreff – {language}",
   "emailAutomationFlowSendSubjectMissing": "In dieser Sprache gibt es noch keinen Inhalt",
   "emailAutomationFlowSendTitle": "E-Mail senden",
+  "emailAutomationFlowSendPoliciesTitle": "Zustellregeln",
+  "emailAutomationFlowSendPoliciesNone": "Keine Zustellregeln: Jeder Durchlauf, der diesen Schritt erreicht, sendet die E-Mail.",
+  "emailAutomationFlowSendOncePerCustomerLabel": "Nur einmal pro Kunde senden",
+  "emailAutomationFlowSendOncePerCustomerSummary": "Jeder Kunde erhält diese E-Mail höchstens einmal; weitere Durchläufe werden übersprungen.",
+  "emailAutomationFlowSendGapLabel": "Nach einmaligen Kampagnen warten",
+  "emailAutomationFlowSendGapDaysLabel": "Wartezeit in Tagen",
+  "emailAutomationFlowSendGapDaysError": "Geben Sie eine ganze Zahl von 1 bis {max} ein.",
+  "emailAutomationFlowSendGapSummary": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Sendet frühestens {count} Tag nach der letzten E-Mail einer einmaligen Kampagne an den Kunden.",
+        "countPlural=other": "Sendet frühestens {count} Tage nach der letzten E-Mail einer einmaligen Kampagne an den Kunden."
+      }
+    }
+  ],
+  "emailAutomationFlowSendSkipPassHoldersLabel": "Pass-Inhaber überspringen",
+  "emailAutomationFlowSendSkipPassHoldersSummary": "Überspringt Kunden, die beim Versand ein nutzbares Eintrittspaket oder einen aktiven oder bevorstehenden Unlimited-Pass haben.",
   "emailAutomationFlowStatusArchived": "Diese Automatisierung ist archiviert, daher lässt sich ihr Ablauf nur anzeigen.",
   "emailAutomationFlowStatusEmpty": "Diese Automatisierung hat noch keinen Ablauf. Wählen Sie einen Auslöser aus und speichern Sie.",
   "emailAutomationFlowStatusPending": "Gespeichert. <link>Prüfen Sie die Vorschau und aktivieren Sie</link>, damit die Änderungen für neue Durchläufe gelten.",

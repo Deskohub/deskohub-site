@@ -1,4 +1,17 @@
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
+import {
+  AdministrationCampaignDetail,
+  automationOneOffCampaignGapMaxDays,
+} from "@deskohub/workspace-admin-api";
+import { Schema } from "effect";
 import { m } from "@/features/administration/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import {
@@ -22,7 +35,7 @@ registerWorkspaceComponentTestEnv();
 const { act, cleanup, fireEvent, render, within } = await import(
   "@testing-library/react"
 );
-const { WaitStepCard } = await import("./step-cards");
+const { SendStepCard, WaitStepCard } = await import("./step-cards");
 
 beforeEach(stubCampaignOperations);
 afterEach(cleanup);
@@ -186,4 +199,200 @@ test("an invalid count is described by its mounted error", () => {
   const error = invalid.view.getByRole("alert");
   expect(count.getAttribute("aria-describedby")).toBe(error.id);
   expect(error.textContent).not.toBe("");
+});
+
+type SendStep = Extract<FlowStepValue, { _tag: "Send" }>;
+
+const campaign = Schema.decodeUnknownSync(AdministrationCampaignDetail)({
+  id: "01990000-0000-7000-8000-000000000001",
+  title: "Synthetic automated campaign",
+  purpose: "marketing",
+  templateKey: "workspace",
+  delivery: "automated",
+  status: "draft",
+  audienceId: null,
+  locales: ["en-US"],
+  createdAt: "2026-10-19T08:00:00Z",
+  updatedAt: "2026-10-19T08:00:00Z",
+  content: {},
+});
+const plainSend: SendStep = { _tag: "Send", id: "send" };
+const ruledSend: SendStep = {
+  ...plainSend,
+  oncePerCustomer: true,
+  oneOffCampaignGap: { days: 21 },
+  skipPassHolders: true,
+};
+
+const renderSend = (
+  step: SendStep,
+  {
+    editable = true,
+    errorAt = () => undefined,
+  }: {
+    readonly editable?: boolean;
+    readonly errorAt?: (field: string) => string | undefined;
+  } = {}
+) => {
+  const onChange = mock((_step: SendStep) => undefined);
+  const view = render(
+    <RouteLocaleProvider locale={locale}>
+      <SendStepCard
+        campaign={campaign}
+        step={step}
+        number={2}
+        onChange={editable ? onChange : undefined}
+        errorAt={errorAt}
+      />
+    </RouteLocaleProvider>
+  );
+  const checkbox = (label: string) =>
+    view.queryByRole("checkbox", { name: label });
+  const controls = {
+    once: () =>
+      checkbox(m.emailAutomationFlowSendOncePerCustomerLabel({}, { locale })),
+    gap: () => checkbox(m.emailAutomationFlowSendGapLabel({}, { locale })),
+    skip: () =>
+      checkbox(m.emailAutomationFlowSendSkipPassHoldersLabel({}, { locale })),
+    gapDays: () =>
+      view.queryByRole("spinbutton", {
+        name: m.emailAutomationFlowSendGapDaysLabel({}, { locale }),
+      }),
+  };
+  const summary = () =>
+    view.getByRole("region", {
+      name: m.emailAutomationFlowSendPoliciesTitle({}, { locale }),
+    });
+  const click = (element: HTMLElement | null) =>
+    act(() => {
+      fireEvent.click(element as HTMLElement);
+    });
+  return { view, onChange, controls, summary, click };
+};
+
+/** The one Send step a card emitted, checked as a step the admin API takes. */
+const emittedSend = (calls: readonly (readonly [SendStep])[]) => {
+  expect(calls).toHaveLength(1);
+  const [next] = calls[0] ?? [];
+  if (!next) throw new Error("Expected a step");
+  expect(
+    isValidFlow({ trigger: { _tag: "AccountCreated" }, steps: [next] })
+  ).toBe(true);
+  return next;
+};
+
+describe("SendStepCard delivery rules", () => {
+  test("an editable card shows each rule's control as the step holds it", () => {
+    const { controls } = renderSend({ ...plainSend, skipPassHolders: true });
+
+    expect(controls.once()?.getAttribute("aria-checked")).toBe("false");
+    expect(controls.gap()?.getAttribute("aria-checked")).toBe("false");
+    expect(controls.skip()?.getAttribute("aria-checked")).toBe("true");
+    expect(controls.gapDays()).toBeNull();
+  });
+
+  test.each([
+    ["once", { oncePerCustomer: true }],
+    ["gap", { oneOffCampaignGap: { days: 14 } }],
+    ["skip", { skipPassHolders: true }],
+  ] as const)("turning on %s adds only its key", (control, added) => {
+    const { onChange, controls, click } = renderSend(plainSend);
+
+    click(controls[control]());
+
+    expect(emittedSend(onChange.mock.calls)).toStrictEqual({
+      ...plainSend,
+      ...added,
+    });
+  });
+
+  test.each([
+    ["once", "oncePerCustomer"],
+    ["gap", "oneOffCampaignGap"],
+    ["skip", "skipPassHolders"],
+  ] as const)("turning off %s removes its key", (control, key) => {
+    const { onChange, controls, click } = renderSend(ruledSend);
+
+    click(controls[control]());
+
+    const next = emittedSend(onChange.mock.calls);
+    expect(Object.hasOwn(next, key)).toBe(false);
+    const { [key]: _removed, ...kept } = ruledSend;
+    expect(next).toStrictEqual(kept);
+  });
+
+  test("editing the gap's days keeps the other rules", () => {
+    const { onChange, controls } = renderSend(ruledSend);
+
+    act(() => {
+      fireEvent.change(controls.gapDays() as HTMLElement, {
+        target: { value: "30" },
+      });
+    });
+
+    expect(emittedSend(onChange.mock.calls)).toStrictEqual({
+      ...ruledSend,
+      oneOffCampaignGap: { days: 30 },
+    });
+  });
+
+  test.each([0, automationOneOffCampaignGapMaxDays + 1])(
+    "a gap of %i days is outside what the admin API takes",
+    (days) => {
+      expect(
+        isValidFlow({
+          trigger: { _tag: "AccountCreated" },
+          steps: [{ ...plainSend, oneOffCampaignGap: { days } }],
+        })
+      ).toBe(false);
+    }
+  );
+
+  test("an invalid gap is described by its mounted error", () => {
+    const { controls, view } = renderSend(
+      { ...plainSend, oneOffCampaignGap: { days: 0 } },
+      {
+        errorAt: (field) =>
+          field === "oneOffCampaignGap.days" ? "Expected 1 to 90" : undefined,
+      }
+    );
+    const days = controls.gapDays() as HTMLElement;
+    const error = view.getByRole("alert");
+
+    expect(days.getAttribute("aria-invalid")).toBe("true");
+    expect(days.getAttribute("aria-describedby")).toBe(error.id);
+    expect(error.textContent).not.toBe("");
+  });
+
+  test("the summary lists one sentence per active rule, or says there are none", () => {
+    const ruled = renderSend(ruledSend);
+    expect(
+      within(ruled.summary())
+        .getAllByRole("listitem")
+        .map((item) => item.textContent)
+    ).toEqual([
+      m.emailAutomationFlowSendOncePerCustomerSummary({}, { locale }),
+      m.emailAutomationFlowSendGapSummary({ count: 21 }, { locale }),
+      m.emailAutomationFlowSendSkipPassHoldersSummary({}, { locale }),
+    ]);
+    cleanup();
+
+    const plain = renderSend(plainSend);
+    expect(within(plain.summary()).queryByRole("list")).toBeNull();
+    expect(plain.summary().textContent).toContain(
+      m.emailAutomationFlowSendPoliciesNone({}, { locale })
+    );
+  });
+
+  test("a read-only card shows the summary without controls", () => {
+    const { controls, summary } = renderSend(ruledSend, { editable: false });
+
+    expect(within(summary()).getAllByRole("listitem")).toHaveLength(3);
+    expect([
+      controls.once(),
+      controls.gap(),
+      controls.skip(),
+      controls.gapDays(),
+    ]).toEqual([null, null, null, null]);
+  });
 });

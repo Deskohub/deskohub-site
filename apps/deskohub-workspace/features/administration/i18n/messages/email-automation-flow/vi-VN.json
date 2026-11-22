@@ -108,6 +108,24 @@
   "emailAutomationFlowSendSubjectLabel": "Tiêu đề – {language}",
   "emailAutomationFlowSendSubjectMissing": "Ngôn ngữ này chưa có nội dung",
   "emailAutomationFlowSendTitle": "Gửi email",
+  "emailAutomationFlowSendPoliciesTitle": "Quy tắc gửi",
+  "emailAutomationFlowSendPoliciesNone": "Không có quy tắc gửi: mọi lượt chạy đến bước này đều gửi email.",
+  "emailAutomationFlowSendOncePerCustomerLabel": "Chỉ gửi một lần cho mỗi khách hàng",
+  "emailAutomationFlowSendOncePerCustomerSummary": "Mỗi khách hàng chỉ nhận email này tối đa một lần; các lượt chạy sau sẽ bị bỏ qua.",
+  "emailAutomationFlowSendGapLabel": "Chờ sau chiến dịch gửi một lần",
+  "emailAutomationFlowSendGapDaysLabel": "Số ngày chờ",
+  "emailAutomationFlowSendGapDaysError": "Vui lòng nhập số nguyên từ 1 đến {max}.",
+  "emailAutomationFlowSendGapSummary": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Chỉ gửi sau ít nhất {count} ngày kể từ email gần nhất của chiến dịch gửi một lần đến khách hàng."
+      }
+    }
+  ],
+  "emailAutomationFlowSendSkipPassHoldersLabel": "Bỏ qua khách hàng đang có thẻ coworking",
+  "emailAutomationFlowSendSkipPassHoldersSummary": "Bỏ qua khách hàng có gói lượt vào còn dùng được hoặc gói Unlimited đang hoạt động hay sắp bắt đầu vào lúc gửi email.",
   "emailAutomationFlowStatusArchived": "Chiến dịch tự động này đã được lưu trữ, nên kịch bản chỉ có thể xem.",
   "emailAutomationFlowStatusEmpty": "Chiến dịch tự động này chưa có kịch bản. Vui lòng chọn sự kiện kích hoạt rồi lưu.",
   "emailAutomationFlowStatusPending": "Đã lưu. Vui lòng <link>xem trước và kích hoạt</link> để các thay đổi áp dụng cho lượt chạy mới.",
