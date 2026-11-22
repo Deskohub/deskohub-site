@@ -78,7 +78,8 @@ export const getCoworkPassPurchaseDraft = (selection: {
   readonly entryTier: WorkspaceProductTier;
   readonly date?: string;
   readonly coffee?: boolean;
-  readonly monitorOption?: WorkspaceProductMonitorOption;
+  /** The form keeps an empty choice while no monitor is picked. */
+  readonly monitorOption?: WorkspaceProductMonitorOption | "";
 }): (PassPurchaseDraft & { readonly tier: PassTier }) | undefined => {
   const tier =
     selection.entryTier === "reserved-desk" && selection.monitorOption
@@ -89,7 +90,7 @@ export const getCoworkPassPurchaseDraft = (selection: {
   return getTierPassPurchaseDraft(
     {
       coffee: selection.coffee,
-      monitorOption: selection.monitorOption,
+      monitorOption: selection.monitorOption || undefined,
       startDate,
     },
     tier

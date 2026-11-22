@@ -56,6 +56,14 @@ describe("getCoworkPassPurchaseDraft", () => {
         coffee: true,
       })
     ).toEqual({ tier: "reserved-desk", startDate });
+    // The form holds an empty monitor choice once the workstation is off.
+    expect(
+      getCoworkPassPurchaseDraft({
+        entryTier: "reserved-desk",
+        date: startDate,
+        monitorOption: "",
+      })
+    ).toEqual({ tier: "reserved-desk", startDate });
   });
 
   test("leaves the start date open when the draft has no valid day", () => {

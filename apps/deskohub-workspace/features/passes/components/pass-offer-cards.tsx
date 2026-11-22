@@ -17,9 +17,9 @@ type PassOfferCardProps = {
   readonly tier: PassTier;
 };
 
-const [smallerEntryPack, largerEntryPack] = [
-  ...new Set(entryPackOffers.map(({ product }) => product.size)),
-].sort((first, second) => first - second);
+const entryPackSizes = entryPackOffers.map(({ product }) => product.size);
+const smallerEntryPack = Math.min(...entryPackSizes);
+const largerEntryPack = Math.max(...entryPackSizes);
 
 const markMask = `url("${workspaceMark.src}") center / contain no-repeat`;
 
