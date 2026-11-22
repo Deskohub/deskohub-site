@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.40.1](https://github.com/totalolage/deskohub-site/compare/dhw-v1.40.0...dhw-v1.40.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **dhw:** clarify pass reminder forecast counts ([a10faec](https://github.com/totalolage/deskohub-site/commit/a10faeccd0c55fd1150e01bc6c25c0df678076ca))
+* **dhw:** clarify pass reminder forecast counts ([7fceee7](https://github.com/totalolage/deskohub-site/commit/7fceee7e2bb0b34fa747f1d2803c146b70c75c67))
+* **dhw:** fence pass reminder records on reader rollback ([a10faec](https://github.com/totalolage/deskohub-site/commit/a10faeccd0c55fd1150e01bc6c25c0df678076ca))
+* **dhw:** fence pass reminder records on reader rollback ([7fceee7](https://github.com/totalolage/deskohub-site/commit/7fceee7e2bb0b34fa747f1d2803c146b70c75c67))
+
 ## [1.40.0](https://github.com/totalolage/deskohub-site/compare/dhw-v1.39.0...dhw-v1.40.0) (2026-11-22)
 
 
