@@ -49,6 +49,7 @@ import { getHeldEntryPackStatus, listHeldEntryPacks } from "./held-entry-packs";
 import { listHeldUnlimitedPasses } from "./held-unlimited-passes";
 import { readBoughtPassGifts, readHeldPassGiftBuyers } from "./pass-gift-reads";
 import { loadUnlimitedAccess } from "./unlimited-access";
+import { getUnlimitedPassCoverageTiers } from "./unlimited-pass-window";
 
 export class CustomerPassesClosed extends Data.TaggedError(
   "CustomerPassesClosed"
@@ -215,10 +216,12 @@ export const getCustomerPassBookingOptions = Effect.fn(
     selection.date
   );
   yield* recoverEntryPackGiftClaims(accountId, verifiedSignInAt);
-  const [packs, unlimited, now] = yield* Effect.all(
+  const { db } = yield* WorkspaceDatabase;
+  const [packs, unlimited, coveredTiers, now] = yield* Effect.all(
     [
       listHeldEntryPacks(accountId),
       listHeldUnlimitedPasses(accountId),
+      getUnlimitedPassCoverageTiers(db, { holderAccountId: accountId, date }),
       currentInstant,
     ],
     { concurrency: "unbounded" }
@@ -236,7 +239,6 @@ export const getCustomerPassBookingOptions = Effect.fn(
               undefined
         )
       : [];
-  const coveredTiers = new Set(coveredPasses.map(({ tier }) => tier));
   const usablePacks = booking.packs.filter(
     (pack) =>
       entryPackCoversDate(pack, date) &&

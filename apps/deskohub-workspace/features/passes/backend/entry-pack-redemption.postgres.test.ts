@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
+import { testCustomerSession } from "@/features/account/backend/account-operations.test-utils";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { makeAccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
@@ -10,6 +11,11 @@ import { quoteCoworkEntryPack } from "@/features/checkout/backend/checkout/cowor
 import { LatePaymentRecoveryRepository } from "@/features/checkout/backend/repositories/late-payment-recovery.repository";
 import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { paymentAbandonedAfterProviderCutoffFailureCode } from "@/features/checkout/backend/repositories/payment-lifecycle-state";
+import {
+  currentAccountResolving,
+  customerApiRequest,
+  makeCustomerApiTestServer,
+} from "@/features/customer-api/customer-api.test-utils";
 import { makeDiscountCommitment } from "@/features/discounts/commitment";
 import { orderIdSchema } from "@/features/order";
 import { WorkspaceReservationRepository } from "@/features/reservation/backend/workspace-reservation.repository";
@@ -28,6 +34,7 @@ import {
   type WorkspacePostgresSuiteDatabase,
 } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
+import { CoworkPassesReleaseGate } from "./cowork-passes-release-gate";
 
 describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
   "Entry pack claims on disposable PostgreSQL",
@@ -300,6 +307,58 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         _tag: "EntryPackUnavailableError",
       });
       expect(await status(reservation)).toBeUndefined();
+    });
+
+    test("booking options respect days reserved by an unclaimed Unlimited gift without revealing it", async () => {
+      const serviceDate = "2099-06-04";
+      const passId = await seedPack();
+      await database.pool.query(
+        "update pass_purchases set gift_claimed_at = now() where id = $1",
+        [passId]
+      );
+      const api = makeCustomerApiTestServer({
+        session: { ...testCustomerSession, accountId: holder },
+        reservations: {
+          currentAccount: currentAccountResolving((session) => ({
+            kind: "profile-missing",
+            session,
+            reviewMarker: "absent",
+          })),
+        },
+        passes: {
+          database: database.layer,
+          release: CoworkPassesReleaseGate.fromDecision(true),
+        },
+      });
+      const options = () =>
+        api.handle(
+          customerApiRequest({
+            method: "GET",
+            path: `/passes/options?date=${serviceDate}&tier=open-space`,
+          })
+        );
+      const before = await options();
+      expect(before.status).toBe(200);
+      expect(await before.json()).toMatchObject({
+        entryPacks: expect.arrayContaining([
+          expect.objectContaining({ passId }),
+        ]),
+        suggestedPackId: expect.any(String),
+      });
+
+      await seedUnlimited({
+        validFrom: serviceDate,
+        validUntil: "2099-06-05",
+      });
+      const after = await options();
+      expect(after.status).toBe(200);
+      expect(await after.json()).toEqual({ entryPacks: [] });
+      const reservation = await draft(serviceDate);
+      await expect(
+        claim(reservation, passId, serviceDate)
+      ).rejects.toMatchObject({
+        _tag: "EntryPackUnavailableError",
+      });
     });
 
     test("keeps an admitted Entry claim and rejects readmission after coverage starts", async () => {

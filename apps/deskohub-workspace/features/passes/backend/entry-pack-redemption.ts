@@ -15,7 +15,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import type { PlainDate } from "@/shared/utils/temporal";
 import type { PassTier } from "../pass-offer";
 import { hasClaimablePassOrder } from "./entry-pack-payment-eligibility";
-import { hasUnlimitedPassCoverage } from "./unlimited-pass-window";
+import { getUnlimitedPassCoverageTiers } from "./unlimited-pass-window";
 
 export class EntryPackUnavailableError extends Data.TaggedError(
   "EntryPackUnavailableError"
@@ -79,7 +79,10 @@ const requireAvailableEntry = Effect.fn("requireAvailableEntry")(function* (
       )
     )
     .limit(1);
-  if (sameDate || (yield* hasUnlimitedPassCoverage(db, request))) {
+  if (
+    sameDate ||
+    (yield* getUnlimitedPassCoverageTiers(db, request)).has(request.tier)
+  ) {
     return yield* new EntryPackUnavailableError({});
   }
 });

@@ -5,7 +5,7 @@ import type { WorkspaceDatabaseClient } from "@/db/database.service";
 import { passPurchases } from "@/db/schema";
 import type { CustomerAccountId } from "@/features/account/customer-account";
 import type { PlainDate } from "@/shared/utils/temporal";
-import { type PassTier, unlimitedPassDays } from "../pass-offer";
+import { unlimitedPassDays } from "../pass-offer";
 import { hasPendingPassChange } from "./pass-administration-pending";
 
 export const keepsUnlimitedRenewalSource = Effect.fn(
@@ -61,38 +61,34 @@ export const overlapsUnlimitedPassWindow = (
     or (${pass.status} in ('withdrawn', 'cancelled') and ${pass.accessEndsOn} > ${pass.validFrom}))
 )`;
 
-/** Same-tier entitlement, including the days retained after an early end. */
-export const hasUnlimitedPassCoverage = Effect.fn("hasUnlimitedPassCoverage")(
-  function* (
-    db: WorkspaceDatabaseClient,
-    {
-      holderAccountId,
-      date,
-      tier,
-    }: {
-      readonly holderAccountId: CustomerAccountId;
-      readonly date: PlainDate;
-      readonly tier: PassTier;
-    }
-  ) {
-    const [covered] = yield* db
-      .select({ id: passPurchases.id })
-      .from(passPurchases)
-      .where(
-        and(
-          eq(passPurchases.holderAccountId, holderAccountId),
-          eq(passPurchases.tier, tier),
-          overlapsUnlimitedPassWindow(
-            passPurchases,
-            { validFrom: date, validUntil: sql`${date}::date + 1` },
-            false
-          )
+/** Booked coverage, including unclaimed gifts and days retained after an early end. */
+export const getUnlimitedPassCoverageTiers = Effect.fn(
+  "getUnlimitedPassCoverageTiers"
+)(function* (
+  db: WorkspaceDatabaseClient,
+  {
+    holderAccountId,
+    date,
+  }: {
+    readonly holderAccountId: CustomerAccountId;
+    readonly date: PlainDate;
+  }
+) {
+  const covered = yield* db
+    .selectDistinct({ tier: passPurchases.tier })
+    .from(passPurchases)
+    .where(
+      and(
+        eq(passPurchases.holderAccountId, holderAccountId),
+        overlapsUnlimitedPassWindow(
+          passPurchases,
+          { validFrom: date, validUntil: sql`${date}::date + 1` },
+          false
         )
       )
-      .limit(1);
-    return covered !== undefined;
-  }
-);
+    );
+  return new Set(covered.map(({ tier }) => tier));
+});
 
 const entitlement = alias(passPurchases, "entitlement");
 
