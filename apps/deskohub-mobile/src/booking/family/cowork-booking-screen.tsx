@@ -2,15 +2,16 @@ import type {
   CustomerBookedSelection,
   CustomerOffering,
 } from "@deskohub/workspace-customer-api";
+import { CustomerPassId } from "@deskohub/workspace-customer-api";
 import {
   useAtom,
   useAtomRefresh,
   useAtomSet,
   useAtomValue,
 } from "@effect/atom-react";
-import { type Array as Arr, Option } from "effect";
-import { Atom } from "effect/reactivity";
-import { useRouter } from "expo-router";
+import { type Array as Arr, Option, Schema } from "effect";
+import { AsyncResult, Atom } from "effect/reactivity";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import Coffee from "lucide-react-native/icons/coffee";
 import Monitor from "lucide-react-native/icons/monitor";
 import RotateCcw from "lucide-react-native/icons/rotate-ccw";
@@ -20,6 +21,22 @@ import type { AppLocale } from "../../i18n/app-locale";
 import { useAppLocale } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
 import { formatMoney } from "../../i18n/money-format";
+import { EntryPackBanner } from "../../passes/entry-pack-banner";
+import {
+  applyEntryPack,
+  entryPackDates,
+  fundWithEntryPack,
+  openEntryPackDraft,
+  packCoversDraft,
+} from "../../passes/entry-pack-booking";
+import { EntryPackOfferLink } from "../../passes/entry-pack-offer-link";
+import {
+  heldPassesAtom,
+  passBookingOptionsAtom,
+  passCatalogAtom,
+} from "../../passes/pass-reads";
+import { ConfirmDialog } from "../../ui/confirm-dialog";
+import { Button } from "../../ui/controls";
 import { Notice } from "../../ui/notice";
 import { Skeleton, SkeletonGroup } from "../../ui/skeleton";
 import { color, radius, space } from "../../ui/tokens";
@@ -52,7 +69,10 @@ import { BookingBar } from "../ui/booking-bar";
 import { BookingSectionHeading } from "../ui/booking-section-heading";
 import { BookingStepLayout } from "../ui/booking-step-layout";
 import { MonthCalendar } from "../ui/month-calendar";
-import { formatShortPragueDate } from "../ui/prague-date-format";
+import {
+  formatPragueDate,
+  formatShortPragueDate,
+} from "../ui/prague-date-format";
 import { bookingClockAtom } from "./booking-clock";
 import { unneededReadAtom } from "./booking-family-atoms";
 import {
@@ -98,6 +118,8 @@ import { selectionBar } from "./selection-bar";
  * The customer's cowork draft, with the preselection it grew from; none
  * until they change what the screen opened with.
  */
+const decodePassId = Schema.decodeUnknownOption(CustomerPassId);
+
 const coworkDraftAtom = Atom.make(Option.none<KeptCoworkDraft>());
 
 const blockerMessage = (blocker: CoworkBlocker, locale: AppLocale) =>
@@ -204,11 +226,55 @@ function CoworkSelection({
   const now = useAtomValue(bookingClockAtom);
   const today = pragueToday(now);
 
-  const seed = bookingPreselectionKey(preselection);
+  const { passId: passParam } = useLocalSearchParams<{ passId?: string }>();
+  const linkedPassId =
+    passParam === undefined
+      ? undefined
+      : Option.getOrElse(decodePassId(passParam), () => "invalid-pass");
+  const seed = linkedPassId ?? bookingPreselectionKey(preselection);
   const [kept, setStored] = useAtom(coworkDraftAtom);
-  const draft = openingCoworkDraft({ kept, preselection, offerings });
-  const setDraft = (next: CoworkDraft) =>
-    setStored(Option.some({ seed, draft: next }));
+  const keptForRoute = Option.getOrUndefined(
+    Option.filter(kept, (stored) => seed === "" || stored.seed === seed)
+  );
+  const entryPackId =
+    keptForRoute === undefined ? linkedPassId : keptForRoute.entryPackId;
+
+  const passCatalog = useAtomValue(passCatalogAtom);
+  const passListAtom = heldPassesAtom(locale);
+  const passList = useAtomValue(passListAtom);
+  const refreshPassList = useAtomRefresh(passListAtom);
+  const packs = AsyncResult.isSuccess(passList)
+    ? passList.value.held.filter((pass) => pass.kind === "entry-pack")
+    : [];
+  const activePack = packs.find(({ passId }) => passId === entryPackId);
+  const openingDraft = openingCoworkDraft({
+    kept:
+      entryPackId === linkedPassId && linkedPassId !== undefined
+        ? Option.fromNullishOr(keptForRoute)
+        : kept,
+    preselection,
+    offerings,
+  });
+  const draft =
+    keptForRoute === undefined &&
+    linkedPassId !== undefined &&
+    activePack !== undefined
+      ? openEntryPackDraft(openingDraft, activePack)
+      : openingDraft;
+  const storeDraft = (next: CoworkDraft, fundingId: string | undefined) =>
+    setStored(
+      Option.some({
+        seed,
+        draft: next,
+        ...(fundingId && { entryPackId: fundingId }),
+      })
+    );
+  const setDraft = (next: CoworkDraft) => storeDraft(next, entryPackId);
+  const [cardChoice, setCardChoice] = useState<CoworkDraft>();
+  const choose = (next: CoworkDraft, covered: boolean) => {
+    if (entryPackId !== undefined && !covered) setCardChoice(next);
+    else setDraft(next);
+  };
 
   const bookableDates = coworkBookableDates(tiers, draft.tier);
   const queries = coworkAvailabilityQueries(draft, bookableDates);
@@ -247,17 +313,77 @@ function CoworkSelection({
   // Keep the workstation the availability fitted, so the next reads are for it.
   useEffect(() => {
     if (model.draft !== draft) {
-      setStored(Option.some({ seed, draft: model.draft }));
+      setStored(
+        Option.some({
+          seed,
+          draft: model.draft,
+          ...(entryPackId && { entryPackId }),
+        })
+      );
     }
-  }, [model.draft, draft, seed, setStored]);
+  }, [model.draft, draft, seed, setStored, entryPackId]);
 
-  const quoteAtom = Option.match(model.quotable, {
+  const chosenDate = Option.getOrUndefined(model.draft.date);
+  const chosenWorkstation = Option.getOrUndefined(model.draft.workstation);
+  const optionsAtom =
+    chosenDate !== undefined && (packs.length > 0 || entryPackId !== undefined)
+      ? passBookingOptionsAtom({
+          date: chosenDate,
+          tier: model.draft.tier,
+          ...(chosenWorkstation && { monitorOption: chosenWorkstation.option }),
+          ...(model.draft.stay === "overnight" && { stay: model.draft.stay }),
+        })
+      : unneededReadAtom;
+  const optionsResult = useAtomValue(optionsAtom);
+  const refreshPassOptions = useAtomRefresh(optionsAtom);
+  const options = AsyncResult.isSuccess(optionsResult)
+    ? optionsResult.value
+    : undefined;
+  const offer =
+    chosenDate === undefined
+      ? packs
+          .filter(
+            (pack) =>
+              pack.bookFrom !== undefined && packCoversDraft(pack, model.draft)
+          )
+          .reduce<(typeof packs)[number] | undefined>(
+            (first, pack) =>
+              first === undefined || pack.lastUsableDate < first.lastUsableDate
+                ? pack
+                : first,
+            undefined
+          )
+      : packs.find(({ passId }) => passId === options?.suggestedPackId);
+  const packPending =
+    entryPackId !== undefined &&
+    (AsyncResult.isInitial(passList) ||
+      (chosenDate !== undefined &&
+        activePack !== undefined &&
+        AsyncResult.isInitial(optionsResult)));
+  const awaitingMonitor =
+    activePack?.tier === "reserved-desk-workstation" &&
+    chosenWorkstation === undefined;
+  const packUnavailable =
+    entryPackId !== undefined &&
+    !packPending &&
+    (activePack?.bookFrom === undefined ||
+      (chosenDate !== undefined &&
+        options !== undefined &&
+        (!options.entryPacks.some(({ passId }) => passId === entryPackId) ||
+          (!awaitingMonitor && !packCoversDraft(activePack, model.draft)))) ||
+      (chosenDate !== undefined && AsyncResult.isFailure(optionsResult)));
+  const selectedBooking = fundWithEntryPack(model.selection, entryPackId);
+  const quotable =
+    packPending || packUnavailable || awaitingMonitor
+      ? Option.none()
+      : fundWithEntryPack(model.quotable, entryPackId);
+  const quoteAtom = Option.match(quotable, {
     onNone: () => unneededReadAtom,
     onSome: (selection) => bookingQuoteAtom(selection, locale),
   });
   const quoteResult = useAtomValue(quoteAtom);
   const refreshQuote = useAtomRefresh(quoteAtom);
-  const quote = Option.map(model.quotable, () => bookingReadOf(quoteResult));
+  const quote = Option.map(quotable, () => bookingReadOf(quoteResult));
 
   // A full day the customer tapped, explained for the tier it is full for.
   const [tapped, setTapped] = useState<{
@@ -290,7 +416,6 @@ function CoworkSelection({
   const chosen = tiers.find(({ tier }) => tier === model.draft.tier);
   const tracks = useChooseTracks(3);
   const tierPair = useCoworkTierPair(tracks);
-  const chosenDate = Option.getOrUndefined(model.draft.date);
   const shortDate = (date: PragueDate) => formatShortPragueDate(date, locale);
   const blocked = enablement.blockers.flatMap((blocker) => {
     const message = blockerMessage(blocker, locale);
@@ -304,7 +429,7 @@ function CoworkSelection({
       : {};
   const checkout = checkoutRequestOf({
     locale,
-    selection: model.selection,
+    selection: selectedBooking,
     blockers: enablement.blockers,
     quote: Option.flatMap(quote, freshValue),
     ...overnightTimes,
@@ -325,18 +450,23 @@ function CoworkSelection({
             }),
             ...overnightTimes,
           },
-          selection: model.selection,
+          selection: selectedBooking,
           quote,
           blocked: Option.fromNullishOr(blocked[0]),
           canContinue: Option.isSome(checkout),
           locale,
         });
 
+  const claimedDates = packs.flatMap(({ bookedDates }) => bookedDates);
   const cards = tiers.map(
     (offering): CoworkTierCard => ({
       tier: offering.tier,
       name: offering.name,
       price: offering.advertisedPrice.price,
+      ...(activePack !== undefined &&
+        offering.tier === model.draft.tier && {
+          entryPrice: m.booking_pass_one_entry({}, { locale }),
+        }),
       ...(offering.advertisedPrice.discount.value > 0 && {
         was: offering.price,
       }),
@@ -395,7 +525,6 @@ function CoworkSelection({
     model.draft.tier === "reserved-desk" && enablement.workstations.length > 0
       ? chosen?.addOns.find(({ id }) => id === "workstation")
       : undefined;
-  const chosenWorkstation = Option.getOrUndefined(model.draft.workstation);
   const firstFreeWorkstation = enablement.workstations.find(
     ({ id }) => !enablement.unavailableWorkstations.has(id)
   );
@@ -408,7 +537,17 @@ function CoworkSelection({
         bar && (
           <BookingBar
             locale={locale}
-            summary={bar.summary}
+            summary={
+              bar.summary === undefined || entryPackId === undefined
+                ? bar.summary
+                : {
+                    ...bar.summary,
+                    detail: m.booking_pass_entry_summary({}, { locale }),
+                    ...(Option.isNone(Option.flatMap(quote, freshValue)) && {
+                      price: { kind: "none" as const },
+                    }),
+                  }
+            }
             action={
               bar.action === "retry"
                 ? {
@@ -459,6 +598,47 @@ function CoworkSelection({
               onRetry={retrySupportingReads}
             />
 
+            <ConfirmDialog
+              visible={cardChoice !== undefined}
+              title={m.booking_pass_confirm_title({}, { locale })}
+              body={m.booking_pass_confirm_body({}, { locale })}
+              confirmLabel={m.booking_pass_pay_card({}, { locale })}
+              cancelLabel={m.booking_pass_keep({}, { locale })}
+              onConfirm={() => {
+                if (cardChoice !== undefined) storeDraft(cardChoice, undefined);
+                setCardChoice(undefined);
+              }}
+              onCancel={() => setCardChoice(undefined)}
+            />
+            {(entryPackId !== undefined || offer !== undefined) && (
+              <EntryPackBanner
+                pack={entryPackId !== undefined ? activePack : offer}
+                applied={entryPackId !== undefined}
+                onApply={() => {
+                  if (offer !== undefined)
+                    storeDraft(applyEntryPack(model.draft), offer.passId);
+                }}
+                onPayByCard={() => storeDraft(model.draft, undefined)}
+              />
+            )}
+            {packUnavailable && (
+              <Notice
+                tone="error"
+                message={m.booking_pass_unavailable({}, { locale })}
+              />
+            )}
+            {packUnavailable &&
+              (AsyncResult.isFailure(passList) ||
+                AsyncResult.isFailure(optionsResult)) && (
+                <Button
+                  variant="text"
+                  label={m.account_retry({}, { locale })}
+                  onPress={() => {
+                    refreshPassList();
+                    refreshPassOptions();
+                  }}
+                />
+              )}
             <View style={tracks && chooseStyles.row}>
               <View style={tracks && chooseStyles.track}>
                 <BookingSectionHeading
@@ -473,10 +653,22 @@ function CoworkSelection({
                   selected={model.draft.tier}
                   onSelect={(tier) => {
                     setTapped(undefined);
-                    setDraft(selectCoworkTier(model.draft, tier));
+                    choose(
+                      selectCoworkTier(model.draft, tier),
+                      model.draft.tier === tier
+                    );
                   }}
                   locale={locale}
                 />
+                {entryPackId === undefined &&
+                  AsyncResult.isSuccess(passCatalog) &&
+                  AsyncResult.isSuccess(passList) &&
+                  !packs.some(({ bookFrom }) => bookFrom !== undefined) && (
+                    <EntryPackOfferLink
+                      catalog={passCatalog.value}
+                      draft={model.draft}
+                    />
+                  )}
               </View>
               <View style={tracks && chooseStyles.calendar}>
                 <CoworkDateHeading
@@ -493,7 +685,15 @@ function CoworkSelection({
                   stretch={tracks}
                   label={m.booking_date_heading({}, { locale })}
                   locale={locale}
-                  dates={enablement.dates}
+                  dates={
+                    activePack === undefined
+                      ? enablement.dates
+                      : entryPackDates(
+                          enablement.dates,
+                          activePack,
+                          claimedDates
+                        )
+                  }
                   selected={chosenDate}
                   onSelect={(date) => {
                     setTapped(undefined);
@@ -501,9 +701,14 @@ function CoworkSelection({
                   }}
                   today={today}
                   focusedDate={focusedDay}
-                  onUnavailablePress={(date) =>
-                    setTapped({ date, tier: model.draft.tier })
-                  }
+                  onUnavailablePress={(date) => {
+                    if (
+                      activePack === undefined ||
+                      !claimedDates.includes(date)
+                    ) {
+                      setTapped({ date, tier: model.draft.tier });
+                    }
+                  }}
                   dayInfo={fullDayInfo}
                   previousMonthLabel={m.booking_calendar_previous_month(
                     {},
@@ -524,11 +729,42 @@ function CoworkSelection({
                   <Notice
                     tone="info"
                     message={
-                      enablement.notices
-                        .map((notice) =>
+                      [
+                        ...enablement.notices.map((notice) =>
                           availabilityNoticeMessage(notice, locale)
-                        )
-                        .join(" ") || undefined
+                        ),
+                        ...(activePack === undefined
+                          ? []
+                          : [
+                              m.booking_pass_date_rules(
+                                {
+                                  date: formatPragueDate(
+                                    activePack.lastUsableDate,
+                                    locale,
+                                    {
+                                      day: "numeric",
+                                      month: "short",
+                                      year: "numeric",
+                                    }
+                                  ),
+                                },
+                                { locale }
+                              ),
+                              ...(activePack.bookedDates[0] === undefined
+                                ? []
+                                : [
+                                    m.booking_pass_already_booked(
+                                      {
+                                        date: shortDate(
+                                          activePack.bookedDates[0]
+                                        ),
+                                      },
+                                      { locale }
+                                    ),
+                                  ]),
+                              m.booking_pass_final_dates({}, { locale }),
+                            ]),
+                      ].join(" ") || undefined
                     }
                   />
                 </View>
@@ -545,6 +781,7 @@ function CoworkSelection({
                         label={coffee.name}
                         icon={Coffee}
                         checked={model.draft.coffee}
+                        disabled={entryPackId !== undefined}
                         onToggle={(checked) =>
                           setDraft({ ...model.draft, coffee: checked })
                         }
@@ -568,13 +805,15 @@ function CoworkSelection({
                         checked={chosenWorkstation !== undefined}
                         disabled={enablement.workstationRequired}
                         onToggle={(checked) =>
-                          setDraft(
+                          choose(
                             selectCoworkWorkstation(
                               model.draft,
                               checked
                                 ? Option.fromNullishOr(firstFreeWorkstation?.id)
                                 : Option.none()
-                            )
+                            ),
+                            activePack?.tier === "reserved-desk-workstation" &&
+                              checked
                           )
                         }
                         price={m.booking_addon_price(

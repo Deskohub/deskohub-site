@@ -9,6 +9,7 @@ import Gift from "lucide-react-native/icons/gift";
 import Languages from "lucide-react-native/icons/languages";
 import Receipt from "lucide-react-native/icons/receipt";
 import Shield from "lucide-react-native/icons/shield";
+import Ticket from "lucide-react-native/icons/ticket";
 import Trash2 from "lucide-react-native/icons/trash-2";
 import User from "lucide-react-native/icons/user";
 import { StyleSheet, View } from "react-native";
@@ -36,6 +37,7 @@ import { formatExactReferralDiscount } from "./referrals/referrals";
 
 const rowIcon: Record<AccountRowSection, IconComponent> = {
   profile: User,
+  passes: Ticket,
   security: Shield,
   assistants: Bot,
   billing: Building,
@@ -50,6 +52,7 @@ const rowIcon: Record<AccountRowSection, IconComponent> = {
 const rowLabel = (section: AccountRowSection, locale: AppLocale) =>
   ({
     profile: m.account_section_profile,
+    passes: m.account_section_passes,
     security: m.account_section_security,
     assistants: m.account_section_assistants,
     billing: m.account_section_billing,
@@ -76,6 +79,7 @@ export const accountRowSubtitleText = (
 ): string =>
   Match.value(subtitle).pipe(
     Match.discriminatorsExhaustive("kind")({
+      passes: ({ count }) => m.account_row_active_passes({ count }, { locale }),
       language: () => getLocaleDefinition(locale).nativeName,
       security: ({ passkeys }) => {
         if (passkeys === 0)

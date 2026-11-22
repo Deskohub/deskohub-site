@@ -375,7 +375,7 @@ function PinHero({
  * (`accessPinBoxSize`). Assistive tech
  * reads it one digit at a time; a placeholder holds the room while loading.
  */
-function PinDigits({
+export function PinDigits({
   groups,
   ended = false,
   placeholder = false,
@@ -460,7 +460,7 @@ function PinDigits({
   );
 }
 
-function CopyPin({
+export function CopyPin({
   orderId,
   code,
 }: {

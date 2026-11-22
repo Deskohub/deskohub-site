@@ -26,6 +26,7 @@ export interface KeptCoworkDraft {
   /** The preselection's key (`bookingPreselectionKey`); empty without one. */
   readonly seed: string;
   readonly draft: CoworkDraft;
+  readonly entryPackId?: string;
 }
 
 /**

@@ -1,10 +1,10 @@
 import type {
   CustomerBookableCoworkTier,
-  CustomerMonitorOption,
   CustomerLocale,
+  CustomerMonitorOption,
   CustomerReservationOrderId,
 } from "@deskohub/workspace-customer-api";
-import { Array, Effect } from "effect";
+import { Array as Arr, Effect } from "effect";
 import { Atom } from "effect/reactivity";
 import type { PragueDate } from "../booking/selection/prague-date";
 import { CustomerApi } from "../customer-api/customer-api.service";
@@ -56,7 +56,7 @@ export const reservationFundingAtom = Atom.family(
   (orderIds: ReadonlyArray<CustomerReservationOrderId>) =>
     customerDataRuntime.atom(
       Effect.forEach(
-        Array.chunksOf(orderIds, 50),
+        Arr.chunksOf(orderIds, 50),
         (batch) =>
           Effect.flatMap(passes, (api) =>
             api.getReservationPassFunding({ query: { orderIds: batch } })
@@ -65,14 +65,22 @@ export const reservationFundingAtom = Atom.family(
       ).pipe(
         Effect.map(
           (batches) =>
-            new Set(batches.flatMap(({ entryPackOrderIds }) => entryPackOrderIds))
+            new Set(
+              batches.flatMap(({ entryPackOrderIds }) => entryPackOrderIds)
+            )
         )
       )
     )
 );
 
 export const resendPassInvitationAtom = customerDataRuntime.fn(
-  ({ passId, locale }: { readonly passId: string; readonly locale: CustomerLocale }, get) =>
+  (
+    {
+      passId,
+      locale,
+    }: { readonly passId: string; readonly locale: CustomerLocale },
+    get
+  ) =>
     Effect.flatMap(passes, (api) =>
       api.resendPassInvitation({ params: { passId } })
     ).pipe(customerWrite, refreshAfterWrite(get, [heldPassesAtom(locale)]))

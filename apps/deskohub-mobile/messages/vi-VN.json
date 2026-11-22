@@ -279,6 +279,8 @@
   "reauthentication_confirmed": "Đã xác minh. Bây giờ hãy thử lại.",
   "account_tab_reservations": "Đặt chỗ",
   "account_tab_account": "Tài khoản",
+  "account_row_active_passes": "{count} đang hoạt động",
+  "account_section_passes": "Thẻ",
   "account_section_reservations": "Đặt chỗ",
   "account_section_referrals": "Mời bạn bè",
   "account_section_profile": "Hồ sơ",
@@ -352,6 +354,124 @@
   "reservations_invoice_not_found": "Không tìm thấy hóa đơn cho đặt chỗ này.",
   "reservations_invoice_share_failed": "Không thể mở hóa đơn trên thiết bị này. Hãy thử lại.",
   "reservations_access_code_label": "Mã PIN ra vào {digits}",
+  "passes_access_closed": "Đã hết giờ vào cửa hôm nay",
+  "passes_access_refresh": "Hãy thử tải lại mã hôm nay.",
+  "passes_active": "Đang hoạt động",
+  "passes_any_free_desk": "Bất kỳ bàn trống nào",
+  "passes_any_open_day": "Đặt chỗ vào bất kỳ ngày còn chỗ nào",
+  "passes_book_date": "Đặt chỗ theo ngày",
+  "passes_booked": "Đã đặt: {count}",
+  "passes_bought": "Mua ngày {date}",
+  "passes_bought_others": "Đã mua cho người khác",
+  "passes_bought_others_description": "Người được bạn tặng sẽ sử dụng gói này.",
+  "passes_buy": "Mua thẻ",
+  "passes_claimed": "Đã nhận",
+  "passes_date_range": "{start} – {end}",
+  "passes_day_fraction": "{day}/{total}",
+  "passes_day_of": "Ngày {day} trên {total}",
+  "passes_day_period": "{day} · {period}",
+  "passes_days": "{count} ngày",
+  "passes_days_gone": "Số ngày đã qua: {count}",
+  "passes_days_remaining": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "Còn {count} ngày, tính cả hôm nay"
+      }
+    }
+  ],
+  "passes_days_to_come": "Số ngày còn lại: {count}",
+  "passes_depleted": "Đã dùng hết",
+  "passes_door_code": "Mã vào cửa hôm nay",
+  "passes_ended": "Đã kết thúc",
+  "passes_ends_in": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "hết hạn sau {count} ngày"
+      }
+    }
+  ],
+  "passes_ends_on": "Kết thúc ngày {date}",
+  "passes_entries": "{count} lượt vào",
+  "passes_entries_left": "trong {size} lượt còn lại",
+  "passes_entry_pack": "Gói lượt vào",
+  "passes_entry_price": "5 hoặc 10 ngày, từ {price} mỗi ngày",
+  "passes_expired": "Đã hết hạn",
+  "passes_gifted": "Quà tặng dành cho bạn",
+  "passes_gifted_by": "Quà tặng từ {name}",
+  "passes_in_days": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "sau {count} ngày"
+      }
+    }
+  ],
+  "passes_invitation_queued": "Lời mời đang chờ gửi.",
+  "passes_invitation_unconfirmed": "Hiện chưa thể gửi lại lời mời.",
+  "passes_keypad": "Nhập mã trên bàn phím số ở lối vào. Mỗi ngày sẽ có mã mới ở đây.",
+  "passes_midnight": "nửa đêm",
+  "passes_next_booking": "Lần đặt chỗ tiếp theo",
+  "passes_no_booking": "Open Space, không cần đặt chỗ",
+  "passes_none_yet": "Chưa có",
+  "passes_not_found": "Tài khoản của bạn không dùng được thẻ này.",
+  "passes_open_space": "Open Space",
+  "passes_paid_with_pack": "Đã thanh toán bằng gói lượt vào",
+  "passes_period": "Thời hạn",
+  "passes_previous": "Gói trước đây",
+  "passes_product_tier": "{product} · {tier}",
+  "passes_renew": "Gia hạn thẻ",
+  "passes_renew_failed": "Không mở được trang gia hạn.",
+  "passes_resend": "Gửi lại lời mời",
+  "passes_reserved_desk": "Bàn đặt riêng",
+  "passes_reserved_workstation": "Bàn đặt riêng có trạm làm việc",
+  "passes_same_desk": "Cùng một bàn mỗi ngày",
+  "passes_starts_on": "Bắt đầu ngày {date}",
+  "passes_tier_desk": "{tier} · Bàn {desk}",
+  "passes_to_book": "Có thể đặt: {count}",
+  "passes_today_included": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "Còn  ngày, tính cả hôm nay"
+      }
+    }
+  ],
+  "passes_today": "Hôm nay",
+  "passes_unclaimed": "Chưa nhận",
+  "passes_unlimited": "Thẻ không giới hạn",
+  "passes_unlimited_price": "{days} ngày liên tiếp, từ {price}",
+  "passes_upcoming": "Sắp bắt đầu",
+  "passes_used": "Đã dùng: {count}",
+  "passes_valid_today": "Có hiệu lực hôm nay, {date}, đến {time}",
+  "passes_valid_until": "Có hiệu lực đến",
+  "passes_where": "Chỗ ngồi",
+  "passes_your_desk": "Chỗ của bạn",
   "reservations_access_copy": "Sao chép mã PIN",
   "reservations_access_copied": "Đã sao chép mã PIN.",
   "reservations_access_copy_failed": "Không thể sao chép mã PIN. Hãy ghi lại mã.",
@@ -543,6 +663,24 @@
   "booking_completion_required": "Hãy hoàn tất hồ sơ trước khi đặt chỗ.",
   "booking_gate_deletion_title": "Tài khoản của bạn đang được xóa",
   "booking_gate_deletion_body": "Trong lúc này, bạn không thể đặt chỗ mới. Hãy nhắn cho chúng tôi nếu đây là nhầm lẫn.",
+  "booking_pass_already_booked": "Bạn đã dùng gói này để đặt chỗ vào {date}.",
+  "booking_pass_applied": "Bạn đang đặt chỗ bằng gói lượt vào",
+  "booking_pass_buy_link": "Bạn thường xuyên đến đây? <packLink>Gói lượt vào từ {price} mỗi ngày</packLink>",
+  "booking_pass_card_instead": "Chuyển sang thanh toán bằng thẻ",
+  "booking_pass_confirm_body": "Nếu chọn phương án này, bạn sẽ phải thanh toán bằng thẻ thay vì dùng gói lượt vào.",
+  "booking_pass_confirm_title": "Chuyển sang thanh toán bằng thẻ?",
+  "booking_pass_date_rules": "Chọn bất kỳ ngày còn chỗ nào đến {date}.",
+  "booking_pass_entry_summary": "1 lượt từ gói lượt vào",
+  "booking_pass_final_dates": "Bạn không thể hủy hoặc đổi ngày đã đặt bằng gói lượt vào.",
+  "booking_pass_keep": "Tiếp tục dùng gói lượt vào",
+  "booking_pass_left": "Còn {count}/{size} lượt",
+  "booking_pass_left_after": "Sau lần đặt này còn {count} lượt",
+  "booking_pass_offer": "Dùng gói lượt vào của bạn",
+  "booking_pass_one_entry": "1 lượt vào",
+  "booking_pass_pay_card": "Thanh toán bằng thẻ",
+  "booking_pass_redeem": "Đặt chỗ bằng 1 lượt vào",
+  "booking_pass_unavailable": "Gói lượt vào của bạn không áp dụng cho lần đặt chỗ này. Hãy chọn ngày khác hoặc thanh toán bằng thẻ.",
+  "booking_pass_use": "Dùng gói",
   "booking_cowork_tier_heading": "Loại chỗ ngồi",
   "booking_cowork_stay_overnight": "Qua đêm",
   "booking_date_heading": "Ngày",

@@ -62,7 +62,9 @@ afterEach(() => {
  * with the screen in view until the test moves it with `setFocused`.
  */
 const startFlow = async (
-  arrange: (checkout: FakeCheckout) => Promise<void> = async () => undefined
+  arrange: (checkout: FakeCheckout) => Promise<void> = async () => undefined,
+  buildRequest: (checkout: FakeCheckout) => CheckoutRequest = (checkout) =>
+    checkout.request()
 ) => {
   const checkout = await makeFakeCheckout();
   harnesses.push(checkout);
@@ -75,7 +77,7 @@ const startFlow = async (
   const setInViewNow = (focused: boolean) => {
     inViewNow = focused;
   };
-  const atom = checkoutFlowAtom(checkout.request(), focus, () => inViewNow);
+  const atom = checkoutFlowAtom(buildRequest(checkout), focus, () => inViewNow);
   const unmount = checkout.registry.mount(atom);
   cleanups.push(unmount);
   const controller = () => checkoutController(checkout.registry.get(atom));
@@ -237,6 +239,31 @@ describe("useCheckoutFlow's flow", () => {
       properties: { reservation_kind: "cowork" },
     });
     expect(reportedBeforeOpening).toBe(true);
+  });
+
+  test("redeems the selected Entry pack on the booking checkout path", async () => {
+    const funding = {
+      kind: "entry" as const,
+      passId: "642ef6b9-48aa-495f-83a8-9a53f4791692",
+    };
+    const flow = await startFlow(undefined, (checkout) =>
+      checkout.request({
+        family: "cowork",
+        tier: "open-space",
+        date: checkout.booking.dateIn(20),
+        coffee: false,
+        funding,
+      })
+    );
+    await toReview(flow);
+    await pay(flow);
+    await flow.untilState("Done");
+
+    const create = flow.checkout.booking.calls.find(
+      (call) => call.endpoint === "createCheckout"
+    );
+    expect(create?.input.selection.funding).toEqual(funding);
+    expect(flow.checkout.browser.opened).toEqual([]);
   });
 
   test("each details submission is a new checkout attempt", async () => {

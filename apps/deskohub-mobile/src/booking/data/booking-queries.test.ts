@@ -10,6 +10,7 @@ import {
 import {
   type CustomerBookingSelection,
   CustomerBookingSelectionInvalid,
+  CustomerSelectionUnavailable,
   customerAvailabilityReplacementHeader,
 } from "@deskohub/workspace-customer-api";
 import { Duration, Effect, Layer } from "effect";
@@ -334,6 +335,44 @@ describe("booking catalog queries", () => {
 });
 
 describe("bookingQuoteAtom request", () => {
+  test("sends the chosen pack in the quote query and keeps its failure separate", async () => {
+    const harness = withTestClock();
+    const selection = coworkSelection(harness.booking.dateIn(23));
+    const passId = "642ef6b9-48aa-495f-83a8-9a53f4791692";
+    const reason = new CustomerSelectionUnavailable({
+      reason: "availability_changed",
+    });
+    harness.booking.reject("getQuote", reason);
+    const usingPack = await settle(
+      harness.registry,
+      bookingQuoteAtom(
+        {
+          ...selection,
+          funding: { kind: "entry", passId },
+        },
+        "en-US"
+      )
+    );
+    expect(usingPack).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: reason._tag },
+    });
+
+    const byCard = await settle(
+      harness.registry,
+      bookingQuoteAtom(selection, "en-US")
+    );
+    expect(byCard._tag).toBe("Success");
+    const received = harness.booking.calls.filter(
+      (call) => call.endpoint === "getQuote"
+    );
+    expect(received.map(({ input }) => input.passId)).toEqual([
+      passId,
+      undefined,
+    ]);
+    expect(received[0]?.input).not.toHaveProperty("funding");
+  });
+
   test("reads a selection that spells out an absent option as undefined", async () => {
     const harness = withTestClock();
     const atom = bookingQuoteAtom(

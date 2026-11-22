@@ -285,6 +285,8 @@
   "reauthentication_confirmed": "Overenie prebehlo. Teraz to skús znova.",
   "account_tab_reservations": "Rezervácie",
   "account_tab_account": "Účet",
+  "account_row_active_passes": "Aktívne: {count}",
+  "account_section_passes": "Permanentky",
   "account_section_reservations": "Rezervácie",
   "account_section_referrals": "Pozvi priateľov",
   "account_section_profile": "Profil",
@@ -358,6 +360,136 @@
   "reservations_invoice_not_found": "K tejto rezervácii sa nepodarilo nájsť faktúru.",
   "reservations_invoice_share_failed": "Faktúru sa v tomto zariadení nepodarilo otvoriť. Skús to znova.",
   "reservations_access_code_label": "Prístupový PIN {digits}",
+  "passes_access_closed": "Dnešný prístup sa skončil",
+  "passes_access_refresh": "Skús znova načítať dnešný kód.",
+  "passes_active": "Aktívna",
+  "passes_any_free_desk": "Ktorýkoľvek voľný stôl",
+  "passes_any_open_day": "Vyberte si ktorýkoľvek voľný deň",
+  "passes_book_date": "Rezervovať deň",
+  "passes_booked": "Rezervované: {count}",
+  "passes_bought": "Zakúpené {date}",
+  "passes_bought_others": "Kúpené pre iných",
+  "passes_bought_others_description": "Balík používa ten, komu ho kúpiš.",
+  "passes_buy": "Kúpiť permanentku",
+  "passes_claimed": "Vyzdvihnuté",
+  "passes_date_range": "{start} – {end}",
+  "passes_day_fraction": "{day}/{total}",
+  "passes_day_of": "Deň {day} z {total}",
+  "passes_day_period": "{day} · {period}",
+  "passes_days": "{count} dní",
+  "passes_days_gone": "Uplynuté dni: {count}",
+  "passes_days_remaining": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "Zostáva {count} deň vrátane dneška",
+        "countPlural=few": "Zostávajú {count} dni vrátane dneška",
+        "countPlural=many": "Zostáva {count} dňa vrátane dneška",
+        "countPlural=other": "Zostáva {count} dní vrátane dneška"
+      }
+    }
+  ],
+  "passes_days_to_come": "Zostávajúce dni: {count}",
+  "passes_depleted": "Vyčerpané",
+  "passes_door_code": "Dnešný prístupový kód",
+  "passes_ended": "Ukončené",
+  "passes_ends_in": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "skončí o {count} deň",
+        "countPlural=few": "skončí o {count} dni",
+        "countPlural=many": "skončí o {count} dňa",
+        "countPlural=other": "skončí o {count} dní"
+      }
+    }
+  ],
+  "passes_ends_on": "Končí {date}",
+  "passes_entries": "{count} vstupov",
+  "passes_entries_left": "z {size} vstupov zostáva",
+  "passes_entry_pack": "Balík vstupov",
+  "passes_entry_price": "5 alebo 10 dní, od {price} za deň",
+  "passes_expired": "Platnosť vypršala",
+  "passes_gifted": "Darček pre teba",
+  "passes_gifted_by": "Darček od {name}",
+  "passes_in_days": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "o {count} deň",
+        "countPlural=few": "o {count} dni",
+        "countPlural=many": "o {count} dňa",
+        "countPlural=other": "o {count} dní"
+      }
+    }
+  ],
+  "passes_invitation_queued": "Pozvánka čaká na odoslanie.",
+  "passes_invitation_unconfirmed": "Pozvánku teraz nejde poslať znova.",
+  "passes_keypad": "Zadaj kód na klávesnici pri vchode. Každý deň sa tu zobrazí nový kód.",
+  "passes_midnight": "polnoci",
+  "passes_next_booking": "Najbližšia rezervácia",
+  "passes_no_booking": "Open Space, bez rezervácie",
+  "passes_none_yet": "Zatiaľ žiadna",
+  "passes_not_found": "Táto permanentka nie je pre váš účet dostupná.",
+  "passes_open_space": "Open Space",
+  "passes_paid_with_pack": "Zaplatené balíkom vstupov",
+  "passes_period": "Platnosť",
+  "passes_previous": "Predchádzajúce balíky",
+  "passes_product_tier": "{product} · {tier}",
+  "passes_renew": "Predĺžiť pas",
+  "passes_renew_failed": "Stránku predĺženia sa nepodarilo otvoriť.",
+  "passes_resend": "Poslať pozvánku znova",
+  "passes_reserved_desk": "Rezervovaný stôl",
+  "passes_reserved_workstation": "Rezervovaný stôl s pracovnou stanicou",
+  "passes_same_desk": "Každý deň ten istý stôl",
+  "passes_starts_on": "Začína {date}",
+  "passes_tier_desk": "{tier} · Stôl {desk}",
+  "passes_to_book": "Na rezerváciu: {count}",
+  "passes_today_included": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "Zostáva  deň vrátane dneška",
+        "countPlural=few": "Zostávajú  dni vrátane dneška",
+        "countPlural=many": "Zostáva  dňa vrátane dneška",
+        "countPlural=other": "Zostáva  dní vrátane dneška"
+      }
+    }
+  ],
+  "passes_today": "Dnes",
+  "passes_unclaimed": "Zatiaľ nevyzdvihnuté",
+  "passes_unlimited": "Neobmedzený pas",
+  "passes_unlimited_price": "{days} dní za sebou, od {price}",
+  "passes_upcoming": "Nadchádzajúca",
+  "passes_used": "Využité: {count}",
+  "passes_valid_today": "Platí dnes, {date}, do {time}",
+  "passes_valid_until": "Platí do",
+  "passes_where": "Kde si sadnúť",
+  "passes_your_desk": "Tvoje miesto",
   "reservations_access_copy": "Kopírovať PIN",
   "reservations_access_copied": "PIN je skopírovaný.",
   "reservations_access_copy_failed": "PIN sa nepodarilo skopírovať. Poznač si ho.",
@@ -549,6 +681,24 @@
   "booking_completion_required": "Skôr než začneš rezervovať, doplň si profil.",
   "booking_gate_deletion_title": "Tvoj účet sa odstraňuje",
   "booking_gate_deletion_body": "Kým odstraňovanie beží, nemôžeš nič nové rezervovať. Ak ide o omyl, napíš nám.",
+  "booking_pass_already_booked": "Na {date} už máte rezerváciu z tejto permanentky.",
+  "booking_pass_applied": "Rezervuješ s balíkom vstupov",
+  "booking_pass_buy_link": "Chodíš často? <packLink>Balíky vstupov od {price} za deň</packLink>",
+  "booking_pass_card_instead": "Radšej zaplatiť kartou",
+  "booking_pass_confirm_body": "Ak vyberieš túto možnosť, budeš musieť zaplatiť kartou namiesto použitia balíka vstupov.",
+  "booking_pass_confirm_title": "Radšej zaplatiť kartou?",
+  "booking_pass_date_rules": "Ktorýkoľvek voľný deň do {date}.",
+  "booking_pass_entry_summary": "1 vstup z permanentky",
+  "booking_pass_final_dates": "Dni rezervované z balíka vstupov sa nedajú zrušiť ani presunúť.",
+  "booking_pass_keep": "Ďalej používať balík vstupov",
+  "booking_pass_left": "Zostáva {count} z {size}",
+  "booking_pass_left_after": "Po tejto rezervácii zostáva: {count}",
+  "booking_pass_offer": "Použi svoj balík vstupov",
+  "booking_pass_one_entry": "1 vstup",
+  "booking_pass_pay_card": "Zaplatiť kartou",
+  "booking_pass_redeem": "Rezervovať za 1 vstup",
+  "booking_pass_unavailable": "Túto rezerváciu tvoj balík nepokrýva. Vyber si iný deň alebo zaplať kartou.",
+  "booking_pass_use": "Použiť balík",
   "booking_cowork_tier_heading": "Typ miesta",
   "booking_cowork_stay_overnight": "Cez noc",
   "booking_date_heading": "Dátum",

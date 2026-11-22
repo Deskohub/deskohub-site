@@ -281,6 +281,8 @@
   "reauthentication_confirmed": "Bestätigt. Versuch es jetzt noch einmal.",
   "account_tab_reservations": "Reservierungen",
   "account_tab_account": "Konto",
+  "account_row_active_passes": "{count} aktiv",
+  "account_section_passes": "Pässe",
   "account_section_reservations": "Reservierungen",
   "account_section_referrals": "Freunde einladen",
   "account_section_profile": "Profil",
@@ -354,6 +356,128 @@
   "reservations_invoice_not_found": "Für diese Reservierung wurde keine Rechnung gefunden.",
   "reservations_invoice_share_failed": "Die Rechnung ließ sich auf diesem Gerät nicht öffnen. Versuch es erneut.",
   "reservations_access_code_label": "Zugangs-PIN {digits}",
+  "passes_access_closed": "Der Zugang für heute ist beendet",
+  "passes_access_refresh": "Versuch, den heutigen Code erneut zu laden.",
+  "passes_active": "Aktiv",
+  "passes_any_free_desk": "Ein beliebiger freier Schreibtisch",
+  "passes_any_open_day": "Buche einen beliebigen freien Tag",
+  "passes_book_date": "Tag reservieren",
+  "passes_booked": "{count} gebucht",
+  "passes_bought": "Gekauft am {date}",
+  "passes_bought_others": "Für andere gekauft",
+  "passes_bought_others_description": "Das Paket nutzt die Person, für die du es gekauft hast.",
+  "passes_buy": "Pass kaufen",
+  "passes_claimed": "Abgeholt",
+  "passes_date_range": "{start} – {end}",
+  "passes_day_fraction": "{day}/{total}",
+  "passes_day_of": "Tag {day} von {total}",
+  "passes_day_period": "{day} · {period}",
+  "passes_days": "{count} Tage",
+  "passes_days_gone": "Tage vergangen: {count}",
+  "passes_days_remaining": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "Noch {count} Tag einschließlich heute",
+        "countPlural=other": "Noch {count} Tage einschließlich heute"
+      }
+    }
+  ],
+  "passes_days_to_come": "Tage übrig: {count}",
+  "passes_depleted": "Aufgebraucht",
+  "passes_door_code": "Dein heutiger Zugangscode",
+  "passes_ended": "Beendet",
+  "passes_ends_in": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "endet in {count} Tag",
+        "countPlural=other": "endet in {count} Tagen"
+      }
+    }
+  ],
+  "passes_ends_on": "Endet am {date}",
+  "passes_entries": "{count} Eintritte",
+  "passes_entries_left": "von {size} Besuchen übrig",
+  "passes_entry_pack": "Eintrittspaket",
+  "passes_entry_price": "5 oder 10 Tage, ab {price} pro Tag",
+  "passes_expired": "Abgelaufen",
+  "passes_gifted": "Für dich gekauft",
+  "passes_gifted_by": "Geschenk von {name}",
+  "passes_in_days": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "in {count} Tag",
+        "countPlural=other": "in {count} Tagen"
+      }
+    }
+  ],
+  "passes_invitation_queued": "Die Einladung wartet auf den Versand.",
+  "passes_invitation_unconfirmed": "Die Einladung kann gerade nicht erneut gesendet werden.",
+  "passes_keypad": "Gib den Code auf dem Tastenfeld am Eingang ein. Hier erscheint jeden Tag ein neuer Code.",
+  "passes_midnight": "Mitternacht",
+  "passes_next_booking": "Nächste Buchung",
+  "passes_no_booking": "Open Space, keine Buchung nötig",
+  "passes_none_yet": "Noch keine",
+  "passes_not_found": "Dieser Pass ist für dein Konto nicht verfügbar.",
+  "passes_open_space": "Open Space",
+  "passes_paid_with_pack": "Mit Eintrittspaket bezahlt",
+  "passes_period": "Gültigkeit",
+  "passes_previous": "Frühere Pakete",
+  "passes_product_tier": "{product} · {tier}",
+  "passes_renew": "Pass verlängern",
+  "passes_renew_failed": "Die Verlängerungsseite konnte nicht geöffnet werden.",
+  "passes_resend": "Einladung erneut senden",
+  "passes_reserved_desk": "Reservierter Schreibtisch",
+  "passes_reserved_workstation": "Reservierter Schreibtisch mit Arbeitsplatz",
+  "passes_same_desk": "Jeden Tag derselbe Schreibtisch",
+  "passes_starts_on": "Beginnt am {date}",
+  "passes_tier_desk": "{tier} · Tisch {desk}",
+  "passes_to_book": "{count} buchbar",
+  "passes_today_included": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "Noch  Tag einschließlich heute",
+        "countPlural=other": "Noch  Tage einschließlich heute"
+      }
+    }
+  ],
+  "passes_today": "Heute",
+  "passes_unclaimed": "Noch nicht abgeholt",
+  "passes_unlimited": "Unbegrenzter Pass",
+  "passes_unlimited_price": "{days} Tage am Stück, ab {price}",
+  "passes_upcoming": "Bevorstehend",
+  "passes_used": "{count} genutzt",
+  "passes_valid_today": "Heute, am {date}, bis {time} gültig",
+  "passes_valid_until": "Gültig bis",
+  "passes_where": "Sitzplatz",
+  "passes_your_desk": "Dein Platz",
   "reservations_access_copy": "PIN kopieren",
   "reservations_access_copied": "PIN kopiert.",
   "reservations_access_copy_failed": "Die PIN konnte nicht kopiert werden. Notiere sie dir.",
@@ -545,6 +669,24 @@
   "booking_completion_required": "Ergänze vor dem Reservieren dein Profil.",
   "booking_gate_deletion_title": "Dein Konto wird gelöscht",
   "booking_gate_deletion_body": "Solange das läuft, kannst du nichts Neues reservieren. Schreib uns, falls das ein Versehen ist.",
+  "booking_pass_already_booked": "Für {date} hast du bereits mit dieser Mehrfachkarte gebucht.",
+  "booking_pass_applied": "Du buchst mit deinem Eintrittspaket",
+  "booking_pass_buy_link": "Kommst du öfter? <packLink>Eintrittspakete ab {price} pro Tag</packLink>",
+  "booking_pass_card_instead": "Stattdessen mit Karte zahlen",
+  "booking_pass_confirm_body": "Wenn du diese Option wählst, musst du mit Karte zahlen, anstatt dein Eintrittspaket zu nutzen.",
+  "booking_pass_confirm_title": "Stattdessen mit Karte zahlen?",
+  "booking_pass_date_rules": "Jeder freie Tag bis {date}.",
+  "booking_pass_entry_summary": "1 Besuch von deiner Mehrfachkarte",
+  "booking_pass_final_dates": "Tage, die du mit einem Eintrittspaket buchst, kannst du weder stornieren noch verschieben.",
+  "booking_pass_keep": "Eintrittspaket weiter nutzen",
+  "booking_pass_left": "Noch {count} von {size}",
+  "booking_pass_left_after": "Danach übrig: {count}",
+  "booking_pass_offer": "Nutze dein Eintrittspaket",
+  "booking_pass_one_entry": "1 Eintritt",
+  "booking_pass_pay_card": "Mit Karte zahlen",
+  "booking_pass_redeem": "Mit 1 Eintritt buchen",
+  "booking_pass_unavailable": "Dein Eintrittspaket deckt diese Buchung nicht ab. Wähle einen anderen Tag oder zahle mit Karte.",
+  "booking_pass_use": "Paket nutzen",
   "booking_cowork_tier_heading": "Platzart",
   "booking_cowork_stay_overnight": "Über Nacht",
   "booking_date_heading": "Datum",

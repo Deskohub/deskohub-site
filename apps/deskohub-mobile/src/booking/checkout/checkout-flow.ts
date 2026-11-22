@@ -28,6 +28,7 @@ import {
   type CustomerDataServices,
   customerDataRuntime,
 } from "../../customer-api/customer-data-runtime";
+import { heldPassesAtom } from "../../passes/pass-reads";
 import { BookingIds } from "../booking-ids.service";
 import {
   type BookingServices,
@@ -252,9 +253,15 @@ export const checkoutFlowAtom = (
       // Through the registry: the flow's end may run after its context's.
       // A registry disposed with the account (sign-out) throws instead;
       // nothing is left to refresh then.
-      Effect.sync(() => get.registry.refresh(reservationHistoryAtom)).pipe(
-        Effect.catchDefect(() => Effect.void)
-      )
+      Effect.sync(() => {
+        get.registry.refresh(reservationHistoryAtom);
+        if (
+          request._tag === "Booking" &&
+          request.selection.funding?.kind === "entry"
+        ) {
+          get.registry.refresh(heldPassesAtom(request.locale));
+        }
+      }).pipe(Effect.catchDefect(() => Effect.void))
     );
   });
 
