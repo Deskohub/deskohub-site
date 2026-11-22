@@ -255,7 +255,9 @@ export function AutomationFlowBuilder({
                       campaign={campaign}
                       step={step}
                       number={number}
-                      skipPassHoldersAvailable={!isPassReminderTrigger(trigger)}
+                      skipPassHoldersAvailable={
+                        trigger === null || !isPassReminderTrigger(trigger)
+                      }
                       onChange={readOnly ? undefined : update}
                       errorAt={(field) => errorAt(`${path}.${field}`)}
                     />
