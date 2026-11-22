@@ -358,9 +358,6 @@ export const emailCampaignAutomationRuns = pgTable(
         emailCampaignRecipients.dotyposCustomerId,
       ],
     }),
-    uniqueIndex("email_campaign_automation_runs_one_open_run_idx")
-      .on(t.campaignId, t.dotyposCustomerId)
-      .where(sql`${t.status} <> 'ended'`),
     uniqueIndex("email_campaign_automation_runs_one_open_customer_run_idx")
       .on(t.campaignId, t.dotyposCustomerId)
       .where(sql`${t.status} <> 'ended' and ${t.triggerPassId} is null`),

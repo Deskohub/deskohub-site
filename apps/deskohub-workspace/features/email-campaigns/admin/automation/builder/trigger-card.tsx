@@ -106,12 +106,14 @@ const triggerTitle = (trigger: FlowTriggerValue | null, locale: Locale) =>
  */
 export function TriggerCard({
   trigger,
+  passRemindersAvailable = false,
   onChange,
   initialPreview,
   errorAt,
   minutesError,
 }: {
   readonly trigger: FlowTriggerValue | null;
+  readonly passRemindersAvailable?: boolean;
   readonly onChange: (trigger: FlowTriggerValue) => void;
   readonly initialPreview: CalendarPreviewView | undefined;
   /** Errors at paths below `trigger`, and at `trigger` itself for "". */
@@ -167,6 +169,7 @@ export function TriggerCard({
       {trigger !== null && trigger._tag !== "Schedule" && (
         <EventTriggerFields
           trigger={trigger}
+          passRemindersAvailable={passRemindersAvailable}
           onChange={onChange}
           errorAt={errorAt}
         />
@@ -311,10 +314,12 @@ function ScheduleTriggerFields({
 
 function EventTriggerFields({
   trigger,
+  passRemindersAvailable,
   onChange,
   errorAt,
 }: {
   readonly trigger: EventTrigger;
+  readonly passRemindersAvailable: boolean;
   readonly onChange: (trigger: EventTrigger) => void;
   readonly errorAt: FieldErrorLookup;
 }) {
@@ -322,7 +327,8 @@ function EventTriggerFields({
   const kindName = useId();
   const kind = eventTriggerKindOf(trigger);
   const options = eventTriggerKinds.filter(
-    (option) => !isPassReminderKind(option) || option === kind
+    (option) =>
+      passRemindersAvailable || !isPassReminderKind(option) || option === kind
   );
   return (
     <div className="space-y-4">

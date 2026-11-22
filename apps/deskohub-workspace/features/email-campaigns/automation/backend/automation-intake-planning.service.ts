@@ -42,6 +42,7 @@ import { AutomationRunTransitions } from "./automation-run-transitions";
 import { lockTriggeringReservations } from "./automation-triggering-reservations";
 import { planAutomationUnits } from "./automation-unit-planning";
 import { plannedIntakeUnit, revisitedReservations } from "./intake";
+import { planPassReminderPages } from "./pass-reminder-planning";
 
 /** What planner step 4 did, for the plan summary. */
 export type AutomationIntakePlan = {
@@ -128,6 +129,7 @@ export class AutomationIntakePlanning extends Context.Service<
     this,
     Effect.gen(function* () {
       const { db, transaction } = yield* WorkspaceDatabase;
+      const databaseContext = yield* Effect.context<WorkspaceDatabase>();
       const facts = yield* AutomationEvaluationFacts;
 
       /**
@@ -493,14 +495,21 @@ export class AutomationIntakePlanning extends Context.Service<
             Effect.bind("withdrawnRuns", () => withdraw(at)),
             Effect.bind("undoneRuns", () => withdrawUndone(at)),
             Effect.bind("events", () => planEvents(at)),
+            Effect.bind("passPages", () =>
+              planPassReminderPages(at).pipe(
+                Effect.provideContext(databaseContext)
+              )
+            ),
             Effect.map(
               ({
                 withdrawnRuns,
                 undoneRuns,
                 events,
+                passPages,
               }): AutomationIntakePlan => ({
-                withdrawnRuns: withdrawnRuns + undoneRuns,
                 ...events,
+                withdrawnRuns: withdrawnRuns + undoneRuns,
+                unitsPlanned: events.unitsPlanned + passPages,
               })
             ),
             Effect.withSpan("AutomationIntakePlanning.plan")

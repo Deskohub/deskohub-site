@@ -4,7 +4,6 @@ import { afterAll, describe, expect, test } from "bun:test";
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer } from "effect";
-import { WorkspaceDatabase } from "@/db/database.service";
 import { orderIdSchema } from "@/features/order";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { PassReminderReads } from "@/features/passes/backend/pass-reminder-reads.service";
@@ -12,7 +11,6 @@ import { getPassReminderDueAt } from "@/features/passes/pass-reminder-schedule";
 import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
-import { automationVersionIdSchema } from "../automation-identifiers";
 import {
   automationScenarioLayer,
   makeEngineDotypos,
@@ -24,9 +22,7 @@ import {
   automationFlowFixture,
   automationLifecycleTestKit,
 } from "./automation-lifecycle.test-utils";
-import { planAutomationUnits } from "./automation-unit-planning";
 import { makeAutomationUnitQueueFake } from "./automation-unit-queue.test-utils";
-import { plannedPassReminderPage } from "./pass-reminder-intake";
 import { PassReminderWritesOpen } from "./pass-reminder-write-policy";
 
 const database = await createWorkspacePostgresSuiteDatabase(
@@ -39,7 +35,14 @@ const dueAt = getPassReminderDueAt(dueDate);
 const activatedAt = dueAt.subtract({ hours: 1 });
 const flow = automationFlowFixture({
   trigger: { _tag: "EntryPackExpiring" },
-  steps: [{ _tag: "Send", id: "send" }],
+  steps: [
+    {
+      _tag: "Condition",
+      id: "eligible",
+      filter: { _tag: "Group", operator: "and", filters: [] },
+    },
+    { _tag: "Send", id: "send" },
+  ],
 });
 
 describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
@@ -54,24 +57,30 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
   );
   const kit = automationLifecycleTestKit(database, { now: activatedAt });
 
-  const seedPass = async (customer: DotyposCustomerId, unclaimed = false) => {
+  const seedPass = async (
+    customer: DotyposCustomerId,
+    unclaimed = false,
+    existingHolder?: string
+  ) => {
     const id = orderIdSchema.make(crypto.randomUUID());
-    const holder = crypto.randomUUID();
+    const holder = existingHolder ?? crypto.randomUUID();
     const buyer = unclaimed ? crypto.randomUUID() : holder;
-    await pool.query(
-      "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
-      [holder, customer]
-    );
+    if (existingHolder === undefined) {
+      await pool.query(
+        "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
+        [holder, customer]
+      );
+      await pool.query(
+        `insert into auth."user" (id, name, email, email_verified)
+         values ($1, 'Synthetic holder', $2, true)`,
+        [holder, testEmailAddress(holder)]
+      );
+    }
     if (unclaimed) {
       await pool.query("insert into customer_accounts (id) values ($1)", [
         buyer,
       ]);
     }
-    await pool.query(
-      `insert into auth."user" (id, name, email, email_verified)
-       values ($1, 'Synthetic holder', $2, true)`,
-      [holder, testEmailAddress(holder)]
-    );
     await pool.query(
       `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, fulfilled_at)
        values ($1, 'pass-purchase', $2, 'complimentary', 'fulfilled', now())`,
@@ -102,40 +111,40 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
     const previewId = await kit.seedPreview(campaignId, {
       status: "completed",
     });
-    await kit.run(
-      kit
-        .lifecycle((lifecycle) =>
-          lifecycle.activate({ campaignId, previewId, activatedBy: null })
-        )
-        .pipe(permit)
+    const activate = kit
+      .lifecycle((lifecycle) =>
+        lifecycle.activate({ campaignId, previewId, activatedBy: null })
+      )
+      .pipe(permit);
+    expect((await kit.failure(activate))._tag).toBe(
+      "AutomationPreviewRequired"
     );
-    const { rows } = await pool.query(
-      "select active_version_id from email_campaign_automations where campaign_id = $1",
-      [campaignId]
+    await pool.query(
+      "update email_campaign_automation_previews set as_of = $2 where id = $1",
+      [previewId, dueAt.toString()]
     );
-    return {
-      campaignId,
-      versionId: automationVersionIdSchema.make(rows[0].active_version_id),
-    };
+    await kit.run(activate);
   };
 
-  test("pins one consenting claimed pass through intake and overlapping replans", async () => {
+  test("plans each eligible pass independently at 10:00 and keeps its identity on replans", async () => {
     const eligible = await fixtures.addCustomer("eligible");
     const noConsent = await fixtures.addCustomer("no-consent", {
       consent: false,
     });
     const unclaimedGift = await fixtures.addCustomer("unclaimed-gift");
     const { id, holder } = await seedPass(eligible);
+    const otherPass = await seedPass(eligible, false, holder);
     await seedPass(noConsent);
     await seedPass(unclaimedGift, true);
-    const targets = [await seedVersion(), await seedVersion()];
+    await seedVersion();
+    await seedVersion();
     const queue = makeAutomationUnitQueueFake();
     const layer = await automationScenarioLayer({
       database,
       dotypos: provider,
       queue,
-      kinds: ["pass-reminder-intake"],
-      planning: [],
+      kinds: ["pass-reminder-intake", "condition"],
+      planning: ["intake"],
       passReminderGate: CoworkPassesReleaseGate.fromDecision(true),
       passReminderReads: PassReminderReads.Default.pipe(
         Layer.provide(
@@ -146,38 +155,47 @@ describe.skipIf(!database)("pass reminder intake on PostgreSQL", () => {
         )
       ),
     });
-    const planned = targets.map((target) =>
-      plannedPassReminderPage({ ...target, kind: "entry-pack", dueDate })
-    );
-    const write = Effect.flatMap(WorkspaceDatabase, ({ transaction }) =>
-      transaction(planAutomationUnits(planned, dueAt))
-    );
-    await Promise.all([
-      runEngineAt(write, layer, dueAt),
-      runEngineAt(write, layer, dueAt),
-    ]);
-    await runEngineAt(planAndProcess(queue), layer, dueAt);
-    await runEngineAt(write, layer, dueAt);
-    await runEngineAt(planAndProcess(queue), layer, dueAt);
+    const tick = (open: boolean) =>
+      planAndProcess(queue).pipe(
+        Effect.provideService(PassReminderWritesOpen, Effect.succeed(open))
+      );
+    expect(
+      (await runEngineAt(tick(true), layer, dueAt.subtract({ minutes: 1 })))
+        .summary.intake.unitsPlanned
+    ).toBe(0);
+    expect(
+      (await runEngineAt(tick(false), layer, dueAt)).summary.intake.unitsPlanned
+    ).toBe(0);
+    expect(
+      (await runEngineAt(tick(true), layer, dueAt)).summary.intake.unitsPlanned
+    ).toBe(2);
+    expect(
+      (await runEngineAt(tick(true), layer, dueAt.add({ minutes: 15 }))).summary
+        .intake.unitsPlanned
+    ).toBe(0);
     const { rows } = await pool.query(
-      `select trigger_pass_id, pass_reminder_context, dotypos_customer_id
+      `select trigger_pass_id, pass_reminder_context, dotypos_customer_id, step_id
        from email_campaign_automation_runs where trigger_pass_id is not null`
     );
-    expect(rows).toEqual([
-      {
-        trigger_pass_id: id,
-        dotypos_customer_id: eligible,
-        pass_reminder_context: {
-          copyVersion: 1,
-          holderAccountId: holder,
-          holderVersion: 0,
-          tier: "open-space",
-          endsOn: "2027-01-14",
-          product: "entry-pack",
-          remainingEntries: 5,
-          totalEntries: 5,
-        },
-      },
-    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(
+      expect.arrayContaining(
+        [id, otherPass.id].map((passId) => ({
+          trigger_pass_id: passId,
+          step_id: "send",
+          dotypos_customer_id: eligible,
+          pass_reminder_context: {
+            copyVersion: 1,
+            holderAccountId: holder,
+            holderVersion: 0,
+            tier: "open-space",
+            endsOn: "2027-01-14",
+            product: "entry-pack",
+            remainingEntries: 5,
+            totalEntries: 5,
+          },
+        }))
+      )
+    );
   });
 });

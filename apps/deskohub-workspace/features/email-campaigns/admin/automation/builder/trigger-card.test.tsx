@@ -55,13 +55,15 @@ const schedule: FlowTriggerValue = {
 const renderTrigger = (
   trigger: FlowTriggerValue | null,
   initialPreview?: CalendarPreviewView,
-  errorAt: (field: string) => string | undefined = () => undefined
+  errorAt: (field: string) => string | undefined = () => undefined,
+  passRemindersAvailable = false
 ) => {
   const onChange = mock((_trigger: FlowTriggerValue) => undefined);
   const view = render(
     <RouteLocaleProvider locale={locale}>
       <TriggerCard
         trigger={trigger}
+        passRemindersAvailable={passRemindersAvailable}
         onChange={onChange}
         initialPreview={initialPreview}
         errorAt={errorAt}
@@ -238,6 +240,18 @@ describe("event kind", () => {
     const { productControl } = renderTrigger({ _tag: "AccountCreated" });
 
     expect(productControl()).toBeNull();
+  });
+
+  test("offers pass reminders only when the release gate is open", () => {
+    const trigger = { _tag: "AccountCreated" } as const;
+    const closed = renderTrigger(trigger);
+    expect(
+      closed.queryByRole("radio", { name: /Entry pack expiring/ })
+    ).toBeNull();
+    closed.unmount();
+    const open = renderTrigger(trigger, undefined, undefined, true);
+    fireEvent.click(open.getByRole("radio", { name: /Unlimited pass ending/ }));
+    expect(open.onChange).toHaveBeenCalledWith({ _tag: "UnlimitedEnding" });
   });
 
   test("a schedule offers no event kinds or product filter", () => {

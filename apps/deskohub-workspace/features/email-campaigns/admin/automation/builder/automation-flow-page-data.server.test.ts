@@ -107,6 +107,7 @@ describe("loadAutomationFlowBuilderData", () => {
       lookups,
       savedAudiences: [{ id: "regulars", name: "Regulars" }],
       calendarPreviews: {},
+      passRemindersAvailable: false,
     });
     expect(inputsOf("previewCalendarExpression")).toEqual([]);
   });

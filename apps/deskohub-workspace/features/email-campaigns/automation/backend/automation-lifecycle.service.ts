@@ -57,7 +57,10 @@ import type {
   AutomationPreviewId,
   AutomationVersionId,
 } from "../automation-identifiers";
-import { automationTriggerSummary } from "../automation-triggers";
+import {
+  automationTriggerSummary,
+  isPassReminderTrigger,
+} from "../automation-triggers";
 import { nextFireAfter } from "../automation-versions";
 import {
   AutomationArchived,
@@ -70,6 +73,7 @@ import {
   AutomationVersionNotFound,
 } from "../errors";
 import { lockAutomationForLifecycle } from "./automation-lifecycle-lock";
+import { nextPassReminderPreviewOccurrence } from "./automation-pass-reminder-preview";
 import { closePreview } from "./automation-previews";
 import { AutomationRunTransitions } from "./automation-run-transitions";
 import { releaseAutomationUnitSubjects } from "./automation-unit-planning";
@@ -316,11 +320,11 @@ const activateIn = (input: {
     Effect.bind("copy", () => loadAutomationWorkingCopy(input.campaignId)),
     Effect.tap(({ copy }) => ensureNotArchived(copy)),
     // 2. A completed dry run of this campaign.
-    Effect.bind("previewHash", () => completedPreviewHash(input)),
+    Effect.bind("preview", () => completedPreview(input)),
     // 3. Of the current draft.
-    Effect.bind("publishable", ({ copy, previewHash }) =>
+    Effect.bind("publishable", ({ copy, preview }) =>
       currentPublishable(copy).pipe(
-        Option.filter(({ draftHash }) => draftHash === previewHash),
+        Option.filter(({ draftHash }) => draftHash === preview.draftHash),
         Option.match({
           onNone: () =>
             Effect.fail(
@@ -339,20 +343,24 @@ const activateIn = (input: {
     ),
     // 5. A retry returns the version it published.
     Effect.bind("latest", () => latestVersion(input.campaignId)),
-    Effect.flatMap(({ copy, publishable, flow, latest, now }) =>
+    Effect.flatMap(({ copy, publishable, flow, latest, now, preview }) =>
       latest.pipe(
         Option.filter(({ draftHash }) => draftHash === publishable.draftHash),
         Option.match({
           onSome: ({ id }) => Effect.succeed(id),
-          onNone: () =>
-            publishVersion({
+          onNone: () => {
+            if (!previewIsCurrent(flow, preview.asOf, now)) {
+              return Effect.fail(new AutomationPreviewRequired(input));
+            }
+            return publishVersion({
               copy,
               publishable,
               flow,
               latest,
               activatedBy: input.activatedBy,
               now,
-            }),
+            });
+          },
         })
       )
     ),
@@ -372,14 +380,25 @@ const activateIn = (input: {
     )
   );
 
-/** The draft hash of the named dry run, if it's a completed one of this campaign. */
-const completedPreviewHash = (input: {
+const previewIsCurrent = (
+  flow: AutomationFlow,
+  asOf: Temporal.Instant,
+  now: Temporal.Instant
+) =>
+  !isPassReminderTrigger(flow.trigger) ||
+  nextPassReminderPreviewOccurrence(flow.trigger, now).fireAt.equals(asOf);
+
+/** The named dry run if it's a completed one for this campaign. */
+const completedPreview = (input: {
   readonly campaignId: CampaignId;
   readonly previewId: AutomationPreviewId;
 }) =>
   Effect.flatMap(WorkspaceTransaction, ({ db }) =>
     db
-      .select({ draftHash: emailCampaignAutomationPreviews.draftHash })
+      .select({
+        draftHash: emailCampaignAutomationPreviews.draftHash,
+        asOf: emailCampaignAutomationPreviews.asOf,
+      })
       .from(emailCampaignAutomationPreviews)
       .where(
         and(
@@ -392,7 +411,7 @@ const completedPreviewHash = (input: {
         Effect.flatMap(([preview]) =>
           preview === undefined
             ? Effect.fail(new AutomationPreviewRequired(input))
-            : Effect.succeed(preview.draftHash)
+            : Effect.succeed(preview)
         )
       )
   );
@@ -753,6 +772,14 @@ const resumeIn = ({
           return Effect.fail(statusConflict(copy, "resume"));
         case "paused":
           return loadAutomationVersionActivations(campaignId).pipe(
+            Effect.tap((versions) => {
+              const active = versions.find(
+                ({ id }) => id === copy.automation.activeVersionId
+              );
+              return active
+                ? ensurePassReminderWritesAllowed(active.trigger, "marketing")
+                : Effect.void;
+            }),
             Effect.flatMap((versions) =>
               Effect.all(
                 [
@@ -1057,6 +1084,7 @@ const activationOf = (input: {
       .select({
         id: emailCampaignAutomationPreviews.id,
         status: emailCampaignAutomationPreviews.status,
+        asOf: emailCampaignAutomationPreviews.asOf,
         unitsDone: emailCampaignAutomationPreviews.unitsDone,
         unitsTotal: emailCampaignAutomationPreviews.unitsTotal,
       })
@@ -1077,21 +1105,33 @@ const activationOf = (input: {
       .orderBy(desc(emailCampaignAutomationPreviews.createdAt))
       .limit(1)
       .pipe(
-        Effect.map(([preview]): AutomationActivation => {
-          if (preview === undefined) return { _tag: "PreviewRequired" };
-          return preview.status === "completed"
-            ? {
-                _tag: "Ready",
-                previewId: preview.id,
-                draftHash: draftHash.value,
+        Effect.flatMap(([preview]) =>
+          lifecycleInstant.pipe(
+            Effect.map((now): AutomationActivation => {
+              if (preview === undefined) return { _tag: "PreviewRequired" };
+              if (
+                Option.exists(
+                  input.copy.flow,
+                  (flow) => !previewIsCurrent(flow, preview.asOf, now)
+                )
+              ) {
+                return { _tag: "PreviewRequired" };
               }
-            : {
-                _tag: "PreviewRunning",
-                previewId: preview.id,
-                unitsDone: preview.unitsDone,
-                unitsTotal: preview.unitsTotal,
-              };
-        })
+              return preview.status === "completed"
+                ? {
+                    _tag: "Ready",
+                    previewId: preview.id,
+                    draftHash: draftHash.value,
+                  }
+                : {
+                    _tag: "PreviewRunning",
+                    previewId: preview.id,
+                    unitsDone: preview.unitsDone,
+                    unitsTotal: preview.unitsTotal,
+                  };
+            })
+          )
+        )
       );
   });
 
