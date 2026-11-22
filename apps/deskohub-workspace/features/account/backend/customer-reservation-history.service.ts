@@ -11,8 +11,6 @@ import {
   eq,
   exists,
   inArray,
-  isNull,
-  notExists,
   or,
   sql,
 } from "drizzle-orm";
@@ -107,8 +105,11 @@ type ReservationRow = {
   readonly reservationPurpose: (typeof workspaceReservations.$inferSelect)["reservationPurpose"];
   readonly paidAt: (typeof workspaceReservations.$inferSelect)["paidAt"];
   readonly paidWithEntryPack: boolean;
-  /** See `CustomerReservationSummary.paidIndividually`. */
-  readonly paidIndividually: boolean;
+  /**
+   * Its order's payment kept a nonzero amount after refunds. Funding from an
+   * Entry pack or an Unlimited pass is marked apart.
+   */
+  readonly paidWithMoney: boolean;
   readonly unlimitedPassDay: boolean;
 };
 
@@ -278,7 +279,9 @@ const toReservationSummary = (
     id: row?.id ?? reservation.id,
     ...(row?.id && { workspaceReservationId: row.id }),
     ...(row?.paidWithEntryPack && { paidWithEntryPack: true }),
-    ...(row?.paidIndividually && { paidIndividually: true }),
+    ...(row?.paidWithMoney &&
+      !row.paidWithEntryPack &&
+      !row.unlimitedPassDay && { paidIndividually: true }),
     ...(party && { party }),
     product: getReservationProduct(row),
     ...getBookedStartFields(reservation, booked),
@@ -493,10 +496,10 @@ export type ReservationHistoryOptions = {
    */
   readonly includePartyNames?: boolean;
   /**
-   * Whether to mark how each booking was paid for: from an Entry pack, or on
+   * Whether to mark how each booking was funded: from an Entry pack, or on
    * its own with money. Pass reads are released with the passes.
    */
-  readonly includeEntryPackPayment?: boolean;
+  readonly includeFunding?: boolean;
   /** The language of the reservations' product names; the default locale when absent. */
   readonly locale?: Locale;
 };
@@ -572,10 +575,10 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
    */
   const selectReservationRows = ({
     account,
-    includeEntryPackPayment,
+    includeFunding,
   }: {
     readonly account: ReservationHistoryAccount;
-    readonly includeEntryPackPayment: boolean;
+    readonly includeFunding: boolean;
   }) =>
     db
       .select({
@@ -590,7 +593,7 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
         reservationPurpose: workspaceReservations.reservationPurpose,
         paidAt: workspaceReservations.paidAt,
         unlimitedPassDay: sql<boolean>`${workspaceReservations.passId} is not null`,
-        paidWithEntryPack: includeEntryPackPayment
+        paidWithEntryPack: includeFunding
           ? sql<boolean>`${exists(
               db
                 .select({ reservationId: passEntryClaims.reservationId })
@@ -603,9 +606,8 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
                 )
             )}`
           : sql<boolean>`false`,
-        paidIndividually: includeEntryPackPayment
+        paidWithMoney: includeFunding
           ? sql<boolean>`${and(
-              isNull(workspaceReservations.passId),
               eq(workspaceReservations.paymentState, "paid"),
               exists(
                 db
@@ -628,20 +630,6 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
                           then coalesce(${paymentAttempts.refundTargetValue}, ${paymentAttempts.amountValue})
                           else 0 end
                       )`
-                    )
-                  )
-              ),
-              notExists(
-                db
-                  .select({ reservationId: passEntryClaims.reservationId })
-                  .from(passEntryClaims)
-                  .where(
-                    and(
-                      eq(
-                        passEntryClaims.reservationId,
-                        workspaceReservations.id
-                      ),
-                      eq(passEntryClaims.status, "consumed")
                     )
                   )
               )
@@ -859,7 +847,7 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
     Effect.succeed({
       account,
       includePartyNames: options.includePartyNames ?? true,
-      includeEntryPackPayment: options.includeEntryPackPayment ?? false,
+      includeFunding: options.includeFunding ?? false,
       locale: options.locale,
     }).pipe(
       Effect.bind("rows", selectReservationRows),

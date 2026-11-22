@@ -85,7 +85,7 @@ export function AccountSectionPanel({
         // creating a scroll container, so it stays sticky.
         footer !== undefined &&
           footerLayout === "edge-to-edge" &&
-          "overflow-clip has-[>[data-footer-layout=edge-to-edge]>:not(template)]:pb-0!",
+          "has-[>[data-footer-layout=edge-to-edge]>:not(template)]:overflow-clip has-[>[data-footer-layout=edge-to-edge]>:not(template)]:pb-0!",
         className
       )}
       {...rest}

@@ -649,7 +649,7 @@ describe.skipIf(!testDatabase)(
           const service = yield* CustomerReservationHistoryService;
           return yield* service.load(
             { accountId: account, dotyposCustomerId },
-            { includeEntryPackPayment: true }
+            { includeFunding: true }
           );
         }).pipe(
           Effect.provide(
@@ -919,13 +919,13 @@ describe.skipIf(!testDatabase)(
         [packWithPaidAddOns.workspaceReservationId, passId]
       );
 
-      const loadHistory = (includeEntryPackPayment: boolean) =>
+      const loadHistory = (includeFunding: boolean) =>
         Effect.runPromise(
           Effect.gen(function* () {
             const service = yield* CustomerReservationHistoryService;
             return yield* service.load(
               { accountId: account, dotyposCustomerId },
-              { includeEntryPackPayment }
+              { includeFunding }
             );
           }).pipe(
             Effect.provide(
@@ -955,8 +955,8 @@ describe.skipIf(!testDatabase)(
             )
           )
         );
-      const paidIndividuallyById = async (includeEntryPackPayment: boolean) => {
-        const history = await loadHistory(includeEntryPackPayment);
+      const paidIndividuallyById = async (includeFunding: boolean) => {
+        const history = await loadHistory(includeFunding);
         if (history.kind !== "available")
           throw new Error("History unavailable");
         return Object.fromEntries(

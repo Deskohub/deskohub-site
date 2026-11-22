@@ -15,6 +15,7 @@ let browser: Browser | undefined;
 let styles = "";
 let document = "";
 let streamingDocument = "";
+let coveredDocument = "";
 
 const pastVisits = Array.from(
   { length: 14 },
@@ -74,6 +75,24 @@ beforeAll(async () => {
   streamingDocument = pageOf(
     await shellOf(await renderHistory(new Promise(() => {})))
   );
+  const covered = await renderHistory(
+    Promise.resolve({
+      held: [
+        {
+          position: 1,
+          tier: "Open Space",
+          entryCount: 5,
+          entriesLeft: 2,
+          lastUsableDay: "Feb 1, 2027",
+          status: "active",
+          bookPath: "/en-US/passes/entry-pack/book",
+        },
+      ],
+      boughtForOthers: [],
+    })
+  );
+  await covered.allReady;
+  coveredDocument = pageOf(await new Response(covered).text());
   browser = await chromium.launch({ headless: true });
 });
 
@@ -158,7 +177,7 @@ test.skipIf(!chromiumAvailable)(
 );
 
 test.skipIf(!chromiumAvailable)(
-  "keeps the Past reservations panel's padding while the offer streams in",
+  "keeps the Past reservations panel's padding unless the offer shows",
   async () => {
     const page = await browser!.newPage({ viewport });
     const panelState = () =>
@@ -184,6 +203,15 @@ test.skipIf(!chromiumAvailable)(
     const offered = await panelState();
     expect(offered.footerShown).not.toBe("none");
     expect(offered.padding).toBe("0px");
+
+    // Settled without an offer: the panel keeps its padding.
+    await page.setContent(coveredDocument);
+    await page.waitForFunction(
+      () => !window.document.querySelector("template")
+    );
+    const covered = await panelState();
+    expect(covered.footerShown).toBe("none");
+    expect(covered.padding).not.toBe("0px");
     await page.close();
   }
 );
