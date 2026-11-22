@@ -6,17 +6,17 @@ import {
   DotyposService,
 } from "@deskohub/dotypos";
 import {
-  AdministrationCampaignRecipientSkipReason,
-  type AdministrationCampaignRecipientSkipReasonType,
   type AutomationRunDetailType as AutomationRunDetail,
   AutomationRunId as AutomationRunIdSchema,
   type AutomationRunListInputType as AutomationRunListInput,
   type AutomationRunPageType as AutomationRunPage,
+  type AutomationRunSkipReasonType,
   type AutomationRunStatsType as AutomationRunStats,
   type AutomationRunSummaryType as AutomationRunSummary,
   AutomationRunTimelineEntry,
   type AutomationRunTimelineEntryType,
   automationRunOutcomes,
+  automationRunSkipReasons,
   automationRunStates,
 } from "@deskohub/workspace-admin-api";
 import { and, asc, count, desc, eq, lt, or } from "drizzle-orm";
@@ -493,7 +493,7 @@ const skipReasonCounts = (
   })[]
 ) =>
   Object.fromEntries(
-    AdministrationCampaignRecipientSkipReason.literals.map((reason) => [
+    automationRunSkipReasons.map((reason) => [
       reason,
       sumRuns(
         groups.filter(
@@ -502,7 +502,7 @@ const skipReasonCounts = (
         )
       ),
     ])
-  ) as Record<AdministrationCampaignRecipientSkipReasonType, number>;
+  ) as Record<AutomationRunSkipReasonType, number>;
 
 const sumRuns = (groups: readonly RunCountGroup[]) =>
   groups.reduce((total, group) => total + group.runs, 0);

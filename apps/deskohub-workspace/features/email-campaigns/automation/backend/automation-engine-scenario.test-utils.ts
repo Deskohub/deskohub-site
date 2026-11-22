@@ -515,6 +515,8 @@ export const makeEngineFixtures = (
     events: [] as CustomerEventId[],
     consents: [] as DotyposCustomerId[],
     accounts: [] as CustomerAccountId[],
+    campaigns: [] as string[],
+    passes: [] as string[],
   };
   const dotyposReservationId = (id: WorkspaceReservationId) =>
     DotyposReservationIdSchema.make(`${id}-dotypos`);
@@ -757,8 +759,145 @@ export const makeEngineFixtures = (
     return event!.id;
   };
 
+  /**
+   * A one-off campaign email to `customer`, dispatched at `at`: `sent` (by
+   * default) in a batch requested then, or still `pending`, in a requested
+   * batch unless `batched` is false. The campaign is Sent once its email
+   * was, Sending while it's pending.
+   */
+  const deliverOneOffCampaign = async (input: {
+    readonly customer: DotyposCustomerId;
+    readonly at: Temporal.Instant;
+    readonly purpose?: "marketing" | "operational";
+    readonly status?: "sent" | "pending" | "failed";
+    readonly batched?: boolean;
+    readonly campaignStatus?: "sent" | "sending" | "failed";
+  }) => {
+    const { pool } = database;
+    const id = `${prefix}-one-off-${created.campaigns.length}`;
+    created.campaigns.push(id);
+    const status = input.status ?? "sent";
+    await pool.query(
+      `insert into email_campaigns (id, title, purpose, template_key, status)
+       values ($1, 'One-off', $2, 'workspace', $3)`,
+      [
+        id,
+        input.purpose ?? "marketing",
+        input.campaignStatus ?? (status === "pending" ? "sending" : "sent"),
+      ]
+    );
+    await pool.query(
+      `insert into email_campaign_sends (id, campaign_id, audience_filter, content_hash, created_at)
+       values ($1, $1, '{"_tag":"Group","operator":"and","filters":[]}', 'hash', $2)`,
+      [id, input.at.toString()]
+    );
+    await pool.query(
+      `insert into email_campaign_recipients (send_id, dotypos_customer_id, locale, status, status_updated_at)
+       values ($1, $2, 'cs-CZ', $3, $4)`,
+      [id, input.customer, status, input.at.toString()]
+    );
+    if (input.batched ?? true) {
+      await pool.query(
+        `insert into email_campaign_delivery_batches (send_id, delivery_attempt, batch_index, dotypos_customer_ids, payload_hash, status, requested_at, settled_at)
+         values ($1, 1, 0, $2, 'hash', $3, $4, case when $3 = 'requested' then null else $4::timestamptz end)`,
+        [
+          id,
+          [input.customer],
+          status === "pending" ? "requested" : "accepted",
+          input.at.toString(),
+        ]
+      );
+    }
+    return id;
+  };
+
+  /**
+   * A complimentary pass held by `customer`'s account, linked to them (and
+   * created) on first use, valid from `validFrom` until `validUntil`
+   * (Prague dates). An Entry pack has 5 entries, all of them used when
+   * `depleted`.
+   */
+  const holdPass = async (input: {
+    readonly customer: DotyposCustomerId;
+    readonly kind: "entry-pack" | "unlimited";
+    readonly validFrom: string;
+    readonly validUntil: string;
+    readonly depleted?: boolean;
+  }) => {
+    const { pool } = database;
+    const linked = await pool.query<{ id: CustomerAccountId }>(
+      "select id from customer_accounts where dotypos_customer_id = $1",
+      [input.customer]
+    );
+    const holder =
+      linked.rows[0]?.id ??
+      (await Effect.runPromise(
+        workspaceFixtures(db).customerAccount({
+          linkedCustomer: input.customer,
+        })
+      ));
+    if (linked.rows.length === 0) created.accounts.push(holder);
+    const passId = crypto.randomUUID();
+    created.passes.push(passId);
+    await pool.query(
+      `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, fulfilled_at)
+       values ($1, 'pass-purchase', $2, 'complimentary', 'fulfilled', now())`,
+      [passId, input.customer]
+    );
+    await pool.query(
+      `insert into pass_purchases (id, buyer_account_id, holder_account_id, product, tier,
+         entry_count, unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
+       values ($1, $2, $2, $3, 'open-space',
+         case when $3 = 'entry-pack' then 5 end,
+         case when $3 = 'unlimited' then false end, 'active',
+         $4, $5, '{}', 'en-US', now())`,
+      [passId, holder, input.kind, input.validFrom, input.validUntil]
+    );
+    for (const day of input.depleted ? [0, 1, 2, 3, 4] : []) {
+      const date = Temporal.PlainDate.from(input.validFrom).add({ days: day });
+      const reservation = await Effect.runPromise(
+        workspaceFixtures(db).reservation({
+          customer: input.customer,
+          stage: {
+            reservation: "confirmed",
+            payment: "paid",
+            fulfillment: "fulfilled",
+          },
+          at: Temporal.Instant.from(`${date}T08:00:00Z`),
+        })
+      );
+      created.reservations.push(reservation.id);
+      await pool.query(
+        "insert into pass_entry_claims (reservation_id, pass_id, date, status) values ($1, $2, $3, 'consumed')",
+        [reservation.id, passId, date.toString()]
+      );
+    }
+    return passId;
+  };
+
   const cleanup = async () => {
     const { pool } = database;
+    await pool.query("delete from pass_entry_claims where pass_id = any($1)", [
+      created.passes,
+    ]);
+    await pool.query("delete from pass_purchases where id = any($1)", [
+      created.passes,
+    ]);
+    await pool.query("delete from orders where id = any($1)", [created.passes]);
+    await pool.query(
+      "delete from email_campaign_delivery_batches where send_id = any($1)",
+      [created.campaigns]
+    );
+    await pool.query(
+      "delete from email_campaign_recipients where send_id = any($1)",
+      [created.campaigns]
+    );
+    await pool.query("delete from email_campaign_sends where id = any($1)", [
+      created.campaigns,
+    ]);
+    await pool.query("delete from email_campaigns where id = any($1)", [
+      created.campaigns,
+    ]);
     // Events the sweep recorded for this prefix's reservations.
     const { rows } = await pool.query<{ id: CustomerEventId }>(
       "select id from customer_events where workspace_reservation_id = any($1) or dotypos_customer_id like $2",
@@ -803,6 +942,8 @@ export const makeEngineFixtures = (
     restoreInWorkspace,
     holdRestoreInWorkspace,
     recordEvent,
+    deliverOneOffCampaign,
+    holdPass,
     cleanup,
     created,
   };
@@ -1324,6 +1465,13 @@ export const makeAutomationEngineScenario = async (input: {
           [campaignId]
         )
       ).rows,
+    claims: async (campaignId: CampaignId) =>
+      (
+        await pool.query(
+          "select * from email_campaign_automation_customer_claims where campaign_id = $1 order by dotypos_customer_id",
+          [campaignId]
+        )
+      ).rows,
     events: async (ids: readonly string[]) =>
       (
         await pool.query(
@@ -1335,6 +1483,11 @@ export const makeAutomationEngineScenario = async (input: {
 
   const cleanup = async () => {
     await resetUnits();
+    // Claims outlive their runs' endings, so they go before the campaigns.
+    await pool.query(
+      "delete from email_campaign_automation_customer_claims where campaign_id = any($1)",
+      [kit.campaignIds]
+    );
     await kit.cleanup();
     await fixtures.cleanup();
   };

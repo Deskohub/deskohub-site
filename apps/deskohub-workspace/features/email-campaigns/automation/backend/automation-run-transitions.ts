@@ -1,16 +1,16 @@
 import "server-only";
 
-import type {
-  AutomationRunEventDetail,
-  AdministrationCampaignRecipientSkipReasonType as CampaignRecipientSkipReason,
-} from "@deskohub/workspace-admin-api";
+import type { AutomationRunEventDetail } from "@deskohub/workspace-admin-api";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { Effect, Match } from "effect";
 import {
   type WorkspaceDatabaseClient,
   WorkspaceTransaction,
 } from "@/db/database.service";
-import { emailCampaignAutomationRuns } from "@/db/schema";
+import {
+  emailCampaignAutomationCustomerClaims,
+  emailCampaignAutomationRuns,
+} from "@/db/schema";
 import type {
   AutomationRunId,
   AutomationStepId,
@@ -19,6 +19,7 @@ import type {
 import type {
   AutomationRunFailureReason,
   AutomationRunPhase,
+  AutomationRunSkipReason,
 } from "../automation-states";
 import {
   type AutomationRunEndingEntry,
@@ -32,7 +33,7 @@ import {
 export type AutomationRunEnding =
   | {
       readonly outcome: "skipped";
-      readonly reason: CampaignRecipientSkipReason;
+      readonly reason: AutomationRunSkipReason;
     }
   | {
       readonly outcome: "failed";
@@ -78,7 +79,8 @@ export const AutomationRunTransitions = {
    * Ends the runs still in `expect` with one compare-and-set, records one
    * timeline entry per run it ended, and returns those runs. Runs CAS in
    * the lock order of §5.4: after the lifecycle lock and any triggering
-   * reservations, before sends, recipients, batches and units.
+   * reservations, before claims, sends, recipients, batches and units. A
+   * run ending `skipped` or `failed` releases its once-per-customer claim.
    */
   end: Effect.fn("AutomationRunTransitions.end")(function* (
     input: AutomationRunEnd
@@ -112,7 +114,16 @@ export const AutomationRunTransitions = {
     yield* appendAutomationRunEndings(
       ended.map((run) => recorded.entry({ ...run, at: input.at }))
     );
-    return ended.map((run): AutomationRunId => run.runId);
+    const endedIds = ended.map((run): AutomationRunId => run.runId);
+    // A run that never reached the provider, or that it definitively
+    // refused, gives up its once-per-customer claim; any other ending may
+    // have mailed the customer, so the claim stays.
+    if (releasesCustomerClaim(input.outcome) && endedIds.length > 0) {
+      yield* db
+        .delete(emailCampaignAutomationCustomerClaims)
+        .where(inArray(emailCampaignAutomationCustomerClaims.runId, endedIds));
+    }
+    return endedIds;
   }),
 };
 
@@ -126,10 +137,7 @@ type EndedRun = {
 const endingRecord = (
   ending: AutomationRunEnding
 ): {
-  readonly reason:
-    | CampaignRecipientSkipReason
-    | AutomationRunFailureReason
-    | null;
+  readonly reason: AutomationRunSkipReason | AutomationRunFailureReason | null;
   readonly entry: (run: EndedRun) => AutomationRunEndingEntry;
 } =>
   Match.value(ending).pipe(
@@ -188,6 +196,9 @@ const endingRecord = (
       }),
     })
   );
+
+const releasesCustomerClaim = (outcome: AutomationRunEnding["outcome"]) =>
+  outcome === "skipped" || outcome === "failed";
 
 /**
  * The runs still in `expect`, row-locked in id order (§5.4) within the

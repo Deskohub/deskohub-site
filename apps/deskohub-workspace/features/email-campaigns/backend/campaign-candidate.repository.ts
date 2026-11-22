@@ -99,6 +99,20 @@ export type CampaignBookedReservation = {
 };
 
 /**
+ * A customer's one-off campaign emails as a Send's one-off campaign gap
+ * reads them.
+ */
+export type OneOffCampaignEmails = {
+  /** When the latest one they received was dispatched, if any. */
+  readonly latestReceivedAt: Temporal.Instant | null;
+  /**
+   * Whether one is still pending while its campaign is sending or a
+   * delivery batch already carries it: it may reach them any moment.
+   */
+  readonly inFlight: boolean;
+};
+
+/**
  * Recipient statuses that mean Resend accepted the email for the customer.
  * `unconfirmed` counts too: the email may well have gone out.
  */
@@ -108,6 +122,18 @@ const receivedCampaignEmailStatuses = [
   "complained",
   "unconfirmed",
 ] as const;
+
+/** A one-off campaign email the customer received. */
+const oneOffEmailReceived = inArray(emailCampaignRecipients.status, [
+  ...receivedCampaignEmailStatuses,
+]);
+
+/**
+ * When a campaign email was dispatched: its batch's first request, or its
+ * status change when a webhook settled it without a batch in its current
+ * attempt.
+ */
+const oneOffEmailDispatchedAt = sql`coalesce(${emailCampaignDeliveryBatches.requestedAt}, ${emailCampaignRecipients.statusUpdatedAt})`;
 
 /** Only verified logins may receive campaigns. */
 const verifiedLogin = eq(authUser.emailVerified, true);
@@ -224,15 +250,27 @@ export interface ICampaignCandidateRepository {
     EffectDrizzleQueryError
   >;
   /**
-   * Each customer's latest one-off marketing campaign email, dated as
-   * `countReceivedCampaignEmails` dates them: received, or still pending
-   * in a batch already requested from the provider. Automated and
-   * operational campaigns don't count. Customers without one are absent.
+   * Each customer's one-off campaign emails, of either purpose, for a Send's
+   * one-off campaign gap: when the latest one they received was dispatched,
+   * dated as `countReceivedCampaignEmails` dates them, and whether one is
+   * still in flight. Customers with neither are absent.
    */
-  readonly latestOneOffMarketingEmails: (
+  readonly latestOneOffCampaignEmails: (
     customers: readonly DotyposCustomerId[]
   ) => Effect.Effect<
-    ReadonlyMap<DotyposCustomerId, Temporal.Instant>,
+    ReadonlyMap<DotyposCustomerId, OneOffCampaignEmails>,
+    EffectDrizzleQueryError
+  >;
+  /**
+   * When each customer's one-off campaign emails, received or in flight,
+   * were dispatched at or after `since`, in ascending order. Customers
+   * without one are absent.
+   */
+  readonly oneOffCampaignEmails: (query: {
+    readonly customers: readonly DotyposCustomerId[];
+    readonly since: Temporal.Instant;
+  }) => Effect.Effect<
+    ReadonlyMap<DotyposCustomerId, readonly Temporal.Instant[]>,
     EffectDrizzleQueryError
   >;
   /**
@@ -301,6 +339,68 @@ export class CampaignCandidateRepository extends Context.Service<
     this,
     Effect.gen(function* () {
       const { db } = yield* WorkspaceDatabase;
+
+      /**
+       * Customers' one-off campaign emails of either purpose that a Send's
+       * one-off campaign gap counts, received or in flight, in dispatch
+       * order, dispatched at or after `since` when given.
+       */
+      const oneOffCampaignEmailRows = (query: {
+        readonly customers: readonly DotyposCustomerId[];
+        readonly since?: Temporal.Instant;
+      }) =>
+        db
+          .select({
+            dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
+            received: sql<boolean>`${oneOffEmailReceived}`,
+            dispatchedAt: sql`${oneOffEmailDispatchedAt}`.mapWith(
+              emailCampaignDeliveryBatches.requestedAt
+            ),
+          })
+          .from(emailCampaignRecipients)
+          .innerJoin(
+            emailCampaignSends,
+            eq(emailCampaignSends.id, emailCampaignRecipients.sendId)
+          )
+          .innerJoin(
+            emailCampaigns,
+            eq(emailCampaigns.id, emailCampaignSends.campaignId)
+          )
+          .leftJoin(
+            emailCampaignDeliveryBatches,
+            and(
+              eq(
+                emailCampaignDeliveryBatches.sendId,
+                emailCampaignRecipients.sendId
+              ),
+              eq(
+                emailCampaignDeliveryBatches.deliveryAttempt,
+                emailCampaignRecipients.deliveryAttempt
+              ),
+              sql`${emailCampaignRecipients.dotyposCustomerId} = any(${emailCampaignDeliveryBatches.dotyposCustomerIds})`
+            )
+          )
+          .where(
+            and(
+              eq(emailCampaigns.delivery, "once"),
+              inArray(emailCampaignRecipients.dotyposCustomerId, [
+                ...query.customers,
+              ]),
+              or(
+                oneOffEmailReceived,
+                and(
+                  eq(emailCampaignRecipients.status, "pending"),
+                  or(
+                    eq(emailCampaigns.status, "sending"),
+                    isNotNull(emailCampaignDeliveryBatches.sendId)
+                  )
+                )
+              ),
+              query.since &&
+                sql`${oneOffEmailDispatchedAt} >= ${temporalInstantToDate(query.since)}`
+            )
+          )
+          .orderBy(sql`${oneOffEmailDispatchedAt}`);
 
       const latestReservations = (customers?: readonly DotyposCustomerId[]) =>
         db
@@ -462,63 +562,39 @@ export class CampaignCandidateRepository extends Context.Service<
             rows.map((row) => [row.dotyposCustomerId, row.count] as const)
           );
         }),
-        latestOneOffMarketingEmails: Effect.fn(
-          "CampaignCandidateRepository.latestOneOffMarketingEmails"
+        latestOneOffCampaignEmails: Effect.fn(
+          "CampaignCandidateRepository.latestOneOffCampaignEmails"
         )(function* (customers) {
-          if (customers.length === 0) return new Map();
-          const rows = yield* db
-            .select({
-              dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
-              latest:
-                sql`max(coalesce(${emailCampaignDeliveryBatches.requestedAt}, ${emailCampaignRecipients.statusUpdatedAt}))`.mapWith(
-                  emailCampaignDeliveryBatches.requestedAt
-                ),
-            })
-            .from(emailCampaignRecipients)
-            .innerJoin(
-              emailCampaignSends,
-              eq(emailCampaignSends.id, emailCampaignRecipients.sendId)
-            )
-            .innerJoin(
-              emailCampaigns,
-              eq(emailCampaigns.id, emailCampaignSends.campaignId)
-            )
-            .leftJoin(
-              emailCampaignDeliveryBatches,
-              and(
-                eq(
-                  emailCampaignDeliveryBatches.sendId,
-                  emailCampaignRecipients.sendId
-                ),
-                eq(
-                  emailCampaignDeliveryBatches.deliveryAttempt,
-                  emailCampaignRecipients.deliveryAttempt
-                ),
-                sql`${emailCampaignRecipients.dotyposCustomerId} = any(${emailCampaignDeliveryBatches.dotyposCustomerIds})`
-              )
-            )
-            .where(
-              and(
-                eq(emailCampaigns.delivery, "once"),
-                eq(emailCampaigns.purpose, "marketing"),
-                inArray(emailCampaignRecipients.dotyposCustomerId, [
-                  ...customers,
-                ]),
-                or(
-                  inArray(emailCampaignRecipients.status, [
-                    ...receivedCampaignEmailStatuses,
-                  ]),
-                  and(
-                    eq(emailCampaignRecipients.status, "pending"),
-                    isNotNull(emailCampaignDeliveryBatches.requestedAt)
-                  )
-                )
-              )
-            )
-            .groupBy(emailCampaignRecipients.dotyposCustomerId);
-          return new Map(
-            rows.map((row) => [row.dotyposCustomerId, row.latest] as const)
-          );
+          const byCustomer = new Map<DotyposCustomerId, OneOffCampaignEmails>();
+          if (customers.length === 0) return byCustomer;
+          const rows = yield* oneOffCampaignEmailRows({ customers });
+          for (const row of rows) {
+            const emails = byCustomer.get(row.dotyposCustomerId) ?? {
+              latestReceivedAt: null,
+              inFlight: false,
+            };
+            // Rows come in dispatch order, so a later received one is the latest.
+            byCustomer.set(
+              row.dotyposCustomerId,
+              row.received
+                ? { ...emails, latestReceivedAt: row.dispatchedAt }
+                : { ...emails, inFlight: true }
+            );
+          }
+          return byCustomer;
+        }),
+        oneOffCampaignEmails: Effect.fn(
+          "CampaignCandidateRepository.oneOffCampaignEmails"
+        )(function* ({ customers, since }) {
+          const byCustomer = new Map<DotyposCustomerId, Temporal.Instant[]>();
+          if (customers.length === 0) return byCustomer;
+          const rows = yield* oneOffCampaignEmailRows({ customers, since });
+          for (const row of rows) {
+            const dispatched = byCustomer.get(row.dotyposCustomerId) ?? [];
+            dispatched.push(row.dispatchedAt);
+            byCustomer.set(row.dotyposCustomerId, dispatched);
+          }
+          return byCustomer;
         }),
         accountCreations: Effect.fn(
           "CampaignCandidateRepository.accountCreations"
