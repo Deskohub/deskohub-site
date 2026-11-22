@@ -63,7 +63,9 @@ describe("customerAgentCatalog", () => {
     (client) => {
       const { tools } = customerAgentCatalog.forClient(client);
 
-      expect(tools).toEqual([...customerAgentCatalog.published.tools]);
+      expect(toNames(tools)).toEqual(
+        toNames(customerAgentCatalog.published.tools)
+      );
       expect(
         tools.find(({ name }) => name === "start_reservation")
       ).toMatchObject({

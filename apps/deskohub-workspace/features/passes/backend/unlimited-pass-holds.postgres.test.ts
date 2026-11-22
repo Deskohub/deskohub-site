@@ -39,6 +39,7 @@ import {
   CustomerAccountSections,
   HeldCustomerAccount,
 } from "@/features/account/backend/customer-account-sections";
+import { CustomerAuthentication } from "@/features/account/backend/customer-authentication.service";
 import { testSessionProfile } from "@/features/account/backend/customer-authentication.test-utils";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { BrowserAgentAccount } from "@/features/agent-tools/agent-tool-call-budget";
@@ -112,13 +113,14 @@ import { prepareUnlimitedPassRecovery } from "./unlimited-pass-recovery";
 mock.module("./customer-pass-purchase-layers", () => ({
   customerPassPurchaseLayers: { agentStart: Layer.empty },
 }));
-const { browserPassTools } = await import(
+const { startBrowserPassPurchaseTool: browserPurchaseTool } = await import(
   "@/features/agent-tools/agent-pass-tools"
 );
-const browserPurchaseTool = browserPassTools.find(
-  ({ name }) => name === "start_pass_purchase"
+const browserPassPurchaseTestLayer = Layer.mergeAll(
+  CustomerPasses.Default,
+  CoworkPassesReleaseGate.fromEvaluation(Effect.succeed(true)),
+  Layer.mock(CustomerAuthentication, {})
 );
-if (!browserPurchaseTool) throw new Error("Missing browser purchase tool");
 
 let database: WorkspacePostgresSuiteDatabase | null;
 beforeEach(async () => {
@@ -1328,10 +1330,6 @@ it("recovers an Unlimited agent purchase from concurrent retries and links the b
       },
     },
   };
-  const shared = Layer.merge(
-    CustomerPasses.Default,
-    CoworkPassesReleaseGate.fromEvaluation(Effect.succeed(true))
-  );
   const buyerServices = unlimitedNewDraftLayer(
     buyer,
     testEmailAddress("agent-pass-buyer"),
@@ -1401,7 +1399,9 @@ it("recovers an Unlimited agent purchase from concurrent retries and links the b
         yield* db.select({ id: paymentAttempts.id }).from(paymentAttempts)
       ).toEqual([{ id: attemptId }]);
       expect(provider.reservations.size).toBe(unlimitedPassDays);
-    }).pipe(Effect.provide(Layer.merge(shared, buyerServices)))
+    }).pipe(
+      Effect.provide(Layer.merge(browserPassPurchaseTestLayer, buyerServices))
+    )
   );
 });
 
@@ -1441,8 +1441,7 @@ it("recovers payment after the buyer edits an agent's Unlimited Details handoff"
   const provider = makeUnlimitedDraftProvider();
   const services = Layer.mergeAll(
     unlimitedNewDraftLayer(accountId, email, provider.service),
-    CustomerPasses.Default,
-    CoworkPassesReleaseGate.fromEvaluation(Effect.succeed(true)),
+    browserPassPurchaseTestLayer,
     SealedStateKeys.Default
   );
   const session = {

@@ -210,37 +210,31 @@ const startPassPurchase = Effect.fn("agentTools.startPassPurchase")(function* (
     return yield* AgentToolError.passesUnavailable();
   const passes = yield* CustomerPasses;
   const orderId = getPassPurchaseOrderId(caller, input);
-  const purchase = yield* passes
-    .startPurchase({
+  const purchase = yield* Effect.catchIf(
+    passes.startPurchase({
       orderId,
       locale: getAgentToolLocale(input),
       product: input.product,
-    })
-    .pipe(
-      Effect.catchIf(
-        (error) =>
-          (error._tag === "EntryPackPurchaseError" ||
-            error._tag === "UnlimitedPassAdmissionError") &&
-          error.reason === "purchase-conflict",
-        Effect.fnUntraced(function* (error) {
-          // The buyer can edit a Details handoff before its order is recorded.
-          const owned = yield* findOwnedPassPurchaseOrder(
-            orderId,
-            accountId,
-            input.product.kind
-          );
-          if (!owned?.order.activePaymentAttemptId) return yield* error;
-          return {
+    }),
+    (error) =>
+      (error._tag === "EntryPackPurchaseError" ||
+        error._tag === "UnlimitedPassAdmissionError") &&
+      error.reason === "purchase-conflict",
+    // The buyer can edit a Details handoff before its order is recorded.
+    (error) =>
+      findOwnedPassPurchaseOrder(orderId, accountId, input.product.kind).pipe(
+        Effect.flatMap((owned) => {
+          if (!owned?.order.activePaymentAttemptId) return Effect.fail(error);
+          return Effect.succeed({
             status: "status" as const,
             checkoutPath: getPassPurchaseStatusPath(
               owned.purchase.locale,
               orderId
             ),
-          };
+          });
         })
-      ),
-      Effect.provide(customerPassPurchaseLayers.agentStart)
-    );
+      )
+  ).pipe(Effect.provide(customerPassPurchaseLayers.agentStart));
   const origin = yield* getWorkspaceRuntimeCallbackOrigin;
   const url = new URL(purchase.checkoutPath, origin);
   if (purchase.status === "details_required") {
@@ -290,26 +284,28 @@ export const startPassPurchaseTool = defineSignedInAgentTool<
     ),
 });
 
+export const startBrowserPassPurchaseTool = defineAgentTool<
+  typeof purchaseInput,
+  typeof purchaseOutput,
+  PassPurchaseToolServices
+>({
+  ...passPurchaseTool,
+  access: "public",
+  run: (input) =>
+    BrowserAgentAccount.pipe(
+      Effect.filterOrFail(
+        (accountId) => accountId !== undefined,
+        AgentToolError.passesUnavailable
+      ),
+      Effect.flatMap((accountId) =>
+        startPassPurchase(input, { accountId, channel: ["web-mcp"] })
+      )
+    ),
+});
+
 /** Only the same-origin browser MCP route publishes this catalog. */
 export const browserPassTools = [
   defineAgentTool({ ...listPasses, access: "public" }),
   defineAgentTool({ ...showPassAccess, access: "public" }),
-  defineAgentTool<
-    typeof purchaseInput,
-    typeof purchaseOutput,
-    PassPurchaseToolServices
-  >({
-    ...passPurchaseTool,
-    access: "public",
-    run: (input) =>
-      BrowserAgentAccount.pipe(
-        Effect.filterOrFail(
-          (accountId) => accountId !== undefined,
-          AgentToolError.passesUnavailable
-        ),
-        Effect.flatMap((accountId) =>
-          startPassPurchase(input, { accountId, channel: ["web-mcp"] })
-        )
-      ),
-  }),
+  startBrowserPassPurchaseTool,
 ];
