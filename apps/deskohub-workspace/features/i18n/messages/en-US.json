@@ -1325,6 +1325,7 @@
   "accountReservationsOtherTitle": "Reservations missing date details",
   "accountReservationsCurrentEmpty": "You have no current or upcoming reservations.",
   "accountReservationsPastEmpty": "You have no past reservations yet.",
+  "accountReservationsPassSavingsLink": "Save with packs and passes",
   "accountReservationsUnavailableTitle": "Reservation history is temporarily unavailable",
   "accountReservationsProviderUnavailable": "Our booking system could not be reached. Your profile is still available, please try again later.",
   "accountReservationOtherProduct": "Workspace reservation",

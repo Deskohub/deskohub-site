@@ -1337,6 +1337,7 @@
   "accountReservationsOtherTitle": "Rezervace bez údaje o datu",
   "accountReservationsCurrentEmpty": "Nemáš žádné aktuální ani nadcházející rezervace.",
   "accountReservationsPastEmpty": "Zatím nemáš žádné minulé rezervace.",
+  "accountReservationsPassSavingsLink": "Ušetři s balíčky a členstvími",
   "accountReservationsUnavailableTitle": "Historie rezervací je dočasně nedostupná",
   "accountReservationsProviderUnavailable": "Náš rezervační systém není dostupný. Tvůj profil zůstává k dispozici, zkus to prosím později.",
   "accountReservationOtherProduct": "Rezervace ve Workspace",

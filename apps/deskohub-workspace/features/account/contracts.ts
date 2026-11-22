@@ -85,6 +85,13 @@ export type CustomerReservationSummary = {
   readonly reviewSandbox?: true;
   /** The account page marks a booking backed by a consumed Entry pack claim. */
   readonly paidWithEntryPack?: true;
+  /**
+   * The booking was paid for on its own, with money: a paid website order
+   * whose payment kept a nonzero amount after refunds, not funded by an Entry
+   * pack claim or an Unlimited pass and not fully discounted. Absent for a
+   * booking with no website order, and whenever passes aren't released.
+   */
+  readonly paidIndividually?: true;
   /** Absent when the account's own customer booked it for itself. */
   readonly party?: CustomerReservationParty;
   readonly product: CustomerReservationProduct;

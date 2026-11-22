@@ -1349,6 +1349,7 @@
   "accountReservationsOtherTitle": "Rezervácie bez údaja o dátume",
   "accountReservationsCurrentEmpty": "Nemáš žiadne aktuálne ani nadchádzajúce rezervácie.",
   "accountReservationsPastEmpty": "Zatiaľ nemáš žiadne minulé rezervácie.",
+  "accountReservationsPassSavingsLink": "Ušetri s balíkmi a pasmi",
   "accountReservationsUnavailableTitle": "História rezervácií je dočasne nedostupná",
   "accountReservationsProviderUnavailable": "Náš rezervačný systém nie je dostupný. Tvoj profil zostáva k dispozícii, skús to, prosím, neskôr.",
   "accountReservationOtherProduct": "Rezervácia vo Workspace",

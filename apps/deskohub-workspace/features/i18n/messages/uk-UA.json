@@ -1349,6 +1349,7 @@
   "accountReservationsOtherTitle": "Бронювання без дати",
   "accountReservationsCurrentEmpty": "У вас немає поточних чи майбутніх бронювань.",
   "accountReservationsPastEmpty": "У вас ще немає минулих бронювань.",
+  "accountReservationsPassSavingsLink": "Заощаджуйте з пакетами й абонементами",
   "accountReservationsUnavailableTitle": "Історія бронювань тимчасово недоступна",
   "accountReservationsProviderUnavailable": "Наша система бронювання недоступна. Ваш профіль і далі доступний, спробуйте пізніше.",
   "accountReservationOtherProduct": "Бронювання в коворкінгу Workspace",
