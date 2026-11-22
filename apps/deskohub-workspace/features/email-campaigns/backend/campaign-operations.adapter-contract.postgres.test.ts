@@ -25,11 +25,13 @@ import { NodeCrypto, NodeHttpServer } from "@effect/platform-node";
 import { Effect, Layer, Option } from "effect";
 import { HttpRouter } from "effect/http";
 import { HttpApiBuilder } from "effect/http-api";
+import * as nextCache from "next/cache";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { cliSessions } from "@/db/schema";
 import type { AdministratorAccountActor } from "@/features/administrators/account-role";
 import { mockAdministratorAccess } from "@/features/administrators/server/administrator-access.test-utils";
 import type { CampaignId } from "@/features/email-campaigns/campaign-identifiers";
+import { recordNextCache } from "@/shared/testing/next-cache-recorder.test-utils";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { richCampaignBodies } from "../body/campaign-body-document.test-utils";
@@ -54,6 +56,8 @@ if (testDatabase) {
   }));
 }
 mock.module("next/cache", () => ({
+  ...nextCache,
+  ...recordNextCache().module,
   revalidatePath: () => undefined,
   revalidateTag: () => undefined,
 }));
