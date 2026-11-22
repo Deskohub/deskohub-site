@@ -8,7 +8,6 @@ import type {
 import { Effect } from "effect";
 import { runAdministrationPage } from "@/features/administrators/server/administration-request.server";
 import type { Locale } from "@/features/i18n";
-import { PassReminderWritesOpen } from "../../../automation/backend/pass-reminder-write-policy";
 import type {
   AudienceValueLookups,
   AudienceValueOption,
@@ -29,7 +28,6 @@ import {
 
 /** What the flow builder needs beyond the automation itself. */
 export type AutomationFlowBuilderData = {
-  readonly passRemindersAvailable: boolean;
   /** Value lists for condition steps' attribute pickers. */
   readonly lookups: AudienceValueLookups;
   /** Saved audiences a condition can check membership of. */
@@ -131,10 +129,7 @@ export const loadAutomationFlowBuilderData = async (
   flow: AutomationFlow | null,
   locale: Locale
 ): Promise<AutomationFlowBuilderData> => {
-  const [
-    lookups,
-    { savedAudiences, calendarPreviews, passRemindersAvailable },
-  ] = await Promise.all([
+  const [lookups, { savedAudiences, calendarPreviews }] = await Promise.all([
     loadAudienceValueLookups(),
     runAdministrationPage(
       "email-campaigns.admin.load-automation-flow-builder",
@@ -142,12 +137,11 @@ export const loadAutomationFlowBuilderData = async (
         {
           savedAudiences: loadSavedAudiences(referencedAudienceIds(flow)),
           calendarPreviews: loadCalendarPreviews(flow, locale),
-          passRemindersAvailable: Effect.flatten(PassReminderWritesOpen),
         },
         { concurrency: "unbounded" }
       ),
       campaignOperationCapabilities
     ),
   ]);
-  return { lookups, savedAudiences, calendarPreviews, passRemindersAvailable };
+  return { lookups, savedAudiences, calendarPreviews };
 };

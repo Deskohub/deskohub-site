@@ -86,7 +86,6 @@ import {
 } from "./automation-stories.test-utils";
 import { AutomationUnitProcessor } from "./automation-unit-processor.service";
 import { makeAutomationUnitQueueFake } from "./automation-unit-queue.test-utils";
-import { PassReminderWritesOpen } from "./pass-reminder-write-policy";
 
 /**
  * A dry run reads every active consent, so the suite runs on a database of
@@ -1919,8 +1918,6 @@ describe.skipIf(!testDatabase)(
         runAt(
           Effect.flatMap(AutomationDryRun, (dryRun) =>
             dryRun.start(campaignId)
-          ).pipe(
-            Effect.provideService(PassReminderWritesOpen, Effect.succeed(true))
           ),
           at
         );
@@ -1974,14 +1971,14 @@ describe.skipIf(!testDatabase)(
             purpose: "marketing",
             filter: { ...everyoneFilter, filters: [taggedVip] },
           });
+          const operationalId = await seedAutomation({
+            flow: decodeFlow({ trigger, steps: [send] }),
+            purpose: "operational",
+            filter: { ...everyoneFilter, filters: [taggedVip] },
+          });
           const refusal = await runExit(
             Effect.flatMap(AutomationDryRun, (dryRun) =>
-              dryRun.start(campaignId)
-            ).pipe(
-              Effect.provideService(
-                PassReminderWritesOpen,
-                Effect.succeed(false)
-              )
+              dryRun.start(operationalId)
             )
           );
           expect(Exit.isFailure(refusal)).toBe(true);
