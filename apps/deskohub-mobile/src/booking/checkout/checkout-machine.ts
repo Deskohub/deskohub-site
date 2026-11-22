@@ -126,7 +126,10 @@ export const canPay = (review: ReviewState): boolean =>
 const onDetails = (details: DetailsState, event: CheckoutEvent) =>
   Event.$match(event, {
     Continue: ({ checkoutAttemptId, details: form }) =>
-      create(details.flow, form, checkoutAttemptId),
+      details.flow.selection.funding?.kind === "entry" &&
+      form.bookingFor !== "self"
+        ? stay(details)
+        : create(details.flow, form, checkoutAttemptId),
     Retry: () =>
       Option.all({
         notice: details.notice.pipe(
@@ -325,6 +328,7 @@ const onReview = (review: ReviewState, event: CheckoutEvent) =>
     // The field and checkbox hold still while a write runs, so its answer
     // and any retry match what the customer sees.
     CodeChanged: ({ input }) =>
+      review.flow.selection.funding?.kind === "entry" ||
       Option.isSome(review.pending)
         ? stay(review)
         : stay(
@@ -340,7 +344,11 @@ const onReview = (review: ReviewState, event: CheckoutEvent) =>
           ),
     ApplyCode: () =>
       whenIdle(review, () =>
-        Option.liftPredicate(review.code.input.trim(), (code) => code !== "")
+        Option.liftPredicate(
+          review.code.input.trim(),
+          (code) =>
+            code !== "" && review.flow.selection.funding?.kind !== "entry"
+        )
       ).pipe(
         Option.match({
           onNone: () => stay(review),

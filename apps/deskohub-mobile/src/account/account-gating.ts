@@ -14,6 +14,7 @@ import type { Href } from "expo-router";
  */
 export const accountSectionOrder = [
   "complete",
+  "passes",
   "profile",
   "security",
   "assistants",
@@ -38,6 +39,7 @@ export type AccountDetailSection = Exclude<AccountScreenSection, "complete">;
  */
 export const accountSectionHref = {
   referrals: "/account/referrals",
+  passes: "/account/passes",
   // Onboarding opens above the tabs, over whichever tab asked for it.
   complete: "/onboarding",
   profile: "/account/profile",
@@ -90,6 +92,7 @@ const noticeOf = (account: CustomerAccountState): AccountNotice | undefined =>
 export interface AccountRelease {
   /** Saved payment methods (issue #412); off until that feature ships. */
   readonly paymentMethods: boolean;
+  readonly passes?: { readonly activeCount: number | undefined };
 }
 
 const noRelease: AccountRelease = { paymentMethods: false };
@@ -98,6 +101,8 @@ const sectionAvailable: Record<
   AccountSection,
   (account: CustomerAccountState, release: AccountRelease) => boolean
 > = {
+  passes: (account, release) =>
+    account.kind === "linked" && release.passes !== undefined,
   referrals: (account) => account.kind === "linked" && account.referralsEnabled,
   complete: (account) => account.kind === "completion-required",
   profile: (account) => account.kind === "linked",

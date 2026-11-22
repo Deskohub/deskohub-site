@@ -256,13 +256,15 @@ export const pricedLines = (
 ): ReadonlyArray<PricedLine> => {
   if (selection.family === "cowork") {
     const tier = selection.tier ?? "open-space";
+    const price =
+      tier === "open-space"
+        ? samplePrices.openSpace
+        : samplePrices.reservedDesk;
+    const packFunded = selection.funding?.kind === "entry";
     return [
       {
         key: `product:cowork-${tier}`,
-        crowns:
-          tier === "open-space"
-            ? samplePrices.openSpace
-            : samplePrices.reservedDesk,
+        crowns: packFunded ? 0 : price,
       },
       ...(tier === "open-space" && selection.coffee === true
         ? [{ key: "addon:coffee", crowns: samplePrices.coffee }]

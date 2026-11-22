@@ -8,6 +8,8 @@ import type {
   CustomerInvoiceNotFound,
   CustomerInvoiceNotIssued,
   CustomerMarketingPreferencesRejected,
+  CustomerPassesUnavailable,
+  CustomerPassNotFound,
   CustomerRateLimited,
   CustomerRequestRejected,
   CustomerReservationNotFound,
@@ -33,6 +35,8 @@ export type CustomerRequestFailure =
   | CustomerMarketingPreferencesRejected
   | CustomerReservationNotFound
   | CustomerAccessCodeUnavailable
+  | CustomerPassesUnavailable
+  | CustomerPassNotFound
   | CustomerDataExportUnavailable
   | CustomerInvoiceNotIssued
   | CustomerInvoiceNotFound
@@ -58,7 +62,7 @@ export type CustomerViewError = Data.TaggedEnum<{
   LinkRequired: { readonly reason: CustomerAccountLinkRequired["reason"] };
   /** The release withholds the feature; hide it. */
   FeatureUnavailable: {
-    readonly feature: CustomerFeatureUnavailable["feature"];
+    readonly feature: CustomerFeatureUnavailable["feature"] | "passes";
   };
   NotFound: Record<never, never>;
   AccessCodeUnavailable: Record<never, never>;
@@ -109,6 +113,9 @@ export const toCustomerViewError = (
       CustomerReservationNotFound: () => CustomerViewError.NotFound(),
       CustomerAccessCodeUnavailable: () =>
         CustomerViewError.AccessCodeUnavailable(),
+      CustomerPassesUnavailable: () =>
+        CustomerViewError.FeatureUnavailable({ feature: "passes" }),
+      CustomerPassNotFound: () => CustomerViewError.NotFound(),
       CustomerDataExportUnavailable: () => CustomerViewError.NotFound(),
       CustomerInvoiceNotIssued: () => CustomerViewError.InvoiceNotIssued(),
       CustomerInvoiceNotFound: () => CustomerViewError.NotFound(),

@@ -1,5 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { createElement } from "react";
+import { RegistryContext } from "@effect/atom-react";
+import { makeFakeCustomerData } from "../customer-api/testing/customer-data-test-registry";
+import { AppLocaleProvider } from "../i18n/locale-context";
 import { clientRoot } from "../testing/client-root";
 import type { AccountRelease } from "./account-gating";
 
@@ -21,8 +23,18 @@ describe("useAccountRelease", () => {
       return null;
     }
 
-    await render(createElement(Probe));
-
-    expect(seen.release).toEqual({ paymentMethods: false });
+    const { registry } = makeFakeCustomerData();
+    try {
+      await render(
+        <RegistryContext.Provider value={registry}>
+          <AppLocaleProvider locale="en-US">
+            <Probe />
+          </AppLocaleProvider>
+        </RegistryContext.Provider>
+      );
+      expect(seen.release).toEqual({ paymentMethods: false });
+    } finally {
+      registry.dispose();
+    }
   });
 });

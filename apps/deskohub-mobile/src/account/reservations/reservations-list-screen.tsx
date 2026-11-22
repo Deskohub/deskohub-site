@@ -1,4 +1,7 @@
-import type { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
+import type {
+  CustomerHeldUnlimitedPass,
+  CustomerReservationOrderId,
+} from "@deskohub/workspace-customer-api";
 import {
   useAtom,
   useAtomMount,
@@ -26,6 +29,7 @@ import {
 import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { orderStatusHref } from "../../booking/booking-routes";
+import { unneededReadAtom } from "../../booking/family/booking-family-atoms";
 import { AsyncView } from "../../customer-api/async-view";
 import { accountAtom } from "../../customer-api/customer-data-runtime";
 import type { CustomerRequestFailure } from "../../customer-api/customer-view-error";
@@ -33,6 +37,13 @@ import type { AppLocale } from "../../i18n/app-locale";
 import { formatInstant } from "../../i18n/date-time-format";
 import { useAppLocale } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
+import { passFeatureClosed } from "../../passes/pass-read-state";
+import {
+  heldPassesAtom,
+  passCatalogAtom,
+  reservationFundingAtom,
+} from "../../passes/pass-reads";
+import { UnlimitedPeriodItem } from "../../passes/unlimited-period-item";
 import { Badge } from "../../ui/badge";
 import { Card } from "../../ui/card";
 import { Button } from "../../ui/controls";
@@ -361,6 +372,14 @@ function ReservationsListView<E extends CustomerRequestFailure>({
   const { isExpanded } = useViewport();
   const open = useOpenReservation();
   const value = AsyncResult.value(list);
+  const passReads = useReservationPasses(
+    showPreferred,
+    Option.map(value, ({ groups }) => groups)
+  );
+  const refreshAll = () => {
+    refresh();
+    passReads.refresh();
+  };
   // Once shown, retain the featured order through resizing and list refreshes.
   // null records that the customer returned from a missing preview.
   const [preview, setPreview] = useState<CustomerReservationOrderId | null>();
@@ -394,19 +413,22 @@ function ReservationsListView<E extends CustomerRequestFailure>({
   const content = (
     <SelectionContext value={listSelection}>
       <ReservationsScreen
-        refreshing={list.waiting && !AsyncResult.isInitial(list)}
-        onRefresh={refresh}
+        refreshing={
+          (list.waiting && !AsyncResult.isInitial(list)) || passReads.refreshing
+        }
+        onRefresh={refreshAll}
         inPane={listSelection !== undefined}
       >
         <AsyncView
           result={shown}
-          onRetry={refresh}
+          onRetry={refreshAll}
           errorTitle={m.reservations_load_failed_title({}, { locale })}
           loading={<ReservationsListSkeleton />}
         >
           {({ groups }) => (
             <ReservationGroupsView
               groups={groups}
+              passes={passReads}
               // The list from the device, with when it was saved.
               savedNotice={
                 <Notice
@@ -461,53 +483,168 @@ function BookButton() {
   ) : null;
 }
 
+const EntryPackFundingContext = createContext<
+  ReadonlySet<CustomerReservationOrderId> | undefined
+>(undefined);
+
+function EntryPackFundingBadge({
+  target,
+}: {
+  readonly target: Option.Option<CustomerReservationOrderId>;
+}) {
+  const locale = useAppLocale();
+  const funded = useContext(EntryPackFundingContext);
+  return (
+    Option.exists(target, (orderId) => funded?.has(orderId) === true) && (
+      <View style={{ alignItems: "flex-start" }}>
+        <Badge tone="info" label={m.passes_paid_with_pack({}, { locale })} />
+      </View>
+    )
+  );
+}
+
+function useReservationPasses(
+  enabled: boolean,
+  groups: Option.Option<ReservationGroups>
+) {
+  const locale = useAppLocale();
+  const catalogAtom = enabled ? passCatalogAtom : unneededReadAtom;
+  const catalog = useAtomValue(catalogAtom);
+  const refreshCatalog = useAtomRefresh(catalogAtom);
+  const passesReleased = AsyncResult.isSuccess(catalog);
+  const listAtom = passesReleased ? heldPassesAtom(locale) : unneededReadAtom;
+  const list = useAtomValue(listAtom);
+  const refreshList = useAtomRefresh(listAtom);
+  const unlimited = AsyncResult.isSuccess(list)
+    ? list.value.held.filter((pass) => pass.kind === "unlimited")
+    : [];
+  const own = Option.match(groups, {
+    onNone: () => [],
+    onSome: ({ featured, moreCurrent, undated, past }) => [
+      ...Option.toArray(featured),
+      ...moreCurrent,
+      ...undated,
+      ...past,
+    ],
+  });
+  const ids = Array.from(
+    new Set(
+      own.flatMap((row) =>
+        row.product.kind === "cowork"
+          ? Option.toArray(reservationStatusTarget(row))
+          : []
+      )
+    )
+  ).sort();
+  const fundingAtom =
+    passesReleased && ids.length > 0
+      ? reservationFundingAtom(ids)
+      : unneededReadAtom;
+  const funding = useAtomValue(fundingAtom);
+  const refreshFunding = useAtomRefresh(fundingAtom);
+  return {
+    unlimited,
+    funded: AsyncResult.isSuccess(funding) ? funding.value : undefined,
+    initial:
+      enabled &&
+      (AsyncResult.isInitial(catalog) ||
+        (passesReleased && AsyncResult.isInitial(list))),
+    failed:
+      (AsyncResult.isFailure(catalog) && !passFeatureClosed(catalog)) ||
+      (AsyncResult.isFailure(list) && !passFeatureClosed(list)) ||
+      (AsyncResult.isFailure(funding) && !passFeatureClosed(funding)),
+    refreshing:
+      (list.waiting && !AsyncResult.isInitial(list)) ||
+      (funding.waiting && !AsyncResult.isInitial(funding)),
+    refresh: () => {
+      refreshCatalog();
+      refreshList();
+      refreshFunding();
+    },
+  };
+}
+
 function ReservationGroupsView({
   groups,
   savedNotice,
+  passes,
 }: {
   readonly groups: ReservationGroups;
   readonly savedNotice: ReactNode;
+  readonly passes: ReturnType<typeof useReservationPasses>;
 }) {
   const locale = useAppLocale();
   const selection = useContext(SelectionContext);
-  if (groups.empty) {
+  const unlimited = passes.unlimited.filter(
+    (pass) => pass.status === "active" || pass.status === "upcoming"
+  );
+  const ended = passes.unlimited.filter(
+    (pass) => pass.status === "ended" || pass.status === "expired"
+  );
+  const passNotice = passes.failed && (
+    <View>
+      <Notice tone="error" message={m.passes_load_failed({}, { locale })} />
+      <Button
+        variant="text"
+        label={m.account_retry({}, { locale })}
+        disabled={passes.refreshing}
+        onPress={passes.refresh}
+      />
+    </View>
+  );
+  if (groups.empty && unlimited.length === 0 && ended.length === 0) {
     return (
       <View style={styles.stack}>
-        <Card>
-          <EmptyState
-            icon={CalendarIcon}
-            title={m.reservations_none_yet({}, { locale })}
-          >
-            <BookButton />
-          </EmptyState>
-        </Card>
+        {passNotice}
+        {passes.initial && <ReservationsListSkeleton />}
+        {!passes.initial && !passes.failed && (
+          <Card>
+            <EmptyState
+              icon={CalendarIcon}
+              title={m.reservations_none_yet({}, { locale })}
+            >
+              <BookButton />
+            </EmptyState>
+          </Card>
+        )}
         {savedNotice}
       </View>
     );
   }
   const later = [...groups.moreCurrent, ...groups.undated];
   return (
-    <View style={styles.stack}>
-      {Option.match(groups.featured, {
-        onSome: (row) =>
-          selection === undefined ? (
-            <NextReservation row={row} />
-          ) : (
-            <View style={styles.group}>
-              <ReservationRow row={row} place="later" featured />
-            </View>
-          ),
-        onNone: () => <NothingUpcoming />,
-      })}
-      {savedNotice}
-      {later.length > 0 && (
-        <View>
-          <SectionHeader title={m.reservations_section_later({}, { locale })} />
-          <ReservationRows rows={later} place="later" />
-        </View>
-      )}
-      {groups.past.length > 0 && <PastReservations rows={groups.past} />}
-    </View>
+    <EntryPackFundingContext value={passes.funded}>
+      <View style={styles.stack}>
+        {passNotice}
+        {unlimited.map((pass) => (
+          <UnlimitedPeriodItem key={pass.passId} pass={pass} />
+        ))}
+        {Option.match(groups.featured, {
+          onSome: (row) =>
+            selection === undefined ? (
+              <NextReservation row={row} />
+            ) : (
+              <View style={styles.group}>
+                <ReservationRow row={row} place="later" featured />
+              </View>
+            ),
+          onNone: () =>
+            unlimited.length === 0 ? <NothingUpcoming /> : undefined,
+        })}
+        {savedNotice}
+        {later.length > 0 && (
+          <View>
+            <SectionHeader
+              title={m.reservations_section_later({}, { locale })}
+            />
+            <ReservationRows rows={later} place="later" />
+          </View>
+        )}
+        {(groups.past.length > 0 || ended.length > 0) && (
+          <PastReservations rows={groups.past} passes={ended} />
+        )}
+      </View>
+    </EntryPackFundingContext>
   );
 }
 
@@ -593,8 +730,10 @@ function NothingUpcoming() {
 
 function PastReservations({
   rows,
+  passes,
 }: {
   readonly rows: ReadonlyArray<ReservationListRow>;
+  readonly passes: ReadonlyArray<CustomerHeldUnlimitedPass>;
 }) {
   const locale = useAppLocale();
   const selection = useContext(SelectionContext);
@@ -614,19 +753,26 @@ function PastReservations({
   return (
     <View>
       <SectionHeader title={m.reservations_section_past({}, { locale })} />
-      <ReservationRows
-        rows={shown}
-        place="past"
-        footer={
-          rows.length > shown.length ? (
-            <Button
-              variant="text"
-              label={m.reservations_show_all_past({}, { locale })}
-              onPress={() => setAll(true)}
-            />
-          ) : undefined
-        }
-      />
+      <View style={passes.length > 0 && styles.stack}>
+        {passes.map((pass) => (
+          <UnlimitedPeriodItem key={pass.passId} pass={pass} />
+        ))}
+        {shown.length > 0 && (
+          <ReservationRows
+            rows={shown}
+            place="past"
+            footer={
+              rows.length > shown.length ? (
+                <Button
+                  variant="text"
+                  label={m.reservations_show_all_past({}, { locale })}
+                  onPress={() => setAll(true)}
+                />
+              ) : undefined
+            }
+          />
+        )}
+      </View>
     </View>
   );
 }
@@ -673,6 +819,8 @@ function ReservationRow({
   const { isExpanded, fontScale } = useViewport();
   const view = reservationRowView(row, place, locale);
   const target = reservationStatusTarget(row);
+  const funding = useContext(EntryPackFundingContext);
+  const packPaid = Option.exists(target, (id) => funding?.has(id) === true);
   const selected = Option.exists(target, (id) => id === selection?.orderId);
   const hasChevron = Option.isSome(target) && selection === undefined;
   const past = place === "past";
@@ -727,13 +875,17 @@ function ReservationRow({
         <Text variant="bodySmall" style={styles.rowDetail}>
           {view.detail}
         </Text>
-        {!past && rowOffersWithdrawal(row) && Option.isSome(target) && (
-          <WithdrawalLink
-            orderId={target.value}
-            style={styles.rowWithdrawal}
-            underlined
-          />
-        )}
+        <EntryPackFundingBadge target={target} />
+        {!packPaid &&
+          !past &&
+          rowOffersWithdrawal(row) &&
+          Option.isSome(target) && (
+            <WithdrawalLink
+              orderId={target.value}
+              style={styles.rowWithdrawal}
+              underlined
+            />
+          )}
       </View>
       {hasChevron && (
         <View
@@ -778,6 +930,8 @@ function NextReservation({ row }: { readonly row: ReservationListRow }) {
   const establishment = AsyncResult.value(useAtomValue(establishmentAtom));
   const view = nextReservationView(row, DateTime.nowUnsafe(), locale);
   const target = reservationStatusTarget(row);
+  const funding = useContext(EntryPackFundingContext);
+  const packPaid = Option.exists(target, (id) => funding?.has(id) === true);
   return (
     <BookingTicket
       onPress={Option.getOrUndefined(
@@ -796,12 +950,13 @@ function NextReservation({ row }: { readonly row: ReservationListRow }) {
         view.when,
         ...Option.toArray(Option.map(establishment, establishmentPlace)),
       ]}
-      stub="row"
+      stub={packPaid ? "column" : "row"}
     >
+      {packPaid && <EntryPackFundingBadge target={target} />}
       <NextAccessLine
         access={view.access}
         orderId={Option.getOrUndefined(target)}
-        withdrawable={rowOffersWithdrawal(row)}
+        withdrawable={!packPaid && rowOffersWithdrawal(row)}
       />
     </BookingTicket>
   );

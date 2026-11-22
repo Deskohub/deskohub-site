@@ -457,6 +457,7 @@ function DetailsWithProfile({
         linked ? Option.some(() => router.push(bookProfileHref)) : Option.none()
       }
       draft={draft}
+      holderOnly={request.selection.funding?.kind === "entry"}
       onDraftChange={setDraft}
       notice={notice}
       busy={busy}
