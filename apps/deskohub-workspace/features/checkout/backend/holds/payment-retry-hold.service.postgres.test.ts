@@ -239,7 +239,7 @@ describe.skipIf(!postgresDatabase)(
       };
     };
 
-    test("keeps a live hold, and clears the retried attempt so its late payment can only be refunded", async () => {
+    test("keeps an unfunded live hold with the pass gate closed and clears its retried attempt", async () => {
       const order = await retriedOrder({
         reservation: "held",
         overrides: {
@@ -247,7 +247,7 @@ describe.skipIf(!postgresDatabase)(
         },
       });
       const before = await rowOf(order.orderId);
-      const harness = makeHarness();
+      const harness = makeHarness({ coworkPassesEnabled: false });
 
       const result = await harness.secure(order);
 
