@@ -15,7 +15,11 @@ import type { AudienceEvaluationContext } from "../backend/audience-evaluation-c
 import type { CampaignPurpose } from "../body/campaign-content";
 import { isWithinDatePeriodBounds } from "../date-period";
 import type { AutomationStepId } from "./automation-identifiers";
-import type { AutomationPreviewOutcome } from "./automation-states";
+import { oneOffCampaignGapEndsAt } from "./automation-send-policies";
+import type {
+  AutomationPreviewOutcome,
+  AutomationRunSkipReason,
+} from "./automation-states";
 import {
   evaluateStep,
   type StepState,
@@ -24,18 +28,68 @@ import {
 import { automationTickAtOrAfter } from "./automation-ticks";
 
 type ConditionStep = Extract<AutomationStep, { readonly _tag: "Condition" }>;
+export type SendStep = Extract<AutomationStep, { readonly _tag: "Send" }>;
+
+/** Why a Send step's delivery policies skip a run. */
+export type SendPolicySkipReason = Extract<
+  AutomationRunSkipReason,
+  "already-sent-once" | "pass-holder" | "consent-withdrawn"
+>;
+
+/** Why the pre-submit check of `skipPassHolders` skips a customer. */
+export type SendGuardSkipReason = Extract<
+  SendPolicySkipReason,
+  "pass-holder" | "consent-withdrawn"
+>;
+
+/**
+ * What a Send step's delivery policies see for one customer, read once by
+ * the caller. The claim and the pre-submit check are observed as they are
+ * now, not as they were at a replayed send, like the profile facts the
+ * dry run's conditions read.
+ */
+export type SendPolicyFacts = {
+  /** `oncePerCustomer`: a run of the campaign already holds the customer's claim. */
+  readonly claimed: boolean;
+  /** `oneOffCampaignGap`: when the customer's one-off campaign emails went out, ascending. */
+  readonly oneOffCampaignEmails: readonly Temporal.Instant[];
+  /** `skipPassHolders`: why the pre-submit check skips the customer now. */
+  readonly guardSkip: Option.Option<SendGuardSkipReason>;
+};
+
+/** The flow's Send step: a decoded flow always ends with it. */
+export const sendStepOf = (steps: readonly AutomationStep[]) =>
+  Option.fromUndefinedOr(
+    steps.findLast((step): step is SendStep => step._tag === "Send")
+  );
+
+/** A Send step's policies see nothing: no claim, no one-off email, no skip. */
+export const noSendPolicyFacts: SendPolicyFacts = {
+  claimed: false,
+  oneOffCampaignEmails: [],
+  guardSkip: Option.none(),
+};
 
 /** Where one simulated run of a flow ends. */
-export type SimulatedRunEnd = {
-  /** `unavailable`: a Calendar wait with no start within the horizon. */
-  readonly outcome: Extract<
-    AutomationPreviewOutcome,
-    "would-send" | "condition-failed" | "unavailable"
-  >;
-  readonly stepId: AutomationStepId;
-  /** The engine tick of the send, or of the run's end. */
-  readonly at: Temporal.Instant;
-};
+export type SimulatedRunEnd =
+  | {
+      /** `unavailable`: a Calendar wait with no start within the horizon. */
+      readonly outcome: Extract<
+        AutomationPreviewOutcome,
+        "would-send" | "condition-failed" | "unavailable"
+      >;
+      readonly stepId: AutomationStepId;
+      /** The engine tick of the send, or of the run's end. */
+      readonly at: Temporal.Instant;
+    }
+  | {
+      /** A Send step's delivery policy skipped the run. */
+      readonly outcome: "skipped";
+      readonly skipReason: SendPolicySkipReason;
+      readonly stepId: AutomationStepId;
+      /** The engine tick the run ended on. */
+      readonly at: Temporal.Instant;
+    };
 
 /**
  * Walks a flow's steps from `triggerAt` as live execution would, on the
@@ -45,7 +99,8 @@ export type SimulatedRunEnd = {
  * them, a Condition asking `evaluateCondition` for its outcome there. A wait
  * is checked on the tick it's entered, then on the first tick at or after
  * its due time, where `evaluateStep` completes it. There is no pause, so no
- * resume overshoot.
+ * resume overshoot. The Send step applies its delivery policies there (see
+ * `sendStepEnd`).
  */
 export const simulateRun = <E, R>(input: {
   readonly steps: readonly AutomationStep[];
@@ -54,6 +109,10 @@ export const simulateRun = <E, R>(input: {
     step: ConditionStep,
     at: Temporal.Instant
   ) => Effect.Effect<AudienceFilterOutcome, E, R>;
+  /** Read only for a Send step with delivery policies; none by default. */
+  readonly sendPolicyFacts?: SendPolicyFacts;
+  /** The customer's sends simulated before this run, in this dry run. */
+  readonly simulatedSends?: readonly Temporal.Instant[];
 }): Effect.Effect<SimulatedRunEnd, E, R> => {
   const enter = (
     steps: readonly AutomationStep[],
@@ -114,16 +173,108 @@ export const simulateRun = <E, R>(input: {
             at: state.at,
           }),
         Send: () =>
-          Effect.succeed<SimulatedRunEnd>({
-            outcome: "would-send",
-            stepId: state.step.id,
-            at: state.at,
-          }),
+          state.step._tag === "Send"
+            ? Effect.succeed(
+                sendStepEnd({
+                  step: state.step,
+                  at: state.at,
+                  facts: input.sendPolicyFacts ?? noSendPolicyFacts,
+                  simulatedSends: input.simulatedSends ?? [],
+                })
+              )
+            : Effect.die(new Error("Only a send step sends")),
       })
     );
 
   return enter(input.steps, automationTickAtOrAfter(input.triggerAt));
 };
+
+/**
+ * A run reaching its Send step on tick `at`, in the engine's order: the
+ * once-ever claim skips a customer whose claim a run of the campaign holds,
+ * or whose send this dry run already simulated; the one-off campaign gap
+ * defers the send; then the pre-submit check skips a pass holder or a
+ * customer who withdrew consent, on the tick it would send.
+ */
+export const sendStepEnd = (input: {
+  readonly step: SendStep;
+  readonly at: Temporal.Instant;
+  readonly facts: SendPolicyFacts;
+  readonly simulatedSends: readonly Temporal.Instant[];
+}): SimulatedRunEnd => {
+  const { step, facts } = input;
+  if (
+    step.oncePerCustomer === true &&
+    (facts.claimed || input.simulatedSends.length > 0)
+  ) {
+    return {
+      outcome: "skipped",
+      skipReason: "already-sent-once",
+      stepId: step.id,
+      at: input.at,
+    };
+  }
+  const sendAt =
+    step.oneOffCampaignGap === undefined
+      ? input.at
+      : oneOffCampaignGapSendAt({
+          at: input.at,
+          emails: facts.oneOffCampaignEmails,
+          gap: step.oneOffCampaignGap,
+        });
+  return Option.match(
+    step.skipPassHolders === true ? facts.guardSkip : Option.none(),
+    {
+      onNone: (): SimulatedRunEnd => ({
+        outcome: "would-send",
+        stepId: step.id,
+        at: sendAt,
+      }),
+      onSome: (skipReason): SimulatedRunEnd => ({
+        outcome: "skipped",
+        skipReason,
+        stepId: step.id,
+        at: sendAt,
+      }),
+    }
+  );
+};
+
+/**
+ * The tick a send on `at` goes out past the one-off campaign gap: while the
+ * latest one-off email by then ends its gap later, the run waits for the
+ * first tick at or after that end and checks again. A gap ending on the
+ * tick itself clears.
+ */
+const oneOffCampaignGapSendAt = (input: {
+  readonly at: Temporal.Instant;
+  readonly emails: readonly Temporal.Instant[];
+  readonly gap: NonNullable<SendStep["oneOffCampaignGap"]>;
+}): Temporal.Instant => {
+  const latest = input.emails.findLast(
+    (sentAt) => Temporal.Instant.compare(sentAt, input.at) <= 0
+  );
+  if (latest === undefined) return input.at;
+  const endsAt = oneOffCampaignGapEndsAt(latest, input.gap);
+  return Temporal.Instant.compare(endsAt, input.at) > 0
+    ? oneOffCampaignGapSendAt({
+        ...input,
+        at: automationTickAtOrAfter(endsAt),
+      })
+    : input.at;
+};
+
+/** A simulated run's row: the send's tick, or why and where it ended. */
+export const simulatedRunOutcome = (
+  end: SimulatedRunEnd,
+  now: Temporal.Instant
+): Omit<DryRunOutcome, "triggerAt"> => ({
+  outcome: end.outcome,
+  stepId: end.stepId,
+  sendAt: end.outcome === "would-send" ? end.at : null,
+  skipReason: end.outcome === "skipped" ? end.skipReason : null,
+  projected: Temporal.Instant.compare(end.at, now) > 0,
+});
 
 /** What replaying one event did for its customer. */
 export type ReplayedEvent =
@@ -145,6 +296,8 @@ export type DryRunOutcome = {
   readonly outcome: AutomationPreviewOutcome;
   readonly stepId: AutomationStepId | null;
   readonly sendAt: Temporal.Instant | null;
+  /** Why the send step would skip the customer, for `skipped`. */
+  readonly skipReason: AutomationRunSkipReason | null;
   /** Evaluated past `now`, from facts as they are now. */
   readonly projected: boolean;
 };
@@ -183,6 +336,8 @@ export const replayCustomerEvents = <Event, E, R>(input: {
   readonly now: Temporal.Instant;
   readonly steps: readonly AutomationStep[];
   readonly approximation: ReplayApproximation;
+  /** The customer's facts for the Send step's delivery policies, if it has any. */
+  readonly sendPolicyFacts?: SendPolicyFacts;
   readonly replay: (
     event: Event,
     simulatedSends: readonly Temporal.Instant[]
@@ -235,7 +390,11 @@ export const replayCustomerEvents = <Event, E, R>(input: {
       approximate,
     }: ReturnType<typeof withRow>) =>
       approximate
-        ? latestRunEnd(input.steps, triggerAt).pipe(
+        ? latestRunEnd({
+            steps: input.steps,
+            triggerAt,
+            sendPolicyFacts: input.sendPolicyFacts,
+          }).pipe(
             Effect.map(
               (latestEnd): CustomerReplay<Event> => ({
                 ...state,
@@ -262,6 +421,7 @@ export const replayCustomerEvents = <Event, E, R>(input: {
               outcome: "already-active",
               stepId: null,
               sendAt: null,
+              skipReason: null,
               projected: false,
             },
             evaluated: false,
@@ -279,6 +439,7 @@ export const replayCustomerEvents = <Event, E, R>(input: {
                       outcome: "not-in-audience",
                       stepId: null,
                       sendAt: null,
+                      skipReason: null,
                       projected: false,
                     },
                     evaluated: true,
@@ -290,6 +451,7 @@ export const replayCustomerEvents = <Event, E, R>(input: {
                       outcome: "withdrawn",
                       stepId: Option.getOrNull(stepId),
                       sendAt: null,
+                      skipReason: null,
                       projected: Option.exists(at, projected),
                     },
                     // A run it started passed the entry audience first.
@@ -300,18 +462,14 @@ export const replayCustomerEvents = <Event, E, R>(input: {
                   }),
                 Entered: ({ end }) =>
                   Option.some<DecidedEvent>({
-                    outcome: {
-                      outcome: end.outcome,
-                      stepId: end.stepId,
-                      sendAt: end.outcome === "would-send" ? end.at : null,
-                      projected: projected(end.at),
-                    },
+                    outcome: simulatedRunOutcome(end, input.now),
                     evaluated: true,
                     state: {
                       sends:
                         end.outcome === "would-send"
                           ? [...replayed.sends, end.at]
                           : replayed.sends,
+                      // A deferred send holds the customer off until it goes out.
                       openUntil: Option.some(end.at),
                     },
                   }),
@@ -341,18 +499,24 @@ export const replayCustomerEvents = <Event, E, R>(input: {
 
 /**
  * The latest tick a run from `triggerAt` can end on: one where every
- * condition matches. A flow is linear and a run reaches each step on the
- * same tick whatever came before, so a run that ends sooner, a condition
- * failing or a calendar never occurring, can only end earlier.
+ * condition matches and the send goes out past the one-off campaign gap. A
+ * flow is linear and a run reaches each step on the same tick whatever came
+ * before, so a run that ends sooner, a condition failing, a calendar never
+ * occurring or the once-ever claim skipping it, can only end earlier.
  */
-const latestRunEnd = (
-  steps: readonly AutomationStep[],
-  triggerAt: Temporal.Instant
-) =>
+const latestRunEnd = (input: {
+  readonly steps: readonly AutomationStep[];
+  readonly triggerAt: Temporal.Instant;
+  readonly sendPolicyFacts: SendPolicyFacts | undefined;
+}) =>
   simulateRun({
-    steps,
-    triggerAt,
+    steps: input.steps,
+    triggerAt: input.triggerAt,
     evaluateCondition: () => Effect.succeed<AudienceFilterOutcome>("match"),
+    sendPolicyFacts: {
+      ...(input.sendPolicyFacts ?? noSendPolicyFacts),
+      claimed: false,
+    },
   }).pipe(Effect.map(({ at }) => at));
 
 /** One event's row before it joins the replay, with the state it leaves. */

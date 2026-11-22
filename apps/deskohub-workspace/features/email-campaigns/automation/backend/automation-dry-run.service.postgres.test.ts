@@ -27,11 +27,14 @@ import {
   customerEvents,
   customerMarketingConsents,
   emailCampaignAudiences,
+  emailCampaignAutomationCustomerClaims,
   emailCampaignAutomationPreviewRows,
   emailCampaignAutomationPreviews,
   emailCampaignAutomationRuns,
   emailCampaignAutomations,
+  emailCampaignAutomationVersions,
   emailCampaignAutomationWorkUnits,
+  emailCampaignDeliveryBatches,
   emailCampaignRecipients,
   emailCampaignSends,
   emailCampaigns,
@@ -59,6 +62,7 @@ import type {
 } from "../../campaign-identifiers";
 import { campaignLocales } from "../../recipient-locale";
 import type { AutomationPreviewId } from "../automation-identifiers";
+import { oneOffCampaignGapEndsAt } from "../automation-send-policies";
 import { automationTickAtOrAfter } from "../automation-ticks";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
 import { AutomationDryRun } from "./automation-dry-run.service";
@@ -78,7 +82,10 @@ import {
 } from "./automation-lifecycle.test-utils";
 import { nextPassReminderPreviewOccurrence } from "./automation-pass-reminder-preview";
 import { makePreviewUnitHandler } from "./automation-preview-unit";
-import { seedKnownCustomers } from "./automation-steps.test-utils";
+import {
+  seedAutomationRun,
+  seedKnownCustomers,
+} from "./automation-steps.test-utils";
 import {
   comeBackOfferFlow,
   lapsedRegularsFilter,
@@ -218,6 +225,8 @@ describe.skipIf(!testDatabase)(
     const campaignIds: CampaignId[] = [];
     const audienceIds: CampaignAudienceId[] = [];
     const reservationIds: string[] = [];
+    /** Campaigns whose seeded claims must go before their runs. */
+    const claimedCampaignIds: CampaignId[] = [];
 
     const candidates = CampaignCandidateRepository.Default.pipe(
       Layer.provide(testDatabase.layer)
@@ -526,7 +535,60 @@ describe.skipIf(!testDatabase)(
       return ids;
     };
 
+    const seedPassHolder = async (
+      dotyposCustomerId: DotyposCustomerId,
+      options: Parameters<typeof profile>[1] = { tags: ["vip"] }
+    ) => {
+      const id = crypto.randomUUID();
+      await testDatabase.pool.query(
+        "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
+        [id, dotyposCustomerId]
+      );
+      await testDatabase.pool.query(
+        `insert into auth."user" (id, name, email, email_verified)
+         values ($1, 'Synthetic holder', $2, true)`,
+        [id, testEmailAddress(dotyposCustomerId)]
+      );
+      dotyposState.customers.push(profile(dotyposCustomerId, options));
+      return id;
+    };
+
+    const seedPass = async (input: {
+      readonly holder: string;
+      readonly kind: "entry-pack" | "unlimited";
+      readonly validUntil: string;
+    }) => {
+      const passId = crypto.randomUUID();
+      await testDatabase.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, fulfilled_at)
+         values ($1, 'pass-purchase', 'synthetic-billing-id', 'complimentary', 'fulfilled', now())`,
+        [passId]
+      );
+      await testDatabase.pool.query(
+        `insert into pass_purchases (id, buyer_account_id, holder_account_id, product, tier,
+           entry_count, unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $2, $3, 'open-space',
+           case when $3 = 'entry-pack' then 5 end,
+           case when $3 = 'unlimited' then false end, 'active',
+           $4::date - 30, $4, '{}', 'en-US', now())`,
+        [passId, input.holder, input.kind, input.validUntil]
+      );
+      return passId;
+    };
+
     afterAll(async () => {
+      if (claimedCampaignIds.length > 0) {
+        await query(
+          db
+            .delete(emailCampaignAutomationCustomerClaims)
+            .where(
+              inArray(
+                emailCampaignAutomationCustomerClaims.campaignId,
+                claimedCampaignIds
+              )
+            )
+        );
+      }
       await kit.cleanup();
       await deleteAutomatedCampaigns(db, campaignIds);
       if (audienceIds.length > 0) {
@@ -1623,6 +1685,226 @@ describe.skipIf(!testDatabase)(
       ).toBe("would-send");
     });
 
+    test("a Send's delivery policies skip, defer and hold off replayed sends", async () => {
+      const triggerAt = ago({ hours: 24 * 10 });
+      const [plain, claimed, gapped, packHolder, unlimitedHolder] = [
+        "policy-plain",
+        "policy-claimed",
+        "policy-gapped",
+        "policy-pack",
+        "policy-unlimited",
+      ].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const { campaignId, previewId: activationPreviewId } =
+        await kit.seedActive(
+          decodeFlow({
+            trigger: { _tag: "ReservationFinished" },
+            steps: [
+              {
+                ...send,
+                oncePerCustomer: true,
+                oneOffCampaignGap: { days: 14 },
+                skipPassHolders: true,
+              },
+            ],
+          })
+        );
+
+      const validUntil = pragueOf(now)
+        .toPlainDate()
+        .add({ days: 30 })
+        .toString();
+      for (const [holder, kind] of [
+        [packHolder, "entry-pack"],
+        [unlimitedHolder, "unlimited"],
+      ] as const) {
+        await seedPass({
+          holder: await seedPassHolder(holder),
+          kind,
+          validUntil,
+        });
+      }
+      dotyposState.customers.push(
+        ...[plain, claimed, gapped].map((id) => profile(id))
+      );
+      await seedKnownCustomers(db, [
+        plain,
+        claimed,
+        gapped,
+        packHolder,
+        unlimitedHolder,
+      ]);
+
+      // Activation's completed dry run would otherwise be reused.
+      await query(
+        db
+          .update(emailCampaignAutomationPreviews)
+          .set({ status: "superseded" })
+          .where(eq(emailCampaignAutomationPreviews.id, activationPreviewId))
+      );
+      claimedCampaignIds.push(campaignId);
+      // A live run of the campaign already holds the claimed customer.
+      const [version] = await query(
+        db
+          .select({ id: emailCampaignAutomationVersions.id })
+          .from(emailCampaignAutomationVersions)
+          .where(eq(emailCampaignAutomationVersions.campaignId, campaignId))
+      );
+      const claimingRun = await seedAutomationRun(db, {
+        campaignId,
+        versionId: version!.id,
+        customerId: claimed,
+        stepId: "send",
+        phase: "waiting",
+        stepEnteredAt: ago({ hours: 1 }),
+        dueAt: ago({ hours: 1 }),
+      });
+      await query(
+        db.insert(emailCampaignAutomationCustomerClaims).values({
+          campaignId,
+          dotyposCustomerId: claimed,
+          runId: claimingRun,
+        })
+      );
+
+      // One-off emails to the gapped customer: one received six days before
+      // the event, a later one requested three days before it.
+      const sent = await seedCampaignSend(db, {
+        purpose: "marketing",
+        status: "sent",
+        recipients: [{ dotyposCustomerId: gapped, status: "sent" as const }],
+      });
+      const requested = await seedCampaignSend(db, {
+        purpose: "marketing",
+        recipients: [{ dotyposCustomerId: gapped, status: "pending" as const }],
+      });
+      campaignIds.push(sent.campaignId, requested.campaignId);
+      await query(
+        db
+          .update(emailCampaignRecipients)
+          .set({ statusUpdatedAt: triggerAt.subtract({ hours: 24 * 6 }) })
+          .where(eq(emailCampaignRecipients.sendId, sent.sendId))
+      );
+      const [pending] = await query(
+        db
+          .select({ deliveryAttempt: emailCampaignRecipients.deliveryAttempt })
+          .from(emailCampaignRecipients)
+          .where(eq(emailCampaignRecipients.sendId, requested.sendId))
+      );
+      const batchRequestedAt = triggerAt.subtract({ hours: 24 * 3 });
+      await query(
+        db.insert(emailCampaignDeliveryBatches).values({
+          sendId: requested.sendId,
+          deliveryAttempt: pending!.deliveryAttempt,
+          batchIndex: 0,
+          dotyposCustomerIds: [gapped],
+          payloadHash: "synthetic-payload-hash",
+          requestedAt: batchRequestedAt,
+        })
+      );
+
+      const customers = [plain, claimed, gapped, packHolder, unlimitedHolder];
+      const laterAt = triggerAt.add({ hours: 24 * 2 });
+      await seedReservations([
+        ...customers.map((customer, index) => ({
+          label: `policy-${index}`,
+          customer,
+          startsAt: triggerAt.subtract({ hours: 2 }),
+          endsAt: triggerAt,
+        })),
+        ...[plain, gapped].map((customer, index) => ({
+          label: `policy-later-${index}`,
+          customer,
+          startsAt: laterAt.subtract({ hours: 2 }),
+          endsAt: laterAt,
+        })),
+      ]);
+      await seedEvents([
+        ...customers.map((customer, index) => ({
+          kind: "reservation-finished" as const,
+          reservation: `policy-${index}`,
+          customer,
+          occurredAt: triggerAt,
+        })),
+        ...[plain, gapped].map((customer, index) => ({
+          kind: "reservation-finished" as const,
+          reservation: `policy-later-${index}`,
+          customer,
+          occurredAt: laterAt,
+        })),
+      ]);
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+      const report = await read(started.previewId);
+
+      const sendTick = automationTickAtOrAfter(triggerAt).toString();
+      const gapSendAt = automationTickAtOrAfter(
+        oneOffCampaignGapEndsAt(batchRequestedAt, { days: 14 })
+      );
+      expect(Temporal.Instant.compare(gapSendAt, now)).toBeGreaterThan(0);
+      const rowOf = (customer: DotyposCustomerId, at: Temporal.Instant) =>
+        report.rows.find(
+          (row) =>
+            row.customerId === customer && row.triggerAt === at.toString()
+        );
+      expect(rowOf(plain, triggerAt)).toMatchObject({
+        outcome: "would-send",
+        sendAt: sendTick,
+        skipReason: null,
+      });
+      expect(rowOf(plain, laterAt)).toMatchObject({
+        outcome: "skipped",
+        sendAt: null,
+        skipReason: "already-sent-once",
+        projected: false,
+      });
+      expect(rowOf(claimed, triggerAt)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "already-sent-once",
+      });
+      expect(rowOf(gapped, triggerAt)).toMatchObject({
+        outcome: "would-send",
+        sendAt: gapSendAt.toString(),
+        skipReason: null,
+        projected: true,
+      });
+      // The deferred send holds the customer's later event off.
+      expect(rowOf(gapped, laterAt)).toMatchObject({
+        outcome: "already-active",
+        skipReason: null,
+      });
+      for (const holder of [packHolder, unlimitedHolder]) {
+        expect(rowOf(holder, triggerAt)).toMatchObject({
+          outcome: "skipped",
+          sendAt: null,
+          skipReason: "pass-holder",
+        });
+      }
+      expect(report.counts).toMatchObject({
+        "would-send": 2,
+        skipped: 4,
+        "already-active": 1,
+      });
+      const stored = await rowsOf(started.previewId);
+      expect(
+        stored
+          .filter((row) => row.outcome === "skipped")
+          .map((row) => row.skipReason)
+          .toSorted()
+      ).toEqual([
+        "already-sent-once",
+        "already-sent-once",
+        "pass-holder",
+        "pass-holder",
+      ]);
+    });
+
     describe("schedule triggers", () => {
       let customers: readonly DotyposCustomerId[] = [];
       const scheduleFlow = (weekday: string, conditionId = "vip") =>
@@ -1924,47 +2206,6 @@ describe.skipIf(!testDatabase)(
           ),
           at
         );
-
-      const seedPassHolder = async (
-        dotyposCustomerId: DotyposCustomerId,
-        options: Parameters<typeof profile>[1] = { tags: ["vip"] }
-      ) => {
-        const id = crypto.randomUUID();
-        await testDatabase.pool.query(
-          "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
-          [id, dotyposCustomerId]
-        );
-        await testDatabase.pool.query(
-          `insert into auth."user" (id, name, email, email_verified)
-           values ($1, 'Synthetic holder', $2, true)`,
-          [id, testEmailAddress(dotyposCustomerId)]
-        );
-        dotyposState.customers.push(profile(dotyposCustomerId, options));
-        return id;
-      };
-
-      const seedPass = async (input: {
-        readonly holder: string;
-        readonly kind: "entry-pack" | "unlimited";
-        readonly validUntil: string;
-      }) => {
-        const passId = crypto.randomUUID();
-        await testDatabase.pool.query(
-          `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, fulfilled_at)
-           values ($1, 'pass-purchase', 'synthetic-billing-id', 'complimentary', 'fulfilled', now())`,
-          [passId]
-        );
-        await testDatabase.pool.query(
-          `insert into pass_purchases (id, buyer_account_id, holder_account_id, product, tier,
-             entry_count, unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
-           values ($1, $2, $2, $3, 'open-space',
-             case when $3 = 'entry-pack' then 5 end,
-             case when $3 = 'unlimited' then false end, 'active',
-             $4::date - 30, $4, '{}', 'en-US', now())`,
-          [passId, input.holder, input.kind, input.validUntil]
-        );
-        return passId;
-      };
 
       for (const _tag of ["EntryPackExpiring", "UnlimitedEnding"] as const) {
         test(`${_tag} previews current recipients and synthetic emails without entering runs`, async () => {

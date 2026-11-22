@@ -782,6 +782,7 @@ export class AutomationDryRun extends Context.Service<
               outcome: row.outcome,
               stepId: row.stepId,
               sendAt: row.sendAt?.toString() ?? null,
+              skipReason: row.skipReason,
               projected: row.projected,
               reservationStatusesApproximate:
                 row.reservationStatusesApproximate,
