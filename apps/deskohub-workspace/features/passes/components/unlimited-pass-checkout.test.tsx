@@ -822,6 +822,62 @@ test("editing Unlimited Details continues to the original order's payment status
   }
 });
 
+test("retrying an Unlimited draft keeps old predecessors without replacing them", async () => {
+  const orderId = orderIdSchema.make(crypto.randomUUID());
+  const editedOrderId = orderIdSchema.make(crypto.randomUUID());
+  const earlierOrderId = orderIdSchema.make(crypto.randomUUID());
+  let retired = [editedOrderId];
+  const beginCheckout = mock(async (_input: { orderId: OrderId }) => {
+    const retiredPredecessorOrderIds = retired;
+    retired = [];
+    return { data: { ...readyCheckout, retiredPredecessorOrderIds } };
+  });
+  const view = render(
+    <QueryProvider>
+      <UnlimitedPassCheckout
+        {...base}
+        initialDetails={{ ...base.initialOptions, startDate: openSpaceStart }}
+        draft={{
+          kind: "submitted",
+          orderId,
+          supersedeOrderId: editedOrderId,
+          predecessorOrderIds: [editedOrderId, earlierOrderId],
+        }}
+        beginCheckout={beginCheckout}
+      />
+    </QueryProvider>
+  );
+  const proceed = () =>
+    fireEvent.click(view.getByRole("button", { name: /continue/i }));
+  proceed();
+  await view.findByRole("button", { name: /pay/i });
+  expect(beginCheckout).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      orderId,
+      supersedeOrderId: editedOrderId,
+      supersedeOrderIds: [editedOrderId, earlierOrderId],
+    })
+  );
+  expect(checkoutUrl().searchParams.get("supersedeOrder")).toBeNull();
+  expect(checkoutUrl().searchParams.getAll("predecessorOrder")).toEqual([
+    earlierOrderId,
+  ]);
+  fireEvent.click(
+    view.getByRole("button", {
+      name: new RegExp(m.unlimitedPassCheckoutHolder({}, { locale }), "i"),
+    })
+  );
+  proceed();
+  await view.findByRole("button", { name: /pay/i });
+  expect(beginCheckout).toHaveBeenCalledTimes(2);
+  expect(beginCheckout).toHaveBeenLastCalledWith(
+    expect.objectContaining({ orderId, supersedeOrderIds: [earlierOrderId] })
+  );
+  expect(beginCheckout.mock.calls[1]?.[0]).not.toHaveProperty(
+    "supersedeOrderId"
+  );
+});
+
 test("Unlimited gift requires a private name and clears it when returning to self-purchase", async () => {
   const beginCheckout = mock(async () => ({ data: readyCheckout }));
   const view = render(

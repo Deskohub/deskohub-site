@@ -113,14 +113,13 @@ function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
     query.submittedOrder !== undefined ||
     query.predecessorOrder !== undefined
   ) {
-    const { submittedOrder, predecessorOrder } = query;
+    const { submittedOrder, predecessorOrder, supersedeOrder } = query;
     const ids = Array.isArray(predecessorOrder)
       ? predecessorOrder
       : [predecessorOrder].filter((id) => id !== undefined);
     const isOrderId = Schema.is(orderIdSchema);
     if (
       query.order !== undefined ||
-      query.supersedeOrder !== undefined ||
       (query.step !== undefined && query.step !== "details") ||
       ids.length > unlimitedCheckoutPredecessorLimit ||
       !ids.every(isOrderId)
@@ -129,12 +128,21 @@ function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
     const predecessorOrderIds = [
       ...new Set(ids.map((id) => orderIdSchema.make(id.toLowerCase()))),
     ];
-    if (submittedOrder === undefined)
-      return { kind: "edit", predecessorOrderIds };
+    let supersedeOrderId: OrderId | undefined;
+    if (supersedeOrder !== undefined) {
+      if (!isOrderId(supersedeOrder)) notFound();
+      supersedeOrderId = orderIdSchema.make(supersedeOrder.toLowerCase());
+      if (!predecessorOrderIds.includes(supersedeOrderId)) notFound();
+    }
+    const predecessors = {
+      predecessorOrderIds,
+      ...(supersedeOrderId && { supersedeOrderId }),
+    };
+    if (submittedOrder === undefined) return { kind: "edit", ...predecessors };
     if (!isOrderId(submittedOrder)) notFound();
     const orderId = orderIdSchema.make(submittedOrder.toLowerCase());
     if (predecessorOrderIds.includes(orderId)) notFound();
-    return { kind: "submitted", orderId, predecessorOrderIds };
+    return { kind: "submitted", orderId, ...predecessors };
   }
   if (query.order !== undefined && query.supersedeOrder !== undefined)
     notFound();
@@ -142,7 +150,10 @@ function readOrderLink(query: Query): UnlimitedPassOrderLink | undefined {
   const orderId = query.order ?? query.supersedeOrder;
   if (orderId === undefined) return undefined;
   if (!Schema.is(orderIdSchema)(orderId)) notFound();
-  return { kind: query.order !== undefined ? "resume" : "replace", orderId };
+  return {
+    kind: query.order !== undefined ? "resume" : "replace",
+    orderId: orderIdSchema.make(orderId.toLowerCase()),
+  };
 }
 
 async function requirePageOpen(searchParams: Promise<Query>) {

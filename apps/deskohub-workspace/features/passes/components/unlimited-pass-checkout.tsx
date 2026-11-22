@@ -384,10 +384,13 @@ export function UnlimitedPassCheckout({
         setError(m.actionFailedUnexpectedly({}, { locale }));
         return;
       }
+      const supersedeOrderId =
+        order?.kind === "edit" ? order.supersedeOrderId : order?.orderId;
       submission = {
         kind: "submitted",
         orderId: orderIdSchema.make(crypto.randomUUID()),
         predecessorOrderIds,
+        ...(supersedeOrderId && { supersedeOrderId }),
       };
     }
     submittedHolder.current = { email: holderEmail };
@@ -402,15 +405,15 @@ export function UnlimitedPassCheckout({
       setOrder(order);
     };
     const beginSubmission = async (attempt: SubmittedOrder) => {
-      const [supersedeOrderId] = attempt.predecessorOrderIds;
+      const { supersedeOrderId } = attempt;
       const send = () =>
         beginCheckout({
           orderId: attempt.orderId,
           locale,
           selection,
           ...(renewsPassId && { renewsPassId }),
-          ...(supersedeOrderId && {
-            supersedeOrderId,
+          ...(supersedeOrderId && { supersedeOrderId }),
+          ...(attempt.predecessorOrderIds.length > 0 && {
             supersedeOrderIds: attempt.predecessorOrderIds,
           }),
           buyerEmail: buyer.email,
@@ -438,10 +441,13 @@ export function UnlimitedPassCheckout({
       const retired = result.data?.retiredPredecessorOrderIds;
       if (detailRevision.current === revision && retired?.length) {
         submission = {
-          ...attempt,
+          kind: "submitted",
+          orderId: attempt.orderId,
           predecessorOrderIds: attempt.predecessorOrderIds.filter(
             (orderId) => !retired.includes(orderId)
           ),
+          ...(supersedeOrderId &&
+            !retired.includes(supersedeOrderId) && { supersedeOrderId }),
         };
         saveOrder(submission);
       }
@@ -459,6 +465,7 @@ export function UnlimitedPassCheckout({
         submission = {
           kind: "submitted",
           orderId: orderIdSchema.make(crypto.randomUUID()),
+          supersedeOrderId: submission.orderId,
           predecessorOrderIds: [
             submission.orderId,
             ...submission.predecessorOrderIds,
@@ -500,12 +507,16 @@ export function UnlimitedPassCheckout({
       ) {
         const retryHandoff = result.data.handoff;
         setHandoff(retryHandoff);
-        const remaining = submission.predecessorOrderIds;
+        const { predecessorOrderIds: remaining, supersedeOrderId } = submission;
         let edit: UnlimitedPassOrderLink | undefined;
         if (retryHandoff) {
           edit = { kind: "resume", orderId: retryHandoff.orderId };
         } else if (remaining.length) {
-          edit = { kind: "edit", predecessorOrderIds: remaining };
+          edit = {
+            kind: "edit",
+            predecessorOrderIds: remaining,
+            ...(supersedeOrderId && { supersedeOrderId }),
+          };
         }
         setOrder(edit);
         setStartDate(fixedStartDate);
@@ -690,5 +701,6 @@ function editOrder(
   return {
     kind: "edit",
     predecessorOrderIds: getUnlimitedCheckoutPredecessors(order),
+    supersedeOrderId: order.orderId,
   };
 }

@@ -296,6 +296,7 @@ test("reload restores an owned submitted draft to Details using the committed se
   const content = await renderContent({
     ...selectionQuery,
     submittedOrder,
+    supersedeOrder: ownedOrder,
     predecessorOrder: ownedOrder,
   });
   expect(content.props.children.props).toMatchObject({
@@ -304,6 +305,7 @@ test("reload restores an owned submitted draft to Details using the committed se
       orderId: submittedOrder,
       holderEmail,
       predecessorOrderIds: [ownedOrder],
+      supersedeOrderId: ownedOrder,
     },
     initialDetails: { tier: "reserved-desk", startDate: "2026-12-01" },
     initialPayment: undefined,
@@ -332,6 +334,7 @@ test("reload before commit retains submitted and predecessor IDs without restori
     initialPayment: undefined,
   });
   expect(props.draft).not.toHaveProperty("holderEmail");
+  expect(props.draft).not.toHaveProperty("supersedeOrderId");
 });
 
 test("reload distinguishes an owned self-purchase from a submission that has not committed", async () => {
