@@ -134,7 +134,7 @@ export type AutomationWait = typeof AutomationWait.Type;
 
 export const automationOneOffCampaignGapMaxDays = 90;
 
-/** How long a Send waits after a one-off marketing campaign email. */
+/** How long a Send waits after a one-off campaign email. */
 export const AutomationOneOffCampaignGap = Schema.Struct({
   days: Schema.Int.check(
     Schema.isBetween({
@@ -162,7 +162,7 @@ export const AutomationStep = Schema.Union([
     oncePerCustomer: Schema.optionalKey(Schema.Literal(true)),
     /**
      * Hold the email until this many Prague calendar days after the
-     * customer's latest one-off marketing campaign email.
+     * customer's latest one-off campaign email, of any purpose.
      */
     oneOffCampaignGap: Schema.optionalKey(AutomationOneOffCampaignGap),
     /**
@@ -755,7 +755,7 @@ export const automationRunEventDetails = {
   woke: noDetail,
   /**
    * The send waits: the triggering visit moved later
-   * (`trigger-not-reached`), or the customer got a one-off marketing
+   * (`trigger-not-reached`), or the customer got a one-off
    * campaign email too recently (`one-off-campaign-gap`).
    */
   deferred: Schema.Struct({
