@@ -1,1 +1,0 @@
-DROP INDEX "email_campaign_automation_runs_one_open_run_idx";
