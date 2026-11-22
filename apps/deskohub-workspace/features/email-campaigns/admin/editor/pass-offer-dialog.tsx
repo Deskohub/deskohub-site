@@ -54,10 +54,12 @@ export type PassOfferAttributes = Readonly<
 >;
 
 const defaultSize = "default";
+/** A size the body rules refuse, as found; no choice matches it. */
+const invalidSize = "invalid";
 
 type PassOfferForm = {
   readonly product: string;
-  /** `default`, a size's digits, or an invalid size as found, which no choice matches. */
+  /** `default`, a size's digits, or `invalid` for a size the rules refuse. */
   readonly size: string;
   readonly headline: string;
   readonly detail: string;
@@ -86,7 +88,9 @@ const toPassOfferForm = (
   size:
     attributes?.size === undefined || attributes.size === null
       ? defaultSize
-      : String(attributes.size),
+      : isCampaignPassOfferSize(attributes.size)
+        ? `${attributes.size}`
+        : invalidSize,
   headline: campaignPassOfferText(attributes?.headline) ?? "",
   detail: campaignPassOfferText(attributes?.detail) ?? "",
 });
@@ -244,6 +248,7 @@ function PassOfferForm({
                   // Only an Entry pack has a size.
                   if (value !== "entry-pack") {
                     form.setValue("size", defaultSize);
+                    form.clearErrors("size");
                   }
                 }}
                 options={campaignPassOfferProducts.map((value) => ({

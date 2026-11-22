@@ -270,6 +270,64 @@ describe("PassOfferNodeView", () => {
     ]);
   });
 
+  test("refuses an imported size that reads like a choice", async () => {
+    const rendered = await renderEditor(
+      bodyWithCard({ ...entryPackCard, size: "default" })
+    );
+    const dialog = await openEditing(rendered);
+
+    expect(
+      choice(dialog, m.emailCampaignsPassOfferSizeDefault({}, { locale }))
+        ?.checked
+    ).toBe(false);
+    await clickIn(dialog, m.emailCampaignsPassOfferUpdate({}, { locale }));
+
+    await waitFor(() =>
+      expect(
+        dialog.getByText(
+          m.emailCampaignsBodyPassOfferSizeInvalid({}, { locale })
+        )
+      ).toBeTruthy()
+    );
+    expect(rendered.changes).toEqual([]);
+  });
+
+  test("switching products clears an invalid size and its issue", async () => {
+    const rendered = await renderEditor(
+      bodyWithCard({ ...entryPackCard, size: 7 })
+    );
+    const dialog = await openEditing(rendered);
+    const sizeInvalid = m.emailCampaignsBodyPassOfferSizeInvalid(
+      {},
+      { locale }
+    );
+
+    await clickIn(dialog, m.emailCampaignsPassOfferUpdate({}, { locale }));
+    await waitFor(() => expect(dialog.getByText(sizeInvalid)).toBeTruthy());
+    for (const product of [
+      customerMessages.passUnlimited({}, { locale }),
+      customerMessages.passEntryPack({}, { locale }),
+    ]) {
+      await act(async () => {
+        fireEvent.click(choice(dialog, product)!);
+      });
+    }
+
+    expect(
+      choice(dialog, m.emailCampaignsPassOfferSizeDefault({}, { locale }))
+        ?.checked
+    ).toBe(true);
+    expect(dialog.queryByText(sizeInvalid) === null).toBe(true);
+    await clickIn(dialog, m.emailCampaignsPassOfferUpdate({}, { locale }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog") === null).toBe(true)
+    );
+    expect(cardsOf(rendered.changes.at(-1))).toEqual([
+      { type: "passOffer", attrs: { ...entryPackCard, size: null } },
+    ]);
+  });
+
   test("marks a card whose product is unknown until one is chosen", async () => {
     const rendered = await renderEditor(
       bodyWithCard({ product: "entry-pak", size: null })
