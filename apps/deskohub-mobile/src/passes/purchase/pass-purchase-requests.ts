@@ -5,7 +5,7 @@ import {
   type SubmitCustomerPassPurchase,
   type UpdateCustomerPassPurchasePrice,
 } from "@deskohub/workspace-customer-api";
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 import { Atom } from "effect/reactivity";
 import { paymentBrowserLayer } from "../../booking/payment-browser";
 import { PaymentBrowser } from "../../booking/payment-browser.service";
@@ -66,10 +66,25 @@ export const unlimitedStartDatesAtom = Atom.family(
     )
 );
 
-const writePass = <A, E, R>(
-  write: (passes: Effect.Success<typeof passesApi>) => Effect.Effect<A, E, R>
-) =>
+class PassPurchaseViewChanged extends Data.TaggedError(
+  "PassPurchaseViewChanged"
+) {}
+
+const confirmPurchaseAction = (owns?: () => boolean) =>
   confirmPassPurchaseScope.pipe(
+    Effect.andThen(Effect.sync(() => owns?.() ?? true)),
+    Effect.filterOrFail(
+      (owned) => owned,
+      () => new PassPurchaseViewChanged()
+    ),
+    Effect.asVoid
+  );
+
+const writePass = <A, E, R>(
+  write: (passes: Effect.Success<typeof passesApi>) => Effect.Effect<A, E, R>,
+  owns?: () => boolean
+) =>
+  confirmPurchaseAction(owns).pipe(
     Effect.andThen(passesApi.pipe(Effect.flatMap(write), customerWrite))
   );
 
@@ -82,12 +97,15 @@ export const submitPassPurchaseAtom = customerDataRuntime.fn(
   ({
     orderId,
     payload,
+    owns,
   }: {
     orderId: string;
     payload: SubmitCustomerPassPurchase;
+    owns?: () => boolean;
   }) =>
-    writePass((passes) =>
-      passes.submitPassPurchase({ params: { orderId }, payload })
+    writePass(
+      (passes) => passes.submitPassPurchase({ params: { orderId }, payload }),
+      owns
     )
 );
 
@@ -105,8 +123,16 @@ export const updatePassPurchasePriceAtom = customerDataRuntime.fn(
 );
 
 export const openPassPaymentAtom = customerDataRuntime.fn(
-  ({ orderId, redirectUrl }: { orderId: string; redirectUrl: string }) =>
-    confirmPassPurchaseScope.pipe(
+  ({
+    orderId,
+    redirectUrl,
+    owns,
+  }: {
+    orderId: string;
+    redirectUrl: string;
+    owns?: () => boolean;
+  }) =>
+    confirmPurchaseAction(owns).pipe(
       Effect.andThen(Effect.service(PaymentBrowser)),
       Effect.flatMap((browser) =>
         browser.open(redirectUrl, passPaymentReturnUrl(orderId))
