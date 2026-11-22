@@ -145,6 +145,14 @@ export const color = {
   credentialFoilFirst: "#FFC2CC",
   credentialFoilMid: "#D999BF",
   credentialFoilLast: "#F3D9C6",
+  /**
+   * The ticket's logo watermark as drawn: the board blends `ticketWatermark`
+   * into `ticketPaper` with darken at 78% and `ticketStubWatermark` into
+   * `ticketStub` with soft light at 72%. Native views can't blend, so these
+   * are the results on those flat fills.
+   */
+  ticketWatermarkOnPaper: "#EFDECE",
+  ticketWatermarkOnStub: "#F7D9B8",
 } as const;
 
 /** Corner radii. */
@@ -210,6 +218,8 @@ export const shadow = {
   toastConfirmation: { boxShadow: "0 10px 24px -8px rgba(0, 81, 62, 0.55)" },
   /** A light card lifted off navy, such as the update offer on the sign-in masthead. */
   onNavy: { boxShadow: "0 8px 20px -12px rgba(0, 0, 24, 0.8)" },
+  /** The Unlimited pass credential at the end of a booking form. */
+  credential: { boxShadow: "0 3px 8px rgba(6, 10, 58, 0.13)" },
   /** The pull-to-refresh disc. */
   refresh: { boxShadow: "0 2px 8px rgba(0, 2, 79, 0.25)" },
 } as const;
@@ -283,6 +293,10 @@ export const typeScale = {
   buttonSmall: brandText(14, 20, 600),
   /** Dialog titles. */
   dialogTitle: brandText(22, 28, 700),
+  /** A pass offer card's product name (board 00). */
+  offerTitle: brandText(22, 25, 700, -0.9),
+  /** The visit count on the Entry pack ticket's stub. */
+  offerCount: brandText(20, 22, 700, -0.8),
 } as const;
 
 export type TypeVariant = keyof typeof typeScale;
