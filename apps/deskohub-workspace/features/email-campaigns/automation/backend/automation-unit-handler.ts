@@ -36,6 +36,7 @@ type PersistedAutomationUnit = Omit<
   "subject"
 > & {
   readonly sendId: CampaignSendId;
+  readonly claimId: string;
 };
 
 /**

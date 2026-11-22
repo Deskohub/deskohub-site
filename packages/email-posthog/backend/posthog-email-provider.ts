@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   continuesEmailChain,
+  type EmailBatchOptions,
   type EmailBatchResult,
   EmailDeliveryIdSchema,
   type EmailMessage,
@@ -10,6 +11,7 @@ import {
   type EmailSendFailure,
   type EmailSendResult,
   EmailServiceError,
+  emailRequestFingerprint,
   NetworkError,
 } from "@deskohub/email";
 import {
@@ -125,6 +127,7 @@ export const makePostHogEmailProvider = (
                   email,
                   idempotencyKey,
                   deadline,
+                  beforeRequest: options.beforeRequest,
                 }).pipe(
                   Effect.timeoutOrElse({
                     duration: Duration.millis(remaining),
@@ -329,12 +332,14 @@ const requestSend = ({
   email,
   idempotencyKey,
   deadline,
+  beforeRequest,
 }: {
   readonly config: PostHogEmailProviderConfig;
   readonly email: PostHogEmail;
   readonly idempotencyKey: string;
   /** The batch deadline in epoch milliseconds; a lone send has none. */
   readonly deadline?: number;
+  readonly beforeRequest?: EmailBatchOptions["beforeRequest"];
 }) =>
   Effect.gen(function* () {
     const policy = postHogEmailRetryPolicy.withAttemptTimeout(
@@ -349,6 +354,13 @@ const requestSend = ({
       HttpClientRequest.setHeader("Idempotency-Key", idempotencyKey),
       HttpClientRequest.bodyJsonUnsafe(email)
     );
+    const admit =
+      beforeRequest?.(
+        emailRequestFingerprint(
+          [providerName, request.url, idempotencyKey, email],
+          Redacted.value(config.secretKey)
+        )
+      ) ?? Effect.void;
 
     const answeredAttempt = (accepted: Ref.Ref<boolean>) =>
       httpClient.execute(request).pipe(
@@ -398,6 +410,7 @@ const requestSend = ({
     // email possibly queued, so the attempt is not retried or handed on.
     const attempt = Effect.gen(function* () {
       const accepted = yield* Ref.make(false);
+      yield* admit;
       return yield* answeredAttempt(accepted).pipe(
         Effect.catch((failure) =>
           Effect.flatMap(Ref.get(accepted), (wasAccepted) =>
@@ -415,11 +428,25 @@ const requestSend = ({
     });
 
     const body = yield* attempt.pipe(
-      policy.retryWhileHonoringDelay(isRetryableAttempt, {
-        requestedDelay: (failure) => failure.retryAfter,
-        maxRequestedDelay: postHogEmailMaxRetryAfter,
-      }),
-      Effect.mapError(toEmailSendError)
+      policy.retryWhileHonoringDelay<
+        PostHogSendAttemptFailure | EmailSendError
+      >(
+        (failure) =>
+          failure._tag === "PostHogSendAttemptFailure" &&
+          isRetryableAttempt(failure),
+        {
+          requestedDelay: (failure) =>
+            failure._tag === "PostHogSendAttemptFailure"
+              ? failure.retryAfter
+              : undefined,
+          maxRequestedDelay: postHogEmailMaxRetryAfter,
+        }
+      ),
+      Effect.mapError((failure) =>
+        failure._tag === "PostHogSendAttemptFailure"
+          ? toEmailSendError(failure)
+          : failure
+      )
     );
 
     const answer = yield* Schema.decodeEffect(

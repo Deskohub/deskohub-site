@@ -2,12 +2,24 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { DotyposCustomerIdSchema } from "@deskohub/dotypos";
+import type { EmailProviderFakeResponse } from "@deskohub/email/testing";
 import { resendSimulatorAddress, testEmailAddress } from "@deskohub/test-email";
+import { Effect, Layer } from "effect";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { orderIdSchema } from "@/features/order";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
+import { PassReminderReads } from "@/features/passes/backend/pass-reminder-reads.service";
+import {
+  getEntryPackBookingPath,
+  getUnlimitedRenewalPath,
+} from "@/features/passes/routes";
+import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/availability-inventory";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { getWorkspaceCanonicalUrl } from "@/shared/utils/site-constants";
+import { plainDateStringSchema } from "@/shared/utils/temporal";
 import { deleteAutomatedCampaigns } from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
 import type { AutomationWorkUnitId } from "../automation-identifiers";
-import type { ResendFakeResponse } from "./automation-engine-scenario.test-utils";
 import {
   deliverProfile,
   makeDeliverEngine,
@@ -82,6 +94,266 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
     seeded: Awaited<ReturnType<typeof seedAutomation>>,
     runs: readonly SeedSendReadyRun[]
   ) => seedSendReadyRuns(db, { ...seeded, runs, at: startedAt });
+
+  const seedPassReminder = async (
+    kind: "entry-pack" | "unlimited" = "entry-pack",
+    count = 1
+  ) => {
+    const customer = customerId(crypto.randomUUID());
+    const account = customerAccountIdSchema.make(crypto.randomUUID());
+    const email = testEmailAddress(customer);
+    await pool.query(
+      "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
+      [account, customer]
+    );
+    await pool.query(
+      `insert into auth."user" (id, name, email, email_verified)
+       values ($1, 'Synthetic holder', $2, true)`,
+      [account, email]
+    );
+    await pool.query(
+      `insert into customer_marketing_consents
+         (dotypos_customer_id, document_hash, locale, granted_at)
+       values ($1, 'hash', 'en-US', '2026-01-01T00:00:00Z')`,
+      [customer]
+    );
+    const seeded = await seedAutomation({
+      purpose: "marketing",
+      flow: sendOnlyFlow(
+        kind === "entry-pack"
+          ? { _tag: "EntryPackExpiring" }
+          : { _tag: "UnlimitedEnding" }
+      ),
+      text: "Generic automation copy must never be sent",
+    });
+    const passIds = Array.from({ length: count }, () =>
+      orderIdSchema.make(crypto.randomUUID())
+    );
+    const validUntil = kind === "entry-pack" ? "2026-10-27" : "2026-10-25";
+    const common = {
+      copyVersion: 1,
+      holderAccountId: account,
+      holderVersion: 0,
+      tier: "open-space",
+      endsOn: plainDateStringSchema.make(
+        kind === "entry-pack" ? "2026-10-26" : "2026-10-24"
+      ),
+    } as const;
+    for (const passId of passIds) {
+      await pool.query(
+        `insert into orders
+           (id, kind, dotypos_customer_id, payment_state, fulfillment_state, fulfilled_at)
+         values ($1, 'pass-purchase', 'historical-billing-id', 'complimentary', 'fulfilled', now())`,
+        [passId]
+      );
+      await pool.query(
+        `insert into pass_purchases
+           (id, buyer_account_id, holder_account_id, product, tier, entry_count,
+            unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $2, $3, 'open-space', case when $3 = 'entry-pack' then 5 end,
+            case when $3 = 'unlimited' then false end, 'active', '2026-09-25', $4,
+            '{}', 'en-US', now())`,
+        [passId, account, kind, validUntil]
+      );
+    }
+    await seedRuns(
+      seeded,
+      passIds.map((passId) => ({
+        customer,
+        triggerKind:
+          kind === "entry-pack" ? "entry-pack-expiring" : "unlimited-ending",
+        triggerPassId: passId,
+        passReminderContext:
+          kind === "entry-pack"
+            ? { ...common, product: kind, remainingEntries: 1, totalEntries: 5 }
+            : {
+                ...common,
+                product: kind,
+                renewalStartsOn: plainDateStringSchema.make(validUntil),
+              },
+      }))
+    );
+    let gateOpen = true;
+    const engine = await setUp({
+      customers: [deliverProfile(customer, { firstName: "Synthetic Holder" })],
+      passReminderReads: PassReminderReads.Default.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            database.layer,
+            Layer.mock(AdvisoryAvailabilityInventory, {
+              tables: Effect.succeed([]),
+            })
+          )
+        )
+      ),
+      passReminderGate: CoworkPassesReleaseGate.fromEvaluation(
+        Effect.sync(() => gateOpen)
+      ),
+    });
+    return {
+      ...seeded,
+      customer,
+      email,
+      passIds,
+      engine,
+      closeGate: () => {
+        gateOpen = false;
+      },
+    };
+  };
+
+  test("renders localized pass copy with unsubscribe and a separate send for each pass", async () => {
+    // The legacy index stays during the reader rollout. The writer removes it.
+    await pool.query(
+      "drop index if exists email_campaign_automation_runs_one_open_run_idx"
+    );
+    const { campaignId, engine, email, passIds } = await seedPassReminder(
+      "entry-pack",
+      2
+    );
+    await engine.tick(startedAt);
+    await engine.tick(startedAt.add({ minutes: 15 }));
+    const requests = engine.resend.requests();
+    expect(requests).toHaveLength(2);
+    const { rows } = await pool.query(
+      `select trigger_pass_id, pass_reminder_context, outcome, send_id
+         from email_campaign_automation_runs where campaign_id = $1`,
+      [campaignId]
+    );
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map(({ send_id }) => send_id)).size).toBe(2);
+    for (const row of rows) {
+      expect(row.outcome).toBe("sent");
+      expect(row.pass_reminder_context).toMatchObject({
+        copyVersion: 1,
+        remainingEntries: 5,
+        totalEntries: 5,
+      });
+      expect(JSON.stringify(row.pass_reminder_context)).not.toContain(email);
+      expect(JSON.stringify(row.pass_reminder_context)).not.toContain(
+        "Synthetic Holder"
+      );
+      const request = requests.find(({ key }) => key.includes(row.send_id));
+      expect(request?.to).toEqual([email]);
+      expect(request?.payload).toContain("Synthetic Holder");
+      expect(request?.payload).toContain("List-Unsubscribe");
+      expect(request?.payload).not.toContain("Generic automation copy");
+      const passId = passIds.find((id) => id === row.trigger_pass_id)!;
+      expect(request?.payload).toContain(
+        getWorkspaceCanonicalUrl(getEntryPackBookingPath("en-US", passId))
+      );
+    }
+  });
+
+  test("Unlimited reminders link back to the pass renewal checkout", async () => {
+    const {
+      engine,
+      passIds: [passId],
+    } = await seedPassReminder("unlimited");
+    await engine.tick(startedAt);
+    const [request] = engine.resend.requests();
+    expect(request?.payload).toContain(
+      getWorkspaceCanonicalUrl(getUnlimitedRenewalPath("en-US", passId!))
+    );
+  });
+
+  test.each(["holder", "consent", "gate", "test-domain"] as const)(
+    "settles the first request without calling the provider after a late %s change",
+    async (change) => {
+      const {
+        campaignId,
+        customer,
+        engine,
+        closeGate,
+        passIds: [passId],
+      } = await seedPassReminder();
+      let checked = false;
+      engine.resend.beforeEachRequest(async () => {
+        checked = true;
+        if (change === "holder") {
+          await pool.query(
+            "update pass_purchases set holder_version = 1 where id = $1",
+            [passId]
+          );
+        } else if (change === "consent") {
+          await pool.query(
+            "update customer_marketing_consents set withdrawn_at = now() where dotypos_customer_id = $1",
+            [customer]
+          );
+        } else if (change === "gate") {
+          closeGate();
+        } else {
+          engine.dotypos.setCustomers([
+            deliverProfile(customer, {
+              email: resendSimulatorAddress("delivered"),
+            }),
+          ]);
+        }
+      });
+      await engine.tick(startedAt);
+      expect(checked).toBe(true);
+      expect(engine.resend.requests()).toEqual([]);
+      const outcomes = {
+        holder: ["ended", "withdrawn", null],
+        consent: ["ended", "skipped", "consent-withdrawn"],
+        gate: ["ended", "withdrawn", null],
+        "test-domain": ["ended", "skipped", "outside-test-domain"],
+      };
+      expect(outcomesOf(await runsOf(campaignId))).toEqual({
+        [customer]: outcomes[change],
+      });
+    }
+  );
+
+  test.each(["unchanged", "holder", "email", "provider"] as const)(
+    "reconciles a lost pass reminder response after a %s check",
+    async (change) => {
+      const {
+        campaignId,
+        customer,
+        engine,
+        passIds: [passId],
+      } = await seedPassReminder();
+      engine.resend.respondWith(() => "accept-hang");
+      await engine.killDuringRequest(startedAt);
+      if (change === "holder") {
+        await pool.query(
+          "update pass_purchases set holder_version = 1 where id = $1",
+          [passId]
+        );
+      }
+      if (change === "email") {
+        engine.dotypos.setCustomers([
+          deliverProfile(customer, { email: testEmailAddress("changed") }),
+        ]);
+      }
+      if (change === "provider") {
+        const [unit] = await unitsOf(campaignId);
+        await pool.query(
+          `update email_campaign_delivery_batches
+             set payload_hash = split_part(payload_hash, ':', 1) || ':' || repeat('0', 64)
+           where send_id = $1`,
+          [unit?.send_id]
+        );
+      }
+      await engine.tick(startedAt.add({ minutes: 6 }));
+      const requests = engine.resend.requests();
+      if (change === "unchanged") {
+        expect(requests).toHaveLength(2);
+        expect(requests[0]).toEqual(requests[1]);
+      } else {
+        expect(requests).toHaveLength(1);
+      }
+      expect(engine.resend.mailed()).toHaveLength(1);
+      expect(outcomesOf(await runsOf(campaignId))).toEqual({
+        [customer]: [
+          "ended",
+          change === "unchanged" ? "sent" : "unconfirmed",
+          null,
+        ],
+      });
+    }
+  );
 
   const runsOf = async (campaignId: CampaignId) => {
     const { rows } = await pool.query<{
@@ -493,7 +765,7 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
   test.each<
     readonly [
       string,
-      ResendFakeResponse,
+      EmailProviderFakeResponse,
       "none" | "pause" | "archive" | "lost-message",
     ]
   >([

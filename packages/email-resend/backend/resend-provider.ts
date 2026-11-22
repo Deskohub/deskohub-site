@@ -6,6 +6,7 @@ import {
   type EmailSendError,
   type EmailSendResult,
   EmailServiceError,
+  emailRequestFingerprint,
   NetworkError,
 } from "@deskohub/email";
 import type { ProviderRequestPolicy } from "@deskohub/provider-request";
@@ -367,7 +368,8 @@ export const makeResendEmailProvider = ({
   apiKey,
   timeouts,
 }: ResendEmailProviderConfig): EmailProvider => {
-  const resend = new Resend(apiKey);
+  const credential = apiKey || process.env.RESEND_API_KEY;
+  const resend = new Resend(credential);
   const sendPolicy = resendRetryPolicy.withAttemptTimeout(timeouts.send);
   const batchPolicy = resendRetryPolicy.withAttemptTimeout(timeouts.batch);
 
@@ -464,10 +466,24 @@ export const makeResendEmailProvider = ({
           size: messages.length,
         });
 
+        const payload = messages.map(toResendEmail);
+        const idempotencyKey = getResendIdempotencyKey(options.idempotencyKey);
+        yield* options.beforeRequest?.(
+          emailRequestFingerprint(
+            [
+              "resend",
+              `${resend.baseUrl}/emails/batch`,
+              resend.userAgent,
+              idempotencyKey,
+              payload,
+            ],
+            credential
+          )
+        ) ?? Effect.void;
         const data = yield* requestResend(
           (signal) =>
-            resend.batch.send(messages.map(toResendEmail), {
-              idempotencyKey: getResendIdempotencyKey(options.idempotencyKey),
+            resend.batch.send(payload, {
+              idempotencyKey,
               signal,
             }),
           batchPolicy
