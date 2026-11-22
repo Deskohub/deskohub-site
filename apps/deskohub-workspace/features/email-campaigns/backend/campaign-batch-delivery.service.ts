@@ -259,6 +259,7 @@ export const BatchOutcome = Data.taggedEnum<BatchOutcome>();
  */
 class UnreplayableBatch extends Data.TaggedError("UnreplayableBatch")<{
   readonly reason: "key-expired" | "payload-changed";
+  readonly skipReason?: CampaignRecipientSkipReason;
 }> {}
 
 export interface ICampaignBatchDelivery {
@@ -813,6 +814,7 @@ export class CampaignBatchDelivery extends Context.Service<
               batch: input.batch,
               profiles,
               payloadHash: admission?.preparedHash ?? input.batch.payloadHash,
+              recheckConsent: admission !== undefined,
             }).pipe(
               Effect.flatMap((messages) =>
                 sendBatch({
@@ -826,8 +828,13 @@ export class CampaignBatchDelivery extends Context.Service<
           ),
           Effect.catchTag(
             "UnreplayableBatch",
-            ({ reason }): Effect.Effect<BatchOutcome> => {
+            ({ reason, skipReason }): Effect.Effect<BatchOutcome> => {
               if (input.mode === "first" && input.failureCodeOnStalePayload) {
+                if (skipReason !== undefined) {
+                  return Effect.succeed(
+                    BatchOutcome.Skipped({ reason: skipReason })
+                  );
+                }
                 return Effect.succeed(
                   BatchOutcome.Refused({
                     request: "first",
@@ -865,6 +872,7 @@ export class CampaignBatchDelivery extends Context.Service<
         /** The batch was persisted from these profiles. */
         readonly profiles: Option.Option<BatchProfiles>;
         readonly payloadHash: string;
+        readonly recheckConsent: boolean;
       }) =>
         loadBatchRecipients(input.batch).pipe(
           Effect.filterOrFail(
@@ -875,20 +883,29 @@ export class CampaignBatchDelivery extends Context.Service<
           Effect.flatMap((recipients) =>
             Option.match(input.profiles, {
               onNone: () => hydrate({ send: input.send, recipients }),
-              // They passed the recheck when the batch was persisted.
               onSome: (profiles) =>
-                Effect.succeed(
-                  classifyRecipients({
-                    recipients,
-                    profiles,
-                    consenting: new Set(input.batch.dotyposCustomerIds),
-                  })
+                (input.recheckConsent
+                  ? loadConsenting({
+                      campaign: input.send.campaign,
+                      customerIds: input.batch.dotyposCustomerIds,
+                    })
+                  : Effect.succeed(new Set(input.batch.dotyposCustomerIds))
+                ).pipe(
+                  Effect.map((consenting) =>
+                    classifyRecipients({ recipients, profiles, consenting })
+                  )
                 ),
             })
           ),
           Effect.flatMap((hydrated) =>
             Effect.fromResult(Result.all(hydrated)).pipe(
-              Effect.mapError(payloadChanged)
+              Effect.mapError(
+                ({ reason: skipReason }) =>
+                  new UnreplayableBatch({
+                    reason: "payload-changed",
+                    skipReason,
+                  })
+              )
             )
           ),
           Effect.flatMap((recipients) => {
@@ -930,11 +947,19 @@ export class CampaignBatchDelivery extends Context.Service<
        * person is read at each request and isn't part of the persisted
        * payload, so a replay names whom consent allows then.
        */
-      const withRecipientIdentities = (input: {
-        readonly batch: PersistedBatch;
-        readonly messages: readonly EmailMessage[];
-      }) =>
-        analyticsIdentity.forRecipients(input.batch.dotyposCustomerIds).pipe(
+      const withRecipientIdentities = (
+        input: {
+          readonly batch: PersistedBatch;
+          readonly messages: readonly EmailMessage[];
+        },
+        guarded = false
+      ) =>
+        (guarded
+          ? analyticsIdentity
+              .forGuardedRecipients(input.batch.dotyposCustomerIds)
+              .pipe(Effect.catch(() => incomplete(input.batch)))
+          : analyticsIdentity.forRecipients(input.batch.dotyposCustomerIds)
+        ).pipe(
           Effect.map((identities) =>
             Arr.zipWith(
               input.messages,
@@ -967,7 +992,7 @@ export class CampaignBatchDelivery extends Context.Service<
         const eligibility = yield* admission.guard;
         if (eligibility !== true) return eligibility;
 
-        const current = yield* withRecipientIdentities(input);
+        const current = yield* withRecipientIdentities(input, true);
         return current.every(
           (message, index) =>
             message.recipientIdentity === prepared[index]?.recipientIdentity
@@ -1014,7 +1039,10 @@ export class CampaignBatchDelivery extends Context.Service<
                   logUnsentEmails(unsentEmails(recipients))
                 )
               );
-          return yield* withRecipientIdentities(input).pipe(
+          return yield* withRecipientIdentities(
+            input,
+            admission !== undefined
+          ).pipe(
             Effect.flatMap((messages) =>
               admission
                 ? requestGuardedBatch({

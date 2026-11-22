@@ -294,25 +294,42 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
     expect(request?.payload).not.toContain(deskLabel);
   });
 
-  test("resumes a first provider request after a temporary admission read failure", async () => {
-    const { campaignId, customer, engine } = await seedPassReminder();
-    engine.dotypos.onRequest(({ method }) =>
-      method === "getCustomersByIds" &&
-      engine.dotypos.calls.getCustomersByIds === 2
-        ? new DotyposUnavailable({
-            operation: method,
-            reason: "server",
-            httpStatus: 503,
-          })
-        : Effect.void
-    );
-    await engine.tick(startedAt);
-    expect(engine.dotypos.calls.getCustomersByIds).toBeGreaterThanOrEqual(4);
-    expect(engine.resend.requests()).toHaveLength(1);
-    expect(outcomesOf(await runsOf(campaignId))).toEqual({
-      [customer]: ["ended", "sent", null],
-    });
-  });
+  test.each(["sent", "skipped"] as const)(
+    "settles %s after a temporary admission read failure",
+    async (outcome) => {
+      const { campaignId, customer, engine } = await seedPassReminder();
+      engine.dotypos.onRequest(({ method }) => {
+        if (
+          method !== "getCustomersByIds" ||
+          engine.dotypos.calls.getCustomersByIds !== 2
+        ) {
+          return Effect.void;
+        }
+        if (outcome === "skipped") {
+          engine.dotypos.setCustomers([
+            deliverProfile(customer, {
+              email: resendSimulatorAddress("delivered"),
+            }),
+          ]);
+        }
+        return new DotyposUnavailable({
+          operation: method,
+          reason: "server",
+          httpStatus: 503,
+        });
+      });
+      await engine.tick(startedAt);
+      expect(engine.dotypos.calls.getCustomersByIds).toBeGreaterThanOrEqual(3);
+      expect(engine.resend.requests()).toHaveLength(outcome === "sent" ? 1 : 0);
+      expect(outcomesOf(await runsOf(campaignId))).toEqual({
+        [customer]: [
+          "ended",
+          outcome,
+          outcome === "sent" ? null : "outside-test-domain",
+        ],
+      });
+    }
+  );
 
   test("stops a prepared provider request when its analytics identity is withdrawn", async () => {
     const { account, campaignId, customer, engine } = await seedPassReminder();
