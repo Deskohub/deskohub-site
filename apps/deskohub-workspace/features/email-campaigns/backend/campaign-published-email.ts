@@ -1,19 +1,23 @@
 import "server-only";
 
 import { EmailDocument, type EmailId } from "@deskohub/workspace-admin-api";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import {
   type WorkspaceDatabaseClient,
   WorkspaceTransaction,
 } from "@/db/database.service";
-import { type CampaignRow, emailCampaignSends } from "@/db/schema";
+import {
+  type CampaignRow,
+  emailCampaignSends,
+  emailCampaigns,
+} from "@/db/schema";
 import { emails, emailVersions } from "@/db/schema/emails";
 import { sampleEmailValues } from "@/features/emails/body";
 import { renderEmailContent } from "@/features/emails/body/email-content";
 import type { Locale } from "@/features/i18n";
 import { currentInstant } from "@/shared/utils/temporal";
-import { onceCampaignSend } from "./campaign-send-selection";
+import type { CampaignId } from "../campaign-identifiers";
 
 const decodePublishedDocument = Schema.decodeUnknownOption(EmailDocument);
 
@@ -91,37 +95,73 @@ export const lockCampaignEmailPublication = Effect.fn(
   return yield* getCampaignEmailPublication(db, emailId);
 });
 
-/** Drafts follow publications. A started send's preview uses its immutable version. */
-export const getLinkedCampaignEmail = Effect.fn("getLinkedCampaignEmail")(
-  function* (db: WorkspaceDatabaseClient, campaign: CampaignRow) {
-    if (
-      !campaign.emailId ||
-      campaign.delivery !== "once" ||
-      campaign.purpose !== "marketing"
-    )
-      return undefined;
-    if (campaign.status === "draft")
-      return yield* getCampaignEmailPublication(db, campaign.emailId);
-    const [row] = yield* db
-      .select({ document: emailVersions.document })
-      .from(emailCampaignSends)
+/** Drafts follow publications. Confirmed sends use their immutable version. */
+export const getLinkedCampaignEmails = Effect.fn("getLinkedCampaignEmails")(
+  function* (db: WorkspaceDatabaseClient, campaigns: readonly CampaignRow[]) {
+    const documents = new Map<
+      CampaignId,
+      { readonly document: EmailDocument }
+    >();
+    const ids = campaigns
+      .filter(({ emailId }) => emailId !== null)
+      .map(({ id }) => id);
+    if (ids.length === 0) return documents;
+
+    const rows = yield* db
+      .selectDistinctOn([emailCampaigns.id], {
+        campaignId: emailCampaigns.id,
+        status: emailCampaigns.status,
+        templateKey: emailCampaigns.templateKey,
+        document: emailVersions.document,
+      })
+      .from(emailCampaigns)
+      .innerJoin(emails, eq(emails.id, emailCampaigns.emailId))
+      .leftJoin(
+        emailCampaignSends,
+        and(
+          eq(emailCampaignSends.campaignId, emailCampaigns.id),
+          isNull(emailCampaignSends.automationVersionId)
+        )
+      )
       .innerJoin(
         emailVersions,
-        eq(emailVersions.id, emailCampaignSends.frozenEmailVersionId)
+        and(
+          eq(emailVersions.emailId, emails.id),
+          or(
+            and(eq(emailCampaigns.status, "draft"), isNull(emails.archivedAt)),
+            and(
+              ne(emailCampaigns.status, "draft"),
+              eq(emailVersions.id, emailCampaignSends.frozenEmailVersionId)
+            )
+          )
+        )
       )
       .where(
         and(
-          onceCampaignSend(campaign.id),
-          eq(emailVersions.emailId, campaign.emailId)
+          inArray(emailCampaigns.id, ids),
+          eq(emailCampaigns.delivery, "once"),
+          eq(emailCampaigns.purpose, "marketing")
         )
+      )
+      .orderBy(emailCampaigns.id, desc(emailVersions.versionNumber));
+    for (const row of rows) {
+      const document = Option.getOrUndefined(
+        decodePublishedDocument(row.document)
       );
-    if (!row) return undefined;
-    const document = Option.getOrUndefined(
-      decodePublishedDocument(row.document)
-    );
-    return document?.purpose === "marketing" &&
-      document.templateKey === campaign.templateKey
-      ? { document }
-      : undefined;
+      if (
+        document?.purpose === "marketing" &&
+        (row.status === "draft" || document.templateKey === row.templateKey)
+      )
+        documents.set(row.campaignId, { document });
+    }
+    return documents;
   }
 );
+
+export const getLinkedCampaignEmail = (
+  db: WorkspaceDatabaseClient,
+  campaign: CampaignRow
+) =>
+  getLinkedCampaignEmails(db, [campaign]).pipe(
+    Effect.map((publications) => publications.get(campaign.id))
+  );

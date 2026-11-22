@@ -74,8 +74,8 @@ describe.skipIf(!databaseUrl)(
               ).rows,
               recipients: (
                 await pool.query(
-                  // `failure_code` is a later additive column, null until a send fails.
-                  "select to_jsonb(t) - 'failure_code' as row from email_campaign_recipients t order by send_id"
+                  // Later migrations add nullable delivery evidence to the recipient row.
+                  "select to_jsonb(t) - 'failure_code' - 'payload_fingerprint' as row from email_campaign_recipients t order by send_id"
                 )
               ).rows,
               retryKeys: (
@@ -117,6 +117,13 @@ describe.skipIf(!databaseUrl)(
             });
             expect(await capture()).toEqual(before);
             expect(await render()).toEqual(renderedBefore);
+            expect(
+              (
+                await pool.query(
+                  "select payload_fingerprint from email_campaign_recipients"
+                )
+              ).rows.every((row) => row.payload_fingerprint === null)
+            ).toBe(true);
             expect(
               (
                 await pool.query("select email_id from email_campaigns")

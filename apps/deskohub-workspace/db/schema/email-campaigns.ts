@@ -228,6 +228,8 @@ export const emailCampaignRecipients = pgTable(
     /** The delivery attempt that last queued this recipient. */
     deliveryAttempt: integer("delivery_attempt").notNull().default(1),
     providerMessageId: text("provider_message_id"),
+    /** Keyed fingerprint of the personalized message, shared by every attempt. */
+    payloadFingerprint: sensitiveText("payload_fingerprint"),
     /**
      * The last provider error code while delivery leaves the recipient
      * undelivered (`failed` or `unconfirmed`); cleared once it is sent or

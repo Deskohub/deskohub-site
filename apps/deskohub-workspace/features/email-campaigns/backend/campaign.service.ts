@@ -71,6 +71,7 @@ import {
 import {
   getCampaignEmailPublication,
   getLinkedCampaignEmail,
+  getLinkedCampaignEmails,
   lockCampaignEmailPublication,
 } from "./campaign-published-email";
 
@@ -143,6 +144,9 @@ export interface ICampaignService {
   readonly getLinkedEmail: (
     campaign: CampaignRow
   ) => ReturnType<typeof getLinkedCampaignEmail>;
+  readonly getLinkedEmails: (
+    campaigns: readonly CampaignRow[]
+  ) => ReturnType<typeof getLinkedCampaignEmails>;
   readonly list: Effect.Effect<readonly Campaign[], EffectDrizzleQueryError>;
   readonly get: (
     campaignId: CampaignId
@@ -616,6 +620,7 @@ export class CampaignService extends Context.Service<
         getPublishedEmail: (emailId) =>
           getCampaignEmailPublication(db, emailId),
         getLinkedEmail: (campaign) => getLinkedCampaignEmail(db, campaign),
+        getLinkedEmails: (campaigns) => getLinkedCampaignEmails(db, campaigns),
         list: db
           .select()
           .from(emailCampaigns)

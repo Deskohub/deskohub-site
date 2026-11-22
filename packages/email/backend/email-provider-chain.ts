@@ -164,8 +164,10 @@ export const sendBatchThroughChain = (
     const results: EmailBatchResult[] = [];
     let pending = messages.map((_, index) => index);
 
-    const providers =
-      options.replay || options.beforeRequest ? chain.slice(0, 1) : chain;
+    const singleProvider =
+      options.replay ||
+      (options.beforeRequest && !options.allowFallbackWithAdmission);
+    const providers = singleProvider ? chain.slice(0, 1) : chain;
     for (const [providerIndex, provider] of providers.entries()) {
       if (pending.length === 0) break;
       const next = providers[providerIndex + 1];

@@ -372,13 +372,13 @@ export class CampaignDeliveryService extends Context.Service<
             BatchRequest.Replay({
               send: input.context,
               batch: input.batch,
-              admit: input.context.campaign.publication
-                ? ensureStartBudget(input.context).pipe(
-                    Effect.andThen(
-                      leasedTransaction(input.context, Effect.void)
-                    )
-                  )
-                : ensureStartBudget(input.context),
+              admit: ensureStartBudget(input.context),
+              ...(input.context.campaign.publication && {
+                personalized: {
+                  send: input.context,
+                  withLease: (work) => leasedTransaction(input.context, work),
+                },
+              }),
             })
           )
           .pipe(
@@ -492,14 +492,18 @@ export class CampaignDeliveryService extends Context.Service<
                         (batch): BatchRequest =>
                           BatchRequest.First({
                             batch,
-                            messages: prepared.messages,
+                            messages: publication
+                              ? prepared.messages.filter((_, index) =>
+                                  batch.dotyposCustomerIds.includes(
+                                    prepared.reachable[index]!.dotyposCustomerId
+                                  )
+                                )
+                              : prepared.messages,
                             ...(publication && {
                               personalized: {
                                 send: input.context,
-                                admit: leasedTransaction(
-                                  input.context,
-                                  Effect.void
-                                ),
+                                withLease: (work) =>
+                                  leasedTransaction(input.context, work),
                               },
                             }),
                           })
@@ -530,11 +534,13 @@ export class CampaignDeliveryService extends Context.Service<
               onSome: (request) =>
                 batches.request(request).pipe(
                   Effect.flatMap((outcome) =>
-                    settleBatch({
-                      context: input.context,
-                      batch: request.batch,
-                      outcome,
-                    })
+                    outcome._tag === "Replanned"
+                      ? Effect.void
+                      : settleBatch({
+                          context: input.context,
+                          batch: request.batch,
+                          outcome,
+                        })
                   )
                 ),
             })

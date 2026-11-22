@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "beb08a09-b39f-44de-8993-20650172b038",
+  "id": "a39fb005-bc95-4004-bd3f-af908a40186a",
   "prevIds": [
     "feda084c-e03a-4aac-bf01-d202922e6fa1"
   ],
@@ -5159,6 +5159,19 @@
       "generated": null,
       "identity": null,
       "name": "provider_message_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "email_campaign_recipients"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "payload_fingerprint",
       "entityType": "columns",
       "schema": "public",
       "table": "email_campaign_recipients"

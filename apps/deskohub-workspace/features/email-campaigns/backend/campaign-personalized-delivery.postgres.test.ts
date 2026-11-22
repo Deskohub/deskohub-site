@@ -12,7 +12,10 @@ import {
   NetworkError,
 } from "@deskohub/email";
 import { testEmailAddress } from "@deskohub/test-email";
-import { EmailDraft } from "@deskohub/workspace-admin-api";
+import {
+  CliMutationRequestId,
+  EmailDraft,
+} from "@deskohub/workspace-admin-api";
 import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Exit, Layer, Logger, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -22,6 +25,9 @@ import {
   discountProductTargets,
   discounts,
 } from "@/db/schema";
+import { customerAccountIdSchema } from "@/features/account/customer-account";
+import { AccountRoleGrants } from "@/features/administrators/backend/account-role-grants.service";
+import { CurrentAdministrator } from "@/features/administrators/backend/current-administrator";
 import { canonicalPromotionCodeSchema } from "@/features/discounts/contracts";
 import { DiscountDefinitionRepository } from "@/features/discounts/discount-definition.repository";
 import { storedDiscountIdSchema } from "@/features/discounts/persistence-contracts";
@@ -35,6 +41,8 @@ import {
 } from "@/features/emails/values/customer";
 import { EmailPreparationRetry } from "@/features/emails/values/preparation";
 import type { Locale } from "@/features/i18n";
+import { analyticsConsentLedgerOf } from "@/features/legal/backend/analytics-consent-ledger.test-utils";
+import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { campaignDeliveryPayloadHash } from "../campaign-delivery-batches";
 import { CampaignService } from "./campaign.service";
@@ -42,6 +50,8 @@ import { CampaignAudienceService } from "./campaign-audience.service";
 import { CampaignConfirmationCodeService } from "./campaign-confirmation-code.service";
 import { campaignDeliveryTestLayer } from "./campaign-delivery.test-utils";
 import { CampaignEmailConfig } from "./campaign-email.config";
+import { CampaignOperations } from "./campaign-operations.service";
+import { automationServiceStubs } from "./campaign-operations.test-utils";
 import { listCampaignEmailPublications } from "./campaign-published-email";
 import { CampaignRecipientService } from "./campaign-recipient.service";
 import { CampaignSendService } from "./campaign-send.service";
@@ -50,8 +60,10 @@ import {
   CampaignSendQueueService,
 } from "./campaign-send-queue.service";
 import { processCampaignSendMessage } from "./campaign-send-queue-consumer";
+import { CampaignSendStatusService } from "./campaign-send-status.service";
 import { everyoneFilter } from "./email-campaigns.test-utils";
 import { OnceCampaignLifecycle } from "./once-campaign-lifecycle";
+import { OperationRequestLedger } from "./operation-request-ledger.service";
 
 const database = await createWorkspacePostgresSuiteDatabase("campaign_offers");
 afterAll(async () => database?.close());
@@ -109,7 +121,14 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
         )
       )
     );
-  const setup = async (tag: string, includeCustomerValue = false) => {
+  const setup = async (
+    tag: string,
+    {
+      includeCustomerValue = false,
+      checkLocales = false,
+      includeAnalytics = false,
+    } = {}
+  ) => {
     const now = Temporal.Now.instant();
     const recipients = [...primary, "withdrawn", "untranslated"].map(
       (name) => ({
@@ -141,6 +160,16 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       )
     );
     const testMessages: EmailMessage[] = [];
+    const analyticsAccounts = includeAnalytics
+      ? await Effect.runPromise(
+          Effect.forEach(recipients.slice(0, 2), ({ dotyposCustomerId }) =>
+            workspaceFixtures(db).customerAccount({
+              linkedCustomer: dotyposCustomerId,
+            })
+          )
+        )
+      : [];
+    const analyticsGrants = new Set(analyticsAccounts);
     const requests: {
       readonly key: string;
       readonly replay: boolean;
@@ -149,6 +178,8 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
     let attempt: CampaignDeliveryAttempt | undefined;
     let answer: "accept" | "interrupt" | "refuse" | "opaque-refusal" = "accept";
     let customerValuesAvailable = true;
+    let beforeProviderRequest: (() => Promise<unknown>) | undefined;
+    let interruptedBeforeAdmission = false;
     let sendPaused:
       | {
           readonly called: PromiseWithResolvers<void>;
@@ -168,7 +199,18 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
           return acceptance("synthetic-test");
         }),
       sendBatch: (messages, options) =>
-        Effect.suspend(() => {
+        Effect.gen(function* () {
+          if (interruptedBeforeAdmission) {
+            interruptedBeforeAdmission = false;
+            return yield* new NetworkError({
+              message: "Synthetic interruption before admission",
+            });
+          }
+          const before = beforeProviderRequest;
+          beforeProviderRequest = undefined;
+          if (before) yield* Effect.promise(before);
+          if (options.beforeRequest)
+            yield* options.beforeRequest("synthetic-provider-fingerprint");
           requests.push({
             key: options.idempotencyKey,
             messages,
@@ -177,43 +219,39 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
           if (sendPaused) {
             const { called, resume } = sendPaused;
             called.resolve();
-            return Effect.promise(() => resume.promise).pipe(
+            return yield* Effect.promise(() => resume.promise).pipe(
               Effect.as(
                 messages.map((_, index) => acceptance(`synthetic-${index}`))
               )
             );
           }
           if (answer === "interrupt")
-            return Effect.fail(
+            return yield* Effect.fail(
               new NetworkError({ message: "Synthetic interruption" })
             );
           if (answer === "refuse")
-            return Effect.fail(
+            return yield* Effect.fail(
               new EmailServiceError("Synthetic refusal", undefined, "test", {
                 definitivelyUnsent: true,
                 code: "synthetic-refusal",
               })
             );
           if (answer === "opaque-refusal")
-            return Effect.succeed(
-              messages.map(() => ({
-                status: "failed" as const,
-                provider: "test",
-                timestamp: new Date(),
-                error: new EmailServiceError(
-                  "Synthetic final fallback refusal",
-                  undefined,
-                  "test",
-                  {
-                    definitivelyUnsent: true,
-                    code: "synthetic-refusal",
-                  }
-                ),
-              }))
-            );
-          return Effect.succeed(
-            messages.map((_, index) => acceptance(`synthetic-${index}`))
-          );
+            return messages.map(() => ({
+              status: "failed" as const,
+              provider: "test",
+              timestamp: new Date(),
+              error: new EmailServiceError(
+                "Synthetic final fallback refusal",
+                undefined,
+                "test",
+                {
+                  definitivelyUnsent: true,
+                  code: "synthetic-refusal",
+                }
+              ),
+            }));
+          return messages.map((_, index) => acceptance(`synthetic-${index}`));
         }),
     });
     const config = Layer.succeed(CampaignEmailConfig, {
@@ -256,6 +294,52 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       Layer.provideMerge(Logger.layer([])),
       Layer.provideMerge(database.layer)
     );
+    const operations = CampaignOperations.Default.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          sending,
+          Layer.mock(AccountRoleGrants, { has: () => Effect.succeed(true) }),
+          Layer.mock(CampaignRecipientService, {}),
+          Layer.mock(CampaignSendStatusService, {}),
+          automationServiceStubs()
+        )
+      )
+    );
+    const runOperations = <A, E>(
+      use: (
+        port: CampaignOperations["Service"]
+      ) => Effect.Effect<A, E, CurrentAdministrator | OperationRequestLedger>
+    ) =>
+      Effect.runPromise(
+        CampaignOperations.pipe(
+          Effect.flatMap(use),
+          Effect.provide(operations),
+          Effect.provide(OperationRequestLedger.unscoped),
+          Effect.provideService(CurrentAdministrator, {
+            accountId: customerAccountIdSchema.make("synthetic-administrator"),
+            email: adminInbox,
+          })
+        )
+      );
+    const requestId = () => CliMutationRequestId.make(crypto.randomUUID());
+    const checkCampaignLocales = (
+      campaignId: Parameters<CampaignService["Service"]["get"]>[0],
+      locales: readonly Locale[]
+    ) =>
+      runOperations((port) =>
+        Effect.gen(function* () {
+          const detail = yield* port.invoke("getCampaign", { campaignId });
+          const editor = yield* port.invoke("getCampaignEditorContent", {
+            campaignId,
+          });
+          const list = yield* port.invoke("listCampaigns", {});
+          expect(detail.locales).toEqual(locales);
+          expect(editor.locales).toEqual(locales);
+          expect(list.find(({ id }) => id === campaignId)?.locales).toEqual(
+            locales
+          );
+        })
+      );
     const delivery = campaignDeliveryTestLayer(
       Layer.mergeAll(
         config,
@@ -264,7 +348,9 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
           getCustomersByIds: dotypos.service.getCustomersByIds,
         })
       ),
-      undefined,
+      analyticsConsentLedgerOf((accountId) =>
+        analyticsGrants.has(accountId) ? "grant" : "withdraw"
+      ),
       Layer.succeed(CustomerValues, {
         resolve: () =>
           customerValuesAvailable
@@ -286,7 +372,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
         productTarget: { kind: "cowork" },
       })
     );
-    const campaign = await Effect.runPromise(
+    const { campaign, draft } = await Effect.runPromise(
       Effect.gen(function* () {
         const emails = yield* EmailPersistence;
         const reusable = yield* emails.create({
@@ -370,16 +456,30 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
           title: "Synthetic audience",
           filter: everyoneFilter,
         });
-        return yield* (yield* CampaignService).create({
+        const campaign = {
           title: "Synthetic campaign",
           emailId: reusable.id,
-          purpose: "marketing",
-          templateKey: "workspace",
+          purpose: "marketing" as const,
+          templateKey: "workspace" as const,
           audienceId: audience.id,
           content: {},
-        });
+        };
+        if (!checkLocales)
+          return {
+            campaign: yield* (yield* CampaignService).create(campaign),
+            draft,
+          };
+        const created = yield* Effect.promise(() =>
+          runOperations((port) =>
+            port.invoke("createCampaign", { requestId: requestId(), campaign })
+          )
+        );
+        expect(created.locales).toEqual(["en-US", "cs-CZ"]);
+        return { campaign: created, draft };
       }).pipe(Effect.provide(sending))
     );
+    if (checkLocales)
+      await checkCampaignLocales(campaign.id, ["en-US", "cs-CZ"]);
     await Effect.runPromise(
       Effect.flatMap(CampaignSendService, (sends) =>
         sends.testSend({ campaignId: campaign.id, extraRecipients: [] })
@@ -407,6 +507,14 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       "update customer_marketing_consents set withdrawn_at = now() where dotypos_customer_id = $1",
       [recipients[2]!.dotyposCustomerId]
     );
+    const issuanceIdentity = async () => {
+      const { rows } = await pool.query(
+        "select i.code, i.expires_at from email_discount_issuances i join email_preparations p on p.id = i.preparation_id where p.send_id = $1 order by p.dotypos_customer_id",
+        [sendId]
+      );
+      return JSON.stringify(rows);
+    };
+    let originalIssuance: string | undefined;
     return {
       recipients,
       sendId,
@@ -417,6 +525,36 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       setCustomerValuesAvailable: (available: boolean) => {
         customerValuesAvailable = available;
       },
+      moveFirstRecipient: () => {
+        const id = recipients[0]!.dotyposCustomerId;
+        const customer = dotypos.customers.get(id);
+        if (!customer) throw new Error("Missing synthetic customer");
+        dotypos.customers.set(id, {
+          ...customer,
+          email: testEmailAddress(`${tag}-moved`),
+        });
+      },
+      withdrawFirstAnalyticsGrant: () => {
+        const [id] = analyticsAccounts;
+        if (!id) throw new Error("Missing synthetic analytics account");
+        analyticsGrants.delete(id);
+      },
+      changeEligibilityBeforeRequest: (change: "withdraw" | "disable") => {
+        beforeProviderRequest = async () => {
+          originalIssuance = await issuanceIdentity();
+          await pool.query(
+            change === "withdraw"
+              ? "update customer_marketing_consents set withdrawn_at = now() where dotypos_customer_id = $1"
+              : "update discount_codes set enabled = false where id in (select code_id from discount_code_customers where dotypos_customer_id = $1)",
+            [recipients[0]!.dotyposCustomerId]
+          );
+        };
+      },
+      interruptBeforeAdmission: () => {
+        interruptedBeforeAdmission = true;
+      },
+      hasOriginalIssuance: async () =>
+        (await issuanceIdentity()) === originalIssuance,
       pauseDelivery: () => {
         const pause = {
           called: Promise.withResolvers<void>(),
@@ -480,6 +618,40 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
              required_value_names from email_versions where email_id = $1`,
           [campaign.emailId]
         ),
+      checkFrozenLocales: async () => {
+        const duplicate = () =>
+          runOperations((port) =>
+            port.invoke("duplicateCampaign", {
+              requestId: requestId(),
+              campaignId: campaign.id,
+            })
+          );
+        const existingDraft = await duplicate();
+        expect(existingDraft.locales).toEqual(["en-US", "cs-CZ"]);
+        if (!campaign.emailId) throw new Error("Missing linked email");
+        await Effect.runPromise(
+          writeEmailDraft({
+            emailId: campaign.emailId,
+            draft: {
+              ...draft,
+              translations: { "cs-CZ": draft.translations["cs-CZ"]! },
+            },
+            publish: true,
+          }).pipe(Effect.provide(sending))
+        );
+        await checkCampaignLocales(campaign.id, ["en-US", "cs-CZ"]);
+        await checkCampaignLocales(existingDraft.id, ["cs-CZ"]);
+        const duplicated = await duplicate();
+        expect(duplicated.locales).toEqual(["cs-CZ"]);
+        await checkCampaignLocales(duplicated.id, ["cs-CZ"]);
+        const updated = await runOperations((port) =>
+          port.invoke("updateCampaign", {
+            campaignId: duplicated.id,
+            title: "Updated offer",
+          })
+        );
+        expect(updated.locales).toEqual(["cs-CZ"]);
+      },
       issued: () =>
         pool.query<{
           enabled: boolean;
@@ -494,13 +666,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
          join discount_codes c on c.code = i.code where p.send_id = $1`,
           [sendId]
         ),
-      issuanceIdentity: async () => {
-        const { rows } = await pool.query(
-          "select i.code, i.expires_at from email_discount_issuances i join email_preparations p on p.id = i.preparation_id where p.send_id = $1 order by p.dotypos_customer_id",
-          [sendId]
-        );
-        return JSON.stringify(rows);
-      },
+      issuanceIdentity,
     };
   };
 
@@ -531,21 +697,23 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
     );
     expect(new Set(codes).size).toBe(2);
     const now = Temporal.Now.instant();
-    const code = codes[0];
-    if (!code) throw new Error("The first booking link did not contain a code");
-    const owner = run.recipients[0]!.dotyposCustomerId;
-    const other = run.recipients[1]!.dotyposCustomerId;
-    expect(Exit.isSuccess(await validatesAtCheckout(code, owner, now))).toBe(
-      true
-    );
-    expect(Exit.isFailure(await validatesAtCheckout(code, other, now))).toBe(
-      true
-    );
-    expect(
-      Exit.isFailure(
-        await validatesAtCheckout(code, owner, now.add({ hours: 31 * 24 }))
-      )
-    ).toBe(true);
+    for (const [index, message] of (first?.messages ?? []).entries()) {
+      const code = bookingCode(message);
+      if (!code) throw new Error("The booking link did not contain a code");
+      const owner = run.recipients[index]!.dotyposCustomerId;
+      const other = run.recipients[1 - index]!.dotyposCustomerId;
+      expect(Exit.isSuccess(await validatesAtCheckout(code, owner, now))).toBe(
+        true
+      );
+      expect(Exit.isFailure(await validatesAtCheckout(code, other, now))).toBe(
+        true
+      );
+      expect(
+        Exit.isFailure(
+          await validatesAtCheckout(code, owner, now.add({ hours: 31 * 24 }))
+        )
+      ).toBe(true);
+    }
     const issued = await run.issued();
     expect(issued.rows).toEqual([
       { enabled: true, restricted: true, valid_window: true },
@@ -559,6 +727,11 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
       "consent-withdrawn",
       "missing-email-language",
     ]);
+  });
+
+  test("linked campaign writes, list and detail show current draft and frozen send locales", async () => {
+    const run = await setup("locales", { checkLocales: true });
+    await run.checkFrozenLocales();
   });
 
   test("a definitive first refusal disables codes and ends retry for those recipients", async () => {
@@ -606,7 +779,7 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
   });
 
   test("temporary value failure preserves the already issued code and expiry for retry", async () => {
-    const run = await setup("temporary", true);
+    const run = await setup("temporary", { includeCustomerValue: true });
     run.setCustomerValuesAvailable(false);
     expect(Exit.isSuccess(await run.deliver())).toBe(true);
     expect(run.requests.length).toBe(0);
@@ -620,6 +793,97 @@ describe.skipIf(!database)("one-off campaigns with a published offer", () => {
     expect(Exit.isSuccess(await run.deliver())).toBe(true);
     expect(run.requests[0]?.messages.length).toBe(2);
     expect((await run.issuanceIdentity()) === issued).toBe(true);
+  });
+
+  test.each(["address", "analytics identity"] as const)(
+    "an explicit retry skips only the recipient whose %s changed",
+    async (changed) => {
+      const run = await setup(changed === "address" ? "moved" : "analytics", {
+        includeAnalytics: changed === "analytics identity",
+      });
+      run.answerWith("interrupt");
+      expect(Exit.isFailure(await run.deliver())).toBe(true);
+      const issued = await run.issuanceIdentity();
+      if (changed === "address") {
+        run.moveFirstRecipient();
+      } else {
+        expect(
+          run.requests[0]?.messages.every(
+            ({ recipientIdentity }) => recipientIdentity !== undefined
+          )
+        ).toBe(true);
+        run.withdrawFirstAnalyticsGrant();
+      }
+      run.answerWith("accept");
+      expect(Exit.isSuccess(await run.deliver())).toBe(true);
+      expect(Exit.isSuccess(await run.retry())).toBe(true);
+      expect(Exit.isSuccess(await run.deliver())).toBe(true);
+      const [first, retry] = run.requests;
+      expect(run.requests.length).toBe(2);
+      expect(retry?.replay).toBe(false);
+      expect(retry?.messages.length).toBe(1);
+      expect(
+        campaignDeliveryPayloadHash(retry?.messages ?? []) ===
+          campaignDeliveryPayloadHash(first?.messages.slice(1) ?? [])
+      ).toBe(true);
+      expect((await run.issuanceIdentity()) === issued).toBe(true);
+      expect((await run.issued()).rows.every(({ enabled }) => enabled)).toBe(
+        true
+      );
+    }
+  );
+
+  test.each(["withdraw", "disable"] as const)(
+    "eligibility change (%s) just before the first request keeps the other recipient deliverable",
+    async (change) => {
+      const run = await setup(`late-${change}`);
+      run.changeEligibilityBeforeRequest(change);
+      expect(Exit.isSuccess(await run.deliver())).toBe(true);
+      expect(run.requests.length).toBe(1);
+      expect(run.requests[0]?.messages.length).toBe(1);
+      expect(await run.hasOriginalIssuance()).toBe(true);
+      const code = bookingCode(run.requests[0]?.messages[0]);
+      if (!code) throw new Error("The booking link did not contain a code");
+      expect(
+        Exit.isSuccess(
+          await validatesAtCheckout(
+            code,
+            run.recipients[1]!.dotyposCustomerId,
+            Temporal.Now.instant()
+          )
+        )
+      ).toBe(true);
+      expect(
+        (await run.issued()).rows.filter(({ enabled }) => enabled).length
+      ).toBe(1);
+      const { rows } = await pool.query(
+        "select status, skip_reason from email_campaign_recipients where send_id = $1 and dotypos_customer_id = $2",
+        [run.sendId, run.recipients[0]!.dotyposCustomerId]
+      );
+      expect(rows).toEqual([
+        change === "withdraw"
+          ? { status: "skipped", skip_reason: "consent-withdrawn" }
+          : { status: "failed", skip_reason: null },
+      ]);
+    }
+  );
+
+  test("a resumed batch stays a possible replay even if the first run stopped before admission", async () => {
+    const run = await setup("before-admission");
+    run.interruptBeforeAdmission();
+    expect(Exit.isFailure(await run.deliver())).toBe(true);
+    run.changeEligibilityBeforeRequest("withdraw");
+    expect(Exit.isSuccess(await run.deliver())).toBe(true);
+    expect(run.requests.length).toBe(0);
+    expect((await run.issued()).rows.map(({ enabled }) => enabled)).toEqual([
+      true,
+      true,
+    ]);
+    const unresolved = await pool.query(
+      "select 1 from email_campaign_recipients where send_id = $1 and status = 'unconfirmed'",
+      [run.sendId]
+    );
+    expect(unresolved.rowCount).toBe(2);
   });
 
   test("a competing delivery cannot issue a second set of codes or request a second batch", async () => {

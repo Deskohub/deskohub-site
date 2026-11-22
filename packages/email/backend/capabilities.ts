@@ -73,10 +73,12 @@ export const continuesEmailChain = (error: EmailSendError): boolean =>
 /** Options of one batch request; the key stays the same across retries. */
 export interface EmailBatchOptions {
   readonly idempotencyKey: string;
-  /** Pins a singleton to the first provider; admits each attempt by request fingerprint. */
+  /** Admits each attempt by request fingerprint. Uses the first provider by default. */
   readonly beforeRequest?: (
     fingerprint: string
   ) => Effect.Effect<void, EmailSendError>;
+  /** Allows the normal provider chain while checking admission at each provider. */
+  readonly allowFallbackWithAdmission?: boolean;
   /**
    * A repeat of a request whose outcome is unknown. Each message stays with
    * the first provider in its chain: a provider-level failure is returned as

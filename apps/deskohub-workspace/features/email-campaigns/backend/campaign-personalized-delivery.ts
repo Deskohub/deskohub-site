@@ -2,7 +2,7 @@ import "server-only";
 
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import type { EmailId, EmailVersionId } from "@deskohub/workspace-admin-api";
-import { and, eq, exists, inArray, notExists } from "drizzle-orm";
+import { and, eq, exists, inArray, notExists, sql } from "drizzle-orm";
 import { Effect, Layer, Result } from "effect";
 import {
   type WorkspaceDatabaseClient,
@@ -78,8 +78,8 @@ const requestableOffer = (db: WorkspaceDatabaseClient) =>
     activeRecipientOffer(db)
   );
 
-/** Checks the whole batch's current consent and usable codes in one database snapshot. */
-export const canRequestCampaignOffers = (
+/** Reads current consent and code availability in the same database snapshot. */
+export const readCampaignOfferEligibility = (
   db: WorkspaceDatabaseClient,
   input: {
     readonly sendId: CampaignSendId;
@@ -88,21 +88,20 @@ export const canRequestCampaignOffers = (
   }
 ) =>
   db
-    .select({ id: emailPreparations.id })
+    .select({
+      customerId: emailPreparations.dotyposCustomerId,
+      consenting: sql<boolean>`${marketingConsentState(emailPreparations.dotyposCustomerId)} = 'active'`,
+      requestable: sql<boolean>`${requestableOffer(db)}`,
+      deliveryOutcome: emailPreparations.deliveryOutcome,
+    })
     .from(emailPreparations)
     .where(
       and(
         eq(emailPreparations.sendId, input.sendId),
         eq(emailPreparations.emailVersionId, input.versionId),
-        inArray(emailPreparations.dotyposCustomerId, [...input.customerIds]),
-        eq(
-          marketingConsentState(emailPreparations.dotyposCustomerId),
-          "active"
-        ),
-        requestableOffer(db)
+        inArray(emailPreparations.dotyposCustomerId, [...input.customerIds])
       )
-    )
-    .pipe(Effect.map((rows) => rows.length === input.customerIds.length));
+    );
 
 /** A replay reads saved values. It never prepares or generates them again. */
 export const readCampaignRecipientContent = Effect.fn(

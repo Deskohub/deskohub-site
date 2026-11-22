@@ -531,6 +531,39 @@ describe("batch failover", () => {
     expect(second.batches).toEqual([]);
   });
 
+  test("a guarded batch can check admission again on allowed provider fallback", async () => {
+    const first = failingProvider("posthog", providerLevel("posthog"));
+    const second = scriptedProvider("resend", () => "accept");
+    const admitted: string[] = [];
+    const withAdmission = (provider: EmailProvider): EmailProvider => ({
+      ...provider,
+      sendBatch: (messages, options) =>
+        (options.beforeRequest?.(provider.name) ?? Effect.void).pipe(
+          Effect.andThen(provider.sendBatch(messages, options))
+        ),
+    });
+    const results = await runWithEmail(
+      Effect.flatMap(EmailServiceTag, (email) =>
+        email.sendBatch(recipients, {
+          idempotencyKey: "recheck-on-fallback",
+          allowFallbackWithAdmission: true,
+          beforeRequest: (fingerprint) =>
+            Effect.sync(() => void admitted.push(fingerprint)),
+        })
+      ),
+      chains({
+        marketing: [
+          withAdmission(first.provider),
+          withAdmission(second.provider),
+        ],
+      })
+    );
+    expect(admitted).toEqual(["posthog", "resend"]);
+    expect(results.map(({ status, provider }) => [status, provider])).toEqual(
+      recipients.map(() => ["sent", "resend"])
+    );
+  });
+
   test("after a fallback, a whole-batch failure comes back per message", async () => {
     const error = new NetworkError({ message: "timed out", code: "timeout" });
 

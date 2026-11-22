@@ -243,20 +243,28 @@ const makeCampaignOperationHandlers = Effect.gen(function* () {
 
   const withLinkedLocales = <T extends { readonly locales: readonly Locale[] }>(
     campaign: CampaignRow,
-    detail: T
+    projected: T
   ) =>
     campaign.emailId
       ? campaigns.getLinkedEmail(campaign).pipe(
           Effect.map((publication) => ({
-            ...detail,
-            locales: publication
-              ? campaignContentLocaleOrder.filter((locale) =>
-                  Object.hasOwn(publication.document.translations, locale)
-                )
-              : [],
+            ...projected,
+            locales: linkedLocales(publication),
           }))
         )
-      : Effect.succeed(detail);
+      : Effect.succeed(projected);
+
+  const linkedLocales = (
+    publication: Effect.Success<ReturnType<typeof campaigns.getLinkedEmail>>
+  ) =>
+    publication
+      ? campaignContentLocaleOrder.filter((locale) =>
+          Object.hasOwn(publication.document.translations, locale)
+        )
+      : [];
+
+  const campaignDetail = (campaign: CampaignRow) =>
+    withLinkedLocales(campaign, toAdministrationCampaignDetail(campaign));
 
   /** Who the campaign's audience reaches now, as the real send would. */
   const previewCampaignRecipients = Effect.fn(
@@ -334,19 +342,27 @@ const makeCampaignOperationHandlers = Effect.gen(function* () {
     previewCampaignTemplate,
     listCampaigns: () =>
       campaigns.list.pipe(
-        Effect.map((rows) => rows.map(toAdministrationCampaignSummary))
+        Effect.flatMap((rows) => {
+          if (!rows.some(({ emailId }) => emailId)) {
+            return Effect.succeed(rows.map(toAdministrationCampaignSummary));
+          }
+          return campaigns.getLinkedEmails(rows).pipe(
+            Effect.map((publications) =>
+              rows.map((campaign) => {
+                const summary = toAdministrationCampaignSummary(campaign);
+                return campaign.emailId
+                  ? {
+                      ...summary,
+                      locales: linkedLocales(publications.get(campaign.id)),
+                    }
+                  : summary;
+              })
+            )
+          );
+        })
       ),
     getCampaign: ({ campaignId }) =>
-      campaigns
-        .get(campaignId)
-        .pipe(
-          Effect.flatMap((campaign) =>
-            withLinkedLocales(
-              campaign,
-              toAdministrationCampaignDetail(campaign)
-            )
-          )
-        ),
+      campaigns.get(campaignId).pipe(Effect.flatMap(campaignDetail)),
     getCampaignEditorContent: ({ campaignId }) =>
       campaigns
         .get(campaignId)
@@ -371,14 +387,12 @@ const makeCampaignOperationHandlers = Effect.gen(function* () {
             content,
           })
         ),
-        Effect.map(toAdministrationCampaignDetail)
+        Effect.flatMap(campaignDetail)
       ),
     updateCampaign: (input) =>
-      campaigns.patch(input).pipe(Effect.map(toAdministrationCampaignDetail)),
+      campaigns.patch(input).pipe(Effect.flatMap(campaignDetail)),
     duplicateCampaign: ({ campaignId }) =>
-      campaigns
-        .duplicate(campaignId)
-        .pipe(Effect.map(toAdministrationCampaignDetail)),
+      campaigns.duplicate(campaignId).pipe(Effect.flatMap(campaignDetail)),
     deleteCampaign: ({ campaignId }) =>
       campaigns.delete(campaignId).pipe(Effect.as({ id: campaignId })),
     previewCampaignRecipients: ({ campaignId }) =>
