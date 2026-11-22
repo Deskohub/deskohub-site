@@ -84,10 +84,20 @@ describe("eventTrigger", () => {
     const takesProduct = eventTriggerKinds.filter((kind) =>
       takesProductFilter(eventTrigger(kind, null))
     );
-    expect(takesProduct).toEqual(
-      eventTriggerKinds.filter((kind) => kind !== "account-created")
-    );
+    expect(takesProduct).toEqual([
+      "reservation-booked",
+      "reservation-cancelled",
+      "reservation-started",
+      "reservation-finished",
+    ]);
   });
+
+  test.each(["entry-pack-expiring", "unlimited-ending"] as const)(
+    "omits the reservation product filter for %s",
+    (kind) => {
+      expect(takesProductFilter(eventTrigger(kind, null))).toBe(false);
+    }
+  );
 });
 
 describe("newStepId", () => {
