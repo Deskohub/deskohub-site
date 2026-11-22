@@ -1063,7 +1063,7 @@ describe("getQuote", () => {
     },
     {
       reason: "same-tier Unlimited coverage",
-      rows: [[["open-space", 5]], [[0]], [], [["unlimited-pass"]]],
+      rows: [[["open-space", 5]], [[0]], [], [["open-space"]]],
     },
   ])("refuses to sign a quote with $reason", async ({ rows }) => {
     const { database, layer } = await passQuoteLayer();
