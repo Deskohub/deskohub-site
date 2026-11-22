@@ -45,6 +45,7 @@ import { isEndedUnpaidPaymentState, type OrderId } from "@/features/order";
 import {
   consumeEntryPackClaim,
   findReservationEntryClaim,
+  lockEntryPackForPayment,
 } from "@/features/passes/backend/entry-pack-redemption";
 import { ReferralInvitationLedger } from "@/features/referrals/referral-invitation-ledger";
 import {
@@ -120,6 +121,15 @@ const ensureEntryPackPayment = Effect.fnUntraced(function* (input: {
       "The reserved Entry pack claim must match the checkout price."
     );
   }
+  yield* lockEntryPackForPayment(claim.passId).pipe(
+    Effect.catchTag("EntryPackUnavailableError", () =>
+      lifecycleStateError(
+        input.operation,
+        { type: "workspaceReservationId", id: input.reservationId },
+        "The Entry pack was withdrawn before payment could start."
+      )
+    )
+  );
 });
 
 type PublicPayment = { readonly accountKey: string };

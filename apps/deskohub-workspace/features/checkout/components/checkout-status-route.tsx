@@ -41,7 +41,10 @@ import {
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
 import { reservationStatusPath } from "@/features/reservation/routes";
-import { readReservationWithdrawalEntry } from "@/features/withdrawal/backend/withdrawal-entry.server";
+import {
+  readPassWithdrawalEntry,
+  readReservationWithdrawalEntry,
+} from "@/features/withdrawal/backend/withdrawal-entry.server";
 import {
   runWorkspaceEffect,
   runWorkspaceEffectOrElse,
@@ -158,6 +161,23 @@ async function renderEntryPackStatus({
     );
   }
 
+  const contract = {
+    kind: status.entryCount === null ? "unlimited-pass" : "entry-pack",
+    id,
+  } as const;
+  const withdrawal =
+    status.status === "paid" ||
+    status.status === "cancelled" ||
+    status.status === "refund_required" ||
+    status.status === "refunded" ||
+    status.status === "partially_refunded"
+      ? await readPassWithdrawalEntry({
+          contract,
+          locale,
+          offerWithdrawal: status.status !== "cancelled",
+        }).pipe(runWorkspaceEffect("passes.status.withdrawal"))
+      : undefined;
+
   return (
     <EntryPackStatusPage
       allowPurchaseContinuation={
@@ -168,6 +188,7 @@ async function renderEntryPackStatus({
       locale={locale}
       presentation={presentation}
       status={status}
+      withdrawal={withdrawal}
     />
   );
 }

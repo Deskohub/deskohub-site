@@ -16,6 +16,7 @@
   "withdrawalPaidAmount": "Bezahlt",
   "withdrawalRefundAmount": "Wir erstatten dir",
   "withdrawalStartedDays": "Für begonnene Tage ({started}/{total})",
+  "withdrawalStartedEntries": "Für genutzte Eintritte ({count})",
   "withdrawalStartedHours": "Für begonnene Stunden ({started}/{total})",
   "withdrawalConfirmRefundNote": "Auf deine ursprüngliche Zahlungsmethode innerhalb von 14 Tagen.",
   "withdrawalRefundChanged": "Die Erstattung hat sich geändert. Prüfe den neuen Betrag und bestätige den Widerruf erneut.",
