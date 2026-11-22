@@ -91,8 +91,10 @@ function PassOfferAction({ children }: { readonly children: ReactNode }) {
   );
 }
 
+// The global h3 rule sets the subheading font outside any layer, so the
+// title's font needs to outrank it.
 const offerTitleClassName =
-  "[font-family:var(--font-heading)] text-[1.84rem] leading-[1.05] font-[690] tracking-[-0.05em] text-balance wrap-break-word";
+  "[font-family:var(--font-heading)]! text-[1.84rem] leading-[1.05] font-[690]! tracking-[-0.05em] text-balance wrap-break-word";
 const offerDetailClassName =
   "mt-[7px] text-[.92rem] leading-[1.36] text-balance";
 
