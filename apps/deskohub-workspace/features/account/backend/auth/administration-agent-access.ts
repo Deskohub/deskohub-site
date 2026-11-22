@@ -1,4 +1,12 @@
-import { and, arrayContains, eq, notExists, type SQL, sql } from "drizzle-orm";
+import {
+  and,
+  arrayContains,
+  eq,
+  notExists,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { Effect } from "effect";
 import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
@@ -7,7 +15,10 @@ import {
   authOauthConsent,
   authOauthRefreshToken,
 } from "@/db/schema/auth";
-import { administrationAgentScope } from "../../agent-scopes";
+import {
+  administrationAgentScope,
+  consentRequiredAgentScopes,
+} from "../../agent-scopes";
 import type { CustomerAccountId } from "../../customer-account";
 
 const administration = [administrationAgentScope];
@@ -29,11 +40,11 @@ const carriesAdministration =
     );
 
 /** The token's consent, if it still has one, no longer names the scope. */
-const outlivesAdministrationConsent = (columns: TokenColumns) =>
+const outlivesScopeConsent = (columns: TokenColumns, scope: string) =>
   notExists(
     sql`(select 1 from ${authOauthConsent} where ${and(
       eq(authOauthConsent.id, columns.consentId),
-      arrayContains(authOauthConsent.scopes, administration)
+      arrayContains(authOauthConsent.scopes, [scope])
     )})`
   );
 
@@ -92,15 +103,15 @@ export const revokeAdministrationAgentAccess = Effect.fn(
 });
 
 /**
- * Deletes one agent's tokens that carry the administration scope although
+ * Deletes one agent's tokens that carry a protected scope although
  * their consent no longer names it. Better Auth rewrites a consent in place
  * when the account consents again for fewer scopes, but tokens keep the
  * scopes they were issued with. Reading the stored consent rather than the
  * request covers a consent step that ends before or after it records the
  * consent.
  */
-export const revokeUnconsentedAdministrationTokens = Effect.fn(
-  "CustomerAgent.revokeUnconsentedAdministrationTokens"
+export const revokeUnconsentedAgentTokens = Effect.fn(
+  "CustomerAgent.revokeUnconsentedAgentTokens"
 )(function* ({
   accountId,
   clientId,
@@ -112,9 +123,16 @@ export const revokeUnconsentedAdministrationTokens = Effect.fn(
   return yield* transaction(
     deleteTokens((columns) =>
       and(
-        carriesAdministration(accountId)(columns),
+        eq(columns.userId, accountId),
         eq(columns.clientId, clientId),
-        outlivesAdministrationConsent(columns)
+        or(
+          ...consentRequiredAgentScopes.map((scope) =>
+            and(
+              arrayContains(columns.scopes, [scope]),
+              outlivesScopeConsent(columns, scope)
+            )
+          )
+        )
       )
     )
   );

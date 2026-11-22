@@ -39,10 +39,17 @@ const preparePayStateAction = defineWorkspaceAction(
     verifyReservationFormHuman(input.locale).pipe(
       Effect.andThen(
         Effect.gen(function* () {
-          if (input.entryPackId && !(yield* CoworkPassesReleaseGate.isOpen)) {
+          const { siteToolEntryPackQuote, ...submission } = input;
+          if (
+            (siteToolEntryPackQuote && !submission.entryPackId) ||
+            (submission.entryPackId && !(yield* CoworkPassesReleaseGate.isOpen))
+          ) {
             return yield* new EntryPackUnavailableError({});
           }
-          return yield* prepareWorkspacePayState(input);
+          return yield* prepareWorkspacePayState({
+            ...submission,
+            ...(siteToolEntryPackQuote && { requireEntryPackQuote: true }),
+          });
         }).pipe(
           Effect.catchTag("EntryPackUnavailableError", () =>
             Effect.succeed({

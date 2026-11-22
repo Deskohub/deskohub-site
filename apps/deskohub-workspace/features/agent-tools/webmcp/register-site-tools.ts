@@ -10,6 +10,7 @@ import {
   callAgentTool,
   isSiteTool,
   listAgentTools,
+  listBrowserPassTools,
   type PublishedAgentTool,
 } from "./agent-tool-mcp-client";
 import { publishQuoteTool, quoteToolName } from "./site-tool-catalog";
@@ -52,11 +53,11 @@ export const registerSiteTool = (
   );
 
 /**
- * Lists the agent tools on `/api/mcp` once and registers each public read
- * tool as a site tool until `signal` aborts. The quote tool is published for
+ * Registers public read tools and the signed-in browser pass tools until
+ * `signal` aborts. The quote tool is published for
  * page tools that build on its input.
  */
-export const registerReadSiteTools = ({
+export const registerSiteTools = ({
   locale,
   modelContext,
   signal,
@@ -67,11 +68,19 @@ export const registerReadSiteTools = ({
 }) =>
   listAgentTools.pipe(
     Effect.map((tools) => tools.filter(isSiteTool)),
+    Effect.flatMap((tools) => {
+      const quote = tools.find((tool) => tool.name === quoteToolName);
+      return quote?.inputSchema.properties?.pass_id === undefined
+        ? Effect.succeed(tools)
+        : listBrowserPassTools.pipe(
+            Effect.map((passTools) => [...tools, ...passTools])
+          );
+    }),
     Effect.tap((tools) =>
       Effect.forEach(
         tools,
         (tool) =>
-          registerSiteTool(modelContext, toReadSiteTool(tool, locale), signal),
+          registerSiteTool(modelContext, toSiteTool(tool, locale), signal),
         { concurrency: "unbounded", discard: true }
       )
     ),
@@ -90,7 +99,7 @@ export const registerReadSiteTools = ({
     )
   );
 
-const toReadSiteTool = (
+const toSiteTool = (
   tool: PublishedAgentTool,
   locale: Locale
 ): ModelContextTool => ({
@@ -98,7 +107,10 @@ const toReadSiteTool = (
   title: getSiteToolTitle(tool, locale),
   description: tool.description,
   inputSchema: tool.inputSchema,
-  annotations: { readOnlyHint: true },
+  annotations:
+    tool.annotations?.readOnlyHint === false
+      ? { readOnlyHint: false, consequentialHint: true }
+      : { readOnlyHint: true },
   execute: (input, options) =>
     callAgentTool(tool.name, withPageLocale(tool, input, locale)).pipe(
       Effect.map(({ structuredContent }) => structuredContent),

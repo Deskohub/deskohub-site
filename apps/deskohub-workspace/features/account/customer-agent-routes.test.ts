@@ -245,18 +245,24 @@ describe("readCustomerAgentConsentRequest", () => {
     expect(request).toMatchObject({ scopes: ["reservations:read"] });
   });
 
-  test("lists every scope when the request names none", () => {
+  test("uses the original defaults when the request names no scopes", () => {
     const query = signedRequest();
     query.delete("scope");
 
     expect(readCustomerAgentConsentRequest(query, now)).toMatchObject({
-      scopes: customerAgentConsentScopes,
+      scopes: [
+        "offerings:read",
+        "reservations:read",
+        "reservations:create",
+        "offline_access",
+      ],
       administration: true,
     });
     expect(customerAgentConsentScopes).toEqual([
       "offerings:read",
       "reservations:read",
       "reservations:create",
+      "passes:manage",
       "offline_access",
     ]);
   });

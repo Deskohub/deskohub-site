@@ -5,6 +5,10 @@ import type {
   FieldValues,
   UseFormReturn,
 } from "react-hook-form";
+import type {
+  SiteToolEntryPackQuote,
+  SiteToolReservationIntent,
+} from "@/features/agent-tools/webmcp/use-prepare-reservation-site-tool";
 import type { CheckoutSummary } from "@/features/checkout/checkout-summary";
 import { type Locale, m } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
@@ -51,6 +55,7 @@ export type ReservationSubmitOptions = {
   readonly event?: FormEvent<HTMLFormElement>;
   /** Labels a marketing consent the site tool ticked for the customer. */
   readonly marketingConsentSource?: "site_tool";
+  readonly siteTool?: SiteToolReservationIntent;
 };
 
 type ReservationCheckout = ReturnType<typeof useReservationCheckout>;
@@ -150,14 +155,17 @@ const getCheckoutDetails = <
     data,
     officeSelection,
     marketingConsentSource,
+    entryPackQuote,
   }: {
     readonly advertisedPriceToken: string;
     readonly data: Data;
     readonly officeSelection?: CheckoutOfficeSelection;
     readonly marketingConsentSource: "site_tool" | undefined;
+    readonly entryPackQuote: SiteToolEntryPackQuote | undefined;
   }
 ): Parameters<ReservationCheckout["startCheckout"]>[0] => ({
-  advertisedPriceToken,
+  advertisedPriceToken: entryPackQuote?.token ?? advertisedPriceToken,
+  ...(entryPackQuote && { siteToolEntryPackQuote: true }),
   ...(displayedOfficePrice && { displayedOfficePrice }),
   ...(entryPackId && { entryPackId }),
   ...(!booksForSomeoneElse && { customer: "account" }),
@@ -178,10 +186,32 @@ const checkoutReservation = <
 >(
   context: ReservationFormSubmissionContext<Input, Data>,
   data: Data,
-  marketingConsentSource: "site_tool" | undefined
+  marketingConsentSource: "site_tool" | undefined,
+  siteTool: SiteToolReservationIntent | undefined
 ): ReservationFormSubmission | Promise<CheckoutSubmission> => {
   const { advertisedPrice, checkout, checkoutCustomer, emailVerification } =
     context;
+  if (siteTool && (checkout.preparedCheckout || !siteTool.isCurrent())) {
+    return {
+      status: "error",
+      message: m.reservationErrorMessage({}, { locale: context.locale }),
+    };
+  }
+  const entryPackQuote = siteTool?.entryPackQuote;
+  if (
+    entryPackQuote &&
+    (context.booksForSomeoneElse ||
+      context.entryPackId !== entryPackQuote.passId ||
+      checkoutCustomer.status === "signed-out")
+  ) {
+    return {
+      status: "error",
+      message: m.coworkEntryPackUnavailableDescription(
+        {},
+        { locale: context.locale }
+      ),
+    };
+  }
   if (checkout.preparedCheckout) return checkout.preparedCheckout;
 
   checkout.clearSubmissionError();
@@ -214,6 +244,7 @@ const checkoutReservation = <
       data,
       officeSelection,
       marketingConsentSource,
+      entryPackQuote,
     })
   );
 };
@@ -254,7 +285,7 @@ export const submitReservationForm = async <
   Data extends ReservationFormData,
 >(
   context: ReservationFormSubmissionContext<Input, Data>,
-  { event, marketingConsentSource }: ReservationSubmitOptions = {}
+  { event, marketingConsentSource, siteTool }: ReservationSubmitOptions = {}
 ): Promise<ReservationFormSubmission> => {
   let submission: ReservationFormSubmission | Promise<CheckoutSubmission> = {
     status: "invalid",
@@ -262,7 +293,12 @@ export const submitReservationForm = async <
   };
   await context.form.handleSubmit(
     (data) => {
-      submission = checkoutReservation(context, data, marketingConsentSource);
+      submission = checkoutReservation(
+        context,
+        data,
+        marketingConsentSource,
+        siteTool
+      );
     },
     (errors) => {
       submission = rejectInvalidForm(context, errors);

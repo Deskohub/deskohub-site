@@ -93,6 +93,7 @@ type ReservationCheckoutFormProps<
   readonly checkoutCustomer: ReservationCheckoutCustomerForm;
   readonly checkoutSessionId?: CheckoutSessionId;
   readonly entryPackId?: OrderId;
+  readonly applyEntryPack?: (passId: OrderId) => boolean;
   readonly children: ReactNode;
   readonly form: UseFormReturn<Input, unknown, Data>;
   readonly getOfficeSelection?: (data: Data) => CheckoutOfficeSelection;
@@ -140,8 +141,10 @@ function useReservationFormCustomer(
 /** Lets the site tool fill and submit the form as the customer would. */
 function useReservationFormSiteTool<Input extends FieldValues>({
   advertisedPrice,
+  applyEntryPack,
   asksMarketingConsent,
   availability,
+  entryPackId,
   form,
   locale,
   selection,
@@ -153,6 +156,8 @@ function useReservationFormSiteTool<Input extends FieldValues>({
     readonly token?: string;
   };
   readonly asksMarketingConsent: boolean;
+  readonly applyEntryPack?: (passId: OrderId) => boolean;
+  readonly entryPackId?: OrderId;
   readonly availability: {
     readonly isPending: boolean;
     readonly unavailableMessage?: string;
@@ -170,6 +175,8 @@ function useReservationFormSiteTool<Input extends FieldValues>({
   const marketingConsentField = "marketingConsent" as Path<Input>;
   usePrepareReservationSiteTool({
     asksMarketingConsent,
+    ...(applyEntryPack && { applyEntryPack }),
+    ...(entryPackId && { entryPackId }),
     hasMarketingConsent: () => form.getValues(marketingConsentField) === true,
     giveMarketingConsent: () =>
       form.setValue(
@@ -192,6 +199,18 @@ function useReservationFormSiteTool<Input extends FieldValues>({
       }
       return changed;
     },
+    captureSelection: (searchParams) => {
+      const fields = Object.keys(selection.fromSearchParams(searchParams)).map(
+        (name) => {
+          const field = name as Path<Input>;
+          return { field, value: form.getValues(field) };
+        }
+      );
+      return () =>
+        fields.every(({ field, value }) =>
+          Object.is(form.getValues(field), value)
+        );
+    },
     kind: selection.kind,
     locale,
     officeSelection: selection.officeSelection,
@@ -203,7 +222,11 @@ function useReservationFormSiteTool<Input extends FieldValues>({
       priceError: advertisedPrice.isError,
       unavailableMessage: availability.unavailableMessage,
     },
-    submit: (marketingConsentSource) => submit({ marketingConsentSource }),
+    submit: (marketingConsentSource, siteTool) =>
+      submit({
+        marketingConsentSource,
+        siteTool,
+      }),
   });
 }
 
@@ -315,6 +338,7 @@ export function ReservationCheckoutForm<
   Data extends ReservationFormData,
 >({
   advertisedPrice,
+  applyEntryPack,
   availability,
   checkoutCustomer,
   checkoutSessionId,
@@ -365,6 +389,8 @@ export function ReservationCheckoutForm<
     advertisedPrice,
     asksMarketingConsent,
     availability,
+    ...(applyEntryPack && { applyEntryPack }),
+    ...(entryPackId && { entryPackId }),
     form,
     locale,
     selection,

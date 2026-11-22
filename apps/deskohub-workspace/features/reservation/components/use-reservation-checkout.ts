@@ -27,6 +27,7 @@ type ReservationCheckoutDetails = {
   readonly advertisedPriceToken: string;
   readonly displayedOfficePrice?: CheckoutSummary;
   readonly entryPackId?: OrderId;
+  readonly siteToolEntryPackQuote?: true;
   readonly customer?: "account";
   readonly marketingConsent?: boolean;
   /** Labels a `marketingConsent: true` given through a site tool. */

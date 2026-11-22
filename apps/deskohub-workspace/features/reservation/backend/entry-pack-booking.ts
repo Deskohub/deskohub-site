@@ -56,56 +56,66 @@ export const resolveEntryPackBooking = Effect.fn("resolveEntryPackBooking")(
   }
 );
 
+type EntryPackQuoteInput = {
+  readonly reservation: SelectedReservation;
+  readonly passId: OrderId;
+  readonly locale: Locale;
+};
+
+const buildEntryPackAdvertisement = (
+  input: EntryPackQuoteInput,
+  forNewQuote?: true
+) =>
+  Effect.succeed(input).pipe(
+    Effect.tap(() => requireCoworkPassesRelease),
+    Effect.bind("holder", () =>
+      CurrentCustomerAccount.pipe(
+        Effect.flatMap((account) => account.requireActive)
+      )
+    ),
+    Effect.bind("cowork", ({ reservation }) =>
+      reservation.kind === "cowork"
+        ? Effect.succeed(reservation)
+        : Effect.fail(new EntryPackUnavailableError({}))
+    ),
+    Effect.bind("entryPack", ({ holder, cowork, passId }) =>
+      WorkspaceDatabase.pipe(
+        Effect.flatMap(({ db }) =>
+          resolveEntryPackBooking({
+            reservation: cowork,
+            passId,
+            holderAccountId: holder.accountId,
+            db,
+            ...(forNewQuote && { forNewQuote }),
+          })
+        )
+      )
+    ),
+    Effect.bind("quote", ({ cowork, entryPack }) =>
+      buildCoworkReservationQuote(cowork, { entryPack })
+    ),
+    Effect.bind("advertisedPriceToken", ({ cowork, quote, locale }) =>
+      buildAdvertisedPriceState({
+        kind: cowork.kind,
+        reservation: getCoworkAdvertisedPriceReservation(cowork),
+        locale,
+        quote,
+      }).pipe(Effect.flatMap((state) => sealAdvertisedPriceState(state)))
+    ),
+    Effect.map(({ cowork, quote, advertisedPriceToken }) => ({
+      kind: cowork.kind,
+      quote,
+      summary: getCoworkCheckoutSummary(cowork, quote),
+      advertisedPriceToken,
+    }))
+  );
+
 /** Quote the holder's selected pack and sign its funding into the advertisement. */
 export const buildEntryPackBookingQuote = Effect.fn(
   "buildEntryPackBookingQuote"
-)(
-  (input: {
-    readonly reservation: SelectedReservation;
-    readonly passId: OrderId;
-    readonly locale: Locale;
-  }) =>
-    Effect.succeed(input).pipe(
-      Effect.tap(() => requireCoworkPassesRelease),
-      Effect.bind("holder", () =>
-        CurrentCustomerAccount.pipe(
-          Effect.flatMap((account) => account.requireActive)
-        )
-      ),
-      Effect.bind("cowork", ({ reservation }) =>
-        reservation.kind === "cowork"
-          ? Effect.succeed(reservation)
-          : Effect.fail(new EntryPackUnavailableError({}))
-      ),
-      Effect.bind("entryPack", ({ holder, cowork, passId }) =>
-        WorkspaceDatabase.pipe(
-          Effect.flatMap(({ db }) =>
-            resolveEntryPackBooking({
-              reservation: cowork,
-              passId,
-              holderAccountId: holder.accountId,
-              db,
-              forNewQuote: true,
-            })
-          )
-        )
-      ),
-      Effect.bind("quote", ({ cowork, entryPack }) =>
-        buildCoworkReservationQuote(cowork, { entryPack })
-      ),
-      Effect.bind("advertisedPriceToken", ({ cowork, quote, locale }) =>
-        buildAdvertisedPriceState({
-          kind: cowork.kind,
-          reservation: getCoworkAdvertisedPriceReservation(cowork),
-          locale,
-          quote,
-        }).pipe(Effect.flatMap((state) => sealAdvertisedPriceState(state)))
-      ),
-      Effect.map(({ cowork, quote, advertisedPriceToken }) => ({
-        kind: cowork.kind,
-        quote,
-        summary: getCoworkCheckoutSummary(cowork, quote),
-        advertisedPriceToken,
-      }))
-    )
-);
+)((input: EntryPackQuoteInput) => buildEntryPackAdvertisement(input, true));
+
+/** Checkout reuses a matching hold before testing eligibility for a new claim. */
+export const buildEntryPackHoldAdvertisement = Effect.fn(
+  "buildEntryPackHoldAdvertisement"
+)((input: EntryPackQuoteInput) => buildEntryPackAdvertisement(input));

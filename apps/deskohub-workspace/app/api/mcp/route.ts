@@ -11,8 +11,10 @@ import {
   CustomerAgentToolsLive,
   customerAgentCatalog,
   identifyAgentToolClient,
+  needsAgentPassCatalog,
   readMcpRequest,
 } from "@/features/agent-tools";
+import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
 import { RequestBudget } from "@/shared/backend/request-budget/request-budget.service";
 import {
   defineWorkspaceRoute,
@@ -45,13 +47,21 @@ const handleMcpRequest = defineWorkspaceRoute(
     readMcpRequest(request).pipe(
       Effect.flatMap((mcpRequest) => {
         const client = identifyAgentToolClient(mcpRequest);
-        return answerAgentToolMcpRequest({
-          ...customerAgentCatalog.forClient(client),
-          // Appended after the customer tools, never adapted per client.
-          callerTools: AdministrationAgentAccess.forCaller,
-          client,
-          request: mcpRequest,
-        });
+        return (
+          needsAgentPassCatalog(mcpRequest)
+            ? CoworkPassesReleaseGate.isOpen
+            : Effect.succeed(false)
+        ).pipe(
+          Effect.flatMap((passes) =>
+            answerAgentToolMcpRequest({
+              ...customerAgentCatalog.forClient(client, passes),
+              // Appended after the customer tools, never adapted per client.
+              callerTools: AdministrationAgentAccess.forCaller,
+              client,
+              request: mcpRequest,
+            })
+          )
+        );
       }),
       Effect.catchTag("AdministrationAgentAccessUnavailable", () =>
         Effect.succeed(
