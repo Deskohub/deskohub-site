@@ -1007,6 +1007,9 @@ describe("ReservationHistory", () => {
       );
       expect(footer?.contains(link)).toBe(true);
       expect(link.getAttribute("href")).toBe("/en-US/pricing");
+      expect(
+        link.querySelectorAll("[data-account-pass-savings-marks] svg")
+      ).toHaveLength(2);
       document.body.innerHTML = "";
     });
 

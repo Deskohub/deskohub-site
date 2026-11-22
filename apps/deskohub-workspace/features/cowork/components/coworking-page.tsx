@@ -317,7 +317,7 @@ function CoworkingDesks({
         </div>
 
         <div className="mt-10 flex flex-wrap items-center gap-x-[1.125rem] gap-y-3">
-          <p className="flex-[1_1_16rem] text-silver/76">
+          <p className="flex-[1_1_16rem] text-balance text-silver/76">
             <Interpolate
               string={m.coworkingPricesNote({}, { locale })}
               mapping={{

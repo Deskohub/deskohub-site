@@ -298,7 +298,7 @@ export function UnlimitedPassOfferCard({
           </header>
           <footer className="col-span-full flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-[#f5c0d050] pt-2 text-[#ffdae6] @max-[380px]:pt-[7px]">
             <span
-              className="flex-[1_1_0] text-[.74rem] leading-[1.2] font-normal text-[#eadce0] @max-[320px]:text-[.67rem]"
+              className="flex-[1_1_0] text-[.74rem] leading-[1.2] font-normal text-[#eadce0] @max-[320px]:text-[.67rem] text-balance"
               id={expiryId}
             >
               <Interpolate
