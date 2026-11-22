@@ -54,11 +54,11 @@ export type PassOfferAttributes = Readonly<
 >;
 
 const defaultSize = "default";
-type PassOfferSizeChoice = typeof defaultSize | `${EntryPackSize}`;
 
 type PassOfferForm = {
   readonly product: string;
-  readonly size: PassOfferSizeChoice;
+  /** `default`, a size's digits, or an invalid size as found, which no choice matches. */
+  readonly size: string;
   readonly headline: string;
   readonly detail: string;
 };
@@ -82,9 +82,11 @@ const toPassOfferForm = (
   product: Predicate.isString(attributes?.product)
     ? attributes.product
     : "entry-pack",
-  size: isCampaignPassOfferSize(attributes?.size)
-    ? `${attributes.size}`
-    : defaultSize,
+  // An invalid size stays, so validation names it until a size is chosen.
+  size:
+    attributes?.size === undefined || attributes.size === null
+      ? defaultSize
+      : String(attributes.size),
   headline: campaignPassOfferText(attributes?.headline) ?? "",
   detail: campaignPassOfferText(attributes?.detail) ?? "",
 });
@@ -110,10 +112,7 @@ const passOfferFieldCheck = (field: keyof PassOfferForm, locale: Locale) =>
 const createPassOfferFields = (locale: Locale) =>
   Schema.Struct({
     product: Schema.String,
-    size: Schema.Literals([
-      defaultSize,
-      ...campaignPassOfferSizes.map((size) => `${size}` as const),
-    ]),
+    size: Schema.String,
     headline: Schema.String,
     detail: Schema.String,
   }).check(
@@ -296,6 +295,8 @@ function PassOfferForm({
         <FormField
           control={form.control}
           name="headline"
+          // A headline settles a detail's missing-headline issue.
+          rules={{ deps: "detail" }}
           render={({ field }) => (
             <FormItem>
               <FormLabel>

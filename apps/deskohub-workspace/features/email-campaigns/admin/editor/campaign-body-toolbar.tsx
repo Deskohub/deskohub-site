@@ -75,17 +75,21 @@ type BlockType = "paragraph" | "h1" | "h2" | "h3";
 
 const headingLevels = { h1: 1, h2: 2, h3: 3 } as const;
 
-const selectedImage = (editor: Editor) => {
+/** The node of `type` the selection is exactly, not one it spans with others. */
+const selectedNode = (editor: Editor, type: string) => {
   const { selection } = editor.state;
-  return selection instanceof NodeSelection &&
-    selection.node.type.name === "image"
+  return selection instanceof NodeSelection && selection.node.type.name === type
     ? selection.node
     : undefined;
 };
 
+const selectedImage = (editor: Editor) => selectedNode(editor, "image");
+
 const selectToolbarState = ({ editor }: { editor: Editor | null }) => {
   if (!editor) return null;
   const image = selectedImage(editor);
+  // Editing applies to one selected card, never to every card a range spans.
+  const passOffer = selectedNode(editor, "passOffer");
   return {
     blockType: (["h1", "h2", "h3"] as const).find((block) =>
       editor.isActive("heading", { level: headingLevels[block] })
@@ -99,10 +103,10 @@ const selectToolbarState = ({ editor }: { editor: Editor | null }) => {
     ctaButton: editor.isActive("ctaButton"),
     ctaLabel: String(editor.getAttributes("ctaButton").label ?? ""),
     ctaHref: String(editor.getAttributes("ctaButton").href ?? ""),
-    passOffer: editor.isActive("passOffer"),
-    passOfferAttributes: editor.getAttributes(
-      "passOffer"
-    ) as PassOfferAttributes,
+    passOffer: passOffer !== undefined,
+    passOfferAttributes: {
+      ...passOffer?.attrs,
+    } satisfies PassOfferAttributes,
     image: editor.isActive("image"),
     imageAlign: selectedImageAlignment(editor),
     imageWidth: editor.getAttributes("image").width,

@@ -208,6 +208,15 @@ describe("PassOfferNodeView", () => {
         )
       ).toBeTruthy()
     );
+    // A headline settles the detail's issue without another submit.
+    fireEvent.input(headlineField(dialog), { target: { value: "Ušetřete" } });
+    await waitFor(() =>
+      expect(
+        dialog.queryByText(
+          m.emailCampaignsBodyPassOfferDetailWithoutHeadline({}, { locale })
+        ) === null
+      ).toBe(true)
+    );
 
     fireEvent.input(headlineField(dialog), {
       target: { value: "a".repeat(campaignPassOfferTextMaxLength + 1) },
@@ -225,6 +234,40 @@ describe("PassOfferNodeView", () => {
       ).toBeTruthy()
     );
     expect(rendered.changes).toEqual([]);
+  });
+
+  test("keeps an invalid Entry pack size until a size is chosen", async () => {
+    const rendered = await renderEditor(
+      bodyWithCard({ ...entryPackCard, size: 7 })
+    );
+    const dialog = await openEditing(rendered);
+
+    expect(
+      ["5", "10", m.emailCampaignsPassOfferSizeDefault({}, { locale })].some(
+        (name) => choice(dialog, name)?.checked
+      )
+    ).toBe(false);
+    await clickIn(dialog, m.emailCampaignsPassOfferUpdate({}, { locale }));
+    await waitFor(() =>
+      expect(
+        dialog.getByText(
+          m.emailCampaignsBodyPassOfferSizeInvalid({}, { locale })
+        )
+      ).toBeTruthy()
+    );
+    expect(rendered.changes).toEqual([]);
+
+    await act(async () => {
+      fireEvent.click(choice(dialog, "10")!);
+    });
+    await clickIn(dialog, m.emailCampaignsPassOfferUpdate({}, { locale }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog") === null).toBe(true)
+    );
+    expect(cardsOf(rendered.changes.at(-1))).toEqual([
+      { type: "passOffer", attrs: { ...entryPackCard, size: 10 } },
+    ]);
   });
 
   test("marks a card whose product is unknown until one is chosen", async () => {

@@ -556,4 +556,26 @@ describe("CampaignBodyToolbar", () => {
     );
     expect(passOffers(rendered)).toEqual([]);
   });
+
+  test("edits a pass offer card only when it alone is selected", async () => {
+    const card = {
+      type: "passOffer",
+      attrs: { product: "unlimited", size: null, headline: null, detail: null },
+    };
+    const rendered = await renderEditor(campaignBodyOf("Podzim", card, card));
+
+    // Both cards, after the 8-position paragraph.
+    act(() => {
+      rendered.editor.commands.setTextSelection({ from: 8, to: 10 });
+    });
+
+    await waitFor(() =>
+      expect(control(rendered, labels.passOfferInsert)).toBeTruthy()
+    );
+    expect(
+      toolbarOf(rendered).queryByRole("button", {
+        name: labels.passOfferEdit,
+      }) === null
+    ).toBe(true);
+  });
 });
