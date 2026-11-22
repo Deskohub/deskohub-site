@@ -104,7 +104,7 @@ import { formatMoney, type Money } from "@/shared/money/money";
 import { cn } from "@/shared/utils";
 import {
   type CoworkEntryPacks,
-  entryPackCoversDate,
+  entryPackIsAvailableOn,
   getEntryPackCoworkTier,
   getOfferedEntryPack,
   type InitialCoworkEntryPack,
@@ -279,7 +279,7 @@ export function CoworkReservationForm({
         appliedPack.id === rejectedPackId ||
         (workstationCovered && !selectedMonitorOption) ||
         getEntryPackCoworkTier(appliedPack.tier) !== selectedTier ||
-        !entryPackCoversDate(appliedPack, selection.date) ||
+        !entryPackIsAvailableOn(appliedPack, selection.date) ||
         bookingPasses?.claimedDates.some((date) => date === selection.date)));
   const offeredPack =
     bookingPasses &&
@@ -321,9 +321,11 @@ export function CoworkReservationForm({
     updatePassInUrl();
   };
   const applyEntryPack = (passId: OrderId) => {
+    const candidate = bookingPasses?.packs.find(({ id }) => id === passId);
     if (
       appliedPack?.id === passId ||
-      !bookingPasses?.packs.some(({ id }) => id === passId)
+      !candidate ||
+      !entryPackIsAvailableOn(candidate, form.getValues("date"))
     ) {
       return false;
     }
@@ -602,6 +604,7 @@ export function CoworkReservationForm({
                 ? new Set([
                     ...selectionAvailability.unavailableDates,
                     ...(bookingPasses?.claimedDates ?? []),
+                    ...(appliedPack.unavailableDates ?? []),
                   ])
                 : selectionAvailability.unavailableDates
             }

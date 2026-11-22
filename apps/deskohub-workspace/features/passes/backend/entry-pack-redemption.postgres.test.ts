@@ -3,6 +3,10 @@ import { DotyposReservationIdSchema } from "@deskohub/dotypos";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Effect, Layer, Schema } from "effect";
 import { testCustomerSession } from "@/features/account/backend/account-operations.test-utils";
+import {
+  CurrentCustomerAccount,
+  requireVerifiedIdentity,
+} from "@/features/account/backend/current-customer-account";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { makeAccountingDocumentSnapshot } from "@/features/accounting/accounting-document-snapshot";
 import { AccountingSnapshotKeyService } from "@/features/accounting/backend/accounting-snapshot-key.service";
@@ -11,6 +15,7 @@ import { quoteCoworkEntryPack } from "@/features/checkout/backend/checkout/cowor
 import { LatePaymentRecoveryRepository } from "@/features/checkout/backend/repositories/late-payment-recovery.repository";
 import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { paymentAbandonedAfterProviderCutoffFailureCode } from "@/features/checkout/backend/repositories/payment-lifecycle-state";
+import { loadCoworkBookingPasses } from "@/features/cowork/backend/cowork-booking-passes";
 import {
   currentAccountResolving,
   customerApiRequest,
@@ -72,13 +77,16 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       return passId;
     };
 
-    const seedPack = async () => {
+    const seedPack = async (
+      tier: "open-space" | "reserved-desk" = "open-space",
+      holderAccountId = holder
+    ) => {
       const passId = await seedPassOrder();
       await database.pool.query(
         `insert into pass_purchases
           (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
-          values ($1, $2, $3, 'entry-pack', 'open-space', 5, 'active', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
-        [passId, buyer, holder]
+          values ($1, $2, $3, 'entry-pack', $4, 5, 'active', '2099-06-01', '2099-07-01', '{}', 'en-US', now())`,
+        [passId, buyer, holderAccountId, tier]
       );
       return passId;
     };
@@ -87,12 +95,14 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       validFrom,
       validUntil,
       accessEndsOn = null,
+      holderAccountId = holder,
       status = "active",
       tier = "open-space",
     }: {
       readonly validFrom: string;
       readonly validUntil: string;
       readonly accessEndsOn?: string | null;
+      readonly holderAccountId?: typeof holder;
       readonly status?:
         | "active"
         | "pending_payment"
@@ -108,7 +118,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         [
           passId,
           buyer,
-          holder,
+          holderAccountId,
           tier,
           status,
           validFrom,
@@ -346,10 +356,14 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
         suggestedPackId: expect.any(String),
       });
 
-      await seedUnlimited({
+      const unlimitedId = await seedUnlimited({
         validFrom: serviceDate,
         validUntil: "2099-06-05",
       });
+      await database.pool.query(
+        "update pass_purchases set gift_issued_at = now() where id = $1",
+        [unlimitedId]
+      );
       const after = await options();
       expect(after.status).toBe(200);
       expect(await after.json()).toEqual({ entryPacks: [] });
@@ -359,6 +373,54 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       ).rejects.toMatchObject({
         _tag: "EntryPackUnavailableError",
       });
+    });
+
+    test("website booking projects only the holder's same-tier blocked Entry dates", async () => {
+      const recipient = customerAccountIdSchema.make(crypto.randomUUID());
+      await database.pool.query(
+        "insert into customer_accounts (id) values ($1)",
+        [recipient]
+      );
+      const openSpaceId = await seedPack("open-space", recipient);
+      const reservedDeskId = await seedPack("reserved-desk", recipient);
+      const unlimitedId = await seedUnlimited({
+        validFrom: "2099-06-24",
+        validUntil: "2099-06-29",
+        accessEndsOn: "2099-06-26",
+        holderAccountId: recipient,
+        status: "withdrawn",
+      });
+      await database.pool.query(
+        "update pass_purchases set gift_issued_at = now() where id = $1",
+        [unlimitedId]
+      );
+      const read = (accountId?: typeof holder) =>
+        Effect.runPromise(
+          loadCoworkBookingPasses(undefined).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                database.layer,
+                Layer.mock(CurrentCustomerAccount, {
+                  requireActive: requireVerifiedIdentity(
+                    accountId ? { ...testCustomerSession, accountId } : null
+                  ),
+                })
+              )
+            )
+          )
+        );
+      const booking = await read(recipient);
+      const openSpace = booking.packs.find(({ id }) => id === openSpaceId);
+      const reservedDesk = booking.packs.find(
+        ({ id }) => id === reservedDeskId
+      );
+      expect(openSpace?.unavailableDates).toEqual(["2099-06-24", "2099-06-25"]);
+      expect(reservedDesk?.id).toBe(reservedDeskId);
+      expect(reservedDesk?.unavailableDates).toBeUndefined();
+      expect(JSON.stringify(booking)).not.toContain(unlimitedId);
+      for (const accountId of [buyer, undefined]) {
+        expect(await read(accountId)).toEqual({ packs: [], claimedDates: [] });
+      }
     });
 
     test("keeps an admitted Entry claim and rejects readmission after coverage starts", async () => {
