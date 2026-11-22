@@ -174,7 +174,7 @@ export function StickyFooterGroup({
     setCovered(pinnedNow ? host.belowPinned() + place.height : 0);
   }, [host]);
   const remeasure = useCallback(() => {
-    if (host === undefined) return;
+    if (host === undefined || !shown) return;
     host.measure(groupView.current, (box) => {
       boxes.current.group = box;
       setFrame((last) =>
@@ -190,7 +190,7 @@ export function StickyFooterGroup({
       boxes.current.footer = box;
       update();
     });
-  }, [host, update]);
+  }, [host, shown, update]);
   // Only a group with a footer follows the scroll.
   useEffect(() => {
     if (!shown) return;
@@ -217,7 +217,9 @@ export function StickyFooterGroup({
     <View
       ref={groupView}
       style={style}
-      onLayout={shown ? remeasure : undefined}
+      // Always set: React Native Web observes a view's layout only when it
+      // has a handler as it mounts, and the footer can come later.
+      onLayout={remeasure}
     >
       {children}
       {shown && (
@@ -332,9 +334,8 @@ export function ScrollScreen({
               focusedField.onLayout(event);
               sticky.onLayout(event);
             }}
-            onContentSizeChange={
-              sticky.tracking ? sticky.onContentSizeChange : undefined
-            }
+            // Always set, for the same reason as a group's onLayout.
+            onContentSizeChange={sticky.onContentSizeChange}
             // A tap on a button, or on a row of a sheet opened from this screen,
             // acts while the keyboard is up; elsewhere it closes the keyboard.
             // The responder system follows the React tree, so a modal sheet's
@@ -519,7 +520,9 @@ function useStickyFooterHost(
       frame.current.viewportHeight = event.nativeEvent.layout.height;
       if (listeners.current.size > 0) measureWindow();
     },
-    onContentSizeChange: () => notify("layout"),
+    onContentSizeChange: () => {
+      if (listeners.current.size > 0) notify("layout");
+    },
   };
 }
 
