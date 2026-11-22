@@ -1446,6 +1446,32 @@ describe.skipIf(!testDatabase)(
       );
       expect(outcomes.get(monaEvent!)).toBe("would-send");
       expect(outcomes.has(ninaEvent!)).toBe(false);
+
+      // A unit that kept missing its deadline still judges payment locally.
+      const fallback = await start(
+        await seedAutomation({
+          flow: decodeFlow({
+            trigger: { _tag: "ReservationFinished", payment: "individual" },
+            steps: [send],
+          }),
+        })
+      );
+      for (const unit of await unitsOf(fallback.previewId)) {
+        await query(
+          db
+            .update(emailCampaignAutomationWorkUnits)
+            .set({ deadlineMisses: 3 })
+            .where(eq(emailCampaignAutomationWorkUnits.id, unit.id))
+        );
+      }
+      await processAll(fallback.previewId);
+      const fallbackOutcomes = new Map(
+        (await rowsOf(fallback.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      expect(fallbackOutcomes.get(monaEvent!)).toBe("unavailable");
+      expect(fallbackOutcomes.has(ninaEvent!)).toBe(false);
     });
 
     test("a reschedule in Dotypos changes the next preview without local writes", async () => {

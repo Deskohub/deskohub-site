@@ -1,6 +1,10 @@
 import "server-only";
 
-import { DotyposService } from "@deskohub/dotypos";
+import {
+  type DotyposReservation,
+  type DotyposReservationId,
+  DotyposService,
+} from "@deskohub/dotypos";
 import type {
   AutomationTrigger,
   ReservationPayment,
@@ -11,12 +15,11 @@ import { Effect, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { workspaceReservations } from "@/db/schema";
 import type { WorkspaceCoworkProductTier } from "@/features/checkout/product-catalog";
-import {
-  type BookedInterval,
-  decodeBookedReservation,
-} from "@/features/reservation/backend/booked-reservation";
+import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
+import type { ReservationVisit } from "@/features/reservation/backend/reservation-visits.service";
 import { StoredReservationDetails } from "@/features/reservation/backend/stored-reservation-details.server";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
+import { reservationPaymentCondition } from "../../backend/reservation-payment-condition";
 import { isBookedStay, loadCoworkTiers } from "../../backend/reservation-stay";
 import { readsTriggeringVisit } from "../automation-trigger-verification";
 import { automationTriggerKind } from "../automation-triggers";
@@ -35,24 +38,86 @@ export const triggerPayment = (
   Option.fromUndefinedOr("payment" in trigger ? trigger.payment : undefined);
 
 /**
- * How many times taking in an event of the trigger reads its reservation's
- * visit from Dotypos: for the re-check (D35), and for the stay (D1).
+ * Whether taking in an event of the trigger reads its reservation's visit
+ * from Dotypos: for the re-check (D35), or for the stay (D1).
  */
-export const triggerVisitReads = (trigger: AutomationTrigger): number =>
-  (readsTriggeringVisit(automationTriggerKind(trigger)) ? 1 : 0) +
-  (Option.isSome(triggerStay(trigger)) ? 1 : 0);
+export const readsTriggerVisit = (trigger: AutomationTrigger): boolean =>
+  readsTriggeringVisit(automationTriggerKind(trigger)) ||
+  Option.isSome(triggerStay(trigger));
 
-/** A triggering visit as its stay needs it. */
+/**
+ * A stay trigger's visit (D1), the one read both its stay and its re-check
+ * (D35) judge, so both see the same version of it.
+ */
 export type StayVisit = {
+  readonly visit: ReservationVisit;
   /** The stored cowork tier; none for another family. */
   readonly tier: WorkspaceCoworkProductTier | undefined;
-  /** The booked interval Dotypos returns. */
-  readonly interval: BookedInterval;
 };
+
+const databaseFailure = (cause: unknown) =>
+  new AutomationUnitFetchFailure({ code: "database", cause });
+
+type LinkedReservation = {
+  readonly workspaceReservationId: WorkspaceReservationId;
+  readonly dotyposReservationId: DotyposReservationId;
+  readonly dotyposCustomerId: ReservationVisit["dotyposCustomerId"];
+  readonly reservationDetails: unknown;
+};
+
+/** The reservations with a Dotypos reservation, whatever their Workspace state. */
+const linkedReservations = (input: {
+  readonly reservationIds: readonly WorkspaceReservationId[];
+}) =>
+  Effect.flatMap(WorkspaceDatabase, ({ db }) =>
+    db
+      .select({
+        workspaceReservationId: workspaceReservations.id,
+        dotyposReservationId: workspaceReservations.dotyposReservationId,
+        dotyposCustomerId: workspaceReservations.dotyposCustomerId,
+        reservationDetails: workspaceReservations.reservationDetails,
+      })
+      .from(workspaceReservations)
+      .where(
+        and(
+          inArray(workspaceReservations.id, [...input.reservationIds]),
+          isNotNull(workspaceReservations.dotyposReservationId)
+        )
+      )
+  ).pipe(
+    Effect.map((rows) =>
+      rows.flatMap(({ dotyposReservationId, ...row }): LinkedReservation[] =>
+        dotyposReservationId === null ? [] : [{ ...row, dotyposReservationId }]
+      )
+    ),
+    Effect.mapError(databaseFailure)
+  );
+
+/** The visit Dotypos returns for a linked reservation, if its interval decodes. */
+const visitOf = (
+  linked: LinkedReservation,
+  reservation: DotyposReservation
+): Option.Option<ReservationVisit> =>
+  Option.map(
+    decodeBookedReservation(
+      reservation,
+      Option.getOrUndefined(
+        StoredReservationDetails.project(linked.reservationDetails)
+      )
+    ).interval,
+    (interval): ReservationVisit => ({
+      workspaceReservationId: linked.workspaceReservationId,
+      dotyposReservationId: linked.dotyposReservationId,
+      dotyposCustomerId: linked.dotyposCustomerId,
+      startsAt: interval.startsAt,
+      endsAt: interval.endsAt,
+      status: reservation.status === "CANCELLED" ? "cancelled" : "active",
+    })
+  );
 
 /**
  * The visits of stay triggers' reservations (D1), at most one Dotypos
- * request per 100. Unlike the re-check's visits, these include
+ * request per 100. Unlike the re-check's usual visits, these include
  * reservations Workspace cancelled: a cancellation trigger fires on one,
  * and cancelling doesn't change a visit's stay. A reservation without a
  * Dotypos reservation, one Dotypos doesn't return, or one whose interval
@@ -67,61 +132,49 @@ export const loadStayVisits = (
 > =>
   reservationIds.length === 0
     ? Effect.succeed(new Map())
-    : Effect.gen(function* () {
-        const { db } = yield* WorkspaceDatabase;
-        const dotypos = yield* DotyposService;
-        const databaseFailure = (cause: unknown) =>
-          new AutomationUnitFetchFailure({ code: "database", cause });
-        const rows = yield* db
-          .select({
-            id: workspaceReservations.id,
-            dotyposReservationId: workspaceReservations.dotyposReservationId,
-            reservationDetails: workspaceReservations.reservationDetails,
-          })
-          .from(workspaceReservations)
-          .where(
-            and(
-              inArray(workspaceReservations.id, [...reservationIds]),
-              isNotNull(workspaceReservations.dotyposReservationId)
-            )
-          )
-          .pipe(Effect.mapError(databaseFailure));
-        const linked = rows.flatMap(({ dotyposReservationId, ...row }) =>
-          dotyposReservationId === null
-            ? []
-            : [{ ...row, dotyposReservationId }]
-        );
-        const dotyposIds = linked.map(
-          ({ dotyposReservationId }) => dotyposReservationId
-        );
-        const tiers = yield* loadCoworkTiers(db, dotyposIds).pipe(
-          Effect.mapError(databaseFailure)
-        );
-        const reservations = yield* dotypos
-          .getReservationsByIds(dotyposIds, { concurrency: 1 })
-          .pipe(Effect.mapError(AutomationUnitFetchFailure.fromDotypos));
-        return new Map(
-          linked.flatMap(({ id, dotyposReservationId, reservationDetails }) => {
-            const reservation = reservations.get(dotyposReservationId);
-            if (reservation === undefined) return [];
-            const booked = decodeBookedReservation(
-              reservation,
-              Option.getOrUndefined(
-                StoredReservationDetails.project(reservationDetails)
+    : Effect.Do.pipe(
+        Effect.bind("linked", () => linkedReservations({ reservationIds })),
+        Effect.let("dotyposIds", ({ linked }) =>
+          linked.map(({ dotyposReservationId }) => dotyposReservationId)
+        ),
+        Effect.bind("tiers", ({ dotyposIds }) =>
+          Effect.flatMap(WorkspaceDatabase, ({ db }) =>
+            loadCoworkTiers(db, dotyposIds)
+          ).pipe(Effect.mapError(databaseFailure))
+        ),
+        Effect.bind("reservations", ({ dotyposIds }) =>
+          Effect.flatMap(DotyposService, (dotypos) =>
+            dotypos.getReservationsByIds(dotyposIds, { concurrency: 1 })
+          ).pipe(Effect.mapError(AutomationUnitFetchFailure.fromDotypos))
+        ),
+        Effect.map(
+          ({ linked, tiers, reservations }) =>
+            new Map(
+              linked.flatMap((reservation) =>
+                Option.match(
+                  Option.flatMap(
+                    Option.fromUndefinedOr(
+                      reservations.get(reservation.dotyposReservationId)
+                    ),
+                    (found) => visitOf(reservation, found)
+                  ),
+                  {
+                    onNone: () => [],
+                    onSome: (visit) => [
+                      [
+                        reservation.workspaceReservationId,
+                        {
+                          visit,
+                          tier: tiers.get(reservation.dotyposReservationId),
+                        },
+                      ] as const,
+                    ],
+                  }
+                )
               )
-            );
-            return Option.match(booked.interval, {
-              onNone: () => [],
-              onSome: (interval) => [
-                [
-                  id,
-                  { tier: tiers.get(dotyposReservationId), interval },
-                ] as const,
-              ],
-            });
-          })
-        );
-      });
+            )
+        )
+      );
 
 /**
  * Whether the triggering visit is of the trigger's stay (D1): always
@@ -135,5 +188,55 @@ export const isOfTriggerStay = (
   Option.match(stay, {
     onNone: () => true,
     onSome: (stay) =>
-      Option.exists(visit, (visit) => isBookedStay(stay, visit)),
+      Option.exists(visit, ({ visit, tier }) =>
+        isBookedStay(stay, { tier, interval: visit })
+      ),
+  });
+
+/**
+ * The reservations among these paid the way `payment` names, as they are
+ * now (D1). Without a payment, all of them.
+ */
+export const loadPaidReservations = (
+  payment: Option.Option<ReservationPayment>,
+  reservationIds: readonly WorkspaceReservationId[]
+): Effect.Effect<
+  Option.Option<ReadonlySet<WorkspaceReservationId>>,
+  AutomationUnitFetchFailure,
+  WorkspaceDatabase
+> =>
+  Option.match(payment, {
+    onNone: () => Effect.succeed(Option.none()),
+    onSome: (payment) =>
+      reservationIds.length === 0
+        ? Effect.succeed(Option.some(new Set()))
+        : Effect.flatMap(WorkspaceDatabase, ({ db }) =>
+            db
+              .select({ id: workspaceReservations.id })
+              .from(workspaceReservations)
+              .where(
+                and(
+                  inArray(workspaceReservations.id, [...reservationIds]),
+                  reservationPaymentCondition(payment)
+                )
+              )
+          ).pipe(
+            Effect.map((rows) =>
+              Option.some(new Set(rows.map(({ id }) => id)))
+            ),
+            Effect.mapError(databaseFailure)
+          ),
+  });
+
+/**
+ * Whether the event's reservation is paid as its trigger requires, by
+ * `loadPaidReservations`' answer. A Dotypos-only reservation never is.
+ */
+export const isPaidAsTriggerRequires = (
+  paid: Option.Option<ReadonlySet<WorkspaceReservationId>>,
+  reservationId: WorkspaceReservationId | null
+): boolean =>
+  Option.match(paid, {
+    onNone: () => true,
+    onSome: (ids) => reservationId !== null && ids.has(reservationId),
   });

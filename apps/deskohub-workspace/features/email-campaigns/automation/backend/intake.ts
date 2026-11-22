@@ -95,7 +95,10 @@ export const plannedIntakeUnit = (
   requestCost: unit.requestCost,
 });
 
-/** The stay triggers' reservations, whose visits judge the stay (D1), each once. */
+/**
+ * The stay triggers' reservations, each once: their own read judges both
+ * the stay (D1) and the re-check (D35), so both see one version of a visit.
+ */
 const stayReservations = (
   matches: readonly IntakeMatch[]
 ): readonly WorkspaceReservationId[] => [
@@ -108,13 +111,15 @@ const stayReservations = (
   ),
 ];
 
-/** The triggering reservations whose visits intake re-checks (D35), each once. */
+/** The other triggering reservations whose visits intake re-checks (D35), each once. */
 const recheckedReservations = (
   matches: readonly IntakeMatch[]
 ): readonly WorkspaceReservationId[] => [
   ...new Set(
-    matches.flatMap(({ event: { kind, workspaceReservationId } }) =>
-      readsTriggeringVisit(kind) && workspaceReservationId !== null
+    matches.flatMap(({ event: { kind, workspaceReservationId }, stay }) =>
+      Option.isNone(stay) &&
+      readsTriggeringVisit(kind) &&
+      workspaceReservationId !== null
         ? [workspaceReservationId]
         : []
     )
@@ -575,7 +580,8 @@ export const makeIntakeHandler = Effect.gen(function* () {
           // A visit not of the trigger's stay takes no receipt, as a
           // product mismatch (D1), before the re-check could record one;
           // a finished visit's stay can't change.
-          if (!isOfTriggerStay(match.stay, visitOf(stayVisits, match))) {
+          const stayVisit = visitOf(stayVisits, match);
+          if (!isOfTriggerStay(match.stay, stayVisit)) {
             return Effect.succeed(Option.none());
           }
           const version = versions.get(match.versionId);
@@ -590,7 +596,9 @@ export const makeIntakeHandler = Effect.gen(function* () {
           }
           const recheck = recheckVisit(
             match.event,
-            Option.flatten(visitOf(visits, match)),
+            Option.isSome(match.stay)
+              ? Option.map(stayVisit, ({ visit }) => visit)
+              : Option.flatten(visitOf(visits, match)),
             now
           );
           if (recheck !== "current") {

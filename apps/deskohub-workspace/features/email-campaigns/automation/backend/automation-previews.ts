@@ -3,7 +3,6 @@ import "server-only";
 import type { DotyposCustomerId } from "@deskohub/dotypos";
 import type {
   AutomationTriggerType as AutomationTrigger,
-  ReservationPayment,
   ReservationProductFilterType,
 } from "@deskohub/workspace-admin-api";
 import {
@@ -41,7 +40,6 @@ import type {
   CustomerEventId,
   CustomerEventKind,
 } from "@/shared/backend/customer-events/customer-event";
-import { reservationPaymentCondition } from "../../backend/reservation-payment-condition";
 import { reservationProductCondition } from "../../backend/reservation-product-condition";
 import type { DryRunOutcome } from "../automation-dry-run-simulation";
 import type {
@@ -52,7 +50,6 @@ import {
   type AutomationPreviewOutcome,
   automationPreviewOutcomes,
 } from "../automation-states";
-import { triggerPayment } from "./automation-trigger-qualification";
 import { triggeringCustomerEvent } from "./automation-triggering-events";
 
 export type AutomationPreviewRow = typeof previews.$inferSelect;
@@ -74,8 +71,6 @@ export type ReplayEventScope = {
   readonly kind: CustomerEventKind;
   /** Reservation triggers only: the trigger's product filter (D27). */
   readonly product: Option.Option<ReservationProductFilterType>;
-  /** Reservation triggers only: how the reservation must be paid (D1). */
-  readonly payment: Option.Option<ReservationPayment>;
   /** Events in `[asOf − 30 days, asOf)`. */
   readonly asOf: Temporal.Instant;
   /**
@@ -95,9 +90,7 @@ export type ReplayEvent = {
 
 /**
  * The events an event trigger's dry run replays: its kind, with a
- * reservation trigger's product filter and payment. A trigger's stay needs
- * the live visit, so the units judge it, and `events_total` and the 1,000
- * also count events of another stay. None for a schedule.
+ * reservation trigger's product filter. None for a schedule.
  */
 export const replayEventScope = (
   trigger: AutomationTrigger,
@@ -110,7 +103,6 @@ export const replayEventScope = (
     Option.some<ReplayEventScope>({
       kind,
       product: Option.fromUndefinedOr(product),
-      payment: triggerPayment(trigger),
       asOf: preview.asOf,
       recordedBy: preview.createdAt,
     });
@@ -141,14 +133,10 @@ const replayEventCondition = (scope: ReplayEventScope): SQL =>
     Option.match(scope.product, {
       onNone: () => undefined,
       onSome: reservationProductCondition,
-    }),
-    Option.match(scope.payment, {
-      onNone: () => undefined,
-      onSome: reservationPaymentCondition,
     })
   )!;
 
-/** Product and payment conditions read the triggering reservation. */
+/** Product conditions read the triggering reservation's snapshot. */
 const eventsWithReservations = (db: Pick<WorkspaceDatabaseClient, "select">) =>
   db
     .select({

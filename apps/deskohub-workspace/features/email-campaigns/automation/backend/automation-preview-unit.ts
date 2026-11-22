@@ -84,8 +84,11 @@ import {
 } from "./automation-previews";
 import {
   isOfTriggerStay,
+  isPaidAsTriggerRequires,
+  loadPaidReservations,
   loadStayVisits,
   type StayVisit,
+  triggerPayment,
   triggerStay,
 } from "./automation-trigger-qualification";
 import {
@@ -449,23 +452,78 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
   };
 
   /**
+   * The job with only the events that qualify for the trigger's payment
+   * and, when `judgeStay`, its stay (D1), as intake would take them in, and
+   * the stay visits it read. The 1,000 events stay fixed across units, so
+   * payment is judged per unit, as it is now, like the stay.
+   */
+  const qualifiedJob = (job: PreviewJob, judgeStay: boolean) => {
+    const stay = judgeStay ? triggerStay(job.flow.trigger) : Option.none();
+    const reservationIds = reservationIdsOf(job.events);
+    return Effect.Do.pipe(
+      Effect.bind("paid", () =>
+        loadPaidReservations(
+          triggerPayment(job.flow.trigger),
+          reservationIds
+        ).pipe(Effect.provideContext(context))
+      ),
+      Effect.bind("stayVisits", () =>
+        loadStayVisits(Option.isSome(stay) ? reservationIds : []).pipe(
+          Effect.provideContext(context)
+        )
+      ),
+      Effect.map(({ paid, stayVisits }) => ({
+        stayVisits,
+        job: {
+          ...job,
+          events: job.events.filter(
+            ({ workspaceReservationId }) =>
+              isPaidAsTriggerRequires(paid, workspaceReservationId) &&
+              isOfTriggerStay(
+                stay,
+                Option.fromUndefinedOr(
+                  workspaceReservationId === null
+                    ? undefined
+                    : stayVisits.get(workspaceReservationId)
+                )
+              )
+          ),
+        },
+      }))
+    );
+  };
+
+  /**
    * An event trigger's 30-day replay for the unit's customers (design
-   * §8.2): each customer's events in time order with per-customer overlays
-   * only, so units are independent.
+   * §8.2): each customer's qualifying events in time order with
+   * per-customer overlays only, so units are independent.
    */
   const evaluateReplay = (
     job: PreviewJob,
     customers: readonly DotyposCustomerId[]
-  ) => {
+  ) =>
+    qualifiedJob(job, true).pipe(
+      Effect.flatMap((qualified) =>
+        replayQualified({ ...qualified, customers })
+      )
+    );
+
+  /**
+   * `evaluateReplay` over the qualifying events. A stay trigger re-checks
+   * the stay visits, so its stay and re-check see one version of a visit.
+   */
+  const replayQualified = ({
+    job,
+    customers,
+    stayVisits,
+  }: {
+    readonly job: PreviewJob;
+    readonly customers: readonly DotyposCustomerId[];
+    readonly stayVisits: ReadonlyMap<WorkspaceReservationId, StayVisit>;
+  }) => {
     const kind = automationTriggerKind(job.flow.trigger);
     const stay = triggerStay(job.flow.trigger);
-    const reservationIds = [
-      ...new Set(
-        job.events.flatMap(({ workspaceReservationId }) =>
-          workspaceReservationId === null ? [] : [workspaceReservationId]
-        )
-      ),
-    ];
+    const reservationIds = reservationIdsOf(job.events);
     const contextOf = (
       event: ReplayEvent,
       now: Temporal.Instant
@@ -479,6 +537,17 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
       }),
       replayed: true,
     });
+
+    /** The other triggers' visits the re-check reads (D35). */
+    const recheckedVisits = (): Effect.Effect<
+      ReadonlyMap<WorkspaceReservationId, Option.Option<ReservationVisit>>,
+      AutomationUnitFetchFailure
+    > =>
+      readsTriggeringVisit(kind) && reservationIds.length > 0
+        ? withVisits((visits) => visits.ofReservations(reservationIds)).pipe(
+            Effect.mapError(AutomationUnitFetchFailure.fromReservationVisits)
+          )
+        : Effect.succeed(new Map());
 
     return Effect.Do.pipe(
       Effect.bind("planned", () =>
@@ -502,20 +571,19 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
         )
       ),
       Effect.bind("visits", () =>
-        readsTriggeringVisit(kind) && reservationIds.length > 0
-          ? withVisits((visits) => visits.ofReservations(reservationIds)).pipe(
-              Effect.mapError(AutomationUnitFetchFailure.fromReservationVisits)
-            )
-          : Effect.succeed(
-              new Map<WorkspaceReservationId, Option.Option<ReservationVisit>>()
-            )
-      ),
-      Effect.bind("stayVisits", () =>
         Option.isSome(stay)
-          ? loadStayVisits(reservationIds).pipe(Effect.provideContext(context))
-          : Effect.succeed<ReadonlyMap<WorkspaceReservationId, StayVisit>>(
-              new Map()
+          ? Effect.succeed(
+              new Map(
+                reservationIds.map((id) => [
+                  id,
+                  Option.map(
+                    Option.fromUndefinedOr(stayVisits.get(id)),
+                    ({ visit }) => visit
+                  ),
+                ])
+              )
             )
+          : recheckedVisits()
       ),
       Effect.bind("cancellations", () =>
         workspaceCancellations(reservationIds)
@@ -525,14 +593,7 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
       ),
       Effect.bind("now", () => currentInstant),
       Effect.flatMap(
-        ({
-          planned,
-          visits,
-          stayVisits,
-          cancellations,
-          undatedChanges,
-          now,
-        }) => {
+        ({ planned, visits, cancellations, undatedChanges, now }) => {
           const replay = (
             event: ReplayEvent,
             simulatedSends: readonly Temporal.Instant[]
@@ -610,19 +671,8 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
               )
             );
 
-          // An event whose visit isn't of the trigger's stay replays as
-          // nothing, as intake takes it in with no receipt (D1).
           const byCustomer = Map.groupBy(
-            job.events.filter(({ workspaceReservationId }) =>
-              isOfTriggerStay(
-                stay,
-                Option.fromUndefinedOr(
-                  workspaceReservationId === null
-                    ? undefined
-                    : stayVisits.get(workspaceReservationId)
-                )
-              )
-            ),
+            job.events,
             ({ dotyposCustomerId }) => dotyposCustomerId
           );
           const sendsContext = {
@@ -759,7 +809,12 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
     unit: ClaimedAutomationUnit<PreviewUnitSubject>
   ) =>
     unit.deadlineMisses >= unavailableAfterDeadlineMisses
-      ? Effect.succeed(unavailableRows(job, unit.subject.customerIds))
+      ? // A stay needs the visit this unit can't read in time; payment is local.
+        qualifiedJob(job, false).pipe(
+          Effect.map((qualified) =>
+            unavailableRows(qualified.job, unit.subject.customerIds)
+          )
+        )
       : evaluators[job.preview.kind](job, unit.subject.customerIds);
 
   const handler: AutomationUnitHandler<PreviewUnitSubject, PreviewUnitFetch> = {
@@ -965,6 +1020,17 @@ const recheck = (input: {
     Match.exhaustive
   );
 };
+
+/** The events' Workspace reservations, each once. */
+const reservationIdsOf = (
+  events: readonly ReplayEvent[]
+): readonly WorkspaceReservationId[] => [
+  ...new Set(
+    events.flatMap(({ workspaceReservationId }) =>
+      workspaceReservationId === null ? [] : [workspaceReservationId]
+    )
+  ),
+];
 
 /**
  * The deliver unit's pre-submit check (§5.9): a reservation Workspace
