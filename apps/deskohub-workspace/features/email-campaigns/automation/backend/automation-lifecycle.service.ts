@@ -369,25 +369,28 @@ const activateIn = (input: {
         if (!previewIsCurrent(flow, preview.asOf, now)) {
           return Effect.fail(new AutomationPreviewRequired(input));
         }
-        const activationTime =
+        const ownership =
           copy.campaign.status === "paused"
-            ? Effect.succeed(now)
-            : passReminderOwnership(input.campaignId, flow.trigger, now).pipe(
-                Effect.filterOrFail(
-                  ({ at }) => previewIsCurrent(flow, preview.asOf, at),
-                  () => new AutomationPreviewRequired(input)
-                ),
-                Effect.flatMap(requirePassReminderOwnership)
-              );
-        return activationTime.pipe(
-          Effect.flatMap((effectiveTime) =>
+            ? Effect.succeed({ at: now, available: true })
+            : passReminderOwnership(input.campaignId, flow.trigger, now);
+        return ownership.pipe(
+          Effect.map(({ at, available }) => ({
+            at: nextVersionActivationTime(latest, at),
+            available,
+          })),
+          Effect.filterOrFail(
+            ({ at }) => previewIsCurrent(flow, preview.asOf, at),
+            () => new AutomationPreviewRequired(input)
+          ),
+          Effect.flatMap(requirePassReminderOwnership),
+          Effect.flatMap((activatedAt) =>
             publishVersion({
               copy,
               publishable,
               flow,
               latest,
               activatedBy: input.activatedBy,
-              now: effectiveTime,
+              activatedAt,
             })
           )
         );
@@ -451,8 +454,8 @@ const passReminderOwnership = Effect.fn(
       )
     )
     .limit(1);
-  // Read the time after the wait. At the exact cutoff the previous owner
-  // may already have planned that occurrence.
+  // Read the time after the wait. A campaign must start accepting before
+  // 10:00 Prague time to enter that day's fire.
   const at = yield* lifecycleInstant;
   const dueAt = getPassReminderDueAt(
     plainDateStringSchema.make(getWorkspaceDate(at).toString())
@@ -641,6 +644,21 @@ const latestVersion = (campaignId: CampaignId) =>
       .pipe(Effect.map(([version]) => Option.fromNullishOr(version)))
   );
 
+/** Activation time orders published versions, including across clock changes. */
+const nextVersionActivationTime = (
+  latest: Option.Option<{ readonly activatedAt: Temporal.Instant }>,
+  now: Temporal.Instant
+) =>
+  latest.pipe(
+    Option.filter(
+      ({ activatedAt }) => Temporal.Instant.compare(activatedAt, now) >= 0
+    ),
+    Option.match({
+      onNone: () => now,
+      onSome: ({ activatedAt }) => activatedAt.add({ microseconds: 1 }),
+    })
+  );
+
 /**
  * Steps 6 and 7: inserts version n + 1 with its provenance, points the
  * automation at it, and applies the status and schedule rules.
@@ -653,21 +671,11 @@ const publishVersion = (input: {
     Option.Option.Value<Effect.Success<ReturnType<typeof latestVersion>>>
   >;
   readonly activatedBy: CustomerAccountId | null;
-  readonly now: Temporal.Instant;
+  readonly activatedAt: Temporal.Instant;
 }) =>
   Effect.flatMap(WorkspaceTransaction, ({ db }) => {
+    const { activatedAt } = input;
     const { campaign, automation } = input.copy;
-    // `activated_at` orders versions, so it's strictly after the previous one's.
-    const activatedAt = input.latest.pipe(
-      Option.filter(
-        ({ activatedAt }) =>
-          Temporal.Instant.compare(activatedAt, input.now) >= 0
-      ),
-      Option.match({
-        onNone: () => input.now,
-        onSome: ({ activatedAt }) => activatedAt.add({ microseconds: 1 }),
-      })
-    );
     return Effect.Do.pipe(
       Effect.bind("versionId", () =>
         db

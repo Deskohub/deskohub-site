@@ -399,6 +399,46 @@ describe.skipIf(!testDatabase)(
         ]);
         await run(lifecycle((service) => service.archive(replacement)));
       });
+
+      test("first activation at 10:00 starts after that day's occurrence even when the kind is vacant", async () => {
+        const { campaignId } = await seedDraft();
+        const cutoff = Temporal.Instant.from("2026-10-19T08:00:00Z");
+        await run(
+          await previewPassReminder(campaignId, "EntryPackExpiring", cutoff),
+          cutoff
+        );
+        const { rows } = await pool.query(
+          `select a.accepting_since = $2 as accepts_next_instant,
+                  v.activated_at = $2 as activates_next_instant
+             from email_campaign_automations a
+             join email_campaign_automation_versions v on v.id = a.active_version_id
+            where a.campaign_id = $1`,
+          [campaignId, cutoff.add({ microseconds: 1 }).toString()]
+        );
+        expect(rows).toEqual([
+          { accepts_next_instant: true, activates_next_instant: true },
+        ]);
+        await run(lifecycle((service) => service.archive(campaignId)));
+      });
+
+      test("checks the preview against the version timestamp when a previous publication is newer than the clock", async () => {
+        const cutoff = Temporal.Instant.from("2026-10-19T08:00:00Z");
+        const beforeCutoff = cutoff.subtract({ minutes: 1 });
+        const { campaignId } = await seedActive(bookedSendFlow, {
+          at: cutoff.add({ minutes: 1 }),
+        });
+        const before = await automationRow(campaignId);
+        const activate = await previewPassReminder(
+          campaignId,
+          "EntryPackExpiring",
+          beforeCutoff
+        );
+        expect((await failure(activate, beforeCutoff))._tag).toBe(
+          "AutomationPreviewRequired"
+        );
+        expect(await automationRow(campaignId)).toEqual(before);
+        expect(await versionRows(campaignId)).toHaveLength(1);
+      });
     });
 
     describe("the preview gate (§7.5)", () => {
