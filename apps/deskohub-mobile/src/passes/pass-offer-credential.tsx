@@ -52,7 +52,7 @@ export function UnlimitedCredential({
     >
       <CredentialBackground />
       <View style={styles.issuer}>
-        <Text variant="badge" style={styles.issuerName}>
+        <Text variant="badge" style={styles.issuerName} balanced>
           {m.passes_offer_unlimited_issuer({}, { locale })}
         </Text>
         <GradientBar

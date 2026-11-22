@@ -95,6 +95,16 @@ test("the offers open with a dotted rule and a heading only screen readers read"
   expect(links(tree)).toHaveLength(2);
 });
 
+test("every label on both cards balances its wrapped lines", () => {
+  const labels = findAll(render({}), "Text").filter(
+    ({ props }) => props.role !== "heading"
+  );
+  expect(labels.length).toBeGreaterThan(0);
+  for (const label of labels) {
+    expect(label.props.textBreakStrategy).toBe("balanced");
+  }
+});
+
 test("each card shows only while the catalog sells its product", () => {
   expect(
     links(render({ catalog: { ...catalog, unlimited: [] } }))

@@ -84,7 +84,7 @@ export function EntryPackTicket({
         >
           {count}
         </Text>
-        <Text variant="badge" style={styles.unit}>
+        <Text variant="badge" style={styles.unit} balanced>
           {m.passes_offer_entry_pack_unit({}, { locale })}
         </Text>
       </View>
