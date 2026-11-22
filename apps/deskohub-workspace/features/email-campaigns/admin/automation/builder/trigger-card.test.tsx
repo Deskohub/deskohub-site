@@ -7,6 +7,8 @@ import {
   mock,
   test,
 } from "bun:test";
+import { AutomationTrigger } from "@deskohub/workspace-admin-api";
+import { Schema } from "effect";
 import { m } from "@/features/administration/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
 import {
@@ -321,5 +323,162 @@ describe("schedule calendar", () => {
     expect(schedulePreviews()).toEqual([
       { expression: edited, usage: "trigger", locale },
     ]);
+  });
+});
+
+describe("reservation qualifiers", () => {
+  const stayLabel = m.emailAutomationFlowTriggerStayLabel({}, { locale });
+  const paymentLabel = m.emailAutomationFlowTriggerPaymentLabel({}, { locale });
+
+  /** Opens the select named `select` and picks `option`. */
+  const pick = async (
+    view: ReturnType<typeof renderTrigger>["view"],
+    select: string,
+    option: string
+  ) => {
+    await act(async () => {
+      fireEvent.keyDown(view.getByRole("combobox", { name: select }), {
+        key: "Enter",
+      });
+    });
+    await act(async () => {
+      fireEvent.click(view.getByRole("option", { name: option }));
+    });
+  };
+
+  /** The contract's issue messages, by path below the trigger. */
+  const triggerErrors = (trigger: FlowTriggerValue) => {
+    const result =
+      Schema.toStandardSchemaV1(AutomationTrigger)["~standard"].validate(
+        trigger
+      );
+    const issues = "issues" in result ? (result.issues ?? []) : [];
+    return (field: string) =>
+      issues.find(({ path }) => (path ?? []).join(".") === field)?.message;
+  };
+
+  test.each(reservationKinds)("%s offers a stay and a payment", (kind) => {
+    const { view } = renderTrigger({ _tag: eventTriggerTags[kind] });
+
+    expect(view.getByRole("combobox", { name: stayLabel }).textContent).toBe(
+      m.emailAutomationFlowTriggerStayAny({}, { locale })
+    );
+    expect(view.getByRole("combobox", { name: paymentLabel }).textContent).toBe(
+      m.emailAutomationFlowTriggerPaymentAny({}, { locale })
+    );
+  });
+
+  test("account created offers neither", () => {
+    const { view } = renderTrigger({ _tag: "AccountCreated" });
+
+    expect(view.queryByRole("combobox", { name: stayLabel })).toBeNull();
+    expect(view.queryByRole("combobox", { name: paymentLabel })).toBeNull();
+  });
+
+  test("sets a stay and a payment and keeps the product", async () => {
+    const stay = renderTrigger({ _tag: "ReservationFinished", product });
+    await pick(
+      stay.view,
+      stayLabel,
+      m.emailAutomationFlowTriggerStayDay({}, { locale })
+    );
+    expect(stay.onChange.mock.calls).toEqual([
+      [{ _tag: "ReservationFinished", product, stay: "day" }],
+    ]);
+    cleanup();
+
+    const payment = renderTrigger({
+      _tag: "ReservationFinished",
+      product,
+      stay: "overnight",
+    });
+    await pick(
+      payment.view,
+      paymentLabel,
+      m.emailAutomationFlowTriggerPaymentIndividual({}, { locale })
+    );
+    expect(payment.onChange.mock.calls).toEqual([
+      [
+        {
+          _tag: "ReservationFinished",
+          product,
+          stay: "overnight",
+          payment: "individual",
+        },
+      ],
+    ]);
+  });
+
+  test("clears a stay and a payment back to any", async () => {
+    const trigger = {
+      _tag: "ReservationBooked",
+      product,
+      stay: "day",
+      payment: "individual",
+    } as const;
+    const stay = renderTrigger(trigger);
+    await pick(
+      stay.view,
+      stayLabel,
+      m.emailAutomationFlowTriggerStayAny({}, { locale })
+    );
+    expect(stay.onChange.mock.calls).toEqual([
+      [{ _tag: "ReservationBooked", product, payment: "individual" }],
+    ]);
+    cleanup();
+
+    const payment = renderTrigger(trigger);
+    await pick(
+      payment.view,
+      paymentLabel,
+      m.emailAutomationFlowTriggerPaymentAny({}, { locale })
+    );
+    expect(payment.onChange.mock.calls).toEqual([
+      [{ _tag: "ReservationBooked", product, stay: "day" }],
+    ]);
+  });
+
+  test.each([
+    ["no product", undefined],
+    ["another product", { family: "office", properties: [] }],
+  ] as const)(
+    "explains a stay with %s, which the contract rejects",
+    (_case, other) => {
+      const trigger: FlowTriggerValue = {
+        _tag: "ReservationFinished",
+        ...(other && { product: other }),
+        stay: "day",
+      };
+      const errorAt = triggerErrors(trigger);
+      expect(errorAt("stay")).toBeDefined();
+      const { view } = renderTrigger(trigger, undefined, errorAt);
+
+      const stay = view.getByRole("combobox", { name: stayLabel });
+      expect(stay.getAttribute("aria-invalid")).toBe("true");
+      const alert = view.container.ownerDocument.getElementById(
+        stay.getAttribute("aria-describedby") ?? ""
+      );
+      expect(alert?.textContent).toBe(
+        m.emailAutomationFlowTriggerStayNeedsCowork({}, { locale })
+      );
+    }
+  );
+
+  test("a cowork stay has no error", () => {
+    const trigger: FlowTriggerValue = {
+      _tag: "ReservationFinished",
+      product,
+      stay: "overnight",
+      payment: "individual",
+    };
+    const errorAt = triggerErrors(trigger);
+    const { view } = renderTrigger(trigger, undefined, errorAt);
+
+    expect(
+      view
+        .getByRole("combobox", { name: stayLabel })
+        .getAttribute("aria-invalid")
+    ).toBe("false");
+    expect(isValidFlow({ trigger, steps: [send] })).toBe(true);
   });
 });
