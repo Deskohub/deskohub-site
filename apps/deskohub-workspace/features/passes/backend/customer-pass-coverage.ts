@@ -18,6 +18,26 @@ import { listHeldEntryPacks } from "./held-entry-packs";
 import { listHeldUnlimitedPasses } from "./held-unlimited-passes";
 
 /**
+ * Whether a held Unlimited pass covers its holder's cowork visits from
+ * `date`: the account page shows it as active or upcoming.
+ */
+export const isCurrentUnlimitedPass = (
+  pass: Parameters<typeof getUnlimitedDisplayStatus>[0],
+  date: Temporal.PlainDate
+) => {
+  const issued =
+    pass.paymentState === "paid" || pass.paymentState === "complimentary";
+  const accessDay = getUnlimitedPassAccessDay({ ...pass, date });
+  const status = getUnlimitedDisplayStatus(
+    pass,
+    plainDateStringSchema.make(date.toString()),
+    issued,
+    accessDay
+  );
+  return status === "active" || status === "upcoming";
+};
+
+/**
  * Whether the account holds a pass that covers its cowork visits at
  * `asOf`. Its two reads share `workspaceStatementConcurrency`, so they run
  * one at a time inside a transaction.
@@ -31,13 +51,7 @@ const accountHoldsCoveringPass = Effect.fn("accountHoldsCoveringPass")(
       { concurrency: yield* workspaceStatementConcurrency }
     );
     if (getCoworkBookingPasses(packs, today).packs.length > 0) return true;
-    return unlimitedPasses.some((pass) => {
-      const issued =
-        pass.paymentState === "paid" || pass.paymentState === "complimentary";
-      const accessDay = getUnlimitedPassAccessDay({ ...pass, date });
-      const status = getUnlimitedDisplayStatus(pass, today, issued, accessDay);
-      return status === "active" || status === "upcoming";
-    });
+    return unlimitedPasses.some((pass) => isCurrentUnlimitedPass(pass, date));
   }
 );
 

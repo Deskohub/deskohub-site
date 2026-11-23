@@ -15,7 +15,7 @@ import { quoteCoworkEntryPack } from "@/features/checkout/backend/checkout/cowor
 import { LatePaymentRecoveryRepository } from "@/features/checkout/backend/repositories/late-payment-recovery.repository";
 import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { paymentAbandonedAfterProviderCutoffFailureCode } from "@/features/checkout/backend/repositories/payment-lifecycle-state";
-import { loadCoworkBookingPasses } from "@/features/cowork/backend/cowork-booking-passes";
+import { loadCoworkCustomerPasses } from "@/features/cowork/backend/cowork-customer-passes";
 import {
   currentAccountResolving,
   customerApiRequest,
@@ -397,7 +397,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       );
       const read = (accountId?: typeof holder) =>
         Effect.runPromise(
-          loadCoworkBookingPasses(undefined).pipe(
+          loadCoworkCustomerPasses(undefined).pipe(
             Effect.provide(
               Layer.mergeAll(
                 database.layer,
@@ -410,7 +410,7 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
             )
           )
         );
-      const booking = await read(recipient);
+      const { bookingPasses: booking } = await read(recipient);
       const openSpace = booking.packs.find(({ id }) => id === openSpaceId);
       const reservedDesk = booking.packs.find(
         ({ id }) => id === reservedDeskId
@@ -420,7 +420,10 @@ describe.skipIf(!process.env.WORKSPACE_TEST_DATABASE_URL)(
       expect(reservedDesk?.unavailableDates).toBeUndefined();
       expect(JSON.stringify(booking)).not.toContain(unlimitedId);
       for (const accountId of [buyer, undefined]) {
-        expect(await read(accountId)).toEqual({ packs: [], claimedDates: [] });
+        expect(await read(accountId)).toEqual({
+          bookingPasses: { packs: [], claimedDates: [] },
+          passPurchaseOffered: true,
+        });
       }
     });
 

@@ -83,6 +83,7 @@ const loadCoworkReservationContent = ({
   pageData = {
     entryPackOffered: false,
     bookingPasses: noCoworkBookingPasses,
+    passPurchaseOffered: true,
     overnightStayOffered: false,
   },
   replacementToken = "signed-replacement-token",
@@ -426,6 +427,7 @@ describe("a linked Entry pack", () => {
   const pageData = {
     entryPackOffered: true,
     bookingPasses: getCoworkBookingPasses([pack], "2099-07-30"),
+    passPurchaseOffered: true,
     overnightStayOffered: false,
   };
 
@@ -600,6 +602,7 @@ describe("a linked overnight stay", () => {
       pageData: {
         entryPackOffered: false,
         bookingPasses: noCoworkBookingPasses,
+        passPurchaseOffered: true,
         overnightStayOffered: true,
       },
       searchParams: overnightLink,
@@ -622,6 +625,7 @@ describe("a linked overnight stay", () => {
       pageData: {
         entryPackOffered: false,
         bookingPasses: noCoworkBookingPasses,
+        passPurchaseOffered: true,
         overnightStayOffered: false,
       },
       searchParams: overnightLink,

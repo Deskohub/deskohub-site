@@ -35,7 +35,10 @@ import {
 } from "@/shared/components/ui/card";
 import { getSearchParam } from "@/shared/utils";
 import { toURLSearchParams } from "@/shared/utils/search-params";
-import { loadCoworkBookingPasses } from "../backend/cowork-booking-passes";
+import {
+  loadCoworkCustomerPasses,
+  unreadCoworkCustomerPasses,
+} from "../backend/cowork-customer-passes";
 import {
   type CoworkEntryPacks,
   firstEntryPackDate,
@@ -54,6 +57,11 @@ const withWorkspaceDate = (values: CoworkReservationInput, today: string) =>
 type CoworkReservationPageData = {
   readonly entryPackOffered: boolean;
   readonly bookingPasses: CoworkEntryPacks;
+  /**
+   * Whether the form offers passes to buy: not to a customer holding an
+   * active or upcoming Unlimited pass, nor one whose passes couldn't be read.
+   */
+  readonly passPurchaseOffered: boolean;
   /** Whether a Reserved Desk can be booked as an overnight stay. */
   readonly overnightStayOffered: boolean;
 };
@@ -126,6 +134,8 @@ export const coworkReservationPage = createReservationPage({
     return {
       entryPackOffered,
       bookingPasses: noCoworkBookingPasses,
+      // The form's page data decides per visitor.
+      passPurchaseOffered: false,
       overnightStayOffered,
     };
   },
@@ -155,7 +165,7 @@ export const coworkReservationPage = createReservationPage({
         redirect(`${bookingPath}?${params}`);
       }
     }
-    const bookingPasses = await loadCoworkBookingPasses(
+    const customerPasses = await loadCoworkCustomerPasses(
       restoredReservation?.entryPack
     ).pipe(
       Effect.provide(
@@ -164,10 +174,10 @@ export const coworkReservationPage = createReservationPage({
       runWorkspaceEffectOrElse("cowork.load-booking-passes", {
         boundary: "page",
         failureCode: "cowork.booking-passes-unavailable",
-        orElse: () => noCoworkBookingPasses,
+        orElse: () => unreadCoworkCustomerPasses,
       })
     );
-    return { ...pageData, bookingPasses };
+    return { ...pageData, ...customerPasses };
   },
   pathname: coworkReservationPath,
   prefillsContact: true,
@@ -298,6 +308,7 @@ export const coworkReservationPage = createReservationPage({
       initialValues={initialValues}
       locale={form.locale}
       overnightStayOffered={form.pageData.overnightStayOffered}
+      passPurchaseOffered={form.pageData.passPurchaseOffered}
       replacementToken={form.replacementToken}
       submittedCode={form.submittedCode}
       today={form.today}

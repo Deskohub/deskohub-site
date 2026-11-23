@@ -489,6 +489,19 @@ describe("CoworkReservationForm advertised pricing", () => {
       ).toBeNull();
     });
 
+    test("omits the cards from a customer the page withholds passes from", () => {
+      const view = renderForm({
+        entryPackOffered: true,
+        passPurchaseOffered: false,
+      });
+      expect(view.container.querySelector("[data-pass-offer]")).toBeNull();
+      expect(
+        view.queryByRole("heading", {
+          name: m.passPurchaseOffersHeading({}, { locale: "en-US" }),
+        })
+      ).toBeNull();
+    });
+
     test("places both cards after the reservation form under the section heading", () => {
       const view = renderForm({ entryPackOffered: true });
       const section = view
