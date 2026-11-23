@@ -58,9 +58,9 @@ const reservationHoldCleanupDelivery = (
   return {
     delaySeconds,
     retentionSeconds,
-    cleanupDeadline: toStoredInstant(
-      input.now.add({ seconds: retentionSeconds })
-    ),
+    // Full precision: truncating would make a delivery exactly at the end of
+    // retention count as late.
+    cleanupDeadline: input.now.add({ seconds: retentionSeconds }),
   };
 };
 

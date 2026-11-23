@@ -68,6 +68,13 @@ const runProcessMessage = async (
     input.findById ?? mock(() => Effect.succeed(makeReservation()));
   const cancelOrderHold =
     input.cancelOrderHold ?? mock(() => Effect.succeed("cancelled" as const));
+  const logs: Array<{ level: string; message: unknown }> = [];
+  const captureLogs = Logger.layer([
+    Logger.make(({ logLevel, message }) => {
+      const [text] = Array.isArray(message) ? message : [message];
+      logs.push({ level: logLevel, message: text });
+    }),
+  ]);
 
   const result = await processReservationHoldCleanupScheduleMessage(
     message,
@@ -83,13 +90,14 @@ const runProcessMessage = async (
           sweepExpiredHolds: mock(() =>
             Effect.succeed({ cancelled: 0, skipped: 0, failed: 0 })
           ),
-        } satisfies ReservationHoldCleanupServiceType)
+        } satisfies ReservationHoldCleanupServiceType),
+        captureLogs
       )
     ),
     Effect.runPromise
   );
 
-  return { result, findById, cancelOrderHold };
+  return { result, findById, cancelOrderHold, logs };
 };
 
 /**
@@ -345,6 +353,34 @@ describe("ReservationHoldCleanupScheduleService", () => {
     expect(delivery.result).toBe("past_deadline");
     expect(delivery.cancelOrderHold).not.toHaveBeenCalled();
     expect(delivery.findById).not.toHaveBeenCalled();
+    expect(delivery.logs).toEqual([
+      {
+        level: "Warn",
+        message:
+          "Reservation hold cleanup queue message acknowledged: past its cleanup deadline",
+      },
+    ]);
+  });
+
+  test("keeps the enqueue clock's full precision in the cleanup deadline", async () => {
+    const { reservationHoldCleanupTopic } = await import(
+      "./reservation-hold-cleanup-topic"
+    );
+    const enqueuedAt = Temporal.Instant.from("2026-06-01T10:00:00.123456789Z");
+    const { message, options } = reservationHoldCleanupTopic.publication({
+      orderId: "order-id" as WorkspaceReservationId,
+      reservationHoldExpiresAt: expiresAt,
+      now: enqueuedAt,
+    });
+    const retentionEnd = enqueuedAt.add({ seconds: options.retentionSeconds });
+
+    const onTime = await runProcessMessage(message, { now: retentionEnd });
+    expect(onTime.result).toBe("cancelled");
+
+    const late = await runProcessMessage(message, {
+      now: retentionEnd.add({ nanoseconds: 1 }),
+    });
+    expect(late.result).toBe("past_deadline");
   });
 
   test("gives a hold scheduled at the delay cap no late retries", async () => {
