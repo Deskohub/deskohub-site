@@ -199,14 +199,17 @@ describe("Alchemy beta.87 surface", () => {
     expect(countBy(types)).toEqual({
       "GCP.ArtifactRegistry.Repository": 1,
       "GCP.Storage.Bucket": 1,
-      "GCP.IAM.Member": 1,
+      "GCP.IAM.Member": 2,
       "GCP.CloudTasks.Queue": 6,
       "GCP.CloudScheduler.Job": 10,
       "GCP.Monitoring.AlertPolicy": 3,
     });
-    // The publisher grant names the declared bucket's output.
-    expect(isOutput(enabled.resources.MobileUpdatesPublisher?.Props.name)).toBe(
-      true
+    // Both publisher grants name the declared bucket's output.
+    for (const id of ["MobileUpdatesPublisher", "MobileUpdatesPublisherRead"]) {
+      expect(isOutput(enabled.resources[id]?.Props.name)).toBe(true);
+    }
+    expect(enabled.resources.MobileUpdatesPublisherRead?.Props.role).toBe(
+      "roles/storage.legacyObjectReader"
     );
   });
 
@@ -251,7 +254,7 @@ describe("Alchemy beta.87 surface", () => {
       countBy(Object.values(resources).map((entry) => entry.Type))
     ).toMatchObject({
       "GCP.Run.Service": 3,
-      "GCP.IAM.Member": 5,
+      "GCP.IAM.Member": 6,
     });
     for (const id of ["TasksWorkerInvoker", "SchedulerWorkerInvoker"]) {
       expect(isOutput(resources[id]?.Props.name)).toBe(true);
