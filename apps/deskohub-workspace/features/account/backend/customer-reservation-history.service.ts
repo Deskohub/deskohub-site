@@ -20,6 +20,7 @@ import type { SqlError } from "effect/sql";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   passEntryClaims,
+  paymentAttempts,
   unlimitedPassDayMoves,
   workspaceReservations,
 } from "@/db/schema";
@@ -104,6 +105,11 @@ type ReservationRow = {
   readonly reservationPurpose: (typeof workspaceReservations.$inferSelect)["reservationPurpose"];
   readonly paidAt: (typeof workspaceReservations.$inferSelect)["paidAt"];
   readonly paidWithEntryPack: boolean;
+  /**
+   * Its order's payment kept a nonzero amount after refunds. Funding from an
+   * Entry pack or an Unlimited pass is marked apart.
+   */
+  readonly paidWithMoney: boolean;
   readonly unlimitedPassDay: boolean;
 };
 
@@ -273,6 +279,9 @@ const toReservationSummary = (
     id: row?.id ?? reservation.id,
     ...(row?.id && { workspaceReservationId: row.id }),
     ...(row?.paidWithEntryPack && { paidWithEntryPack: true }),
+    ...(row?.paidWithMoney &&
+      !row.paidWithEntryPack &&
+      !row.unlimitedPassDay && { paidIndividually: true }),
     ...(party && { party }),
     product: getReservationProduct(row),
     ...getBookedStartFields(reservation, booked),
@@ -486,7 +495,11 @@ export type ReservationHistoryOptions = {
    * names passes false to skip the read.
    */
   readonly includePartyNames?: boolean;
-  readonly includeEntryPackPayment?: boolean;
+  /**
+   * Whether to mark how each booking was funded: from an Entry pack, or on
+   * its own with money. Pass reads are released with the passes.
+   */
+  readonly includeFunding?: boolean;
   /** The language of the reservations' product names; the default locale when absent. */
   readonly locale?: Locale;
 };
@@ -562,10 +575,10 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
    */
   const selectReservationRows = ({
     account,
-    includeEntryPackPayment,
+    includeFunding,
   }: {
     readonly account: ReservationHistoryAccount;
-    readonly includeEntryPackPayment: boolean;
+    readonly includeFunding: boolean;
   }) =>
     db
       .select({
@@ -580,7 +593,7 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
         reservationPurpose: workspaceReservations.reservationPurpose,
         paidAt: workspaceReservations.paidAt,
         unlimitedPassDay: sql<boolean>`${workspaceReservations.passId} is not null`,
-        paidWithEntryPack: includeEntryPackPayment
+        paidWithEntryPack: includeFunding
           ? sql<boolean>`${exists(
               db
                 .select({ reservationId: passEntryClaims.reservationId })
@@ -591,6 +604,35 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
                     eq(passEntryClaims.status, "consumed")
                   )
                 )
+            )}`
+          : sql<boolean>`false`,
+        paidWithMoney: includeFunding
+          ? sql<boolean>`${and(
+              eq(workspaceReservations.paymentState, "paid"),
+              exists(
+                db
+                  .select({ id: paymentAttempts.id })
+                  .from(paymentAttempts)
+                  .where(
+                    and(
+                      eq(
+                        paymentAttempts.id,
+                        workspaceReservations.activePaymentAttemptId
+                      ),
+                      eq(paymentAttempts.state, "paid"),
+                      // Money the customer kept paying: internal attempts
+                      // settle a zero total, such as a fully discounted or
+                      // Entry pack funded booking, and a refund made or owed
+                      // (in full when no target is set) gives money back.
+                      sql`${paymentAttempts.amountValue} > greatest(
+                        coalesce(${paymentAttempts.refundedAmountValue}, 0),
+                        case when ${paymentAttempts.refundState} = 'required'
+                          then coalesce(${paymentAttempts.refundTargetValue}, ${paymentAttempts.amountValue})
+                          else 0 end
+                      )`
+                    )
+                  )
+              )
             )}`
           : sql<boolean>`false`,
       })
@@ -805,7 +847,7 @@ export const makeCustomerReservationHistory = Effect.fn(function* (
     Effect.succeed({
       account,
       includePartyNames: options.includePartyNames ?? true,
-      includeEntryPackPayment: options.includeEntryPackPayment ?? false,
+      includeFunding: options.includeFunding ?? false,
       locale: options.locale,
     }).pipe(
       Effect.bind("rows", selectReservationRows),

@@ -1,13 +1,20 @@
 import {
   type EmailBodyComponent,
+  type EmailComponentCondition,
   type EmailDocument,
   type EmailInlinePart,
   type EmailTextListLevel,
   type EmailTranslation,
+  type EmailTriggerEvent,
   type EmailValueDefinition,
-  type EmailValueName,
+  EmailValueName,
+  type EmailValueReference,
   type EmailValueSnapshot,
+  emailTriggerFieldAt,
+  isEmailTriggerInlineField,
+  isEmailTriggerUrlField,
   matchesEmailCustomerField,
+  matchesEmailTriggerValue,
   WORKSPACE_SITE_TIME_ZONE,
 } from "@deskohub/workspace-admin-api";
 import {
@@ -94,8 +101,11 @@ const resolvedValue = (
   const frozen = definition["customerShape"];
   const matchesFrozen = Match.valueTags(snapshot, {
     Fallback: () => true,
-    Resolved: ({ value }) =>
-      frozen === undefined || matchesEmailCustomerField(value, frozen),
+    Resolved: ({ value }) => {
+      if (definition.source.kind === "trigger")
+        return matchesEmailTriggerValue(definition.source.trigger, value);
+      return frozen === undefined || matchesEmailCustomerField(value, frozen);
+    },
   });
   return matchesFrozen
     ? Result.succeed({ definition, snapshot })
@@ -167,6 +177,82 @@ const recordFieldText = (
     ? scalarOf(name, valueAtPath(value, field), locale)
     : Result.fail(new EmailValueMismatch({ name }));
 
+const triggerFieldText = (
+  name: EmailValueName,
+  trigger: EmailTriggerEvent,
+  value: Schema.Json,
+  field: readonly string[] | undefined,
+  locale: Locale
+): Result.Result<string, EmailValueMismatch> => {
+  const meta = emailTriggerFieldAt(trigger, field);
+  if (!isEmailTriggerInlineField(meta) || !field || !isJsonRecord(value))
+    return Result.fail(new EmailValueMismatch({ name }));
+  return scalarOf(name, valueAtPath(value, field), locale);
+};
+
+const isSafeDestination = (href: string): boolean => {
+  const protocol = URL.parse(href)?.protocol;
+  return protocol === "https:" || protocol === "mailto:";
+};
+
+const buttonHrefValue = (
+  rendering: Rendering,
+  ref: EmailValueReference
+): Result.Result<string, ValueFailure> =>
+  Result.gen(function* () {
+    const { definition, snapshot } = yield* resolvedValue(rendering, ref.name);
+    return yield* Match.valueTags(snapshot, {
+      Fallback: () => Result.fail(new EmailValueMismatch({ name: ref.name })),
+      Resolved: ({ value }) => {
+        if (
+          definition.source.kind !== "trigger" ||
+          !isEmailTriggerUrlField(
+            emailTriggerFieldAt(definition.source.trigger, ref.field)
+          ) ||
+          !ref.field ||
+          !isJsonRecord(value)
+        ) {
+          return Result.fail(new EmailValueMismatch({ name: ref.name }));
+        }
+        const href = valueAtPath(value, ref.field);
+        return Predicate.isString(href) && isSafeDestination(href)
+          ? Result.succeed(href)
+          : Result.fail(new EmailValueMismatch({ name: ref.name }));
+      },
+    });
+  });
+
+const conditionMatches = (
+  rendering: Rendering,
+  condition: EmailComponentCondition
+): Result.Result<boolean, ValueFailure> =>
+  Result.gen(function* () {
+    const { snapshot } = yield* resolvedValue(rendering, condition.name);
+    const present = yield* Match.valueTags(snapshot, {
+      Fallback: () => Result.succeed(false),
+      Resolved: ({ value }) => {
+        if (condition.field && condition.field.length > 0) {
+          if (!isJsonRecord(value))
+            return Result.fail(
+              new EmailValueMismatch({ name: condition.name })
+            );
+          const raw = valueAtPath(value, condition.field);
+          return Result.succeed(
+            raw !== undefined &&
+              raw !== null &&
+              (!Predicate.isString(raw) || raw.trim() !== "")
+          );
+        }
+        return Result.succeed(
+          value !== undefined &&
+            value !== null &&
+            (!Predicate.isString(value) || value.trim() !== "")
+        );
+      },
+    });
+    return condition.present ? present : !present;
+  });
+
 /** The text a value reference shows: its fallback, or the referenced scalar. */
 const valueText = (
   rendering: Rendering,
@@ -192,6 +278,14 @@ const valueText = (
                     )
                   )
                 )
+              ),
+            trigger: (source) =>
+              triggerFieldText(
+                part.name,
+                source.trigger,
+                value,
+                part.field,
+                rendering.locale
               ),
             customer: () =>
               part.field && part.field.length > 0
@@ -555,10 +649,19 @@ const componentElement = (
           />
         );
       }),
-    Button: ({ labelKey, href }) =>
+    Button: ({ labelKey, href, hrefValue }) =>
       Result.gen(function* () {
+        const resolvedHref = hrefValue
+          ? yield* buttonHrefValue(rendering, hrefValue)
+          : href;
+        if (!resolvedHref)
+          return yield* Result.fail(
+            new EmailValueMismatch({
+              name: hrefValue?.name ?? EmailValueName.make("href"),
+            })
+          );
         const label = yield* plainText(rendering, textOf(rendering, labelKey));
-        return <EmailCtaButton href={href} label={label} />;
+        return <EmailCtaButton href={resolvedHref} label={label} />;
       }),
     Record: (record) =>
       valueComponent(rendering, record.value, (value) =>
@@ -600,9 +703,14 @@ export const renderEmailContent = ({
     const rendering: Rendering = { document, locale, translation, values };
     const components = yield* Result.all(
       document.structure.map((component) =>
-        componentElement(rendering, component).pipe(
-          Result.map((element) => ({ id: component.id, element }))
-        )
+        Result.gen(function* () {
+          if (component.when) {
+            const visible = yield* conditionMatches(rendering, component.when);
+            if (!visible) return { id: component.id, element: null };
+          }
+          const element = yield* componentElement(rendering, component);
+          return { id: component.id, element };
+        })
       )
     );
     const operationalReason = (yield* plainText(

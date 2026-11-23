@@ -12,13 +12,16 @@ export {
   type AutomationRunFailureReason,
   type AutomationRunOutcome,
   type AutomationRunPhase,
+  type AutomationRunSkipReason,
   type AutomationRunState,
+  type AutomationSendDeferralCause,
   type AutomationTriggerKind,
   automationPreviewKinds,
   automationPreviewOutcomes,
   automationPreviewStatuses,
   automationRunEventKinds,
   automationRunOutcomes,
+  automationRunSkipReasons,
   automationTriggerKinds,
 } from "@deskohub/workspace-admin-api";
 

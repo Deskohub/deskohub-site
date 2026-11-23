@@ -1,9 +1,9 @@
 import {
-  AdministrationCampaignRecipientSkipReason,
   type AutomationFlow,
   type AutomationRunOutcome,
   type AutomationRunState,
   type AutomationVersionSummary,
+  automationRunSkipReasons,
 } from "@deskohub/workspace-admin-api";
 import { Option } from "effect";
 import { AdministrationLink } from "@/features/administration/admin-link";
@@ -133,7 +133,7 @@ function AutomationRunFilterForm({
           <option value="">
             {m.emailAutomationRunsFilterSkipReasonAny({}, { locale })}
           </option>
-          {AdministrationCampaignRecipientSkipReason.literals.map((reason) => (
+          {automationRunSkipReasons.map((reason) => (
             <option key={reason} value={reason}>
               {upperCaseFirst(
                 automationRunSkipReasonLabel(reason, locale),

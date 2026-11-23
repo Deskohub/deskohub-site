@@ -5,7 +5,7 @@ import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import { prefixPathnameWithLocale } from "@deskohub/i18n/pathname";
 import { fioPollTopic } from "@/features/checkout/backend/fio/fio-poll-wake.service";
 import { paidFulfillmentTopic } from "@/features/checkout/backend/fulfillment/paid-fulfillment-queue.service";
-import { reservationHoldCleanupTopic } from "@/features/checkout/backend/holds/reservation-hold-cleanup-queue.service";
+import { reservationHoldCleanupTopic } from "@/features/checkout/backend/holds/reservation-hold-cleanup-topic";
 import { latePaymentRecoveryTopic } from "@/features/checkout/backend/payment/late-payment-recovery-queue.service";
 import { automationUnitTopic } from "@/features/email-campaigns/automation/backend/automation-unit-queue.service";
 import { campaignSendTopic } from "@/features/email-campaigns/backend/campaign-send-queue.service";

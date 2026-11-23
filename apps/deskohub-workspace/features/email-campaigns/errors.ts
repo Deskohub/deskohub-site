@@ -233,7 +233,11 @@ export class CampaignContentMissing extends Data.TaggedError(
 export class CampaignPublishedEmailInvalid extends Data.TaggedError(
   "CampaignPublishedEmailInvalid"
 )<{
-  readonly reason: "unavailable" | "inline-content" | "automated";
+  readonly reason:
+    | "unavailable"
+    | "inline-content"
+    | "trigger-required"
+    | "automated-values-unsupported";
 }> {}
 
 /**

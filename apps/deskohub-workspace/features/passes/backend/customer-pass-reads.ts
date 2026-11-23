@@ -372,7 +372,7 @@ type HeldUnlimited = Effect.Success<
   ReturnType<typeof listHeldUnlimitedPasses>
 >[number];
 
-function getUnlimitedDisplayStatus(
+export function getUnlimitedDisplayStatus(
   pass: HeldUnlimited,
   today: PlainDate,
   issued: boolean,

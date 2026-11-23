@@ -30,6 +30,10 @@ const allowedColumns = new Map([
     "reusable email identity",
   ],
   [
+    "public.email_campaign_automation_versions.frozen_email_version_id",
+    "published email version identity",
+  ],
+  [
     "public.email_campaign_sends.frozen_email_version_id",
     "published email version identity",
   ],

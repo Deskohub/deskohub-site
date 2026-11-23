@@ -21,6 +21,7 @@ import {
   emailCampaignAutomationWorkUnits as units,
 } from "@/db/schema";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
   type AutomationConditionPlan,
@@ -422,7 +423,7 @@ export class AutomationPlanner extends Context.Service<
         WorkspaceDatabase.Default,
         WorkspaceDatabaseAdvisoryLock.Default,
         AutomationUnitHandlers.Live,
-        AutomationUnitQueue.Live,
+        AutomationUnitQueue.Default.pipe(Layer.provide(VercelQueuePublisher)),
         AutomationSweepPlanning.Live,
         AutomationIntakePlanning.Live,
         AutomationTimerPlanning.Live,

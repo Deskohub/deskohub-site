@@ -1337,6 +1337,7 @@
   "accountReservationsOtherTitle": "Rezervace bez údaje o datu",
   "accountReservationsCurrentEmpty": "Nemáš žádné aktuální ani nadcházející rezervace.",
   "accountReservationsPastEmpty": "Zatím nemáš žádné minulé rezervace.",
+  "accountReservationsPassSavingsLink": "Ušetři s balíčky a členstvími",
   "accountReservationsUnavailableTitle": "Historie rezervací je dočasně nedostupná",
   "accountReservationsProviderUnavailable": "Náš rezervační systém není dostupný. Tvůj profil zůstává k dispozici, zkus to prosím později.",
   "accountReservationOtherProduct": "Rezervace ve Workspace",
@@ -1593,6 +1594,7 @@
   ],
   "landingNavCoworking": "Coworking",
   "landingOfferingCoworkPageLink": "Prohlédnout coworking",
+  "landingOfferingPassesLink": "Balíčky a členství",
   "breadcrumbLabel": "Drobečková navigace",
   "breadcrumbHome": "Deskohub Workspace",
   "coworkingBreadcrumb": "Coworking",
@@ -1623,6 +1625,7 @@
   "coworkingReservedDeskPointWorkstation": "Za příplatek si přidáš pracovní stanici se dvěma monitory",
   "coworkingReservedDeskCta": "Rezervovat vyhrazené místo",
   "coworkingPricesNote": "Ceny doplňků a případné akce najdeš v <pricing>ceníku</pricing>.",
+  "coworkingComparePassesLink": "Porovnat denní vstupy s balíčky a členstvím",
   "coworkingAmenitiesTitle": "Co tu najdeš",
   "coworkingAmenityInternetTitle": "Internet",
   "coworkingAmenityInternetText": "Optický internet a Wi-Fi 6 zvládnou videohovory i velké soubory.",
@@ -1882,50 +1885,6 @@
   "entryPackCheckoutTermsChanged": "Podmínky se změnily. Před platbou si přečtěte aktuální znění a znovu je potvrďte.",
   "passEntryPack": "Balíček vstupů",
   "passUnlimited": "Neomezené členství",
-  "passReminderGreeting": "Ahoj {firstName},",
-  "passReminderGreetingUnnamed": "Dobrý den,",
-  "passReminderEntryPackSubject": [
-    {
-      "declarations": [
-        "input remaining",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "V balíčku ti zbývá {remainingNumber} vstup",
-        "remainingPlural=few": "V balíčku ti zbývají {remainingNumber} vstupy",
-        "remainingPlural=other": "V balíčku ti zbývá {remainingNumber} vstupů"
-      }
-    }
-  ],
-  "passReminderEntryPackPreheader": "Tvůj balíček ({tier}) končí {endsOn}.",
-  "passReminderEntryPackBody": [
-    {
-      "declarations": [
-        "input remaining",
-        "input total",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number",
-        "local totalNumber = total: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "Tvůj balíček vstupů ({tier}) končí <strong>{endsOn}</strong>. Ještě můžeš využít <strong>{remainingNumber} z {totalNumber} vstupů</strong>. Vyber si dny, ať vstupy nepropadnou.",
-        "remainingPlural=few": "Tvůj balíček vstupů ({tier}) končí <strong>{endsOn}</strong>. Ještě můžeš využít <strong>{remainingNumber} z {totalNumber} vstupů</strong>. Vyber si dny, ať vstupy nepropadnou.",
-        "remainingPlural=other": "Tvůj balíček vstupů ({tier}) končí <strong>{endsOn}</strong>. Ještě můžeš využít <strong>{remainingNumber} z {totalNumber} vstupů</strong>. Vyber si dny, ať vstupy nepropadnou."
-      }
-    }
-  ],
-  "passReminderEntryPackBook": "Rezervovat den",
-  "passReminderEntryPackExpiry": "Vstupy, na které do té doby nemáš rezervaci, s balíčkem propadnou.",
-  "passReminderUnlimitedSubject": "Tvé neomezené členství končí {endsOn}",
-  "passReminderUnlimitedPreheader": "Obnov si členství na dalších {days} dní.",
-  "passReminderUnlimitedPreheaderWithDesk": "Obnov si členství a {deskLabel} ti zůstane na dalších {days} dní.",
-  "passReminderUnlimitedBody": "Tvé neomezené členství ({tier}) končí <strong>{endsOn}</strong>. Obnov si ho teď a dalších {days} dní začne hned poté, {renewalStartsOn}.",
-  "passReminderUnlimitedBodyWithDesk": "Tvé neomezené členství ({tier}) končí <strong>{endsOn}</strong>. Obnov si ho teď a dalších {days} dní začne hned poté, {renewalStartsOn}. Zůstane ti <strong>{deskLabel}</strong>.",
-  "passReminderUnlimitedRenew": "Obnovit na {days} dní",
-  "passReminderUnlimitedDeskFallback": "Pokud už při obnovení nebude {deskLabel} k dispozici, přidělíme ti jiný stůl.",
   "unlimitedPassRenew": "Prodloužit členství",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Rezervovaný stůl",
@@ -1996,8 +1955,18 @@
   "entryPackDiscoveryPerDay": "{price} za den",
   "entryPackDiscoveryBuy": "Koupit",
   "entryPackDiscoveryBuyTier": "Koupit balíček vstupů ({tier})",
-  "entryPackDiscoveryCoworkLink": "Chodíš často? <packLink>Balíčky vstupů od {price} za den</packLink>",
-  "unlimitedPassDiscoveryIntro": "30 dní v řadě od zvoleného data. Každý den budeš mít připravený vstupní kód i bez rezervace.",
+  "unlimitedPassDiscoveryIntro": "Neomezený přístup na 30 dní od zvoleného data. Každý den budeš mít připravený vstupní kód i bez rezervace.",
+  "passPurchaseOffersHeading": "Balíčky a členství",
+  "entryPackOfferTagline": "plať méně za každou návštěvu",
+  "entryPackOfferSizes": "{smaller} nebo {larger}",
+  "entryPackOfferVisits": "vstupů",
+  "entryPackOfferAction": "Vybrat balíček",
+  "entryPackOfferLabel": "Vybrat balíček vstupů ({tier})",
+  "unlimitedPassOfferTaglineOpenSpace": "neomezený přístup na {days} dní",
+  "unlimitedPassOfferTaglineReservedDesk": "tvoje vlastní stálé místo",
+  "unlimitedPassOfferExpiry": "Platnost do: <date>{date}</date>",
+  "unlimitedPassOfferAction": "Vybrat členství",
+  "unlimitedPassOfferLabel": "Vybrat neomezené členství ({tier})",
   "unlimitedPassDiscoveryOpenSpaceDescription": "Místo v Open Space každý den od 00:00 do {until}.",
   "unlimitedPassDiscoveryReservedDeskDescription": "Po všech 30 dní máš stejné místo k dispozici nonstop.",
   "unlimitedPassDiscoveryWorkstationDescription": "Po všech 30 dní máš nonstop k dispozici stejné místo se dvěma monitory.",

@@ -65,7 +65,10 @@ const writeReusableEmailAction = defineAdministrationAction(
         emailId,
       }),
       ...(publish
-        ? [administrationHref("/[locale]/admin/email-campaigns/new")]
+        ? [
+            administrationHref("/[locale]/admin/email-campaigns/new"),
+            administrationHref("/[locale]/admin/email-campaigns"),
+          ]
         : []),
     ],
   },

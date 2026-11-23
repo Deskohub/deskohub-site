@@ -27,11 +27,14 @@ import {
   customerEvents,
   customerMarketingConsents,
   emailCampaignAudiences,
+  emailCampaignAutomationCustomerClaims,
   emailCampaignAutomationPreviewRows,
   emailCampaignAutomationPreviews,
   emailCampaignAutomationRuns,
   emailCampaignAutomations,
+  emailCampaignAutomationVersions,
   emailCampaignAutomationWorkUnits,
+  emailCampaignDeliveryBatches,
   emailCampaignRecipients,
   emailCampaignSends,
   emailCampaigns,
@@ -50,8 +53,11 @@ import { CampaignRecipientService } from "../../backend/campaign-recipient.servi
 import {
   deleteAutomatedCampaigns,
   everyoneFilter,
+  passReminderEmailDocumentFixture,
   seedAutomatedCampaign,
+  seedAutomatedSend,
   seedCampaignSend,
+  seedPublishedEmail,
 } from "../../backend/email-campaigns.test-utils";
 import type {
   CampaignAudienceId,
@@ -59,6 +65,7 @@ import type {
 } from "../../campaign-identifiers";
 import { campaignLocales } from "../../recipient-locale";
 import type { AutomationPreviewId } from "../automation-identifiers";
+import { oneOffCampaignGapEndsAt } from "../automation-send-policies";
 import { automationTickAtOrAfter } from "../automation-ticks";
 import { AutomationConditionEvaluation } from "./automation-condition-evaluation.service";
 import { AutomationDryRun } from "./automation-dry-run.service";
@@ -78,7 +85,10 @@ import {
 } from "./automation-lifecycle.test-utils";
 import { nextPassReminderPreviewOccurrence } from "./automation-pass-reminder-preview";
 import { makePreviewUnitHandler } from "./automation-preview-unit";
-import { seedKnownCustomers } from "./automation-steps.test-utils";
+import {
+  seedAutomationRun,
+  seedKnownCustomers,
+} from "./automation-steps.test-utils";
 import {
   comeBackOfferFlow,
   lapsedRegularsFilter,
@@ -86,7 +96,6 @@ import {
 } from "./automation-stories.test-utils";
 import { AutomationUnitProcessor } from "./automation-unit-processor.service";
 import { makeAutomationUnitQueueFake } from "./automation-unit-queue.test-utils";
-import { PassReminderWritesOpen } from "./pass-reminder-write-policy";
 
 /**
  * A dry run reads every active consent, so the suite runs on a database of
@@ -166,6 +175,9 @@ const dotyposState = {
   failNextCustomerPage: false,
   customerPageCalls: [] as number[],
   reservationReads: 0,
+  /** Fails every reservation lookup by id that asks for any id. */
+  failReservationLookups: false,
+  reservationLookups: [] as number[],
 };
 const dotypos = DotyposServiceMock({
   getCustomersByIds: (ids) => {
@@ -193,6 +205,17 @@ const dotypos = DotyposServiceMock({
   },
   getReservationsByIds: (ids, readOptions) => {
     dotyposState.reservationReads += 1;
+    const asked = [...ids].length;
+    dotyposState.reservationLookups.push(asked);
+    if (dotyposState.failReservationLookups && asked > 0) {
+      return Effect.fail(
+        new DotyposUnavailable({
+          operation: "getReservationsByIds",
+          reason: "server",
+          httpStatus: 503,
+        })
+      );
+    }
     return makeInMemoryDotypos({
       reservations: dotyposState.reservations,
     }).service.getReservationsByIds(ids, readOptions);
@@ -218,6 +241,8 @@ describe.skipIf(!testDatabase)(
     const campaignIds: CampaignId[] = [];
     const audienceIds: CampaignAudienceId[] = [];
     const reservationIds: string[] = [];
+    /** Campaigns whose seeded claims must go before their runs. */
+    const claimedCampaignIds: CampaignId[] = [];
 
     const candidates = CampaignCandidateRepository.Default.pipe(
       Layer.provide(testDatabase.layer)
@@ -526,7 +551,60 @@ describe.skipIf(!testDatabase)(
       return ids;
     };
 
+    const seedPassHolder = async (
+      dotyposCustomerId: DotyposCustomerId,
+      options: Parameters<typeof profile>[1] = { tags: ["vip"] }
+    ) => {
+      const id = crypto.randomUUID();
+      await testDatabase.pool.query(
+        "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
+        [id, dotyposCustomerId]
+      );
+      await testDatabase.pool.query(
+        `insert into auth."user" (id, name, email, email_verified)
+         values ($1, 'Synthetic holder', $2, true)`,
+        [id, testEmailAddress(dotyposCustomerId)]
+      );
+      dotyposState.customers.push(profile(dotyposCustomerId, options));
+      return id;
+    };
+
+    const seedPass = async (input: {
+      readonly holder: string;
+      readonly kind: "entry-pack" | "unlimited";
+      readonly validUntil: string;
+    }) => {
+      const passId = crypto.randomUUID();
+      await testDatabase.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, fulfilled_at)
+         values ($1, 'pass-purchase', 'synthetic-billing-id', 'complimentary', 'fulfilled', now())`,
+        [passId]
+      );
+      await testDatabase.pool.query(
+        `insert into pass_purchases (id, buyer_account_id, holder_account_id, product, tier,
+           entry_count, unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $2, $3, 'open-space',
+           case when $3 = 'entry-pack' then 5 end,
+           case when $3 = 'unlimited' then false end, 'active',
+           $4::date - 30, $4, '{}', 'en-US', now())`,
+        [passId, input.holder, input.kind, input.validUntil]
+      );
+      return passId;
+    };
+
     afterAll(async () => {
+      if (claimedCampaignIds.length > 0) {
+        await query(
+          db
+            .delete(emailCampaignAutomationCustomerClaims)
+            .where(
+              inArray(
+                emailCampaignAutomationCustomerClaims.campaignId,
+                claimedCampaignIds
+              )
+            )
+        );
+      }
       await kit.cleanup();
       await deleteAutomatedCampaigns(db, campaignIds);
       if (audienceIds.length > 0) {
@@ -1301,6 +1379,357 @@ describe.skipIf(!testDatabase)(
       expect(await unitsOf(started.previewId)).toEqual([]);
     });
 
+    test("a stay trigger replays only the visits of its stay", async () => {
+      const [ida, jack, lena] = ["ida", "jack", "lena"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const noonDaysAgo = (days: number) =>
+        pragueOf(ago({ hours: 24 * days }))
+          .toPlainDate()
+          .toZonedDateTime({ timeZone: "Europe/Prague", plainTime: "12:00" })
+          .toInstant();
+      /** 09:00 to 17:00 in Prague. */
+      const dayOf = (days: number) => ({
+        startsAt: noonDaysAgo(days).subtract({ hours: 3 }),
+        endsAt: noonDaysAgo(days).add({ hours: 5 }),
+      });
+      /** Noon to noon the next day in Prague. */
+      const overnightFrom = (days: number) => ({
+        startsAt: noonDaysAgo(days),
+        endsAt: noonDaysAgo(days - 1),
+      });
+      const visits = {
+        "ida-overnight": { customer: ida, ...overnightFrom(8) },
+        "jack-day": { customer: jack, ...dayOf(7) },
+        // Ends while jack's day run still waits.
+        "jack-overnight": { customer: jack, ...overnightFrom(6) },
+        "lena-day": { customer: lena, ...dayOf(10) },
+      };
+      await seedReservations(
+        Object.entries(visits).map(([label, visit]) => ({
+          label,
+          ...visit,
+          // Workspace cancelled lena's visit after its email went out.
+          ...(label === "lena-day" && { workspaceCancelledAt: noonDaysAgo(2) }),
+        }))
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "reserved-desk",
+              coffee: true,
+            },
+          })
+          .where(
+            inArray(
+              workspaceReservations.id,
+              Object.keys(visits).map(reservationIdOf)
+            )
+          )
+      );
+      const [idaEvent, jackDay, jackOvernight, lenaDay] = await seedEvents(
+        Object.entries(visits).map(([reservation, visit]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer: visit.customer,
+          occurredAt: visit.endsAt,
+        }))
+      );
+      const campaignId = await seedAutomation({
+        flow: decodeFlow({
+          trigger: {
+            _tag: "ReservationFinished",
+            product: { family: "cowork", properties: [] },
+            stay: "day",
+          },
+          steps: [waitHours("hold", 72), send],
+        }),
+      });
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+
+      const outcomes = new Map(
+        (await rowsOf(started.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      expect(outcomes.has(idaEvent!)).toBe(false);
+      expect(outcomes.get(jackDay!)).toBe("would-send");
+      expect(outcomes.has(jackOvernight!)).toBe(false);
+      expect(outcomes.get(lenaDay!)).toBe("would-send");
+    });
+
+    test("a payment trigger replays only individually paid reservations", async () => {
+      const [mona, nina] = ["mona", "nina"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const finishedAt = ago({ hours: 24 * 4 });
+      await seedReservations(
+        [
+          { label: "mona-card", customer: mona },
+          { label: "nina-unpaid-attempt", customer: nina },
+        ].map((reservation) => ({
+          ...reservation,
+          startsAt: finishedAt.subtract({ hours: 2 }),
+          endsAt: finishedAt,
+        }))
+      );
+      // Only mona's order has a paid attempt that keeps its amount.
+      const attemptId = `dry-run-card-${runId}`;
+      await testDatabase.pool.query(
+        `insert into payment_attempts (id, order_id, workspace_reservation_id, provider,
+           provider_order_id, state, amount_value, amount_exponent, currency)
+         values ($1, $2, $2, 'nexi', $1, 'paid', 29000, 2, 'CZK')`,
+        [attemptId, reservationIdOf("mona-card")]
+      );
+      await testDatabase.pool.query(
+        "update workspace_reservations set active_payment_attempt_id = $2 where id = $1",
+        [reservationIdOf("mona-card"), attemptId]
+      );
+      const [monaEvent, ninaEvent] = await seedEvents([
+        {
+          kind: "reservation-finished",
+          reservation: "mona-card",
+          customer: mona,
+          occurredAt: finishedAt,
+        },
+        {
+          kind: "reservation-finished",
+          reservation: "nina-unpaid-attempt",
+          customer: nina,
+          occurredAt: finishedAt,
+        },
+      ]);
+      const campaignId = await seedAutomation({
+        flow: decodeFlow({
+          trigger: { _tag: "ReservationFinished", payment: "individual" },
+          steps: [send],
+        }),
+      });
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+
+      const outcomes = new Map(
+        (await rowsOf(started.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      expect(outcomes.get(monaEvent!)).toBe("would-send");
+      expect(outcomes.has(ninaEvent!)).toBe(false);
+
+      // A unit that kept missing its deadline still judges payment locally.
+      const fallback = await start(
+        await seedAutomation({
+          flow: decodeFlow({
+            trigger: { _tag: "ReservationFinished", payment: "individual" },
+            steps: [send],
+          }),
+        })
+      );
+      for (const unit of await unitsOf(fallback.previewId)) {
+        await query(
+          db
+            .update(emailCampaignAutomationWorkUnits)
+            .set({ deadlineMisses: 3 })
+            .where(eq(emailCampaignAutomationWorkUnits.id, unit.id))
+        );
+      }
+      await processAll(fallback.previewId);
+      const fallbackOutcomes = new Map(
+        (await rowsOf(fallback.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      expect(fallbackOutcomes.get(monaEvent!)).toBe("unavailable");
+      expect(fallbackOutcomes.has(ninaEvent!)).toBe(false);
+    });
+
+    test("a unit past its deadline still drops events payment and stored tiers settle", async () => {
+      const [ola, pia, quin] = ["ola", "pia", "quin"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const finishedAt = ago({ hours: 24 * 3 });
+      const reservations = {
+        "ola-open-space": ola,
+        "pia-reserved-desk": pia,
+        "quin-reserved-desk-unpaid": quin,
+      };
+      await seedReservations(
+        Object.entries(reservations).map(([label, customer]) => ({
+          label,
+          customer,
+          startsAt: finishedAt.subtract({ hours: 24 }),
+          endsAt: finishedAt,
+        }))
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "reserved-desk",
+              coffee: true,
+            },
+          })
+          .where(
+            inArray(workspaceReservations.id, [
+              reservationIdOf("pia-reserved-desk"),
+              reservationIdOf("quin-reserved-desk-unpaid"),
+            ])
+          )
+      );
+      for (const label of ["ola-open-space", "pia-reserved-desk"]) {
+        const attemptId = `dry-run-card-${runId}-${label}`;
+        await testDatabase.pool.query(
+          `insert into payment_attempts (id, order_id, workspace_reservation_id, provider,
+             provider_order_id, state, amount_value, amount_exponent, currency)
+           values ($1, $2, $2, 'nexi', $1, 'paid', 29000, 2, 'CZK')`,
+          [attemptId, reservationIdOf(label)]
+        );
+        await testDatabase.pool.query(
+          "update workspace_reservations set active_payment_attempt_id = $2 where id = $1",
+          [reservationIdOf(label), attemptId]
+        );
+      }
+      const [olaEvent, piaEvent, quinEvent] = await seedEvents(
+        Object.entries(reservations).map(([reservation, customer]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer,
+          occurredAt: finishedAt,
+        }))
+      );
+      const started = await start(
+        await seedAutomation({
+          flow: decodeFlow({
+            trigger: {
+              _tag: "ReservationFinished",
+              product: { family: "cowork", properties: [] },
+              stay: "overnight",
+              payment: "individual",
+            },
+            steps: [send],
+          }),
+        })
+      );
+      for (const unit of await unitsOf(started.previewId)) {
+        await query(
+          db
+            .update(emailCampaignAutomationWorkUnits)
+            .set({ deadlineMisses: 3 })
+            .where(eq(emailCampaignAutomationWorkUnits.id, unit.id))
+        );
+      }
+      await processAll(started.previewId);
+
+      const outcomes = new Map(
+        (await rowsOf(started.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      // Open Space can't be overnight; the unpaid one fails payment; only
+      // the paid Reserved Desk visit needs its unread interval.
+      expect(outcomes.has(olaEvent!)).toBe(false);
+      expect(outcomes.has(quinEvent!)).toBe(false);
+      expect(outcomes.get(piaEvent!)).toBe("unavailable");
+    });
+
+    test("a stay its stored tiers rule out reads no visits, so Dotypos can't stall the replay", async () => {
+      const [rita, sven] = ["rita", "sven"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const finishedAt = ago({ hours: 24 * 2 });
+      const labels = { "rita-open-space": rita, "sven-open-space": sven };
+      await seedReservations(
+        Object.entries(labels).map(([label, customer]) => ({
+          label,
+          customer,
+          startsAt: finishedAt.subtract({ hours: 24 }),
+          endsAt: finishedAt,
+        }))
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "open-space",
+              coffee: false,
+            },
+          })
+          .where(
+            inArray(
+              workspaceReservations.id,
+              Object.keys(labels).map(reservationIdOf)
+            )
+          )
+      );
+      const events = await seedEvents(
+        Object.entries(labels).map(([reservation, customer]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer,
+          occurredAt: finishedAt,
+        }))
+      );
+      const started = await start(
+        await seedAutomation({
+          flow: decodeFlow({
+            trigger: {
+              _tag: "ReservationFinished",
+              // Only this test's Open Space visits are candidates.
+              product: {
+                family: "cowork",
+                properties: [
+                  {
+                    property: "tier",
+                    operator: "anyOf",
+                    value: ["open-space"],
+                  },
+                ],
+              },
+              stay: "overnight",
+            },
+            steps: [send],
+          }),
+        })
+      );
+
+      dotyposState.reservationLookups = [];
+      dotyposState.failReservationLookups = true;
+      try {
+        await processAll(started.previewId);
+      } finally {
+        dotyposState.failReservationLookups = false;
+      }
+
+      expect(
+        dotyposState.reservationLookups.filter((asked) => asked > 0)
+      ).toEqual([]);
+      expect(
+        (await unitsOf(started.previewId)).map(({ status }) => status)
+      ).toEqual(["done"]);
+      const rows = await rowsOf(started.previewId);
+      expect(
+        rows.filter(({ customerEventId }) =>
+          events.includes(customerEventId ?? "")
+        )
+      ).toEqual([]);
+    });
+
     test("a reschedule in Dotypos changes the next preview without local writes", async () => {
       const hank = customerId("hank");
       await seedReservations([
@@ -1623,6 +2052,510 @@ describe.skipIf(!testDatabase)(
       ).toBe("would-send");
     });
 
+    test("a Send's delivery policies skip, defer and hold off replayed sends", async () => {
+      const triggerAt = ago({ hours: 24 * 10 });
+      const [plain, claimed, gapped, packHolder, unlimitedHolder] = [
+        "policy-plain",
+        "policy-claimed",
+        "policy-gapped",
+        "policy-pack",
+        "policy-unlimited",
+      ].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const { campaignId, previewId: activationPreviewId } =
+        await kit.seedActive(
+          decodeFlow({
+            trigger: { _tag: "ReservationFinished" },
+            steps: [
+              {
+                ...send,
+                oncePerCustomer: true,
+                oneOffCampaignGap: { days: 14 },
+                skipPassHolders: true,
+              },
+            ],
+          })
+        );
+
+      const validUntil = pragueOf(now)
+        .toPlainDate()
+        .add({ days: 30 })
+        .toString();
+      for (const [holder, kind] of [
+        [packHolder, "entry-pack"],
+        [unlimitedHolder, "unlimited"],
+      ] as const) {
+        await seedPass({
+          holder: await seedPassHolder(holder),
+          kind,
+          validUntil,
+        });
+      }
+      dotyposState.customers.push(
+        ...[plain, claimed, gapped].map((id) => profile(id))
+      );
+      await seedKnownCustomers(db, [
+        plain,
+        claimed,
+        gapped,
+        packHolder,
+        unlimitedHolder,
+      ]);
+
+      // Activation's completed dry run would otherwise be reused.
+      await query(
+        db
+          .update(emailCampaignAutomationPreviews)
+          .set({ status: "superseded" })
+          .where(eq(emailCampaignAutomationPreviews.id, activationPreviewId))
+      );
+      claimedCampaignIds.push(campaignId);
+      // A live run of the campaign already holds the claimed customer.
+      const [version] = await query(
+        db
+          .select({ id: emailCampaignAutomationVersions.id })
+          .from(emailCampaignAutomationVersions)
+          .where(eq(emailCampaignAutomationVersions.campaignId, campaignId))
+      );
+      const claimingRun = await seedAutomationRun(db, {
+        campaignId,
+        versionId: version!.id,
+        customerId: claimed,
+        stepId: "send",
+        phase: "waiting",
+        stepEnteredAt: ago({ hours: 1 }),
+        dueAt: ago({ hours: 1 }),
+      });
+      await query(
+        db.insert(emailCampaignAutomationCustomerClaims).values({
+          campaignId,
+          dotyposCustomerId: claimed,
+          runId: claimingRun,
+        })
+      );
+
+      // One-off emails to the gapped customer: one received six days before
+      // the event, a later one requested three days before it.
+      const sent = await seedCampaignSend(db, {
+        purpose: "marketing",
+        status: "sent",
+        recipients: [{ dotyposCustomerId: gapped, status: "sent" as const }],
+      });
+      const requested = await seedCampaignSend(db, {
+        purpose: "marketing",
+        recipients: [{ dotyposCustomerId: gapped, status: "pending" as const }],
+      });
+      campaignIds.push(sent.campaignId, requested.campaignId);
+      await query(
+        db
+          .update(emailCampaignRecipients)
+          .set({ statusUpdatedAt: triggerAt.subtract({ hours: 24 * 6 }) })
+          .where(eq(emailCampaignRecipients.sendId, sent.sendId))
+      );
+      const [pending] = await query(
+        db
+          .select({ deliveryAttempt: emailCampaignRecipients.deliveryAttempt })
+          .from(emailCampaignRecipients)
+          .where(eq(emailCampaignRecipients.sendId, requested.sendId))
+      );
+      const batchRequestedAt = triggerAt.subtract({ hours: 24 * 3 });
+      await query(
+        db.insert(emailCampaignDeliveryBatches).values({
+          sendId: requested.sendId,
+          deliveryAttempt: pending!.deliveryAttempt,
+          batchIndex: 0,
+          dotyposCustomerIds: [gapped],
+          payloadHash: "synthetic-payload-hash",
+          requestedAt: batchRequestedAt,
+        })
+      );
+
+      const customers = [plain, claimed, gapped, packHolder, unlimitedHolder];
+      const laterAt = triggerAt.add({ hours: 24 * 2 });
+      await seedReservations([
+        ...customers.map((customer, index) => ({
+          label: `policy-${index}`,
+          customer,
+          startsAt: triggerAt.subtract({ hours: 2 }),
+          endsAt: triggerAt,
+        })),
+        ...[plain, gapped].map((customer, index) => ({
+          label: `policy-later-${index}`,
+          customer,
+          startsAt: laterAt.subtract({ hours: 2 }),
+          endsAt: laterAt,
+        })),
+      ]);
+      await seedEvents([
+        ...customers.map((customer, index) => ({
+          kind: "reservation-finished" as const,
+          reservation: `policy-${index}`,
+          customer,
+          occurredAt: triggerAt,
+        })),
+        ...[plain, gapped].map((customer, index) => ({
+          kind: "reservation-finished" as const,
+          reservation: `policy-later-${index}`,
+          customer,
+          occurredAt: laterAt,
+        })),
+      ]);
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+      const report = await read(started.previewId);
+
+      const sendTick = automationTickAtOrAfter(triggerAt).toString();
+      const gapSendAt = automationTickAtOrAfter(
+        oneOffCampaignGapEndsAt(batchRequestedAt, { days: 14 })
+      );
+      expect(Temporal.Instant.compare(gapSendAt, now)).toBeGreaterThan(0);
+      const rowOf = (customer: DotyposCustomerId, at: Temporal.Instant) =>
+        report.rows.find(
+          (row) =>
+            row.customerId === customer && row.triggerAt === at.toString()
+        );
+      expect(rowOf(plain, triggerAt)).toMatchObject({
+        outcome: "would-send",
+        sendAt: sendTick,
+        skipReason: null,
+      });
+      expect(rowOf(plain, laterAt)).toMatchObject({
+        outcome: "skipped",
+        sendAt: null,
+        skipReason: "already-sent-once",
+        projected: false,
+      });
+      expect(rowOf(claimed, triggerAt)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "already-sent-once",
+      });
+      expect(rowOf(gapped, triggerAt)).toMatchObject({
+        outcome: "would-send",
+        sendAt: gapSendAt.toString(),
+        skipReason: null,
+        projected: true,
+      });
+      // The deferred send holds the customer's later event off.
+      expect(rowOf(gapped, laterAt)).toMatchObject({
+        outcome: "already-active",
+        skipReason: null,
+      });
+      for (const holder of [packHolder, unlimitedHolder]) {
+        expect(rowOf(holder, triggerAt)).toMatchObject({
+          outcome: "skipped",
+          sendAt: null,
+          skipReason: "pass-holder",
+        });
+      }
+      expect(report.counts).toMatchObject({
+        "would-send": 2,
+        skipped: 4,
+        "already-active": 1,
+      });
+      const stored = await rowsOf(started.previewId);
+      expect(
+        stored
+          .filter((row) => row.outcome === "skipped")
+          .map((row) => row.skipReason)
+          .toSorted()
+      ).toEqual([
+        "already-sent-once",
+        "already-sent-once",
+        "pass-holder",
+        "pass-holder",
+      ]);
+    });
+
+    test("a stay and payment trigger replays only qualifying visits through its Send's policies", async () => {
+      const [repeat, holder, unpaidHolder, overnight] = [
+        "qualified-repeat",
+        "qualified-holder",
+        "qualified-unpaid-holder",
+        "qualified-overnight",
+      ].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const noonDaysAgo = (days: number) =>
+        pragueOf(ago({ hours: 24 * days }))
+          .toPlainDate()
+          .toZonedDateTime({ timeZone: "Europe/Prague", plainTime: "12:00" })
+          .toInstant();
+      /** 09:00 to 17:00 in Prague. */
+      const dayOf = (days: number) => ({
+        startsAt: noonDaysAgo(days).subtract({ hours: 3 }),
+        endsAt: noonDaysAgo(days).add({ hours: 5 }),
+      });
+      /** Noon to noon the next day in Prague. */
+      const overnightFrom = (days: number) => ({
+        startsAt: noonDaysAgo(days),
+        endsAt: noonDaysAgo(days - 1),
+      });
+      const visits = {
+        "qualified-repeat-first": {
+          customer: repeat,
+          ...dayOf(10),
+          paid: true,
+        },
+        "qualified-repeat-overnight": {
+          customer: repeat,
+          ...overnightFrom(8),
+          paid: true,
+        },
+        "qualified-repeat-later": { customer: repeat, ...dayOf(5), paid: true },
+        "qualified-holder-day": { customer: holder, ...dayOf(9), paid: true },
+        "qualified-unpaid-holder-day": {
+          customer: unpaidHolder,
+          ...dayOf(9),
+          paid: false,
+        },
+        "qualified-overnight-stay": {
+          customer: overnight,
+          ...overnightFrom(7),
+          paid: true,
+        },
+      };
+      await seedReservations(
+        Object.entries(visits).map(
+          ([label, { customer, startsAt, endsAt }]) => ({
+            label,
+            customer,
+            startsAt,
+            endsAt,
+          })
+        )
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "reserved-desk",
+              coffee: true,
+            },
+          })
+          .where(
+            inArray(
+              workspaceReservations.id,
+              Object.keys(visits).map(reservationIdOf)
+            )
+          )
+      );
+      for (const [label, { paid }] of Object.entries(visits)) {
+        if (!paid) continue;
+        const attemptId = `dry-run-${label}-${runId}`;
+        await testDatabase.pool.query(
+          `insert into payment_attempts (id, order_id, workspace_reservation_id, provider,
+             provider_order_id, state, amount_value, amount_exponent, currency)
+           values ($1, $2, $2, 'nexi', $1, 'paid', 29000, 2, 'CZK')`,
+          [attemptId, reservationIdOf(label)]
+        );
+        await testDatabase.pool.query(
+          "update workspace_reservations set active_payment_attempt_id = $2 where id = $1",
+          [reservationIdOf(label), attemptId]
+        );
+      }
+      const validUntil = pragueOf(now)
+        .toPlainDate()
+        .add({ days: 30 })
+        .toString();
+      for (const passHolder of [holder, unpaidHolder]) {
+        await seedPass({
+          holder: await seedPassHolder(passHolder),
+          kind: "entry-pack",
+          validUntil,
+        });
+      }
+      dotyposState.customers.push(
+        ...[repeat, overnight].map((id) => profile(id))
+      );
+      await seedKnownCustomers(db, [repeat, holder, unpaidHolder, overnight]);
+      const [
+        repeatFirst,
+        repeatOvernight,
+        repeatLater,
+        holderDay,
+        unpaidHolderDay,
+        overnightStay,
+      ] = await seedEvents(
+        Object.entries(visits).map(([reservation, visit]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer: visit.customer,
+          occurredAt: visit.endsAt,
+        }))
+      );
+      const campaignId = await seedAutomation({
+        flow: decodeFlow({
+          trigger: {
+            _tag: "ReservationFinished",
+            product: { family: "cowork", properties: [] },
+            stay: "day",
+            payment: "individual",
+          },
+          steps: [{ ...send, oncePerCustomer: true, skipPassHolders: true }],
+        }),
+      });
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+
+      const rows = await rowsOf(started.previewId);
+      const rowOf = (eventId: string | undefined) =>
+        rows.find((row) => row.customerEventId === eventId);
+      expect(rowOf(repeatFirst)).toMatchObject({
+        outcome: "would-send",
+        skipReason: null,
+      });
+      expect(rowOf(repeatLater)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "already-sent-once",
+      });
+      expect(rowOf(holderDay)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "pass-holder",
+      });
+      for (const ruledOut of [
+        repeatOvernight,
+        unpaidHolderDay,
+        overnightStay,
+      ]) {
+        expect(rowOf(ruledOut)).toBeUndefined();
+      }
+      // A customer whose every event the trigger rules out shows no row.
+      expect(
+        rows
+          .map((row) => row.dotyposCustomerId)
+          .filter((id) => id === unpaidHolder || id === overnight)
+      ).toEqual([]);
+    });
+
+    test("an earlier version's sent run counts as sent once, and skipping pass holders reads marketing consent on an operational campaign", async () => {
+      const triggerAt = ago({ hours: 24 * 10 });
+      const [plain, sentEarlier, withdrawn] = [
+        "policy-op-plain",
+        "policy-op-sent-earlier",
+        "policy-op-withdrawn",
+      ].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const { campaignId, previewId: activationPreviewId } =
+        await kit.seedActive(
+          decodeFlow({
+            trigger: { _tag: "ReservationFinished" },
+            steps: [{ ...send, oncePerCustomer: true, skipPassHolders: true }],
+          })
+        );
+      await query(
+        db
+          .update(emailCampaigns)
+          .set({ purpose: "operational" })
+          .where(eq(emailCampaigns.id, campaignId))
+      );
+      const customers = [plain, sentEarlier, withdrawn];
+      dotyposState.customers.push(...customers.map((id) => profile(id)));
+      await seedKnownCustomers(db, customers);
+      await query(
+        db
+          .update(customerMarketingConsents)
+          .set({ withdrawnAt: now })
+          .where(eq(customerMarketingConsents.dotyposCustomerId, withdrawn))
+      );
+      // Activation's completed dry run would otherwise be reused.
+      await query(
+        db
+          .update(emailCampaignAutomationPreviews)
+          .set({ status: "superseded" })
+          .where(eq(emailCampaignAutomationPreviews.id, activationPreviewId))
+      );
+      claimedCampaignIds.push(campaignId);
+      // A run of the campaign sent `sentEarlier` the email without a claim,
+      // as a version without the policy does.
+      const [version] = await query(
+        db
+          .select({ id: emailCampaignAutomationVersions.id })
+          .from(emailCampaignAutomationVersions)
+          .where(eq(emailCampaignAutomationVersions.campaignId, campaignId))
+      );
+      const sendId = await seedAutomatedSend(db, {
+        campaignId,
+        versionId: version!.id,
+        purpose: "operational",
+        recipients: [
+          { dotyposCustomerId: sentEarlier, status: "sent" as const },
+        ],
+      });
+      const earlierRun = await seedAutomationRun(db, {
+        campaignId,
+        versionId: version!.id,
+        customerId: sentEarlier,
+        stepId: "send",
+        phase: "ready",
+        stepEnteredAt: ago({ hours: 24 * 20 }),
+        dueAt: ago({ hours: 24 * 20 }),
+      });
+      await query(
+        db
+          .update(emailCampaignAutomationRuns)
+          .set({
+            status: "ended",
+            phase: null,
+            dueAt: null,
+            sendId,
+            outcome: "sent",
+            endedAt: ago({ hours: 24 * 20 }),
+          })
+          .where(eq(emailCampaignAutomationRuns.id, earlierRun))
+      );
+
+      await seedReservations(
+        customers.map((customer, index) => ({
+          label: `policy-op-${index}`,
+          customer,
+          startsAt: triggerAt.subtract({ hours: 2 }),
+          endsAt: triggerAt,
+        }))
+      );
+      await seedEvents(
+        customers.map((customer, index) => ({
+          kind: "reservation-finished" as const,
+          reservation: `policy-op-${index}`,
+          customer,
+          occurredAt: triggerAt,
+        }))
+      );
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+      const report = await read(started.previewId);
+      const rowOf = (customer: DotyposCustomerId) =>
+        report.rows.find((row) => row.customerId === customer);
+
+      expect(rowOf(plain)).toMatchObject({
+        outcome: "would-send",
+        skipReason: null,
+      });
+      expect(rowOf(sentEarlier)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "already-sent-once",
+      });
+      expect(rowOf(withdrawn)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "consent-withdrawn",
+      });
+    });
+
     describe("schedule triggers", () => {
       let customers: readonly DotyposCustomerId[] = [];
       const scheduleFlow = (weekday: string, conditionId = "vip") =>
@@ -1919,69 +2852,44 @@ describe.skipIf(!testDatabase)(
         runAt(
           Effect.flatMap(AutomationDryRun, (dryRun) =>
             dryRun.start(campaignId)
-          ).pipe(
-            Effect.provideService(PassReminderWritesOpen, Effect.succeed(true))
           ),
           at
         );
 
-      const seedPassHolder = async (
-        dotyposCustomerId: DotyposCustomerId,
-        options: Parameters<typeof profile>[1] = { tags: ["vip"] }
-      ) => {
-        const id = crypto.randomUUID();
-        await testDatabase.pool.query(
-          "insert into customer_accounts (id, dotypos_customer_id) values ($1, $2)",
-          [id, dotyposCustomerId]
-        );
-        await testDatabase.pool.query(
-          `insert into auth."user" (id, name, email, email_verified)
-           values ($1, 'Synthetic holder', $2, true)`,
-          [id, testEmailAddress(dotyposCustomerId)]
-        );
-        dotyposState.customers.push(profile(dotyposCustomerId, options));
-        return id;
-      };
-
-      const seedPass = async (input: {
-        readonly holder: string;
-        readonly kind: "entry-pack" | "unlimited";
-        readonly validUntil: string;
-      }) => {
-        const passId = crypto.randomUUID();
-        await testDatabase.pool.query(
-          `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, fulfilled_at)
-           values ($1, 'pass-purchase', 'synthetic-billing-id', 'complimentary', 'fulfilled', now())`,
-          [passId]
-        );
-        await testDatabase.pool.query(
-          `insert into pass_purchases (id, buyer_account_id, holder_account_id, product, tier,
-             entry_count, unlimited_coffee, status, valid_from, valid_until, quote, locale, created_at)
-           values ($1, $2, $2, $3, 'open-space',
-             case when $3 = 'entry-pack' then 5 end,
-             case when $3 = 'unlimited' then false end, 'active',
-             $4::date - 30, $4, '{}', 'en-US', now())`,
-          [passId, input.holder, input.kind, input.validUntil]
-        );
-        return passId;
-      };
-
       for (const _tag of ["EntryPackExpiring", "UnlimitedEnding"] as const) {
         test(`${_tag} previews current recipients and synthetic emails without entering runs`, async () => {
           const trigger = { _tag };
+          const published = await seedPublishedEmail(db, {
+            title: `Dry-run ${_tag} email`,
+            document: passReminderEmailDocumentFixture(
+              _tag === "EntryPackExpiring"
+                ? "entry-pack-expiring"
+                : "unlimited-ending"
+            ),
+          });
           const campaignId = await seedAutomation({
             flow: decodeFlow({ trigger, steps: [send] }),
             purpose: "marketing",
             filter: { ...everyoneFilter, filters: [taggedVip] },
           });
+          await query(
+            db
+              .update(emailCampaigns)
+              .set({
+                emailId: published.emailId,
+                content: {},
+                templateKey: "workspace",
+              })
+              .where(eq(emailCampaigns.id, campaignId))
+          );
+          const operationalId = await seedAutomation({
+            flow: decodeFlow({ trigger, steps: [send] }),
+            purpose: "operational",
+            filter: { ...everyoneFilter, filters: [taggedVip] },
+          });
           const refusal = await runExit(
             Effect.flatMap(AutomationDryRun, (dryRun) =>
-              dryRun.start(campaignId)
-            ).pipe(
-              Effect.provideService(
-                PassReminderWritesOpen,
-                Effect.succeed(false)
-              )
+              dryRun.start(operationalId)
             )
           );
           expect(Exit.isFailure(refusal)).toBe(true);
@@ -2083,7 +2991,9 @@ describe.skipIf(!testDatabase)(
           );
           for (const email of report.emails) {
             expect(email.preheader).toBeTruthy();
-            expect(email.html).toContain("https://example.com/");
+            expect(email.html).toContain(
+              _tag === "EntryPackExpiring" ? "/reservation/cowork" : "/passes/"
+            );
             expect(email.html).not.toContain(passId);
             expect(email.html).not.toContain(testEmailAddress(eligible));
             expect(email.subject).not.toBe("Rozpracovaný koncept");

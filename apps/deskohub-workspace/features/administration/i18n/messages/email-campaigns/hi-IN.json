@@ -439,6 +439,15 @@
   "emailCampaignsAudienceReservationCountStatusNeedsRefund": "धनवापसी के लिए लंबित",
   "emailCampaignsAudienceReservationCountVisitEndPeriod": "(विज़िट की समाप्ति: {period})",
   "emailCampaignsAudienceReservationCountVisitPeriod": "(विज़िट: {period})",
+  "emailCampaignsAudienceReservationCountStayLabel": "ठहराव",
+  "emailCampaignsAudienceReservationCountStayAny": "किसी भी तरह के ठहराव के साथ",
+  "emailCampaignsAudienceReservationCountStayDay": "दिन के ठहराव के साथ",
+  "emailCampaignsAudienceReservationCountStayOvernight": "रात भर के ठहराव के साथ",
+  "emailCampaignsAudienceReservationCountStayNeedsCowork": "ठहराव केवल कोवर्किंग बुकिंग में होता है। ठहराव के आधार पर फ़िल्टर करने के लिए कोवर्किंग प्रोडक्ट चुनें।",
+  "emailCampaignsAudienceReservationCountStayNeedsVisitDate": "ठहराव की गणना विज़िट की तारीख़ या विज़िट समाप्ति के आधार पर होती है, पुष्टि की तारीख़ के आधार पर नहीं।",
+  "emailCampaignsAudienceReservationCountPaymentLabel": "भुगतान",
+  "emailCampaignsAudienceReservationCountPaymentAny": "किसी भी भुगतान के साथ",
+  "emailCampaignsAudienceReservationCountPaymentIndividual": "अलग भुगतान के साथ",
   "emailCampaignsAudienceSaveCampaignNotFound": "ऑडियंस सहेजी नहीं जा सकी। जिस अभियान के email यह गिनती है, वह अब मौजूद नहीं है। कोई दूसरा अभियान चुनें।",
   "emailCampaignsAudienceSaveFailedCheckFilters": "ऑडियंस सहेजी नहीं जा सकी। फ़िल्टर जाँचें और फिर से कोशिश करें।",
   "emailCampaignsAudienceSaveFailedRetry": "ऑडियंस सहेजी नहीं जा सकी। फिर से कोशिश करें।",
@@ -1249,6 +1258,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "अब Dotypos में नहीं है",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "टेस्ट email डोमेन से बाहर",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "इस प्राप्तकर्ता की भाषा में ईमेल का अनुवाद उपलब्ध नहीं है",
+  "emailCampaignsSentSkipReasonPassHolder": "पास धारक",
   "emailCampaignsSentStatus": "स्थिति",
   "emailCampaignsTestSendAdd": "जोड़ें",
   "emailCampaignsTestSendAddRecipientLabel": "टेस्ट प्राप्तकर्ता जोड़ें",
@@ -1293,5 +1303,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "इनमें से एक पता मान्य email पता नहीं है। पते जाँचें और फिर से कोशिश करें।",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "प्रोडक्शन के बाहर अभियान email केवल @{domain} पतों पर भेजे जा सकते हैं, और कुछ प्राप्तकर्ता इनमें शामिल नहीं हैं। कुछ भी नहीं भेजा गया।",
   "emailCampaignsSendingFailureRecipientsUnavailable": "प्राप्तकर्ता तय नहीं किए जा सके, क्योंकि Dotypos या डेटाबेस उपलब्ध नहीं है। कुछ भी नहीं भेजा गया और कोड अब भी मान्य है; थोड़ी देर बाद फिर से कोशिश करें।",
-  "emailCampaignsSendingFailureEmailSetupMissing": "इस डिप्लॉयमेंट में अभियान email सेट नहीं हैं। किसी डेवलपर से अभियान email के एनवायरनमेंट वेरिएबल जाँचने के लिए कहें।"
+  "emailCampaignsSendingFailureEmailSetupMissing": "इस डिप्लॉयमेंट में अभियान email सेट नहीं हैं। किसी डेवलपर से अभियान email के एनवायरनमेंट वेरिएबल जाँचने के लिए कहें।",
+  "emailCampaignsComposerEditPublishedEmail": "लाइब्रेरी में ईमेल संपादित करें",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "यह ईमेल ऐसे ट्रिगर मान उपयोग करता है जो इस ऑटोमेशन के ट्रिगर से मेल नहीं खाते। कोई उपयुक्त ईमेल चुनें या फ़्लो अपडेट करें।"
 }

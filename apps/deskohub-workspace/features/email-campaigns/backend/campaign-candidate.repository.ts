@@ -6,6 +6,7 @@ import type {
 } from "@deskohub/dotypos";
 import type {
   AdministrationReservationStatusFilter,
+  ReservationPayment,
   ReservationProductFilterType,
 } from "@deskohub/workspace-admin-api";
 import {
@@ -22,12 +23,13 @@ import {
   sql,
 } from "drizzle-orm";
 import type { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Context, Effect, Layer } from "effect";
+import { Context, Duration, Effect, Layer } from "effect";
 import {
   WorkspaceDatabase,
   type WorkspaceDatabaseClient,
   workspaceStatementConcurrency,
 } from "@/db/database.service";
+import { equalsAny } from "@/db/equals-any";
 import {
   customerAccounts,
   customerMarketingConsents,
@@ -45,16 +47,20 @@ import {
   reservationStatusCondition,
   undatedStatusChangeAt,
 } from "@/features/administration/reservation-status-condition";
+import type { WorkspaceCoworkProductTier } from "@/features/checkout/product-catalog";
 import { marketingConsentState } from "@/features/legal/backend/marketing-consent-ledger";
 import { loadEarlySetupDetails } from "@/features/reservation/backend/early-setup-details";
 import type { StoredWorkspaceReservationDetails } from "@/features/reservation/persistence-contracts";
 import { temporalInstantToDate } from "@/shared/utils/temporal";
 import type { AudienceDateFacts } from "../audience-filter";
 import type { CampaignPurpose } from "../body/campaign-content";
+import { campaignDeliveryBatchReplayWindow } from "../campaign-delivery-batches";
 import type { CampaignId } from "../campaign-identifiers";
 import type { DatePeriodBounds } from "../date-period";
 import { sendAutomationVersion, sendPurpose } from "./campaign-send-selection";
+import { reservationPaymentCondition } from "./reservation-payment-condition";
 import { reservationProductCondition } from "./reservation-product-condition";
+import { loadCoworkTiers } from "./reservation-stay";
 
 /** What Workspace stores about one customer it knows. */
 export type CampaignCandidateFacts = {
@@ -88,6 +94,8 @@ export type CampaignReservationSelection = {
   readonly dotyposReservationIds?: readonly DotyposReservationId[];
   /** Limits the count to one product family and its catalog properties. */
   readonly product?: ReservationProductFilterType;
+  /** Limits the count to reservations paid this way. */
+  readonly payment?: ReservationPayment;
   /** Limits the count to these customers' reservations. */
   readonly customers?: readonly DotyposCustomerId[];
 };
@@ -96,6 +104,26 @@ export type CampaignReservationSelection = {
 export type CampaignBookedReservation = {
   readonly dotyposReservationId: DotyposReservationId;
   readonly dotyposCustomerId: DotyposCustomerId;
+};
+
+/**
+ * A customer's one-off campaign emails as a Send's one-off campaign gap
+ * reads them.
+ */
+export type OneOffCampaignEmails = {
+  /**
+   * When the latest one they received was dispatched, if any. A pending one
+   * whose delivery batch was requested longer than the batch replay window
+   * ago counts as received at its request: no replay can settle it any
+   * more, and it may have reached them.
+   */
+  readonly latestReceivedAt: Temporal.Instant | null;
+  /**
+   * Whether one is still pending while its campaign is sending, or its
+   * delivery batch is requested within the replay window: it may reach
+   * them any moment.
+   */
+  readonly inFlight: boolean;
 };
 
 /**
@@ -108,6 +136,57 @@ const receivedCampaignEmailStatuses = [
   "complained",
   "unconfirmed",
 ] as const;
+
+/** A one-off campaign email the customer received. */
+const oneOffEmailReceived = inArray(emailCampaignRecipients.status, [
+  ...receivedCampaignEmailStatuses,
+]);
+
+/**
+ * When a campaign email was dispatched: its batch's first request, or its
+ * status change when a webhook settled it without a batch in its current
+ * attempt.
+ */
+const campaignEmailDispatchedAt = sql`coalesce(${emailCampaignDeliveryBatches.requestedAt}, ${emailCampaignRecipients.statusUpdatedAt})`;
+
+/** A pending one-off email: not yet received, though maybe on its way. */
+const oneOffEmailPending = eq(emailCampaignRecipients.status, "pending");
+
+/**
+ * A pending one-off email whose delivery batch is requested: the provider
+ * may be mailing it.
+ */
+const oneOffEmailRequested = and(
+  oneOffEmailPending,
+  eq(emailCampaignDeliveryBatches.status, "requested")
+);
+
+/**
+ * A one-off email that counts as received at `now`: Resend accepted it, or
+ * its batch was requested longer than the replay window ago. Such a batch
+ * stays requested only when its campaign was abandoned mid-delivery, and
+ * it may have reached the customer.
+ */
+const oneOffEmailReceivedAt = (now: Temporal.Instant) =>
+  or(
+    oneOffEmailReceived,
+    and(
+      oneOffEmailRequested,
+      sql`${emailCampaignDeliveryBatches.requestedAt} < ${temporalInstantToDate(
+        now.subtract({
+          milliseconds: Duration.toMillis(campaignDeliveryBatchReplayWindow),
+        })
+      )}`
+    )
+  );
+
+/**
+ * When a one-off email was, or is assumed to be, dispatched. A pending one
+ * of a sending campaign that no requested batch carries yet is assumed to
+ * go out at `now`: its status change says nothing about a request.
+ */
+const oneOffEmailDispatchedAt = (now: Temporal.Instant) =>
+  sql`case when ${oneOffEmailPending} and ${emailCampaignDeliveryBatches.status} is distinct from 'requested' then ${temporalInstantToDate(now)} else ${campaignEmailDispatchedAt} end`;
 
 /** Only verified logins may receive campaigns. */
 const verifiedLogin = eq(authUser.emailVerified, true);
@@ -161,11 +240,13 @@ const reservationSelection = ({
   asOf,
   dotyposReservationIds,
   product,
+  payment,
   customers,
 }: CampaignReservationSelection): SQL | undefined =>
   and(
     ofCustomers(workspaceReservations.dotyposCustomerId, customers),
     product && reservationProductCondition(product),
+    payment && reservationPaymentCondition(payment),
     status
       ? reservationStatusCondition(status, asOf)
       : bookedReservationConditionAt(asOf),
@@ -174,10 +255,12 @@ const reservationSelection = ({
     status &&
       asOf &&
       sql`${workspaceReservations.createdAt} <= ${temporalInstantToDate(asOf)}`,
+    // One array parameter: a stay count at any time can list every visit.
     dotyposReservationIds &&
-      inArray(workspaceReservations.dotyposReservationId, [
-        ...dotyposReservationIds,
-      ])
+      equalsAny(
+        workspaceReservations.dotyposReservationId,
+        dotyposReservationIds
+      )
   );
 
 export interface ICampaignCandidateRepository {
@@ -224,6 +307,36 @@ export interface ICampaignCandidateRepository {
     EffectDrizzleQueryError
   >;
   /**
+   * Each customer's one-off campaign emails, of either purpose, for a Send's
+   * one-off campaign gap: when the latest one they received was dispatched,
+   * dated as `countReceivedCampaignEmails` dates them, and whether one is
+   * still in flight at `now`. Customers with neither are absent.
+   */
+  readonly latestOneOffCampaignEmails: (query: {
+    readonly customers: readonly DotyposCustomerId[];
+    readonly now: Temporal.Instant;
+  }) => Effect.Effect<
+    ReadonlyMap<DotyposCustomerId, OneOffCampaignEmails>,
+    EffectDrizzleQueryError
+  >;
+  /**
+   * When each customer's one-off campaign emails, received or in flight at
+   * `now`, were dispatched at or after `since`, in ascending order, for a
+   * dry run. It projects an in-flight email as dispatched: at its batch's
+   * request, or at `now` while no requested batch carries it yet. Live, a
+   * run waits for such an email with short rechecks and then holds the gap
+   * from the same instant, so the projection differs only when that email
+   * ends failed. Customers without one are absent.
+   */
+  readonly oneOffCampaignEmails: (query: {
+    readonly customers: readonly DotyposCustomerId[];
+    readonly now: Temporal.Instant;
+    readonly since: Temporal.Instant;
+  }) => Effect.Effect<
+    ReadonlyMap<DotyposCustomerId, readonly Temporal.Instant[]>,
+    EffectDrizzleQueryError
+  >;
+  /**
    * Customers with a linked account created by `asOf`, and those whose
    * account was created in the bounds. An account created later doesn't
    * exist yet at a replayed moment. A legacy account was created before
@@ -266,6 +379,17 @@ export interface ICampaignCandidateRepository {
     EffectDrizzleQueryError
   >;
   /**
+   * The stored tier of each Workspace-booked cowork reservation among these
+   * Dotypos reservations, by Dotypos ID: with the booked interval, it gives
+   * the visit's stay.
+   */
+  readonly coworkTiers: (
+    dotyposReservationIds: readonly DotyposReservationId[]
+  ) => Effect.Effect<
+    ReadonlyMap<DotyposReservationId, WorkspaceCoworkProductTier>,
+    EffectDrizzleQueryError
+  >;
+  /**
    * Per customer, when one of their reservations last changed in a way the
    * stored timestamps can't date for these statuses. As of an earlier
    * moment, their counts in those statuses are approximate. Customers
@@ -289,6 +413,70 @@ export class CampaignCandidateRepository extends Context.Service<
     this,
     Effect.gen(function* () {
       const { db } = yield* WorkspaceDatabase;
+
+      /**
+       * Customers' one-off campaign emails of either purpose that a Send's
+       * one-off campaign gap counts at `now`, received or in flight, in
+       * dispatch order, dispatched at or after `since` when given. The
+       * delivery batch join is the recipient's current attempt in any
+       * status, so a received email keeps its batch's request as its
+       * dispatch; a pending one is in flight only through a requested batch
+       * or its sending campaign.
+       */
+      const oneOffCampaignEmailRows = (query: {
+        readonly customers: readonly DotyposCustomerId[];
+        readonly now: Temporal.Instant;
+        readonly since?: Temporal.Instant;
+      }) => {
+        const dispatchedAt = oneOffEmailDispatchedAt(query.now);
+        return db
+          .select({
+            dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
+            received: sql<boolean>`${oneOffEmailReceivedAt(query.now)}`,
+            dispatchedAt: dispatchedAt.mapWith(
+              emailCampaignDeliveryBatches.requestedAt
+            ),
+          })
+          .from(emailCampaignRecipients)
+          .innerJoin(
+            emailCampaignSends,
+            eq(emailCampaignSends.id, emailCampaignRecipients.sendId)
+          )
+          .innerJoin(
+            emailCampaigns,
+            eq(emailCampaigns.id, emailCampaignSends.campaignId)
+          )
+          .leftJoin(
+            emailCampaignDeliveryBatches,
+            and(
+              eq(
+                emailCampaignDeliveryBatches.sendId,
+                emailCampaignRecipients.sendId
+              ),
+              eq(
+                emailCampaignDeliveryBatches.deliveryAttempt,
+                emailCampaignRecipients.deliveryAttempt
+              ),
+              sql`${emailCampaignRecipients.dotyposCustomerId} = any(${emailCampaignDeliveryBatches.dotyposCustomerIds})`
+            )
+          )
+          .where(
+            and(
+              eq(emailCampaigns.delivery, "once"),
+              inArray(emailCampaignRecipients.dotyposCustomerId, [
+                ...query.customers,
+              ]),
+              or(
+                oneOffEmailReceived,
+                oneOffEmailRequested,
+                and(oneOffEmailPending, eq(emailCampaigns.status, "sending"))
+              ),
+              query.since &&
+                sql`${dispatchedAt} >= ${temporalInstantToDate(query.since)}`
+            )
+          )
+          .orderBy(dispatchedAt);
+      };
 
       const latestReservations = (customers?: readonly DotyposCustomerId[]) =>
         db
@@ -450,6 +638,44 @@ export class CampaignCandidateRepository extends Context.Service<
             rows.map((row) => [row.dotyposCustomerId, row.count] as const)
           );
         }),
+        latestOneOffCampaignEmails: Effect.fn(
+          "CampaignCandidateRepository.latestOneOffCampaignEmails"
+        )(function* ({ customers, now }) {
+          const byCustomer = new Map<DotyposCustomerId, OneOffCampaignEmails>();
+          if (customers.length === 0) return byCustomer;
+          const rows = yield* oneOffCampaignEmailRows({ customers, now });
+          for (const row of rows) {
+            const emails = byCustomer.get(row.dotyposCustomerId) ?? {
+              latestReceivedAt: null,
+              inFlight: false,
+            };
+            // Rows come in dispatch order, so a later received one is the latest.
+            byCustomer.set(
+              row.dotyposCustomerId,
+              row.received
+                ? { ...emails, latestReceivedAt: row.dispatchedAt }
+                : { ...emails, inFlight: true }
+            );
+          }
+          return byCustomer;
+        }),
+        oneOffCampaignEmails: Effect.fn(
+          "CampaignCandidateRepository.oneOffCampaignEmails"
+        )(function* ({ customers, now, since }) {
+          const byCustomer = new Map<DotyposCustomerId, Temporal.Instant[]>();
+          if (customers.length === 0) return byCustomer;
+          const rows = yield* oneOffCampaignEmailRows({
+            customers,
+            now,
+            since,
+          });
+          for (const row of rows) {
+            const dispatched = byCustomer.get(row.dotyposCustomerId) ?? [];
+            dispatched.push(row.dispatchedAt);
+            byCustomer.set(row.dotyposCustomerId, dispatched);
+          }
+          return byCustomer;
+        }),
         accountCreations: Effect.fn(
           "CampaignCandidateRepository.accountCreations"
         )(function* ({ created, asOf, customers }) {
@@ -511,6 +737,8 @@ export class CampaignCandidateRepository extends Context.Service<
         }),
         earlySetupDetails: (dotyposReservationIds) =>
           loadEarlySetupDetails(db, dotyposReservationIds),
+        coworkTiers: (dotyposReservationIds) =>
+          loadCoworkTiers(db, dotyposReservationIds),
         undatedStatusChanges: Effect.fn(
           "CampaignCandidateRepository.undatedStatusChanges"
         )(function* ({ statuses, customers }) {

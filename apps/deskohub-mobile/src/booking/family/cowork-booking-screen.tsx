@@ -29,7 +29,8 @@ import {
   openEntryPackDraft,
   packCoversDraft,
 } from "../../passes/entry-pack-booking";
-import { EntryPackOfferLink } from "../../passes/entry-pack-offer-link";
+import { PassOfferCards } from "../../passes/pass-offer-cards";
+import { coworkPassOfferCatalog } from "../../passes/pass-offers";
 import { cashBookingCoverage } from "../../passes/pass-read-state";
 import {
   heldPassesAtom,
@@ -262,6 +263,11 @@ function CoworkSelection({
     AsyncResult.isInitial(passList);
   const held = AsyncResult.isSuccess(passList) ? passList.value.held : [];
   const packs = held.filter((pass) => pass.kind === "entry-pack");
+  const offerCatalog = coworkPassOfferCatalog({
+    appliedPackId: entryPackId,
+    catalog: passCatalog,
+    heldPasses: passList,
+  });
   const hasUnlimited = held.some(
     (pass) =>
       pass.kind === "unlimited" &&
@@ -750,15 +756,6 @@ function CoworkSelection({
                   }}
                   locale={locale}
                 />
-                {entryPackId === undefined &&
-                  AsyncResult.isSuccess(passCatalog) &&
-                  AsyncResult.isSuccess(passList) &&
-                  !packs.some(({ bookFrom }) => bookFrom !== undefined) && (
-                    <EntryPackOfferLink
-                      catalog={passCatalog.value}
-                      draft={model.draft}
-                    />
-                  )}
               </View>
               <View style={tracks && chooseStyles.calendar}>
                 <CoworkDateHeading
@@ -950,6 +947,13 @@ function CoworkSelection({
                 </View>
               )}
             </View>
+            {offerCatalog !== undefined && (
+              <PassOfferCards
+                catalog={offerCatalog}
+                draft={model.draft}
+                today={today}
+              />
+            )}
           </>
         )}
       </BookingReadView>

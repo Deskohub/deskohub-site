@@ -1,5 +1,10 @@
 import { Array as Arr, Order, Schema, Struct } from "effect";
-import { ReservationProductFilter } from "./audience-attribute-kinds";
+import {
+  ReservationPayment,
+  ReservationProductFilter,
+  ReservationStay,
+  reservationStayIssue,
+} from "./audience-attribute-kinds";
 import {
   type AudienceCondition,
   AudienceFilter,
@@ -25,7 +30,12 @@ import {
   AdministrationCampaignSendId,
   AdministrationCampaignTemplateKey,
 } from "./email-campaigns";
-import { fieldWithDefault, listField, nullableField } from "./response-fields";
+import {
+  countsField,
+  fieldWithDefault,
+  listField,
+  nullableField,
+} from "./response-fields";
 import { AdministrationDotyposCustomerId } from "./workspace-admin-api";
 
 /** Stable id of a flow step. A run's position is a step id, not an index. */
@@ -40,10 +50,21 @@ export const AutomationStepId = Schema.String.check(
   });
 export type AutomationStepId = typeof AutomationStepId.Type;
 
-/** The reservation product filter of a reservation trigger; audiences use the same schema. */
+/**
+ * What a reservation trigger's event must be: of the product, of the booked
+ * cowork stay, and paid individually, each only when set. Audiences'
+ * reservation counts use the same schemas and rules.
+ */
 const reservationTriggerFields = {
   product: Schema.optionalKey(ReservationProductFilter),
+  stay: Schema.optionalKey(ReservationStay),
+  payment: Schema.optionalKey(ReservationPayment),
 };
+
+const reservationTrigger = <const Tag extends string>(tag: Tag) =>
+  Schema.TaggedStruct(tag, reservationTriggerFields).check(
+    Schema.makeFilter(reservationStayIssue)
+  );
 
 const passReminderTriggerFields = {
   /** Stored on published flows so later copy revisions don't change a run. */
@@ -53,10 +74,10 @@ const passReminderTriggerFields = {
 /** What starts a run: a calendar schedule, customer event, or pass reminder. */
 export const AutomationTrigger = Schema.Union([
   Schema.TaggedStruct("Schedule", { calendar: CalendarExpression }),
-  Schema.TaggedStruct("ReservationBooked", reservationTriggerFields),
-  Schema.TaggedStruct("ReservationCancelled", reservationTriggerFields),
-  Schema.TaggedStruct("ReservationStarted", reservationTriggerFields),
-  Schema.TaggedStruct("ReservationFinished", reservationTriggerFields),
+  reservationTrigger("ReservationBooked"),
+  reservationTrigger("ReservationCancelled"),
+  reservationTrigger("ReservationStarted"),
+  reservationTrigger("ReservationFinished"),
   Schema.TaggedStruct("AccountCreated", {}),
   Schema.TaggedStruct("EntryPackExpiring", passReminderTriggerFields),
   Schema.TaggedStruct("UnlimitedEnding", passReminderTriggerFields),
@@ -132,13 +153,45 @@ export const AutomationWait = Schema.Union([
 ]).annotate({ identifier: "AutomationWait" });
 export type AutomationWait = typeof AutomationWait.Type;
 
+export const automationOneOffCampaignGapMaxDays = 90;
+
+/** How long a Send waits after a one-off campaign email. */
+export const AutomationOneOffCampaignGap = Schema.Struct({
+  days: Schema.Int.check(
+    Schema.isBetween({
+      minimum: 1,
+      maximum: automationOneOffCampaignGapMaxDays,
+    })
+  ),
+}).annotate({ identifier: "AutomationOneOffCampaignGap" });
+export type AutomationOneOffCampaignGap =
+  typeof AutomationOneOffCampaignGap.Type;
+
 export const AutomationStep = Schema.Union([
   Schema.TaggedStruct("Condition", {
     id: AutomationStepId,
     filter: AutomationConditionFilter,
   }),
   Schema.TaggedStruct("Wait", { id: AutomationStepId, wait: AutomationWait }),
-  Schema.TaggedStruct("Send", { id: AutomationStepId }),
+  Schema.TaggedStruct("Send", {
+    id: AutomationStepId,
+    /**
+     * The campaign emails each customer at most once ever. A send that may
+     * have reached the provider keeps the customer's claim; a skipped or
+     * refused one releases it.
+     */
+    oncePerCustomer: Schema.optionalKey(Schema.Literal(true)),
+    /**
+     * Hold the email until this many Prague calendar days after the
+     * customer's latest one-off campaign email, of any purpose.
+     */
+    oneOffCampaignGap: Schema.optionalKey(AutomationOneOffCampaignGap),
+    /**
+     * Skip customers who hold a usable Entry pack or an active or upcoming
+     * Unlimited pass when the email is about to go out.
+     */
+    skipPassHolders: Schema.optionalKey(Schema.Literal(true)),
+  }),
 ]).annotate({ identifier: "AutomationStep" });
 export type AutomationStep = typeof AutomationStep.Type;
 
@@ -351,12 +404,37 @@ export const AutomationPreviewState = Schema.Literals(
 );
 export type AutomationPreviewState = typeof AutomationPreviewState.Type;
 
+/**
+ * Why a run ended `skipped`: its recipient's skip reason, or
+ * `already-sent-once` when a once-per-customer send found the customer
+ * already claimed by another run of the campaign.
+ */
+export const automationRunSkipReasons = [
+  ...AdministrationCampaignRecipientSkipReason.literals,
+  "already-sent-once",
+] as const;
+export const AutomationRunSkipReason = Schema.Literals(
+  automationRunSkipReasons
+);
+export type AutomationRunSkipReason = typeof AutomationRunSkipReason.Type;
+
+export const automationSendDeferralCauses = [
+  "trigger-not-reached",
+  "one-off-campaign-gap",
+] as const;
+export const AutomationSendDeferralCause = Schema.Literals(
+  automationSendDeferralCauses
+);
+export type AutomationSendDeferralCause =
+  typeof AutomationSendDeferralCause.Type;
+
 export const automationPreviewOutcomes = [
   "would-send",
   "condition-failed",
   "not-in-audience",
   "already-active",
   "withdrawn",
+  "skipped",
   "unavailable",
 ] as const;
 export const AutomationPreviewOutcome = Schema.Literals(
@@ -404,6 +482,8 @@ export const AutomationDryRunRow = Schema.Struct({
    * engine ticks every 15 minutes, so a send waits for the next one.
    */
   sendAt: nullableField(Instant),
+  /** Why the send step would skip the customer, for `skipped`. */
+  skipReason: nullableField(AutomationRunSkipReason),
   /** Evaluated after now, from facts as they are now. */
   projected: fieldWithDefault(Schema.Boolean, false),
   /**
@@ -448,14 +528,19 @@ export const AutomationDryRun = Schema.Struct({
   /** Schedules only: the next five fires of the working copy. */
   nextFires: listField(Instant),
   frequency: nullableField(AutomationFrequency),
-  counts: fieldWithDefault(Schema.Record(AutomationPreviewOutcome, count), {
-    "would-send": 0,
-    "condition-failed": 0,
-    "not-in-audience": 0,
-    "already-active": 0,
-    withdrawn: 0,
-    unavailable: 0,
-  }),
+  /** An older server doesn't count `skipped`. */
+  counts: fieldWithDefault(
+    countsField(automationPreviewOutcomes, ["skipped"], count),
+    {
+      "would-send": 0,
+      "condition-failed": 0,
+      "not-in-audience": 0,
+      "already-active": 0,
+      withdrawn: 0,
+      skipped: 0,
+      unavailable: 0,
+    }
+  ),
   /** Replay only: the events in the window, before truncation. */
   eventsTotal: nullableField(count),
   /** More events happened than the replay evaluates. */
@@ -548,7 +633,9 @@ const zeroSkipReasonCounts = {
   "invalid-email": 0,
   "consent-withdrawn": 0,
   "outside-test-domain": 0,
-};
+  "pass-holder": 0,
+  "already-sent-once": 0,
+} satisfies Record<AutomationRunSkipReason, 0>;
 
 /** Run counts of all versions, or of one. */
 export const AutomationRunStats = Schema.Struct({
@@ -565,11 +652,16 @@ export const AutomationRunStats = Schema.Struct({
     })
   ),
   /**
-   * Skipped runs by why delivery skipped them. An older server omits it, so
-   * it may not add up to `byOutcome.skipped`.
+   * Skipped runs by why delivery skipped them. An older server omits it, or
+   * the reasons it doesn't know yet, so it may not add up to
+   * `byOutcome.skipped`.
    */
   bySkipReason: fieldWithDefault(
-    Schema.Record(AdministrationCampaignRecipientSkipReason, count),
+    countsField(
+      automationRunSkipReasons,
+      ["pass-holder", "already-sent-once"],
+      count
+    ),
     zeroSkipReasonCounts
   ),
 });
@@ -582,7 +674,7 @@ export const AutomationRunListInput = Schema.Struct({
   stepId: Schema.optionalKey(AutomationStepId),
   outcome: Schema.optionalKey(AutomationRunOutcome),
   /** Skipped runs with this reason only. */
-  skipReason: Schema.optionalKey(AdministrationCampaignRecipientSkipReason),
+  skipReason: Schema.optionalKey(AutomationRunSkipReason),
   versionNumber: Schema.optionalKey(AutomationVersionNumber),
   customerId: Schema.optionalKey(AdministrationDotyposCustomerId),
   cursor: Schema.optionalKey(AutomationPageCursor),
@@ -691,15 +783,19 @@ export const automationRunEventDetails = {
   }),
   waiting: Schema.Struct({ dueAt: Instant }),
   woke: noDetail,
-  /** The triggering visit moved later; the send waits for it. */
+  /**
+   * The send waits: the triggering visit moved later
+   * (`trigger-not-reached`), or the customer got a one-off
+   * campaign email too recently (`one-off-campaign-gap`).
+   */
   deferred: Schema.Struct({
-    cause: Schema.Literal("trigger-not-reached"),
+    cause: AutomationSendDeferralCause,
     recheckAt: Instant,
   }),
   "send-queued": Schema.Struct({ sendId: AdministrationCampaignSendId }),
   sent: noDetail,
   unconfirmed: noDetail,
-  skipped: Schema.Struct({ reason: AdministrationCampaignRecipientSkipReason }),
+  skipped: Schema.Struct({ reason: AutomationRunSkipReason }),
   failed: Schema.Struct({ reason: AutomationRunFailureReason }),
   withdrawn: noDetail,
   archived: noDetail,

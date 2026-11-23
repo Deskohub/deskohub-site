@@ -12,7 +12,7 @@ import { fixtureDraft } from "./email-editor.fixtures.test-utils";
 
 registerWorkspaceComponentTestEnv();
 // React DOM detects the DOM when it loads, so load it after registration.
-const { act, cleanup, render, waitFor } = await import(
+const { act, cleanup, fireEvent, render, waitFor } = await import(
   "@testing-library/react"
 );
 const { useEmailEditor } = await import("./email-editor-context");
@@ -33,12 +33,19 @@ type Answer = Awaited<
 const deferredRenderer = () => {
   const requests: {
     readonly locale: string;
+    readonly omittedFields?: readonly string[];
     readonly resolve: (answer: Answer) => void;
     readonly reject: (cause: unknown) => void;
   }[] = [];
-  const renderPreview = ({ locale: language }: { readonly locale: string }) =>
+  const renderPreview = ({
+    locale: language,
+    omittedFields,
+  }: {
+    readonly locale: string;
+    readonly omittedFields?: readonly string[];
+  }) =>
     new Promise<Answer>((resolve, reject) =>
-      requests.push({ locale: language, resolve, reject })
+      requests.push({ locale: language, omittedFields, resolve, reject })
     );
   return { requests, renderPreview };
 };
@@ -156,4 +163,46 @@ test("a failure clears the earlier picture and shows the server's message", asyn
   expect(
     view.getByTitle(frameTitle(languageNames[opening])).getAttribute("srcdoc")
   ).toBe("");
+});
+
+test("offers optional-field toggles when a block has a display condition and forwards omittedFields", async () => {
+  const renderer = deferredRenderer();
+  const conditionalDraft = {
+    ...fixtureDraft,
+    values: [
+      {
+        name: "pass",
+        source: {
+          kind: "trigger" as const,
+          trigger: "unlimited-ending" as const,
+        },
+      },
+    ],
+    structure: [
+      {
+        _tag: "Paragraph" as const,
+        id: "desk-note",
+        textKey: "heading-1-text",
+        when: { name: "pass", field: ["deskLabel"], present: true },
+      },
+    ],
+  };
+  const view = render(
+    <EmailEditorTestHost defaultValues={conditionalDraft}>
+      <EmailPreviewPanel renderPreview={renderer.renderPreview} />
+    </EmailEditorTestHost>
+  );
+  await waitFor(() => expect(renderer.requests).toHaveLength(1));
+  expect(renderer.requests[0]?.omittedFields).toBeUndefined();
+
+  const toggle = view.getByRole("checkbox", {
+    name: "pass.deskLabel",
+  }) as HTMLInputElement;
+  expect(toggle.checked).toBe(true);
+
+  await act(async () => {
+    fireEvent.click(toggle);
+  });
+  await waitFor(() => expect(renderer.requests).toHaveLength(2));
+  expect(renderer.requests[1]?.omittedFields).toEqual(["pass.deskLabel"]);
 });

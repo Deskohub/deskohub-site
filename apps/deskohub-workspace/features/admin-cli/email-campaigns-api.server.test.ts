@@ -79,7 +79,9 @@ const customerId = AdministrationDotyposCustomerId.make("1001");
 const otherCustomerId = AdministrationDotyposCustomerId.make("1002");
 const createdAt = Temporal.Instant.from("2026-10-14T08:00:00Z");
 const AuthorizedCliRequest = authorizedCliRequest();
-const TestDhwVersionHeader = cliClientVersion(campaignsMinimumDhwVersion);
+/** The newest minimum a campaign endpoint requires. */
+const repeatVisitDhwVersion = "1.42.0";
+const TestDhwVersionHeader = cliClientVersion(repeatVisitDhwVersion);
 
 const campaignRow = (overrides: Partial<CampaignRow> = {}): CampaignRow => ({
   id: campaignId,
@@ -162,7 +164,7 @@ const callCampaignsApi = <A, E>(
   call: (client: CampaignsClient) => Effect.Effect<A, E>,
   overrides: CampaignServiceOverrides = {},
   bearer = AuthorizedCliRequest,
-  dhwVersion: string = campaignsMinimumDhwVersion
+  dhwVersion: string = repeatVisitDhwVersion
 ) =>
   campaignsClient.pipe(
     Effect.flatMap(call),

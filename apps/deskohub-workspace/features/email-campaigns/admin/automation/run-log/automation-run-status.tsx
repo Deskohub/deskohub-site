@@ -1,7 +1,7 @@
 import {
-  AdministrationCampaignRecipientSkipReason,
   AutomationRunFailureReason,
   type AutomationRunOutcome,
+  AutomationRunSkipReason,
   type AutomationRunSummary,
 } from "@deskohub/workspace-admin-api";
 import { Option, Schema } from "effect";
@@ -13,9 +13,9 @@ import {
   type StatusTone,
 } from "@/shared/components/ui/status-badge";
 
-/** Why a recipient was skipped, as the end of "Skipped · …". */
+/** Why a run was skipped, as the end of "Skipped · …". */
 export const automationRunSkipReasonLabel = (
-  reason: AdministrationCampaignRecipientSkipReason,
+  reason: AutomationRunSkipReason,
   locale: Locale
 ) =>
   ({
@@ -25,6 +25,8 @@ export const automationRunSkipReasonLabel = (
     "invalid-email": m.emailAutomationRunsSkipInvalidEmail,
     "deleted-customer": m.emailAutomationRunsSkipDeletedCustomer,
     "missing-from-dotypos": m.emailAutomationRunsSkipMissingFromDotypos,
+    "pass-holder": m.emailAutomationRunsSkipPassHolder,
+    "already-sent-once": m.emailAutomationRunsSkipAlreadySentOnce,
   })[reason]({}, { locale });
 
 /** Why a run failed, as the end of "Failed · …". */
@@ -68,9 +70,7 @@ const endedLabel = (
   reason: string | null,
   locale: Locale
 ) => {
-  const skip = Schema.decodeUnknownOption(
-    AdministrationCampaignRecipientSkipReason
-  )(reason);
+  const skip = Schema.decodeUnknownOption(AutomationRunSkipReason)(reason);
   const failure = Schema.decodeUnknownOption(AutomationRunFailureReason)(
     reason
   );

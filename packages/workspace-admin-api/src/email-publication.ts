@@ -12,6 +12,14 @@ import {
 } from "./email-customer-selection";
 import type { EmailValueName } from "./email-identifiers";
 import {
+  documentEmailTriggerEvents,
+  type EmailTriggerEvent,
+  emailTriggerFieldAt,
+  isEmailTriggerEvent,
+  isEmailTriggerInlineField,
+  isEmailTriggerUrlField,
+} from "./email-trigger-selection";
+import {
   EmailBodyComponent,
   EmailDocument,
   EmailDraft,
@@ -241,8 +249,11 @@ export const referencedEmailValueNames = (
 ): ReadonlySet<string> => {
   const structure = draft.structure ?? [];
   const names = new Set<string>();
-  for (const component of structure)
+  for (const component of structure) {
     if (component.value) names.add(component.value);
+    if (component.hrefValue?.name) names.add(component.hrefValue.name);
+    if (component.when?.name) names.add(component.when.name);
+  }
   for (const translation of Object.values(draft.translations ?? {}))
     for (const part of translatedParts(structure, translation))
       if (part._tag === "Value" && part.name) names.add(part.name);
@@ -257,6 +268,23 @@ export const requiredEmailValueNames = (
   return document.values
     .filter((definition) => referenced.has(definition.name))
     .map((definition) => definition.name);
+};
+
+/** Trigger events required by the document's referenced values. */
+export const emailDocumentRequiredTriggers = (
+  document: EmailDocument
+): readonly EmailTriggerEvent[] =>
+  documentEmailTriggerEvents(document, referencedEmailValueNames(document));
+
+/** Whether the document's referenced values issue recipient discount codes. */
+export const emailDocumentUsesDiscounts = (
+  document: EmailDocument
+): boolean => {
+  const referenced = referencedEmailValueNames(document);
+  return document.values.some(
+    (definition) =>
+      referenced.has(definition.name) && definition.source.kind === "discount"
+  );
 };
 
 // Like publication, settings of another component or source kind are dropped.
@@ -382,9 +410,26 @@ function validScalarReference(
   definition: EmailValueDefinition,
   field: readonly string[] | undefined
 ): boolean {
-  return definition.source.kind === "discount"
-    ? validDiscountReference(field)
-    : validCustomerReference(definition.source, field);
+  if (definition.source.kind === "discount")
+    return validDiscountReference(field);
+  if (definition.source.kind === "trigger")
+    return isEmailTriggerInlineField(
+      emailTriggerFieldAt(definition.source.trigger, field)
+    );
+  return validCustomerReference(definition.source, field);
+}
+
+/** A dynamic button link references a URL-bearing trigger field. */
+function validUrlReference(
+  definition: EmailValueDefinition,
+  field: readonly string[] | undefined
+): boolean {
+  return (
+    definition.source.kind === "trigger" &&
+    isEmailTriggerUrlField(
+      emailTriggerFieldAt(definition.source.trigger, field)
+    )
+  );
 }
 
 /** A discount exposes only its generated code and expiry. */
@@ -456,7 +501,10 @@ const componentRequirements: Record<
   ],
   Button: (component) => [
     ...missing("labelKey", Boolean(component.labelKey)),
-    ...missing("href", Boolean(component.href)),
+    ...missing(
+      "href",
+      Boolean(component.href) !== Boolean(component.hrefValue)
+    ),
   ],
   Offer: (component) => [
     ...missing("value", Boolean(component.value)),
@@ -487,10 +535,13 @@ const isPositiveOrUnset = (count: number | undefined): boolean =>
 const definitionRequirements = (definition: DraftDefinition): string[] => {
   const source = definition.source;
   if (!source) return ["source"];
-  return source.kind === "customer"
-    ? customerSourceRequirements(source)
-    : discountSourceRequirements(source);
+  if (source.kind === "customer") return customerSourceRequirements(source);
+  if (source.kind === "trigger") return triggerSourceRequirements(source);
+  return discountSourceRequirements(source);
 };
+
+const triggerSourceRequirements = (source: DraftSource): string[] =>
+  missing("trigger", isEmailTriggerEvent(source.trigger));
 
 const customerSourceRequirements = (source: DraftSource): string[] => [
   ...missing("path", Boolean(source.path?.length)),
@@ -656,10 +707,19 @@ function componentProblems(
   if (!componentId) return [P.ComponentIncomplete({ index, field: "id" })];
   const absent = componentRequirements[component._tag](component);
   const destinations = destinationProblems(component, componentId);
+  const hrefValue = buttonHrefValueProblems(component, componentId, values);
+  const condition = componentConditionProblems(
+    component,
+    index,
+    componentId,
+    values
+  );
   // Unreadable settings are reported only when nothing more specific names the component.
   const unreadable =
     absent.length === 0 &&
     destinations.length === 0 &&
+    hrefValue.length === 0 &&
+    condition.length === 0 &&
     !duplicateIds.has(componentId) &&
     Option.isNone(decodeComponent(component));
   return [
@@ -667,6 +727,8 @@ function componentProblems(
       P.ComponentIncomplete({ index, componentId, field })
     ),
     ...destinations,
+    ...hrefValue,
+    ...condition,
     ...(unreadable
       ? [P.ComponentIncomplete({ index, componentId, field: "settings" })]
       : []),
@@ -679,6 +741,53 @@ function componentProblems(
         })
       : []),
   ];
+}
+
+function buttonHrefValueProblems(
+  component: DraftComponent,
+  componentId: string,
+  values: ValueScope
+): EmailDocumentProblem[] {
+  if (component._tag !== "Button" || !component.hrefValue) return [];
+  const at: EmailContentLocation = { field: "component", componentId };
+  const { name, field } = component.hrefValue;
+  if (!name) return [P.ValueReferenceIncomplete({ at })];
+  if (!values.kept.has(name)) return [P.ValueUnknown({ name, at })];
+  const definition = values.definitions.get(name);
+  const invalid =
+    isMalformedField(field) ||
+    (definition !== undefined && !validUrlReference(definition, field));
+  return invalid ? [P.ValueReferenceInvalid({ name, at })] : [];
+}
+
+function componentConditionProblems(
+  component: DraftComponent,
+  index: number,
+  componentId: string,
+  values: ValueScope
+): EmailDocumentProblem[] {
+  const condition = component.when;
+  if (!condition) return [];
+  const at: EmailContentLocation = { field: "component", componentId };
+  const problems: EmailDocumentProblem[] = [];
+  if (typeof condition.present !== "boolean") {
+    problems.push(P.ComponentIncomplete({ index, componentId, field: "when" }));
+  }
+  const { name, field } = condition;
+  if (!name) {
+    problems.push(P.ValueReferenceIncomplete({ at }));
+    return problems;
+  }
+  if (!values.kept.has(name)) {
+    problems.push(P.ValueUnknown({ name, at }));
+    return problems;
+  }
+  const definition = values.definitions.get(name);
+  const invalid =
+    isMalformedField(field) ||
+    (definition !== undefined && !validScalarReference(definition, field));
+  if (invalid) problems.push(P.ValueReferenceInvalid({ name, at }));
+  return problems;
 }
 
 const destinationProblems = (

@@ -439,6 +439,15 @@
   "emailCampaignsAudienceReservationCountStatusNeedsRefund": "needs refund",
   "emailCampaignsAudienceReservationCountVisitEndPeriod": "ending {period}",
   "emailCampaignsAudienceReservationCountVisitPeriod": "visiting {period}",
+  "emailCampaignsAudienceReservationCountStayLabel": "Stay",
+  "emailCampaignsAudienceReservationCountStayAny": "with any stay",
+  "emailCampaignsAudienceReservationCountStayDay": "with a day stay",
+  "emailCampaignsAudienceReservationCountStayOvernight": "with an overnight stay",
+  "emailCampaignsAudienceReservationCountStayNeedsCowork": "Only cowork reservations have a stay. Choose the Cowork product to count by stay.",
+  "emailCampaignsAudienceReservationCountStayNeedsVisitDate": "A stay counts by visit date or visit end, not by booking date.",
+  "emailCampaignsAudienceReservationCountPaymentLabel": "Payment",
+  "emailCampaignsAudienceReservationCountPaymentAny": "with any payment",
+  "emailCampaignsAudienceReservationCountPaymentIndividual": "paid individually",
   "emailCampaignsAudienceSaveCampaignNotFound": "The audience could not be saved. A campaign it counts emails from no longer exists. Choose another campaign.",
   "emailCampaignsAudienceSaveFailedCheckFilters": "The audience could not be saved. Check the filters and try again.",
   "emailCampaignsAudienceSaveFailedRetry": "The audience could not be saved. Try again.",
@@ -1286,6 +1295,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "No longer in Dotypos",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Outside the test email domain",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "The email has no translation for this recipient",
+  "emailCampaignsSentSkipReasonPassHolder": "Pass holder",
   "emailCampaignsSentStatus": "Status",
   "emailCampaignsTestSendAdd": "Add",
   "emailCampaignsTestSendAddRecipientLabel": "Add a test recipient",
@@ -1330,5 +1340,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "One of the addresses isn't a valid email address. Check them and try again.",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "Outside production, campaign email can only go to @{domain} addresses, and some recipients are outside it. Nothing was sent.",
   "emailCampaignsSendingFailureRecipientsUnavailable": "Recipients couldn't be resolved because Dotypos or the database is unavailable. Nothing was sent and the code still works; try again in a moment.",
-  "emailCampaignsSendingFailureEmailSetupMissing": "Campaign email isn't configured for this deployment. Ask a developer to check its campaign email environment variables."
+  "emailCampaignsSendingFailureEmailSetupMissing": "Campaign email isn't configured for this deployment. Ask a developer to check its campaign email environment variables.",
+  "emailCampaignsComposerEditPublishedEmail": "Edit email in library",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "This email uses trigger values that don’t match this automation’s trigger. Choose a matching email or update the flow."
 }

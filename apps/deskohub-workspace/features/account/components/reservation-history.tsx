@@ -1,10 +1,12 @@
 import { CalendarDays, UserRound, Users } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, Suspense, use } from "react";
+import type { AccountPasses } from "@/features/account/account-passes.server";
 import type {
   AccountUnlimitedPass,
   AccountUnlimitedPasses,
 } from "@/features/account/account-unlimited-passes.server";
 import { UnlimitedReservationItem } from "@/features/account/components/account-unlimited-pass";
+import { PassSavingsFooter } from "@/features/account/components/pass-savings-footer";
 import { AccountSectionPanel } from "@/features/account/components/shell/account-section-panel";
 import type {
   CustomerReservationHistory,
@@ -12,8 +14,10 @@ import type {
   CustomerReservationStatus,
   CustomerReservationSummary,
 } from "@/features/account/contracts";
+import { offersPassSavings } from "@/features/account/pass-savings-offer";
 import { getReservationProductName } from "@/features/account/reservation-product-name";
 import { type Locale, m } from "@/features/i18n";
+import { PassProductMarks } from "@/features/passes/components/pass-product-marks";
 import { ReservationAccessButton } from "@/features/reservation/components/reservation-access-button";
 import { formatMeetingRoomSetupStart } from "@/features/reservation/meeting-room-reservation-display-time";
 import {
@@ -189,10 +193,16 @@ function ReservationRowWithdrawal({
 }
 
 export function ReservationHistory({
+  entryPacks,
   history,
   locale,
   unlimitedPasses = [],
 }: {
+  /**
+   * The account's Entry packs, read only while passes are released. Without
+   * it the Past reservations section never offers packs and passes.
+   */
+  readonly entryPacks?: Promise<AccountPasses>;
   readonly history?: CustomerReservationHistory;
   readonly locale: Locale;
   readonly unlimitedPasses?: AccountUnlimitedPasses;
@@ -221,6 +231,18 @@ export function ReservationHistory({
       )}
       {(groups || pastPasses.length > 0) && (
         <PastReservationGroup
+          footer={
+            entryPacks && (
+              <Suspense fallback={null}>
+                <PassSavingsOffer
+                  entryPacks={entryPacks}
+                  locale={locale}
+                  past={groups?.past ?? []}
+                  unlimitedPasses={unlimitedPasses}
+                />
+              </Suspense>
+            )
+          }
           locale={locale}
           passes={pastPasses}
           reservations={groups?.past ?? []}
@@ -630,17 +652,48 @@ function CompactReservationItem({
   );
 }
 
+/**
+ * The packs and passes offer once the account's Entry packs have loaded,
+ * shown only to a customer it fits (`offersPassSavings`).
+ */
+function PassSavingsOffer({
+  entryPacks,
+  locale,
+  past,
+  unlimitedPasses,
+}: {
+  readonly entryPacks: Promise<AccountPasses>;
+  readonly locale: Locale;
+  readonly past: readonly CustomerReservationSummary[];
+  readonly unlimitedPasses: AccountUnlimitedPasses;
+}) {
+  const offered = offersPassSavings({
+    past,
+    entryPacks: use(entryPacks),
+    unlimitedPasses,
+  });
+  return (
+    offered && (
+      <PassSavingsFooter locale={locale} marks={<PassProductMarks />} />
+    )
+  );
+}
+
 function PastReservationGroup({
+  footer,
   locale,
   passes,
   reservations,
 }: {
+  readonly footer?: ReactNode;
   readonly locale: Locale;
   readonly passes: readonly AccountUnlimitedPass[];
   readonly reservations: readonly CustomerReservationSummary[];
 }) {
   return (
     <AccountSectionPanel
+      footer={footer || undefined}
+      footerLayout="edge-to-edge"
       actions={
         <span className="rounded-full bg-[#f3f5f8] px-2.5 py-1 text-xs font-semibold text-[#64748b]">
           {reservations.length + passes.length}

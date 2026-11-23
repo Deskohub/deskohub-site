@@ -21,6 +21,7 @@ import type { WorkspaceReservationId } from "@/features/reservation/persistence-
 import { getReservationHoldExpiresAt } from "@/features/reservation/reservation-hold-deadline";
 import { hasReservationIntervalEnded } from "@/features/reservation/reservation-interval";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
+import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
 import { currentInstant } from "@/shared/utils/temporal";
 import { LatePaymentRecoveryRepository } from "../repositories/late-payment-recovery.repository";
 import { PaymentAttemptRepository } from "../repositories/payment-attempt.repository";
@@ -411,7 +412,11 @@ export class PaymentRetryHoldService extends Context.Service<
         Layer.provide(WorkspaceDotyposLayer)
       )
     ),
-    Layer.provide(ReservationHoldCleanupScheduleService.Live),
+    Layer.provide(
+      ReservationHoldCleanupScheduleService.Default.pipe(
+        Layer.provide(VercelQueuePublisher)
+      )
+    ),
     Layer.provide(WorkspaceDatabaseAdvisoryLock.Default),
     Layer.provide(WorkspaceDotyposLayer)
   );

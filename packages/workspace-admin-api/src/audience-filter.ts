@@ -14,6 +14,9 @@ import {
   optionalChoiceParam,
   optionValues,
   periodParam,
+  ReservationPayment,
+  ReservationStay,
+  reservationStayIssue,
   setAttribute,
 } from "./audience-attribute-kinds";
 import {
@@ -37,6 +40,9 @@ export const audienceAttributeCatalogue = defineAudienceAttributeCatalogue({
    * booked reservations count: confirmed and never cancelled.
    * `visitEnd` also excludes provider cancellations without a status;
    * paired with `Past` it counts completed intervals, not attendance.
+   * `stay` counts only cowork visits of that booked stay, so it needs the
+   * cowork product and a visit date basis; `payment` counts only
+   * reservations paid individually. Unset, either counts every reservation.
    */
   reservationCount: countAttribute("reservationCount", {
     label: "Reservation count",
@@ -69,12 +75,45 @@ export const audienceAttributeCatalogue = defineAudienceAttributeCatalogue({
           },
         },
       }),
+      stay: optionalChoiceParam(ReservationStay, {
+        label: "Stay",
+        control: "select",
+        absent: { label: "any stay" },
+        options: {
+          day: { label: "day stay", nounBefore: "day-stay " },
+          overnight: { label: "overnight stay", nounBefore: "overnight " },
+        },
+      }),
+      payment: optionalChoiceParam(ReservationPayment, {
+        label: "Payment",
+        control: "select",
+        absent: { label: "any payment" },
+        options: {
+          individual: {
+            label: "paid individually",
+            nounAfter: " paid individually",
+          },
+        },
+      }),
     },
     reservationProduct: true,
+    // A stay is read from the visit's booked interval, which a booking-date
+    // count never reads.
+    paramsIssue: ({ dateBasis, stay, product }) =>
+      stay !== undefined && dateBasis === "booking"
+        ? {
+            path: ["stay"],
+            issue:
+              "A stay counts by visit date or visit end, not booking date.",
+          }
+        : reservationStayIssue({ stay, product }),
     editor: {
       lead: [
         { param: "status" },
-        { text: "reservations by" },
+        { param: "stay" },
+        { text: "reservations" },
+        { param: "payment" },
+        { text: "by" },
         { param: "dateBasis" },
       ],
       period: "Reservations",

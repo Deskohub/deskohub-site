@@ -8,8 +8,10 @@ import type {
   AudienceAttributeDefinition,
   AudienceConditionIn,
   AudienceConditionOf,
+  ReservationStay,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Match } from "effect";
+import type { BookedInterval } from "@/features/reservation/backend/booked-reservation";
 import type {
   AudienceCandidate,
   AudienceDateFacts,
@@ -27,6 +29,13 @@ import {
   scopedCustomers,
 } from "./audience-evaluation-context";
 import type { ICampaignCandidateRepository } from "./campaign-candidate.repository";
+import { isBookedStay } from "./reservation-stay";
+
+/** A Dotypos visit and its booked interval. */
+type AudienceVisit = {
+  readonly dotyposReservationId: DotyposReservationId;
+  readonly interval: BookedInterval;
+};
 
 /** What a resolver can query while resolving one audience. */
 export type AudienceResolution = {
@@ -40,12 +49,12 @@ export type AudienceResolution = {
    */
   readonly visitsIn: (
     bounds: DatePeriodBounds
-  ) => Resolved<readonly DotyposReservationId[]>;
+  ) => Resolved<readonly AudienceVisit[]>;
   /** Valid visit ends in the bounds; booked counts exclude provider cancellations. */
   readonly visitEndsIn: (
     bounds: DatePeriodBounds,
     includeCancelled: boolean
-  ) => Resolved<readonly DotyposReservationId[]>;
+  ) => Resolved<readonly AudienceVisit[]>;
   /** Every Dotypos reservation that has begun by `asOf`, with its start. */
   readonly pastVisits: (
     asOf: Temporal.Instant
@@ -165,11 +174,14 @@ const database = CampaignRecipientResolutionError.database;
  * it; by visit date at any time every booked reservation counts. A replay
  * counts the reservations as they stood at its moment. Visit-end counts
  * always read valid ends; `Past` makes them completed intervals. Without
- * an explicit status they also exclude provider-cancelled visits.
+ * an explicit status they also exclude provider-cancelled visits. A stay
+ * keeps only the visits whose booked interval and stored tier give it, so it
+ * reads visits even at any time; a payment keeps only reservations paid
+ * that way.
  */
 const countReservations = (
   {
-    params: { dateBasis, period, status, product },
+    params: { dateBasis, period, status, stay, payment, product },
     reservationsAsOf,
   }: {
     readonly params: ConcreteCountParams<
@@ -182,6 +194,7 @@ const countReservations = (
   const selection = {
     ...(status && { status }),
     ...(product && { product }),
+    ...(payment && { payment }),
     ...(reservationsAsOf && { asOf: reservationsAsOf }),
     customers: scopedCustomers(scope),
   };
@@ -194,27 +207,52 @@ const countReservations = (
     candidates
       .countReservations({ ...selection, ...extra })
       .pipe(Effect.mapError(database));
+  const countVisits = (visits: Resolved<readonly AudienceVisit[]>) =>
+    visits.pipe(
+      Effect.flatMap((selected) =>
+        stay === undefined
+          ? Effect.succeed(selected.map((visit) => visit.dotyposReservationId))
+          : visitsOfStay(stay, selected, candidates)
+      ),
+      Effect.flatMap((dotyposReservationIds) =>
+        countSelected({ dotyposReservationIds })
+      )
+    );
   return Match.value(dateBasis).pipe(
     Match.when("booking", () => countSelected({ booked: period })),
     Match.when("visitEnd", () =>
-      visitEndsIn(period, status !== undefined).pipe(
-        Effect.flatMap((dotyposReservationIds) =>
-          countSelected({ dotyposReservationIds })
-        )
-      )
+      countVisits(visitEndsIn(period, status !== undefined))
     ),
     Match.when("visit", () =>
-      isUnboundedPeriod(period)
+      isUnboundedPeriod(period) && stay === undefined
         ? countSelected({})
-        : visitsIn(period).pipe(
-            Effect.flatMap((dotyposReservationIds) =>
-              countSelected({ dotyposReservationIds })
-            )
-          )
+        : countVisits(visitsIn(period))
     ),
     Match.exhaustive
   );
 };
+
+/** The visits whose booked interval and stored cowork tier give the stay. */
+const visitsOfStay = (
+  stay: ReservationStay,
+  visits: readonly AudienceVisit[],
+  candidates: ICampaignCandidateRepository
+) =>
+  candidates
+    .coworkTiers(visits.map(({ dotyposReservationId }) => dotyposReservationId))
+    .pipe(
+      Effect.mapError(database),
+      Effect.map((tiers) =>
+        visits.flatMap(({ dotyposReservationId, interval }) =>
+          isBookedStay(stay, {
+            tier: tiers.get(dotyposReservationId),
+            interval,
+          })
+            ? [dotyposReservationId]
+            : []
+        )
+      )
+    );
 
 /**
  * Each customer's earliest or latest booked visit among the visits begun by
@@ -283,9 +321,10 @@ const visitDates =
 export const audienceAttributeResolvers: AudienceAttributeResolvers = {
   reservationCount: {
     count: countReservations,
-    readsVisits: ({ params: { dateBasis, period } }) =>
+    readsVisits: ({ params: { dateBasis, period, stay } }) =>
       dateBasis === "visitEnd" ||
-      (dateBasis === "visit" && !isUnboundedPeriod(period)),
+      (dateBasis === "visit" &&
+        (stay !== undefined || !isUnboundedPeriod(period))),
   },
   campaignEmailCount: {
     // The evaluating campaign without one (`null`) has sent nobody anything.

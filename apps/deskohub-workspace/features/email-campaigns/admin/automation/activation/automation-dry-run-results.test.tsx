@@ -3,6 +3,7 @@ import { testEmailAddress } from "@deskohub/test-email";
 import type {
   AdministrationCampaignContent,
   AutomationDryRunRow,
+  AutomationRunSkipReason,
 } from "@deskohub/workspace-admin-api";
 import { automationPreviewOutcomes } from "@deskohub/workspace-admin-api";
 import { cleanup, render, within } from "@testing-library/react";
@@ -15,7 +16,9 @@ import {
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
 import { formatCount } from "@/shared/utils/number";
+import { upperCaseFirst } from "@/shared/utils/text-case";
 import type { AutomationDryRunWithLifecycle } from "../../../automation/backend/automation-dry-run.service";
+import { automationRunSkipReasonLabel } from "../run-log/automation-run-status";
 import { automationStepLabelOrId } from "../run-log/automation-step-label";
 import {
   automationFlowFixture,
@@ -89,6 +92,7 @@ describe("AutomationDryRunResults", () => {
       "not-in-audience": 3,
       "already-active": 4,
       withdrawn: 5,
+      skipped: 7,
       unavailable: 6,
     };
     const view = renderResults(automationDryRunFixture({ counts }));
@@ -484,6 +488,42 @@ describe("AutomationDryRunResults", () => {
     expect(sending?.textContent).toContain(
       m.emailAutomationActivationFlagApproximate({}, { locale })
     );
+  });
+
+  test("a skipped row names why the send step would skip the customer", () => {
+    const view = renderResults(
+      automationDryRunFixture({
+        customers,
+        rows: [
+          row({
+            outcome: "skipped",
+            stepId: "send",
+            skipReason: "pass-holder",
+          }),
+          row({
+            customerEventId: "event-2",
+            outcome: "skipped",
+            stepId: "send",
+            skipReason: "already-sent-once",
+          }),
+        ],
+      })
+    );
+    const items = within(
+      view.getByRole("list", { name: rowsLabel })
+    ).getAllByRole("listitem");
+    const reasonLabel = (reason: AutomationRunSkipReason) =>
+      upperCaseFirst(automationRunSkipReasonLabel(reason, locale), locale);
+
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining(reasonLabel("pass-holder")),
+      expect.stringContaining(reasonLabel("already-sent-once")),
+    ]);
+    for (const item of items) {
+      expect(item.textContent).toContain(
+        m.emailAutomationActivationOutcomeSkipped({}, { locale })
+      );
+    }
   });
 
   test("links no pages when the dry run fits one", () => {

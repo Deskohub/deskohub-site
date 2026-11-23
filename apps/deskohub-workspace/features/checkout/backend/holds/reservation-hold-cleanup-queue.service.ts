@@ -1,84 +1,20 @@
-import { Context, Data, Duration, Effect, Layer, Schema } from "effect";
-import { toStoredInstant } from "@/db/instant";
-import {
-  type WorkspaceReservationId,
-  workspaceReservationIdSchema,
-} from "@/features/reservation/persistence-contracts";
+import { Context, Data, Effect, Layer } from "effect";
 import { QueueRedelivery } from "@/shared/backend/queue/queue-consumer";
 import {
   QueuePublisher,
   type QueuePublishOutcome,
 } from "@/shared/backend/queue/queue-publisher";
-import { defineQueueTopic } from "@/shared/backend/queue/queue-topic";
-import { clamp } from "@/shared/utils";
-import { instantStringSchema } from "@/shared/utils/temporal";
 import { ProviderPaymentDeferral } from "../payment/provider-payment-finalization.service";
 import {
   type ReservationHoldCleanupOutcome,
   ReservationHoldCleanupService,
 } from "./reservation-hold-cleanup.service";
+import {
+  type ReservationHoldCleanupSchedule,
+  type ReservationHoldCleanupSchedulePayload,
+  reservationHoldCleanupTopic,
+} from "./reservation-hold-cleanup-topic";
 import { HoldCancellationInProgress } from "./unpaid-hold-release.service";
-
-export const reservationHoldCleanupScheduleMaxDelaySeconds = 7 * 24 * 60 * 60;
-const reservationHoldCleanupRetryWindowSeconds = 60 * 60;
-
-const ReservationHoldCleanupSchedulePayloadSchema = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  orderId: workspaceReservationIdSchema,
-  reservationHoldExpiresAtIso: instantStringSchema,
-});
-
-type ReservationHoldCleanupSchedulePayload =
-  typeof ReservationHoldCleanupSchedulePayloadSchema.Type;
-
-type ReservationHoldCleanupSchedule = {
-  readonly orderId: WorkspaceReservationId;
-  readonly reservationHoldExpiresAt: Temporal.Instant;
-};
-
-/**
- * One message per hold deadline, delivered when the hold expires and kept for
- * an hour of retries after it.
- */
-export const reservationHoldCleanupTopic = defineQueueTopic({
-  topic: "workspace-reservation-hold-cleanup",
-  label: "Reservation hold cleanup",
-  message: Schema.toStandardSchemaV1(
-    ReservationHoldCleanupSchedulePayloadSchema
-  ),
-  publish: (
-    input: ReservationHoldCleanupSchedule & { readonly now: Temporal.Instant }
-  ) => {
-    const reservationHoldExpiresAtIso = toStoredInstant(
-      input.reservationHoldExpiresAt
-    ).toString();
-    const delaySeconds = clamp(
-      Math.ceil(
-        (input.reservationHoldExpiresAt.epochMilliseconds -
-          input.now.epochMilliseconds) /
-          1000
-      ),
-      0,
-      reservationHoldCleanupScheduleMaxDelaySeconds
-    );
-    const retentionSeconds = clamp(
-      delaySeconds + reservationHoldCleanupRetryWindowSeconds,
-      60,
-      reservationHoldCleanupScheduleMaxDelaySeconds
-    );
-
-    return {
-      message: {
-        schemaVersion: 1 as const,
-        orderId: input.orderId,
-        reservationHoldExpiresAtIso,
-      },
-      key: `reservation-hold-cleanup:${input.orderId}:${reservationHoldExpiresAtIso}`,
-      delay: Duration.seconds(delaySeconds),
-      retention: Duration.seconds(retentionSeconds),
-    };
-  },
-});
 
 class ReservationHoldCleanupScheduleError extends Data.TaggedError(
   "ReservationHoldCleanupScheduleError"
@@ -150,8 +86,6 @@ export class ReservationHoldCleanupScheduleService extends Context.Service<
       };
     })
   );
-
-  static Live = this.Default.pipe(Layer.provide(QueuePublisher.Default));
 }
 
 export const processReservationHoldCleanupScheduleMessage = Effect.fn(

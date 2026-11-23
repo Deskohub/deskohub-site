@@ -8,6 +8,8 @@ import { Result, Schema } from "effect";
 import {
   EmailDocumentForPublication,
   type EmailDocumentProblem,
+  emailDocumentRequiredTriggers,
+  emailDocumentUsesDiscounts,
   emailDraftProblems,
   emailPublicationProblems,
   englishEmailDocumentProblem,
@@ -943,5 +945,121 @@ describe("publication problems", () => {
     expect(recordProblems([bodyField("email")])).toEqual([
       "Unselected component field: customer.",
     ]);
+  });
+});
+
+describe("trigger values, dynamic button links, and block conditions", () => {
+  const passReminderDocument = {
+    purpose: "marketing",
+    templateKey: "workspace",
+    values: [
+      {
+        name: "pass",
+        source: { kind: "trigger", trigger: "unlimited-ending" },
+      },
+    ],
+    structure: [
+      {
+        _tag: "Paragraph",
+        id: "greeting_named",
+        textKey: "greeting_named",
+        when: { name: "pass", field: ["firstName"], present: true },
+      },
+      {
+        _tag: "Paragraph",
+        id: "greeting_unnamed",
+        textKey: "greeting_unnamed",
+        when: { name: "pass", field: ["firstName"], present: false },
+      },
+      {
+        _tag: "Paragraph",
+        id: "desk_note",
+        textKey: "desk_note",
+        when: { name: "pass", field: ["deskLabel"], present: true },
+      },
+      {
+        _tag: "Button",
+        id: "renew",
+        labelKey: "renew_label",
+        hrefValue: { name: "pass", field: ["actionUrl"] },
+      },
+    ],
+    translations: {
+      "cs-CZ": {
+        subject: [
+          { _tag: "Text", text: "Končí " },
+          { _tag: "Value", name: "pass", field: ["endsOn"] },
+        ],
+        preheader: [{ _tag: "Value", name: "pass", field: ["tier"] }],
+        texts: {
+          greeting_named: [
+            { _tag: "Text", text: "Ahoj " },
+            { _tag: "Value", name: "pass", field: ["firstName"] },
+          ],
+          greeting_unnamed: [{ _tag: "Text", text: "Dobrý den," }],
+          desk_note: [
+            { _tag: "Text", text: "Stůl " },
+            { _tag: "Value", name: "pass", field: ["deskLabel"], bold: true },
+            { _tag: "Text", text: ", další období od " },
+            { _tag: "Value", name: "pass", field: ["renewalStartsOn"] },
+          ],
+          renew_label: [{ _tag: "Text", text: "Obnovit" }],
+        },
+      },
+    },
+  };
+
+  test("publishes trigger values with conditional blocks and dynamic button links", () => {
+    expect(emailDraftProblems(draft(passReminderDocument))).toEqual([]);
+    const published = Result.getOrThrow(publish(passReminderDocument));
+    expect(emailDocumentRequiredTriggers(published)).toEqual([
+      "unlimited-ending",
+    ]);
+    expect(emailDocumentUsesDiscounts(published)).toBe(false);
+    expect(requiredEmailValueNames(published) as readonly string[]).toEqual([
+      "pass",
+    ]);
+    expect([...referencedEmailValueNames(published)]).toEqual(["pass"]);
+  });
+
+  test("rejects URL trigger fields inline, non-URL fields on buttons, and dual button destinations", () => {
+    const inlineUrl = structuredClone(passReminderDocument);
+    inlineUrl.translations["cs-CZ"].subject = [
+      { _tag: "Value", name: "pass", field: ["actionUrl"] },
+    ];
+    expect(tags(emailDraftProblems(draft(inlineUrl)))).toContain(
+      "ValueReferenceInvalid"
+    );
+    expect(Result.isFailure(publish(inlineUrl))).toBe(true);
+
+    const nonUrlButton = structuredClone(passReminderDocument);
+    (
+      nonUrlButton.structure[3] as {
+        hrefValue: { name: string; field: string[] };
+      }
+    ).hrefValue = { name: "pass", field: ["endsOn"] };
+    expect(tags(emailDraftProblems(draft(nonUrlButton)))).toContain(
+      "ValueReferenceInvalid"
+    );
+    expect(Result.isFailure(publish(nonUrlButton))).toBe(true);
+
+    const bothDestinations = structuredClone(passReminderDocument);
+    (bothDestinations.structure[3] as { href?: string }).href =
+      "https://workspace.deskohub.cz/";
+    expect(tags(emailDraftProblems(draft(bothDestinations)))).toContain(
+      "ComponentIncomplete"
+    );
+    expect(Result.isFailure(publish(bothDestinations))).toBe(true);
+
+    const badCondition = structuredClone(passReminderDocument);
+    (
+      badCondition.structure[0] as {
+        when: { name: string; field: string[]; present: boolean };
+      }
+    ).when = { name: "pass", field: ["remainingEntries"], present: true };
+    expect(tags(emailDraftProblems(draft(badCondition)))).toContain(
+      "ValueReferenceInvalid"
+    );
+    expect(Result.isFailure(publish(badCondition))).toBe(true);
   });
 });

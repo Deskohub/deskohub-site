@@ -45,6 +45,7 @@
   "emailAutomationActivationOutcomeAlreadyActive": "Уже виконується",
   "emailAutomationActivationOutcomeConditionFailed": "Зупинено умовою",
   "emailAutomationActivationOutcomeNotInAudience": "Поза аудиторією",
+  "emailAutomationActivationOutcomeSkipped": "Пропущено",
   "emailAutomationActivationOutcomeUnavailable": "Не вдалося оцінити",
   "emailAutomationActivationOutcomeWithdrawn": "Відкликано",
   "emailAutomationActivationOutcomeWouldSend": "Було б надіслано",

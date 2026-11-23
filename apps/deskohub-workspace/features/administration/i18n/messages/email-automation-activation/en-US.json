@@ -45,6 +45,7 @@
   "emailAutomationActivationOutcomeAlreadyActive": "Already in a run",
   "emailAutomationActivationOutcomeConditionFailed": "Stopped by a condition",
   "emailAutomationActivationOutcomeNotInAudience": "Not in the audience",
+  "emailAutomationActivationOutcomeSkipped": "Skipped",
   "emailAutomationActivationOutcomeUnavailable": "Couldn't be evaluated",
   "emailAutomationActivationOutcomeWithdrawn": "Withdrawn",
   "emailAutomationActivationOutcomeWouldSend": "Would send",

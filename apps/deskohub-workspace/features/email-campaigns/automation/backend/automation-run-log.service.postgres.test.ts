@@ -72,6 +72,8 @@ const zeroSkipReasons = {
   "invalid-email": 0,
   "consent-withdrawn": 0,
   "outside-test-domain": 0,
+  "pass-holder": 0,
+  "already-sent-once": 0,
 };
 
 /** A synthetic Dotypos profile; `undefined` fields are left out. */

@@ -1,7 +1,7 @@
 import {
-  AdministrationCampaignRecipientSkipReason,
   AdministrationDotyposCustomerId,
   AutomationRunOutcome,
+  AutomationRunSkipReason,
   AutomationRunState,
   AutomationStepId,
   AutomationVersionNumber,
@@ -13,7 +13,7 @@ import type { SearchParamValues } from "@/shared/utils/search-params";
 export interface AutomationRunFilters {
   readonly state: Option.Option<AutomationRunState>;
   readonly outcome: Option.Option<AutomationRunOutcome>;
-  readonly skipReason: Option.Option<AdministrationCampaignRecipientSkipReason>;
+  readonly skipReason: Option.Option<AutomationRunSkipReason>;
   readonly stepId: Option.Option<AutomationStepId>;
   readonly versionNumber: Option.Option<AutomationVersionNumber>;
   readonly customerId: Option.Option<AdministrationDotyposCustomerId>;
@@ -48,9 +48,7 @@ export const parseAutomationRunFilters = (
     Option.flatMap(Schema.decodeUnknownOption(AutomationRunOutcome))
   ),
   skipReason: param(searchParams, "skipReason").pipe(
-    Option.flatMap(
-      Schema.decodeUnknownOption(AdministrationCampaignRecipientSkipReason)
-    )
+    Option.flatMap(Schema.decodeUnknownOption(AutomationRunSkipReason))
   ),
   stepId: param(searchParams, "step").pipe(
     Option.flatMap(Schema.decodeUnknownOption(AutomationStepId))

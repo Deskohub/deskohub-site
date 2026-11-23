@@ -8,8 +8,10 @@ import {
 import { Effect, Option } from "effect";
 import type { AudienceFilterOutcome } from "../audience-filter";
 import {
+  noSendPolicyFacts,
   type ReplayedEvent,
   replayCustomerEvents,
+  type SendPolicyFacts,
   simulateRun,
 } from "./automation-dry-run-simulation";
 
@@ -199,5 +201,314 @@ describe("replayCustomerEvents on engine ticks", () => {
       ["would-send", "2026-10-21T10:15:00Z"],
       ["would-send", "2026-10-21T10:30:00Z"],
     ]);
+  });
+});
+
+describe("simulateRun at a Send step with delivery policies", () => {
+  const sendWith = (
+    policies: Omit<Extract<AutomationStep, { _tag: "Send" }>, "_tag" | "id">
+  ): AutomationStep => ({ ...send, ...policies });
+  const gap = { oneOffCampaignGap: { days: 14 } } as const;
+
+  /** Simulates a lone Send from `triggerAt` with the customer's policy facts. */
+  const simulateSend = (input: {
+    readonly step: AutomationStep;
+    readonly triggerAt: string;
+    readonly facts?: Partial<SendPolicyFacts>;
+    readonly simulatedSends?: readonly string[];
+  }) => {
+    const end = Effect.runSync(
+      simulateRun({
+        steps: [input.step],
+        triggerAt: at(input.triggerAt),
+        evaluateCondition: () => Effect.succeed("match" as const),
+        sendPolicyFacts: { ...noSendPolicyFacts, ...input.facts },
+        simulatedSends: input.simulatedSends?.map(at),
+      })
+    );
+    return {
+      outcome: end.outcome,
+      at: end.at.toString(),
+      skipReason: end.outcome === "skipped" ? end.skipReason : null,
+    };
+  };
+
+  test("a Send without policies sends on its tick whatever the facts", () => {
+    expect(
+      simulateSend({
+        step: send,
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: {
+          alreadySentOnce: true,
+          oneOffCampaignEmails: [at("2026-10-20T10:00:00Z")],
+          guardSkip: Option.some("pass-holder"),
+        },
+        simulatedSends: ["2026-10-01T10:00:00Z"],
+      })
+    ).toEqual({
+      outcome: "would-send",
+      at: "2026-10-21T10:15:00Z",
+      skipReason: null,
+    });
+  });
+
+  test("a claim another run holds skips the send as already sent once", () => {
+    expect(
+      simulateSend({
+        step: sendWith({ oncePerCustomer: true }),
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: { alreadySentOnce: true },
+      })
+    ).toEqual({
+      outcome: "skipped",
+      at: "2026-10-21T10:15:00Z",
+      skipReason: "already-sent-once",
+    });
+  });
+
+  test("a send simulated earlier in the dry run claims the customer", () => {
+    expect(
+      simulateSend({
+        step: sendWith({ oncePerCustomer: true }),
+        triggerAt: "2026-10-21T10:01:00Z",
+        simulatedSends: ["2026-10-01T10:00:00Z"],
+      })
+    ).toMatchObject({ outcome: "skipped", skipReason: "already-sent-once" });
+  });
+
+  test("the claim skips on the send's tick before the gap would defer it", () => {
+    expect(
+      simulateSend({
+        step: sendWith({ oncePerCustomer: true, ...gap }),
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: {
+          alreadySentOnce: true,
+          oneOffCampaignEmails: [at("2026-10-20T10:00:00Z")],
+        },
+      })
+    ).toEqual({
+      outcome: "skipped",
+      at: "2026-10-21T10:15:00Z",
+      skipReason: "already-sent-once",
+    });
+  });
+
+  test("a one-off email within the gap defers the send to the gap's end", () => {
+    expect(
+      simulateSend({
+        step: sendWith(gap),
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: { oneOffCampaignEmails: [at("2026-10-10T08:00:00Z")] },
+      })
+    ).toEqual({
+      outcome: "would-send",
+      at: "2026-10-24T08:00:00Z",
+      skipReason: null,
+    });
+  });
+
+  test("a gap ending on the send's tick clears it", () => {
+    expect(
+      simulateSend({
+        step: sendWith(gap),
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: { oneOffCampaignEmails: [at("2026-10-07T10:15:00Z")] },
+      }).at
+    ).toBe("2026-10-21T10:15:00Z");
+  });
+
+  test("a gap ending a minute after the send's tick defers it to the next tick", () => {
+    expect(
+      simulateSend({
+        step: sendWith(gap),
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: { oneOffCampaignEmails: [at("2026-10-07T10:16:00Z")] },
+      }).at
+    ).toBe("2026-10-21T10:30:00Z");
+  });
+
+  test("a one-off email after the send doesn't defer it", () => {
+    expect(
+      simulateSend({
+        step: sendWith(gap),
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: { oneOffCampaignEmails: [at("2026-10-22T12:00:00Z")] },
+      }).at
+    ).toBe("2026-10-21T10:15:00Z");
+  });
+
+  test("a one-off email during the deferral defers the send again, in Prague days", () => {
+    expect(
+      simulateSend({
+        step: sendWith(gap),
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: {
+          oneOffCampaignEmails: [
+            at("2026-10-10T08:00:00Z"),
+            at("2026-10-22T12:00:00Z"),
+          ],
+        },
+      }).at
+      // 14:00 in Prague on 22 October, two weeks later after the DST change.
+    ).toBe("2026-11-05T13:00:00Z");
+  });
+
+  test("a pass holder is skipped on the tick the deferred send would go out", () => {
+    expect(
+      simulateSend({
+        step: sendWith({ skipPassHolders: true, ...gap }),
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: {
+          oneOffCampaignEmails: [at("2026-10-10T08:00:00Z")],
+          guardSkip: Option.some("pass-holder"),
+        },
+      })
+    ).toEqual({
+      outcome: "skipped",
+      at: "2026-10-24T08:00:00Z",
+      skipReason: "pass-holder",
+    });
+  });
+
+  test("a customer who withdrew consent is skipped", () => {
+    expect(
+      simulateSend({
+        step: sendWith({ skipPassHolders: true }),
+        triggerAt: "2026-10-21T10:01:00Z",
+        facts: { guardSkip: Option.some("consent-withdrawn") },
+      })
+    ).toEqual({
+      outcome: "skipped",
+      at: "2026-10-21T10:15:00Z",
+      skipReason: "consent-withdrawn",
+    });
+  });
+
+  describe("in a customer's replay", () => {
+    const replayRows = (
+      step: AutomationStep,
+      facts: Partial<SendPolicyFacts>,
+      events: readonly string[],
+      undatedChangeAt: Option.Option<Temporal.Instant> = Option.none()
+    ) => {
+      const sendPolicyFacts = { ...noSendPolicyFacts, ...facts };
+      return Effect.runSync(
+        replayCustomerEvents({
+          events: events.map(at),
+          occurredAt: (event) => event,
+          now: at("2026-10-22T00:00:00Z"),
+          steps: [step],
+          approximation: { undatedChangeAt, countsSimulatedSends: false },
+          sendPolicyFacts,
+          replay: (event, simulatedSends) =>
+            Effect.map(
+              simulateRun({
+                steps: [step],
+                triggerAt: event,
+                evaluateCondition: () => Effect.succeed("match" as const),
+                sendPolicyFacts,
+                simulatedSends,
+              }),
+              (end): ReplayedEvent => ({ _tag: "Entered", end })
+            ),
+        })
+      );
+    };
+    const replayWith = (
+      step: AutomationStep,
+      facts: Partial<SendPolicyFacts>,
+      events: readonly string[]
+    ) =>
+      replayRows(step, facts, events).map(({ outcome }) => [
+        outcome.outcome,
+        outcome.sendAt?.toString() ?? null,
+        outcome.skipReason,
+        outcome.projected,
+      ]);
+
+    test("a deferred send holds later events off until it goes out", () => {
+      expect(
+        replayWith(
+          sendWith(gap),
+          { oneOffCampaignEmails: [at("2026-10-10T08:00:00Z")] },
+          [
+            "2026-10-21T10:01:00Z",
+            "2026-10-24T08:00:00Z",
+            "2026-10-24T08:01:00Z",
+          ]
+        )
+      ).toEqual([
+        ["would-send", "2026-10-24T08:00:00Z", null, true],
+        ["already-active", null, null, false],
+        ["would-send", "2026-10-24T08:15:00Z", null, true],
+      ]);
+    });
+
+    test("a send simulated for an earlier event skips the later ones once per customer", () => {
+      expect(
+        replayWith(sendWith({ oncePerCustomer: true }), {}, [
+          "2026-10-10T10:01:00Z",
+          "2026-10-12T10:01:00Z",
+        ])
+      ).toEqual([
+        ["would-send", "2026-10-10T10:15:00Z", null, false],
+        ["skipped", null, "already-sent-once", false],
+      ]);
+    });
+
+    test("a row skipped once per customer after an approximate send is approximate too", () => {
+      const events = ["2026-10-10T10:01:00Z", "2026-10-12T10:01:00Z"];
+      // Statuses read for the first event predate an undated change.
+      const undatedChangeAt = Option.some(at("2026-10-11T00:00:00Z"));
+      const rowsOf = (step: AutomationStep) =>
+        replayRows(step, {}, events, undatedChangeAt).map(
+          ({ outcome, reservationStatusesApproximate }) => [
+            outcome.outcome,
+            outcome.skipReason,
+            reservationStatusesApproximate,
+          ]
+        );
+
+      expect(rowsOf(sendWith({ oncePerCustomer: true }))).toEqual([
+        ["would-send", null, true],
+        ["skipped", "already-sent-once", true],
+      ]);
+      // Without the policy the later row doesn't depend on the earlier send.
+      expect(rowsOf(send)).toEqual([
+        ["would-send", null, true],
+        ["would-send", null, false],
+      ]);
+    });
+
+    test("a customer already sent once is skipped exactly after an approximate row", () => {
+      const rows = replayRows(
+        sendWith({ oncePerCustomer: true }),
+        { alreadySentOnce: true },
+        ["2026-10-10T10:01:00Z", "2026-10-12T10:01:00Z"],
+        Option.some(at("2026-10-11T00:00:00Z"))
+      ).map(({ outcome, reservationStatusesApproximate }) => [
+        outcome.outcome,
+        outcome.skipReason,
+        reservationStatusesApproximate,
+      ]);
+
+      expect(rows).toEqual([
+        ["skipped", "already-sent-once", true],
+        ["skipped", "already-sent-once", false],
+      ]);
+    });
+
+    test("a skipped send claims nothing for the later events", () => {
+      expect(
+        replayWith(
+          sendWith({ oncePerCustomer: true, skipPassHolders: true }),
+          { guardSkip: Option.some("pass-holder") },
+          ["2026-10-10T10:01:00Z", "2026-10-12T10:01:00Z"]
+        ).map(([outcome, , skipReason]) => [outcome, skipReason])
+      ).toEqual([
+        ["skipped", "pass-holder"],
+        ["skipped", "pass-holder"],
+      ]);
+    });
   });
 });

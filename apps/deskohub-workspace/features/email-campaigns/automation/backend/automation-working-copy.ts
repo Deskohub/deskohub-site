@@ -12,6 +12,10 @@ import {
   emailCampaigns,
 } from "@/db/schema";
 import type { DatabaseQueryError } from "@/db/sql-constraint";
+import {
+  type CampaignEmailPublication,
+  getCampaignEmailPublication,
+} from "../../backend/campaign-published-email";
 import type { CampaignId } from "../../campaign-identifiers";
 import type { AutomatedCampaignStatus } from "../../campaign-states";
 import { CampaignDeliveryMismatch, CampaignNotFound } from "../../errors";
@@ -23,9 +27,7 @@ import {
   automationFlowSchema,
   validateAutomationFlow,
 } from "../automation-flow";
-import { isPassReminderTrigger } from "../automation-triggers";
 import { AutomationFlowInvalid } from "../errors";
-import { passReminderSampleContent } from "./automation-pass-reminder-preview";
 
 export type AutomationRow = typeof emailCampaignAutomations.$inferSelect;
 
@@ -37,9 +39,10 @@ export type AutomatedCampaign = CampaignRow & {
 
 /**
  * An automated campaign's working copy as stored now: the campaign row, its
- * automation row with the decoded flow, its audience, and the draft hash
- * of what activation would publish. The hash is none until both a flow and
- * an audience exist.
+ * automation row with the decoded flow, its audience, its latest linked
+ * library email publication (when linked), and the draft hash of what
+ * activation would publish. The hash is none until a flow, an audience, and
+ * (when linked) an available published email exist.
  */
 export type AutomationWorkingCopy = {
   readonly campaign: AutomatedCampaign;
@@ -48,6 +51,7 @@ export type AutomationWorkingCopy = {
   readonly audience: Option.Option<
     Pick<CampaignAudienceRow, "id" | "filter" | "archivedAt">
   >;
+  readonly publishedEmail: Option.Option<CampaignEmailPublication>;
   readonly draftHash: Option.Option<AutomationDraftHash>;
 };
 
@@ -71,27 +75,41 @@ export const loadAutomationWorkingCopy = (
     Effect.bind("row", () => selectWorkingCopy(campaignId)),
     Effect.bind("flow", ({ row }) => decodeStoredFlow(row.automation.flow)),
     Effect.let("audience", ({ row }) => Option.fromNullishOr(row.audience)),
-    Effect.let("campaign", ({ row, flow }) => {
-      const trigger = Option.getOrUndefined(flow)?.trigger;
-      // The approved copy and its revision both participate in the draft hash.
-      if (trigger === undefined || !isPassReminderTrigger(trigger))
-        return row.campaign;
-      return { ...row.campaign, content: passReminderSampleContent(trigger) };
-    }),
+    Effect.bind("publishedEmail", ({ row }) =>
+      row.campaign.emailId === null
+        ? Effect.succeed(Option.none<CampaignEmailPublication>())
+        : Effect.flatMap(WorkspaceTransaction, ({ db }) =>
+            getCampaignEmailPublication(db, row.campaign.emailId!).pipe(
+              Effect.map(Option.fromNullishOr)
+            )
+          )
+    ),
     Effect.map(
-      ({ row, campaign, flow, audience }): AutomationWorkingCopy => ({
-        campaign,
-        automation: row.automation,
-        flow,
-        audience,
-        draftHash: Option.zipWith(flow, audience, (flow, { filter }) =>
-          hashAutomationDraft({
-            ...campaign,
-            flow,
-            audienceFilter: filter,
-          })
-        ),
-      })
+      ({ row, flow, audience, publishedEmail }): AutomationWorkingCopy => {
+        const { campaign } = row;
+        const missingLinkedEmail =
+          campaign.emailId !== null && Option.isNone(publishedEmail);
+        return {
+          campaign,
+          automation: row.automation,
+          flow,
+          audience,
+          publishedEmail,
+          draftHash: missingLinkedEmail
+            ? Option.none()
+            : Option.zipWith(flow, audience, (flow, { filter }) =>
+                hashAutomationDraft({
+                  ...campaign,
+                  ...(Option.isSome(publishedEmail) && {
+                    emailId: publishedEmail.value.emailId,
+                    emailVersionId: publishedEmail.value.versionId,
+                  }),
+                  flow,
+                  audienceFilter: filter,
+                })
+              ),
+        };
+      }
     ),
     Effect.withSpan("automationWorkingCopy.load")
   );

@@ -4,12 +4,10 @@ import {
   unlimitedPassOffers,
 } from "@/features/passes/pass-offer";
 import { getPassTierName } from "@/features/passes/pass-offer.i18n";
-import { getUnlimitedPassPurchasePath } from "@/features/passes/unlimited-pass-discovery";
-import { GuardedLink as Link } from "@/shared/components/guarded-link";
-import { Button } from "@/shared/components/ui/button";
 import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney, moneyMajorAmount } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
+import { UnlimitedPassPurchaseButton } from "./unlimited-pass-purchase-button";
 
 export function UnlimitedPassPrices({ locale }: { readonly locale: Locale }) {
   return (
@@ -94,17 +92,16 @@ export function UnlimitedPassPrices({ locale }: { readonly locale: Locale }) {
                       { locale }
                     )}
                   </p>
-                  <Button asChild size="md" caps className="mt-3">
-                    <Link
-                      aria-label={m.unlimitedPassDiscoveryBuyTier(
-                        { tier: name },
-                        { locale }
-                      )}
-                      href={getUnlimitedPassPurchasePath(locale, tier)}
-                    >
-                      {m.entryPackDiscoveryBuy({}, { locale })}
-                    </Link>
-                  </Button>
+                  <UnlimitedPassPurchaseButton
+                    aria-label={m.unlimitedPassDiscoveryBuyTier(
+                      { tier: name },
+                      { locale }
+                    )}
+                    locale={locale}
+                    tier={tier}
+                  >
+                    {m.entryPackDiscoveryBuy({}, { locale })}
+                  </UnlimitedPassPurchaseButton>
                 </div>
               </li>
             );

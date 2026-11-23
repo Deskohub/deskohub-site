@@ -18,7 +18,11 @@ import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/av
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { getWorkspaceCanonicalUrl } from "@/shared/utils/site-constants";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
-import { deleteAutomatedCampaigns } from "../../backend/email-campaigns.test-utils";
+import {
+  deleteAutomatedCampaigns,
+  passReminderEmailDocumentFixture,
+  seedPublishedEmail,
+} from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
 import type { AutomationWorkUnitId } from "../automation-identifiers";
 import {
@@ -99,7 +103,8 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
   const seedPassReminder = async (
     kind: "entry-pack" | "unlimited" = "entry-pack",
     count = 1,
-    deskLabel?: string
+    deskLabel?: string,
+    policies: Parameters<typeof sendOnlyFlow>[1] = {}
   ) => {
     const customer = customerId(crypto.randomUUID());
     const account = customerAccountIdSchema.make(crypto.randomUUID());
@@ -119,14 +124,22 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
        values ($1, 'hash', 'en-US', '2026-01-01T00:00:00Z')`,
       [customer]
     );
+    const published = await seedPublishedEmail(db, {
+      title: `Synthetic ${kind} reminder`,
+      document: passReminderEmailDocumentFixture(
+        kind === "entry-pack" ? "entry-pack-expiring" : "unlimited-ending"
+      ),
+    });
     const seeded = await seedAutomation({
       purpose: "marketing",
       flow: sendOnlyFlow(
         kind === "entry-pack"
           ? { _tag: "EntryPackExpiring" }
-          : { _tag: "UnlimitedEnding" }
+          : { _tag: "UnlimitedEnding" },
+        policies
       ),
-      text: "Generic automation copy must never be sent",
+      emailId: published.emailId,
+      frozenEmailVersionId: published.versionId,
     });
     const passIds = Array.from({ length: count }, () =>
       orderIdSchema.make(crypto.randomUUID())
@@ -294,6 +307,23 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
     expect(request?.payload).not.toContain(deskLabel);
   });
 
+  test("Unlimited reminders render the conditional desk block for a Reserved Desk holder", async () => {
+    const {
+      engine,
+      passIds: [passId],
+    } = await seedPassReminder("unlimited", 1, "Desk 14");
+    await pool.query(
+      "update pass_purchases set tier = 'reserved-desk', unlimited_coffee = null where id = $1",
+      [passId]
+    );
+    await engine.tick(startedAt);
+    const [request] = engine.resend.requests();
+    expect(request?.payload).toContain("Desk 14");
+    expect(request?.payload).toContain(
+      getWorkspaceCanonicalUrl(getUnlimitedRenewalPath("en-US", passId!))
+    );
+  });
+
   test.each(["sent", "skipped"] as const)(
     "settles %s after a temporary admission read failure",
     async (outcome) => {
@@ -352,6 +382,31 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
     expect(outcomesOf(await runsOf(campaignId))).toEqual({
       [customer]: ["ended", "withdrawn", null],
     });
+  });
+
+  test("a reminder withdrawn on its first request releases its once-per-customer claim", async () => {
+    const { campaignId, customer, engine } = await seedPassReminder(
+      "entry-pack",
+      1,
+      undefined,
+      { oncePerCustomer: true }
+    );
+    engine.dotypos.onRequest(({ method }) =>
+      method === "getCustomersByIds" &&
+      engine.dotypos.calls.getCustomersByIds === 2
+        ? TestClock.adjust("2 seconds")
+        : Effect.void
+    );
+    await engine.tick(Temporal.Instant.from("2026-10-26T22:59:59Z"));
+    expect(engine.resend.requests()).toEqual([]);
+    expect(outcomesOf(await runsOf(campaignId))).toEqual({
+      [customer]: ["ended", "withdrawn", null],
+    });
+    const { rows } = await pool.query(
+      "select 1 from email_campaign_automation_customer_claims where campaign_id = $1",
+      [campaignId]
+    );
+    expect(rows).toEqual([]);
   });
 
   test("withdraws an Entry Pack that expires while its first request is being checked", async () => {

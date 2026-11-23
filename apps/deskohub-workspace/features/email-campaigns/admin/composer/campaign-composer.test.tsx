@@ -1,4 +1,8 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import {
+  type AutomationTriggerKind,
+  EmailId,
+} from "@deskohub/workspace-admin-api";
 import { m } from "@/features/administration/i18n";
 import type { Locale } from "@/features/i18n";
 import { RouteLocaleProvider } from "@/features/i18n/route-locale";
@@ -70,9 +74,13 @@ const renderComposer = async (
   {
     fields = initialFields,
     readOnly = false,
+    automationTriggerKind,
+    publishedEmails = [],
   }: {
     readonly fields?: CampaignComposerFields;
     readonly readOnly?: boolean;
+    readonly automationTriggerKind?: AutomationTriggerKind | null;
+    readonly publishedEmails?: readonly import("./campaign-composer").CampaignComposerPublishedEmail[];
   } = {}
 ) => {
   const { CampaignComposer } = await import("./campaign-composer");
@@ -89,9 +97,11 @@ const renderComposer = async (
                 contentLocales: [],
                 delivery,
                 readOnly,
+                automationTriggerKind,
               }
         }
         initialFields={fields}
+        publishedEmails={publishedEmails}
         templates={[]}
       />
     </RouteLocaleProvider>
@@ -364,4 +374,54 @@ test("each language tab shows whether its content is missing, incomplete, or rea
     ["optional"],
     ["optional"],
   ]);
+});
+
+test("automated campaigns link compatible published emails, show Edit in library, and warn on trigger mismatch", async () => {
+  const entryPackEmailId = EmailId.make("01900000-0000-7000-8000-000000000010");
+  const unlimitedEmailId = EmailId.make("01900000-0000-7000-8000-000000000011");
+  const publishedEmails = [
+    {
+      emailId: entryPackEmailId,
+      title: "Entry pack reminder email",
+      locales: ["cs-CZ", "en-US"] as const,
+      compatibleWithOnce: false,
+      compatibleWithAutomated: true,
+      requiredTriggers: ["entry-pack-expiring"] as const,
+    },
+    {
+      emailId: unlimitedEmailId,
+      title: "Unlimited renewal email",
+      locales: ["cs-CZ", "en-US"] as const,
+      compatibleWithOnce: false,
+      compatibleWithAutomated: true,
+      requiredTriggers: ["unlimited-ending"] as const,
+    },
+  ];
+
+  const matching = await renderComposer("automated", "en-US", {
+    automationTriggerKind: "entry-pack-expiring",
+    publishedEmails,
+    fields: { ...initialFields, emailId: entryPackEmailId },
+  });
+  const editLink = matching.getByRole("link", {
+    name: m.emailCampaignsComposerEditPublishedEmail({}, { locale: "en-US" }),
+  });
+  expect(editLink.getAttribute("href")).toContain(
+    `/admin/email-campaigns/library/${entryPackEmailId}`
+  );
+  const mismatchMessage = m.emailCampaignsComposerPublishedEmailTriggerMismatch(
+    {},
+    { locale: "en-US" }
+  );
+  expect(matching.queryByText(mismatchMessage)).toBeNull();
+  cleanup();
+
+  const mismatched = await renderComposer("automated", "en-US", {
+    automationTriggerKind: "entry-pack-expiring",
+    publishedEmails,
+    fields: { ...initialFields, emailId: unlimitedEmailId },
+  });
+  expect(mismatched.getByText(mismatchMessage).getAttribute("role")).toBe(
+    "alert"
+  );
 });

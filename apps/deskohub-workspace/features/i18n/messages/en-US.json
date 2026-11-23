@@ -1325,6 +1325,7 @@
   "accountReservationsOtherTitle": "Reservations missing date details",
   "accountReservationsCurrentEmpty": "You have no current or upcoming reservations.",
   "accountReservationsPastEmpty": "You have no past reservations yet.",
+  "accountReservationsPassSavingsLink": "Save with packs and passes",
   "accountReservationsUnavailableTitle": "Reservation history is temporarily unavailable",
   "accountReservationsProviderUnavailable": "Our booking system could not be reached. Your profile is still available, please try again later.",
   "accountReservationOtherProduct": "Workspace reservation",
@@ -1578,6 +1579,7 @@
   ],
   "landingNavCoworking": "Coworking",
   "landingOfferingCoworkPageLink": "See the coworking space",
+  "landingOfferingPassesLink": "Packs and passes",
   "breadcrumbLabel": "Breadcrumb",
   "breadcrumbHome": "Deskohub Workspace",
   "coworkingBreadcrumb": "Coworking",
@@ -1608,6 +1610,7 @@
   "coworkingReservedDeskPointWorkstation": "Add a workstation with two monitors for an extra fee",
   "coworkingReservedDeskCta": "Book a reserved desk",
   "coworkingPricesNote": "Add-on prices and any current sale are in the <pricing>price list</pricing>.",
+  "coworkingComparePassesLink": "Compare day visits and passes",
   "coworkingAmenitiesTitle": "What you'll find here",
   "coworkingAmenityInternetTitle": "Internet",
   "coworkingAmenityInternetText": "Fiber internet and Wi-Fi 6 handle video calls and large files.",
@@ -1862,48 +1865,6 @@
   "entryPackCheckoutTermsChanged": "The terms changed. Review the current terms and confirm them again before paying.",
   "passEntryPack": "Entry pack",
   "passUnlimited": "Unlimited pass",
-  "passReminderGreeting": "Hi {firstName},",
-  "passReminderGreetingUnnamed": "Hello,",
-  "passReminderEntryPackSubject": [
-    {
-      "declarations": [
-        "input remaining",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "{remainingNumber} entry left on your Entry pack",
-        "remainingPlural=other": "{remainingNumber} entries left on your Entry pack"
-      }
-    }
-  ],
-  "passReminderEntryPackPreheader": "Your {tier} pack ends on {endsOn}.",
-  "passReminderEntryPackBody": [
-    {
-      "declarations": [
-        "input remaining",
-        "input total",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number",
-        "local totalNumber = total: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "Your {tier} Entry pack ends on <strong>{endsOn}</strong>, and <strong>{remainingNumber} of its {totalNumber} entries</strong> is still unused. Pick your days now so they don’t go to waste.",
-        "remainingPlural=other": "Your {tier} Entry pack ends on <strong>{endsOn}</strong>, and <strong>{remainingNumber} of its {totalNumber} entries</strong> are still unused. Pick your days now so they don’t go to waste."
-      }
-    }
-  ],
-  "passReminderEntryPackBook": "Book a day",
-  "passReminderEntryPackExpiry": "Entries that aren’t booked by then expire with the pack.",
-  "passReminderUnlimitedSubject": "Your Unlimited pass ends on {endsOn}",
-  "passReminderUnlimitedPreheader": "Renew now for the next {days} days.",
-  "passReminderUnlimitedPreheaderWithDesk": "Renew now to keep {deskLabel} for the next {days} days.",
-  "passReminderUnlimitedBody": "Your {tier} Unlimited pass ends on <strong>{endsOn}</strong>. Renew now and your next {days} days start right after, on {renewalStartsOn}.",
-  "passReminderUnlimitedBodyWithDesk": "Your {tier} Unlimited pass ends on <strong>{endsOn}</strong>. Renew now and your next {days} days start right after, on {renewalStartsOn}, at <strong>{deskLabel}</strong>.",
-  "passReminderUnlimitedRenew": "Renew for {days} days",
-  "passReminderUnlimitedDeskFallback": "If {deskLabel} is no longer free when you renew, we’ll assign you another desk.",
   "unlimitedPassRenew": "Renew pass",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Reserved Desk",
@@ -1973,8 +1934,18 @@
   "entryPackDiscoveryPerDay": "{price} a day",
   "entryPackDiscoveryBuy": "Buy",
   "entryPackDiscoveryBuyTier": "Buy an Entry pack ({tier})",
-  "entryPackDiscoveryCoworkLink": "Coming often? <packLink>Entry packs from {price} a day</packLink>",
-  "unlimitedPassDiscoveryIntro": "30 days in a row from the start date you choose. Your door code is ready each day without a booking.",
+  "unlimitedPassDiscoveryIntro": "Unlimited access for 30 days from the start date you choose. Your door code is ready each day without a booking.",
+  "passPurchaseOffersHeading": "Packs and passes",
+  "entryPackOfferTagline": "pay less per visit",
+  "entryPackOfferSizes": "{smaller} or {larger}",
+  "entryPackOfferVisits": "visits",
+  "entryPackOfferAction": "Choose pack",
+  "entryPackOfferLabel": "Choose an Entry pack ({tier})",
+  "unlimitedPassOfferTaglineOpenSpace": "unlimited access for {days} days",
+  "unlimitedPassOfferTaglineReservedDesk": "your own permanent seat",
+  "unlimitedPassOfferExpiry": "Date of expiry: <date>{date}</date>",
+  "unlimitedPassOfferAction": "Choose pass",
+  "unlimitedPassOfferLabel": "Choose an Unlimited pass ({tier})",
   "unlimitedPassDiscoveryOpenSpaceDescription": "A desk in the open space every day, 00:00–{until}.",
   "unlimitedPassDiscoveryReservedDeskDescription": "The same desk is yours on all 30 days, around the clock.",
   "unlimitedPassDiscoveryWorkstationDescription": "The same desk with two monitors on all 30 days, around the clock.",

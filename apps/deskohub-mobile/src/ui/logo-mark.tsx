@@ -1,4 +1,6 @@
+import { Platform } from "react-native";
 import Svg, { Path } from "react-native-svg";
+import { iconHiddenProps } from "./icon";
 
 /**
  * The Deskohub die's faces without its outline, in one colour
@@ -15,15 +17,43 @@ export function LogoMark({
   return (
     <Svg
       width={width}
-      height={(width * logoHeight) / logoWidth}
+      height={logoMarkHeight(width)}
       viewBox={`0 0 ${logoWidth} ${logoHeight}`}
-      aria-hidden
-      importantForAccessibility="no-hide-descendants"
+      {...iconHiddenProps(Platform.OS)}
     >
       <Path d={facets} fill={color} fillRule="evenodd" />
     </Svg>
   );
 }
+
+/**
+ * The same logo drawn inside another drawing, as a child of an `Svg`: its
+ * top left at `x`, `y` and `width` wide.
+ */
+export function LogoMarkShape({
+  x,
+  y,
+  width,
+  color,
+}: {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly color: string;
+}) {
+  return (
+    <Path
+      d={facets}
+      fill={color}
+      fillRule="evenodd"
+      transform={`translate(${x} ${y}) scale(${width / logoWidth})`}
+    />
+  );
+}
+
+/** The logo's height at a width. */
+export const logoMarkHeight = (width: number) =>
+  (width * logoHeight) / logoWidth;
 
 const logoWidth = 289;
 const logoHeight = 327;

@@ -458,6 +458,15 @@
   "emailCampaignsAudienceReservationCountStatusNeedsRefund": "čekajících na vrácení peněz",
   "emailCampaignsAudienceReservationCountVisitEndPeriod": "s koncem {period}",
   "emailCampaignsAudienceReservationCountVisitPeriod": "s návštěvou {period}",
+  "emailCampaignsAudienceReservationCountStayLabel": "Pobyt",
+  "emailCampaignsAudienceReservationCountStayAny": "s jakýmkoli pobytem",
+  "emailCampaignsAudienceReservationCountStayDay": "s denním pobytem",
+  "emailCampaignsAudienceReservationCountStayOvernight": "s pobytem přes noc",
+  "emailCampaignsAudienceReservationCountStayNeedsCowork": "Pobyt mají jen rezervace coworku. Chcete-li počítat podle pobytu, zvolte produkt Cowork.",
+  "emailCampaignsAudienceReservationCountStayNeedsVisitDate": "Pobyt se počítá podle data návštěvy nebo konce návštěvy, ne podle data potvrzení.",
+  "emailCampaignsAudienceReservationCountPaymentLabel": "Platba",
+  "emailCampaignsAudienceReservationCountPaymentAny": "s jakoukoli platbou",
+  "emailCampaignsAudienceReservationCountPaymentIndividual": "s vlastní platbou",
   "emailCampaignsAudienceSaveCampaignNotFound": "Okruh příjemců se nepodařilo uložit. Kampaň, jejíž e-maily počítá, už neexistuje. Vyberte jinou kampaň.",
   "emailCampaignsAudienceSaveFailedCheckFilters": "Okruh příjemců se nepodařilo uložit. Zkontrolujte filtry a zkuste to znovu.",
   "emailCampaignsAudienceSaveFailedRetry": "Okruh příjemců se nepodařilo uložit. Zkuste to znovu.",
@@ -1286,6 +1295,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "Už není v systému Dotypos",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Mimo testovací e-mailovou doménu",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "E-mail nemá překlad pro tohoto příjemce",
+  "emailCampaignsSentSkipReasonPassHolder": "Držitel permanentky",
   "emailCampaignsSentStatus": "Stav",
   "emailCampaignsTestSendAdd": "Přidat",
   "emailCampaignsTestSendAddRecipientLabel": "Přidat příjemce testu",
@@ -1331,5 +1341,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "Jedna z adres není platná e-mailová adresa. Zkontrolujte je a zkuste to znovu.",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "Mimo produkci lze e-maily kampaní posílat jen na adresy @{domain} a někteří příjemci mezi ně nepatří. Nic nebylo odesláno.",
   "emailCampaignsSendingFailureRecipientsUnavailable": "Příjemce se nepodařilo určit, protože Dotypos nebo databáze není dostupná. Nic nebylo odesláno a kód stále platí; zkuste to za chvíli znovu.",
-  "emailCampaignsSendingFailureEmailSetupMissing": "E-maily kampaní nejsou v tomto nasazení nastavené. Požádejte vývojáře, aby zkontroloval proměnné prostředí pro e-maily kampaní."
+  "emailCampaignsSendingFailureEmailSetupMissing": "E-maily kampaní nejsou v tomto nasazení nastavené. Požádejte vývojáře, aby zkontroloval proměnné prostředí pro e-maily kampaní.",
+  "emailCampaignsComposerEditPublishedEmail": "Upravit e-mail v knihovně",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "Tento e-mail používá hodnoty spouštěče, které neodpovídají spouštěči této automatizace. Vyberte odpovídající e-mail nebo upravte tok."
 }

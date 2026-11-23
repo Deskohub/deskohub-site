@@ -7,7 +7,8 @@ import {
   mock,
   test,
 } from "bun:test";
-import { renderToStaticMarkup } from "react-dom/server";
+import { prerender } from "react-dom/static";
+import type { GlobalRelease } from "@/features/feature-flags/backend/global-release";
 import { locales, m } from "@/features/i18n";
 import {
   getCoworkReservationPath,
@@ -17,6 +18,28 @@ import {
   registerWorkspaceComponentTestEnv,
   unregisterWorkspaceComponentTestEnv,
 } from "@/shared/testing/workspace-component-test-env";
+
+const nextServer = await import("next/server");
+
+mock.module("server-only", () => ({}));
+mock.module("next/server", () => ({
+  ...nextServer,
+  connection: () => Promise.resolve(),
+}));
+
+const releasedFlags: Array<string> = [];
+let passesRelease: GlobalRelease = "off";
+const isCoworkPassesPageOpenAfterConnection = mock(async () => false);
+mock.module("@/features/feature-flags/backend/global-release.server", () => ({
+  loadGlobalRelease: async (flag: string) => {
+    releasedFlags.push(flag);
+    return passesRelease;
+  },
+}));
+mock.module(
+  "@/features/passes/backend/cowork-passes-release-gate.server",
+  () => ({ isCoworkPassesPageOpenAfterConnection })
+);
 
 const isMeetingRoomPageEnabled = mock();
 const isOfficePageEnabled = mock();
@@ -46,12 +69,19 @@ const renderSection = async (
 ) => {
   isMeetingRoomPageEnabled.mockResolvedValue(flags.meetingRoomPage);
   isOfficePageEnabled.mockResolvedValue(flags.officePage);
-  const container = document.createElement("div");
-  container.innerHTML = renderToStaticMarkup(
+  const { prelude } = await prerender(
     await LandingPageOfferingSection({ locale })
   );
+  const container = document.createElement("div");
+  container.innerHTML = await new Response(prelude).text();
   return container;
 };
+
+/** Links that carry the pass product marks. */
+const passLinks = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll("a"))
+    .filter((link) => link.querySelector('[aria-hidden="true"] svg'))
+    .map((link) => link.getAttribute("href"));
 
 const hrefs = (container: HTMLElement) =>
   Array.from(container.querySelectorAll("a"), (link) =>
@@ -65,6 +95,10 @@ describe.each(locales)("LandingPageOfferingSection in %s", (locale) => {
   beforeEach(() => {
     isMeetingRoomPageEnabled.mockReset();
     isOfficePageEnabled.mockReset();
+    releasedFlags.length = 0;
+    passesRelease = "off";
+    isCoworkPassesPageOpenAfterConnection.mockReset();
+    isCoworkPassesPageOpenAfterConnection.mockResolvedValue(false);
   });
 
   test("links each offer to its booking or detail page", async () => {
@@ -107,5 +141,41 @@ describe.each(locales)("LandingPageOfferingSection in %s", (locale) => {
 
     expect(withOfficePage.textContent).not.toContain(offices);
     expect(withoutOfficePage.textContent).toContain(offices);
+  });
+
+  test("links packs and passes to Pricing while cowork passes are released", async () => {
+    passesRelease = "on";
+    const container = await renderSection(locale, {
+      meetingRoomPage: true,
+      officePage: true,
+    });
+
+    expect(passLinks(container)).toEqual([`/${locale}/pricing`]);
+    expect(hrefs(container)).toContain(`/${locale}/coworking`);
+    expect(releasedFlags).toEqual(["cowork_passes"]);
+  });
+
+  test("leaves out the packs and passes link while cowork passes are off", async () => {
+    const container = await renderSection(locale, {
+      meetingRoomPage: true,
+      officePage: true,
+    });
+
+    expect(passLinks(container)).toEqual([]);
+    expect(isCoworkPassesPageOpenAfterConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe("LandingPageOfferingSection while the cowork passes release varies", () => {
+  test("follows the visitor's cowork passes gate", async () => {
+    passesRelease = "undecided";
+    const flags = { meetingRoomPage: true, officePage: true };
+    isCoworkPassesPageOpenAfterConnection.mockResolvedValue(false);
+    const closed = await renderSection("en-US", flags);
+    isCoworkPassesPageOpenAfterConnection.mockResolvedValue(true);
+    const open = await renderSection("en-US", flags);
+
+    expect(passLinks(closed)).toEqual([]);
+    expect(passLinks(open)).toEqual(["/en-US/pricing"]);
   });
 });

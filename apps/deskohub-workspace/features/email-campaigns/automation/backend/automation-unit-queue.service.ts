@@ -55,6 +55,4 @@ export class AutomationUnitQueue extends Context.Service<
       };
     })
   );
-
-  static Live = this.Default.pipe(Layer.provide(QueuePublisher.Default));
 }

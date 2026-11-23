@@ -1,9 +1,11 @@
 import { expect, mock, spyOn, test } from "bun:test";
+import type { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
 import { RegistryContext } from "@effect/atom-react";
 import { Effect, Layer, Result } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import type { AtomRegistry } from "effect/reactivity";
 import type { ReactElement } from "react";
+import { apiOrigin } from "../../auth/auth-client";
 import { CustomerApi } from "../../customer-api/customer-api.service";
 import { accountAtom } from "../../customer-api/customer-data-runtime";
 import { nativeCustomerApiTransport } from "../../customer-api/platform-transports";
@@ -24,18 +26,43 @@ import {
 import { withSampleHistory } from "../../customer-api/testing/sample-history";
 import { AppLocaleProvider } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
-import { heldPassesAtom, passCatalogAtom } from "../../passes/pass-reads";
+import {
+  heldPassesAtom,
+  passCatalogAtom,
+  reservationFundingAtom,
+} from "../../passes/pass-reads";
+import { sitePageUrl } from "../../routing/site-page";
 import { expoRouterStandIn } from "../../testing/expo-router-stand-in";
 import { findAll, hostTree, textOf } from "../../ui/testing/element-tree";
 import { invitedReservationsAtom } from "./invited-reservations";
 import { reservationHistoryAtom } from "./reservations-list-state";
+import {
+  pastVisitsApiLayer,
+  samplePastVisits,
+} from "./testing/past-visits-sample";
 
 mock.module("expo-router", () => expoRouterStandIn());
 
-const { ReservationsListScreen } = await import("./reservations-list-screen");
-const { ToastProvider } = await import("../../ui/toast");
+const openedPages: Array<string> = [];
+// How many next pages the browser blocks.
+let blockedPages = 0;
+mock.module("../../routing/open-site-page", () => ({
+  appBrowserTabColors: {},
+  openSitePage: async (url: string) => {
+    if (blockedPages > 0) {
+      blockedPages -= 1;
+      throw new Error("blocked");
+    }
+    openedPages.push(url);
+    return { type: "opened" };
+  },
+}));
 
-const screenText = (registry: AtomRegistry.AtomRegistry) => {
+const { ReservationsListScreen } = await import("./reservations-list-screen");
+const toasts = await import("../../ui/toast");
+const { ToastProvider } = toasts;
+
+const screenHosts = (registry: AtomRegistry.AtomRegistry) => {
   const within = (node: ReactElement) => (
     <RegistryContext.Provider value={registry}>
       <AppLocaleProvider locale="en-US">
@@ -49,13 +76,14 @@ const screenText = (registry: AtomRegistry.AtomRegistry) => {
       error(...args);
   });
   try {
-    return findAll(hostTree(<ReservationsListScreen />, within), "Text")
-      .map(textOf)
-      .join("\n");
+    return hostTree(<ReservationsListScreen />, within);
   } finally {
     warnings.mockRestore();
   }
 };
+
+const screenText = (registry: AtomRegistry.AtomRegistry) =>
+  findAll(screenHosts(registry), "Text").map(textOf).join("\n");
 
 test.each(["completion-required", "linked"] as const)(
   "lists invitations independently of own history for a %s account",
@@ -185,5 +213,119 @@ test("empty history shows a pass catalog outage and retry restores the Unlimited
   } finally {
     for (const dispose of release) dispose();
     registry.dispose();
+  }
+});
+
+/**
+ * The linked account's screen over three past coworking visits, with the
+ * pass rollout open, no pass held, and `packFunded` paid with an Entry pack.
+ */
+const withPastVisits = async (
+  packFunded: ReadonlyArray<string>,
+  check: (hosts: ReturnType<typeof hostTree>) => void
+) => {
+  const workspace = FakeWorkspace.forKind("linked");
+  const base = fakeCustomerDataLayer({ workspace, device: makeFakeDevice() });
+  const locale = "en-US" as const;
+  const past = samplePastVisits(3);
+  const api = pastVisitsApiLayer({ workspace, past, packFunded });
+  const registry = makeCustomerDataRegistry(Layer.mergeAll(base, api));
+  const funding = reservationFundingAtom(
+    past.map(({ orderId }) => orderId as CustomerReservationOrderId).sort()
+  );
+  const release = [
+    registry.mount(accountAtom),
+    registry.mount(reservationHistoryAtom),
+    registry.mount(passCatalogAtom),
+    registry.mount(heldPassesAtom(locale)),
+    registry.mount(funding),
+  ];
+  try {
+    await settle(registry, accountAtom);
+    await settle(registry, reservationHistoryAtom);
+    await settle(registry, passCatalogAtom);
+    await settle(registry, heldPassesAtom(locale));
+    expect(Result.isSuccess(await settle(registry, funding))).toBe(true);
+    check(screenHosts(registry));
+  } finally {
+    for (const dispose of release) dispose();
+    registry.dispose();
+  }
+};
+
+const savingsLinks = (hosts: ReturnType<typeof hostTree>) =>
+  findAll(hosts, "Pressable").filter(
+    (pressable) =>
+      pressable.props["aria-label"] ===
+      m.reservations_save_with_passes({}, { locale: "en-US" })
+  );
+
+test("the Past group ends with the savings link, after Show all", async () => {
+  await withPastVisits(["sample-visit-1"], (hosts) => {
+    const [link] = savingsLinks(hosts);
+    expect(savingsLinks(hosts)).toHaveLength(1);
+    // Past's rows, then its Show all action, then the link, in one group.
+    const texts = findAll(hosts, "Text").map(textOf);
+    const showAll = texts.indexOf(
+      m.reservations_show_all_past({}, { locale: "en-US" })
+    );
+    const savings = texts.indexOf(
+      m.reservations_save_with_passes({}, { locale: "en-US" })
+    );
+    expect(showAll).toBeGreaterThan(
+      texts.indexOf(m.reservations_section_past({}, { locale: "en-US" }))
+    );
+    expect(savings).toBe(showAll + 1);
+    expect(link?.props.role).toBe("link");
+  });
+});
+
+test("the savings link opens Pricing in the app's language, unselected", async () => {
+  await withPastVisits([], (hosts) => {
+    openedPages.length = 0;
+    const press = savingsLinks(hosts)[0]?.props.onPress as () => void;
+    press();
+    expect(openedPages).toEqual([sitePageUrl("/pricing", apiOrigin, "en-US")]);
+    expect(new URL(openedPages[0] ?? "").search).toBe("");
+
+    // Enter follows it too, on the web, where the link has no href.
+    openedPages.length = 0;
+    const keyDown = savingsLinks(hosts)[0]?.props.onKeyDown as (event: {
+      nativeEvent: { key: string };
+      preventDefault: () => void;
+    }) => void;
+    keyDown({ nativeEvent: { key: "Enter" }, preventDefault: () => undefined });
+    expect(openedPages).toHaveLength(1);
+  });
+});
+
+test("visits paid with an Entry pack offer no savings link", async () => {
+  await withPastVisits(
+    ["sample-visit-1", "sample-visit-2", "sample-visit-3"],
+    (hosts) => {
+      expect(savingsLinks(hosts)).toHaveLength(0);
+    }
+  );
+});
+
+test("a blocked Pricing page shows the neutral toast", async () => {
+  const shown: Array<{ readonly tone?: string }> = [];
+  const useToast = spyOn(toasts, "useToast").mockReturnValue({
+    show: (toast) => {
+      shown.push(toast);
+    },
+  });
+  try {
+    blockedPages = 1;
+    await withPastVisits([], (hosts) => {
+      const press = savingsLinks(hosts)[0]?.props.onPress as () => void;
+      press();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(shown).toHaveLength(1);
+    expect(shown[0]?.tone).toBe("neutral");
+  } finally {
+    blockedPages = 0;
+    useToast.mockRestore();
   }
 });

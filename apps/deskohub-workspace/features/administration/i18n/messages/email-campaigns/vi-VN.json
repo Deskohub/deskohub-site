@@ -420,6 +420,15 @@
   "emailCampaignsAudienceReservationCountStatusNeedsRefund": "lượt đặt chỗ đang chờ hoàn tiền",
   "emailCampaignsAudienceReservationCountVisitEndPeriod": "kết thúc {period}",
   "emailCampaignsAudienceReservationCountVisitPeriod": "diễn ra {period}",
+  "emailCampaignsAudienceReservationCountStayLabel": "Lưu trú",
+  "emailCampaignsAudienceReservationCountStayAny": "với bất kỳ lượt lưu trú nào",
+  "emailCampaignsAudienceReservationCountStayDay": "với lượt lưu trú ban ngày",
+  "emailCampaignsAudienceReservationCountStayOvernight": "với lượt lưu trú qua đêm",
+  "emailCampaignsAudienceReservationCountStayNeedsCowork": "Chỉ lượt đặt chỗ coworking mới có thông tin lưu trú. Vui lòng chọn sản phẩm Coworking để lọc theo thời gian lưu trú.",
+  "emailCampaignsAudienceReservationCountStayNeedsVisitDate": "Lượt lưu trú được tính theo ngày đến hoặc ngày kết thúc, không phải ngày xác nhận.",
+  "emailCampaignsAudienceReservationCountPaymentLabel": "Thanh toán",
+  "emailCampaignsAudienceReservationCountPaymentAny": "với bất kỳ hình thức thanh toán nào",
+  "emailCampaignsAudienceReservationCountPaymentIndividual": "với khoản thanh toán riêng",
   "emailCampaignsAudienceSaveCampaignNotFound": "Không thể lưu nhóm người nhận. Chiến dịch có email được đếm không còn tồn tại. Vui lòng chọn chiến dịch khác.",
   "emailCampaignsAudienceSaveFailedCheckFilters": "Không thể lưu nhóm người nhận. Vui lòng kiểm tra bộ lọc và thử lại.",
   "emailCampaignsAudienceSaveFailedRetry": "Không thể lưu nhóm người nhận. Vui lòng thử lại.",
@@ -1212,6 +1221,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "Không còn trong Dotypos",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Ngoài tên miền email thử nghiệm",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "Email chưa có bản dịch cho người nhận này",
+  "emailCampaignsSentSkipReasonPassHolder": "Khách hàng đang có thẻ coworking",
   "emailCampaignsSentStatus": "Trạng thái",
   "emailCampaignsTestSendAdd": "Thêm",
   "emailCampaignsTestSendAddRecipientLabel": "Thêm người nhận email thử",
@@ -1255,5 +1265,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "Một trong các địa chỉ không phải là địa chỉ email hợp lệ. Vui lòng kiểm tra và thử lại.",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "Ngoài môi trường chính thức, email chiến dịch chỉ có thể gửi đến địa chỉ @{domain}, và một số người nhận không thuộc tên miền này. Chưa có gì được gửi.",
   "emailCampaignsSendingFailureRecipientsUnavailable": "Không thể xác định người nhận vì Dotypos hoặc cơ sở dữ liệu không khả dụng. Chưa có gì được gửi và mã vẫn còn hiệu lực; vui lòng thử lại sau ít phút.",
-  "emailCampaignsSendingFailureEmailSetupMissing": "Email chiến dịch chưa được cấu hình cho bản triển khai này. Vui lòng yêu cầu nhà phát triển kiểm tra các biến môi trường cho email chiến dịch."
+  "emailCampaignsSendingFailureEmailSetupMissing": "Email chiến dịch chưa được cấu hình cho bản triển khai này. Vui lòng yêu cầu nhà phát triển kiểm tra các biến môi trường cho email chiến dịch.",
+  "emailCampaignsComposerEditPublishedEmail": "Chỉnh sửa email trong thư viện",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "Email này dùng giá trị kích hoạt không khớp với điều kiện kích hoạt của tự động hóa này. Hãy chọn email phù hợp hoặc cập nhật luồng."
 }

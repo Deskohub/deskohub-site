@@ -477,6 +477,15 @@
   "emailCampaignsAudienceReservationCountStatusNeedsRefund": "бронювань, що очікують повернення коштів",
   "emailCampaignsAudienceReservationCountVisitEndPeriod": "із завершенням {period}",
   "emailCampaignsAudienceReservationCountVisitPeriod": "з візитом {period}",
+  "emailCampaignsAudienceReservationCountStayLabel": "Перебування",
+  "emailCampaignsAudienceReservationCountStayAny": "із будь-яким перебуванням",
+  "emailCampaignsAudienceReservationCountStayDay": "із денним перебуванням",
+  "emailCampaignsAudienceReservationCountStayOvernight": "із перебуванням на ніч",
+  "emailCampaignsAudienceReservationCountStayNeedsCowork": "Перебування є лише в бронювань коворкінгу. Щоб фільтрувати за перебуванням, виберіть продукт «Коворкінг».",
+  "emailCampaignsAudienceReservationCountStayNeedsVisitDate": "Перебування враховується за датою візиту або його завершення, а не за датою підтвердження.",
+  "emailCampaignsAudienceReservationCountPaymentLabel": "Платіж",
+  "emailCampaignsAudienceReservationCountPaymentAny": "з будь-яким платежем",
+  "emailCampaignsAudienceReservationCountPaymentIndividual": "з оплатою за власним замовленням",
   "emailCampaignsAudienceSaveCampaignNotFound": "Не вдалося зберегти аудиторію. Кампанії, листи якої вона враховує, більше не існує. Оберіть іншу кампанію.",
   "emailCampaignsAudienceSaveFailedCheckFilters": "Не вдалося зберегти аудиторію. Перевірте фільтри та спробуйте ще раз.",
   "emailCampaignsAudienceSaveFailedRetry": "Не вдалося зберегти аудиторію. Спробуйте ще раз.",
@@ -1323,6 +1332,7 @@
   "emailCampaignsSentSkipReasonMissingFromDotypos": "Більше немає в Dotypos",
   "emailCampaignsSentSkipReasonOutsideTestDomain": "Поза тестовим поштовим доменом",
   "emailCampaignsSentSkipReasonMissingEmailLanguage": "Лист не має перекладу для цього одержувача",
+  "emailCampaignsSentSkipReasonPassHolder": "Власник абонемента",
   "emailCampaignsSentStatus": "Статус",
   "emailCampaignsTestSendAdd": "Додати",
   "emailCampaignsTestSendAddRecipientLabel": "Додати тестового одержувача",
@@ -1369,5 +1379,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "Одна з адрес не є дійсною електронною адресою. Перевірте адреси та спробуйте ще раз.",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "Поза робочим середовищем листи кампаній можна надсилати лише на адреси @{domain}, а деякі одержувачі до них не належать. Нічого не надіслано.",
   "emailCampaignsSendingFailureRecipientsUnavailable": "Не вдалося визначити одержувачів, бо Dotypos або база даних недоступні. Нічого не надіслано, і код досі дійсний; спробуйте ще раз трохи згодом.",
-  "emailCampaignsSendingFailureEmailSetupMissing": "Листи кампаній не налаштовано в цьому розгортанні. Зверніться до команди розробки, щоб перевірити змінні середовища для листів кампаній."
+  "emailCampaignsSendingFailureEmailSetupMissing": "Листи кампаній не налаштовано в цьому розгортанні. Зверніться до команди розробки, щоб перевірити змінні середовища для листів кампаній.",
+  "emailCampaignsComposerEditPublishedEmail": "Редагувати лист у бібліотеці",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "Цей лист використовує значення тригера, що не відповідають тригеру цієї автоматизації. Виберіть відповідний лист або оновіть сценарій."
 }

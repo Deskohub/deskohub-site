@@ -15,6 +15,7 @@ import { m } from "@/features/administration/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { Button } from "@/shared/components/ui/button";
 import { cn } from "@/shared/utils";
+import { isPassReminderTrigger } from "../../../automation/automation-triggers";
 import type { CampaignOperationFailureCopy } from "../../campaign-operation-failure";
 import { useCampaignOperation } from "../../use-campaign-operation";
 import {
@@ -184,7 +185,6 @@ export function AutomationFlowBuilder({
           <li>
             <TriggerCard
               trigger={trigger}
-              passRemindersAvailable={data.passRemindersAvailable}
               onChange={(next) => {
                 if (saveFailure?.code === scheduleMinutesNotAllowedCode) {
                   setSaveFailure(null);
@@ -250,7 +250,16 @@ export function AutomationFlowBuilder({
                     />
                   )}
                   {step._tag === "Send" && (
-                    <SendStepCard campaign={campaign} number={number} />
+                    <SendStepCard
+                      campaign={campaign}
+                      step={step}
+                      number={number}
+                      skipPassHoldersAvailable={
+                        trigger === null || !isPassReminderTrigger(trigger)
+                      }
+                      onChange={readOnly ? undefined : update}
+                      errorAt={(field) => errorAt(`${path}.${field}`)}
+                    />
                   )}
                 </li>
               </Fragment>

@@ -7,6 +7,8 @@ import { testEmailAddress } from "@deskohub/test-email";
 import {
   type AutomationFlowType as AutomationFlow,
   AutomationFlow as automationFlowContractSchema,
+  type EmailId,
+  type EmailVersionId,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Fiber, Schema } from "effect";
 import type { WorkspaceDatabaseClient } from "@/db/database.service";
@@ -63,11 +65,15 @@ export const deliverProfile = (
 
 const decodeFlow = Schema.decodeUnknownSync(automationFlowContractSchema);
 
-/** A flow whose trigger is `trigger` and whose only step sends. */
+/**
+ * A flow whose trigger is `trigger` and whose only step sends, under the
+ * given once-per-customer policy.
+ */
 export const sendOnlyFlow = (
-  trigger: AutomationFlow["trigger"] = { _tag: "AccountCreated" }
+  trigger: AutomationFlow["trigger"] = { _tag: "AccountCreated" },
+  policies: { readonly oncePerCustomer?: true } = {}
 ): AutomationFlow =>
-  decodeFlow({ trigger, steps: [{ _tag: "Send", id: "send" }] });
+  decodeFlow({ trigger, steps: [{ _tag: "Send", id: "send", ...policies }] });
 
 /** An active automated campaign with one version of `flow` in force. */
 export const seedDeliverAutomation = async (
@@ -76,17 +82,24 @@ export const seedDeliverAutomation = async (
     readonly purpose?: CampaignPurpose;
     readonly flow?: AutomationFlow;
     readonly text?: string;
+    readonly emailId?: EmailId;
+    readonly frozenEmailVersionId?: EmailVersionId;
     readonly activatedAt: Temporal.Instant;
   }
 ) => {
   const purpose = input.purpose ?? "operational";
   const flow = input.flow ?? sendOnlyFlow();
-  const campaignId = await seedAutomatedCampaign(db, { purpose });
+  const campaignId = await seedAutomatedCampaign(db, {
+    purpose,
+    emailId: input.emailId,
+  });
   const versionId = await seedAutomationVersion(db, {
     campaignId,
     purpose,
     flow,
     text: input.text,
+    emailId: input.emailId,
+    frozenEmailVersionId: input.frozenEmailVersionId,
     activatedAt: input.activatedAt,
   });
   await seedAutomation(db, {

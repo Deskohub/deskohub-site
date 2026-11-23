@@ -27,6 +27,11 @@ export type AudienceChoiceWording = {
   readonly options: Readonly<Record<string, string>>;
   /** The label of an optional choice left unset. */
   readonly absent?: string;
+  /**
+   * Why the condition rejects the chosen option, by the other parameters
+   * that make it invalid, for a choice the contract cross-checks.
+   */
+  readonly invalid?: (params: CountParams) => string;
 };
 
 /** A campaign parameter's picker: its name, "any campaign", and a lost one. */
@@ -209,6 +214,21 @@ const optionOf = <Options extends object>(
   Object.entries(options).find(([option]) => option === params[param])?.[1];
 
 /**
+ * The options chosen in `choices` as phrases after the counted noun, each
+ * with a leading space (" with a day stay paid individually"), or nothing.
+ */
+const chosenQualifiers = (
+  params: CountParams,
+  choices: Readonly<Record<string, AudienceChoiceWording>>
+): string =>
+  Object.entries(choices)
+    .flatMap(([param, choice]) => {
+      const phrase = optionOf(choice.options, params, param);
+      return phrase === undefined ? [] : [` ${phrase}`];
+    })
+    .join("");
+
+/**
  * How a condition summary names an audience language inside its sentence
  * ("speak Czech", "mluví česky").
  */
@@ -231,6 +251,35 @@ const audienceAttributeWordings = (
   locale: Locale
 ): AudienceAttributeWordings => {
   const options = { locale };
+  const reservationStay = {
+    label: m.emailCampaignsAudienceReservationCountStayLabel({}, options),
+    absent: m.emailCampaignsAudienceReservationCountStayAny({}, options),
+    options: {
+      day: m.emailCampaignsAudienceReservationCountStayDay({}, options),
+      overnight: m.emailCampaignsAudienceReservationCountStayOvernight(
+        {},
+        options
+      ),
+    },
+    // The contract's order: a booking-date count rejects a stay first.
+    invalid: (params) =>
+      params.dateBasis === "booking"
+        ? m.emailCampaignsAudienceReservationCountStayNeedsVisitDate(
+            {},
+            options
+          )
+        : m.emailCampaignsAudienceReservationCountStayNeedsCowork({}, options),
+  } as const satisfies AudienceChoiceWording;
+  const reservationPayment = {
+    label: m.emailCampaignsAudienceReservationCountPaymentLabel({}, options),
+    absent: m.emailCampaignsAudienceReservationCountPaymentAny({}, options),
+    options: {
+      individual: m.emailCampaignsAudienceReservationCountPaymentIndividual(
+        {},
+        options
+      ),
+    },
+  } as const satisfies AudienceChoiceWording;
   return {
     reservationCount: {
       kind: "count",
@@ -241,8 +290,12 @@ const audienceAttributeWordings = (
           text: m.emailCampaignsAudienceReservationCountLeadText({}, options),
         },
         { param: "dateBasis" },
+        { param: "stay" },
+        { param: "payment" },
       ],
       choices: {
+        stay: reservationStay,
+        payment: reservationPayment,
         dateBasis: {
           label: m.emailCampaignsAudienceReservationCountDateBasisLabel(
             {},
@@ -301,7 +354,16 @@ const audienceAttributeWordings = (
           (
             optionOf(reservationNouns, params, "status") ??
             m.emailCampaignsAudienceReservationCountNounBooked
-          )({ count, product }, options),
+          )(
+            {
+              count,
+              product: `${product}${chosenQualifiers(params, {
+                stay: reservationStay,
+                payment: reservationPayment,
+              })}`,
+            },
+            options
+          ),
         period: (params, period) => {
           if (params.dateBasis === "booking") {
             return m.emailCampaignsAudienceReservationCountBookingPeriod(
