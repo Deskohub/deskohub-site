@@ -24,6 +24,7 @@ export const sandboxConfigInput = {
     schedulerWorkerRuntime: sandboxServiceAccount("workspace-scheduler-worker"),
     tasksInvoker: sandboxServiceAccount("workspace-tasks-invoker"),
     schedulerInvoker: sandboxServiceAccount("workspace-scheduler-invoker"),
+    mobileUpdatesPublisher: sandboxServiceAccount("workspace-mobile-publisher"),
   },
   secrets: [
     {

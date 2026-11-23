@@ -104,6 +104,8 @@ export const WorkspaceServiceAccounts = Schema.Struct({
   tasksInvoker: ServiceAccountEmail,
   /** OIDC identity Cloud Scheduler presents to the scheduler worker. */
   schedulerInvoker: ServiceAccountEmail,
+  /** Uploads mobile update assets; may create objects but never replace them. */
+  mobileUpdatesPublisher: ServiceAccountEmail,
 }).annotate({ identifier: "WorkspaceServiceAccounts" });
 export type WorkspaceServiceAccounts = typeof WorkspaceServiceAccounts.Type;
 

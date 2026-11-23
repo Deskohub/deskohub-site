@@ -30,6 +30,13 @@ export class ReleaseApplyPending extends Data.TaggedError(
   readonly releaseId: ReleaseId;
 }> {}
 
+/** The candidate revision's readback does not match the staged release. */
+export class CandidateNotVerified extends Data.TaggedError(
+  "CandidateNotVerified"
+)<{
+  readonly releaseId: ReleaseId;
+}> {}
+
 export class NoPendingReleaseApply extends Data.TaggedError(
   "NoPendingReleaseApply"
 ) {}
@@ -46,11 +53,12 @@ export class ReleaseNotRestorable extends Data.TaggedError(
 }> {}
 
 /**
- * Readback shows neither the intended target nor the release it replaced.
- * An operator reconciles it; the reconciler never guesses.
+ * Readback does not show the intended target serving. The intent stays
+ * pending: the caller re-applies the same declaration (apply is
+ * idempotent) and settles again, or an operator abandons it with evidence.
  */
-export class UnknownReleaseApplyState extends Data.TaggedError(
-  "UnknownReleaseApplyState"
+export class ReleaseApplyNotObserved extends Data.TaggedError(
+  "ReleaseApplyNotObserved"
 )<{
   readonly intended: ReleaseId;
   readonly servingRevision: string | null;
@@ -125,14 +133,16 @@ export interface StageInput {
 }
 
 /**
- * Record a built image as a candidate. Its release ID and Cloud Run
- * revision name derive from the new generation, so reruns never collide.
+ * Record a built image as the candidate, replacing any earlier one. Its
+ * release ID and Cloud Run revision name derive from the new generation, so
+ * reruns never collide.
  */
 export const stage = Effect.fn("WorkspaceRelease.stage")(function* (
   record: ReleaseRecord,
   input: StageInput
 ) {
   yield* fence(record, input.expectedGeneration);
+  yield* requireNoPendingApply(record);
   const generation = record.generation + 1;
   const releaseId = ReleaseId.make(`r${generation}-${input.sha.slice(0, 7)}`);
   const deployment: ReleaseDeployment = {
@@ -147,7 +157,7 @@ export const stage = Effect.fn("WorkspaceRelease.stage")(function* (
     record: {
       ...record,
       generation,
-      staged: [...record.staged, deployment],
+      candidate: deployment,
     } satisfies ReleaseRecord,
   };
 });
@@ -158,18 +168,35 @@ export interface TrafficChangeInput {
   readonly now: DateTime.Utc;
 }
 
-/** Persist the intent to move traffic to a staged release. */
+export interface PromoteInput extends TrafficChangeInput {
+  /**
+   * Readback of the zero-traffic candidate revision. Required once a
+   * release is active; the very first release has no traffic to protect
+   * and no candidate revision before its promotion.
+   */
+  readonly candidateReadback: {
+    readonly revision: string;
+    readonly imageDigest: ImageDigest | null;
+  } | null;
+}
+
+/** Persist the intent to move traffic to the verified candidate. */
 export const promote = Effect.fn("WorkspaceRelease.promote")(function* (
   record: ReleaseRecord,
-  input: TrafficChangeInput
+  input: PromoteInput
 ) {
   yield* fence(record, input.expectedGeneration);
   yield* requireNoPendingApply(record);
-  const target = record.staged.find(
-    (entry) => entry.releaseId === input.releaseId
-  );
-  if (target === undefined) {
+  const target = record.candidate;
+  if (target === null || target.releaseId !== input.releaseId) {
     return yield* new ReleaseNotStaged({ releaseId: input.releaseId });
+  }
+  const verified =
+    input.candidateReadback !== null &&
+    input.candidateReadback.revision === target.revision &&
+    input.candidateReadback.imageDigest === target.imageDigest;
+  if (record.active !== null && !verified) {
+    return yield* new CandidateNotVerified({ releaseId: input.releaseId });
   }
   return {
     ...record,
@@ -228,9 +255,9 @@ const servesDeployment = (
 
 /**
  * Settle the persisted traffic intent from readback. A normal apply and a
- * recovery after an unknown apply response take the same path: readback
- * showing the target completes it, readback showing the prior release
- * abandons it, and anything else fails for an operator.
+ * recovery after an unknown apply response take the same path: only
+ * readback showing the target serving completes it. Anything else keeps
+ * the intent pending, because an interrupted request may still land.
  */
 export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
   record: ReleaseRecord,
@@ -269,7 +296,10 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
       generation,
       active: verified,
       previous: record.active,
-      staged: withoutRelease(record.staged, pending.target.releaseId),
+      candidate:
+        record.candidate?.releaseId === pending.target.releaseId
+          ? null
+          : record.candidate,
       compatible: [
         ...(record.active === null
           ? keptCompatible
@@ -279,21 +309,37 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
       pendingApply: null,
     } satisfies ReleaseRecord;
   }
-  if (
-    record.active !== null &&
-    servesDeployment(input.readback, record.active)
-  ) {
-    return {
-      ...record,
-      generation,
-      pendingApply: null,
-    } satisfies ReleaseRecord;
-  }
-  return yield* new UnknownReleaseApplyState({
+  return yield* new ReleaseApplyNotObserved({
     intended: pending.target.releaseId,
     servingRevision: input.readback.servingRevision,
   });
 });
+
+export interface AbandonInput {
+  readonly expectedGeneration: number;
+  /** The operator's evidence that the interrupted apply can no longer land. */
+  readonly evidence: string;
+}
+
+/**
+ * Drop a pending traffic intent. Only an operator does this, with evidence
+ * that the interrupted request can no longer take effect (its operation
+ * finished, or a later service generation superseded it); readback showing
+ * the old revision alone is not that evidence.
+ */
+export const abandonApply = Effect.fn("WorkspaceRelease.abandonApply")(
+  function* (record: ReleaseRecord, input: AbandonInput) {
+    yield* fence(record, input.expectedGeneration);
+    if (record.pendingApply === null) {
+      return yield* new NoPendingReleaseApply();
+    }
+    return {
+      ...record,
+      generation: record.generation + 1,
+      pendingApply: null,
+    } satisfies ReleaseRecord;
+  }
+);
 
 /** Revisions the edge may route to now: serving, pending and compatible. */
 export const routableDeployments = (
@@ -361,19 +407,28 @@ export const makeInMemoryReleaseRecordStore = (initial: ReleaseRecord) =>
     return ReleaseRecordStore.of({
       read: Ref.get(state),
       write: (record, ifVersion) =>
-        Ref.get(state).pipe(
-          Effect.flatMap((current) => {
+        Ref.modify(
+          state,
+          (
+            current
+          ): readonly [
+            Effect.Effect<StoredReleaseRecord, ReleaseRecordConflict>,
+            StoredReleaseRecord,
+          ] => {
             if (current.version !== ifVersion) {
-              return Effect.fail(
-                new ReleaseRecordConflict({ expectedVersion: ifVersion })
-              );
+              return [
+                Effect.fail(
+                  new ReleaseRecordConflict({ expectedVersion: ifVersion })
+                ),
+                current,
+              ];
             }
             const next: StoredReleaseRecord = {
               record,
               version: String(Number(current.version) + 1),
             };
-            return Ref.set(state, next).pipe(Effect.as(next));
-          })
-        ),
+            return [Effect.succeed(next), next];
+          }
+        ).pipe(Effect.flatten),
     });
   });

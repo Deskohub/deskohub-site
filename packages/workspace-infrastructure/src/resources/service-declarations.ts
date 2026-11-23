@@ -12,6 +12,7 @@ import { routableDeployments } from "../release/release-reconciler";
 import type { ReleaseRecord } from "../release/release-record";
 import { toGcpDuration } from "./queue-declarations";
 import {
+  secretResourceName,
   workloadAudience,
   workloadRuntimeServiceAccount,
   workloadServiceIds,
@@ -29,7 +30,10 @@ const secretEnvironment = (
     .map((secret) => ({
       name: secret.environmentVariable,
       valueSource: {
-        secretKeyRef: { secret: secret.secretId, version: secret.version },
+        secretKeyRef: {
+          secret: secretResourceName(config, secret.secretId),
+          version: secret.version,
+        },
       },
     }));
 
@@ -61,19 +65,33 @@ const container = (
   ],
 });
 
+/** The release taking untagged traffic: the one being applied, else active. */
+const servingDeployment = (record: ReleaseRecord) =>
+  record.pendingApply?.target ?? record.active;
+
 /**
- * Untagged traffic goes to the release being applied, else the active one;
- * every other routable release keeps a zero-percent tag so pages it served
- * can reach it for the compatible window.
+ * Untagged traffic goes to the serving release. The candidate and every
+ * release still in its compatible window keep a zero-percent tag, so the
+ * candidate can be verified before promotion and pages an older release
+ * served can still reach it.
  */
 export const webTraffic = (
   record: ReleaseRecord,
   now: DateTime.Utc
 ): ReadonlyArray<TrafficTarget> => {
-  const [serving, ...compatible] = routableDeployments(record, now);
-  if (serving === undefined) {
+  const serving = servingDeployment(record);
+  if (serving === null) {
     return [];
   }
+  const tagged = [
+    ...(record.candidate === null ? [] : [record.candidate]),
+    ...routableDeployments(record, now),
+  ].filter(
+    (deployment, index, all) =>
+      deployment.releaseId !== serving.releaseId &&
+      all.findIndex((other) => other.releaseId === deployment.releaseId) ===
+        index
+  );
   return [
     {
       type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
@@ -81,7 +99,7 @@ export const webTraffic = (
       percent: 100,
       tag: `release-${serving.releaseId}`,
     },
-    ...compatible.map((deployment) => ({
+    ...tagged.map((deployment) => ({
       type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
       revision: deployment.revision,
       percent: 0,
@@ -94,16 +112,24 @@ export const webTraffic = (
  * The public web service. Only the external load balancer reaches it
  * (`infra/workspace-edge`), and its default URL is off so traffic cannot
  * bypass Cloud Armor.
+ *
+ * The template is the revision Cloud Run creates next: the pending target,
+ * else the candidate, else the active release. A candidate therefore
+ * becomes a real zero-traffic revision while the active one keeps serving.
+ * Nothing is declared before a release serves: the first release is
+ * created by its own promotion.
  */
 export const webServiceProps = (
   config: WorkspaceStackConfig,
   record: ReleaseRecord,
   now: DateTime.Utc
 ): ServiceProps | undefined => {
-  const target = record.pendingApply?.target ?? record.active;
-  if (target === null) {
+  const serving = servingDeployment(record);
+  if (serving === null) {
     return undefined;
   }
+  const template =
+    record.pendingApply?.target ?? record.candidate ?? record.active ?? serving;
   return {
     serviceId: workloadServiceIds.web,
     location: config.region,
@@ -112,14 +138,14 @@ export const webServiceProps = (
     invokerIamDisabled: true,
     defaultUriDisabled: true,
     template: {
-      revision: target.revision,
+      revision: template.revision,
       serviceAccount: config.serviceAccounts.webRuntime,
       timeout: "300s",
       scaling: {
         minInstanceCount: 0,
         maxInstanceCount: config.capacity.webMaxInstances,
       },
-      containers: [container(config, "web", target.imageDigest)],
+      containers: [container(config, "web", template.imageDigest)],
     },
     traffic: [...webTraffic(record, now)],
   };

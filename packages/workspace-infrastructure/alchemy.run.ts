@@ -1,54 +1,54 @@
 import * as GCP from "@alchemy.run/gcp";
 import * as Alchemy from "alchemy";
+import { Stage } from "alchemy/Stage";
 import * as Config from "effect/Config";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { decodeWorkspaceStackConfig } from "./src/config/stack-config";
-import {
-  emptyReleaseRecord,
-  ReleaseRecord,
-} from "./src/release/release-record";
-import { declareWorkspaceStack } from "./src/workspace-stack";
+import { declareWorkspaceFoundation } from "./src/workspace-stack";
+
+/** The stage config CI supplies; it alone selects project, stage and state. */
+const stackConfig = Config.String("WORKSPACE_STACK_CONFIG").pipe(
+  Effect.flatMap((raw) =>
+    Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(raw)
+  ),
+  Effect.flatMap(decodeWorkspaceStackConfig),
+  Effect.orDie
+);
 
 /**
- * The Workspace stack. CI supplies the stage config and the release record
- * it read from the release store; `GOOGLE_PROJECT_ID` must name the same
- * project as the config, so credentials for one stage never apply another.
+ * The Workspace foundation stack. State lives in the config's own state
+ * bucket, and the Alchemy stage and `GOOGLE_PROJECT_ID` must both name the
+ * config's stage and project, so credentials or state of one stage never
+ * apply another.
+ *
+ * The release-owned Cloud Run services (`declareWorkspaceServices`) are not
+ * declared here: they need the authoritative release record read under its
+ * generation fence from the durable release store, which ships with the
+ * hosted #1452 proof. A CI snapshot is never trusted in its place.
  */
 export default Alchemy.Stack(
   "DeskohubWorkspace",
   {
     providers: GCP.providers(),
     state: Layer.unwrap(
-      Config.String("WORKSPACE_STATE_BUCKET").pipe(
-        Effect.map((bucketName) => GCP.state({ bucketName }))
+      stackConfig.pipe(
+        Effect.map((config) => GCP.state({ bucketName: config.stateBucket }))
       )
-    ).pipe(Layer.orDie),
+    ),
   },
   Effect.gen(function* () {
-    const rawConfig = yield* Config.String("WORKSPACE_STACK_CONFIG");
-    const config = yield* Schema.decodeEffect(
-      Schema.fromJsonString(Schema.Unknown)
-    )(rawConfig).pipe(Effect.flatMap(decodeWorkspaceStackConfig), Effect.orDie);
+    const config = yield* stackConfig;
+    const stage = yield* Stage;
     const ambientProject = yield* Config.String("GOOGLE_PROJECT_ID");
-    if (ambientProject !== config.projectId) {
+    if (stage !== config.stage || ambientProject !== config.projectId) {
       return yield* Effect.die(
         new Error(
-          `GOOGLE_PROJECT_ID does not match the ${config.stage} stack project.`
+          `The Alchemy stage and GOOGLE_PROJECT_ID must match the ${config.stage} stack configuration.`
         )
       );
     }
-    const rawRecord = yield* Config.option(
-      Config.String("WORKSPACE_RELEASE_RECORD")
-    );
-    const record =
-      rawRecord._tag === "None"
-        ? emptyReleaseRecord
-        : yield* Schema.decodeEffect(Schema.fromJsonString(ReleaseRecord))(
-            rawRecord.value
-          ).pipe(Effect.orDie);
-    return yield* declareWorkspaceStack(config, record, yield* DateTime.now);
+    return yield* declareWorkspaceFoundation(config);
   })
 );

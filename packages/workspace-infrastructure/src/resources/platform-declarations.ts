@@ -7,6 +7,7 @@ import type {
   WorkspaceWorkload,
 } from "../config/stack-config";
 import {
+  secretResourceName,
   workloadRuntimeServiceAccount,
   workloadServiceIds,
   workspaceArtifactRepositoryId,
@@ -27,8 +28,9 @@ export const artifactRepositoryProps = (
 
 /**
  * Mobile update assets. Versioned, uniform access, never force-destroyed
- * outside the sandbox. A locked retention policy is deferred: beta.87
- * `Storage.Bucket` exposes no retention props (see `surface-classification`).
+ * outside the sandbox, and written create-only by the mobile publisher
+ * (`mobileUpdatesPublisherGrant`). A locked retention policy is deferred:
+ * beta.87 `Storage.Bucket` exposes no retention props.
  */
 export const mobileUpdatesBucketProps = (
   config: WorkspaceStackConfig
@@ -40,6 +42,23 @@ export const mobileUpdatesBucketProps = (
   uniformBucketLevelAccess: true,
   forceDestroy: config.stage === "sandbox",
   labels: workspaceLabels(config),
+});
+
+/**
+ * The mobile publisher may only create objects: replacing an issued object
+ * name needs `storage.objects.delete`, which `objectCreator` lacks, so live
+ * bytes at a published name never change.
+ */
+export const mobileUpdatesPublisherGrant = (
+  config: WorkspaceStackConfig
+): { readonly id: string; readonly props: MemberProps } => ({
+  id: "MobileUpdatesPublisher",
+  props: {
+    kind: "storage.bucket",
+    name: config.mobileUpdatesBucket,
+    role: "roles/storage.objectCreator",
+    member: `serviceAccount:${config.serviceAccounts.mobileUpdatesPublisher}`,
+  },
 });
 
 const serviceResourceName = (
@@ -78,13 +97,18 @@ export const workerInvokerGrants = (
  */
 export const secretAccessorGrants = (
   config: WorkspaceStackConfig
-): ReadonlyArray<{ readonly id: string; readonly props: MemberProps }> =>
+): ReadonlyArray<{
+  readonly id: string;
+  readonly workload: WorkspaceWorkload;
+  readonly props: MemberProps;
+}> =>
   config.secrets.flatMap((secret) =>
     secret.consumers.map((workload) => ({
       id: `SecretAccess-${secret.secretId}-${workload}`,
+      workload,
       props: {
         kind: "secretmanager.secret",
-        name: `projects/${config.projectId}/secrets/${secret.secretId}`,
+        name: secretResourceName(config, secret.secretId),
         role: "roles/secretmanager.secretAccessor",
         member: `serviceAccount:${workloadRuntimeServiceAccount(config, workload)}`,
       },

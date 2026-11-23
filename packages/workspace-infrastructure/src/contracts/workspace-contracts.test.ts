@@ -97,6 +97,12 @@ describe("queue contracts", () => {
     expect(holdCleanup && Duration.toDays(holdCleanup.maxScheduleDelay)).toBe(
       7
     );
+    // Cloud Tasks counts retries from the first attempt, so the publisher's
+    // 7-day clamp from enqueue is an application expiry.
+    expect(
+      holdCleanup?.absoluteExpiry &&
+        Duration.toDays(holdCleanup.absoluteExpiry.fromEnqueue)
+    ).toBe(7);
   });
 
   test("declare queues with the shared retry policy and a pinned private target", () => {
@@ -178,13 +184,13 @@ describe("schedule contracts", () => {
     ).toEqual([...vercel.crons]);
   });
 
-  test("declare paused OIDC jobs against the private scheduler worker", () => {
+  test("declare OIDC jobs against the private scheduler worker", () => {
     for (const contract of workspaceScheduleContracts) {
       const job = scheduleJobProps(sandboxConfig, contract);
       expect(job).toMatchObject({
         schedule: contract.schedule,
         timeZone: workspaceScheduleTimeZone,
-        paused: true,
+        paused: false,
         retryConfig: { retryCount: 0 },
         httpTarget: {
           uri: `https://workspace-scheduler-worker-123456789012.europe-west1.run.app${contract.handlerPath}`,
@@ -197,15 +203,6 @@ describe("schedule contracts", () => {
         },
       });
     }
-    expect(
-      workspaceScheduleContracts.map(
-        (contract) =>
-          scheduleJobProps(
-            { ...sandboxConfig, schedulesEnabled: true },
-            contract
-          ).paused
-      )
-    ).toEqual(workspaceScheduleContracts.map(() => false));
   });
 
   test("keep the route budgets as attempt deadlines", () => {

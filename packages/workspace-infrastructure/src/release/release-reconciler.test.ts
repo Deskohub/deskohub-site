@@ -5,8 +5,10 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { ImageDigest } from "../config/stack-config";
-import { webTraffic } from "../resources/service-declarations";
+import { sandboxConfig } from "../config/stack-config.test-utils";
+import { webServiceProps, webTraffic } from "../resources/service-declarations";
 import {
+  abandonApply,
   makeInMemoryReleaseRecordStore,
   promote,
   ReleaseRecordStore,
@@ -43,14 +45,12 @@ const failure = <A, E>(effect: Effect.Effect<A, E>) => {
   return reason?._tag === "Fail" ? reason.error : reason;
 };
 
-/** Stage, promote and settle one release against readback that serves it. */
-const release = (
+const stageRelease = (
   record: ReleaseRecord,
   sha: GitSha,
-  digest: ImageDigest,
-  now: DateTime.Utc
-) => {
-  const staged = run(
+  digest: ImageDigest
+) =>
+  run(
     stage(record, {
       expectedGeneration: record.generation,
       sha,
@@ -58,16 +58,34 @@ const release = (
       origin: "cloud-run",
     })
   );
+
+/** Stage, verify the candidate, promote and settle one release. */
+const release = (
+  record: ReleaseRecord,
+  sha: GitSha,
+  digest: ImageDigest,
+  now: DateTime.Utc
+) => {
+  const staged = stageRelease(record, sha, digest);
+  const candidate = staged.record.candidate;
   const pending = run(
     promote(staged.record, {
       expectedGeneration: staged.record.generation,
       releaseId: staged.releaseId,
       now,
+      candidateReadback:
+        candidate === null
+          ? null
+          : {
+              revision: candidate.revision,
+              imageDigest: candidate.imageDigest,
+            },
     })
   );
   const target = pending.pendingApply?.target;
   return {
     releaseId: staged.releaseId,
+    staged: staged.record,
     pending,
     settled: run(
       settleApply(pending, {
@@ -97,11 +115,53 @@ describe("release reconciler", () => {
         verifiedAt: "2026-11-22T10:00:00.000Z",
       },
       previous: null,
-      staged: [],
+      candidate: null,
       compatible: [],
       pendingApply: null,
     });
     expect(Schema.is(ReleaseRecord)(first.settled)).toBe(true);
+  });
+
+  test("declares no service before the first release serves", () => {
+    const staged = stageRelease(emptyReleaseRecord, shaA, digestA);
+    expect(webServiceProps(sandboxConfig, staged.record, t0)).toBeUndefined();
+  });
+
+  test("materializes a later candidate at zero traffic and promotes it only after readback", () => {
+    const first = release(emptyReleaseRecord, shaA, digestA, t0);
+    const staged = stageRelease(first.settled, shaB, digestB);
+    const web = webServiceProps(sandboxConfig, staged.record, later(1));
+    expect(web?.template?.revision).toBe("workspace-web-r4-bbbbbbb");
+    expect(web?.traffic).toEqual([
+      {
+        type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+        revision: "workspace-web-r1-aaaaaaa",
+        percent: 100,
+        tag: "release-r1-aaaaaaa",
+      },
+      {
+        type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+        revision: "workspace-web-r4-bbbbbbb",
+        percent: 0,
+        tag: "release-r4-bbbbbbb",
+      },
+    ]);
+    for (const candidateReadback of [
+      null,
+      { revision: "workspace-web-r4-bbbbbbb", imageDigest: digestA },
+      { revision: "workspace-web-r1-aaaaaaa", imageDigest: digestB },
+    ]) {
+      expect(
+        failure(
+          promote(staged.record, {
+            expectedGeneration: staged.record.generation,
+            releaseId: staged.releaseId,
+            now: later(1),
+            candidateReadback,
+          })
+        )
+      ).toMatchObject({ _tag: "CandidateNotVerified" });
+    }
   });
 
   test("refuses every operation from a stale generation", () => {
@@ -134,12 +194,11 @@ describe("release reconciler", () => {
     const first = release(emptyReleaseRecord, shaA, digestA, t0);
     const second = release(first.settled, shaB, digestB, later(1));
     expect(second.settled.previous?.releaseId).toBe(first.releaseId);
-    expect(second.settled.compatible).toEqual(
-      first.settled.active === null
-        ? []
-        : [{ ...first.settled.active, expiresAt: "2026-11-22T23:00:00.000Z" }]
-    );
     expect(second.settled.compatible).toHaveLength(1);
+    expect(second.settled.compatible[0]).toMatchObject({
+      releaseId: first.releaseId,
+      expiresAt: "2026-11-22T23:00:00.000Z",
+    });
     expect(
       routableDeployments(second.settled, later(12.9)).map(
         (entry) => entry.releaseId
@@ -150,20 +209,7 @@ describe("release reconciler", () => {
         (entry) => entry.releaseId
       )
     ).toEqual([second.releaseId]);
-    expect(webTraffic(second.settled, later(2))).toEqual([
-      {
-        type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
-        revision: "workspace-web-r4-bbbbbbb",
-        percent: 100,
-        tag: "release-r4-bbbbbbb",
-      },
-      {
-        type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
-        revision: "workspace-web-r1-aaaaaaa",
-        percent: 0,
-        tag: "release-r1-aaaaaaa",
-      },
-    ]);
+    expect(webTraffic(second.settled, later(13))).toHaveLength(1);
   });
 
   test("restores the previous release and moves the current one into the window", () => {
@@ -198,7 +244,6 @@ describe("release reconciler", () => {
     const first = release(emptyReleaseRecord, shaA, digestA, t0);
     const second = release(first.settled, shaB, digestB, later(1));
     const third = release(second.settled, shaC, digestC, later(2));
-    // r1 is no longer `previous`; only its compatible entry could allow it.
     expect(
       run(
         restore(third.settled, {
@@ -219,53 +264,47 @@ describe("release reconciler", () => {
     ).toMatchObject({ _tag: "ReleaseNotRestorable" });
   });
 
-  test("recovers an unknown apply response from readback", () => {
+  test("keeps an unknown apply pending until readback shows the target", () => {
     const first = release(emptyReleaseRecord, shaA, digestA, t0);
-    const staged = run(
-      stage(first.settled, {
-        expectedGeneration: first.settled.generation,
-        sha: shaB,
-        imageDigest: digestB,
-        origin: "cloud-run",
-      })
-    );
+    const staged = stageRelease(first.settled, shaB, digestB);
     const pending = run(
       promote(staged.record, {
         expectedGeneration: staged.record.generation,
         releaseId: staged.releaseId,
         now: later(1),
-      })
-    );
-    // A new operation waits until the pending apply is settled.
-    expect(
-      failure(
-        promote(pending, {
-          expectedGeneration: pending.generation,
-          releaseId: staged.releaseId,
-          now: later(1),
-        })
-      )
-    ).toMatchObject({ _tag: "ReleaseApplyPending" });
-
-    // The apply never landed: the old release still serves.
-    const abandoned = run(
-      settleApply(pending, {
-        expectedGeneration: pending.generation,
-        readback: {
-          servingRevision: "workspace-web-r1-aaaaaaa",
-          servingImageDigest: digestA,
+        candidateReadback: {
+          revision: "workspace-web-r4-bbbbbbb",
+          imageDigest: digestB,
         },
-        now: later(1),
       })
     );
-    expect(abandoned.active?.releaseId).toBe(first.releaseId);
-    expect(abandoned.pendingApply).toBeNull();
-    expect(abandoned.staged.map((entry) => entry.releaseId)).toEqual([
-      staged.releaseId,
-    ]);
-
-    // Split, failed or foreign traffic needs an operator.
+    // While an apply is pending, nothing else may start.
+    const blockedSteps: ReadonlyArray<Effect.Effect<unknown, unknown>> = [
+      promote(pending, {
+        expectedGeneration: pending.generation,
+        releaseId: staged.releaseId,
+        now: later(1),
+        candidateReadback: null,
+      }),
+      stage(pending, {
+        expectedGeneration: pending.generation,
+        sha: shaC,
+        imageDigest: digestC,
+        origin: "cloud-run",
+      }),
+    ];
+    for (const blocked of blockedSteps) {
+      expect(failure(blocked)).toMatchObject({
+        _tag: "ReleaseApplyPending",
+      });
+    }
+    // The old release still serving, split traffic or a foreign digest all
+    // leave the intent pending: the interrupted request may still land.
     for (const readback of [
+      {
+        servingRevision: "workspace-web-r1-aaaaaaa",
+        servingImageDigest: digestA,
+      },
       { servingRevision: null, servingImageDigest: null },
       {
         servingRevision: "workspace-web-r4-bbbbbbb",
@@ -281,38 +320,71 @@ describe("release reconciler", () => {
           })
         )
       ).toMatchObject({
-        _tag: "UnknownReleaseApplyState",
+        _tag: "ReleaseApplyNotObserved",
         intended: staged.releaseId,
       });
     }
-  });
-
-  test("serializes steps: a run holding an old store version cannot write", () => {
-    const result = Effect.runSync(
-      Effect.gen(function* () {
-        const store = yield* makeInMemoryReleaseRecordStore(emptyReleaseRecord);
-        const before = yield* store.read;
-        const staged = yield* runReleaseStep((record) =>
-          stage(record, {
-            expectedGeneration: record.generation,
-            sha: shaA,
-            imageDigest: digestA,
-            origin: "cloud-run",
-          }).pipe(
-            Effect.map(({ record: next, releaseId }) => ({
-              record: next,
-              result: releaseId,
-            }))
-          )
-        ).pipe(Effect.provideService(ReleaseRecordStore, store));
-        const conflict = yield* Effect.flip(
-          store.write(emptyReleaseRecord, before.version)
-        );
-        return { staged, conflict, after: yield* store.read };
+    // A re-apply that lands completes it.
+    expect(
+      run(
+        settleApply(pending, {
+          expectedGeneration: pending.generation,
+          readback: {
+            servingRevision: "workspace-web-r4-bbbbbbb",
+            servingImageDigest: digestB,
+          },
+          now: later(1.5),
+        })
+      ).active?.releaseId
+    ).toBe(staged.releaseId);
+    // Only an operator with evidence drops it, and only at its generation.
+    const abandoned = run(
+      abandonApply(pending, {
+        expectedGeneration: pending.generation,
+        evidence: "operation finished without traffic change",
       })
     );
-    expect(result.staged).toBe("r1-aaaaaaa" as ReleaseId);
-    expect(result.conflict._tag).toBe("ReleaseRecordConflict");
+    expect(abandoned.pendingApply).toBeNull();
+    expect(abandoned.active?.releaseId).toBe(first.releaseId);
+    expect(abandoned.candidate?.releaseId).toBe(staged.releaseId);
+  });
+
+  test("serializes concurrent steps: only one writer per store version wins", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* makeInMemoryReleaseRecordStore(emptyReleaseRecord);
+        const step = (sha: GitSha) =>
+          runReleaseStep((record) =>
+            // Yield after the read so both runs hold the same version.
+            Effect.andThen(
+              Effect.yieldNow,
+              stage(record, {
+                expectedGeneration: record.generation,
+                sha,
+                imageDigest: digestA,
+                origin: "cloud-run",
+              })
+            ).pipe(
+              Effect.map(({ record: next, releaseId }) => ({
+                record: next,
+                result: releaseId,
+              }))
+            )
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.result
+          );
+        const outcomes = yield* Effect.all([step(shaA), step(shaB)], {
+          concurrency: "unbounded",
+        });
+        return { outcomes, after: yield* store.read };
+      })
+    );
+    expect(result.outcomes.map((outcome) => outcome._tag).toSorted()).toEqual([
+      "Failure",
+      "Success",
+    ]);
     expect(result.after.record.generation).toBe(1);
+    expect(result.after.version).toBe("2");
   });
 });

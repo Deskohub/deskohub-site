@@ -24,7 +24,9 @@ region="europe-west1"
 environment_name="workspace-gcp-sandbox"
 trusted_workflow_path=".github/workflows/workspace-gcp-sandbox-smoke.yml"
 trusted_ref="refs/heads/main"
-pool_id="github-actions"
+# A pool dedicated to this one provider, so no other provider can map to
+# the same subject.
+pool_id="workspace-sandbox-github"
 provider_id="deskohub-workspace"
 dry_run=false
 project_id=""
@@ -107,6 +109,7 @@ sa_email() { echo "$1@${project_id}.iam.gserviceaccount.com"; }
 deployer="$(sa_email workspace-deployer)"
 runtime_accounts=(workspace-web workspace-tasks-worker workspace-scheduler-worker)
 invoker_accounts=(workspace-tasks-invoker workspace-scheduler-invoker)
+publisher_account=workspace-mobile-publisher
 state_bucket="${project_id}-workspace-state"
 pool_name="projects/${project_number}/locations/global/workloadIdentityPools/${pool_id}"
 provider_name="${pool_name}/providers/${provider_id}"
@@ -128,7 +131,7 @@ run gcloud projects update "$project_id" \
   --update-labels "workspace-sandbox-max-spend=${spend_label},workspace-sandbox-teardown=${teardown_date}"
 
 echo "== Service accounts"
-for account in workspace-deployer "${runtime_accounts[@]}" "${invoker_accounts[@]}"; do
+for account in workspace-deployer "${runtime_accounts[@]}" "${invoker_accounts[@]}" "$publisher_account"; do
   exists gcloud iam service-accounts describe "$(sa_email "$account")" --project "$project_id" ||
     run gcloud iam service-accounts create "$account" --project "$project_id" \
     --display-name "Workspace ${account#workspace-}"
@@ -168,10 +171,23 @@ for account in "${runtime_accounts[@]}"; do
     --role roles/iam.serviceAccountUser --format=none
 done
 
+echo "== Google service agents may mint OIDC tokens as their invokers"
+# Cloud Tasks and Cloud Scheduler sign each request as the invoker account;
+# their service agents need Service Account Token Creator on it.
+run gcloud beta services identity create --service cloudtasks.googleapis.com --project "$project_id" --format=none
+run gcloud beta services identity create --service cloudscheduler.googleapis.com --project "$project_id" --format=none
+run gcloud iam service-accounts add-iam-policy-binding "$(sa_email workspace-tasks-invoker)" \
+  --project "$project_id" --role roles/iam.serviceAccountTokenCreator --format=none \
+  --member "serviceAccount:service-${project_number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+run gcloud iam service-accounts add-iam-policy-binding "$(sa_email workspace-scheduler-invoker)" \
+  --project "$project_id" --role roles/iam.serviceAccountTokenCreator --format=none \
+  --member "serviceAccount:service-${project_number}@gcp-sa-cloudscheduler.iam.gserviceaccount.com"
+
 echo "== Workload identity federation"
 exists gcloud iam workload-identity-pools describe "$pool_id" --project "$project_id" --location global ||
   run gcloud iam workload-identity-pools create "$pool_id" --project "$project_id" --location global \
   --display-name "GitHub Actions"
+attribute_mapping="google.subject=assertion.sub,attribute.repository_id=assertion.repository_id,attribute.repository_owner_id=assertion.repository_owner_id,attribute.environment=assertion.environment,attribute.workflow_ref=assertion.workflow_ref"
 attribute_condition="assertion.repository_owner_id == '${github_owner_id}' && assertion.repository_id == '${github_repository_id}' && assertion.environment == '${environment_name}' && assertion.workflow_ref == '${trusted_workflow_ref}'"
 exists gcloud iam workload-identity-pools providers describe "$provider_id" \
   --project "$project_id" --location global --workload-identity-pool "$pool_id" ||
@@ -179,12 +195,21 @@ exists gcloud iam workload-identity-pools providers describe "$provider_id" \
   --project "$project_id" --location global --workload-identity-pool "$pool_id" \
   --display-name "Deskohub Workspace sandbox" \
   --issuer-uri "https://token.actions.githubusercontent.com" \
-  --attribute-mapping "google.subject=assertion.sub,attribute.repository_id=assertion.repository_id,attribute.repository_owner_id=assertion.repository_owner_id,attribute.environment=assertion.environment,attribute.workflow_ref=assertion.workflow_ref" \
+  --attribute-mapping "$attribute_mapping" \
   --attribute-condition "$attribute_condition"
-# Keep the condition current on reruns.
+# Converge issuer, mapping and condition on reruns.
 run gcloud iam workload-identity-pools providers update-oidc "$provider_id" \
   --project "$project_id" --location global --workload-identity-pool "$pool_id" \
+  --issuer-uri "https://token.actions.githubusercontent.com" \
+  --attribute-mapping "$attribute_mapping" \
   --attribute-condition "$attribute_condition"
+# Grant by subject only when this provider is the pool's sole provider.
+if [[ "$dry_run" == false ]]; then
+  providers="$(gcloud iam workload-identity-pools providers list --project "$project_id" \
+    --location global --workload-identity-pool "$pool_id" --format='value(name)')"
+  [[ "$providers" == "$provider_name" ]] ||
+    fail "pool $pool_id must contain only provider $provider_id before deploy access is granted"
+fi
 run gcloud iam service-accounts add-iam-policy-binding "$deployer" --project "$project_id" \
   --role roles/iam.workloadIdentityUser --format=none \
   --member "principal://iam.googleapis.com/${pool_name}/subject/${trusted_subject}"

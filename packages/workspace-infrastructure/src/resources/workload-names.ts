@@ -62,3 +62,9 @@ export const workspaceLabels = (config: WorkspaceStackConfig) => ({
   "deskohub-app": "workspace",
   "deskohub-stage": config.stage,
 });
+
+/** A Secret Manager secret's resource name in the stage's project. */
+export const secretResourceName = (
+  config: WorkspaceStackConfig,
+  secretId: string
+) => `projects/${config.projectId}/secrets/${secretId}`;

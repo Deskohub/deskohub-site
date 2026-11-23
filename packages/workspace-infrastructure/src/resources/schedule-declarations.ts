@@ -9,8 +9,8 @@ import { workloadAudience, workloadUrl } from "./workload-names";
 
 /**
  * A Cloud Scheduler job calling the private scheduler worker with an OIDC
- * token for the scheduler invoker. Jobs stay paused unless the stage is
- * authorized to run schedules (#1456).
+ * token for the scheduler invoker. Only stages authorized to run schedules
+ * declare jobs at all (#1456, `declareWorkspaceFoundation`).
  */
 export const scheduleJobProps = (
   config: WorkspaceStackConfig,
@@ -31,5 +31,5 @@ export const scheduleJobProps = (
       audience: workloadAudience(config, "scheduler-worker"),
     },
   },
-  paused: !config.schedulesEnabled,
+  paused: false,
 });

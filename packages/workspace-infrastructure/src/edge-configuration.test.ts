@@ -91,6 +91,10 @@ describe("workspace edge Terraform", () => {
     expect(all).toMatch(
       /variable "static_cdn_enabled" \{[^}]*default\s+= false/
     );
+    // Overrides may only name immutable build-asset paths.
+    expect(sources["variables.tf"]).toContain(
+      'contains(["/_next/static/*", "/app/_expo/static/*", "/polyfills/*"], path)'
+    );
     for (const block of [dynamic, staticAssets]) {
       expect(block).toContain(
         "security_policy       = google_compute_security_policy.workspace.id"

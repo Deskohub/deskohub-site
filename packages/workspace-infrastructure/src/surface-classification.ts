@@ -93,11 +93,11 @@ export const workspaceSurfaceClassification: ReadonlyArray<SurfaceItem> = [
     },
   },
   {
-    capability: "Release record store",
+    capability: "Release record store and service apply",
     owner: {
       kind: "deferred",
       reason:
-        "The reconciler runs against the ReleaseRecordStore port; the Cloud Storage adapter with generation preconditions ships with the hosted #1452 proof.",
+        "The reconciler runs against the ReleaseRecordStore port. The Cloud Storage adapter with generation preconditions, and the apply entry that declares services from it, ship with the hosted #1452 proof; alchemy.run.ts declares only the foundation until then.",
     },
   },
   {

@@ -144,7 +144,7 @@ describe("sandbox bootstrap script", () => {
       "assertion.repository_owner_id\\ ==\\ \\'1001\\'\\ \\&\\&\\ assertion.repository_id\\ ==\\ \\'2002\\'\\ \\&\\&\\ assertion.environment\\ ==\\ \\'workspace-gcp-sandbox\\'\\ \\&\\&\\ assertion.workflow_ref\\ ==\\ \\'example-owner/example-repo/.github/workflows/workspace-gcp-sandbox-smoke.yml@refs/heads/main\\'"
     );
     expect(output).toContain(
-      "--role roles/iam.workloadIdentityUser --format=none --member principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/github-actions/subject/repo:example-owner/example-repo:environment:workspace-gcp-sandbox"
+      "--role roles/iam.workloadIdentityUser --format=none --member principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/workspace-sandbox-github/subject/repo:example-owner/example-repo:environment:workspace-gcp-sandbox"
     );
     for (const account of [
       "workspace-deployer",
@@ -153,6 +153,7 @@ describe("sandbox bootstrap script", () => {
       "workspace-scheduler-worker",
       "workspace-tasks-invoker",
       "workspace-scheduler-invoker",
+      "workspace-mobile-publisher",
     ]) {
       expect(output).toContain(
         `gcloud iam service-accounts create ${account} `
@@ -164,6 +165,19 @@ describe("sandbox bootstrap script", () => {
     expect(output).toContain(
       "gcloud storage buckets update gs://deskohub-ws-sandbox-workspace-state --versioning"
     );
+    // Google's agents sign task and schedule requests as the invokers.
+    for (const [invoker, agent] of [
+      ["workspace-tasks-invoker", "gcp-sa-cloudtasks"],
+      ["workspace-scheduler-invoker", "gcp-sa-cloudscheduler"],
+    ] as const) {
+      expect(output).toContain(
+        `gcloud iam service-accounts add-iam-policy-binding ${sandboxServiceAccount(invoker)} --project deskohub-ws-sandbox --role roles/iam.serviceAccountTokenCreator --format=none --member serviceAccount:service-123456789012@${agent}.iam.gserviceaccount.com`
+      );
+    }
+    // The provider update converges issuer and mapping, not only the condition.
+    expect(output).toMatch(
+      /providers update-oidc deskohub-workspace .*--issuer-uri https:\/\/token\.actions\.githubusercontent\.com --attribute-mapping google\.subject=assertion\.sub/
+    );
   });
 
   test("prints the gh variable commands and no secret values", () => {
@@ -173,7 +187,7 @@ describe("sandbox bootstrap script", () => {
       .filter((line) => line.startsWith("gh variable set"));
     expect(ghCommands).toEqual([
       "gh variable set GCP_SANDBOX_PROJECT_ID --repo example-owner/example-repo --env workspace-gcp-sandbox --body deskohub-ws-sandbox",
-      "gh variable set GCP_SANDBOX_WIF_PROVIDER --repo example-owner/example-repo --env workspace-gcp-sandbox --body projects/123456789012/locations/global/workloadIdentityPools/github-actions/providers/deskohub-workspace",
+      "gh variable set GCP_SANDBOX_WIF_PROVIDER --repo example-owner/example-repo --env workspace-gcp-sandbox --body projects/123456789012/locations/global/workloadIdentityPools/workspace-sandbox-github/providers/deskohub-workspace",
       `gh variable set GCP_SANDBOX_DEPLOY_SA --repo example-owner/example-repo --env workspace-gcp-sandbox --body ${sandboxServiceAccount("workspace-deployer")}`,
       "gh variable set GCP_SANDBOX_STATE_BUCKET --repo example-owner/example-repo --env workspace-gcp-sandbox --body deskohub-ws-sandbox-workspace-state",
     ]);

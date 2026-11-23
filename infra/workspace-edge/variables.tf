@@ -42,9 +42,17 @@ variable "static_cdn_enabled" {
 }
 
 variable "static_asset_paths" {
-  description = "Path patterns served by the static backend, which alone may use Cloud CDN."
+  description = "Path patterns served by the static backend, which alone may use Cloud CDN. Only immutable build-asset paths are allowed."
   type        = list(string)
   default     = ["/_next/static/*", "/app/_expo/static/*", "/polyfills/*"]
+
+  validation {
+    condition = length(var.static_asset_paths) > 0 && alltrue([
+      for path in var.static_asset_paths :
+      contains(["/_next/static/*", "/app/_expo/static/*", "/polyfills/*"], path)
+    ])
+    error_message = "static_asset_paths may only list /_next/static/*, /app/_expo/static/* and /polyfills/*."
+  }
 }
 
 variable "auth_rate_limit_per_minute" {

@@ -27,8 +27,12 @@ export const GitSha = Schema.String.check(
 );
 export type GitSha = typeof GitSha.Type;
 
-/** Where a release serves from: Cloud Run, or the Vercel bridge (#1458). */
-export const ReleaseOrigin = Schema.Literals(["cloud-run", "vercel-bridge"]);
+/**
+ * Where a release serves from. Only Cloud Run is verifiable from revision
+ * and digest readback; the Vercel bridge (#1458) joins when it has its own
+ * readback.
+ */
+export const ReleaseOrigin = Schema.Literals(["cloud-run"]);
 export type ReleaseOrigin = typeof ReleaseOrigin.Type;
 
 const Instant = Schema.String.check(
@@ -79,7 +83,11 @@ export const ReleaseRecord = Schema.Struct({
   generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   active: Schema.NullOr(VerifiedDeployment),
   previous: Schema.NullOr(VerifiedDeployment),
-  staged: Schema.Array(ReleaseDeployment),
+  /**
+   * The one staged release. Once a release is active, the web service
+   * materializes the candidate as a zero-traffic revision for verification.
+   */
+  candidate: Schema.NullOr(ReleaseDeployment),
   compatible: Schema.Array(CompatibleDeployment),
   pendingApply: Schema.NullOr(PendingApply),
 }).annotate({ identifier: "ReleaseRecord" });
@@ -89,7 +97,7 @@ export const emptyReleaseRecord: ReleaseRecord = {
   generation: 0,
   active: null,
   previous: null,
-  staged: [],
+  candidate: null,
   compatible: [],
   pendingApply: null,
 };

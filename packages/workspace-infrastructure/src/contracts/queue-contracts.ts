@@ -43,6 +43,15 @@ export interface QueueContract {
   readonly dispatchDeadline: Duration.Duration;
   /** What the task carries; recovery relies on these keys, not payloads. */
   readonly deliveryKey: string;
+  /**
+   * A cap on total lifetime from enqueue that the queue cannot express:
+   * Cloud Tasks counts `maxRetryDuration` from the first attempt. The
+   * handler enforces it from the payload and acknowledges expired work.
+   */
+  readonly absoluteExpiry?: {
+    readonly fromEnqueue: Duration.Duration;
+    readonly enforcedBy: string;
+  };
 }
 
 const bounded = (maxRetryDuration: Duration.Duration) =>
@@ -108,5 +117,12 @@ export const workspaceQueueContracts: ReadonlyArray<QueueContract> = [
     maxScheduleDelay: Duration.days(7),
     dispatchDeadline: Duration.seconds(300),
     deliveryKey: "order ID + exact hold expiry",
+    // The publisher clamps retention to min(delay + 1 h, 7 days) from
+    // enqueue; a hold due in seven days gets no extra hour.
+    absoluteExpiry: {
+      fromEnqueue: Duration.days(7),
+      enforcedBy:
+        "apps/deskohub-workspace/features/checkout/backend/holds/reservation-hold-cleanup-queue.service.ts (retention clamp)",
+    },
   },
 ];
