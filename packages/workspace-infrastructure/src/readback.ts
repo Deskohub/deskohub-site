@@ -36,6 +36,10 @@ export interface ObservedService {
   readonly templateRevision?: string | undefined;
   /** The digest the live template's container image pins, if any. */
   readonly templateImageDigest?: ImageDigest | undefined;
+  /** The spec fingerprint annotation on the live template, if any. */
+  readonly templateSpecFingerprint?: string | undefined;
+  /** The live template's own revision is ready, routed or not. */
+  readonly templateReady?: boolean | undefined;
 }
 
 /** The live web template, or null while the service does not exist. */
@@ -47,6 +51,8 @@ export const liveTemplateOf = (
     : {
         revision: observed.templateRevision ?? null,
         imageDigest: observed.templateImageDigest ?? null,
+        specFingerprint: observed.templateSpecFingerprint ?? null,
+        ready: observed.templateReady === true,
       };
 
 const observedTrafficGeneration = (observed: ObservedService) => {

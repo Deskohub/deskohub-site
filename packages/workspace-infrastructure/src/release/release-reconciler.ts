@@ -8,10 +8,12 @@ import {
   type CompatibleDeployment,
   compatibleDeploymentWindowHours,
   type GitSha,
+  type MaterializedDeployment,
   type ReleaseDeployment,
   ReleaseId,
   type ReleaseOrigin,
   type ReleaseRecord,
+  templateRevisionOf,
   type VerifiedDeployment,
 } from "./release-record";
 
@@ -89,7 +91,64 @@ export type ReleaseWorker = Exclude<WorkspaceWorkload, "web">;
 export interface LiveTemplate {
   readonly revision: string | null;
   readonly imageDigest: ImageDigest | null;
+  /** The spec fingerprint the template was declared with, if any. */
+  readonly specFingerprint: string | null;
+  /** The template's own revision is ready, routed or not. */
+  readonly ready: boolean;
 }
+
+/** What a step needs to decide which revision template to declare. */
+export interface TemplateInput {
+  /** The web service's live template, read just before the step. */
+  readonly liveTemplate: LiveTemplate | null;
+  /** The fingerprint of the template spec the stack declares now for an image. */
+  readonly specFingerprintOf: (imageDigest: ImageDigest) => string;
+}
+
+/**
+ * The live template is this deployment's, under the name the record
+ * declares it, ready, and declared from the spec the stack declares now:
+ * re-declaring it changes nothing.
+ */
+const keepsTemplate = (
+  input: TemplateInput,
+  deployment: MaterializedDeployment | null
+): deployment is MaterializedDeployment =>
+  input.liveTemplate !== null &&
+  deployment !== null &&
+  input.liveTemplate.ready &&
+  input.liveTemplate.revision === templateRevisionOf(deployment) &&
+  input.liveTemplate.imageDigest === deployment.imageDigest &&
+  input.liveTemplate.specFingerprint ===
+    input.specFingerprintOf(deployment.imageDigest);
+
+/**
+ * A template for `target` under a name of the record's own, for when the
+ * live one cannot be kept. A name minted earlier for the same release and
+ * spec that has not landed is reused, so a re-apply declares the same
+ * revision; otherwise the new generation mints a fresh one. Traffic keeps
+ * targeting the release's own revision.
+ */
+const freshTemplate = (
+  record: ReleaseRecord,
+  target: ReleaseDeployment,
+  generation: number,
+  input: TemplateInput
+): MaterializedDeployment => {
+  const specFingerprint = input.specFingerprintOf(target.imageDigest);
+  const minted = record.materialized?.template;
+  const reusable =
+    minted !== undefined &&
+    record.materialized?.releaseId === target.releaseId &&
+    minted.specFingerprint === specFingerprint &&
+    input.liveTemplate?.revision !== minted.revision;
+  return {
+    ...deploymentOf(target),
+    template: reusable
+      ? minted
+      : { revision: `${target.revision}-t${generation}`, specFingerprint },
+  };
+};
 
 const templateIs = (
   live: LiveTemplate | null,
@@ -267,44 +326,27 @@ export const promote = Effect.fn("WorkspaceRelease.promote")(function* (
   } satisfies ReleaseRecord;
 });
 
-/**
- * The web service's live revision template is neither the revision the
- * record materialized nor its candidate. Declaring the record's template
- * would re-declare an older, immutable revision name with a different spec,
- * so nothing is changed until an operator reconciles the service.
- */
-export class ReleaseTemplateUnknown extends Data.TaggedError(
-  "ReleaseTemplateUnknown"
-)<{
-  readonly liveTemplate: LiveTemplate | null;
-  readonly expectedRevisions: ReadonlyArray<string>;
-}> {}
-
-export interface RestoreInput extends TrafficChangeInput {
-  /** The web service's live template, read just before the step. */
-  readonly liveTemplate: LiveTemplate | null;
-}
+export interface RestoreInput extends TrafficChangeInput, TemplateInput {}
 
 /**
  * The template the web service keeps once restore drops the candidate: the
- * candidate itself if its template already landed, else the materialized
- * one. Either way Cloud Run's live template must name that revision and pin
- * its digest.
+ * candidate or the materialized template, whichever Cloud Run runs ready
+ * from the current spec. Otherwise the restored release's image gets a
+ * template under a fresh name, since a failed or outdated revision name
+ * can never be re-declared with another spec.
  */
-const restoredTemplate = (record: ReleaseRecord, input: RestoreInput) => {
-  const landed = [record.candidate, record.materialized].find((deployment) =>
-    templateIs(input.liveTemplate, deployment)
-  );
-  return landed === undefined || landed === null
-    ? Effect.fail(
-        new ReleaseTemplateUnknown({
-          liveTemplate: input.liveTemplate,
-          expectedRevisions: [record.candidate, record.materialized].flatMap(
-            (deployment) => (deployment === null ? [] : [deployment.revision])
-          ),
-        })
-      )
-    : Effect.succeed(deploymentOf(landed));
+const restoredTemplate = (
+  record: ReleaseRecord,
+  input: RestoreInput,
+  target: ReleaseDeployment,
+  generation: number
+): MaterializedDeployment => {
+  if (keepsTemplate(input, record.materialized)) {
+    return record.materialized;
+  }
+  return keepsTemplate(input, record.candidate)
+    ? deploymentOf(record.candidate)
+    : freshTemplate(record, target, generation, input);
 };
 
 /**
@@ -313,7 +355,8 @@ const restoredTemplate = (record: ReleaseRecord, input: RestoreInput) => {
  * itself. It supersedes a pending traffic change: only the lock holder
  * restores, so the earlier apply's outcome is known or an operator
  * unlocked it. An unverified candidate is dropped, so it loses its traffic
- * tag; the service template stays the revision Cloud Run already runs.
+ * tag; the service template stays the revision Cloud Run already runs when
+ * that one is ready and current.
  */
 export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
   record: ReleaseRecord,
@@ -331,10 +374,14 @@ export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
   if (target === undefined) {
     return yield* new ReleaseNotRestorable({ releaseId: input.releaseId });
   }
-  const materialized = yield* restoredTemplate(record, input);
   return {
     ...record,
-    materialized,
+    materialized: restoredTemplate(
+      record,
+      input,
+      target,
+      record.generation + 1
+    ),
     candidate: null,
     generation: record.generation + 1,
     trafficGeneration: record.trafficGeneration + 1,
@@ -448,6 +495,44 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
     observed: { web: input.readback, ...input.workers },
   });
 });
+
+export interface RefreshTemplateInput extends TemplateInput {
+  readonly expectedGeneration: number;
+}
+
+/**
+ * Decide the template a plain deploy declares, before it runs. It keeps
+ * the template Cloud Run runs when that is ready and current, and an
+ * unlanded candidate, which the deploy creates from the current spec.
+ * Otherwise the active release's image gets a template under a fresh name,
+ * and a candidate declared from an older spec is dropped: re-declaring its
+ * revision name with another spec would be refused.
+ */
+export const refreshTemplate = Effect.fn("WorkspaceRelease.refreshTemplate")(
+  function* (record: ReleaseRecord, input: RefreshTemplateInput) {
+    yield* fence(record, input.expectedGeneration);
+    yield* requireNoPendingApply(record);
+    const active = record.active;
+    const candidateUnlanded =
+      record.candidate !== null &&
+      input.liveTemplate?.revision !== record.candidate.revision &&
+      keepsTemplate(input, record.materialized);
+    if (
+      active === null ||
+      candidateUnlanded ||
+      keepsTemplate(input, record.candidate ?? record.materialized)
+    ) {
+      return record;
+    }
+    const generation = record.generation + 1;
+    return {
+      ...record,
+      generation,
+      materialized: freshTemplate(record, active, generation, input),
+      candidate: null,
+    } satisfies ReleaseRecord;
+  }
+);
 
 /** Revisions the edge may route to now: serving, pending and compatible. */
 export const routableDeployments = (

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import type { WorkspaceStackConfig } from "../config/stack-config";
+import { sha256Hex } from "../sha256";
 import {
   requireQuietReleaseServices,
   requireRecordCoversLiveService,
@@ -89,9 +90,7 @@ export interface ReleaseWriter {
 }
 
 export const writerDigestOf = (token: Redacted.Redacted<string>) =>
-  WriterDigest.make(
-    createHash("sha256").update(Redacted.value(token)).digest("hex")
-  );
+  WriterDigest.make(sha256Hex(Redacted.value(token)));
 
 const heldFingerprint = (record: ReleaseRecord) =>
   record.writer === null ? null : writerFingerprint(record.writer.holderDigest);
@@ -287,9 +286,16 @@ export const applyAsWriter = (request: Omit<StackApplyRequest, "writer">) =>
   });
 
 /**
- * Clear a lock whose holder an operator has confirmed stopped (its CI run
- * or process ended). It refuses unless `fingerprint` names the held lock
- * and no release-owned service is rolling out. Returns the cleared lock.
+ * Break-glass: clear a lock whose holder an operator has confirmed stopped
+ * (its CI run or process ended). It refuses unless `fingerprint` names the
+ * held lock and no release-owned service is rolling out. Returns the
+ * cleared lock.
+ *
+ * Residual risk: Cloud Run accepts a service write without an etag, so a
+ * write the old holder sent before it stopped (a lost response, a frozen
+ * process) can still land after the unlock and over a newer decision.
+ * Neither the quiet-readback check nor any later check can rule that out;
+ * only the operator's confirmation that the holder is gone does.
  */
 export const unlockReleaseWriter = (
   config: WorkspaceStackConfig,

@@ -15,7 +15,10 @@ import {
   serviceReadbackDrift,
   trafficReadback,
 } from "../readback";
-import { releaseTrafficTag } from "../resources/service-declarations";
+import {
+  releaseTrafficTag,
+  webTemplateSpecFingerprint,
+} from "../resources/service-declarations";
 import {
   observeReleaseServices,
   requireRecordCoversLiveService,
@@ -26,6 +29,7 @@ import {
   promote,
   ReleaseApplyPending,
   type ReleaseWorker,
+  refreshTemplate,
   restore,
   type StageInput,
   StaleReleaseGeneration,
@@ -107,10 +111,11 @@ const servingReleaseOf = (record: ReleaseRecord): ServingRelease | null =>
  * The fence alone does not stop an older apply from landing late: a Cloud
  * Run write carries no etag, so a request accepted after a newer decision
  * (a lost response, a frozen process) still changes the service. The
- * writer lock closes that window except when an operator runs `unlock`
- * while the old executor is in fact still alive; no check after the apply
- * can prevent it. Hosted runs therefore use one non-cancelling concurrency
- * group per stage.
+ * writer lock closes that window while it is held. The break-glass
+ * `unlock` reopens it: if the old executor is in fact still alive, or a
+ * write it sent is still in flight, that write can land over a newer
+ * decision, and no check before or after an apply can prevent it. Hosted
+ * runs therefore use one non-cancelling concurrency group per stage.
  */
 export const readFencedReleaseRecord = (expectedGeneration: number) =>
   Effect.gen(function* () {
@@ -363,9 +368,13 @@ export const restoreRelease = Effect.fn("WorkspaceRelease.restore")(function* (
     const now = yield* DateTime.now;
     const liveTemplate = yield* readLiveTemplate;
     const generation = yield* runLockedReleaseStep((record) =>
-      restore(record, { ...input, now, liveTemplate }).pipe(
-        Effect.map((next) => ({ record: next, result: next.generation }))
-      )
+      restore(record, {
+        ...input,
+        now,
+        liveTemplate,
+        specFingerprintOf: (imageDigest) =>
+          webTemplateSpecFingerprint(config, imageDigest),
+      }).pipe(Effect.map((next) => ({ record: next, result: next.generation })))
     );
     return yield* applyAndSettle(config, generation, policy);
   }).pipe(withReleaseWriter(config, "restore"));
@@ -395,7 +404,10 @@ export const recoverRelease = Effect.fn("WorkspaceRelease.recover")(function* (
  * Run the whole stack outside a release, such as an infrastructure change,
  * as the stage's only writer: `deploy` applies it and `plan` previews it.
  * It declares the current record, so a pending traffic change must be
- * recovered or restored first.
+ * recovered or restored first; a staged candidate alone is fine. Before a
+ * deploy runs, its own step decides the web template (`refreshTemplate`):
+ * a failed or outdated template gets a fresh revision name, so a config
+ * change never re-declares an existing revision name with another spec.
  */
 export const runStack = Effect.fn("WorkspaceRelease.runStack")(function* (
   config: WorkspaceStackConfig,
@@ -407,6 +419,17 @@ export const runStack = Effect.fn("WorkspaceRelease.runStack")(function* (
       return yield* new ReleaseApplyPending({
         releaseId: record.pendingApply.target.releaseId,
       });
+    }
+    if (action === "deploy") {
+      const liveTemplate = yield* readLiveTemplate;
+      yield* runLockedReleaseStep((current) =>
+        refreshTemplate(current, {
+          expectedGeneration: current.generation,
+          liveTemplate,
+          specFingerprintOf: (imageDigest) =>
+            webTemplateSpecFingerprint(config, imageDigest),
+        }).pipe(Effect.map((next) => ({ record: next, result: next })))
+      );
     }
     yield* applyAsWriter({ action, generation: null });
   }).pipe(withReleaseWriter(config, action));

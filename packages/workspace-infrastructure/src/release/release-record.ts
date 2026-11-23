@@ -50,6 +50,33 @@ export const ReleaseDeployment = Schema.Struct({
 }).annotate({ identifier: "ReleaseDeployment" });
 export type ReleaseDeployment = typeof ReleaseDeployment.Type;
 
+/**
+ * A revision template the record declared under its own name instead of
+ * the release's revision: Cloud Run's template under the release's name
+ * failed or was declared from an older spec, and a revision name can never
+ * be re-declared with a different spec.
+ */
+export const DeclaredTemplate = Schema.Struct({
+  revision: ReleaseDeployment.fields.revision,
+  /** The fingerprint of the template spec the name was minted for. */
+  specFingerprint: Schema.String,
+}).annotate({ identifier: "DeclaredTemplate" });
+export type DeclaredTemplate = typeof DeclaredTemplate.Type;
+
+/**
+ * The deployment whose image the web template runs. Without `template`, the
+ * template is declared under the deployment's own revision name.
+ */
+export const MaterializedDeployment = Schema.Struct({
+  ...ReleaseDeployment.fields,
+  template: Schema.optionalKey(DeclaredTemplate),
+}).annotate({ identifier: "MaterializedDeployment" });
+export type MaterializedDeployment = typeof MaterializedDeployment.Type;
+
+/** The revision name the web template is declared under. */
+export const templateRevisionOf = (deployment: MaterializedDeployment) =>
+  deployment.template?.revision ?? deployment.revision;
+
 export const VerifiedDeployment = Schema.Struct({
   ...ReleaseDeployment.fields,
   /** When traffic readback confirmed the release served. */
@@ -131,7 +158,7 @@ export const ReleaseRecord = Schema.Struct({
    * The revision template Cloud Run last created. Promote and restore keep
    * it, so they change traffic only and never re-create a revision.
    */
-  materialized: Schema.NullOr(ReleaseDeployment),
+  materialized: Schema.NullOr(MaterializedDeployment),
   active: Schema.NullOr(VerifiedDeployment),
   previous: Schema.NullOr(VerifiedDeployment),
   /**

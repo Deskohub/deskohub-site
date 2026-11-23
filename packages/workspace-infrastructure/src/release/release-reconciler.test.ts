@@ -10,6 +10,7 @@ import { webServiceProps, webTraffic } from "../resources/service-declarations";
 import { workersServing } from "./release-readback.test-utils";
 import {
   promote,
+  refreshTemplate,
   restore,
   routableDeployments,
   settleApply,
@@ -18,9 +19,10 @@ import {
 import {
   emptyReleaseRecord,
   GitSha,
-  type ReleaseDeployment,
+  type MaterializedDeployment,
   type ReleaseId,
   ReleaseRecord,
+  templateRevisionOf,
 } from "./release-record";
 import {
   makeInMemoryReleaseRecordStore,
@@ -36,11 +38,19 @@ const digestB = ImageDigest.make(`sha256:${"2".repeat(64)}`);
 const digestC = ImageDigest.make(`sha256:${"3".repeat(64)}`);
 const t0 = DateTime.makeUnsafe("2026-11-22T10:00:00Z");
 
+/** Every image's template spec, as a config that never changes declares it. */
+const specFingerprintOf = () => "spec-a";
+
 /** The live template Cloud Run reports once a deployment's template landed. */
-const templateOf = (deployment: ReleaseDeployment | null) =>
+const templateOf = (deployment: MaterializedDeployment | null) =>
   deployment === null
     ? null
-    : { revision: deployment.revision, imageDigest: deployment.imageDigest };
+    : {
+        revision: templateRevisionOf(deployment),
+        imageDigest: deployment.imageDigest,
+        specFingerprint: "spec-a",
+        ready: true,
+      };
 const later = (hours: number) =>
   DateTime.addDuration(t0, Duration.hours(hours));
 
@@ -200,6 +210,7 @@ describe("release reconciler", () => {
           expectedGeneration: 1,
           releaseId: "r1-aaaaaaa" as ReleaseId,
           liveTemplate: templateOf(settled.materialized),
+          specFingerprintOf,
           now: t0,
         })
       )
@@ -236,6 +247,7 @@ describe("release reconciler", () => {
         expectedGeneration: second.settled.generation,
         releaseId: first.releaseId,
         liveTemplate: templateOf(second.settled.materialized),
+        specFingerprintOf,
         now: later(2),
       })
     );
@@ -281,6 +293,7 @@ describe("release reconciler", () => {
           expectedGeneration: third.settled.generation,
           releaseId: first.releaseId,
           liveTemplate: templateOf(third.settled.materialized),
+          specFingerprintOf,
           now: later(12.5),
         })
       ).pendingApply?.target.releaseId
@@ -291,6 +304,7 @@ describe("release reconciler", () => {
           expectedGeneration: third.settled.generation,
           releaseId: first.releaseId,
           liveTemplate: templateOf(third.settled.materialized),
+          specFingerprintOf,
           now: later(13),
         })
       )
@@ -431,25 +445,168 @@ describe("release reconciler", () => {
   });
 });
 
-describe("restore template", () => {
-  test("refuses a live template the record does not know", () => {
+describe("declared web template", () => {
+  /** r1 active and r4 serving, so r1 is the previous release. */
+  const twoReleases = (): ReleaseRecord => {
     const first = release(emptyReleaseRecord, shaA, digestA, t0);
-    const second = release(first.settled, shaB, digestB, later(1));
+    return release(first.settled, shaB, digestB, later(1)).settled;
+  };
+  const restoreFirst = (
+    record: ReleaseRecord,
+    liveTemplate: ReturnType<typeof templateOf>,
+    fingerprint = specFingerprintOf
+  ): ReleaseRecord =>
+    run(
+      restore(record, {
+        expectedGeneration: record.generation,
+        releaseId: "r1-aaaaaaa" as ReleaseId,
+        now: later(2),
+        liveTemplate,
+        specFingerprintOf: fingerprint,
+      })
+    );
+  const settleRestore = (pending: ReleaseRecord) => {
+    const target = pending.pendingApply?.target;
+    return run(
+      settleApply(pending, {
+        expectedGeneration: pending.generation,
+        readback: {
+          servingRevision: target?.revision ?? null,
+          servingImageDigest: target?.imageDigest ?? null,
+          trafficGeneration: pending.pendingApply?.trafficGeneration ?? null,
+        },
+        workers: workersServing(target?.imageDigest ?? null),
+        now: later(2),
+      })
+    );
+  };
+
+  test("restore keeps a ready template declared from the current spec", () => {
+    const settled = twoReleases();
+    const pending = restoreFirst(settled, templateOf(settled.materialized));
+    expect(pending.materialized).toEqual(settled.materialized);
+  });
+
+  test("restore over a failed template mints a fresh name and settles", () => {
+    const settled = twoReleases();
+    const failed = templateOf(settled.materialized);
+    const pending = restoreFirst(
+      settled,
+      failed === null ? null : { ...failed, ready: false }
+    );
+    expect(pending.materialized).toMatchObject({
+      releaseId: "r1-aaaaaaa",
+      imageDigest: digestA,
+      template: {
+        revision: `workspace-web-r1-aaaaaaa-t${pending.generation}`,
+        specFingerprint: "spec-a",
+      },
+    });
+    const restored = settleRestore(pending);
+    expect(restored.active?.releaseId).toBe("r1-aaaaaaa" as ReleaseId);
+    expect(restored.materialized).toEqual(pending.materialized);
+    // Traffic still targets the release's own revision.
+    expect(restored.active?.revision).toBe("workspace-web-r1-aaaaaaa");
+    const web = webServiceProps(sandboxConfig, restored, later(2));
+    expect(web?.template?.revision).toBe(
+      `workspace-web-r1-aaaaaaa-t${pending.generation}`
+    );
+    expect(web?.traffic?.[0]?.revision).toBe("workspace-web-r1-aaaaaaa");
+  });
+
+  test("restore over a template from an older spec mints a fresh name", () => {
+    const settled = twoReleases();
+    const pending = restoreFirst(
+      settled,
+      templateOf(settled.materialized),
+      () => "spec-b"
+    );
+    expect(pending.materialized?.template).toEqual({
+      revision: `workspace-web-r1-aaaaaaa-t${pending.generation}`,
+      specFingerprint: "spec-b",
+    });
+  });
+
+  test("a minted name that has not landed is reused on the next decision", () => {
+    const settled = twoReleases();
+    const oldTemplate = templateOf(settled.materialized);
+    const changed = () => "spec-b";
+    const first = run(
+      refreshTemplate(settled, {
+        expectedGeneration: settled.generation,
+        liveTemplate: oldTemplate,
+        specFingerprintOf: changed,
+      })
+    );
+    const minted = first.materialized?.template;
+    expect(minted?.revision).toBe(
+      `workspace-web-r4-bbbbbbb-t${first.generation}`
+    );
+    // The deploy failed before the template landed: the retry reuses it.
+    const retried = run(
+      refreshTemplate(first, {
+        expectedGeneration: first.generation,
+        liveTemplate: oldTemplate,
+        specFingerprintOf: changed,
+      })
+    );
+    expect(retried.materialized?.template).toEqual(minted);
+  });
+
+  test("a plain deploy after a config change mints a name once", () => {
+    const settled = twoReleases();
+    const changed = () => "spec-b";
+    const unchanged = run(
+      refreshTemplate(settled, {
+        expectedGeneration: settled.generation,
+        liveTemplate: templateOf(settled.materialized),
+        specFingerprintOf,
+      })
+    );
+    expect(unchanged).toEqual(settled);
+    const minted = run(
+      refreshTemplate(settled, {
+        expectedGeneration: settled.generation,
+        liveTemplate: templateOf(settled.materialized),
+        specFingerprintOf: changed,
+      })
+    );
+    const landed = templateOf(minted.materialized);
+    const again = run(
+      refreshTemplate(minted, {
+        expectedGeneration: minted.generation,
+        liveTemplate:
+          landed === null ? null : { ...landed, specFingerprint: "spec-b" },
+        specFingerprintOf: changed,
+      })
+    );
+    expect(again).toEqual(minted);
+    expect(minted.materialized?.template?.revision).toBe(
+      `workspace-web-r4-bbbbbbb-t${minted.generation}`
+    );
+  });
+
+  test("a plain deploy drops a landed candidate from an older spec", () => {
+    const settled = twoReleases();
+    const staged = stageRelease(settled, shaC, digestC).record;
+    const refreshed = run(
+      refreshTemplate(staged, {
+        expectedGeneration: staged.generation,
+        liveTemplate: templateOf(staged.candidate),
+        specFingerprintOf: () => "spec-b",
+      })
+    );
+    expect(refreshed.candidate).toBeNull();
+    expect(refreshed.materialized?.releaseId).toBe("r4-bbbbbbb" as ReleaseId);
+    // An unlanded candidate is created from the current spec instead.
     expect(
-      failure(
-        restore(second.settled, {
-          expectedGeneration: second.settled.generation,
-          releaseId: first.releaseId,
-          now: later(2),
-          liveTemplate: {
-            revision: "workspace-web-r9-fffffff",
-            imageDigest: digestA,
-          },
+      run(
+        refreshTemplate(staged, {
+          expectedGeneration: staged.generation,
+          liveTemplate: templateOf(staged.materialized),
+          specFingerprintOf,
         })
       )
-    ).toMatchObject({
-      _tag: "ReleaseTemplateUnknown",
-      expectedRevisions: ["workspace-web-r4-bbbbbbb"],
-    });
+    ).toEqual(staged);
   });
 });

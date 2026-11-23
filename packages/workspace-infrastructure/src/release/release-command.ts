@@ -117,7 +117,7 @@ const unlockCommand = Command.make(
   {
     holder: Flag.String("holder").pipe(
       Flag.withDescription(
-        "The fingerprint `status` shows for the lock. Confirm first that its run or process has ended."
+        "The fingerprint `status` shows for the lock. Confirm first that its CI run or process has ended: a write it sent may still land after the unlock."
       )
     ),
   },
@@ -128,7 +128,7 @@ const unlockCommand = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    "Clear the writer lock of a run that has stopped, once no service is rolling out"
+    "Break-glass: clear the writer lock of a run you confirmed has stopped. A Cloud Run write that run already sent carries no etag and can still land after the unlock, over a newer release decision."
   )
 );
 

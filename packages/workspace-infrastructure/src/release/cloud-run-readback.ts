@@ -13,6 +13,7 @@ import {
   makeGoogleApi,
 } from "../google-api";
 import type { ObservedService, ObservedTrafficStatus } from "../readback";
+import { templateSpecAnnotation } from "../resources/service-declarations";
 import {
   workloadServiceIds,
   workspaceWebServiceId,
@@ -66,6 +67,7 @@ const CloudRunService = Schema.Struct({
   template: Schema.optional(
     Schema.Struct({
       revision: Schema.optional(Schema.String),
+      annotations: Schema.optional(Schema.Record(Schema.String, Schema.String)),
       containers: Schema.optional(
         Schema.Array(Schema.Struct({ image: Schema.optional(Schema.String) }))
       ),
@@ -272,16 +274,22 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
         .filter((entry) => entry.percent > 0 || entry.tag !== undefined)
         .map((entry) => entry.revision)
     );
-    // A routed revision deleted between the reads leaves no digest, so its
-    // serving image stays unverified instead of failing the whole readback.
+    // The template's own revision is read even while unrouted, for its
+    // readiness. A routed revision deleted between the reads leaves no
+    // digest, so its serving image stays unverified instead of failing the
+    // whole readback.
+    const templateRevision = live.template?.revision;
     const revisions = yield* Effect.forEach(
-      routed,
+      new Set([
+        ...routed,
+        ...(templateRevision === undefined ? [] : [templateRevision]),
+      ]),
       (revision) => readRevision(serviceId, revision),
       { concurrency: "unbounded" }
     );
     const revisionDigests: Record<string, ImageDigest> = {};
     for (const revision of revisions) {
-      if (revision?.imageDigest) {
+      if (revision?.imageDigest && routed.has(revision.revision)) {
         revisionDigests[revision.revision] = revision.imageDigest;
       }
     }
@@ -298,6 +306,16 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
       annotations: live.annotations ?? {},
       templateRevision: live.template?.revision,
       templateImageDigest: pinnedDigest(live.template?.containers?.[0]?.image),
+      templateSpecFingerprint:
+        live.template?.annotations?.[templateSpecAnnotation],
+      templateReady:
+        templateRevision === undefined
+          ? undefined
+          : revisions.some(
+              (revision) =>
+                revision?.revision === templateRevision &&
+                revision?.ready === true
+            ),
     } satisfies ObservedService;
   });
 

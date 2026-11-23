@@ -9,7 +9,12 @@ import type {
 import { workspaceQueueContracts } from "../contracts/queue-contracts";
 import { workspaceScheduleContracts } from "../contracts/schedule-contracts";
 import { routableDeployments } from "../release/release-reconciler";
-import type { ReleaseId, ReleaseRecord } from "../release/release-record";
+import {
+  type ReleaseId,
+  type ReleaseRecord,
+  templateRevisionOf,
+} from "../release/release-record";
+import { sha256Hex } from "../sha256";
 import { toGcpDuration } from "./queue-declarations";
 import {
   secretResourceName,
@@ -64,6 +69,36 @@ const container = (
     ...secretEnvironment(config, workload),
   ],
 });
+
+/**
+ * The template annotation carrying the fingerprint of the template spec,
+ * so readback can tell a template declared from an older config apart.
+ */
+export const templateSpecAnnotation = "deskohub.workspace/template-spec";
+
+/** The web revision template for one image, without its revision name. */
+const webTemplateSpec = (
+  config: WorkspaceStackConfig,
+  imageDigest: ImageDigest
+) => ({
+  serviceAccount: config.serviceAccounts.webRuntime,
+  timeout: "300s",
+  scaling: {
+    minInstanceCount: 0,
+    maxInstanceCount: config.capacity.webMaxInstances,
+  },
+  containers: [container(config, "web", imageDigest)],
+});
+
+/**
+ * A short sha256 fingerprint of the web template spec for one image. Two
+ * templates with the same fingerprint may share a revision name.
+ */
+export const webTemplateSpecFingerprint = (
+  config: WorkspaceStackConfig,
+  imageDigest: ImageDigest
+) =>
+  sha256Hex(JSON.stringify(webTemplateSpec(config, imageDigest))).slice(0, 16);
 
 /** The service annotation carrying the record's traffic generation. */
 export const trafficGenerationAnnotation =
@@ -137,6 +172,10 @@ export const webServiceProps = (
     return undefined;
   }
   const template = record.candidate ?? record.materialized ?? serving;
+  const revision =
+    template === record.materialized
+      ? templateRevisionOf(record.materialized)
+      : template.revision;
   return {
     serviceId: workloadServiceIds.web,
     location: config.region,
@@ -148,14 +187,14 @@ export const webServiceProps = (
       [trafficGenerationAnnotation]: String(record.trafficGeneration),
     },
     template: {
-      revision: template.revision,
-      serviceAccount: config.serviceAccounts.webRuntime,
-      timeout: "300s",
-      scaling: {
-        minInstanceCount: 0,
-        maxInstanceCount: config.capacity.webMaxInstances,
+      revision,
+      annotations: {
+        [templateSpecAnnotation]: webTemplateSpecFingerprint(
+          config,
+          template.imageDigest
+        ),
       },
-      containers: [container(config, "web", template.imageDigest)],
+      ...webTemplateSpec(config, template.imageDigest),
     },
     traffic: [...webTraffic(record, now)],
   };

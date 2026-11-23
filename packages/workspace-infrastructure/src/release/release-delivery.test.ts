@@ -6,13 +6,20 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Redacted from "effect/Redacted";
-import { ImageDigest, type WorkspaceWorkload } from "../config/stack-config";
+import {
+  ImageDigest,
+  type WorkspaceStackConfig,
+  type WorkspaceWorkload,
+} from "../config/stack-config";
 import {
   previewConfig,
   sandboxConfig,
 } from "../config/stack-config.test-utils";
 import type { ObservedService } from "../readback";
-import { webServiceProps } from "../resources/service-declarations";
+import {
+  templateSpecAnnotation,
+  webServiceProps,
+} from "../resources/service-declarations";
 import { workloadUrl } from "../resources/workload-names";
 import { requireRecordCoversLiveService } from "./live-release-services";
 import {
@@ -95,6 +102,10 @@ interface CloudRunFaults {
   missingWorkerReads?: number;
   /** Services report a rollout in progress. */
   reconciling?: boolean;
+  /** The live web template's revision is not ready. */
+  failedTemplate?: boolean;
+  /** The stack config the apply declares from, after a config change. */
+  config?: WorkspaceStackConfig;
 }
 
 /**
@@ -152,7 +163,7 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
             return;
           }
           const props = webServiceProps(
-            sandboxConfig,
+            faults.config ?? sandboxConfig,
             record,
             yield* DateTime.now
           );
@@ -207,6 +218,9 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
               typeof image === "string"
                 ? ImageDigest.make(image.slice(image.indexOf("@") + 1))
                 : undefined,
+            templateSpecFingerprint:
+              props.template?.annotations?.[templateSpecAnnotation],
+            templateReady: true,
           };
           lagReads = options.trafficLagReads ?? 0;
           missingWorkerReads = faults.missingWorkerReads ?? 0;
@@ -249,9 +263,13 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
             return visible;
           }
           visible = web;
-          return web !== null && faults.reconciling
-            ? { ...web, reconciling: true }
-            : web;
+          return web === null
+            ? null
+            : {
+                ...web,
+                reconciling: faults.reconciling === true,
+                templateReady: faults.failedTemplate !== true,
+              };
         }),
       revision: (revision) =>
         (options.beforeRevisionRead ?? Effect.void).pipe(
@@ -1295,5 +1313,96 @@ describe("recovery from a failed apply", () => {
       ReleaseId.make("r4-bbbbbbb")
     );
     expect(result.record.writer).toBeNull();
+  });
+});
+
+describe("declared web template", () => {
+  const restoreFirst = (expectedGeneration: number) =>
+    restoreRelease(
+      sandboxConfig,
+      { releaseId: ReleaseId.make("r1-aaaaaaa"), expectedGeneration },
+      policy
+    );
+
+  test("restore over a failed template mints a fresh name and settles", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, provide } = yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        yield* provide(deliver(shaB, digestB));
+        faults.failedTemplate = true;
+        const before = (yield* store.read).record;
+        const served = yield* provide(restoreFirst(before.generation));
+        return { served, record: (yield* store.read).record };
+      })
+    );
+    expect(result.served.revision).toBe("workspace-web-r1-aaaaaaa");
+    expect(result.record.materialized).toMatchObject({
+      releaseId: "r1-aaaaaaa",
+      template: { revision: "workspace-web-r1-aaaaaaa-t7" },
+    });
+  });
+
+  test("recovery re-applies the persisted template name", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, applies, provide } = yield* setup({
+          // Generation 7 is the restore's traffic apply.
+          interruptApplyOf: new Set([7]),
+        });
+        yield* provide(deliver(shaA, digestA));
+        yield* provide(deliver(shaB, digestB));
+        faults.failedTemplate = true;
+        yield* provide(
+          restoreFirst((yield* store.read).record.generation).pipe(Effect.exit)
+        );
+        const pending = (yield* store.read).record;
+        yield* provide(
+          unlockReleaseWriter(sandboxConfig, fingerprintOf(pending))
+        );
+        const recovered = yield* Effect.exit(
+          provide(recoverRelease(sandboxConfig, policy))
+        );
+        return {
+          pending,
+          recovered,
+          applies,
+          record: (yield* store.read).record,
+        };
+      })
+    );
+    expect(result.pending.materialized?.template?.revision).toBe(
+      "workspace-web-r1-aaaaaaa-t7"
+    );
+    // The fake interrupts every apply of generation 7, so recovery re-applies
+    // the same declaration; its template keeps the persisted name.
+    expect(result.applies.slice(-2)).toEqual([7, 7]);
+    expect(result.record.materialized).toEqual(result.pending.materialized);
+  });
+
+  test("a plain deploy after a config change mints a template name once", async () => {
+    const changed: WorkspaceStackConfig = {
+      ...sandboxConfig,
+      capacity: {
+        ...sandboxConfig.capacity,
+        webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+      },
+    };
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, provide } = yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        faults.config = changed;
+        yield* provide(runStack(changed, "deploy"));
+        const first = (yield* store.read).record;
+        yield* provide(runStack(changed, "deploy"));
+        return { first, second: (yield* store.read).record };
+      })
+    );
+    expect(result.first.materialized?.template?.revision).toBe(
+      `workspace-web-r1-aaaaaaa-t${result.first.generation}`
+    );
+    expect(result.second.materialized).toEqual(result.first.materialized);
+    expect(result.second.generation).toBe(result.first.generation);
   });
 });

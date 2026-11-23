@@ -10,7 +10,10 @@ import * as TestClock from "effect/testing/TestClock";
 import { ImageDigest } from "../config/stack-config";
 import { sandboxConfig } from "../config/stack-config.test-utils";
 import { trafficReadback } from "../readback";
-import { trafficGenerationAnnotation } from "../resources/service-declarations";
+import {
+  templateSpecAnnotation,
+  trafficGenerationAnnotation,
+} from "../resources/service-declarations";
 import { cloudRunServiceReadbackLayer } from "./cloud-run-readback";
 import {
   type ReleaseReadbackUnavailable,
@@ -743,5 +746,48 @@ describe("Cloud Run service template readback", () => {
     expect(
       (await read(`${registry}:latest`))?.templateImageDigest
     ).toBeUndefined();
+  });
+
+  test("reads an unrouted template revision's readiness and spec fingerprint", async () => {
+    const unrouted = "workspace-web-r3-aaaaaaa-t9";
+    const read = (revisionAnswer: { status: number; body?: unknown }) =>
+      success(
+        readback(
+          fakeCloudRun({
+            ...steadyRoutes,
+            [webPath]: {
+              status: 200,
+              body: {
+                ...steadyWeb,
+                template: {
+                  revision: unrouted,
+                  annotations: { [templateSpecAnnotation]: "0123456789abcdef" },
+                },
+              },
+            },
+            [revisionPath(unrouted)]: revisionAnswer,
+          }),
+          (port) => port.service("web")
+        )
+      );
+    const ready = await read({
+      status: 200,
+      body: readyRevision(unrouted, servingDigest),
+    });
+    expect(ready).toMatchObject({
+      templateRevision: unrouted,
+      templateSpecFingerprint: "0123456789abcdef",
+      templateReady: true,
+    });
+    // An unrouted revision never counts as serving.
+    expect(Object.keys(ready?.revisionDigests ?? {})).not.toContain(unrouted);
+    const failed = await read({
+      status: 200,
+      body: {
+        ...readyRevision(unrouted, servingDigest),
+        conditions: [{ type: "Ready", state: "CONDITION_FAILED" }],
+      },
+    });
+    expect(failed?.templateReady).toBe(false);
   });
 });
