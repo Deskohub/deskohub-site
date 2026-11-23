@@ -77,6 +77,28 @@ describe("cloudLoggingRecord", () => {
     ]);
   });
 
+  test("keeps one event and message across a call's numbered records", async () => {
+    const records = await recordsOf(
+      Effect.forEach([1, 2, 3], (attemptNumber) =>
+        Effect.logWarning(`Nexi retry attempt #${attemptNumber}`, {
+          attemptNumber,
+        })
+      ).pipe(Effect.asVoid)
+    );
+
+    expect(records.map(({ event, message }) => ({ event, message }))).toEqual(
+      Array.from({ length: 3 }, () => ({
+        event: "nexi_retry_attempt",
+        message: "Nexi retry attempt",
+      }))
+    );
+    expect(records.map(({ details }) => details)).toEqual([
+      [{ attemptNumber: 1 }],
+      [{ attemptNumber: 2 }],
+      [{ attemptNumber: 3 }],
+    ]);
+  });
+
   test("links the record to the active trace and span", async () => {
     let spanIds: { traceId: string; spanId: string } | undefined;
     const [record] = await recordsOf(

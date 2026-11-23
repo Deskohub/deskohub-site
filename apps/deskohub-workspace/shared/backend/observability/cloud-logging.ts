@@ -115,8 +115,20 @@ const logSpanDurations = (options: Logger.Options<unknown>) => {
 /**
  * The record's stable event name: the call's `event` annotation, such as
  * `runtime.shutdown.started`, or else its static message as a key, such as
- * `checkout_provider_slow` for "Checkout provider slow.".
+ * `checkout_provider_slow` for "Checkout provider slow." and
+ * `nexi_retry_attempt` for "Nexi retry attempt #2".
  */
+/**
+ * The message without the counts and numbers a caller wrote into it, such
+ * as "Nexi retry attempt #2", so every record of one call shares a static
+ * message; numbers belong in its structured fields.
+ */
+const staticMessage = (message: string) =>
+  message
+    .replace(/(^|\s)#?\d+(?:[.,:]\d+)*(?=[\s.,;:!?)]|$)/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
 const eventName = (annotations: LogAnnotations, message: string) => {
   const annotated = annotations.event;
   if (Predicate.isString(annotated) && annotated) return annotated;
@@ -129,7 +141,8 @@ const eventName = (annotations: LogAnnotations, message: string) => {
 
 /**
  * The censored structured record of one log call. The message is the static
- * text of the call; values the call passes beside it go under `details`.
+ * text of the call, without numbers written into it; values the call passes
+ * beside it go under `details`.
  */
 export const cloudLoggingRecord = (
   identity: CloudLoggingIdentity,
@@ -141,7 +154,7 @@ export const cloudLoggingRecord = (
     : [options.message];
   const details = parts.filter((part) => !Predicate.isString(part));
   const annotations = logAnnotations(options);
-  const message = parts.filter(Predicate.isString).join(" ");
+  const message = staticMessage(parts.filter(Predicate.isString).join(" "));
 
   return {
     severity: cloudLoggingSeverity(options.logLevel),

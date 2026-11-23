@@ -26,6 +26,8 @@ interface ExportedAttribute {
 interface ExportedSpan {
   readonly name: string;
   readonly attributes: readonly ExportedAttribute[];
+  readonly parentSpanId?: string;
+  readonly links?: readonly { readonly spanId: string }[];
 }
 
 interface ExportedTraces {
@@ -119,6 +121,11 @@ describe("the container's span export through registerOTel", () => {
       );
       const serverSpan = spans?.find(({ name }) => name.startsWith("GET /"));
       expect(serverSpan?.name).toBe("GET /api/customers/[customerId]");
+      // The caller's context survives as the parent and the link.
+      expect(serverSpan?.parentSpanId).toBe(callerContext.spanId);
+      expect(serverSpan?.links?.map(({ spanId }) => spanId)).toEqual([
+        callerContext.spanId,
+      ]);
       expect(
         Object.keys(attributeMap(serverSpan?.attributes ?? []))
       ).not.toContain("resource.name");
