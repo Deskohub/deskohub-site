@@ -56,9 +56,14 @@ export class StateBucketUnreadable extends Data.TaggedError(
  * another region would take the same lock but read and declare services
  * where none of the stage's run: an unlock would see no rollout while a
  * worker still reconciles, and the lost-record guard would miss live
- * services. The bucket's location is set when the bucket is created and
- * can never change, and deleting the release record leaves it in place,
- * so one region stays bound to the project and its stages.
+ * services. The bucket's location outlives the release record, so one
+ * region stays bound to the project and its stages.
+ *
+ * The bucket must stay in its stages' services' region for as long as they
+ * run. Cloud Storage can relocate an eligible bucket in place; relocate or
+ * recreate it only together with migrating or retiring the workloads.
+ * Never clear a `StageRegionMismatch` by changing the config's region to
+ * the bucket's unless the stage's services actually run there.
  */
 export const verifyStackTarget = Effect.fn("WorkspaceStack.verifyStackTarget")(
   function* (config: WorkspaceStackConfig) {
