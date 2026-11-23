@@ -79,7 +79,10 @@ process.exitCode = scriptOnly() === 42 ? 0 : 1;
 `,
   "test-preload.ts": `
 import { environmentName } from "./src/environment";
-(globalThis as { fixtureEnvironment?: string }).fixtureEnvironment = environmentName();
+declare global {
+  var fixtureEnvironment: string | undefined;
+}
+globalThis.fixtureEnvironment = environmentName();
 `,
   "tests/math.test.ts": `
 import { expect, test } from "bun:test";
@@ -99,7 +102,7 @@ test("signs and greets", async () => {
   expect(mockedValue()).toBe("mock");
   expect(sign(-1)).toBe("negative");
   expect(greeting("bun")).toBe("hello bun");
-  expect((globalThis as { fixtureEnvironment?: string }).fixtureEnvironment).toBe("test");
+  expect(globalThis.fixtureEnvironment).toBe("test");
 });
 `,
   "tests/in-page.test.ts": `
