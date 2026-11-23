@@ -109,9 +109,15 @@ const ghApiJson = (args, { slurp = false } = {}) => {
   try {
     const parsed = JSON.parse(res.stdout || "null");
     if (slurp) {
+      if (
+        !Array.isArray(parsed) ||
+        parsed.some((page) => !Array.isArray(page))
+      ) {
+        return { ok: false, error: "Unexpected paginated response shape" };
+      }
       return {
         ok: true,
-        data: Array.isArray(parsed) ? parsed.flat() : [],
+        data: parsed.flat(),
       };
     }
     return { ok: true, data: parsed };
@@ -132,7 +138,10 @@ const fetchPrCommits = (prNumber) =>
     slurp: true,
   });
 
-const fetchCommitPulls = (sha) => ghApiJson([`${repoApi}/commits/${sha}/pulls`]);
+const fetchCommitPulls = (sha) =>
+  ghApiJson([`${repoApi}/commits/${sha}/pulls?per_page=100`], {
+    slurp: true,
+  });
 
 const isEligibleInternalPr = (pr) =>
   pr?.state === "open" &&

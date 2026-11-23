@@ -1190,6 +1190,58 @@ exit 1
       "flows=admin"
     );
 
+    // Multi-page `commits/<sha>/pulls`: PR sync must paginate and stay blocked
+    // when a second eligible PR sits on page 2 or a later page fails to read.
+    const multiPageSyncGh = (
+      mode: "ambiguous" | "error"
+    ) => `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+if [[ "$*" == *"/commits/${headSha}/pulls"* ]]; then
+  if [[ "$*" != *"--paginate"* || "$*" != *"--slurp"* ]]; then
+    echo "expected paginated commits/pulls lookup: $*" >&2
+    exit 1
+  fi
+  if [[ "${mode}" == "error" ]]; then
+    echo "HTTP 502 on page 2" >&2
+    exit 1
+  fi
+  echo '[[${JSON.stringify(makePr("## E2E flows\n- none\n"))}],[${JSON.stringify({ ...makePr("## E2E flows\n- none\n"), number: prNumber + 1 })}]]'
+  exit 0
+fi
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  echo '${JSON.stringify(makePr("## E2E flows\n- none\n"))}'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${headSha}/statuses"* ]]; then
+  echo '[[${JSON.stringify(ambiguityStatus)}]]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"${previewUrl}/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const syncPage2Ambiguous = await runSync({
+      body: "## E2E flows\n- none\n",
+      commands: { gh: multiPageSyncGh("ambiguous") },
+    });
+    expect(syncPage2Ambiguous.result.exitCode).toBe(0);
+    expect(statusPosts(syncPage2Ambiguous.calls)).toEqual([]);
+
+    const syncPage2Error = await runSync({
+      body: "## E2E flows\n- none\n",
+      commands: { gh: multiPageSyncGh("error") },
+    });
+    expect(syncPage2Error.result.exitCode).toBe(0);
+    expect(statusPosts(syncPage2Error.calls)).toEqual([]);
+
     // 3. Restoring carried coverage must cite only the commit that actually
     // passed the surviving flows and must never merge distinct carried sources
     // under a single source SHA.

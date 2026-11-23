@@ -1498,6 +1498,105 @@ exit 1
     expect(clearedPosts[0]).toContain(
       "description=Protected preview E2E skipped [flows: none]"
     );
+
+    // Multi-page `commits/<sha>/pulls`: a second eligible PR on page 2 must
+    // keep ambiguity unresolved in BOTH initial target resolution and
+    // publish-status-without-run, and an unreadable later page must fail closed.
+    const multiPageGh = (
+      secondPageMode: "ambiguous" | "error"
+    ) => `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+if [[ "$*" == *"/commits/${targetSha}/pulls"* ]]; then
+  if [[ "$*" != *"--paginate"* || "$*" != *"--slurp"* ]]; then
+    echo "expected paginated commits/pulls lookup: $*" >&2
+    exit 1
+  fi
+  if [[ "${secondPageMode}" == "error" ]]; then
+    echo "HTTP 502 on page 2" >&2
+    exit 1
+  fi
+  echo '[[${JSON.stringify(pullRequest)}],[${JSON.stringify({ ...pullRequest, number: prNumber + 1 })}]]'
+  exit 0
+fi
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  echo '{"body":"## E2E flows\\n- none\\n","head":{"sha":"${targetSha}"}}'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${targetSha}/statuses"* ]]; then
+  echo '[[${JSON.stringify(ambiguityFailure)}]]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"${previewUrl}/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+if [[ "$*" == *"/statuses/${targetSha}"* ]]; then
+  echo '{"id":500}'
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const page2Target = await runStep(
+      targetStep,
+      {},
+      {
+        EVENT_NAME: "repository_dispatch",
+        FLOWS_CLI: flowsCli,
+        INCLUDE_NIGHTLY_CASES: "false",
+        INPUT_FLOWS: "",
+        TARGET_DEPLOYMENT: "success",
+        TARGET_REF: pullRequest.head.ref,
+        TARGET_SHA: targetSha,
+        TARGET_URL: previewUrl,
+      },
+      { gh: multiPageGh("ambiguous") }
+    );
+    expect(page2Target.result.exitCode).not.toBe(0);
+    expect(page2Target.outputs.resolution_error_kind).toBe("ambiguous-pr");
+
+    const page2Publish = await runStep(
+      publishStep,
+      {},
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      },
+      { gh: multiPageGh("ambiguous") }
+    );
+    expect(page2Publish.result.exitCode).toBe(0);
+    expect(
+      page2Publish.calls.filter((call) =>
+        call.includes(`statuses/${targetSha}`)
+      )
+    ).toEqual([]);
+
+    const unreadablePage2Publish = await runStep(
+      publishStep,
+      {},
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      },
+      { gh: multiPageGh("error") }
+    );
+    expect(unreadablePage2Publish.result.exitCode).toBe(0);
+    expect(
+      unreadablePage2Publish.calls.filter((call) =>
+        call.includes(`statuses/${targetSha}`)
+      )
+    ).toEqual([]);
   });
 
   test("reconciles a delayed metadata failure that raced with a concurrent fix to none", async () => {

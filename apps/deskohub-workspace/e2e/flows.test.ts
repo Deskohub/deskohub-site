@@ -140,7 +140,9 @@ describe("PR description ## E2E flows parser", () => {
       flows: "none",
     });
     expect(
-      parsePrBodyE2EFlows("Some paragraph <!-- unclosed\n## E2E flows\n- none\n")
+      parsePrBodyE2EFlows(
+        "Some paragraph <!-- unclosed\n## E2E flows\n- none\n"
+      )
     ).toMatchObject({
       ok: true,
       kind: "none",
@@ -167,6 +169,18 @@ describe("PR description ## E2E flows parser", () => {
       ok: true,
       kind: "subset",
       flows: "admin",
+    });
+
+    // Per GFM §5.2, an empty list-item marker (`+`, `-`, `1.`) cannot
+    // interrupt a paragraph, so a bare marker inside a multiline inline HTML
+    // comment stays hidden rather than failing PR validation.
+    expect(
+      parsePrBodyE2EFlows("## E2E flows\n- admin <!-- start\n  +\n  end -->\n")
+    ).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "admin",
+      selected: ["admin"],
     });
 
     // Listing every individual flow normalizes to `all`.

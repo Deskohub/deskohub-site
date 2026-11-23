@@ -137,9 +137,10 @@ jobs:
             exit 1
           fi
 
-          pulls="$(gh api \
+          pulls="$(gh api --paginate --slurp \
             -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/pulls")"
+            "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/pulls?per_page=100" | \
+            jq 'add // []')"
           eligible_pulls="$(jq \
             --arg repo "$GITHUB_REPOSITORY" \
             --arg ref "$TARGET_REF" \

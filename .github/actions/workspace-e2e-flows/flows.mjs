@@ -295,7 +295,9 @@ const stripInlineHtmlComments = (
   return { text: out, inComment };
 };
 
-const listItemStartPattern = /^ {0,3}(?:[-*+]|1[.)])(?:[ \t]|$)/;
+// Per GFM §5.2, only a non-empty list item (unordered or ordered starting
+// with `1`) can interrupt a paragraph; bare markers like `+` or `-` cannot.
+const listItemStartPattern = /^ {0,3}(?:[-*+]|1[.)])[ \t]+\S/;
 const blockquoteStartPattern = /^ {0,3}>/;
 
 const interruptsParagraph = (line, isBlank) => {
