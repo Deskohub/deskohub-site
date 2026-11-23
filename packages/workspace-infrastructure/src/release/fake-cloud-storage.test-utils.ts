@@ -80,12 +80,27 @@ const requestBody = (request: HttpClientRequest.HttpClientRequest) =>
     ? new TextDecoder().decode(request.body.body)
     : "";
 
+/** Where the fake's buckets live, as the bucket metadata reports it. */
+export interface FakeBucketLocation {
+  readonly location: string;
+  readonly locationType: string;
+}
+
+/** A single-region bucket in the test configs' default region. */
+export const sandboxBucketLocation: FakeBucketLocation = {
+  location: "EUROPE-WEST1",
+  locationType: "region",
+};
+
 /**
  * An in-memory Cloud Storage JSON API for the two media endpoints the
- * release store uses. It serves `x-goog-generation`, honors
- * `ifGenerationMatch` atomically, and records every request.
+ * release store uses and the bucket metadata the stack target reads. It
+ * serves `x-goog-generation`, honors `ifGenerationMatch` atomically, and
+ * records every request.
  */
-export const makeFakeCloudStorage = () => {
+export const makeFakeCloudStorage = (
+  bucketLocation: FakeBucketLocation = sandboxBucketLocation
+) => {
   const objects = new Map<string, StoredObject>();
   const requests: Array<RecordedRequest> = [];
   const interceptors: Array<Interceptor> = [];
@@ -104,6 +119,14 @@ export const makeFakeCloudStorage = () => {
   const handle = (request: HttpClientRequest.HttpClientRequest, url: URL) => {
     if (request.headers.authorization !== `Bearer ${fakeAccessToken}`) {
       return respond(request, 401);
+    }
+    if (
+      request.method === "GET" &&
+      /^\/storage\/v1\/b\/[^/]+$/.test(url.pathname)
+    ) {
+      return respond(request, 200, JSON.stringify(bucketLocation), {
+        "content-type": "application/json",
+      });
     }
     const download = url.pathname.match(/^\/storage\/v1\/b\/([^/]+)\/o\/(.+)$/);
     if (
@@ -166,6 +189,7 @@ export const makeFakeCloudStorage = () => {
   });
 
   return {
+    client,
     layer: Layer.succeed(HttpClient.HttpClient, client),
     requests,
     /** Answer the next requests with these interceptors, in order. */

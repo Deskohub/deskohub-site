@@ -1,11 +1,24 @@
 import { describe, expect, test } from "bun:test";
+import { GcpEnvironment } from "@alchemy.run/gcp";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Command } from "effect/cli";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
+import { GcpRegion, type WorkspaceStackConfig } from "../config/stack-config";
 import { sandboxConfig } from "../config/stack-config.test-utils";
-import { ReleaseStack, releaseCommand } from "./release-command";
+import {
+  fakeCredentialsLayer,
+  makeFakeCloudStorage,
+} from "./fake-cloud-storage.test-utils";
+import { releaseRecordLocation } from "./gcs-release-store";
+import {
+  ReleaseStack,
+  releaseCommand,
+  releaseRuntime,
+} from "./release-command";
 import {
   ReleaseServiceApply,
   ReleaseServiceReadback,
@@ -133,5 +146,111 @@ describe("workspace release command", () => {
         ? "<none>"
         : writerFingerprint(locked.writer.holderDigest)
     );
+  });
+});
+
+/**
+ * Runs one command on the release runtime itself, over a fake Cloud
+ * Storage whose state bucket sits in europe-west1 and a Cloud Run API that
+ * has no service anywhere, so a config naming another region would see a
+ * quiet stage.
+ */
+const runOnRuntime = async (
+  args: ReadonlyArray<string>,
+  config: WorkspaceStackConfig,
+  initial: ReleaseRecord
+) => {
+  const storage = makeFakeCloudStorage();
+  const location = releaseRecordLocation(config);
+  storage.put(location.bucket, location.object, JSON.stringify(initial));
+  const cloudRunReads: Array<string> = [];
+  const client = HttpClient.make((request, url) => {
+    if (url.hostname !== "run.googleapis.com") {
+      return storage.client.execute(request);
+    }
+    cloudRunReads.push(url.pathname);
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(JSON.stringify({ error: { code: 404 } }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        })
+      )
+    );
+  });
+  const access = Layer.mergeAll(
+    Layer.succeed(HttpClient.HttpClient, client),
+    fakeCredentialsLayer,
+    Layer.succeed(
+      GcpEnvironment,
+      Effect.succeed({
+        project: config.projectId,
+        region: config.region,
+        // Never read by the runtime; synthetic.
+        accessToken: Redacted.make("synthetic-access-token"),
+      })
+    )
+  );
+  const exit = await Effect.runPromiseExit(
+    Command.runWith(releaseCommand, { version: "0.0.0" })(args).pipe(
+      Effect.provide(
+        Layer.mergeAll(releaseRuntime(config, access), BunServices.layer)
+      )
+    )
+  );
+  const stored = storage.get(location.bucket, location.object);
+  return {
+    exit,
+    record: stored === undefined ? undefined : JSON.parse(stored.body),
+    writes: storage.requests.filter(({ method }) => method === "POST"),
+    cloudRunReads,
+  };
+};
+
+describe("workspace release runtime region", () => {
+  const otherRegion: WorkspaceStackConfig = {
+    ...sandboxConfig,
+    region: GcpRegion.make("europe-west3"),
+  };
+  const locked = heldBy(emptyReleaseRecord, "deliver");
+  const holder =
+    locked.writer === null ? "" : writerFingerprint(locked.writer.holderDigest);
+
+  test("unlock clears the lock in the stage's own region", async () => {
+    const result = await runOnRuntime(
+      ["unlock", "--holder", holder],
+      sandboxConfig,
+      locked
+    );
+    expect(Exit.isSuccess(result.exit)).toBe(true);
+    expect(result.record.writer).toBeNull();
+  });
+
+  test("unlock refuses a config in another region before reading Cloud Run", async () => {
+    const result = await runOnRuntime(
+      ["unlock", "--holder", holder],
+      otherRegion,
+      locked
+    );
+    expect(Exit.isFailure(result.exit)).toBe(true);
+    expect(String(result.exit)).toContain("StageRegionMismatch");
+    expect(result.record).toEqual(locked);
+    expect(result.writes).toEqual([]);
+    expect(result.cloudRunReads).toEqual([]);
+  });
+
+  test("recover refuses a config in another region before the lost-record guard", async () => {
+    // A lost record: the stage's services may run in europe-west1 while
+    // the record is empty. Another region would see none of them.
+    const result = await runOnRuntime(
+      ["recover"],
+      otherRegion,
+      emptyReleaseRecord
+    );
+    expect(Exit.isFailure(result.exit)).toBe(true);
+    expect(String(result.exit)).toContain("StageRegionMismatch");
+    expect(result.writes).toEqual([]);
+    expect(result.cloudRunReads).toEqual([]);
   });
 });

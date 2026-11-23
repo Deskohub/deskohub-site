@@ -8,7 +8,7 @@ import {
   configuredWorkspaceStack,
   type WorkspaceStackConfig,
 } from "./src/config/stack-config";
-import { workspaceGcpAccess, workspaceGoogleApiAccess } from "./src/gcp-access";
+import { workspaceGoogleApiAccess } from "./src/gcp-access";
 import {
   releaseApplyGenerationVariable,
   releaseWriterVariable,
@@ -47,7 +47,8 @@ const releasePlatform = (config: WorkspaceStackConfig) =>
 /**
  * The Workspace stack. State lives in the config's own state bucket,
  * reached only after `verifyStackTarget`, so credentials or state of one
- * stage never apply another.
+ * stage never apply another, and a config naming another region than the
+ * state bucket's never plans or declares anything.
  *
  * The release-owned Cloud Run services come from the authoritative release
  * record in that bucket, never from a CI snapshot. A fenced release apply
@@ -73,7 +74,7 @@ export default Alchemy.Stack(
             Layer.effectDiscard(
               verifyStackTarget(config).pipe(
                 // The same resolution the GCS state store uses.
-                Effect.provide(workspaceGcpAccess),
+                Effect.provide(workspaceGoogleApiAccess),
                 Effect.andThen(releaseWriter),
                 Effect.flatMap((writer) =>
                   requireStackWriter(config, writer).pipe(

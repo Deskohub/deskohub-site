@@ -1,9 +1,11 @@
+import type { Credentials, GcpEnvironment } from "@alchemy.run/gcp";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Stage } from "alchemy/Stage";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import { Command, Flag } from "effect/cli";
 import * as Effect from "effect/Effect";
+import type { HttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import {
@@ -11,11 +13,7 @@ import {
   ImageDigest,
   type WorkspaceStackConfig,
 } from "../config/stack-config";
-import {
-  standaloneAlchemyAuth,
-  workspaceGcpAccess,
-  workspaceGoogleApiAccess,
-} from "../gcp-access";
+import { standaloneAlchemyAuth, workspaceGoogleApiAccess } from "../gcp-access";
 import { verifyStackTarget } from "../stack-target";
 import { alchemyServiceApply } from "./alchemy-service-apply";
 import { cloudRunServiceReadbackLayer } from "./cloud-run-readback";
@@ -117,7 +115,7 @@ const unlockCommand = Command.make(
   {
     holder: Flag.String("holder").pipe(
       Flag.withDescription(
-        "The fingerprint `status` shows for the lock. Confirm first that its CI run or process has ended: a write it sent may still land after the unlock."
+        "The fingerprint `status` shows for the lock. Confirm first that its CI run or process has ended: a Cloud Run, Alchemy state or foundation resource write it already sent may still land after the unlock."
       )
     ),
   },
@@ -128,7 +126,7 @@ const unlockCommand = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    "Break-glass: clear the writer lock of a run you confirmed has stopped. A Cloud Run write that run already sent carries no etag and can still land after the unlock, over a newer release decision."
+    "Break-glass: clear the writer lock of a run you confirmed has stopped. Writes that run already sent (Cloud Run services carry no etag; its Alchemy state and foundation resource writes are not fenced) can still land after the unlock, over a newer release decision. Hosted workflows must run each stage under a concurrency group that never cancels a run in progress."
   )
 );
 
@@ -161,25 +159,40 @@ export const releaseCommand = Command.make("workspace-release").pipe(
   ])
 );
 
+/** What the release runtime reads Google Cloud with. */
+export type ReleaseCloudAccess =
+  | Credentials
+  | GcpEnvironment
+  | HttpClient.HttpClient;
+
 /**
- * The live release runtime for the configured stack. It refuses to start
- * unless the effective GCP project is the config's project, so one stage's
- * credentials never touch another stage's record or services.
+ * The release runtime for one stack over the given Google Cloud access. It
+ * refuses to start unless the effective GCP project and the state bucket's
+ * region are the config's (`verifyStackTarget`), so one stage's
+ * credentials never touch another stage's record, and a lock is never
+ * taken, cleared or recovered while Cloud Run is read in another region.
  */
+export const releaseRuntime = <E, R>(
+  config: WorkspaceStackConfig,
+  access: Layer.Layer<ReleaseCloudAccess, E, R>
+) => {
+  const verified = Layer.effectDiscard(
+    verifyStackTarget(config).pipe(Effect.provideService(Stage, config.stage))
+  );
+  const platform = Layer.mergeAll(
+    gcsReleaseRecordStoreLayer(releaseRecordLocation(config)),
+    cloudRunServiceReadbackLayer(config)
+  );
+  return Layer.mergeAll(
+    Layer.succeed(ReleaseStack, config),
+    platform,
+    alchemyServiceApply(config).pipe(Layer.provide(BunServices.layer))
+  ).pipe(Layer.provideMerge(verified), Layer.provide(access));
+};
+
+/** The live release runtime for the configured stack. */
 export const liveReleaseRuntime = Layer.unwrap(
-  Effect.gen(function* () {
-    const config = yield* configuredWorkspaceStack;
-    const verified = Layer.effectDiscard(
-      verifyStackTarget(config).pipe(Effect.provideService(Stage, config.stage))
-    ).pipe(Layer.provide(workspaceGcpAccess));
-    const platform = Layer.mergeAll(
-      gcsReleaseRecordStoreLayer(releaseRecordLocation(config)),
-      cloudRunServiceReadbackLayer(config)
-    ).pipe(Layer.provide(workspaceGoogleApiAccess));
-    return Layer.mergeAll(
-      Layer.succeed(ReleaseStack, config),
-      platform,
-      alchemyServiceApply(config).pipe(Layer.provide(BunServices.layer))
-    ).pipe(Layer.provideMerge(verified), Layer.provide(standaloneAlchemyAuth));
-  })
-);
+  Effect.map(configuredWorkspaceStack, (config) =>
+    releaseRuntime(config, workspaceGoogleApiAccess)
+  )
+).pipe(Layer.provide(standaloneAlchemyAuth));

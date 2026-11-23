@@ -200,6 +200,12 @@ const releaseReleaseWriter = Effect.fn("WorkspaceRelease.releaseReleaseWriter")(
  * change's outcome known. An apply that failed after it started, or a run
  * interrupted or killed during one, leaves the lock blocking every writer
  * until an operator runs `unlock`.
+ *
+ * The lock only excludes runs that check it. A hosted workflow must run
+ * each stage under a concurrency group that never cancels a run in
+ * progress: a cancelled run is killed mid-apply, leaves the lock held and
+ * forces a break-glass `unlock` (see `unlockReleaseWriter` for what that
+ * cannot rule out).
  */
 export const withReleaseWriter =
   (config: WorkspaceStackConfig, operation: ReleaseOperation) =>
@@ -291,11 +297,15 @@ export const applyAsWriter = Effect.fn("WorkspaceRelease.applyAsWriter")(
  * held lock and no release-owned service is rolling out. Returns the
  * cleared lock.
  *
- * Residual risk: Cloud Run accepts a service write without an etag, so a
- * write the old holder sent before it stopped (a lost response, a frozen
- * process) can still land after the unlock and over a newer decision.
- * Neither the quiet-readback check, the operator's confirmation that the
- * holder stopped, nor any later check can rule that out.
+ * Residual risk: writes the old holder sent before it stopped (a lost
+ * response, a frozen process) can still land after the unlock and over a
+ * newer decision. Cloud Run accepts a service write without an etag; the
+ * old holder's Alchemy state writes and its writes to foundation resources
+ * (queues, schedules, buckets, IAM, monitoring) are not fenced by the lock
+ * either. Neither the quiet-readback check, the operator's confirmation
+ * that the holder stopped, nor any later check can rule that out. Hosted
+ * workflows keep this rare by running each stage under a concurrency group
+ * that never cancels a run in progress.
  */
 export const unlockReleaseWriter = Effect.fn(
   "WorkspaceRelease.unlockReleaseWriter"
