@@ -220,15 +220,17 @@ project_exclusion_names() {
   $dry_run || jq -r '.[] | .name' <<<"$exclusions"
 }
 
-# The seconds a token has left, from Google's tokeninfo; the token goes in
-# the request body, never on a command line.
-token_lifetime() {
-  local seconds
+# A token's expiry from Google's tokeninfo, in epoch seconds: the reported
+# lifetime counted from before the request, so a slow reply only makes it
+# earlier. The token goes in the request body, never on a command line.
+token_expiry() {
+  local start seconds
+  start="$(date +%s)"
   seconds="$(printf '%s' "$1" |
     curl -sS --fail-with-body --data-urlencode 'access_token@-' \
       https://oauth2.googleapis.com/tokeninfo | jq -r '.expires_in // empty')" || return 1
   [[ "$seconds" =~ ^[0-9]+$ ]] || return 1
-  printf '%s\n' "$seconds"
+  printf '%s\n' "$((start + seconds))"
 }
 
 # Alchemy beta.87 rejects federated credential files, so it gets a bearer
@@ -244,27 +246,27 @@ ensure_alchemy_token() {
     echo "+ (GOOGLE_ACCESS_TOKEN from token_format: access_token; refreshed under 30 minutes left)" >&2
     return
   fi
-  local now expires_at="${GOOGLE_ACCESS_TOKEN_EXPIRES_AT:-}" expires_in
-  now="$(date +%s)"
+  local expires_at="${GOOGLE_ACCESS_TOKEN_EXPIRES_AT:-}" now
   if ! [[ "$expires_at" =~ ^[0-9]+$ ]]; then
     # The workflow's token: an unreadable lifetime counts as expired.
-    expires_at=0
-    if [[ -n "${GOOGLE_ACCESS_TOKEN:-}" ]] &&
-      expires_in="$(token_lifetime "$GOOGLE_ACCESS_TOKEN")"; then
-      expires_at=$((now + expires_in))
+    if [[ -z "${GOOGLE_ACCESS_TOKEN:-}" ]] ||
+      ! expires_at="$(token_expiry "$GOOGLE_ACCESS_TOKEN")"; then
+      expires_at=0
     fi
   fi
+  # Read after any lookup, so its time counts against the token.
+  now="$(date +%s)"
   if [[ -z "${GOOGLE_ACCESS_TOKEN:-}" ]] || ((expires_at - now < 1800)); then
     local config
     config="$(mktemp -d)"
     GOOGLE_ACCESS_TOKEN="$(CLOUDSDK_CONFIG="$config" gcloud auth print-access-token)"
     rm -rf "${config:?}"
     echo "::add-mask::${GOOGLE_ACCESS_TOKEN}"
-    expires_in="$(token_lifetime "$GOOGLE_ACCESS_TOKEN")" ||
+    expires_at="$(token_expiry "$GOOGLE_ACCESS_TOKEN")" ||
       fail "the minted access token's lifetime is unreadable"
-    ((expires_in >= 1800)) ||
-      fail "the minted access token expires in ${expires_in} s, under the 30-minute step budget"
-    expires_at=$((now + expires_in))
+    now="$(date +%s)"
+    ((expires_at - now >= 1800)) ||
+      fail "the minted access token expires in $((expires_at - now)) s, under the 30-minute step budget"
   fi
   GOOGLE_ACCESS_TOKEN_EXPIRES_AT="$expires_at"
   export GOOGLE_ACCESS_TOKEN GOOGLE_ACCESS_TOKEN_EXPIRES_AT

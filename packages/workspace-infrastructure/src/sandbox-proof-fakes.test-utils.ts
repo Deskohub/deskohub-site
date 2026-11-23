@@ -75,6 +75,8 @@ export interface FakeWorld {
    * an unknown token gets a 400.
    */
   readonly tokenLifetimes?: Record<string, number>;
+  /** Seconds the fake clock moves while tokeninfo answers. */
+  readonly tokeninfoDelay?: number;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
   readonly now?: number;
   readonly [key: string]: unknown;
@@ -350,6 +352,15 @@ const interruptedDeliver = async (
   return 0;
 };
 
+/** Move the fake clock on, as a slow call would. */
+const advanceClock = (seconds: number) => {
+  if (seconds === 0) return;
+  const clock = process.env.FAKE_CLOCK ?? "";
+  const now = Number(readFileSync(clock, "utf8").trim());
+  writeFileSync(`${clock}.next`, `${now + seconds}\n`);
+  renameSync(`${clock}.next`, clock);
+};
+
 const runFake = async (tool: string, args: ReadonlyArray<string>) => {
   const worldFile = process.env.FAKE_WORLD ?? "";
   appendFileSync(process.env.FAKE_CALLS ?? "", `${tool} ${args.join(" ")}\n`);
@@ -379,6 +390,7 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
   ) {
     const token = (await Bun.stdin.text()).trim();
     const seconds = world.tokenLifetimes[token];
+    advanceClock(world.tokeninfoDelay ?? 0);
     if (seconds === undefined) {
       print('{"error":"invalid_token"}');
       return 22;
@@ -394,12 +406,7 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     if (rule.set !== undefined) {
       save({ ...world, ...rule.set });
     }
-    if (rule.advance !== undefined) {
-      const clock = process.env.FAKE_CLOCK ?? "";
-      const now = Number(readFileSync(clock, "utf8").trim());
-      writeFileSync(`${clock}.next`, `${now + rule.advance}\n`);
-      renameSync(`${clock}.next`, clock);
-    }
+    advanceClock(rule.advance ?? 0);
     if (rule.stdout !== undefined) {
       print(rule.stdout);
     }

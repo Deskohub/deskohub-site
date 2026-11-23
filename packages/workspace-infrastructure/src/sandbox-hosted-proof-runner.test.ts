@@ -774,6 +774,34 @@ describe("Alchemy access token", () => {
     }
   });
 
+  test("counts a slow tokeninfo reply against the token", () => {
+    // Each reply takes 5 s, so a reported 1801 s or 1803 s leaves less
+    // than 30 minutes once it arrives.
+    const withLifetimes = (lifetimes: Record<string, number>) =>
+      withProofFakes(
+        { now, tokenLifetimes: lifetimes, tokeninfoDelay: 5 },
+        (fakes) => {
+          const result = runPhase(fakes, "foundation", {
+            GOOGLE_ACCESS_TOKEN: "workflow-token",
+            GOOGLE_ACCESS_TOKEN_EXPIRES_AT: "",
+          });
+          return {
+            exitCode: result.exitCode,
+            mints: result.output.split("::add-mask::").length - 1,
+          };
+        }
+      );
+    // The workflow's token is replaced, and the fresh one accepted.
+    expect(
+      withLifetimes({ "workflow-token": 1801, "fake-access-token": 3599 })
+    ).toEqual({ exitCode: 0, mints: 1 });
+    // A fresh token short of 30 minutes on arrival is refused.
+    expect(withLifetimes({ "fake-access-token": 1803 })).toEqual({
+      exitCode: 1,
+      mints: 1,
+    });
+  });
+
   test("refreshes between phases of one run by the token's real expiry", () => {
     // The minted token has 1805 s; the first deploy takes 600 s of it.
     const { exitCode, mints } = run(["foundation", "foundation"], 0, [
