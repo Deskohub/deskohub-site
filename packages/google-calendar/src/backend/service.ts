@@ -179,8 +179,7 @@ export class GoogleCalendarService extends Context.Service<
             catch: (cause) =>
               new GoogleCalendarAPIError({
                 operation: "events.watch",
-                statusCode: getGoogleStatusCode(cause),
-                message: getGoogleErrorMessage(cause),
+                ...readGoogleErrorDetails(cause),
                 cause: withoutRequestBody(cause),
               }),
           }).pipe(
@@ -246,8 +245,7 @@ export class GoogleCalendarService extends Context.Service<
           catch: (cause) =>
             new GoogleCalendarAPIError({
               operation: "events.list",
-              statusCode: getGoogleStatusCode(cause),
-              message: getGoogleErrorMessage(cause),
+              ...readGoogleErrorDetails(cause),
               cause,
             }),
         }).pipe(
@@ -444,18 +442,23 @@ const addDays = (date: string, days: number) => {
 
 const toCalendarBoundary = (date: string) => `${date}T00:00:00Z`;
 
-const getGoogleStatusCode = (cause: unknown) => {
-  const status = getOwnPropertyValue(cause, "status");
-  return Predicate.isNumber(status) ? status : undefined;
+/**
+ * The HTTP status code and message a Google API error carries. Only own data
+ * properties are read, so reading the error never invokes a getter.
+ */
+const readGoogleErrorDetails = (
+  cause: unknown
+): {
+  readonly statusCode: number | undefined;
+  readonly message: string | undefined;
+} => {
+  if (!Predicate.isObject(cause)) {
+    return { statusCode: undefined, message: undefined };
+  }
+  const status = Object.getOwnPropertyDescriptor(cause, "status")?.value;
+  const message = Object.getOwnPropertyDescriptor(cause, "message")?.value;
+  return {
+    statusCode: Predicate.isNumber(status) ? status : undefined,
+    message: Predicate.isString(message) ? message : undefined,
+  };
 };
-
-const getGoogleErrorMessage = (cause: unknown) => {
-  const message = getOwnPropertyValue(cause, "message");
-  return Predicate.isString(message) ? message : undefined;
-};
-
-/** Reads an own property without invoking an inherited getter. */
-const getOwnPropertyValue = (cause: unknown, property: string) =>
-  Predicate.isObject(cause)
-    ? Object.getOwnPropertyDescriptor(cause, property)?.value
-    : undefined;

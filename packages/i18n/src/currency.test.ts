@@ -41,6 +41,39 @@ describe("formatCurrencyAmount", () => {
   });
 });
 
+describe("formatCurrencyAmount with decimal text beyond the double range", () => {
+  test("formats the overflowing amount as numeric infinity", () => {
+    const NumberFormat = Intl.NumberFormat;
+    const formattedValues: (number | bigint | Intl.StringNumericLiteral)[] = [];
+    class RecordingNumberFormat extends NumberFormat {
+      override format(value: number | bigint | Intl.StringNumericLiteral) {
+        formattedValues.push(value);
+        return super.format(value);
+      }
+    }
+    Object.defineProperty(Intl, "NumberFormat", {
+      configurable: true,
+      value: RecordingNumberFormat,
+      writable: true,
+    });
+    try {
+      formatCurrencyAmount({
+        amount: "1e309",
+        currency: "CZK",
+        locale: "cs-CZ",
+      });
+    } finally {
+      Object.defineProperty(Intl, "NumberFormat", {
+        configurable: true,
+        value: NumberFormat,
+        writable: true,
+      });
+    }
+
+    expect(formattedValues).toEqual([Number.POSITIVE_INFINITY]);
+  });
+});
+
 describe("formatCurrencyAmount with an exact decimal", () => {
   const format = (amount: string, locale: string, currency = "CZK") =>
     formatCurrencyAmount({ amount, currency, locale, fractionDigits: 2 });

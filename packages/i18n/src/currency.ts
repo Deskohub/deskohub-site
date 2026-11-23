@@ -68,9 +68,15 @@ const toFormattableAmount = (
   });
 };
 
+/**
+ * Whether text is a finite numeric string, which TypeScript's
+ * `Intl.StringNumericLiteral` admits. Text that overflows to infinity, such as
+ * "1e309", is not.
+ */
 const isStringNumericLiteral = (
   text: string
-): text is Intl.StringNumericLiteral => !Number.isNaN(Number(text));
+): text is Intl.StringNumericLiteral =>
+  text.trim() !== "" && Number.isFinite(Number(text));
 
 /**
  * Names a currency in the reader's language, such as "česká koruna" for CZK in
