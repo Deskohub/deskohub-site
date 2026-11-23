@@ -28,7 +28,7 @@ export {
  */
 export const loadCustomerAccountPage = cache(
   (): Promise<CustomerAccountStateWithHistory> =>
-    loadAccountStateWithHistory().pipe(
+    loadAccountStateWithHistory.pipe(
       Effect.provide(accountPageCapabilities(liveAccountPageLayers)),
       runWorkspaceEffect("account.page", { boundary: "page" })
     )

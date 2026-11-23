@@ -211,11 +211,11 @@ export const loadAccountState: Effect.Effect<
  * after the state. An unavailable history degrades to the section's
  * unavailable notice.
  */
-export const loadAccountStateWithHistory = (): Effect.Effect<
+export const loadAccountStateWithHistory: Effect.Effect<
   CustomerAccountStateWithHistory,
   never,
   AccountStateCapabilities | CustomerReservationHistoryService
-> => Effect.suspend(() => loadAccount).pipe(Effect.flatMap(attachHistory));
+> = Effect.suspend(() => loadAccount).pipe(Effect.flatMap(attachHistory));
 
 /** Reads the history `loaded` shows and attaches it to its state. */
 function attachHistory(
