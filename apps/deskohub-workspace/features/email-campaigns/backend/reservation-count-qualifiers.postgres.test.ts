@@ -60,7 +60,7 @@ type Funding =
       /** A refund done (`refunded`) or owed (`required`, with its target). */
       readonly refund?: {
         readonly state: "refunded" | "required";
-        readonly refunded: number;
+        readonly refunded?: number;
         readonly target?: number;
       };
     }
@@ -154,6 +154,14 @@ const visits = [
       amount: 45_000,
       refund: { state: "required", refunded: 10_000, target: 45_000 },
     },
+  },
+  {
+    // A cancellation owes a refund before its amount is known: the whole.
+    label: "unknown-refund-owed",
+    tier: "open-space",
+    date: "2026-10-16",
+    interval: "day",
+    funding: { _tag: "Order", amount: 45_000, refund: { state: "required" } },
   },
   {
     label: "partial-refund-owed",
@@ -287,7 +295,7 @@ describe.skipIf(!testDatabase)(
           funding.amount,
           refund?.state ?? "not_required",
           refund?.refunded ?? null,
-          refund ? "2026-10-16T10:00:00Z" : null,
+          refund?.refunded === undefined ? null : "2026-10-16T10:00:00Z",
           refund?.target ?? null,
         ]
       );
