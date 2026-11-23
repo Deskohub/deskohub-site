@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { Credentials } from "@alchemy.run/gcp";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import { TestClock } from "effect/testing";
 import { ImageDigest } from "../config/stack-config";
@@ -72,7 +74,8 @@ const stageStep = (sha: GitSha) =>
  */
 const withStore = <A, E>(
   fake: FakeCloudStorage,
-  use: Effect.Effect<A, E, ReleaseRecordStore>
+  use: Effect.Effect<A, E, ReleaseRecordStore>,
+  credentials: Layer.Layer<Credentials> = fakeCredentialsLayer
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -85,9 +88,7 @@ const withStore = <A, E>(
       yield* TestClock.adjust("10 minutes");
       return yield* Fiber.join(fiber);
     }).pipe(
-      Effect.provide(
-        Layer.mergeAll(fake.layer, fakeCredentialsLayer, TestClock.layer())
-      )
+      Effect.provide(Layer.mergeAll(fake.layer, credentials, TestClock.layer()))
     )
   );
 
@@ -313,6 +314,8 @@ describe("Cloud Storage release record store", () => {
     const lostAnswers: ReadonlyArray<Interceptor> = [
       ({ request, forward }) =>
         Effect.andThen(forward, transportFailure(request)),
+      // Applied, but the answer never arrives before the attempt timeout.
+      ({ forward }) => Effect.andThen(forward, Effect.never),
       (input) => Effect.andThen(input.forward, respondWith(503)(input)),
       // Applied, but the answer does not name the new generation.
       (input) => Effect.andThen(input.forward, respondWith(200, "{}")(input)),
@@ -332,6 +335,42 @@ describe("Cloud Storage release record store", () => {
         `GET ${objectPath}`,
       ]);
     }
+  });
+
+  test("treats a first dispatched attempt's lost precondition as a conflict after a credential stall", async () => {
+    const fake = makeFakeCloudStorage();
+    const theirs = staged(emptyReleaseRecord, shaA);
+    fake.put(location.bucket, location.object, JSON.stringify(theirs));
+    let tokenRequests = 0;
+    // The first token exchange stalls past the timeout; nothing was sent.
+    const stallingCredentials = Layer.succeed(
+      Credentials,
+      Effect.suspend(() => {
+        tokenRequests += 1;
+        return tokenRequests === 1
+          ? Effect.never
+          : Effect.succeed({ accessToken: Redacted.make(fakeAccessToken) });
+      })
+    );
+    expect(
+      failure(await withStore(fake, write(theirs, "0"), stallingCredentials))
+    ).toMatchObject({ _tag: "ReleaseRecordConflict", expectedVersion: "0" });
+    expect(tokenRequests).toBe(2);
+    expect(requestLines(fake)).toEqual([`POST ${uploadPath} if=0`]);
+  });
+
+  test("never confirms an unanswered write against a missing object", async () => {
+    const fake = makeFakeCloudStorage();
+    fake.intercept(({ request }) => transportFailure(request));
+    expect(
+      failure(await withStore(fake, write(emptyReleaseRecord, "123")))
+    ).toMatchObject({ _tag: "ReleaseRecordConflict", expectedVersion: "123" });
+    expect(requestLines(fake)).toEqual([
+      `POST ${uploadPath} if=123`,
+      `POST ${uploadPath} if=123`,
+      `GET ${objectPath}`,
+    ]);
+    expect(storedObject(fake)).toBeUndefined();
   });
 
   test("treats a lost precondition after a throttled attempt as a conflict", async () => {

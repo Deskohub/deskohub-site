@@ -1,8 +1,8 @@
 import { Credentials } from "@alchemy.run/gcp";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import type { HttpClientResponse } from "effect/http";
 import { HttpClient, HttpClientRequest } from "effect/http";
-import type * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
@@ -131,38 +131,59 @@ export const makeGcsReleaseRecordStore = Effect.fn(
   const objectUrl = `${cloudStorageApi}/storage/v1/b/${bucketPath}/o/${encodeURIComponent(location.object)}`;
   const uploadUrl = `${cloudStorageApi}/upload/storage/v1/b/${bucketPath}/o`;
 
-  const send = (
+  /**
+   * Attach a bearer token. Nothing is dispatched yet, so a stalled or
+   * failed token exchange never makes a write's outcome unknown.
+   */
+  const authorize = (
     operation: "read" | "write",
     request: HttpClientRequest.HttpClientRequest
   ) =>
-    Effect.gen(function* () {
-      const { accessToken } = yield* credentials.pipe(
-        Effect.mapError(
-          () =>
-            new ReleaseStoreUnavailable({
-              operation,
+    credentials.pipe(
+      Effect.mapError(
+        () =>
+          new ReleaseStoreUnavailable({
+            operation,
+            status: null,
+            reason: "Google Cloud credentials are unavailable",
+          })
+      ),
+      Effect.timeoutOrElse({
+        duration: attemptTimeout,
+        orElse: () =>
+          Effect.fail(
+            new RetryableAttempt({
               status: null,
-              reason: "Google Cloud credentials are unavailable",
+              reason: "Google Cloud credentials did not resolve in time",
+              outcomeUnknown: false,
             })
-        )
-      );
-      return yield* http
-        .execute(request.pipe(HttpClientRequest.bearerToken(accessToken)))
-        .pipe(
-          Effect.mapError(
-            () =>
-              new RetryableAttempt({
-                status: null,
-                reason: "Cloud Storage could not be reached",
-                outcomeUnknown: true,
-              })
-          )
-        );
-    });
+          ),
+      }),
+      Effect.map(({ accessToken }) =>
+        request.pipe(HttpClientRequest.bearerToken(accessToken))
+      )
+    );
 
-  /** Bound an attempt, including reading its body. */
-  const bounded = <A, E, R>(attempt: Effect.Effect<A, E, R>) =>
-    attempt.pipe(
+  /**
+   * Dispatch an authorized request and handle its response within one
+   * bound. From here on a lost answer leaves a write's outcome unknown.
+   */
+  const exchange = <A, E>(
+    request: HttpClientRequest.HttpClientRequest,
+    handle: (
+      response: HttpClientResponse.HttpClientResponse
+    ) => Effect.Effect<A, E>
+  ) =>
+    http.execute(request).pipe(
+      Effect.mapError(
+        () =>
+          new RetryableAttempt({
+            status: null,
+            reason: "Cloud Storage could not be reached",
+            outcomeUnknown: true,
+          })
+      ),
+      Effect.flatMap(handle),
       Effect.timeoutOrElse({
         duration: attemptTimeout,
         orElse: () =>
@@ -188,108 +209,169 @@ export const makeGcsReleaseRecordStore = Effect.fn(
       )
     );
 
-  const fetchObject = bounded(
-    Effect.gen(function* () {
-      const response = yield* send(
-        "read",
-        HttpClientRequest.get(objectUrl).pipe(
-          HttpClientRequest.setUrlParam("alt", "media")
-        )
-      );
-      if (response.status === 404) {
-        return null;
-      }
-      if (response.status !== 200) {
-        return yield* statusFailure("read", response.status);
-      }
-      const generation = response.headers["x-goog-generation"];
-      if (!isObjectGeneration(generation)) {
-        return yield* new ReleaseStoreUnavailable({
-          operation: "read",
-          status: response.status,
-          reason:
-            "Cloud Storage served the record without an object generation",
-        });
-      }
-      return { body: yield* bodyText(response), version: generation };
-    })
+  const storedObject = (
+    response: HttpClientResponse.HttpClientResponse
+  ): Effect.Effect<
+    { readonly body: string; readonly version: string } | null,
+    RetryableAttempt | ReleaseStoreUnavailable
+  > => {
+    if (response.status === 404) {
+      return Effect.succeed(null);
+    }
+    if (response.status !== 200) {
+      return Effect.fail(statusFailure("read", response.status));
+    }
+    const generation = response.headers["x-goog-generation"];
+    return isObjectGeneration(generation)
+      ? Effect.map(bodyText(response), (body) => ({
+          body,
+          version: generation,
+        }))
+      : Effect.fail(
+          new ReleaseStoreUnavailable({
+            operation: "read",
+            status: response.status,
+            reason:
+              "Cloud Storage served the record without an object generation",
+          })
+        );
+  };
+
+  const decodeStored = (stored: {
+    readonly body: string;
+    readonly version: string;
+  }) =>
+    decodeStoredRecord(stored.body).pipe(
+      Effect.map(
+        (record): StoredReleaseRecord => ({ record, version: stored.version })
+      ),
+      // The schema issue may quote stored values; keep the reason fixed.
+      Effect.mapError(
+        () =>
+          new ReleaseRecordCorrupt({
+            version: stored.version,
+            reason: "the stored object does not decode as a release record",
+          })
+      )
+    );
+
+  /** The stored record, or null while no object exists. */
+  const readPresent = authorize(
+    "read",
+    HttpClientRequest.get(objectUrl).pipe(
+      HttpClientRequest.setUrlParam("alt", "media")
+    )
+  ).pipe(
+    Effect.flatMap((request) => exchange(request, storedObject)),
+    retryTransient,
+    Effect.catchTag("RetryableAttempt", (attempt) =>
+      Effect.fail(unavailableAfterRetries("read")(attempt))
+    ),
+    Effect.flatMap((stored) =>
+      stored === null ? Effect.succeed(null) : decodeStored(stored)
+    )
   );
 
   const read: Effect.Effect<
     StoredReleaseRecord,
     ReleaseRecordCorrupt | ReleaseStoreUnavailable
-  > = retryTransient(fetchObject).pipe(
-    Effect.catchTag("RetryableAttempt", (attempt) =>
-      Effect.fail(unavailableAfterRetries("read")(attempt))
-    ),
-    Effect.flatMap((stored) =>
-      stored === null
-        ? Effect.succeed({ record: emptyReleaseRecord, version: "0" })
-        : decodeStoredRecord(stored.body).pipe(
-            Effect.map((record) => ({ record, version: stored.version })),
-            // The schema issue may quote stored values; keep the reason fixed.
-            Effect.mapError(
-              () =>
-                new ReleaseRecordCorrupt({
-                  version: stored.version,
-                  reason:
-                    "the stored object does not decode as a release record",
-                })
-            )
-          )
+  > = readPresent.pipe(
+    Effect.map(
+      (stored): StoredReleaseRecord =>
+        stored ?? { record: emptyReleaseRecord, version: "0" }
     ),
     Effect.withSpan("WorkspaceRelease.readReleaseRecord")
   );
 
-  const upload = (body: string, ifVersion: string) =>
-    bounded(
-      Effect.gen(function* () {
-        const response = yield* send(
-          "write",
-          HttpClientRequest.post(uploadUrl).pipe(
-            HttpClientRequest.setUrlParams({
-              uploadType: "media",
-              name: location.object,
-              ifGenerationMatch: ifVersion,
-            }),
-            HttpClientRequest.bodyText(body, "application/json")
-          )
-        );
-        if (response.status === 412) {
-          return yield* new PreconditionLost();
-        }
-        if (response.status !== 200) {
-          return yield* statusFailure("write", response.status);
-        }
-        // The write landed, but without its generation the version is
-        // unknown; the retry's precondition check settles it.
-        const uploaded = yield* bodyText(response).pipe(
-          Effect.flatMap(decodeUploadedObject),
-          Effect.mapError(
-            () =>
-              new RetryableAttempt({
-                status: response.status,
-                reason:
-                  "Cloud Storage did not report the new object generation",
-                outcomeUnknown: true,
-              })
-          )
-        );
-        return uploaded.generation;
-      })
+  const uploadedGeneration = (
+    response: HttpClientResponse.HttpClientResponse
+  ): Effect.Effect<
+    string,
+    PreconditionLost | RetryableAttempt | ReleaseStoreUnavailable
+  > => {
+    if (response.status === 412) {
+      return Effect.fail(new PreconditionLost());
+    }
+    if (response.status !== 200) {
+      return Effect.fail(statusFailure("write", response.status));
+    }
+    // The write landed, but without its generation the version is
+    // unknown; the retry's precondition check settles it.
+    return bodyText(response).pipe(
+      Effect.flatMap(decodeUploadedObject),
+      Effect.map((uploaded) => uploaded.generation),
+      Effect.mapError(
+        () =>
+          new RetryableAttempt({
+            status: response.status,
+            reason: "Cloud Storage did not report the new object generation",
+            outcomeUnknown: true,
+          })
+      )
+    );
+  };
+
+  /** Upload with retries, noting any attempt whose outcome is unknown. */
+  const upload = (input: {
+    readonly body: string;
+    readonly ifVersion: string;
+    readonly outcomeUnknown: Ref.Ref<boolean>;
+  }) =>
+    authorize(
+      "write",
+      HttpClientRequest.post(uploadUrl).pipe(
+        HttpClientRequest.setUrlParams({
+          uploadType: "media",
+          name: location.object,
+          ifGenerationMatch: input.ifVersion,
+        }),
+        HttpClientRequest.bodyText(input.body, "application/json")
+      )
+    ).pipe(
+      Effect.flatMap((request) => exchange(request, uploadedGeneration)),
+      Effect.tapError((error) =>
+        error._tag === "RetryableAttempt" && error.outcomeUnknown
+          ? Ref.set(input.outcomeUnknown, true)
+          : Effect.void
+      ),
+      retryTransient,
+      Effect.catchTag("RetryableAttempt", (attempt) =>
+        Effect.fail(unavailableAfterRetries("write")(attempt))
+      )
     );
 
   /**
    * A retry lost its precondition after an attempt whose outcome is
-   * unknown. That attempt landed only if the store now holds this call's
-   * record; anything else is another writer's.
+   * unknown. That attempt landed only if the object now exists at a newer
+   * generation holding this call's record; anything else is another
+   * writer's.
    */
-  const confirmEarlierAttempt = (record: ReleaseRecord, ifVersion: string) =>
-    read.pipe(
+  const confirmEarlierAttempt = (input: {
+    readonly record: ReleaseRecord;
+    readonly ifVersion: string;
+  }) =>
+    readPresent.pipe(
       Effect.filterOrFail(
-        (stored) =>
-          stored.version !== ifVersion && sameRecord(stored.record, record),
-        () => new ReleaseRecordConflict({ expectedVersion: ifVersion })
+        (stored): stored is StoredReleaseRecord =>
+          stored !== null &&
+          stored.version !== input.ifVersion &&
+          sameRecord(stored.record, input.record),
+        () => new ReleaseRecordConflict({ expectedVersion: input.ifVersion })
+      )
+    );
+
+  const settleLostPrecondition = (input: {
+    readonly record: ReleaseRecord;
+    readonly ifVersion: string;
+    readonly outcomeUnknown: Ref.Ref<boolean>;
+  }) =>
+    Ref.get(input.outcomeUnknown).pipe(
+      Effect.flatMap((unknown) =>
+        unknown
+          ? confirmEarlierAttempt(input)
+          : Effect.fail(
+              new ReleaseRecordConflict({ expectedVersion: input.ifVersion })
+            )
       )
     );
 
@@ -300,34 +382,22 @@ export const makeGcsReleaseRecordStore = Effect.fn(
     StoredReleaseRecord,
     ReleaseRecordConflict | ReleaseRecordCorrupt | ReleaseStoreUnavailable
   > =>
-    Effect.gen(function* () {
+    Effect.Do.pipe(
+      Effect.let("record", () => record),
+      Effect.let("ifVersion", () => ifVersion),
       // The record type guarantees a valid encoding; a failure is a defect.
-      const body = yield* encodeStoredRecord(record).pipe(Effect.orDie);
-      const outcomeUnknown = yield* Ref.make(false);
-      return yield* retryTransient(
-        upload(body, ifVersion).pipe(
-          Effect.tapError((error) =>
-            error._tag === "RetryableAttempt" && error.outcomeUnknown
-              ? Ref.set(outcomeUnknown, true)
-              : Effect.void
+      Effect.bind("body", () => Effect.orDie(encodeStoredRecord(record))),
+      Effect.bind("outcomeUnknown", () => Ref.make(false)),
+      Effect.flatMap((input) =>
+        upload(input).pipe(
+          Effect.map((version): StoredReleaseRecord => ({ record, version })),
+          Effect.catchTag("PreconditionLost", () =>
+            settleLostPrecondition(input)
           )
         )
-      ).pipe(
-        Effect.map((version): StoredReleaseRecord => ({ record, version })),
-        Effect.catchTags({
-          RetryableAttempt: (attempt) =>
-            Effect.fail(unavailableAfterRetries("write")(attempt)),
-          PreconditionLost: () =>
-            Effect.flatMap(Ref.get(outcomeUnknown), (unknown) =>
-              unknown
-                ? confirmEarlierAttempt(record, ifVersion)
-                : Effect.fail(
-                    new ReleaseRecordConflict({ expectedVersion: ifVersion })
-                  )
-            ),
-        })
-      );
-    }).pipe(Effect.withSpan("WorkspaceRelease.writeReleaseRecord"));
+      ),
+      Effect.withSpan("WorkspaceRelease.writeReleaseRecord")
+    );
 
   return ReleaseRecordStore.of({ read, write });
 });
