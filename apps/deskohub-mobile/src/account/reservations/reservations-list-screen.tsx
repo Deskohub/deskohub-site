@@ -857,16 +857,13 @@ function ReservationRow({
           {view.detail}
         </Text>
         {packPaid && <EntryPackBadge />}
-        {!packPaid &&
-          !past &&
-          rowOffersWithdrawal(row) &&
-          Option.isSome(target) && (
-            <WithdrawalLink
-              orderId={target.value}
-              style={styles.rowWithdrawal}
-              underlined
-            />
-          )}
+        {!past && rowOffersWithdrawal(row) && Option.isSome(target) && (
+          <WithdrawalLink
+            orderId={target.value}
+            style={styles.rowWithdrawal}
+            underlined
+          />
+        )}
       </View>
       {hasChevron && (
         <View
@@ -936,7 +933,7 @@ function NextReservation({ row }: { readonly row: ReservationListRow }) {
       <NextAccessLine
         access={view.access}
         orderId={Option.getOrUndefined(target)}
-        withdrawable={!packPaid && rowOffersWithdrawal(row)}
+        withdrawable={rowOffersWithdrawal(row)}
       />
     </BookingTicket>
   );

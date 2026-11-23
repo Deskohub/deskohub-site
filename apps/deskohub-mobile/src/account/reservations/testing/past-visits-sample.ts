@@ -42,9 +42,11 @@ export const samplePastVisits = (count: number, now: Date = new Date()) =>
 export const pastVisitsApiLayer = ({
   workspace,
   past,
+  current = [],
 }: {
   readonly workspace: FakeWorkspace;
   readonly past: ReadonlyArray<unknown>;
+  readonly current?: ReadonlyArray<unknown>;
 }): Layer.Layer<CustomerApi> => {
   const transport = Layer.effect(
     HttpClient.HttpClient,
@@ -56,7 +58,7 @@ export const pastVisitsApiLayer = ({
           );
         switch (url.pathname.replace(/\/$/, "")) {
           case "/api/customer/reservations":
-            return respond({ current: [], past, unavailable: [] });
+            return respond({ current, past, unavailable: [] });
           case "/api/customer/passes/catalog":
             return respond({
               entryPacks: [],

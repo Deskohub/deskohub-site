@@ -379,6 +379,7 @@ describe("listReservations", () => {
       endsAt: "2099-07-01T22:00:00Z",
       seats: 1,
       status: "confirmed",
+      settlement: "paid",
       accessStartsAt: "2099-07-01T06:00:00.000Z",
       accessEndsAt: "2099-07-01T22:00:00.000Z",
       bookedSelection: {

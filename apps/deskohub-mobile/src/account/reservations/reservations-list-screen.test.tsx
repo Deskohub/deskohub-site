@@ -1,5 +1,8 @@
 import { expect, mock, spyOn, test } from "bun:test";
-import type { CustomerReservationSettlement } from "@deskohub/workspace-customer-api";
+import {
+  CustomerReservationOrderId,
+  type CustomerReservationSummary,
+} from "@deskohub/workspace-customer-api";
 import { RegistryContext } from "@effect/atom-react";
 import { Effect, Layer, Result } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -23,6 +26,7 @@ import {
   fakeWorkspaceHttpClient,
   fakeWorkspaceOrigin,
 } from "../../customer-api/testing/fake-workspace";
+import { sampleLaterMeetingRoom } from "../../customer-api/testing/sample-fixtures";
 import { withSampleHistory } from "../../customer-api/testing/sample-history";
 import { AppLocaleProvider } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
@@ -214,21 +218,24 @@ test("empty history shows a pass catalog outage and retry restores the Unlimited
 
 /**
  * The linked account's screen over three past coworking visits paid with
- * money, except as `settled` names, with the pass rollout open and no pass
- * held.
+ * money, except as `settled` names (undefined: no settlement), with the pass
+ * rollout open and no pass held.
  */
 const withPastVisits = async (
-  settled: Readonly<Record<string, CustomerReservationSettlement>>,
-  check: (hosts: ReturnType<typeof hostTree>) => void
+  settled: Readonly<Record<string, string | undefined>>,
+  check: (hosts: ReturnType<typeof hostTree>) => void,
+  current: ReadonlyArray<CustomerReservationSummary> = []
 ) => {
   const workspace = FakeWorkspace.forKind("linked");
   const base = fakeCustomerDataLayer({ workspace, device: makeFakeDevice() });
   const locale = "en-US" as const;
-  const past = samplePastVisits(3).map((visit) => ({
-    ...visit,
-    settlement: settled[visit.orderId] ?? visit.settlement,
-  }));
-  const api = pastVisitsApiLayer({ workspace, past });
+  const past = samplePastVisits(3).map(({ settlement, ...visit }) => {
+    const value = Object.hasOwn(settled, visit.orderId)
+      ? settled[visit.orderId]
+      : settlement;
+    return value === undefined ? visit : { ...visit, settlement: value };
+  });
+  const api = pastVisitsApiLayer({ workspace, past, current });
   const registry = makeCustomerDataRegistry(Layer.mergeAll(base, api));
   const release = [
     registry.mount(accountAtom),
@@ -314,16 +321,48 @@ test("visits paid with an Entry pack offer no savings link, and carry its label"
   );
 });
 
-test("free and refunded visits offer no savings link", async () => {
+test("free, unsettled and unknown settlements offer no savings link", async () => {
   await withPastVisits(
     {
       "sample-visit-1": "free",
-      "sample-visit-2": "refunded",
-      "sample-visit-3": "free",
+      // A refunded order, or a value a later server adds.
+      "sample-visit-2": undefined,
+      "sample-visit-3": "voucher",
     },
     (hosts) => {
       expect(savingsLinks(hosts)).toHaveLength(0);
     }
+  );
+});
+
+test("an upcoming Entry pack visit keeps the withdrawal the server offers", async () => {
+  const room = sampleLaterMeetingRoom(new Date());
+  const current = [
+    { ...room, settlement: "entry-pack" },
+    {
+      ...room,
+      id: "sample-reservation-room-later-2",
+      orderId: CustomerReservationOrderId.make("sample-room-later-2"),
+      settlement: "entry-pack",
+    },
+  ];
+  await withPastVisits(
+    {},
+    (hosts) => {
+      const texts = findAll(hosts, "Text").map(textOf);
+      expect(
+        texts.filter(
+          (text) => text === m.passes_paid_with_pack({}, { locale: "en-US" })
+        ).length
+      ).toBeGreaterThan(0);
+      expect(
+        texts.filter(
+          (text) =>
+            text === m.reservationWithdrawalAction({}, { locale: "en-US" })
+        ).length
+      ).toBeGreaterThan(0);
+    },
+    current
   );
 });
 
