@@ -2,7 +2,8 @@
  * Who owns each piece of the Workspace Google Cloud surface (#1452). One
  * owner per workload or field: Alchemy beta.87 for what its GCP provider
  * declares, Terraform (`infra/workspace-edge`) for the unsupported edge
- * subgraph, the owner bootstrap for identity and state, and deferred items
+ * subgraph, the owner bootstrap for identity and state, the release flow
+ * for the release record in the state bucket, and deferred items
  * with the reason they wait.
  */
 export type SurfaceOwner =
@@ -13,6 +14,8 @@ export type SurfaceOwner =
     }
   | { readonly kind: "terraform"; readonly path: string }
   | { readonly kind: "owner-bootstrap"; readonly path: string }
+  /** The fenced release flow that owns the record and drives service apply. */
+  | { readonly kind: "release-flow"; readonly path: string }
   | { readonly kind: "deferred"; readonly reason: string };
 
 export interface SurfaceItem {
@@ -93,11 +96,10 @@ export const workspaceSurfaceClassification: ReadonlyArray<SurfaceItem> = [
     },
   },
   {
-    capability: "Release record store and service apply",
+    capability: "Release record and fenced service apply",
     owner: {
-      kind: "deferred",
-      reason:
-        "The reconciler runs against the ReleaseRecordStore port. The Cloud Storage adapter with generation preconditions, and the apply entry that declares services from it, ship with the hosted #1452 proof; alchemy.run.ts declares only the foundation until then.",
+      kind: "release-flow",
+      path: "packages/workspace-infrastructure/src/release",
     },
   },
   {
