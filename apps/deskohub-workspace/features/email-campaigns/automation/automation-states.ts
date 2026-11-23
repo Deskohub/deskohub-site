@@ -22,7 +22,6 @@ export {
   automationRunEventKinds,
   automationRunOutcomes,
   automationRunSkipReasons,
-  automationSendDeferralCauses,
   automationTriggerKinds,
 } from "@deskohub/workspace-admin-api";
 

@@ -31,7 +31,7 @@ type ConditionStep = Extract<AutomationStep, { readonly _tag: "Condition" }>;
 export type SendStep = Extract<AutomationStep, { readonly _tag: "Send" }>;
 
 /** Why a Send step's delivery policies skip a run. */
-export type SendPolicySkipReason = Extract<
+type SendPolicySkipReason = Extract<
   AutomationRunSkipReason,
   "already-sent-once" | "pass-holder" | "consent-withdrawn"
 >;
@@ -205,7 +205,7 @@ export const simulateRun = <E, R>(input: {
  * defers the send; then the pre-submit check skips a pass holder or a
  * customer who withdrew consent, on the tick it would send.
  */
-export const sendStepEnd = (input: {
+const sendStepEnd = (input: {
   readonly step: SendStep;
   readonly at: Temporal.Instant;
   readonly facts: SendPolicyFacts;

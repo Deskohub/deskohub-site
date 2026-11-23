@@ -28,7 +28,7 @@ import {
  * address or analytics identity changed after the batch was persisted: it
  * was never requested.
  */
-export const passHolderGuardRecipientChangedCode = "recipient-changed";
+const passHolderGuardRecipientChangedCode = "recipient-changed";
 
 /**
  * Requests the one-customer batch of a Send that skips pass holders

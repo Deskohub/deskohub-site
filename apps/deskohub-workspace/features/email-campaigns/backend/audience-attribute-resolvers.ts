@@ -32,7 +32,7 @@ import type { ICampaignCandidateRepository } from "./campaign-candidate.reposito
 import { isBookedStay } from "./reservation-stay";
 
 /** A Dotypos visit and its booked interval. */
-export type AudienceVisit = {
+type AudienceVisit = {
   readonly dotyposReservationId: DotyposReservationId;
   readonly interval: BookedInterval;
 };

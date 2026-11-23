@@ -26,7 +26,7 @@ import type { AutomationRunOutcome } from "../automation-states";
  * admission (a replay or an admitted attempt ends `unconfirmed`), and
  * every other withdrawal comes before the send.
  */
-export const customerClaimReleasingOutcomes = [
+const customerClaimReleasingOutcomes = [
   "skipped",
   "failed",
   "withdrawn",

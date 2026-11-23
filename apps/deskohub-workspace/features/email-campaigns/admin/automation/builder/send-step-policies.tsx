@@ -21,19 +21,19 @@ import type { FlowStepValue } from "./automation-flow-form";
 export type SendStep = Extract<FlowStepValue, { _tag: "Send" }>;
 
 /** The gap a newly turned-on one-off campaign gap starts with. */
-export const defaultOneOffCampaignGapDays = 14;
+const defaultOneOffCampaignGapDays = 14;
 
 /*
  * A turned-off rule drops its key, so a Send without rules keeps the exact
  * shape, and draft hash, it had before the rules existed.
  */
 
-export const withOncePerCustomer = (step: SendStep, on: boolean): SendStep => {
+const withOncePerCustomer = (step: SendStep, on: boolean): SendStep => {
   const { oncePerCustomer: _, ...rest } = step;
   return on ? { ...rest, oncePerCustomer: true } : rest;
 };
 
-export const withOneOffCampaignGap = (
+const withOneOffCampaignGap = (
   step: SendStep,
   days: number | null
 ): SendStep => {
@@ -41,7 +41,7 @@ export const withOneOffCampaignGap = (
   return days === null ? rest : { ...rest, oneOffCampaignGap: { days } };
 };
 
-export const withSkipPassHolders = (step: SendStep, on: boolean): SendStep => {
+const withSkipPassHolders = (step: SendStep, on: boolean): SendStep => {
   const { skipPassHolders: _, ...rest } = step;
   return on ? { ...rest, skipPassHolders: true } : rest;
 };
