@@ -261,7 +261,9 @@ export const mayBeOfTriggerStay = (
 /**
  * Whether the triggering visit is of the trigger's stay (D1): always
  * without one. Otherwise its booked interval and stored cowork tier must
- * give that stay.
+ * give that stay. Intake judges it once, from the visit it reads when it
+ * takes the event in. The pre-submit re-check (D35) reads the visit again
+ * only to withdraw or defer the send, never to judge its stay again.
  */
 export const isOfTriggerStay = (
   stay: Option.Option<ReservationStay>,

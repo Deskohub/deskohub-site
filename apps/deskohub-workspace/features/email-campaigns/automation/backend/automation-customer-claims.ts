@@ -21,7 +21,8 @@ import type { AutomationRunOutcome } from "../automation-states";
 
 /**
  * Run endings that prove the run never mailed the customer, so they give
- * up its claim. A `withdrawn` run never reached the provider: delivery
+ * up its claim. `skipped` covers every skip before the provider request,
+ * a marketing consent withdrawn by then included. A `withdrawn` run never reached the provider: delivery
  * withdraws a pass reminder only when its first request is refused before
  * admission (a replay or an admitted attempt ends `unconfirmed`), and
  * every other withdrawal comes before the send.
