@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
+import { Schema } from "effect";
 import { faceGroups, faceIsDrawn, sampleDieFrame } from "./die-frame";
 import { dieFaces, type Point } from "./geometry";
 import {
@@ -8,7 +9,7 @@ import {
   loadingDieLayout,
   serializeLoadingDieDocument,
 } from "./loading-die-document";
-import type { LoadingDieLottie } from "./lottie";
+import { LoadingDieLottieSchema } from "./lottie";
 import { dieBase, loadingDiePose } from "./motion";
 import { type LoadingDieMotion, loadingDieTiming } from "./timing";
 
@@ -17,19 +18,19 @@ import { type LoadingDieMotion, loadingDieTiming } from "./timing";
  * `UPDATE_LOADING_DIE=1 bun test src/loading-die/loading-die-document.test.ts`
  * and look at the frames before committing.
  */
-const committed: Record<LoadingDieMotion, URL> = {
+const committed = {
   tumble: new URL("./loading-die-tumble.lottie.json", import.meta.url),
   inPlace: new URL("./loading-die-in-place.lottie.json", import.meta.url),
-};
+} satisfies Record<LoadingDieMotion, URL>;
 const motions = ["tumble", "inPlace"] as const;
 const byteBudget = 150_000;
 
-const generated = Object.fromEntries(
-  motions.map((motion) => [
-    motion,
-    serializeLoadingDieDocument(buildLoadingDieDocument(motion)),
-  ])
-) as Record<LoadingDieMotion, string>;
+const generatedText = (motion: LoadingDieMotion) =>
+  serializeLoadingDieDocument(buildLoadingDieDocument(motion));
+const generated = {
+  tumble: generatedText("tumble"),
+  inPlace: generatedText("inPlace"),
+} satisfies Record<LoadingDieMotion, string>;
 
 if (process.env.UPDATE_LOADING_DIE === "1") {
   for (const motion of motions) {
@@ -39,8 +40,12 @@ if (process.env.UPDATE_LOADING_DIE === "1") {
 
 const committedText = (motion: LoadingDieMotion) =>
   readFileSync(committed[motion], "utf8");
+/** Strict, so a key the generator writes but the schema does not describe fails here. */
+const decodeDocument = Schema.decodeUnknownSync(LoadingDieLottieSchema, {
+  onExcessProperty: "error",
+});
 const committedDocument = (motion: LoadingDieMotion) =>
-  JSON.parse(committedText(motion)) as LoadingDieLottie;
+  decodeDocument(JSON.parse(committedText(motion)));
 
 const distance = (a: Point, b: Point) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 

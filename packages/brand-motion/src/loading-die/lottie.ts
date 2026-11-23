@@ -4,6 +4,7 @@
  * keys, hold keys keep their value until the next key.
  */
 
+import { Schema } from "effect";
 import type { Point } from "./geometry";
 
 /** A closed path: vertices with in and out tangents relative to them. */
@@ -127,7 +128,7 @@ export interface DieLayer extends LayerTiming {
   readonly shapes: readonly (FaceGroup | GradientFill | SolidFill)[];
 }
 
-/** A loading die document. A type alias, so it stays assignable to the public `LottieDocument`. */
+/** A loading die document, exported as the public `LottieDocument`. */
 export type LoadingDieLottie = {
   readonly v: string;
   readonly nm: string;
@@ -228,32 +229,154 @@ export const sampleShape = (
         ]
       )[0];
 
+const PointSchema = Schema.Tuple([Schema.Finite, Schema.Finite]);
+
+const LottieShapeSchema = Schema.Struct({
+  c: Schema.Literal(true),
+  v: Schema.Array(PointSchema),
+  i: Schema.Array(PointSchema),
+  o: Schema.Array(PointSchema),
+});
+
+const LottieEasingSchema = Schema.Struct({
+  x: Schema.Finite,
+  y: Schema.Finite,
+});
+
+const lottieProperty = <Static extends Schema.Top, Keyed extends Schema.Top>(
+  staticValue: Static,
+  keyedValue: Keyed
+) =>
+  Schema.Union([
+    Schema.Struct({ a: Schema.Literal(0), k: staticValue }),
+    Schema.Struct({
+      a: Schema.Literal(1),
+      k: Schema.Array(
+        Schema.Struct({
+          t: Schema.Finite,
+          s: keyedValue,
+          h: Schema.optionalKey(Schema.Literal(1)),
+          o: Schema.optionalKey(LottieEasingSchema),
+          i: Schema.optionalKey(LottieEasingSchema),
+        })
+      ),
+    }),
+  ]);
+
+const ShapePropertySchema = lottieProperty(
+  LottieShapeSchema,
+  Schema.Tuple([LottieShapeSchema])
+);
+const ScalarPropertySchema = lottieProperty(
+  Schema.Finite,
+  Schema.Tuple([Schema.Finite])
+);
+const VectorPropertySchema = lottieProperty(
+  Schema.Array(Schema.Finite),
+  Schema.Array(Schema.Finite)
+);
+
+const FaceGroupSchema = Schema.Struct({
+  ty: Schema.Literal("gr"),
+  nm: Schema.String,
+  it: Schema.Tuple([
+    Schema.Struct({
+      ty: Schema.Literal("sh"),
+      nm: Schema.String,
+      ks: ShapePropertySchema,
+    }),
+    Schema.Struct({
+      ty: Schema.Literal("tr"),
+      p: VectorPropertySchema,
+      a: VectorPropertySchema,
+      s: VectorPropertySchema,
+      r: ScalarPropertySchema,
+      o: ScalarPropertySchema,
+    }),
+  ]),
+});
+
+const GradientFillSchema = Schema.Struct({
+  ty: Schema.Literal("gf"),
+  nm: Schema.String,
+  o: ScalarPropertySchema,
+  r: Schema.Literal(1),
+  bm: Schema.Literal(0),
+  t: Schema.Literal(1),
+  s: VectorPropertySchema,
+  e: VectorPropertySchema,
+  g: Schema.Struct({ p: Schema.Finite, k: VectorPropertySchema }),
+});
+
+const SolidFillSchema = Schema.Struct({
+  ty: Schema.Literal("fl"),
+  nm: Schema.String,
+  o: ScalarPropertySchema,
+  c: VectorPropertySchema,
+  r: Schema.Literal(1),
+  bm: Schema.Literal(0),
+});
+
+const SplitPositionSchema = Schema.Struct({
+  s: Schema.Literal(true),
+  x: ScalarPropertySchema,
+  y: ScalarPropertySchema,
+});
+
+const LayerTransformSchema = Schema.Struct({
+  o: ScalarPropertySchema,
+  r: ScalarPropertySchema,
+  p: Schema.Union([VectorPropertySchema, SplitPositionSchema]),
+  a: VectorPropertySchema,
+  s: VectorPropertySchema,
+});
+
+const LayerTimingSchema = Schema.Struct({
+  ddd: Schema.Literal(0),
+  ind: Schema.Finite,
+  nm: Schema.String,
+  sr: Schema.Literal(1),
+  ao: Schema.Literal(0),
+  ip: Schema.Finite,
+  op: Schema.Finite,
+  st: Schema.Literal(0),
+  bm: Schema.Literal(0),
+});
+
+const HopLayerSchema = Schema.Struct({
+  ...LayerTimingSchema.fields,
+  ty: Schema.Literal(3),
+  ks: Schema.Struct({ ...LayerTransformSchema.fields, p: SplitPositionSchema }),
+});
+
+const DieLayerSchema = Schema.Struct({
+  ...LayerTimingSchema.fields,
+  ty: Schema.Literal(4),
+  parent: Schema.Finite,
+  ks: LayerTransformSchema,
+  shapes: Schema.Array(
+    Schema.Union([FaceGroupSchema, GradientFillSchema, SolidFillSchema])
+  ),
+});
+
 /**
- * Confirms the layer structure the runtime reads from a committed document.
- * The documents are generated and checked by loading-die-document.test.ts,
- * so this is a guard at the JSON import, not a full validation.
+ * A loading die document as the runtime reads it. The committed documents are
+ * generated and checked by loading-die-document.test.ts; checking them
+ * against this schema types the JSON import.
  */
-export const isLoadingDieLottie = (
-  value: unknown
-): value is LoadingDieLottie => {
-  if (typeof value !== "object" || value === null || !("layers" in value)) {
-    return false;
-  }
-  const { layers } = value;
-  if (!Array.isArray(layers) || layers.length !== 2) {
-    return false;
-  }
-  const [hop, die]: unknown[] = layers;
-  return (
-    typeof hop === "object" &&
-    hop !== null &&
-    "ty" in hop &&
-    hop.ty === 3 &&
-    typeof die === "object" &&
-    die !== null &&
-    "ty" in die &&
-    die.ty === 4 &&
-    "shapes" in die &&
-    Array.isArray(die.shapes)
-  );
-};
+export const LoadingDieLottieSchema: Schema.Decoder<LoadingDieLottie> =
+  Schema.Struct({
+    v: Schema.String,
+    nm: Schema.String,
+    fr: Schema.Finite,
+    ip: Schema.Finite,
+    op: Schema.Finite,
+    w: Schema.Finite,
+    h: Schema.Finite,
+    ddd: Schema.Literal(0),
+    assets: Schema.Array(Schema.Never),
+    layers: Schema.Tuple([HopLayerSchema, DieLayerSchema]),
+  });
+
+/** Narrows an imported JSON document to a loading die document, keeping the object itself. */
+export const isLoadingDieLottie = Schema.is(LoadingDieLottieSchema);

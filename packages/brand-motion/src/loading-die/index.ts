@@ -6,6 +6,7 @@
  * player or draw sampled frames themselves.
  */
 
+import type { Schema } from "effect";
 import {
   faceIsDrawn,
   facePathData,
@@ -22,21 +23,26 @@ import {
 } from "./lottie";
 import type { LoadingDieMotion } from "./timing";
 
-export { type LoadingDieMotion, loadingDieTiming } from "./timing";
+export {
+  type LoadingDieMotion,
+  type LoadingDieTiming,
+  loadingDieTiming,
+} from "./timing";
 
 /** Fill of the die's faces: the brand gradient from the colour logo, or one solid `#rrggbb` colour. */
 export type LoadingDieFill =
   | { readonly kind: "brand" }
   | { readonly kind: "solid"; readonly color: `#${string}` };
 
-/** A Lottie (Bodymovin) document. */
-export type LottieDocument = Readonly<Record<string, unknown>> & {
-  readonly w: number;
-  readonly h: number;
-  readonly fr: number;
-  readonly ip: number;
-  readonly op: number;
-};
+/**
+ * A Lottie (Bodymovin) document: its header fields, and any other top-level
+ * field as JSON. `loadingDieAnimation` also returns the die's own layers.
+ */
+export type LottieDocument = Pick<
+  LoadingDieLottie,
+  "w" | "h" | "fr" | "ip" | "op"
+> &
+  Readonly<Record<string, Schema.Json | LoadingDieLottie["layers"]>>;
 
 /** Size of a motion's document and of the die at rest inside it, in document units. */
 export interface LoadingDieBox {
@@ -67,16 +73,27 @@ export interface LoadingDieBrandGradient {
   };
 }
 
-const committedDocument = (json: unknown): LoadingDieLottie => {
-  if (!isLoadingDieLottie(json)) {
-    throw new Error("A committed loading die document is malformed.");
-  }
-  return json;
+const committedDocuments = {
+  tumble: tumbleDocument,
+  inPlace: inPlaceDocument,
 };
 
-const documents: Readonly<Record<LoadingDieMotion, LoadingDieLottie>> = {
-  tumble: committedDocument(tumbleDocument),
-  inPlace: committedDocument(inPlaceDocument),
+const checkedDocuments = new Map<LoadingDieMotion, LoadingDieLottie>();
+
+/** The committed document of `motion`, checked on first use and then shared. */
+const committedDocument = (motion: LoadingDieMotion): LoadingDieLottie => {
+  const checked = checkedDocuments.get(motion);
+  if (checked !== undefined) {
+    return checked;
+  }
+  const document = committedDocuments[motion];
+  if (!isLoadingDieLottie(document)) {
+    throw new Error(
+      `The committed ${motion} loading die document is malformed.`
+    );
+  }
+  checkedDocuments.set(motion, document);
+  return document;
 };
 
 const solidColorPattern = /^#[0-9a-f]{6}$/i;
@@ -120,10 +137,10 @@ const animations = new Map<string, LoadingDieLottie>();
 export function loadingDieAnimation(options: {
   readonly motion: LoadingDieMotion;
   readonly fill: LoadingDieFill;
-}): LottieDocument {
+}): LottieDocument & LoadingDieLottie {
   const { motion, fill } = options;
   if (fill.kind === "brand") {
-    return documents[motion];
+    return committedDocument(motion);
   }
   if (!solidColorPattern.test(fill.color)) {
     throw new RangeError(
@@ -136,7 +153,7 @@ export function loadingDieAnimation(options: {
   if (cached !== undefined) {
     return cached;
   }
-  const animation = withFill(documents[motion], solidFill(color));
+  const animation = withFill(committedDocument(motion), solidFill(color));
   animations.set(key, animation);
   return animation;
 }
@@ -152,7 +169,7 @@ export function loadingDieBox(motion: LoadingDieMotion): LoadingDieBox {
   if (cached !== undefined) {
     return cached;
   }
-  const document = documents[motion];
+  const document = committedDocument(motion);
   const rest = paintedBounds(sampleDieFrame(document, 0));
   if (rest === undefined) {
     throw new Error("The loading die draws nothing at rest.");
@@ -174,7 +191,7 @@ export function loadingDieFrame(
   if (!Number.isFinite(frame)) {
     throw new RangeError(`The loading die frame must be finite, got ${frame}.`);
   }
-  const document = documents[motion];
+  const document = committedDocument(motion);
   const length = document.op - document.ip;
   const sampled = sampleDieFrame(
     document,
@@ -203,7 +220,7 @@ const hexColor = (components: readonly number[]): `#${string}` =>
 export function loadingDieBrandGradient(
   motion: LoadingDieMotion
 ): LoadingDieBrandGradient {
-  const tint = documents[motion].layers[1].shapes.at(-1);
+  const tint = committedDocument(motion).layers[1].shapes.at(-1);
   if (
     tint?.ty !== "gf" ||
     tint.s.a !== 0 ||
