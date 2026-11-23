@@ -19,13 +19,14 @@ import {
   ReleaseReadbackUnavailable,
   ReleaseServiceReadback,
 } from "./release-platform";
+import { ReleaseDeployment } from "./release-record";
 
 const cloudRunApiRoot = "https://run.googleapis.com/v2";
 
 /**
  * Retry ceiling for every Cloud Run read. Reads are idempotent, so each
- * attempt gets its own timeout and transient answers (408, 429, 5xx,
- * transport failures, timeouts) retry with exponential backoff.
+ * attempt, body included, gets its own timeout, and a missing answer, 429
+ * or 5xx retries with exponential backoff within one shared budget.
  */
 const cloudRunReadRetry = {
   attemptTimeout: "10 seconds",
@@ -86,28 +87,53 @@ type CloudRunRevision = typeof CloudRunRevision.Type;
 const isImageDigest = Schema.is(ImageDigest);
 
 /**
- * The digest Cloud Run resolved for the serving container: the only
- * container, or the one that receives requests (declares a port). Cloud Run
- * reports either a bare digest or a full `image@sha256:…` reference.
+ * The status of the serving container. A revision with one container and
+ * one status uses that status unless their names disagree; otherwise the
+ * serving container is the one named container that declares a port, and
+ * only its own status counts.
+ */
+const servingContainerStatus = (revision: CloudRunRevision) => {
+  const containers = revision.containers ?? [];
+  const statuses = revision.containerStatuses ?? [];
+  const [onlyContainer] = containers;
+  const [onlyStatus] = statuses;
+  if (containers.length === 1) {
+    return statuses.length === 1 &&
+      onlyStatus !== undefined &&
+      (!onlyContainer?.name ||
+        !onlyStatus.name ||
+        onlyContainer.name === onlyStatus.name)
+      ? onlyStatus
+      : undefined;
+  }
+  const ingress = containers.filter(
+    (container) => (container.ports?.length ?? 0) > 0
+  );
+  const [onlyIngress] = ingress;
+  const ingressName = ingress.length === 1 ? onlyIngress?.name : undefined;
+  return ingressName
+    ? statuses.find((status) => status.name === ingressName)
+    : undefined;
+};
+
+/**
+ * The digest Cloud Run resolved for the serving container, which it reports
+ * as a bare digest or a full `image@sha256:…` reference.
  */
 const servingImageDigest = (revision: CloudRunRevision) => {
-  const statuses = revision.containerStatuses ?? [];
-  const servingName = revision.containers?.find(
-    (container) => (container.ports?.length ?? 0) > 0
-  )?.name;
-  const serving =
-    statuses.length === 1
-      ? statuses[0]
-      : statuses.find(
-          (status) => servingName !== undefined && status.name === servingName
-        );
-  const resolved = serving?.imageDigest;
+  const resolved = servingContainerStatus(revision)?.imageDigest;
   if (resolved === undefined) {
     return null;
   }
   const digest = resolved.slice(resolved.lastIndexOf("@") + 1);
   return isImageDigest(digest) ? digest : null;
 };
+
+/** No answer, rate limiting, or a server error: a later read can succeed. */
+const isTransientReadFailure = ({ status }: ReleaseReadbackUnavailable) =>
+  status === null || status === 429 || status >= 500;
+
+const isRevisionName = Schema.is(ReleaseDeployment.fields.revision);
 
 const isReady = (revision: CloudRunRevision) =>
   revision.reconciling !== true &&
@@ -126,13 +152,7 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
   config: WorkspaceStackConfig
 ) {
   const credentials = yield* Credentials;
-  const client = (yield* HttpClient.HttpClient).pipe(
-    HttpClient.timeout(cloudRunReadRetry.attemptTimeout),
-    HttpClient.retryTransient({
-      schedule: Schedule.exponential(cloudRunReadRetry.backoff),
-      times: cloudRunReadRetry.retries,
-    })
-  );
+  const client = yield* HttpClient.HttpClient;
   const serviceResource = (serviceId: string) =>
     `projects/${config.projectId}/locations/${config.region}/services/${serviceId}`;
 
@@ -144,43 +164,73 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
       const unavailable = (status: number | null, reason: string) =>
         new ReleaseReadbackUnavailable({ resource, status, reason });
       const { accessToken, quotaProject } = yield* credentials.pipe(
+        Effect.timeout(cloudRunReadRetry.attemptTimeout),
         Effect.mapError(() => unavailable(null, "credentials unavailable"))
       );
-      const response = yield* client
-        .execute(
-          HttpClientRequest.get(`${cloudRunApiRoot}/${resource}`).pipe(
-            HttpClientRequest.bearerToken(accessToken),
-            HttpClientRequest.acceptJson,
-            // User credentials bill quota to an explicit project.
-            quotaProject === undefined
-              ? (request) => request
-              : HttpClientRequest.setHeader("x-goog-user-project", quotaProject)
-          )
-        )
-        .pipe(
-          Effect.mapError(() => unavailable(null, "no response from Cloud Run"))
+      const request = HttpClientRequest.get(
+        `${cloudRunApiRoot}/${resource}`
+      ).pipe(
+        HttpClientRequest.bearerToken(accessToken),
+        HttpClientRequest.acceptJson,
+        // User credentials bill quota to an explicit project.
+        quotaProject
+          ? HttpClientRequest.setHeader("x-goog-user-project", quotaProject)
+          : (unchanged) => unchanged
+      );
+      // One attempt runs through the whole body, under one timeout; 404 is
+      // the only answer that means absence.
+      const attempt = Effect.gen(function* () {
+        const response = yield* client
+          .execute(request)
+          .pipe(
+            Effect.mapError(() =>
+              unavailable(null, "no response from Cloud Run")
+            )
+          );
+        if (response.status === 404) {
+          return null;
+        }
+        if (response.status !== 200) {
+          return yield* unavailable(
+            response.status,
+            `Cloud Run answered HTTP ${response.status}`
+          );
+        }
+        return yield* response.text.pipe(
+          Effect.mapError(() => unavailable(null, "Cloud Run body interrupted"))
         );
-      if (response.status === 404) {
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: cloudRunReadRetry.attemptTimeout,
+          orElse: () => Effect.fail(unavailable(null, "Cloud Run timed out")),
+        })
+      );
+      const body = yield* attempt.pipe(
+        Effect.retry({
+          schedule: Schedule.exponential(cloudRunReadRetry.backoff),
+          times: cloudRunReadRetry.retries,
+          while: isTransientReadFailure,
+        })
+      );
+      if (body === null) {
         return null;
       }
-      if (response.status !== 200) {
-        return yield* unavailable(
-          response.status,
-          `Cloud Run answered HTTP ${response.status}`
-        );
-      }
-      return yield* response.json.pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(schema)),
-        Effect.mapError(() =>
-          unavailable(response.status, "unreadable Cloud Run response")
-        )
+      return yield* Schema.decodeEffect(Schema.fromJsonString(schema))(
+        body
+      ).pipe(
+        Effect.mapError(() => unavailable(200, "unreadable Cloud Run response"))
       );
     });
 
+  // A name Cloud Run could never assign names no revision; it is never
+  // spliced into a request path.
   const readRevision = (serviceId: string, revision: string) =>
-    read(
-      `${serviceResource(serviceId)}/revisions/${encodeURIComponent(revision)}`,
-      CloudRunRevision
+    (isRevisionName(revision)
+      ? read(
+          `${serviceResource(serviceId)}/revisions/${revision}`,
+          CloudRunRevision
+        )
+      : Effect.succeed(null)
     ).pipe(
       Effect.map(
         (live): ObservedRevision | null =>
@@ -213,6 +263,8 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
         .filter((entry) => entry.percent > 0 || entry.tag !== undefined)
         .map((entry) => entry.revision)
     );
+    // A routed revision deleted between the reads leaves no digest, so its
+    // serving image stays unverified instead of failing the whole readback.
     const revisions = yield* Effect.forEach(
       routed,
       (revision) => readRevision(serviceId, revision),

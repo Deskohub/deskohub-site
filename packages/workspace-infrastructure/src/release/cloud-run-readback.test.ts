@@ -3,7 +3,7 @@ import { Credentials } from "@alchemy.run/gcp";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -69,10 +69,17 @@ const steadyWeb = {
   annotations: { [trafficGenerationAnnotation]: "7" },
 };
 
-interface Answer {
-  readonly status: number;
-  readonly body?: unknown;
-}
+type Answer =
+  | {
+      readonly status: number;
+      readonly body?: unknown;
+      /** A raw body instead of JSON-encoded `body`. */
+      readonly text?: string;
+      /** The body starts but never finishes. */
+      readonly stallBody?: true;
+    }
+  /** No response: the connection failed, or headers never arrive. */
+  | { readonly transport: "failed" | "stalled" };
 
 /**
  * An in-memory Cloud Run Admin API. Each path answers its listed responses
@@ -93,30 +100,44 @@ const fakeCloudRun = (
     readonly authorization: string | undefined;
     readonly quotaProject: string | undefined;
   }> = [];
-  const client = HttpClient.make((request, url) =>
-    Effect.sync(() => {
-      requests.push({
-        method: request.method,
-        path: url.pathname,
-        authorization: request.headers.authorization,
-        quotaProject: request.headers["x-goog-user-project"],
-      });
-      const queue = queues.get(url.pathname);
-      const answer = (queue && queue.length > 1
-        ? queue.shift()
-        : queue?.[0]) ?? {
-        status: 404,
-        body: { error: { code: 404, status: "NOT_FOUND" } },
-      };
-      return HttpClientResponse.fromWeb(
+  const client = HttpClient.make((request, url) => {
+    requests.push({
+      method: request.method,
+      path: url.pathname,
+      authorization: request.headers.authorization,
+      quotaProject: request.headers["x-goog-user-project"],
+    });
+    const queue = queues.get(url.pathname);
+    const answer: Answer = (queue && queue.length > 1
+      ? queue.shift()
+      : queue?.[0]) ?? {
+      status: 404,
+      body: { error: { code: 404, status: "NOT_FOUND" } },
+    };
+    if ("transport" in answer) {
+      return answer.transport === "stalled"
+        ? Effect.never
+        : Effect.fail(
+            new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({ request }),
+            })
+          );
+    }
+    const body = answer.stallBody
+      ? new ReadableStream({
+          start: (controller) => controller.enqueue(new Uint8Array([123])),
+        })
+      : (answer.text ?? JSON.stringify(answer.body ?? {}));
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
         request,
-        new Response(JSON.stringify(answer.body ?? {}), {
+        new Response(body, {
           status: answer.status,
           headers: { "content-type": "application/json" },
         })
-      );
-    })
-  );
+      )
+    );
+  });
   return { client, requests };
 };
 
@@ -126,7 +147,9 @@ const readback = <A>(
   use: (
     port: typeof ReleaseServiceReadback.Service
   ) => Effect.Effect<A, ReleaseReadbackUnavailable>,
-  quotaProject?: string
+  credentials: typeof Credentials.Service = Effect.succeed({
+    accessToken: Redacted.make(accessToken),
+  })
 ) =>
   Effect.runPromiseExit(
     Effect.gen(function* () {
@@ -144,13 +167,7 @@ const readback = <A>(
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(HttpClient.HttpClient, fake.client),
-                Layer.succeed(
-                  Credentials,
-                  Effect.succeed({
-                    accessToken: Redacted.make(accessToken),
-                    ...(quotaProject ? { quotaProject } : {}),
-                  })
-                )
+                Layer.succeed(Credentials, credentials)
               )
             )
           ),
@@ -245,10 +262,28 @@ describe("Cloud Run service readback", () => {
   test("bills user credentials to their quota project", async () => {
     const fake = fakeCloudRun(steadyRoutes);
     await success(
-      readback(fake, (port) => port.revision(servingRevision), "quota-project")
+      readback(
+        fake,
+        (port) => port.revision(servingRevision),
+        Effect.succeed({
+          accessToken: Redacted.make(accessToken),
+          quotaProject: "quota-project",
+        })
+      )
+    );
+    await success(
+      readback(
+        fake,
+        (port) => port.revision(servingRevision),
+        Effect.succeed({
+          accessToken: Redacted.make(accessToken),
+          quotaProject: "",
+        })
+      )
     );
     expect(fake.requests.map(({ quotaProject }) => quotaProject)).toEqual([
       "quota-project",
+      undefined,
     ]);
   });
 
@@ -437,27 +472,99 @@ describe("Cloud Run service readback", () => {
     ).toMatchObject({ imageDigest: candidateDigest });
   });
 
-  test("retries a transient answer, then reads", async () => {
+  test("never takes a sidecar's digest for the serving container", async () => {
+    for (const shape of [
+      {
+        containers: [
+          { name: "sidecar" },
+          { name: "workspace", ports: [{ containerPort: 8080 }] },
+        ],
+        containerStatuses: [{ name: "sidecar", imageDigest: servingDigest }],
+      },
+      {
+        containers: [{ name: "workspace" }],
+        containerStatuses: [{ name: "sidecar", imageDigest: servingDigest }],
+      },
+      {
+        containers: [{ name: "sidecar" }, { name: "workspace" }],
+        containerStatuses: [{ name: "workspace", imageDigest: servingDigest }],
+      },
+    ]) {
+      const fake = fakeCloudRun({
+        [revisionPath(candidateRevision)]: {
+          status: 200,
+          body: {
+            ...readyRevision(candidateRevision, candidateDigest),
+            ...shape,
+          },
+        },
+      });
+      expect(
+        await success(
+          readback(fake, (port) => port.revision(candidateRevision))
+        )
+      ).toMatchObject({ imageDigest: null });
+    }
+  });
+
+  test("a name Cloud Run could not assign is no revision and sends no request", async () => {
+    const fake = fakeCloudRun(steadyRoutes);
+    for (const name of ["../workspace-tasks-worker", "Workspace-web", ""]) {
+      expect(
+        await success(readback(fake, (port) => port.revision(name)))
+      ).toBeNull();
+    }
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  test("retries missing answers, rate limits and server errors, then reads", async () => {
     const fake = fakeCloudRun({
       ...steadyRoutes,
-      [webPath]: [{ status: 503 }, { status: 429 }, steadyWebAnswer],
+      [webPath]: [
+        { status: 503 },
+        { transport: "failed" },
+        { status: 429 },
+        { status: 200, stallBody: true },
+        steadyWebAnswer,
+      ],
     });
     const observed = await success(
       readback(fake, (port) => port.service("web"))
     );
     expect(observed?.workload).toBe("web");
     expect(fake.requests.filter(({ path }) => path === webPath)).toHaveLength(
-      3
+      5
     );
   });
 
-  test("fails unavailable once the retries are spent", async () => {
-    const fake = fakeCloudRun({ [webPath]: { status: 503 } });
+  test("mixed transient failures share one retry budget", async () => {
+    const fake = fakeCloudRun({
+      [webPath]: [
+        { status: 500 },
+        { transport: "stalled" },
+        { status: 429 },
+        { status: 200, stallBody: true },
+        { transport: "failed" },
+        { status: 501 },
+      ],
+    });
     const error = await failure(readback(fake, (port) => port.service("web")));
     expect(error).toMatchObject({
       _tag: "ReleaseReadbackUnavailable",
       resource: webPath.replace("/v2/", ""),
-      status: 503,
+      status: null,
+    });
+    // One attempt plus the four retries the read allows.
+    expect(fake.requests).toHaveLength(5);
+  });
+
+  test("fails unavailable once the retries are spent", async () => {
+    const fake = fakeCloudRun({ [webPath]: { status: 501 } });
+    const error = await failure(readback(fake, (port) => port.service("web")));
+    expect(error).toMatchObject({
+      _tag: "ReleaseReadbackUnavailable",
+      resource: webPath.replace("/v2/", ""),
+      status: 501,
     });
     // One attempt plus the four retries the read allows.
     expect(fake.requests).toHaveLength(5);
@@ -467,7 +574,9 @@ describe("Cloud Run service readback", () => {
     for (const [answer, status] of [
       [{ status: 403, body: { error: { message: "secret-detail" } } }, 403],
       [{ status: 401 }, 401],
+      [{ status: 400 }, 400],
       [{ status: 200, body: { trafficStatuses: "not-a-list" } }, 200],
+      [{ status: 200, text: "{not json" }, 200],
     ] as const) {
       const fake = fakeCloudRun({ [webPath]: answer });
       const error = await failure(
@@ -480,6 +589,26 @@ describe("Cloud Run service readback", () => {
       expect(JSON.stringify(error)).not.toContain("secret-detail");
       expect(JSON.stringify(error)).not.toContain(accessToken);
       expect(fake.requests).toHaveLength(1);
+    }
+  });
+
+  test("credentials that fail or hang fail unavailable without a request", async () => {
+    for (const credentials of [
+      // The provider's credential error class is not exported; any failure
+      // of the credential lookup must surface the same way.
+      Effect.fail("no credentials") as unknown as typeof Credentials.Service,
+      Effect.never,
+    ]) {
+      const fake = fakeCloudRun(steadyRoutes);
+      const error = await failure(
+        readback(fake, (port) => port.service("web"), credentials)
+      );
+      expect(error).toMatchObject({
+        _tag: "ReleaseReadbackUnavailable",
+        status: null,
+        reason: "credentials unavailable",
+      });
+      expect(fake.requests).toHaveLength(0);
     }
   });
 });
