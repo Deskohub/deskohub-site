@@ -177,16 +177,16 @@ export const reservationHoldCleanupRedelivery = (cause: unknown) =>
 /**
  * The queue delivery: a message past its cleanup deadline is acknowledged
  * before `dependencies` are built, so a late delivery never retries even when
- * they can't be.
+ * they can't be. The cleanup reads its own clock once they are built.
  */
 export const reservationHoldCleanupConsumer = <ROut, E, RIn>(
   dependencies: Layer.Layer<ROut | ReservationHoldCleanupService, E, RIn>
 ) =>
   reservationHoldCleanupTopic.consume((message) => {
-    const now = Temporal.Now.instant();
-    return isPastCleanupDeadline(message, now)
-      ? acknowledgePastCleanupDeadline(message, now)
-      : processReservationHoldCleanupScheduleMessage(message, now).pipe(
+    const receivedAt = Temporal.Now.instant();
+    return isPastCleanupDeadline(message, receivedAt)
+      ? acknowledgePastCleanupDeadline(message, receivedAt)
+      : processReservationHoldCleanupScheduleMessage(message).pipe(
           Effect.provide(dependencies)
         );
   }, reservationHoldCleanupRedelivery);

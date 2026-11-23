@@ -401,6 +401,57 @@ describe("ReservationHoldCleanupScheduleService", () => {
     expect(builds).toHaveBeenCalledTimes(1);
   });
 
+  test("checks a delivered hold once its cleanup dependencies are built", async () => {
+    const { reservationHoldCleanupConsumer } = await import(
+      "./reservation-hold-cleanup-queue.service"
+    );
+    const { ReservationHoldCleanupService } = await import(
+      "./reservation-hold-cleanup.service"
+    );
+    let builtAt: Temporal.Instant | undefined;
+    let checkedAt: Temporal.Instant | undefined;
+    const cancelOrderHold = mock(
+      (input: { readonly checkedAt: Temporal.Instant }) => {
+        checkedAt = input.checkedAt;
+        return Effect.succeed("cancelled" as const);
+      }
+    );
+    const consume = reservationHoldCleanupConsumer(
+      Layer.effect(
+        ReservationHoldCleanupService,
+        Effect.sleep("20 millis").pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              builtAt = Temporal.Now.instant();
+              return {
+                cancelOrderHold,
+                sweepExpiredHolds: mock(() =>
+                  Effect.succeed({ cancelled: 0, skipped: 0, failed: 0 })
+                ),
+              } satisfies ReservationHoldCleanupServiceType;
+            })
+          )
+        )
+      )
+    );
+
+    const outcome = await consume(
+      {
+        messageId: "message-id",
+        deliveryCount: 1,
+        topic: "workspace-reservation-hold-cleanup",
+        payload: duePayload,
+      },
+      "durable"
+    ).pipe(Effect.runPromise);
+
+    expect(outcome).toEqual({ _tag: "Handled" });
+    // A provider cutoff crossed while dependencies build counts as passed.
+    expect(
+      checkedAt && builtAt && Temporal.Instant.compare(checkedAt, builtAt)
+    ).toBeGreaterThanOrEqual(0);
+  });
+
   test("keeps the enqueue clock's full precision in the cleanup deadline", async () => {
     const { reservationHoldCleanupTopic } = await import(
       "./reservation-hold-cleanup-topic"
