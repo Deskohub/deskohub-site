@@ -1,12 +1,19 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 
+const isAsyncResult = <Output>(
+  result:
+    | StandardSchemaV1.Result<Output>
+    | Promise<StandardSchemaV1.Result<Output>>
+): result is Promise<StandardSchemaV1.Result<Output>> =>
+  "then" in result && result.then instanceof Function;
+
 const getSchemaValidationResult = <Input, Output>(
   schema: StandardSchemaV1<Input, Output>,
   value: unknown
 ): StandardSchemaV1.Result<Output> => {
   const result = schema["~standard"].validate(value);
 
-  if ("then" in result) {
+  if (isAsyncResult(result)) {
     throw new Error("Async Standard Schema validation is not supported here");
   }
 
