@@ -372,6 +372,23 @@ test.each([
   }
 );
 
+test("keeps Vercel Production's canonical origin when a public origin is configured", async () => {
+  const result = await inspectProxyResponses(
+    [["https://workspace-alias.vercel.app/en-US/faq?utm_source=synthetic", {}]],
+    {
+      ...process.env,
+      EMAIL_API_KEY: "re_test",
+      VERCEL_ENV: "production",
+      WORKSPACE_PUBLIC_ORIGIN: "https://workspace-public.example",
+    }
+  );
+  expect(result.exitCode).toBe(0);
+  expect(inspectedResponses(result)[0]).toMatchObject({
+    status: 308,
+    location: "https://workspace.deskohub.cz/en-US/faq?utm_source=synthetic",
+  });
+});
+
 test("moves a container Preview's plain HTTP page loads to its HTTPS origin", async () => {
   const response = inspectedResponses(await inspectContainer("preview"))[3];
   expect(response.location).toBe("https://workspace-public.example/en-US/faq");
