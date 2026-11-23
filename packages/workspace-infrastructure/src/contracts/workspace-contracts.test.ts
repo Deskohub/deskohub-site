@@ -100,9 +100,17 @@ describe("queue contracts", () => {
     // Cloud Tasks counts retries from the first attempt, so the publisher's
     // 7-day clamp from enqueue is an application expiry.
     expect(
-      holdCleanup?.absoluteExpiry &&
-        Duration.toDays(holdCleanup.absoluteExpiry.fromEnqueue)
+      holdCleanup?.absoluteExpiry && Duration.toDays(holdCleanup.absoluteExpiry)
     ).toBe(7);
+    // Topics whose Cloud Tasks delivery is not yet safe say what must hold.
+    expect(
+      workspaceQueueContracts
+        .filter((contract) => contract.activationGate !== undefined)
+        .map((contract) => contract.topic)
+    ).toEqual([
+      "workspace-email-automation-unit",
+      "workspace-reservation-hold-cleanup",
+    ]);
   });
 
   test("declare queues with the shared retry policy and a pinned private target", () => {

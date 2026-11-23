@@ -27,11 +27,7 @@ export const workspaceQueueRetry = {
  */
 export type QueueTransportLifetime =
   | { readonly kind: "bounded"; readonly maxRetryDuration: Duration.Duration }
-  | {
-      readonly kind: "provider-default";
-      /** What must be proven before producers may publish to this queue. */
-      readonly activationGate: string;
-    };
+  | { readonly kind: "provider-default" };
 
 export interface QueueContract {
   /** The Vercel queue topic this queue replaces. */
@@ -49,13 +45,14 @@ export interface QueueContract {
   readonly deliveryKey: string;
   /**
    * A cap on total lifetime from enqueue that the queue cannot express:
-   * Cloud Tasks counts `maxRetryDuration` from the first attempt. The
-   * handler enforces it from the payload and acknowledges expired work.
+   * Cloud Tasks counts `maxRetryDuration` from the first attempt.
    */
-  readonly absoluteExpiry?: {
-    readonly fromEnqueue: Duration.Duration;
-    readonly enforcedBy: string;
-  };
+  readonly absoluteExpiry?: Duration.Duration;
+  /**
+   * What must hold before any producer publishes this topic to Cloud
+   * Tasks. The queue may exist earlier; it stays without producers.
+   */
+  readonly activationGate?: string;
 }
 
 const bounded = (maxRetryDuration: Duration.Duration) =>
@@ -78,11 +75,9 @@ export const workspaceQueueContracts: ReadonlyArray<QueueContract> = [
     topic: "workspace-email-automation-unit",
     queueId: "workspace-email-automation-unit",
     handlerPath: "/api/queues/workspace/email-automation-unit",
-    transportLifetime: {
-      kind: "provider-default",
-      activationGate:
-        "Read the effective Vercel retention for this topic and approve a business expiry before any producer publishes to the Cloud Tasks queue.",
-    },
+    transportLifetime: { kind: "provider-default" },
+    activationGate:
+      "Read the effective Vercel retention for this topic and approve a business expiry before any producer publishes to the Cloud Tasks queue.",
     maxScheduleDelay: Duration.zero,
     dispatchDeadline: Duration.seconds(300),
     deliveryKey: "work unit ID + enqueue generation",
@@ -125,12 +120,10 @@ export const workspaceQueueContracts: ReadonlyArray<QueueContract> = [
     maxScheduleDelay: Duration.days(7),
     dispatchDeadline: Duration.seconds(300),
     deliveryKey: "order ID + exact hold expiry",
-    // The publisher clamps retention to min(delay + 1 h, 7 days) from
-    // enqueue; a hold due in seven days gets no extra hour.
-    absoluteExpiry: {
-      fromEnqueue: Duration.days(7),
-      enforcedBy:
-        "apps/deskohub-workspace/features/checkout/backend/holds/reservation-hold-cleanup-queue.service.ts (retention clamp)",
-    },
+    // The Vercel publisher clamps retention to min(delay + 1 h, 7 days)
+    // from enqueue. Cloud Tasks cannot, and today's handler does not check it.
+    absoluteExpiry: Duration.days(7),
+    activationGate:
+      "The hold-cleanup payload carries its clamped deadline from enqueue and the handler acknowledges without cleanup after it (apps/deskohub-workspace/features/checkout/backend/holds/reservation-hold-cleanup-queue.service.ts).",
   },
 ];

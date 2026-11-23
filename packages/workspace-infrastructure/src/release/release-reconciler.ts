@@ -54,8 +54,10 @@ export class ReleaseNotRestorable extends Data.TaggedError(
 
 /**
  * Readback does not show the intended target serving. The intent stays
- * pending: the caller re-applies the same declaration (apply is
- * idempotent) and settles again, or an operator abandons it with evidence.
+ * pending and blocks every other release step: the caller re-applies the
+ * same declaration (apply is idempotent) and settles again. There is no
+ * abandon step until Cloud Run operation evidence can prove an interrupted
+ * write can no longer land.
  */
 export class ReleaseApplyNotObserved extends Data.TaggedError(
   "ReleaseApplyNotObserved"
@@ -328,32 +330,6 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
     servingRevision: input.readback.servingRevision,
   });
 });
-
-export interface AbandonInput {
-  readonly expectedGeneration: number;
-  /** The operator's evidence that the interrupted apply can no longer land. */
-  readonly evidence: string;
-}
-
-/**
- * Drop a pending traffic intent. Only an operator does this, with evidence
- * that the interrupted request can no longer take effect (its operation
- * finished, or a later service generation superseded it); readback showing
- * the old revision alone is not that evidence.
- */
-export const abandonApply = Effect.fn("WorkspaceRelease.abandonApply")(
-  function* (record: ReleaseRecord, input: AbandonInput) {
-    yield* fence(record, input.expectedGeneration);
-    if (record.pendingApply === null) {
-      return yield* new NoPendingReleaseApply();
-    }
-    return {
-      ...record,
-      generation: record.generation + 1,
-      pendingApply: null,
-    } satisfies ReleaseRecord;
-  }
-);
 
 /** Revisions the edge may route to now: serving, pending and compatible. */
 export const routableDeployments = (

@@ -7,7 +7,11 @@ import {
   trafficReadback,
   webTrafficDrift,
 } from "./readback";
-import { emptyReleaseRecord } from "./release/release-record";
+import {
+  emptyReleaseRecord,
+  GitSha,
+  ReleaseId,
+} from "./release/release-record";
 
 const digest = ImageDigest.make(`sha256:${"1".repeat(64)}`);
 const healthyWorker: ObservedService = {
@@ -67,22 +71,54 @@ describe("stack readback", () => {
     ).toEqual(["ingress", "invokerIamDisabled", "url"]);
   });
 
-  test("flags a web service stamped by another traffic generation", () => {
-    const record = { ...emptyReleaseRecord, trafficGeneration: 4 };
-    const web = { ...healthyWorker, workload: "web" as const };
-    expect(webTrafficDrift(record, web)).toEqual([]);
+  test("flags web traffic that differs from the release record", () => {
+    const active = {
+      releaseId: ReleaseId.make("r1-aaaaaaa"),
+      sha: GitSha.make("a".repeat(40)),
+      imageDigest: digest,
+      origin: "cloud-run" as const,
+      revision: "workspace-web-r1-aaaaaaa",
+      verifiedAt: "2026-11-22T10:00:00.000Z",
+    };
+    const record = {
+      ...emptyReleaseRecord,
+      trafficGeneration: 4,
+      active,
+      materialized: active,
+    };
+    const web: ObservedService = {
+      ...healthyWorker,
+      workload: "web",
+      traffic: [{ revision: active.revision, percent: 100 }],
+      revisionDigests: { [active.revision]: digest },
+    };
+    const fields = (observed: ObservedService) =>
+      webTrafficDrift(record, observed).map((drift) => drift.field);
+    expect(fields(web)).toEqual([]);
+    // A delayed write from an older run.
     expect(
-      webTrafficDrift(record, {
+      fields({
         ...web,
         annotations: { "deskohub.workspace/traffic-generation": "3" },
       })
-    ).toEqual([
-      {
-        workload: "web",
-        field: "trafficGeneration",
-        expected: "4",
-        observed: "3",
-      },
-    ]);
+    ).toEqual(["trafficGeneration"]);
+    // The current stamp, but all traffic on another revision.
+    expect(
+      fields({
+        ...web,
+        traffic: [{ revision: "workspace-web-r9-fffffff", percent: 100 }],
+        revisionDigests: { "workspace-web-r9-fffffff": digest },
+      })
+    ).toEqual(["servingRevision"]);
+    // Split traffic is unavailable, never a pass.
+    expect(
+      webTrafficDrift(record, {
+        ...web,
+        traffic: [
+          { revision: active.revision, percent: 50 },
+          { revision: "workspace-web-r9-fffffff", percent: 50 },
+        ],
+      }).map((drift) => drift.observed)
+    ).toEqual(["<unavailable>", "<unavailable>"]);
   });
 });

@@ -117,23 +117,45 @@ export const serviceReadbackDrift = (
 };
 
 /**
- * A web service stamped with any traffic generation other than the
- * record's is drift: most likely a delayed write from an older run. The
- * record is not changed; an operator re-applies the current declaration.
+ * Drift between the live web service and the release record: untagged
+ * traffic must reach the expected release's revision and digest under the
+ * record's traffic generation. Split, reconciling or failed traffic is
+ * reported as unavailable rather than passing.
  */
 export const webTrafficDrift = (
   record: ReleaseRecord,
   observed: ObservedService
 ): ReadonlyArray<ReadbackDrift> => {
-  const actual = observedTrafficGeneration(observed);
-  return actual === record.trafficGeneration
-    ? []
-    : [
-        {
-          workload: "web",
-          field: "trafficGeneration",
-          expected: String(record.trafficGeneration),
-          observed: actual === null ? "<unset>" : String(actual),
-        },
-      ];
+  const expected = record.pendingApply?.target ?? record.active;
+  const readback = trafficReadback(observed);
+  const drift = (field: string, wanted: string, actual: string | null) =>
+    wanted === actual
+      ? []
+      : [
+          {
+            workload: "web" as const,
+            field,
+            expected: wanted,
+            observed: actual ?? "<unavailable>",
+          },
+        ];
+  return [
+    ...drift(
+      "trafficGeneration",
+      String(record.trafficGeneration),
+      readback.trafficGeneration === null
+        ? null
+        : String(readback.trafficGeneration)
+    ),
+    ...drift(
+      "servingRevision",
+      expected?.revision ?? "<none>",
+      readback.servingRevision
+    ),
+    ...drift(
+      "servingImageDigest",
+      expected?.imageDigest ?? "<none>",
+      readback.servingImageDigest
+    ),
+  ];
 };

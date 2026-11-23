@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sandboxServiceAccount } from "./config/stack-config.test-utils";
 
 const workflowFile = new URL(
@@ -122,7 +125,83 @@ describe("sandbox smoke workflow", () => {
   });
 });
 
+/**
+ * Run the script live against a stub `gcloud` that answers lookups from
+ * the environment and records every call, so live-only guards can be
+ * tested without Google Cloud.
+ */
+const runLiveBootstrap = (
+  answers: { projectNumber: string; jwksJson?: string },
+  ...args: ReadonlyArray<string>
+) => {
+  const directory = mkdtempSync(join(tmpdir(), "bootstrap-gcloud-"));
+  const log = join(directory, "calls.log");
+  const stub = join(directory, "gcloud");
+  writeFileSync(
+    stub,
+    `#!/usr/bin/env bash
+echo "$*" >> "${log}"
+case "$*" in
+  *"projects describe"*"value(projectNumber)"*) echo "$STUB_PROJECT_NUMBER" ;;
+  *"billing projects describe"*) echo True ;;
+  *"providers list"*) echo "projects/$STUB_PROJECT_NUMBER/locations/global/workloadIdentityPools/workspace-sandbox-github/providers/deskohub-workspace" ;;
+  *"value(oidc.issuerUri)"*) echo https://token.actions.githubusercontent.com ;;
+  *"value(oidc.jwksJson)"*) echo "$STUB_JWKS" ;;
+  *describe*) exit 1 ;;
+esac
+`
+  );
+  chmodSync(stub, 0o755);
+  const result = Bun.spawnSync(["bash", bootstrapScript, ...args], {
+    env: {
+      PATH: `${directory}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+      STUB_PROJECT_NUMBER: answers.projectNumber,
+      STUB_JWKS: answers.jwksJson ?? "",
+    },
+  });
+  const calls = Bun.spawnSync(["cat", log]).stdout.toString();
+  rmSync(directory, { recursive: true, force: true });
+  return { result, calls: calls.split("\n").filter(Boolean) };
+};
+
+const liveArgs = dryRunArgs.filter((arg) => arg !== "--dry-run");
+
 describe("sandbox bootstrap script", () => {
+  test("refuses a project number that is not the project's before any change", () => {
+    const { result, calls } = runLiveBootstrap(
+      { projectNumber: "999999999999" },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("--project-number");
+    expect(calls).toEqual([
+      "projects describe deskohub-ws-sandbox --format=value(projectNumber)",
+    ]);
+  });
+
+  test("refuses a provider with uploaded signing keys before granting deploy access", () => {
+    const { result, calls } = runLiveBootstrap(
+      { projectNumber: "123456789012", jwksJson: '{"keys":[]}' },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("uploaded signing keys");
+    expect(calls.some((call) => call.includes("workloadIdentityUser"))).toBe(
+      false
+    );
+  });
+
+  test("grants deploy-subject access once the provider trusts GitHub's keys", () => {
+    const { result, calls } = runLiveBootstrap(
+      { projectNumber: "123456789012" },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(0);
+    expect(calls.some((call) => call.includes("workloadIdentityUser"))).toBe(
+      true
+    );
+  });
+
   test("passes bash -n", () => {
     const result = Bun.spawnSync(["bash", "-n", bootstrapScript]);
     expect(result.exitCode).toBe(0);
@@ -174,6 +253,10 @@ describe("sandbox bootstrap script", () => {
         `gcloud iam service-accounts add-iam-policy-binding ${sandboxServiceAccount(invoker)} --project deskohub-ws-sandbox --role roles/iam.serviceAccountTokenCreator --format=none --member serviceAccount:service-123456789012@${agent}.iam.gserviceaccount.com`
       );
     }
+    // Cloud Tasks' primary agent may also act as the tasks invoker.
+    expect(output).toContain(
+      `gcloud iam service-accounts add-iam-policy-binding ${sandboxServiceAccount("workspace-tasks-invoker")} --project deskohub-ws-sandbox --role roles/iam.serviceAccountUser --format=none --member serviceAccount:service-123456789012@${"gcp-sa-cloudtasks"}.iam.gserviceaccount.com`
+    );
     // The provider update converges issuer and mapping, not only the condition.
     expect(output).toMatch(
       /providers update-oidc deskohub-workspace .*--issuer-uri https:\/\/token\.actions\.githubusercontent\.com --attribute-mapping google\.subject=assertion\.sub/

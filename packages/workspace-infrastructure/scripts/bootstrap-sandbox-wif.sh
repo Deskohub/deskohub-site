@@ -105,12 +105,18 @@ exists() {
   [[ "$dry_run" == false ]] && "$@" >/dev/null 2>&1
 }
 
-if [[ -z "$project_number" ]]; then
-  if [[ "$dry_run" == true ]]; then
-    project_number="000000000000"
-  else
-    project_number="$(gcloud projects describe "$project_id" --format='value(projectNumber)')"
+# Live runs always resolve the number from the approved project ID, before
+# any change, so a mistyped --project-number never grants another
+# project's service agents access here.
+if [[ "$dry_run" == false ]]; then
+  resolved_number="$(gcloud projects describe "$project_id" --format='value(projectNumber)')"
+  [[ "$resolved_number" =~ ^[1-9][0-9]{5,19}$ ]] || fail "could not resolve the number of $project_id"
+  if [[ -n "$project_number" && "$project_number" != "$resolved_number" ]]; then
+    fail "--project-number does not belong to $project_id"
   fi
+  project_number="$resolved_number"
+elif [[ -z "$project_number" ]]; then
+  project_number="000000000000"
 fi
 
 if [[ "$dry_run" == false ]]; then
@@ -159,13 +165,17 @@ for account in "${runtime_accounts[@]}"; do
     --role roles/iam.serviceAccountUser --format=none
 done
 
-echo "== Google service agents may mint OIDC tokens as their invokers"
-# Cloud Tasks and Cloud Scheduler sign each request as the invoker account;
-# their service agents need Service Account Token Creator on it.
+echo "== Google service agents may act as and mint OIDC tokens for their invokers"
+# Cloud Tasks and Cloud Scheduler sign each request as the invoker account.
+# Their service agents need Service Account Token Creator on it, and Cloud
+# Tasks' primary agent also needs Service Account User (actAs).
 run gcloud beta services identity create --service cloudtasks.googleapis.com --project "$project_id" --format=none
 run gcloud beta services identity create --service cloudscheduler.googleapis.com --project "$project_id" --format=none
 run gcloud iam service-accounts add-iam-policy-binding "$(sa_email workspace-tasks-invoker)" \
   --project "$project_id" --role roles/iam.serviceAccountTokenCreator --format=none \
+  --member "serviceAccount:service-${project_number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+run gcloud iam service-accounts add-iam-policy-binding "$(sa_email workspace-tasks-invoker)" \
+  --project "$project_id" --role roles/iam.serviceAccountUser --format=none \
   --member "serviceAccount:service-${project_number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
 run gcloud iam service-accounts add-iam-policy-binding "$(sa_email workspace-scheduler-invoker)" \
   --project "$project_id" --role roles/iam.serviceAccountTokenCreator --format=none \
@@ -197,6 +207,17 @@ if [[ "$dry_run" == false ]]; then
     --location global --workload-identity-pool "$pool_id" --format='value(name)')"
   [[ "$providers" == "$provider_name" ]] ||
     fail "pool $pool_id must contain only provider $provider_id before deploy access is granted"
+  # Uploaded signing keys would replace GitHub's published keys as the
+  # trust root; accept only keys discovered from the issuer.
+  provider_field() {
+    gcloud iam workload-identity-pools providers describe "$provider_id" \
+      --project "$project_id" --location global --workload-identity-pool "$pool_id" \
+      --format="value($1)"
+  }
+  [[ "$(provider_field oidc.issuerUri)" == "https://token.actions.githubusercontent.com" ]] ||
+    fail "provider $provider_id must use GitHub's issuer"
+  [[ -z "$(provider_field oidc.jwksJson)" ]] ||
+    fail "provider $provider_id has uploaded signing keys; remove them so GitHub's published keys are the trust root"
 fi
 run gcloud iam service-accounts add-iam-policy-binding "$deployer" --project "$project_id" \
   --role roles/iam.workloadIdentityUser --format=none \

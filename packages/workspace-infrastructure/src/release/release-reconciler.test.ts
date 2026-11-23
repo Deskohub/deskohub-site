@@ -8,7 +8,6 @@ import { ImageDigest } from "../config/stack-config";
 import { sandboxConfig } from "../config/stack-config.test-utils";
 import { webServiceProps, webTraffic } from "../resources/service-declarations";
 import {
-  abandonApply,
   makeInMemoryReleaseRecordStore,
   promote,
   ReleaseRecordStore,
@@ -350,7 +349,7 @@ describe("release reconciler", () => {
         intended: staged.releaseId,
       });
     }
-    // A re-apply that lands completes it.
+    // Recovery is re-applying the same declaration until readback shows it.
     expect(
       run(
         settleApply(pending, {
@@ -364,16 +363,6 @@ describe("release reconciler", () => {
         })
       ).active?.releaseId
     ).toBe(staged.releaseId);
-    // Only an operator with evidence drops it, and only at its generation.
-    const abandoned = run(
-      abandonApply(pending, {
-        expectedGeneration: pending.generation,
-        evidence: "operation finished without traffic change",
-      })
-    );
-    expect(abandoned.pendingApply).toBeNull();
-    expect(abandoned.active?.releaseId).toBe(first.releaseId);
-    expect(abandoned.candidate?.releaseId).toBe(staged.releaseId);
   });
 
   test("serializes concurrent steps: only one writer per store version wins", async () => {
