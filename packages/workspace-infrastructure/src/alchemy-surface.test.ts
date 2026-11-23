@@ -46,7 +46,9 @@ import {
   workerInvokerGrants,
 } from "./resources/platform-declarations";
 import {
+  templateSpecAnnotation,
   webServiceProps,
+  webTemplateSpecFingerprint,
   workerServiceProps,
 } from "./resources/service-declarations";
 import { workspaceSurfaceClassification } from "./surface-classification";
@@ -323,6 +325,71 @@ describe("Alchemy beta.87 surface", () => {
     const refused = await plain(pending);
     expect(String(refused.exit)).toContain("ReleaseApplyPending");
     expect(refused.resources).toEqual({});
+  });
+
+  test("a plan declares the web template its following deploy decides", async () => {
+    const record = servingRecord();
+    // Cloud Run runs the release's template from an older spec.
+    const olderSpec = ReleaseServiceReadback.of({
+      service: (workload) =>
+        Effect.succeed(
+          workload === "web"
+            ? {
+                workload,
+                uri: undefined,
+                urls: [],
+                ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
+                invokerIamDisabled: true,
+                terminalConditionState: "CONDITION_SUCCEEDED",
+                reconciling: false,
+                traffic: [
+                  { revision: "workspace-web-r1-aaaaaaa", percent: 100 },
+                ],
+                revisionDigests: { "workspace-web-r1-aaaaaaa": digest },
+                annotations: {},
+                templateRevision: "workspace-web-r1-aaaaaaa",
+                templateImageDigest: digest,
+                templateSpecFingerprint: "spec-older",
+                templateReady: true,
+              }
+            : null
+        ),
+      revision: () => Effect.succeed(null),
+    });
+    const declareAs = (operation: "plan" | "deploy") =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(
+            heldBy(record, operation)
+          );
+          const services = yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            runAsHolder(null)
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, olderSpec)
+          );
+          return { services, stored: (yield* store.read).record };
+        })
+      );
+
+    const planned = await declareAs("plan");
+    expect(planned.exit._tag).toBe("Success");
+    const template = planned.resources.WorkspaceWeb?.Props.template;
+    expect(template?.revision).toBe(
+      `workspace-web-r1-aaaaaaa-t${record.generation + 1}`
+    );
+    expect(template?.annotations?.[templateSpecAnnotation]).toBe(
+      webTemplateSpecFingerprint(sandboxConfig, digest)
+    );
+    // The plan persisted nothing; a deploy persists the decision first.
+    if (planned.exit._tag === "Success") {
+      expect(planned.exit.value.stored).toEqual(heldBy(record, "plan"));
+    }
+    const deployed = await declareAs("deploy");
+    expect(deployed.resources.WorkspaceWeb?.Props.template?.revision).toBe(
+      "workspace-web-r1-aaaaaaa"
+    );
   });
 
   test("refuses an empty record while the web service is live", async () => {

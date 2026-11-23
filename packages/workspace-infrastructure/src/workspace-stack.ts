@@ -17,6 +17,7 @@ import type {
 import { workspaceQueueContracts } from "./contracts/queue-contracts";
 import { workspaceScheduleContracts } from "./contracts/schedule-contracts";
 import { requireRecordCoversLiveService } from "./release/live-release-services";
+import { stackRunRecord } from "./release/release-delivery";
 import { StaleReleaseGeneration } from "./release/release-reconciler";
 import type { ReleaseRecord } from "./release/release-record";
 import {
@@ -208,7 +209,8 @@ export interface StackRun {
  * or Alchemy would delete them. The run must hold the record's writer lock,
  * and the lock decides its mode: a fenced apply passes the generation it
  * persisted and refuses a record any other run has since moved on, while a
- * plain run declares the current record. A record without a serving release
+ * plain run declares the current record, and a plan the template decision
+ * the following deploy would persist. A record without a serving release
  * is refused while a release-owned service is live (`ReleaseRecordLost`).
  * Preview declares none until #1455 and needs no lock.
  */
@@ -233,5 +235,11 @@ export const declareRecordedWorkspaceServices = (
     }
     // Declaring nothing from a lost record would delete the live services.
     yield* requireRecordCoversLiveService(record);
-    return yield* declareWorkspaceServices(config, record, yield* DateTime.now);
+    // A plan previews the template decision its deploy would persist.
+    const declared = yield* stackRunRecord(config, record, held.lock.operation);
+    return yield* declareWorkspaceServices(
+      config,
+      declared,
+      yield* DateTime.now
+    );
   });

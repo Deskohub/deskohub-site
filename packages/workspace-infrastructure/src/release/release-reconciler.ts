@@ -127,32 +127,25 @@ const keepsTemplate = (
       input.specFingerprintOf(deployment.imageDigest));
 
 /**
- * A template for `target` under a name of the record's own, for when the
- * live one cannot be kept. A name minted earlier for the same release and
- * spec that has not landed is reused, so a re-apply declares the same
- * revision; otherwise the new generation mints a fresh one. Traffic keeps
- * targeting the release's own revision.
+ * A template for `target` under a name minted for this decision's
+ * generation, for when the live one cannot be kept. Every new decision
+ * mints its own name, even when an earlier one minted a name for the same
+ * release and spec: that name may have landed and been displaced since, and
+ * Cloud Run never re-creates a revision name with another spec. Only
+ * re-applying the persisted decision (recovery) declares a name again.
+ * Traffic keeps targeting the release's own revision.
  */
 const freshTemplate = (
-  record: ReleaseRecord,
   target: ReleaseDeployment,
   generation: number,
   input: TemplateInput
-): MaterializedDeployment => {
-  const specFingerprint = input.specFingerprintOf(target.imageDigest);
-  const minted = record.materialized?.template;
-  const reusable =
-    minted !== undefined &&
-    record.materialized?.releaseId === target.releaseId &&
-    minted.specFingerprint === specFingerprint &&
-    input.liveTemplate?.revision !== minted.revision;
-  return {
-    ...deploymentOf(target),
-    template: reusable
-      ? minted
-      : { revision: `${target.revision}-t${generation}`, specFingerprint },
-  };
-};
+): MaterializedDeployment => ({
+  ...deploymentOf(target),
+  template: {
+    revision: `${target.revision}-t${generation}`,
+    specFingerprint: input.specFingerprintOf(target.imageDigest),
+  },
+});
 
 const templateIs = (
   live: LiveTemplate | null,
@@ -354,7 +347,7 @@ const restoredTemplate = (
   }
   return keepsTemplate(input, record.candidate)
     ? deploymentOf(record.candidate)
-    : freshTemplate(record, target, generation, input);
+    : freshTemplate(target, generation, input);
 };
 
 /**
@@ -506,29 +499,31 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
 
 export interface RefreshTemplateInput extends TemplateInput {
   readonly expectedGeneration: number;
+  /**
+   * Cloud Run has a revision under the candidate's name, ready, live or
+   * not: its verification apply may have created it from another spec.
+   */
+  readonly candidateCreated: boolean;
 }
 
 /**
  * Decide the template a plain deploy declares, before it runs. It keeps
- * the template Cloud Run runs when that is ready and current, and an
- * unlanded candidate, whose new revision name the deploy creates from the
- * current spec.
- * Otherwise the active release's image gets a template under a fresh name,
- * and a candidate declared from an older spec is dropped: re-declaring its
- * revision name with another spec would be refused.
+ * the template Cloud Run runs when that is ready and current, and a
+ * candidate Cloud Run has no revision for, whose name the deploy creates
+ * from the current spec. A candidate whose revision exists but cannot be
+ * kept is dropped, since its name may stand for another spec: the active
+ * release keeps the materialized template when that one is kept, else gets
+ * a template under a fresh name.
  */
 export const refreshTemplate = Effect.fn("WorkspaceRelease.refreshTemplate")(
   function* (record: ReleaseRecord, input: RefreshTemplateInput) {
     yield* fence(record, input.expectedGeneration);
     yield* requireNoPendingApply(record);
     const active = record.active;
-    const candidateUnlanded =
-      record.candidate !== null &&
-      input.liveTemplate?.revision !== record.candidate.revision;
     if (
       active === null ||
-      candidateUnlanded ||
-      keepsTemplate(input, record.candidate ?? record.materialized)
+      keepsTemplate(input, record.candidate ?? record.materialized) ||
+      (record.candidate !== null && !input.candidateCreated)
     ) {
       return record;
     }
@@ -536,7 +531,9 @@ export const refreshTemplate = Effect.fn("WorkspaceRelease.refreshTemplate")(
     return {
       ...record,
       generation,
-      materialized: freshTemplate(record, active, generation, input),
+      materialized: keepsTemplate(input, record.materialized)
+        ? record.materialized
+        : freshTemplate(active, generation, input),
       candidate: null,
     } satisfies ReleaseRecord;
   }

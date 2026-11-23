@@ -115,8 +115,12 @@ const servingReleaseOf = (record: ReleaseRecord): ServingRelease | null =>
  * writer lock closes that window while it is held. The break-glass
  * `unlock` reopens it: if the old executor is in fact still alive, or a
  * write it sent is still in flight, that write can land over a newer
- * decision, and no check before or after an apply can prevent it. Hosted
- * runs therefore use one non-cancelling concurrency group per stage.
+ * decision, and no check before or after an apply can prevent it. The same
+ * holds for the old holder's other in-flight writes: its Alchemy state
+ * writes and its foundation resource writes can land after the unlock too.
+ * A hosted workflow therefore runs every release command of a stage in one
+ * non-cancelling concurrency group per stage, so a run is never cancelled
+ * mid-apply and no second run starts beside it.
  */
 export const readFencedReleaseRecord = (expectedGeneration: number) =>
   Effect.gen(function* () {
@@ -228,10 +232,11 @@ const readLiveTemplate = Effect.gen(function* () {
 });
 
 /**
- * The record would re-declare the revision name Cloud Run's live template
- * already has, from a different spec (a config change since it was
- * created). Cloud Run never re-creates a revision name with another spec,
- * so nothing is applied: `restore` (or `deploy` when nothing is pending)
+ * The record would re-declare a revision name Cloud Run already has from a
+ * different spec (a config change since it was created), or one it has off
+ * the live template, whose spec readback cannot show (`liveSpecFingerprint`
+ * null). Cloud Run never re-creates a revision name with another spec, so
+ * nothing is applied: `restore` (or `deploy` when nothing is pending)
  * decides a fresh template name first.
  */
 export class ReleaseTemplateSpecChanged extends Data.TaggedError(
@@ -245,9 +250,12 @@ export class ReleaseTemplateSpecChanged extends Data.TaggedError(
 /**
  * Refuse a fenced apply whose template would be declared from a spec other
  * than the one its name stands for: a minted name decided for an older
- * spec, landed or not, or the live revision's name from another spec. A
- * release's own name Cloud Run has not created yet is safe to declare from
- * the current spec. The intent stays pending for an explicit `restore`.
+ * spec, landed or not, the live revision's name from another spec, or a
+ * name Cloud Run has a revision for off the live template (an apply landed
+ * it and a later rollout displaced it), whose spec is unknown. Only a name
+ * Cloud Run has no revision for, or the live template's from the current
+ * spec, is safe to declare. The intent stays pending for an explicit
+ * `restore`.
  */
 const requireDeclarableTemplate = Effect.fn(
   "WorkspaceRelease.requireDeclarableTemplate"
@@ -262,20 +270,24 @@ const requireDeclarableTemplate = Effect.fn(
     declared.imageDigest
   );
   const live = yield* readLiveTemplate;
+  // Not being the live template proves nothing: look the name up.
+  const created =
+    live?.revision === declared.revision ||
+    (yield* (yield* ReleaseServiceReadback).revision(declared.revision)) !==
+      null;
   const liveSpecFingerprint =
-    live?.revision === declared.revision ? live.specFingerprint : undefined;
+    live?.revision === declared.revision ? live.specFingerprint : null;
   // The name must stand for the current spec both in the record (the spec
   // it was minted for) and on Cloud Run (the spec it was created with).
   const mintedForOtherSpec =
     declared.specFingerprint !== null &&
     declared.specFingerprint !== declaredSpecFingerprint;
   const createdFromOtherSpec =
-    liveSpecFingerprint !== undefined &&
-    liveSpecFingerprint !== declaredSpecFingerprint;
+    created && liveSpecFingerprint !== declaredSpecFingerprint;
   if (mintedForOtherSpec || createdFromOtherSpec) {
     return yield* new ReleaseTemplateSpecChanged({
       revision: declared.revision,
-      liveSpecFingerprint: liveSpecFingerprint ?? null,
+      liveSpecFingerprint,
       declaredSpecFingerprint,
     });
   }
@@ -468,6 +480,45 @@ export const recoverRelease = Effect.fn("WorkspaceRelease.recover")(function* (
 });
 
 /**
+ * The current record with the web template a plain deploy decides from
+ * what Cloud Run runs now (`refreshTemplate`).
+ */
+const refreshedPlainRunRecord = Effect.fn(
+  "WorkspaceRelease.refreshedPlainRunRecord"
+)(function* (config: WorkspaceStackConfig, record: ReleaseRecord) {
+  const readback = yield* ReleaseServiceReadback;
+  const liveTemplate = liveTemplateOf(yield* readback.service("web"));
+  const candidate = record.candidate;
+  const candidateCreated =
+    candidate !== null &&
+    (liveTemplate?.revision === candidate.revision ||
+      (yield* readback.revision(candidate.revision)) !== null);
+  return yield* refreshTemplate(record, {
+    expectedGeneration: record.generation,
+    liveTemplate,
+    candidateCreated,
+    specFingerprintOf: (imageDigest) =>
+      webTemplateSpecFingerprint(config, imageDigest),
+  });
+});
+
+/**
+ * The record a stack run under `operation` declares the release-owned
+ * services from. `deploy` persists its template decision before it runs,
+ * so it and every fenced run declare the stored record; `plan` declares
+ * the decision the following `deploy` would persist, without persisting
+ * it, so a plan previews the template that deploy declares.
+ */
+export const stackRunRecord = (
+  config: WorkspaceStackConfig,
+  record: ReleaseRecord,
+  operation: ReleaseOperation
+) =>
+  operation === "plan"
+    ? refreshedPlainRunRecord(config, record)
+    : Effect.succeed(record);
+
+/**
  * Run the whole stack outside a release, such as an infrastructure change,
  * as the stage's only writer: `deploy` applies it and `plan` previews it.
  * It declares the current record, so a pending traffic change must be
@@ -488,14 +539,10 @@ export const runStack = Effect.fn("WorkspaceRelease.runStack")(function* (
       });
     }
     if (action === "deploy") {
-      const liveTemplate = yield* readLiveTemplate;
       yield* runLockedReleaseStep((current) =>
-        refreshTemplate(current, {
-          expectedGeneration: current.generation,
-          liveTemplate,
-          specFingerprintOf: (imageDigest) =>
-            webTemplateSpecFingerprint(config, imageDigest),
-        }).pipe(Effect.map((next) => ({ record: next, result: next })))
+        refreshedPlainRunRecord(config, current).pipe(
+          Effect.map((next) => ({ record: next, result: next }))
+        )
       );
     }
     yield* applyAsWriter({ action, generation: null });
