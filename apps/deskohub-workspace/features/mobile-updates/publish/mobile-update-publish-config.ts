@@ -49,7 +49,7 @@ export interface CloudStorageSettings {
 }
 
 /** Where a publish run stores update files in Cloud Storage. */
-export interface CloudStorageAssetStore {
+interface CloudStorageAssetStore {
   readonly bucket: string;
   readonly accessToken: Redacted.Redacted<string>;
   /** Origin and path prefix of every stored file's URL, without a trailing slash. */
