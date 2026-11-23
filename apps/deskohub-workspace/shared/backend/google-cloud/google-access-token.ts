@@ -54,6 +54,11 @@ export const metadataServerTokenUrl =
 const attemptTimeout = Duration.seconds(10);
 const retrySchedule = Schedule.exponential("200 millis");
 const retries = 2;
+/**
+ * Bounds a whole refresh, retry waits included: a `Retry-After` may ask for
+ * longer, and callers wait on the cache lock meanwhile.
+ */
+const refreshDeadline = Duration.seconds(30);
 /** Refreshes a token this long before it expires. */
 const expiryMargin = Duration.minutes(1);
 
@@ -100,7 +105,15 @@ export const MetadataServerGoogleAccessToken: Layer.Layer<GoogleAccessToken> =
             HttpClientRequest.setHeader("Metadata-Flavor", "Google")
           )
         )
-        .pipe(Effect.mapError(toTokenError), Effect.flatMap(readTokenResponse));
+        .pipe(
+          Effect.mapError(toTokenError),
+          Effect.flatMap(readTokenResponse),
+          Effect.timeoutOrElse({
+            duration: refreshDeadline,
+            orElse: () =>
+              Effect.fail(new GoogleAccessTokenError({ reason: "timeout" })),
+          })
+        );
 
       const fetchToken = Effect.Do.pipe(
         Effect.bind("response", () => requestToken),

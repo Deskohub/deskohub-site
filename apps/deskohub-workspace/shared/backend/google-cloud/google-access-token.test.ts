@@ -130,6 +130,36 @@ describe("MetadataServerGoogleAccessToken", () => {
     expect(requests).toHaveLength(2);
   });
 
+  test("gives up a refresh at its deadline and lets a waiting caller refresh", async () => {
+    const { outcome, requests } = await withMetadataServer(
+      (count) =>
+        count === 1
+          ? new Response(null, {
+              status: 503,
+              headers: { "Retry-After": "120" },
+            })
+          : tokenResponse(count),
+      ({ get }) =>
+        Effect.gen(function* () {
+          const first = yield* Effect.forkChild(Effect.flip(get));
+          const waiting = yield* Effect.forkChild(get);
+          yield* TestClock.adjust("31 seconds");
+          return {
+            first: yield* Fiber.join(first),
+            waiting: yield* Fiber.join(waiting),
+          };
+        })
+    );
+
+    expect(outcome).toMatchObject({
+      success: {
+        first: { _tag: "GoogleAccessTokenError", reason: "timeout" },
+        waiting: "token-2",
+      },
+    });
+    expect(requests).toHaveLength(2);
+  });
+
   test("fails on a rejected request without retrying it", async () => {
     const { outcome, requests } = await withMetadataServer(
       () => new Response(null, { status: 403 }),
