@@ -339,6 +339,7 @@ const {
   CustomerAvatarService,
   CustomerAvatarSettings,
   deriveCustomerAvatarNamespace,
+  resolveCustomerAvatarNamespace,
 } = await import("./customer-avatar.service");
 
 const makeLayer = (namespace: Option.Option<string>) =>
@@ -407,6 +408,25 @@ const resetFakes = () => {
 };
 
 describe("customer avatar namespaces", () => {
+  test("scopes a preview by the Workspace revision before Vercel's commit", () => {
+    expect(
+      resolveCustomerAvatarNamespace({
+        VERCEL_ENV: "preview",
+        WORKSPACE_REVISION_SHA: "workspace-commit",
+        VERCEL_GIT_COMMIT_SHA: "vercel-commit",
+      })
+    ).toEqual(Option.some("avatars/preview/workspace-commit"));
+    expect(
+      resolveCustomerAvatarNamespace({
+        VERCEL_ENV: "preview",
+        VERCEL_GIT_COMMIT_SHA: "vercel-commit",
+      })
+    ).toEqual(Option.some("avatars/preview/vercel-commit"));
+    expect(resolveCustomerAvatarNamespace({ VERCEL_ENV: "preview" })).toEqual(
+      Option.none()
+    );
+  });
+
   test("isolates production, development, and immutable preview identities", () => {
     expect(
       deriveCustomerAvatarNamespace({

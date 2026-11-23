@@ -14,6 +14,10 @@ import {
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { env } from "@/env";
 import { WorkspaceCloudinaryLayer } from "@/shared/backend/cloudinary";
+import {
+  type DeploymentIdentitySettings,
+  resolveDeploymentIdentity,
+} from "@/shared/deployment/deployment-identity";
 import type {
   CustomerAccountAccessError,
   CustomerAccountId,
@@ -89,6 +93,20 @@ export const deriveCustomerAvatarNamespace = (deployment: {
 };
 
 /**
+ * The avatar namespace of a deployment from its settings: its stage, and the
+ * commit that scopes a preview, whichever host names it.
+ */
+export const resolveCustomerAvatarNamespace = (
+  settings: DeploymentIdentitySettings & { readonly VERCEL_ENV: string }
+): Option.Option<string> =>
+  deriveCustomerAvatarNamespace({
+    vercelEnvironment: settings.VERCEL_ENV,
+    deploymentId: Option.fromUndefinedOr(
+      resolveDeploymentIdentity(settings).revisionSha
+    ),
+  });
+
+/**
  * Environment-scoped avatar settings resolved once at layer construction.
  * A `none` namespace keeps the account page working (initials fallback)
  * while mutations report the avatar feature as unavailable.
@@ -98,10 +116,7 @@ export class CustomerAvatarSettings extends Context.Service<
   { readonly namespace: Option.Option<string> }
 >()("@deskohub-workspace/account/CustomerAvatarSettings") {
   static Live = Layer.sync(this, () => ({
-    namespace: deriveCustomerAvatarNamespace({
-      vercelEnvironment: env.VERCEL_ENV,
-      deploymentId: Option.fromUndefinedOr(env.VERCEL_GIT_COMMIT_SHA),
-    }),
+    namespace: resolveCustomerAvatarNamespace(env),
   }));
 }
 

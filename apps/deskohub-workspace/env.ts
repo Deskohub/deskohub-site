@@ -5,7 +5,7 @@ import {
   createEnvironmentSchema,
   workspaceServerEnvSchema,
 } from "./env.schema";
-import { selectDeploymentStageSetting } from "./shared/deployment/deployment-stage";
+import { selectDeploymentStageSetting } from "./shared/deployment/deployment-stage-setting.js";
 
 // Next only transforms statically named environment accesses. Key rotation is
 // additive: configure the new variable, add its direct access here, deploy,
@@ -208,7 +208,12 @@ export const env = createWorkspaceEnv({
   NEXT_PUBLIC_POSTHOG_HOST: process.env.NEXT_PUBLIC_POSTHOG_HOST,
   NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN:
     process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN,
-  NEXT_PUBLIC_VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV,
+  // The browser's stage, resolved as `client-env.ts` resolves it.
+  NEXT_PUBLIC_VERCEL_ENV: selectDeploymentStageSetting({
+    WORKSPACE_DEPLOYMENT_STAGE:
+      process.env.NEXT_PUBLIC_WORKSPACE_DEPLOYMENT_STAGE,
+    VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV,
+  }),
 });
 
 export const getAccountingDocumentSnapshotSecret = (keyId: string) =>

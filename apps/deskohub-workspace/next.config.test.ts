@@ -224,3 +224,66 @@ test("emits the standalone server only for a container image build", async () =>
     }
   }
 });
+
+const importConfigWith = async (
+  variables: Readonly<Record<string, string | undefined>>,
+  cacheKey: string
+) => {
+  const before = Object.fromEntries(
+    Object.keys(variables).map((name) => [name, process.env[name]])
+  );
+  const assign = (values: Readonly<Record<string, string | undefined>>) => {
+    for (const [name, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+  assign(variables);
+  try {
+    const { default: config } = await import(
+      `./next.config.mjs?stage=${cacheKey}`
+    );
+    return config as typeof nextConfig;
+  } finally {
+    assign(before);
+  }
+};
+
+test("gates browser source maps and the testing API by the Workspace stage before Vercel's", async () => {
+  const containerProduction = await importConfigWith(
+    { WORKSPACE_DEPLOYMENT_STAGE: "production", VERCEL_ENV: undefined },
+    "container-production"
+  );
+  expect(containerProduction.productionBrowserSourceMaps).toBe(true);
+
+  const containerPreview = await importConfigWith(
+    { WORKSPACE_DEPLOYMENT_STAGE: "preview", VERCEL_ENV: "production" },
+    "container-preview"
+  );
+  expect(containerPreview.productionBrowserSourceMaps).toBe(false);
+  expect(containerPreview.experimental?.exposeTestingApiInProductionBuild).toBe(
+    true
+  );
+
+  const vercelProduction = await importConfigWith(
+    { WORKSPACE_DEPLOYMENT_STAGE: undefined, VERCEL_ENV: "production" },
+    "vercel-production"
+  );
+  expect(vercelProduction.productionBrowserSourceMaps).toBe(true);
+});
+
+test("hands a host's Workspace stage to the browser bundle and leaves Vercel's alone", async () => {
+  const container = await importConfigWith(
+    { WORKSPACE_DEPLOYMENT_STAGE: "production" },
+    "container-browser-stage"
+  );
+  expect(container.env).toEqual({
+    NEXT_PUBLIC_WORKSPACE_DEPLOYMENT_STAGE: "production",
+  });
+
+  const vercel = await importConfigWith(
+    { WORKSPACE_DEPLOYMENT_STAGE: undefined, VERCEL_ENV: "production" },
+    "vercel-browser-stage"
+  );
+  expect(vercel.env).toBeUndefined();
+});

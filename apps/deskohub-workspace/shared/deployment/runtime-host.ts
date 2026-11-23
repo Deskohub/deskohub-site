@@ -13,3 +13,5 @@ export const serviceRoleSchema = Schema.String.check(
 );
 
 export const defaultServiceRole = "web";
+
+export type RuntimeHost = typeof runtimeHostSchema.Type;
