@@ -1,62 +1,46 @@
+import { Predicate } from "effect";
+import type { UnnormalizedLogicalExpression } from "./expression";
 import type { CloudinaryPublicId } from "./schema";
 
-const maxPrimitiveLength = 100;
+const maxTagLength = 100;
+const maxGroupItems = 50;
+const maxDepth = 10;
+const maxSerializedLength = 1000;
 
-/** `String(value)`, which spells `null` and `undefined` out, cut to 100 characters. */
-const stringifyPrimitive = (value: unknown) => {
-  const stringValue = String(value);
-  return stringValue.length > maxPrimitiveLength
-    ? `${stringValue.substring(0, maxPrimitiveLength)}...`
-    : stringValue;
+/** The tag cut to 100 characters. */
+const truncateTag = (tag: string) =>
+  tag.length > maxTagLength ? `${tag.substring(0, maxTagLength)}...` : tag;
+
+const serializeExpression = (
+  expression: UnnormalizedLogicalExpression<string>,
+  depth = 0
+): string => {
+  if (depth > maxDepth) {
+    return "[...]";
+  }
+
+  if (Predicate.isString(expression)) {
+    return truncateTag(expression);
+  }
+
+  const items = expression
+    .slice(0, maxGroupItems)
+    .map((item) => serializeExpression(item, depth + 1));
+  return `[${items.join(",")}${expression.length > maxGroupItems ? ",..." : ""}]`;
 };
 
-export function createStableHash(value: unknown): string {
-  const seen = new WeakSet();
-  const maxDepth = 10;
-  const maxStringLength = 1000;
-
-  const stringify = (nestedValue: unknown, depth = 0): string => {
-    if (depth > maxDepth) {
-      return "[...]";
-    }
-
-    if (nestedValue === null || typeof nestedValue !== "object") {
-      return stringifyPrimitive(nestedValue);
-    }
-
-    if (seen.has(nestedValue)) {
-      return "[circular]";
-    }
-
-    seen.add(nestedValue);
-
-    if (Array.isArray(nestedValue)) {
-      const items = nestedValue
-        .slice(0, 50)
-        .map((item) => stringify(item, depth + 1));
-      seen.delete(nestedValue);
-      return `[${items.join(",")}${nestedValue.length > 50 ? ",..." : ""}]`;
-    }
-
-    const sortedKeys = Object.keys(nestedValue).sort().slice(0, 50);
-    const pairs = sortedKeys.map(
-      (key) =>
-        `${key}:${stringify((nestedValue as Record<string, unknown>)[key], depth + 1)}`
-    );
-    seen.delete(nestedValue);
-
-    return `{${pairs.join(",")}}`;
-  };
-
-  const serialized = stringify(value);
-  const truncatedSerialized =
-    serialized.length > maxStringLength
-      ? serialized.substring(0, maxStringLength)
-      : serialized;
+/** A short hash that is equal for equal tag expressions. */
+export function createStableHash(
+  expression: UnnormalizedLogicalExpression<string>
+): string {
+  const serialized = serializeExpression(expression).substring(
+    0,
+    maxSerializedLength
+  );
 
   let hash = 0;
-  for (let index = 0; index < truncatedSerialized.length; index++) {
-    hash = ((hash << 5) - hash + truncatedSerialized.charCodeAt(index)) | 0;
+  for (let index = 0; index < serialized.length; index++) {
+    hash = ((hash << 5) - hash + serialized.charCodeAt(index)) | 0;
   }
 
   return Math.abs(hash).toString(36);
@@ -70,7 +54,10 @@ export function createCloudinaryCacheTags({
   return {
     all: () => `${namespace}:all`,
     image: (publicId: CloudinaryPublicId) => `${namespace}:img:${publicId}`,
-    search: (tags?: unknown, maxResults?: number) => {
+    search: (
+      tags?: UnnormalizedLogicalExpression<string>,
+      maxResults?: number
+    ) => {
       const parts = [`${namespace}:search`];
 
       if (tags) {

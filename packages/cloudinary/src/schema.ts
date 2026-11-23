@@ -1,7 +1,4 @@
-import {
-  type SupportedLocale,
-  supportedLocales,
-} from "@deskohub/i18n/locale-registry";
+import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import * as Schema from "effect/Schema";
 
 export const CloudinaryPublicIdSchema = Schema.NonEmptyString.pipe(
@@ -21,28 +18,24 @@ export const CloudinarySearchCursorSchema = Schema.NonEmptyString.pipe(
 });
 export type CloudinarySearchCursor = typeof CloudinarySearchCursorSchema.Type;
 
-/** A context field an asset carries per locale, beside a bare fallback. */
-export type LocalizedContextField = "alt" | "caption" | "detail";
+const localizedContextFields = ["alt", "caption", "detail"] as const;
 
-const optionalContextValue = Schema.optional(Schema.String);
+/** A context field an asset carries per locale, beside a bare fallback. */
+export type LocalizedContextField = (typeof localizedContextFields)[number];
 
 /**
  * The bare `alt`, `caption` and `detail` context fields and one
  * `<field>-<locale>` field each per supported locale, such as `alt-cs-CZ`.
  */
-const localizedContextFields = Object.fromEntries(
-  (["alt", "caption", "detail"] as const).flatMap((field) => [
-    [field, optionalContextValue],
-    ...supportedLocales.map((locale) => [
-      `${field}-${locale}`,
-      optionalContextValue,
-    ]),
-  ])
-) as {
-  readonly [Key in
-    | LocalizedContextField
-    | `${LocalizedContextField}-${SupportedLocale}`]: typeof optionalContextValue;
-};
+const localizedContextKeys = localizedContextFields.flatMap((field) => [
+  field,
+  ...supportedLocales.map((locale) => `${field}-${locale}` as const),
+]);
+
+const LocalizedContextSchema = Schema.Record(
+  Schema.Literals(localizedContextKeys),
+  Schema.optional(Schema.String)
+);
 
 export const CloudinaryAssetSchema = Schema.Struct({
   public_id: CloudinaryPublicIdSchema,
@@ -64,7 +57,7 @@ export const CloudinaryAssetSchema = Schema.Struct({
   tags: Schema.optional(Schema.Array(Schema.String)),
   context: Schema.optional(
     Schema.Struct({
-      custom: Schema.optional(Schema.Struct(localizedContextFields)),
+      custom: Schema.optional(LocalizedContextSchema),
     })
   ),
 });

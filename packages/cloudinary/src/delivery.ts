@@ -1,4 +1,9 @@
+import { Predicate } from "effect";
 import type { CloudinaryAsset } from "./schema";
+
+/** The public ID an image source names: an asset's own, or the bare ID. */
+export const imageSourcePublicId = (source: CloudinaryAsset | string) =>
+  Predicate.isString(source) ? source : source.public_id;
 
 /**
  * Derives the versioned secure delivery URL for an asset from its own data.
