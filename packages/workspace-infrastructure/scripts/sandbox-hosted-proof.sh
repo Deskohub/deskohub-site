@@ -91,6 +91,11 @@ collector_image=workspace-otel-collector
 mobile_updates_bucket="${project_id}-mobile-updates"
 edge_exclusion="workspace-${stage}-token-route-requests"
 marker=synthetic-probe-marker
+# Token-bearing routes the privacy phase sends the marker to.
+token_routes=(/app/auth/callback /api/auth/magic-link/verify /marketing-preferences/access)
+# Request sources that record the full URL of a token-route request.
+token_request_sources=('resource.type="http_load_balancer"' 'resource.type="cloud_run_revision"' 'log_id("run.googleapis.com/requests")')
+dry_run_exclusion_filter='(resource.type="http_load_balancer" OR (resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests"))) AND httpRequest.requestUrl=~"^https?://[^/]+(/app/auth/callback|/api/auth/magic-link/verify|/marketing-preferences/access)([/?#]|$)"'
 declared_repository_description="Workspace container images, deployed by digest."
 plan_log="${proof_dir}/plan.log"
 
@@ -233,19 +238,39 @@ stack_config_file="${proof_dir}/stack-config.json"
 digests_file="${proof_dir}/digests.env"
 releases_file="${proof_dir}/releases.env"
 edge_file="${proof_dir}/edge.env"
+exclusion_filter_file="${proof_dir}/edge-exclusion-filter.txt"
 # The proof run's disposable queue ID suffix, kept in the state bucket
 # outside the stack prefix so a later cleanup-only run declares the same
 # queues. Removed with the stack.
 proof_run_file="${proof_dir}/proof-run.env"
 proof_run_object="sandbox-proof/run.env"
+# The writer-lock holder whose processes the interrupt phase proved dead.
+dead_holder_file="${proof_dir}/interrupted-dead-holder"
 # Hosted proof starts only this long before the teardown deadline, leaving
 # time for its own teardown and a cleanup-only rerun.
 hosted_proof_teardown_margin_seconds=86400
 
+# Read KEY=value records as data, never as shell: the proof run record comes
+# back from the state bucket. Only upper-case keys with plain values (what
+# record_value writes for digests, IDs, addresses and suffixes) are accepted.
 load_env_file() {
-  # shellcheck disable=SC1090
-  [[ -f "$1" ]] && source "$1"
-  return 0
+  local file="$1" line key value name="${1##*/}"
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "$line" == *=* && "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$value" =~ ^[A-Za-z0-9._:/@+-]*$ ]] ||
+      fail "${name} holds a record that is not a plain KEY=value"
+    declare -g "${key}=${value}"
+  done <"$file"
+}
+
+# The proof run record from the state bucket names only the queue suffix.
+load_proof_run_file() {
+  load_env_file "$proof_run_file"
+  [[ -z "${QUEUE_SUFFIX:-}" || "$QUEUE_SUFFIX" =~ ^r[0-9]{1,20}-[0-9]{1,4}$ ]] ||
+    fail "the proof run record holds an invalid queue suffix"
 }
 
 record_value() {
@@ -260,7 +285,7 @@ record_value() {
 # with the package's own schema before any use.
 write_stack_config() {
   local collector_digest="${1:-}"
-  load_env_file "$proof_run_file"
+  load_proof_run_file
   trace bun scripts/sandbox-stack-config.ts
   (
     cd "$package_dir"
@@ -391,18 +416,32 @@ terraform_edge() {
     -var enable_https=false
 }
 
+# An object's live generation, or "absent" when the bucket reports it not
+# found; any other failure fails, so an unreadable object never reads as
+# an unchanged one.
 object_generation() {
-  capture 1 gcloud storage objects describe "gs://${state_bucket}/$1" \
-    --format='value(generation)' 2>/dev/null || true
+  local generation err="${proof_dir}/object-generation.err"
+  if generation="$(capture 1 gcloud storage objects describe "gs://${state_bucket}/$1" \
+    --format='value(generation)' 2>"$err")"; then
+    [[ "$generation" =~ ^[0-9]+$ ]] || return 1
+    echo "$generation"
+  elif grep -qiE 'not found|404' "$err"; then
+    echo absent
+  else
+    return 1
+  fi
 }
 
 # No Alchemy lease holder: a live holder refreshes the 60 s lease well
-# within a minute, so an unchanged generation over 65 s means none.
+# within a minute, so an unchanged generation over 65 s means none. An
+# unreadable lease fails rather than counting as quiet.
 wait_for_quiet_lease() {
   local before after
-  before="$(object_generation "$lease_object")"
+  before="$(object_generation "$lease_object")" ||
+    fail "the Alchemy lease is unreadable; a live holder cannot be ruled out"
   pause 65
-  after="$(object_generation "$lease_object")"
+  after="$(object_generation "$lease_object")" ||
+    fail "the Alchemy lease is unreadable; a live holder cannot be ruled out"
   expect_equal "Alchemy lease generation over 65 s" "$after" "$before"
 }
 
@@ -618,6 +657,8 @@ phase_edge_apply() {
   expect_equal "edge protocol" "$protocol" http
   ip="$(capture 198.51.100.10 terraform -chdir="$dir" output -raw edge_ip_address)"
   record_value "$edge_file" EDGE_IP "$ip"
+  capture "$dry_run_exclusion_filter" terraform -chdir="$dir" output -raw token_route_exclusion_filter \
+    >"$exclusion_filter_file" || fail "the edge reports no token-route exclusion filter"
   run terraform -chdir="$dir" output -json
   expect_serving v1
   local robots
@@ -659,13 +700,29 @@ phase_drift() {
 }
 
 # The persisted Cloud Run generation of every release service.
+# Each release service's persisted Cloud Run generation, one per line in
+# release_services order; fails when any read fails or is not a number.
 release_service_generations() {
   local service generation
   for service in "${release_services[@]}"; do
     generation="$(capture 1 gcloud run services describe "$service" --project="$project_id" \
-      --region="$region" --format='value(metadata.generation)' 2>/dev/null || true)"
-    printf '%s=%s\n' "$service" "$generation"
+      --region="$region" --format='value(metadata.generation)' 2>/dev/null)" || return 1
+    [[ "$generation" =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "$generation"
   done
+}
+
+# Whether some service's generation rose between two successful reads.
+generations_increased() {
+  local -a before after
+  local index
+  mapfile -t before <<<"$1"
+  mapfile -t after <<<"$2"
+  ((${#before[@]} == ${#release_services[@]} && ${#after[@]} == ${#release_services[@]})) || return 1
+  for index in "${!release_services[@]}"; do
+    ((after[index] > before[index])) && return 0
+  done
+  return 1
 }
 
 # Processes whose environment carries the interrupt token. Every descendant
@@ -707,8 +764,9 @@ kill_token_processes() {
 phase_interrupt_recover() {
   load_env_file "$digests_file"
   expect_settled "$(release_status before-interrupt)"
-  local before log="${proof_dir}/interrupted-deliver.log"
-  before="$(release_service_generations)"
+  local before after log="${proof_dir}/interrupted-deliver.log"
+  before="$(release_service_generations)" ||
+    fail "Cloud Run service generations are unreadable; the interrupt has no baseline"
   use_stack_config
   trace env "SANDBOX_PROOF_INTERRUPT_TOKEN=<random>" bun run release deliver \
     --sha "$GITHUB_SHA" --image-digest "${PROBE_V3_DIGEST:-}" "&"
@@ -727,7 +785,8 @@ phase_interrupt_recover() {
     done
     # `kill -0` would still see an exited, unreaped deliver; the token does not.
     while ((SECONDS < deadline)) && [[ -n "$(token_processes "$token")" ]]; do
-      if [[ "$(release_service_generations)" != "$before" ]]; then
+      # A failed read is inconclusive: only a read generation increase counts.
+      if after="$(release_service_generations)" && generations_increased "$before" "$after"; then
         changed=true
         break
       fi
@@ -747,6 +806,8 @@ phase_interrupt_recover() {
   status="$(release_status interrupted)"
   holder="$(json_get '.record.writer.holder' "$status")"
   [[ -n "$holder" && "$holder" != null ]] || fail "the interrupted deliver left no writer lock"
+  # Only this holder's processes were proven dead; teardown may clear no other.
+  $dry_run || printf '%s\n' "$holder" >"$dead_holder_file"
   local unlocked=false
   for _ in $(seq 1 20); do
     if release unlock --holder "$holder"; then
@@ -928,6 +989,23 @@ verify_log_routing() {
       '$known[0] + [.[] | . + {parent: $parent, level: "ancestor"}]' <<<"$sinks" >"${dir}/sinks.next"
     mv "${dir}/sinks.next" "${dir}/sinks.json"
   done < <(jq -r '.[] | [.id, .type] | @tsv' <<<"$ancestors")
+  # The live project exclusion must be the filter Terraform applied, and
+  # that filter must name both request sources and every token route.
+  local expected live source route
+  expected="$(cat "$exclusion_filter_file" 2>/dev/null)" ||
+    fail "the edge recorded no token-route exclusion filter; log routing unverified"
+  [[ -n "$expected" ]] || fail "the edge recorded an empty token-route exclusion filter"
+  for source in "${token_request_sources[@]}"; do
+    [[ "$expected" == *"$source"* ]] || fail "the token-route exclusion filter omits ${source}"
+  done
+  for route in "${token_routes[@]}"; do
+    [[ "$expected" == *"$route"* ]] || fail "the token-route exclusion filter omits ${route}"
+  done
+  live="$(jq -r --arg name "$edge_exclusion" \
+    'map(select(.name == $name and .disabled != true)) | first | .filter // empty' \
+    "${dir}/project-exclusions.json")"
+  [[ "$live" == "$expected" ]] ||
+    fail "the enabled project exclusion ${edge_exclusion} does not apply the Terraform token-route filter"
   local uncovered
   uncovered="$(jq -r --arg name "$edge_exclusion" --slurpfile exclusions "${dir}/project-exclusions.json" '
     ($exclusions[0] | map(select(.name == $name and .disabled != true)) | first | .filter) as $filter
@@ -1007,7 +1085,7 @@ phase_edge_privacy() {
   local ip path body start
   ip="$(edge_ip)"
   start="$(capture 2026-01-01T00:00:00Z date -u +%Y-%m-%dT%H:%M:%SZ)"
-  for path in /app/auth/callback /api/auth/magic-link/verify /marketing-preferences/access; do
+  for path in "${token_routes[@]}"; do
     body="$(capture "{\"route\":\"${path}\"}" curl -fsS --max-time 10 "http://${ip}${path}?token=${marker}")"
     [[ "$body" != *"$marker"* ]] || fail "${path} echoed the marker"
   done
@@ -1071,9 +1149,11 @@ phase_stack_destroy() {
   status="$(release_status before-destroy)"
   holder="$(json_get '.record.writer.holder' "$status")"
   if ! $dry_run && [[ -n "$holder" && "$holder" != null ]]; then
-    # The concurrency group never runs two sandbox jobs, every earlier step
-    # of this job has exited and the interrupt phase killed its deliver's
-    # whole process tree; a quiet Alchemy lease confirms no apply runs.
+    # Only the holder whose whole process tree the interrupt phase proved
+    # dead may be cleared, and only once the Alchemy lease is quiet; any
+    # other holder may still be writing, so its lock stays for an operator.
+    [[ -f "$dead_holder_file" && "$(cat "$dead_holder_file")" == "$holder" ]] ||
+      fail "the writer lock is held by ${holder}, whose death this run did not establish; the lock stays and nothing was destroyed (an operator must confirm it stopped)"
     wait_for_quiet_lease
     release unlock --holder "$holder" ||
       fail "the writer lock held by ${holder} was not released; nothing was destroyed"

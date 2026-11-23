@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type FakeRule,
@@ -111,7 +111,10 @@ describe("cleanup under the writer lock", () => {
         ],
       },
       (fakes) => {
-        seed(fakes, { "stack-config.json": "{}" });
+        seed(fakes, {
+          "stack-config.json": "{}",
+          "interrupted-dead-holder": "h\n",
+        });
         const { exitCode, output } = runPhase(fakes, "stack-destroy");
         expect(exitCode).toBe(1);
         expect(output).toContain("was not released; nothing was destroyed");
@@ -119,6 +122,55 @@ describe("cleanup under the writer lock", () => {
         expect(calls).not.toMatch(directDeletes);
         expect(calls).not.toContain("sandbox-locked-stack.ts destroy");
         expect(calls).not.toContain("storage rm");
+      }
+    );
+  });
+
+  const heldBy = (holder: string, rules: ReadonlyArray<FakeRule> = []) => ({
+    status: {
+      version: "1",
+      record: { generation: 4, writer: { holder }, pendingApply: null },
+    },
+    rules,
+  });
+
+  test("leaves a lock whose holder this run did not prove dead", () => {
+    for (const deadHolder of [null, "another-holder"]) {
+      withProofFakes(heldBy("live-holder"), (fakes) => {
+        seed(fakes, {
+          "stack-config.json": "{}",
+          ...(deadHolder === null
+            ? {}
+            : { "interrupted-dead-holder": `${deadHolder}\n` }),
+        });
+        const { exitCode, output } = runPhase(fakes, "stack-destroy");
+        expect(exitCode).toBe(1);
+        expect(output).toContain("whose death this run did not establish");
+        const calls = fakes.calls().join("\n");
+        expect(calls).not.toContain("unlock");
+        expect(calls).not.toContain("sandbox-locked-stack.ts destroy");
+      });
+    }
+  });
+
+  test("leaves the lock when the Alchemy lease is unreadable", () => {
+    withProofFakes(
+      heldBy("h", [
+        {
+          tool: "gcloud",
+          pattern: "^storage objects describe .*__lease__",
+          exit: 1,
+        },
+      ]),
+      (fakes) => {
+        seed(fakes, {
+          "stack-config.json": "{}",
+          "interrupted-dead-holder": "h\n",
+        });
+        const { exitCode, output } = runPhase(fakes, "stack-destroy");
+        expect(exitCode).toBe(1);
+        expect(output).toContain("the Alchemy lease is unreadable");
+        expect(fakes.calls().join("\n")).not.toContain("unlock");
       }
     );
   });
@@ -213,6 +265,43 @@ describe("disposable queue IDs", () => {
     expect(upload).toBeGreaterThan(-1);
     expect(upload).toBeLessThan(deploy);
     expect(foundation("112").suffix).toBe("r112-2");
+  });
+
+  test("never executes the recorded proof run file", () => {
+    for (const record of [
+      "QUEUE_SUFFIX=r111-2\ntouch pwned\n",
+      "QUEUE_SUFFIX=$(touch pwned)\n",
+      "QUEUE_SUFFIX=r111-2;touch_pwned\n",
+    ]) {
+      withProofFakes(
+        {
+          files: { "sandbox-proof/run.env": record },
+          rules: [
+            {
+              tool: "gcloud",
+              pattern: "^projects describe",
+              stdout: "759037106024",
+            },
+            {
+              tool: "gcloud",
+              pattern: "^storage buckets describe",
+              stdout: "europe-west1",
+            },
+          ],
+        },
+        (fakes) => {
+          const { exitCode, output } = runPhase(fakes, "preflight", {
+            SANDBOX_PROOF_MODE: "cleanup-only",
+          });
+          expect({ record, exitCode }).toEqual({ record, exitCode: 1 });
+          expect(output).toMatch(/not a plain KEY=value|invalid queue suffix/);
+          expect(
+            existsSync(join(packageRoot, "pwned")) ||
+              existsSync(join(fakes.proofDir, "pwned"))
+          ).toBe(false);
+        }
+      );
+    }
   });
 
   test("reuse the recorded suffix in a later cleanup-only run", () => {
@@ -463,6 +552,43 @@ describe("interrupting a deliver mid-apply", () => {
     });
   });
 
+  test("fails without a baseline generation read", () => {
+    const world = interruptWorld("apply");
+    withProofFakes(
+      {
+        ...world,
+        rules: [
+          {
+            tool: "gcloud",
+            pattern: "^run services describe workspace-web ",
+            exit: 1,
+          },
+          ...(world.rules ?? []),
+        ],
+      },
+      (fakes) => {
+        seedDeliver(fakes);
+        const { exitCode, output } = runPhase(fakes, "interrupt-recover");
+        expect(exitCode).toBe(1);
+        expect(output).toContain("the interrupt has no baseline");
+        expect(fakes.calls().join("\n")).not.toContain("deliver");
+      }
+    );
+  });
+
+  test("never counts a failed generation read as a change", () => {
+    withProofFakes(
+      { ...interruptWorld("exit"), serviceReadsFailAfterDeliver: true },
+      (fakes) => {
+        seedDeliver(fakes);
+        const { exitCode, output } = runPhase(fakes, "interrupt-recover");
+        expect(exitCode).toBe(1);
+        expect(output).toContain("persisted no Cloud Run change");
+        expect(fakes.calls().join("\n")).not.toContain("unlock");
+      }
+    );
+  });
+
   test("fails when the deliver ends before persisting any change", () => {
     withProofFakes(interruptWorld("exit"), (fakes) => {
       seedDeliver(fakes);
@@ -475,7 +601,13 @@ describe("interrupting a deliver mid-apply", () => {
 });
 
 describe("token-route privacy and telemetry", () => {
-  const exclusionFilter = 'resource.type="http_load_balancer" AND token';
+  // The filter Terraform builds in infra/workspace-edge/request-log-exclusions.tf.
+  const lbSource = 'resource.type="http_load_balancer"';
+  const runSource =
+    'resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests")';
+  const routes =
+    "/app/auth/callback|/api/auth/magic-link/verify|/api/email-campaigns/unsubscribe|(/[a-z]{2,3}-[A-Z]{2})?/marketing-preferences/access";
+  const exclusionFilter = `(${lbSource} OR (${runSource})) AND httpRequest.requestUrl=~"^https?://[^/]+(${routes})([/?#]|$)"`;
   const exclusions = JSON.stringify({
     exclusions: [{ name: exclusionName, filter: exclusionFilter }],
   });
@@ -556,9 +688,17 @@ describe("token-route privacy and telemetry", () => {
       stdout: JSON.stringify({ traces: [{ traceId }] }),
     },
   ];
-  const privacy = (overrides: ReadonlyArray<FakeRule> = []) =>
+  const privacy = (
+    overrides: ReadonlyArray<FakeRule> = [],
+    recordedFilter: string | null = exclusionFilter
+  ) =>
     withProofFakes({ rules: rules(overrides) }, (fakes) => {
-      seed(fakes, { "edge.env": "EDGE_IP=198.51.100.10\n" });
+      seed(fakes, {
+        "edge.env": "EDGE_IP=198.51.100.10\n",
+        ...(recordedFilter === null
+          ? {}
+          : { "edge-exclusion-filter.txt": recordedFilter }),
+      });
       const result = runPhase(fakes, "edge-privacy");
       return {
         ...result,
@@ -654,6 +794,32 @@ describe("token-route privacy and telemetry", () => {
       const { exitCode, markerSent } = privacy([override]);
       expect({ override, exitCode, markerSent }).toEqual({
         override,
+        exitCode: 1,
+        markerSent: false,
+      });
+    }
+  });
+
+  test("sends no marker unless the live exclusion is the full Terraform filter", () => {
+    const liveExclusion = (filter: string): FakeRule => ({
+      tool: "curl",
+      pattern: "logging\\.googleapis\\.com/v2/projects/.*/exclusions",
+      stdout: JSON.stringify({ exclusions: [{ name: exclusionName, filter }] }),
+    });
+    const withoutCloudRun = `${lbSource} AND httpRequest.requestUrl=~"^https?://[^/]+(${routes})([/?#]|$)"`;
+    const withoutRoute = exclusionFilter.replace("/app/auth/callback|", "");
+    for (const [overrides, recorded] of [
+      // No filter recorded by the edge apply.
+      [[], null],
+      // The live exclusion differs from what Terraform applied.
+      [[liveExclusion(withoutCloudRun)], exclusionFilter],
+      // Terraform's own filter misses Cloud Run request logs or a route.
+      [[liveExclusion(withoutCloudRun)], withoutCloudRun],
+      [[liveExclusion(withoutRoute)], withoutRoute],
+    ] satisfies ReadonlyArray<[ReadonlyArray<FakeRule>, string | null]>) {
+      const { exitCode, markerSent } = privacy(overrides, recorded);
+      expect({ recorded, exitCode, markerSent }).toEqual({
+        recorded,
         exitCode: 1,
         markerSent: false,
       });

@@ -20,3 +20,8 @@ output "edge_protocol" {
   description = "Protocol clients use to reach the edge: https, or http when the sandbox disables HTTPS."
   value       = var.enable_https ? "https" : "http"
 }
+
+output "token_route_exclusion_filter" {
+  description = "Filter of the project exclusion that drops token-route request logs; the hosted proof requires every sink to apply it."
+  value       = google_logging_project_exclusion.token_route_requests.filter
+}

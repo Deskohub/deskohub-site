@@ -59,6 +59,10 @@ export interface FakeWorld {
    * hangs; `exit` changes nothing and exits.
    */
   readonly interruptedDeliver?: "apply" | "exit";
+  /** Cloud Run service reads fail once an interrupted deliver has started. */
+  readonly serviceReadsFailAfterDeliver?: boolean;
+  /** Set by any deliver started with an interrupt token. */
+  readonly deliverStarted?: boolean;
   /** Set by an `apply` deliver: the detached child's process ID. */
   readonly detachedChildPid?: number;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
@@ -273,6 +277,7 @@ const interruptedDeliver = async (
   world: FakeWorld,
   save: (next: FakeWorld) => void
 ) => {
+  save({ ...world, deliverStarted: true });
   if (world.interruptedDeliver !== "apply") {
     return 0;
   }
@@ -350,6 +355,10 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
   }
   if (tool === "gcloud") {
     if (args[0] === "run" && args[1] === "services" && args[2] === "describe") {
+      if (world.serviceReadsFailAfterDeliver && world.deliverStarted) {
+        process.stderr.write("ERROR: 503 Service Unavailable\n");
+        return 1;
+      }
       print(String(world.serviceGenerations?.[args[3] ?? ""] ?? 1));
       return 0;
     }
