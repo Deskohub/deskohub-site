@@ -14,11 +14,11 @@ import {
   loadingDieFrame,
   loadingDieTiming,
 } from "./index";
-import type { LoadingDieLottie, LottieShape } from "./lottie";
+import type { LottieShape } from "./lottie";
 
 const motions = ["tumble", "inPlace"] as const;
 const brandDocument = (motion: LoadingDieMotion) =>
-  loadingDieAnimation({ motion, fill: { kind: "brand" } }) as LoadingDieLottie;
+  loadingDieAnimation({ motion, fill: { kind: "brand" } });
 const lastFrame = loadingDieTiming.frameCount;
 
 /** Rounding to one decimal can move a vertex by 0.05 per axis. */
@@ -152,10 +152,10 @@ describe.each([...motions])("the %s loop", (motion) => {
 });
 
 describe("landings", () => {
-  const landings: Record<LoadingDieMotion, readonly number[]> = {
+  const landings = {
     tumble: [36, 48, 84],
     inPlace: [48],
-  };
+  } satisfies Record<LoadingDieMotion, readonly number[]>;
 
   test.each([...motions])("the %s motion lands on the logo", (motion) => {
     const document = brandDocument(motion);
@@ -201,7 +201,7 @@ describe("loadingDieAnimation", () => {
     const navy = loadingDieAnimation({
       motion: "tumble",
       fill: { kind: "solid", color: "#00024f" },
-    }) as LoadingDieLottie;
+    });
     expect(navy.layers[0]).toEqual(brand.layers[0]);
     const brandShapes = brand.layers[1].shapes;
     const navyShapes = navy.layers[1].shapes;

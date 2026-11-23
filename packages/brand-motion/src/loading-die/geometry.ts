@@ -180,10 +180,13 @@ const buildDie = () => {
     ])
   );
   const ey: Vector3 = [-up[0], -up[1], -up[2]];
-  const ez = frontNormal;
-  const ex = cross(ey, ez);
+  const ex = cross(ey, frontNormal);
   const rest = vertices.map(
-    (vertex): Vector3 => [dot(ex, vertex), dot(ey, vertex), dot(ez, vertex)]
+    (vertex): Vector3 => [
+      dot(ex, vertex),
+      dot(ey, vertex),
+      dot(frontNormal, vertex),
+    ]
   );
 
   const depths = rest.map((vertex) => vertex[2]).sort((a, b) => b - a);
@@ -225,14 +228,14 @@ const buildDie = () => {
     }
     return best;
   };
-  const ringNames: Record<number, LogoVertex> = {
-    90: "top",
-    30: "upperRight",
-    330: "lowerRight",
-    270: "bottom",
-    210: "lowerLeft",
-    150: "upperLeft",
-  };
+  const ringNames = new Map<number, LogoVertex>([
+    [90, "top"],
+    [30, "upperRight"],
+    [330, "lowerRight"],
+    [270, "bottom"],
+    [210, "lowerLeft"],
+    [150, "upperLeft"],
+  ]);
 
   const controls: Point[] = [];
   const targets: Point[] = [];
@@ -251,7 +254,7 @@ const buildDie = () => {
     const vertex = at(rest, index);
     const sector =
       (Math.round(angleDegrees(vertex[0], vertex[1]) / 30) * 30) % 360;
-    const name = ringNames[sector];
+    const name = ringNames.get(sector);
     if (name === undefined) {
       throw new Error(`No logo vertex at ${sector} degrees.`);
     }
@@ -445,12 +448,11 @@ const roundedFace = (triangle: readonly [Point, Point, Point]): FaceOutline => {
     );
     const handle =
       (4 / 3) * Math.tan((Math.PI - angle) / 4) * reach * Math.tan(angle / 2);
-    return {
-      a: [corner[0] + u1[0] * reach, corner[1] + u1[1] * reach] as Point,
-      aHandle: [-u1[0] * handle, -u1[1] * handle] as Point,
-      b: [corner[0] + u2[0] * reach, corner[1] + u2[1] * reach] as Point,
-      bHandle: [-u2[0] * handle, -u2[1] * handle] as Point,
-    };
+    const a: Point = [corner[0] + u1[0] * reach, corner[1] + u1[1] * reach];
+    const aHandle: Point = [-u1[0] * handle, -u1[1] * handle];
+    const b: Point = [corner[0] + u2[0] * reach, corner[1] + u2[1] * reach];
+    const bHandle: Point = [-u2[0] * handle, -u2[1] * handle];
+    return { a, aHandle, b, bHandle };
   });
   const [c0, c1, c2] = [at(corners, 0), at(corners, 1), at(corners, 2)];
   return {

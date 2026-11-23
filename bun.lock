@@ -418,6 +418,9 @@
     "packages/brand-motion": {
       "name": "@deskohub/brand-motion",
       "version": "0.1.0",
+      "dependencies": {
+        "effect": "4.1.4",
+      },
       "devDependencies": {
         "typescript": "npm:@typescript/typescript6@6.0.2",
       },

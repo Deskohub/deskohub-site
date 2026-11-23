@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { Point } from "./geometry";
+import tumbleDocument from "./loading-die-tumble.lottie.json";
 import {
+  isLoadingDieLottie,
   type LottieShape,
   linearEasing,
   type ScalarProperty,
@@ -115,5 +117,28 @@ describe("sampleShape", () => {
 
   test("keeps the last key's shape past the end", () => {
     expect(sampleShape(shape, 96)).toEqual(open);
+  });
+});
+
+describe("isLoadingDieLottie", () => {
+  test("accepts a committed document", () => {
+    expect(isLoadingDieLottie(tumbleDocument)).toBe(true);
+  });
+
+  test("rejects a document without its die layer", () => {
+    const [hop] = tumbleDocument.layers;
+    expect(isLoadingDieLottie({ ...tumbleDocument, layers: [hop] })).toBe(
+      false
+    );
+  });
+
+  test("rejects a document whose die layer holds an unknown shape item", () => {
+    const [hop, die] = tumbleDocument.layers;
+    expect(
+      isLoadingDieLottie({
+        ...tumbleDocument,
+        layers: [hop, { ...die, shapes: [{ ty: "st" }] }],
+      })
+    ).toBe(false);
   });
 });
