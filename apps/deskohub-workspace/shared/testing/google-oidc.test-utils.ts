@@ -2,7 +2,7 @@ import { mock, spyOn } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import type { env } from "@/env";
-import type { GoogleInvoker } from "@/shared/backend/google-oidc";
+import type { GoogleInvoker } from "@/shared/backend/google-cloud/google-oidc";
 
 /** Synthetic invokers with the distinct accounts and audiences infra declares. */
 export const tasksInvoker: GoogleInvoker = {

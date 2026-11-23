@@ -3,7 +3,7 @@ import "server-only";
 import { Effect, Match, Option, Schema } from "effect";
 import { NextResponse } from "next/server";
 import { env } from "@/env";
-import { cloudTasksInvoker } from "@/shared/backend/google-oidc";
+import { cloudTasksInvoker } from "@/shared/backend/google-cloud/google-oidc";
 import {
   defineServiceRoute,
   requireGoogleInvoker,
@@ -14,6 +14,7 @@ import {
   type QueueDeliveryOutcome,
   queueDeliveryModeForStage,
 } from "./queue-consumer";
+import type { WorkspaceQueueTopic } from "./workspace-queue-topics";
 
 const parseRetryCount = (value: string | null) => {
   const count = value === null ? Number.NaN : Number(value);
@@ -29,7 +30,7 @@ const parseRetryCount = (value: string | null) => {
  */
 const cloudTasksDeliveryMetadata = (
   headers: Headers,
-  topic: string
+  topic: WorkspaceQueueTopic
 ): Omit<QueueDelivery, "payload"> => ({
   topic,
   messageId: headers.get("x-cloudtasks-taskname") ?? "unknown",
@@ -85,7 +86,7 @@ const cloudTasksResponse = (outcome: QueueDeliveryOutcome) =>
  */
 export const defineCloudTasksQueueRoute = (
   operation: string,
-  topic: string,
+  topic: WorkspaceQueueTopic,
   consume: QueueConsumer<never>
 ) =>
   defineServiceRoute(operation, (request) =>

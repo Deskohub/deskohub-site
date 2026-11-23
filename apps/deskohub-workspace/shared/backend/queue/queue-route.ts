@@ -2,6 +2,7 @@ import { env } from "@/env";
 import { defineCloudTasksQueueRoute } from "./cloud-tasks-queue-consumer";
 import type { QueueConsumer } from "./queue-consumer";
 import { defineVercelQueueRoute } from "./vercel-queue-consumer";
+import type { WorkspaceQueueTopic } from "./workspace-queue-topics";
 
 type QueueRouteHandler = (request: Request) => Promise<Response>;
 
@@ -14,7 +15,7 @@ type QueueRouteHandler = (request: Request) => Promise<Response>;
  */
 export const defineQueueRoute = (
   operation: string,
-  topic: string,
+  topic: WorkspaceQueueTopic,
   consume: QueueConsumer<never>
 ) => {
   let vercel: QueueRouteHandler | undefined;

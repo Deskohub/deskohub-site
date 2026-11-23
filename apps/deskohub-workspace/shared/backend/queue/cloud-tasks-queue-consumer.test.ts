@@ -17,6 +17,7 @@ import type {
   QueueDeliveryMode,
   QueueDeliveryOutcome,
 } from "./queue-consumer";
+import type { WorkspaceQueueTopic } from "./workspace-queue-topics";
 
 const workspaceLogs = captureWorkspaceLogs();
 const nextServer = await import("next/server");
@@ -24,11 +25,10 @@ const nextServer = await import("next/server");
 mock.module("next/server", () => ({ ...nextServer, after: () => undefined }));
 
 // The Vercel transport answers a marker, so a test sees which one ran.
-mock.module("@vercel/queue", () => ({
-  ...vercelQueue,
-  handleCallback: () => () =>
-    Promise.resolve(new Response("vercel", { status: 299 })),
-}));
+const handleCallback = mock(
+  () => () => Promise.resolve(new Response("vercel", { status: 299 }))
+);
+mock.module("@vercel/queue", () => ({ ...vercelQueue, handleCallback }));
 
 const containerHost = {
   WORKSPACE_RUNTIME_HOST: "container",
@@ -47,7 +47,8 @@ afterEach(() => {
   setHost(containerHost);
 });
 
-const topic = "workspace-test-parcel";
+// Any registered topic; the adapter only carries it into the delivery.
+const topic: WorkspaceQueueTopic = "workspace-paid-fulfillment";
 
 const taskRequest = (
   authorization: string | undefined,
@@ -427,5 +428,16 @@ describe("defineQueueRoute", () => {
       expect(response.status).toBe(299);
       expect(deliveries).toHaveLength(0);
     }
+  });
+
+  test("never builds the Vercel handler on a container host", async () => {
+    handleCallback.mockClear();
+    const { POST, deliveries } = recordingRoute();
+
+    const response = await POST(taskRequest(await bearer(tasksInvoker)));
+
+    expect(response.status).toBe(200);
+    expect(deliveries).toHaveLength(1);
+    expect(handleCallback).not.toHaveBeenCalled();
   });
 });

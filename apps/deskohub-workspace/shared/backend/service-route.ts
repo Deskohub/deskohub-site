@@ -8,7 +8,7 @@ import {
   authenticateGoogleInvoker,
   cloudSchedulerInvoker,
   type GoogleInvoker,
-} from "./google-oidc";
+} from "./google-cloud/google-oidc";
 import { defineWorkspaceRoute, WorkspaceRouteFailure } from "./workspace-route";
 
 /**
