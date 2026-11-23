@@ -338,11 +338,12 @@ export const administrationOperationDeclaration = (
  * The variant a generic mutation endpoint's request body selects, read from
  * the undecoded body: none when it names no declared variant.
  */
-export const administrationOperationVariantOf = (
+export const administrationOperationVariantOf = <Body>(
   variants: AdministrationOperationVariants["Service"],
-  body: Schema.Json
+  body: Body
 ): Option.Option<string> =>
-  ownMember(body, variants.field).pipe(
+  Schema.decodeUnknownOption(Schema.Json)(body).pipe(
+    Option.flatMap((json) => ownMember(json, variants.field)),
     Option.flatMap((member) => ownMember(member, variants.discriminator)),
     Option.filter(Schema.is(Schema.String)),
     Option.filter((variant) => Object.hasOwn(variants.operations, variant))

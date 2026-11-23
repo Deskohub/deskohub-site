@@ -1,8 +1,10 @@
 import {
-  type Array as Arr,
+  Array as Arr,
   Effect,
+  type Layer,
   Option,
   Schema,
+  type Scope,
   Struct,
   type Types,
 } from "effect";
@@ -26,7 +28,10 @@ import type {
 } from "./administration-operation-port";
 import type { NoInput } from "./campaign-operations";
 import { MinimumDhwVersion } from "./dhw-version";
-import { administrationOperationGroup } from "./workspace-admin-api";
+import {
+  type AdministrationOperationGroup,
+  administrationOperationGroup,
+} from "./workspace-admin-api";
 
 /** The names of a path's `:name` segments. */
 export type PathParamNames<Path extends string> =
@@ -425,19 +430,6 @@ const endpointOf = (
 };
 
 /**
- * Whether `endpoints` are one endpoint per route, named after its operation
- * in the routes' order, which TypeScript can't tell of endpoints built from
- * the routes at run time.
- */
-const areRouteEndpoints = <Endpoint extends HttpApiEndpoint.Constraint>(
-  endpoints: ReadonlyArray<HttpApiEndpoint.Constraint>,
-  names: ReadonlyArray<string>
-): endpoints is Arr.NonEmptyReadonlyArray<Endpoint> =>
-  endpoints.length > 0 &&
-  endpoints.length === names.length &&
-  endpoints.every((endpoint, index) => endpoint.identifier === names[index]);
-
-/**
  * The `/api/v1/cli` group serving `operations`, one endpoint per operation
  * named after it. Each endpoint's request parts come from the operation's
  * input as its route places them, its success is the operation's output,
@@ -449,7 +441,10 @@ const areRouteEndpoints = <Endpoint extends HttpApiEndpoint.Constraint>(
  * returned, since `prefix`, `middleware` and `annotate` copy a group without
  * them.
  */
-export const operationGroup = <
+// `HttpApiEndpoint` types an endpoint by the schemas its constructor gets,
+// and these endpoints are built from the routes at run time; the overload
+// states the endpoint type `OperationGroupEndpoints` derives from the routes.
+export function operationGroup<
   const Id extends string,
   Ops extends Operations,
   const Routes extends OperationRoutes<Ops>,
@@ -458,34 +453,46 @@ export const operationGroup = <
   identifier: Id,
   operations: Ops,
   routes: Routes & CheckedRoutes<Ops, Routes>,
-  { errors }: { readonly errors: Errors }
-) => {
-  const endpoints: ReadonlyArray<HttpApiEndpoint.Constraint> = Object.entries(
-    routes
-  ).map(([name, operationRoute]) => {
+  options: { readonly errors: Errors }
+): OperationGroup<Id, Ops, Routes, Errors[number]>;
+export function operationGroup(
+  identifier: string,
+  operations: Operations,
+  routes: OperationRoutes<Operations>,
+  { errors }: { readonly errors: ReadonlyArray<Schema.Top> }
+): HttpApiGroup.Constraint & OperationBinding {
+  const endpoints = Object.entries(routes).map(([name, operationRoute]) => {
     const operation = operations[name];
     if (operation === undefined) {
       throw new Error(`${identifier}.${name} routes no operation.`);
     }
     return endpointOf(operation, operationRoute, errors);
   });
-  if (
-    !areRouteEndpoints<OperationGroupEndpoints<Ops, Routes, Errors[number]>>(
-      endpoints,
-      Object.keys(routes)
-    )
-  ) {
+  const [first, ...rest] = endpoints;
+  if (first === undefined) {
     throw new Error(`${identifier} serves no operation.`);
   }
   const group = administrationOperationGroup(
-    HttpApiGroup.make(identifier).add(...endpoints),
+    HttpApiGroup.make(identifier).add(first, ...rest),
     { checkDhwVersionBeforeAuthentication: true }
   );
-  const binding: OperationBinding<Ops, Routes> = {
+  const binding: OperationBinding = {
     [operationBinding]: { operations, routes },
   };
   return Object.assign(group, binding);
-};
+}
+
+/** The group `operationGroup` declares, carrying its operations and routes. */
+export type OperationGroup<
+  Id extends string,
+  Ops extends Operations,
+  Routes extends OperationRoutes<Ops>,
+  Errors extends Schema.Top,
+> = AdministrationOperationGroup<
+  HttpApiGroup.HttpApiGroup<Id, OperationGroupEndpoints<Ops, Routes, Errors>>,
+  { readonly checkDhwVersionBeforeAuthentication: true }
+> &
+  OperationBinding<Ops, Routes>;
 
 /** Runs an operation by name; `operationGroupHandlers` serves a group with it. */
 export type OperationInvoke<Ops extends Operations, Failure, Services> = <
@@ -607,13 +614,28 @@ type OutputServices<Outputs> = {
     : never;
 }[keyof Outputs];
 
+/** The handlers serving every endpoint of `Group`. */
+type GroupHandlers<
+  Group extends HttpApiGroup.Constraint,
+  Services,
+  Outputs,
+> = HttpApiBuilder.Handlers<
+  ServedRequirements<
+    HttpApiGroup.Endpoints<Group>,
+    Services | OutputServices<Outputs>
+  >
+>;
+
 /**
  * Serves every endpoint of an operation group by running the operation of
  * its name on the input its request carries. `outputs` adapts an
  * operation's output for the caller, as withholding what an older `dhw`
  * can't decode.
  */
-export const operationGroupHandlers = <
+// `HttpApiBuilder` types each handler by an endpoint name known at compile
+// time; these handlers serve the group's own routes, read at run time, so
+// the overload states the layer serving every one of them.
+export function operationGroupHandlers<
   ApiId extends string,
   Groups extends HttpApiGroup.Constraint,
   Group extends Groups & OperationBinding,
@@ -631,97 +653,64 @@ export const operationGroupHandlers = <
     R
   >,
   outputs?: Outputs
-) => {
+): Layer.Layer<
+  HttpApiGroup.Service<ApiId, HttpApiGroup.Identifier<Group>>,
+  E,
+  Exclude<
+    | R
+    | HttpApiBuilder.Handlers.Context<GroupHandlers<Group, Services, Outputs>>,
+    Scope.Scope
+  >
+>;
+export function operationGroupHandlers(
+  api: HttpApi.HttpApi<string, HttpApiGroup.Constraint>,
+  group: HttpApiGroup.Constraint & OperationBinding,
+  invoker: Effect.Effect<
+    OperationInvoke<Operations, unknown, unknown>,
+    unknown,
+    unknown
+  >,
+  outputs?: OutputAdapters<Operations>
+): Layer.Any {
   const { operations, routes } = group[operationBinding];
-  const names = Object.keys(routes);
   const serve =
-    (invoke: OperationInvoke<OperationsOf<Group>, Failure, Services>) =>
+    (invoke: OperationInvoke<Operations, unknown, unknown>) =>
     ([name, operationRoute]: [string, OperationRoute]): HttpApiEndpoint.Handler<
       HttpApiEndpoint.Constraint,
       never,
       unknown
     > =>
-    (request) =>
-      Effect.flatMap(
-        Effect.orDie(Schema.decodeUnknownEffect(OperationRequest)(request)),
-        (parts) => {
-          if (!isOperationName(operations, name)) {
-            return Effect.die(new Error(`${name} routes no operation.`));
-          }
-          const operation = operations[name];
-          if (operation === undefined) {
-            return Effect.die(new Error(`${name} routes no operation.`));
-          }
-          const input = inputOf(operationRoute, parts);
-          // The endpoint decoded each part; the operation decodes the input.
-          if (!Schema.is(Schema.toEncoded(operation.input))(input)) {
-            return Effect.die(
-              new Error(`${name}'s request doesn't carry its input.`)
-            );
-          }
-          const output = invoke(name, input);
-          const adapt: OutputAdapter | undefined = outputs?.[name];
-          return adapt === undefined ? output : Effect.flatMap(output, adapt);
+      Effect.fnUntraced(function* (request) {
+        const operation = operations[name];
+        if (operation === undefined) {
+          return yield* Effect.die(new Error(`${name} routes no operation.`));
         }
-      );
-  type Served = HttpApiBuilder.Handlers<
-    ServedRequirements<
-      HttpApiGroup.Endpoints<Group>,
-      Services | OutputServices<Outputs>
-    >
-  >;
-  if (!isGroupIdentifier(api, group.identifier)) {
-    throw new Error(`${group.identifier} is no group of this API.`);
-  }
+        const parts = yield* Effect.orDie(
+          Schema.decodeUnknownEffect(OperationRequest)(request)
+        );
+        // The endpoint decoded each part; the port takes the encoded input
+        // and decodes it again.
+        const input = yield* Effect.orDie(
+          Schema.encodeUnknownEffect(operation.input)(
+            inputOf(operationRoute, parts)
+          )
+        );
+        const output = invoke(name, input);
+        const adapt: OutputAdapter | undefined = outputs?.[name];
+        return yield* adapt === undefined
+          ? output
+          : Effect.flatMap(output, adapt);
+      });
   return HttpApiBuilder.group(api, group.identifier, (handlers) =>
     Effect.flatMap(invoker, (invoke) => {
-      // `HttpApiBuilder` types each handler by an endpoint name known at
-      // compile time; these are the group's own routes, read at run time.
-      // Each `handle` registers on `handlers` itself, which the check below
-      // confirms for every route.
-      const byName: RouteHandlers = handlers;
-      for (const entry of Object.entries<OperationRoute>(routes)) {
-        byName.handle(entry[0], serve(invoke)(entry));
-      }
-      if (!servesEveryRoute<Served>(byName, names)) {
-        return Effect.die(
-          new Error(`${group.identifier} leaves a route unserved.`)
-        );
-      }
-      return Effect.succeed<Served>(byName);
+      // Each `handle` registers on `handlers` and returns it, so every
+      // element is `handlers` serving all the routes.
+      const served = Object.entries<OperationRoute>(routes).map((entry) =>
+        handlers.handle(entry[0], serve(invoke)(entry))
+      );
+      return Arr.isReadonlyArrayNonEmpty(served)
+        ? Effect.succeed(served[0])
+        : Effect.die(new Error(`${group.identifier} serves no operation.`));
     })
   );
-};
-
-/** Handlers registered by an endpoint name read at run time. */
-type RouteHandlers = HttpApiBuilder.Handlers<
-  unknown,
-  Readonly<Record<string, HttpApiEndpoint.Constraint>>
->;
-
-/** Whether `name` names one of `operations`. */
-const isOperationName = <Ops extends Operations>(
-  operations: Ops,
-  name: string
-): name is keyof Ops & string => Object.hasOwn(operations, name);
-
-/** Whether `identifier` names one of `api`'s groups. */
-const isGroupIdentifier = <Groups extends HttpApiGroup.Constraint>(
-  api: HttpApi.HttpApi<string, Groups>,
-  identifier: string
-): identifier is HttpApiGroup.Identifier<Groups> =>
-  Object.hasOwn(api.groups, identifier);
-
-/**
- * Whether `handlers` serves each of `names`, which TypeScript can't tell of
- * handlers registered by names read at run time.
- */
-const servesEveryRoute = <Served extends RouteHandlers>(
-  handlers: RouteHandlers,
-  names: ReadonlyArray<string>
-): handlers is Served => {
-  const registered = "handlers" in handlers ? handlers.handlers : undefined;
-  return (
-    registered instanceof Map && names.every((name) => registered.has(name))
-  );
-};
+}

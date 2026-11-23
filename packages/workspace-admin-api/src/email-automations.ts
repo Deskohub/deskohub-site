@@ -7,7 +7,6 @@ import {
 } from "./audience-attribute-kinds";
 import {
   type AudienceCondition,
-  type AudienceConditionEncoded,
   AudienceFilter,
   type AudienceFilterOf,
   audienceAttributeCatalogue,
@@ -110,7 +109,8 @@ export const scheduleMinutesOffTick = (
  * current definition, so an audience edit takes effect without a new version.
  */
 export const InSavedAudience = Schema.TaggedStruct("InAudience", {
-  audienceId: AdministrationCampaignAudienceId,
+  // Like a condition's campaign id, the wire carries the branded id as is.
+  audienceId: Schema.toType(AdministrationCampaignAudienceId),
   operator: Schema.Literals(["in", "notIn"]),
 }).annotate({
   identifier: "InSavedAudience",
@@ -125,16 +125,14 @@ export type AutomationConditionFilter =
   AudienceFilterOf<AutomationConditionLeaf>;
 
 /** A condition step's filter: the audience builder's AND/OR groups plus "in saved audience" leaves. */
-export const AutomationConditionFilter: Schema.Codec<
-  AutomationConditionFilter,
-  AudienceFilterOf<AudienceConditionEncoded | typeof InSavedAudience.Encoded>
-> = makeAudienceFilterSchemas(audienceAttributeCatalogue, {
-  extraLeaves: [InSavedAudience],
-}).filter.annotate({
-  identifier: "AutomationConditionFilter",
-  description:
-    "Nested AND/OR tree of audience attribute conditions and saved-audience membership.",
-});
+export const AutomationConditionFilter: Schema.Codec<AutomationConditionFilter> =
+  makeAudienceFilterSchemas(audienceAttributeCatalogue, {
+    extraLeaves: [InSavedAudience],
+  }).filter.annotate({
+    identifier: "AutomationConditionFilter",
+    description:
+      "Nested AND/OR tree of audience attribute conditions and saved-audience membership.",
+  });
 
 export const automationDurationUnits = [
   "minute",

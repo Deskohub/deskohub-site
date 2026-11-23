@@ -25,7 +25,6 @@ import {
   defineOperations,
   mutation,
   type OperationInput,
-  type OperationOutput,
   query,
 } from "./administration-operation-port";
 import { NoInput } from "./campaign-operations";
@@ -99,6 +98,13 @@ const noteOperations = defineOperations({
     }).annotate(strictParseOptions),
     output: ReceivedInput,
   }),
+  // The endpoint decodes the count to a number; the port takes its string.
+  countNotes: query({
+    input: Schema.Struct({ count: Schema.NumberFromString }).annotate(
+      strictParseOptions
+    ),
+    output: ReceivedInput,
+  }),
 });
 type NoteOperations = typeof noteOperations;
 
@@ -122,6 +128,7 @@ const Notes = operationGroup(
       behavior: writeOperation({ idempotent: true }),
     }),
     previewNote: route.post("/notes/:noteId/preview", { body: "draft" }),
+    countNotes: route.get("/note-counts", { query: true }),
   },
   { errors: [CliInputInvalid.schema] }
 );
@@ -138,6 +145,7 @@ const inputs = {
   archiveNote: { noteId: "note-1" },
   renameNote: { noteId: "note-1", title: "Tea notes" },
   previewNote: { noteId: "note-1", draft: { copyOf: "note-2" } },
+  countNotes: { count: "3" },
 } satisfies {
   readonly [Name in keyof NoteOperations]: OperationInput<NoteOperations[Name]>;
 };
@@ -207,8 +215,25 @@ const notesClient = HttpApiClient.make(api, {
 
 /** A client method, sent the request parts `operationRequest` builds. */
 interface RequestSender {
-  send(request: OperationRequest): Effect.Effect<string, unknown>;
+  readonly send: (request: OperationRequest) => Effect.Effect<string, unknown>;
 }
+
+/**
+ * Sends a request through `method` once it decodes to the parts `shape`
+ * states, which are the parts the method takes.
+ */
+const sender = <Parts>(
+  shape: Schema.Decoder<Parts>,
+  method: (parts: Parts) => Effect.Effect<string, unknown>
+): RequestSender => ({
+  send: (request) =>
+    Schema.decodeUnknownEffect(shape)(request).pipe(
+      Effect.orDie,
+      Effect.flatMap(method)
+    ),
+});
+
+const NoteParams = Schema.Struct({ params: NoteRef });
 
 /**
  * Each name's client method, sent the request parts `operationRequest` builds
@@ -219,13 +244,45 @@ const sendersOf = (
 ): { readonly [Name in keyof NoteOperations]: RequestSender } => ({
   // listNotes takes no input, so its request carries no parts.
   listNotes: { send: () => client.listNotes() },
-  getNote: { send: client.getNote },
-  searchNotes: { send: client.searchNotes },
-  createNote: { send: client.createNote },
-  editNote: { send: client.editNote },
-  archiveNote: { send: client.archiveNote },
-  renameNote: { send: client.renameNote },
-  previewNote: { send: client.previewNote },
+  getNote: sender(NoteParams, client.getNote),
+  searchNotes: sender(
+    Schema.Struct({
+      params: Schema.Struct({ folderId: NoteId }),
+      query: Schema.Struct({ text: Schema.optionalKey(Schema.String) }),
+    }),
+    client.searchNotes
+  ),
+  createNote: sender(
+    Schema.Struct({ payload: noteOperations.createNote.input }),
+    client.createNote
+  ),
+  editNote: sender(
+    NoteParams.mapFields(
+      Struct.assign({ payload: Schema.Struct({ text: Schema.String }) })
+    ),
+    client.editNote
+  ),
+  archiveNote: sender(NoteParams, client.archiveNote),
+  renameNote: sender(
+    NoteParams.mapFields(
+      Struct.assign({
+        payload: Schema.Struct({ title: Schema.optionalKey(Schema.String) }),
+      })
+    ),
+    client.renameNote
+  ),
+  previewNote: sender(
+    NoteParams.mapFields(
+      Struct.assign({
+        payload: noteOperations.previewNote.input.fields.draft,
+      })
+    ),
+    client.previewNote
+  ),
+  countNotes: sender(
+    Schema.Struct({ query: noteOperations.countNotes.input }),
+    client.countNotes
+  ),
 });
 
 /** What the client sends for `name`'s input, and what the operation receives. */
@@ -261,6 +318,7 @@ describe("operation endpoints", () => {
         params: { noteId: "note-1" },
         payload: { copyOf: "note-2" },
       },
+      countNotes: { query: { count: "3" } },
     });
   });
 
@@ -344,6 +402,18 @@ describe("operation endpoints", () => {
     );
   });
 
+  test("the operation receives a transformed field in its encoded form", async () => {
+    expect(await call("countNotes", { count: "12" })).toBe('{"count":"12"}');
+  });
+
+  test("a sender refuses request parts its route doesn't take", async () => {
+    const send = notesClient.pipe(
+      Effect.flatMap((client) => sendersOf(client).getNote.send({})),
+      Effect.runPromise
+    );
+    await expect(send).rejects.toThrow();
+  });
+
   test("an output adapter answers in place of the operation's output", async () => {
     expect(await call("listNotes")).toBe("adapted {}");
   });
@@ -377,6 +447,7 @@ describe("operation endpoints", () => {
         behavior: { kind: "write", idempotent: true },
       },
       previewNote: { _tag: "Operation", behavior: readOperation },
+      countNotes: { _tag: "Operation", behavior: readOperation },
     });
   });
 
@@ -431,6 +502,7 @@ describe("operation endpoints", () => {
           }),
           // @ts-expect-error draft has no place beside a body of text
           previewNote: route.post("/notes/:noteId/preview", { body: "text" }),
+          countNotes: route.get("/note-counts", { query: true }),
         },
         { errors: [] }
       ),

@@ -226,7 +226,11 @@ export type AudiencePeriodParam = typeof periodParam;
  * campaign of their own, so only they accept `This`.
  */
 export const CampaignEmailSource = Schema.Union([
-  Schema.TaggedStruct("Specific", { campaignId: AdministrationCampaignId }),
+  // The wire carries the branded id as is, so the encoded condition is the
+  // decoded one, as `AudienceFilter`'s codec type states.
+  Schema.TaggedStruct("Specific", {
+    campaignId: Schema.toType(AdministrationCampaignId),
+  }),
   Schema.TaggedStruct("This", {}),
 ]).annotate({
   identifier: "CampaignEmailSource",
@@ -763,17 +767,6 @@ export type AudienceConditionIn<
   },
 > = {
   readonly [Attribute in keyof Catalogue]: Catalogue[Attribute]["conditions"][number]["Type"];
-}[keyof Catalogue];
-
-/** The encoded form of a catalogue's conditions, before brands apply. */
-export type AudienceConditionEncodedIn<
-  Catalogue extends {
-    readonly [Attribute in keyof Catalogue]: {
-      readonly conditions: ConditionShapes;
-    };
-  },
-> = {
-  readonly [Attribute in keyof Catalogue]: Catalogue[Attribute]["conditions"][number]["Encoded"];
 }[keyof Catalogue];
 
 /** The condition defaults of one entry, for a new condition. */

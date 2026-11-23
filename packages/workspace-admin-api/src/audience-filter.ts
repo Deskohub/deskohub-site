@@ -2,7 +2,6 @@ import { Schema } from "effect";
 import {
   type AudienceAttributeDefinition,
   type AudienceAttributeKind,
-  type AudienceConditionEncodedIn,
   type AudienceConditionIn,
   booleanAttribute,
   campaignSourceParam,
@@ -320,9 +319,6 @@ export type AudienceAttributeOfKind<Kind extends AudienceAttributeKind> = {
 }[AudienceAttribute];
 
 export type AudienceCondition = AudienceConditionIn<AudienceAttributeCatalogue>;
-/** A catalogued condition as the wire carries it. */
-export type AudienceConditionEncoded =
-  AudienceConditionEncodedIn<AudienceAttributeCatalogue>;
 
 /** The condition shape of one attribute. */
 export type AudienceConditionOf<Attribute extends AudienceAttribute> = Extract<
@@ -401,17 +397,12 @@ export const makeAudienceFilterSchemas = <
 const schemas = makeAudienceFilterSchemas(audienceAttributeCatalogue);
 
 /** One condition on one catalogued customer attribute. */
-export const AudienceCondition: Schema.Codec<
-  AudienceCondition,
-  AudienceConditionEncoded
-> = schemas.condition;
+export const AudienceCondition: Schema.Codec<AudienceCondition> =
+  schemas.condition;
 
 /**
  * The filter tree a campaign audience selects its recipients with. Workspace
  * stores and evaluates this schema, and the administration API carries it, so
  * it has one definition.
  */
-export const AudienceFilter: Schema.Codec<
-  AudienceFilter,
-  AudienceFilterOf<AudienceConditionEncoded>
-> = schemas.filter;
+export const AudienceFilter: Schema.Codec<AudienceFilter> = schemas.filter;

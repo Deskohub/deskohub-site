@@ -1,5 +1,4 @@
-import { Effect, Schema } from "effect";
-import { hasEveryKey } from "./administration-record-keys";
+import { Effect, Schema, Struct } from "effect";
 
 /**
  * Response fields a newer `dhw` must still decode from an older server, which
@@ -47,15 +46,8 @@ export const countsField = <
   const requiredKeys = keys.filter(
     (key): key is Exclude<Key, AddedKey> => !added.has(key)
   );
-  const required = Object.fromEntries(requiredKeys.map((key) => [key, count]));
-  const defaultedFields = Object.fromEntries(
-    addedKeys.map((key) => [key, defaulted])
-  );
-  if (
-    !hasEveryKey(required, requiredKeys) ||
-    !hasEveryKey(defaultedFields, addedKeys)
-  ) {
-    throw new Error("A count lost its key while being declared.");
-  }
-  return Schema.Struct({ ...required, ...defaultedFields });
+  return Schema.Struct({
+    ...Struct.Record(requiredKeys, count),
+    ...Struct.Record(addedKeys, defaulted),
+  });
 };

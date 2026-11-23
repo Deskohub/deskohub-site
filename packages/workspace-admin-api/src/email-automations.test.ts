@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import { Result, Schema } from "effect";
 import { administrationInputParseOptions } from "./administration-input-parse-options";
+import { AudienceCondition, AudienceFilter } from "./audience-filter";
 import {
+  AutomationConditionFilter,
   AutomationDetail,
   AutomationDryRun,
   AutomationDryRunRow,
@@ -585,5 +587,18 @@ describe("scheduleMinutesOffTick", () => {
     [{ minutes: [45, 7, 0, 1] }, [1, 7]],
   ] as const)("%j fires off the engine's ticks at %j", (calendar, minutes) => {
     expect(scheduleMinutesOffTick(calendar)).toEqual(minutes);
+  });
+});
+
+describe("audience codecs", () => {
+  test("keep their decoded shape on the wire side", () => {
+    // Callers type these codecs by their decoded shape alone.
+    const condition: Schema.Codec<AudienceCondition> = AudienceCondition;
+    const filter: Schema.Codec<AudienceFilter> = AudienceFilter;
+    const automationFilter: Schema.Codec<AutomationConditionFilter> =
+      AutomationConditionFilter;
+    expect([condition, filter, automationFilter].every(Schema.isSchema)).toBe(
+      true
+    );
   });
 });

@@ -555,27 +555,6 @@ export type AdministrationOperationGroup<
 const administrationOperationPrefix = "/api/v1/cli";
 
 /**
- * Whether `served` serves each endpoint as an administration operation:
- * under the prefix, authenticated and recorded, and checked for its minimum
- * `dhw` first when `checksFirst`. TypeScript can't tell this of a group whose
- * middleware depends on an option read at run time.
- */
-const isAdministrationOperationGroup = <Served extends HttpApiGroup.Constraint>(
-  served: HttpApiGroup.Constraint,
-  checksFirst: boolean
-): served is Served =>
-  Object.values(served.endpoints).every((endpoint) => {
-    if (!HttpApiEndpoint.isHttpApiEndpoint(endpoint)) return false;
-    const middlewares: ReadonlySet<unknown> = endpoint.middlewares;
-    return (
-      endpoint.path.startsWith(administrationOperationPrefix) &&
-      middlewares.has(AdministrationActionRecord) &&
-      middlewares.has(AdministrationAuthentication) &&
-      (!checksFirst || middlewares.has(CliClientCompatibility))
-    );
-  });
-
-/**
  * Throws when an endpoint can't be an administration operation in its group:
  * it is CLI-only, or the group and the endpoint disagree on who checks the
  * minimum `dhw`.
@@ -615,7 +594,9 @@ const assertAdministrationOperationEndpoint = (
  * endpoint whose minimum `dhw` nothing checks, and on one that checks its
  * own in a group that checks every endpoint's first.
  */
-export const administrationOperationGroup = <
+// The middleware a group gets depends on an option read at run time, so
+// the overload states the group type the options select.
+export function administrationOperationGroup<
   Group extends HttpApiGroup.Constraint,
   const Options extends AdministrationOperationGroupOptions = Record<
     never,
@@ -624,7 +605,11 @@ export const administrationOperationGroup = <
 >(
   group: Group,
   options?: Options
-): AdministrationOperationGroup<Group, Options> => {
+): AdministrationOperationGroup<Group, Options>;
+export function administrationOperationGroup(
+  group: HttpApiGroup.Constraint,
+  options?: AdministrationOperationGroupOptions
+): HttpApiGroup.Constraint {
   if (!HttpApiGroup.isHttpApiGroup(group)) {
     throw new Error(`${group.identifier} isn't an HttpApiGroup.`);
   }
@@ -636,22 +621,12 @@ export const administrationOperationGroup = <
   const authenticated = group
     .middleware(AdministrationActionRecord)
     .middleware(AdministrationAuthentication);
-  const served: HttpApiGroup.Constraint = checksFirst
+  return checksFirst
     ? authenticated
         .middleware(CliClientCompatibility)
         .prefix(administrationOperationPrefix)
     : authenticated.prefix(administrationOperationPrefix);
-  if (
-    !isAdministrationOperationGroup<
-      AdministrationOperationGroup<Group, Options>
-    >(served, checksFirst)
-  ) {
-    throw new Error(
-      `${group.identifier} lost its administration middleware while being served.`
-    );
-  }
-  return served;
-};
+}
 
 export const AdministrationOverviewMetric = Schema.Struct({
   completed: Schema.Number,
