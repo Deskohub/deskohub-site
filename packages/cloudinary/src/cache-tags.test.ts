@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
-import {
-  createCloudinaryCacheTags,
-  createStableHash,
-  type StableHashValue,
-} from "./cache-tags";
+import { createCloudinaryCacheTags, createStableHash } from "./cache-tags";
 import { CloudinaryPublicIdSchema } from "./schema";
 
 describe("createCloudinaryCacheTags", () => {
@@ -35,12 +31,12 @@ describe("createCloudinaryCacheTags", () => {
   });
 
   test("keeps the hashes earlier releases gave tag expressions and other values", () => {
-    const cyclic: StableHashValue[] = ["a"];
+    const cyclic: unknown[] = ["a"];
     cyclic.push(cyclic);
-    const deep: StableHashValue[] = [];
+    const deep: unknown[] = [];
     let level = deep;
     for (let index = 0; index < 12; index += 1) {
-      const next: StableHashValue[] = [];
+      const next: unknown[] = [];
       level.push(next);
       level = next;
     }
@@ -56,5 +52,18 @@ describe("createCloudinaryCacheTags", () => {
     expect(createStableHash("x".repeat(150))).toBe("p2uufm");
     expect(createStableHash(deep)).toBe("8uvnji");
     expect(createStableHash(12)).toBe("17l");
+  });
+
+  test("accepts any value its callers type, as earlier releases did", () => {
+    interface TagFilter {
+      readonly tag: string;
+    }
+    const filter: TagFilter = { tag: "gallery" };
+    const opaque: unknown = filter;
+    const cacheTags = createCloudinaryCacheTags({ namespace: "n" });
+
+    expect(createStableHash(filter)).toBe(createStableHash(opaque));
+    expect(cacheTags.search(filter)).toBe("n:search:tags:2npry2");
+    expect(cacheTags.search(opaque, 12)).toBe("n:search:tags:2npry2:limit:12");
   });
 });
