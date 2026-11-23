@@ -1501,11 +1501,16 @@ exit 1
 
     // Multi-page `commits/<sha>/pulls`: a second eligible PR on page 2 must
     // keep ambiguity unresolved in BOTH initial target resolution and
-    // publish-status-without-run, and an unreadable later page must fail closed
-    // (including publishing failure over a prior green status when a preview
-    // fails during a partial PR lookup).
+    // publish-status-without-run; a failed lookup must fail a verified eligible
+    // head (via page 1 or branch-specific PR lookup) while honoring a
+    // successful empty branch lookup so an unrelated branch sharing the same
+    // SHA never overwrites another PR's passing status.
     const multiPageGh = (
-      secondPageMode: "ambiguous" | "error" | "page1-then-error"
+      secondPageMode:
+        | "ambiguous"
+        | "branch-fallback"
+        | "page1-then-error"
+        | "unrelated-branch"
     ) => `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
@@ -1519,7 +1524,7 @@ if [[ "$*" == *"/commits/${targetSha}/pulls"* ]]; then
     echo "HTTP 502 on page 2" >&2
     exit 1
   fi
-  if [[ "${secondPageMode}" == "error" ]]; then
+  if [[ "${secondPageMode}" == "branch-fallback" || "${secondPageMode}" == "unrelated-branch" ]]; then
     echo "HTTP 502 on page 2" >&2
     exit 1
   fi
@@ -1535,15 +1540,19 @@ if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
   echo '{"body":"## E2E flows\\n- none\\n","head":{"sha":"${targetSha}"}}'
   exit 0
 fi
-if [[ "$*" == *"/pulls?state=open"* ]]; then
-  echo '[]'
+if [[ "$*" == *"repos/${repository}/pulls"* ]]; then
+  if [[ "${secondPageMode}" == "branch-fallback" && "$*" == *"head=owner:${pullRequest.head.ref}"* ]]; then
+    echo '[${JSON.stringify(pullRequest)}]'
+  else
+    echo '[]'
+  fi
   exit 0
 fi
 if [[ "$*" == *"/commits/${targetSha}/statuses"* ]]; then
-  if [[ "${secondPageMode}" == "error" || "${secondPageMode}" == "page1-then-error" ]]; then
-    echo '[[{"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
-  else
+  if [[ "${secondPageMode}" == "ambiguous" ]]; then
     echo '[[${JSON.stringify(ambiguityFailure)}]]'
+  else
+    echo '[[{"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
   fi
   exit 0
 fi
@@ -1580,11 +1589,11 @@ exit 1
     expect(page2Target.result.exitCode).not.toBe(0);
     expect(page2Target.outputs.resolution_error_kind).toBe("ambiguous-pr");
 
-    // Failed preview + unreadable second page on a SHA with a prior green
-    // status: resolve-target must still mark the head eligible and route to
-    // publish-status-without-run so the prior green status is overwritten with
-    // failure (both when page 1 streamed and when lookup errored with no body).
-    for (const mode of ["page1-then-error", "error"] as const) {
+    // Failed preview + unreadable second page on a verified eligible PR head:
+    // resolve-target must still mark the head eligible and route to
+    // publish-status-without-run so any prior green status is overwritten with
+    // failure (both when page 1 streamed and via branch-specific PR lookup).
+    for (const mode of ["page1-then-error", "branch-fallback"] as const) {
       const failedTarget = await runStep(
         targetStep,
         {},
@@ -1645,6 +1654,33 @@ exit 1
       expect(failurePosts[0]).toContain("state=failure");
       expect(failurePosts[0]).toContain("could not verify PR state");
     }
+
+    // Two branches sharing a SHA: when commit-to-PR lookup fails and the
+    // branch-specific lookup for an unrelated branch returns `[]`, resolver
+    // must honor the empty branch lookup (`eligible=false`, exit 0) and leave
+    // the healthy PR's green status untouched with zero status posts.
+    const unrelatedBranch = await runStep(
+      targetStep,
+      {},
+      {
+        EVENT_NAME: "repository_dispatch",
+        FLOWS_CLI: flowsCli,
+        INCLUDE_NIGHTLY_CASES: "false",
+        INPUT_FLOWS: "",
+        TARGET_DEPLOYMENT: "failed",
+        TARGET_REF: "feat/unrelated-branch",
+        TARGET_SHA: targetSha,
+        TARGET_URL: previewUrl,
+      },
+      { gh: multiPageGh("unrelated-branch") }
+    );
+    expect(unrelatedBranch.result.exitCode).toBe(0);
+    expect(unrelatedBranch.outputs).toEqual({ eligible: "false" });
+    expect(
+      unrelatedBranch.calls.filter((call) =>
+        call.includes(`statuses/${targetSha}`)
+      )
+    ).toEqual([]);
 
     const page2Publish = await runStep(
       publishStep,

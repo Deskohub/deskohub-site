@@ -171,11 +171,39 @@ describe("PR description ## E2E flows parser", () => {
       flows: "admin",
     });
 
-    // Per GFM §5.2, an empty list-item marker (`+`, `-`, `1.`) cannot
-    // interrupt a paragraph, so a bare marker inside a multiline inline HTML
-    // comment stays hidden rather than failing PR validation.
+    // Per GFM §5.2 & §2.2, an empty list-item marker (`+`, `-`, `*`) indented
+    // to or beyond the item's 4-column tab-stop content indent cannot interrupt
+    // its paragraph, so it stays hidden inside a multiline inline HTML comment.
     expect(
       parsePrBodyE2EFlows("## E2E flows\n- admin <!-- start\n  +\n  end -->\n")
+    ).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "admin",
+      selected: ["admin"],
+    });
+    expect(
+      parsePrBodyE2EFlows("## E2E flows\n-\tadmin <!-- start\n\t+\n\tend -->\n")
+    ).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "admin",
+      selected: ["admin"],
+    });
+    expect(
+      parsePrBodyE2EFlows(
+        "## E2E flows\n-\tadmin <!-- start\n    +\n    end -->\n"
+      )
+    ).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "admin",
+      selected: ["admin"],
+    });
+    expect(
+      parsePrBodyE2EFlows(
+        "## E2E flows\n- \tadmin <!-- start\n    *\n    end -->\n"
+      )
     ).toMatchObject({
       ok: true,
       kind: "subset",
@@ -301,6 +329,14 @@ describe("PR description ## E2E flows parser", () => {
     [
       "sibling - list item closing an unfinished inline comment",
       "## E2E flows\n- admin <!-- start\n-\n  follow-up -->\n",
+    ],
+    [
+      "mixed space-tab bullet followed by sibling * at column 2 (< 4)",
+      "## E2E flows\n- \tnone <!-- start\n  *\n    bogus -->\n",
+    ],
+    [
+      "tab-separated bullet followed by sibling * at column 3 (< 4)",
+      "## E2E flows\n-\tadmin <!-- start\n   *\n    bogus -->\n",
     ],
   ])("fails closed on %s", (_label, body) => {
     expect(parsePrBodyE2EFlows(body).ok).toBe(false);

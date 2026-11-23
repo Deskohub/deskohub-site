@@ -306,21 +306,48 @@ const anyListMarkerPattern = /^( {0,3})(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)/;
 const listItemStartPattern = /^ {0,3}(?:[-*+]|1[.)])[ \t]+\S/;
 const blockquoteStartPattern = /^ {0,3}>/;
 
+const advanceColumn = (column, ch) =>
+  ch === "\t" ? column + (4 - (column % 4)) : column + 1;
+
 const computeListContentIndent = (line) => {
   const match = listItemOpenPattern.exec(line);
   if (!match) return null;
-  const leading = match[1].length;
-  const markerLen = match[2].length;
-  const spacesAfter = match[3].replace(/\t/g, "    ").length;
-  return leading + markerLen + (spacesAfter >= 5 ? 1 : spacesAfter);
+  let col = 0;
+  for (const ch of match[1]) {
+    col = advanceColumn(col, ch);
+  }
+  col += match[2].length;
+  const afterMarkerCol = col;
+  for (const ch of match[3]) {
+    col = advanceColumn(col, ch);
+  }
+  const spacesAfter = col - afterMarkerCol;
+  // Per GFM §2.2 & §5.2, tabs expand to 4-column tab stops, and 5+ columns of
+  // space after the marker starts an indented code block with content indent
+  // at `afterMarkerCol + 1`.
+  return spacesAfter >= 5 ? afterMarkerCol + 1 : col;
 };
 
-const stripUpToIndent = (line, maxSpaces) => {
-  let removed = 0;
+const stripUpToColumns = (line, maxColumns) => {
+  let col = 0;
   let index = 0;
-  while (index < line.length && removed < maxSpaces && line[index] === " ") {
-    removed += 1;
-    index += 1;
+  while (index < line.length && col < maxColumns) {
+    const ch = line[index];
+    if (ch === " ") {
+      col += 1;
+      index += 1;
+      continue;
+    }
+    if (ch === "\t") {
+      const nextCol = col + (4 - (col % 4));
+      if (nextCol > maxColumns) {
+        return `${" ".repeat(nextCol - maxColumns)}${line.slice(index + 1)}`;
+      }
+      col = nextCol;
+      index += 1;
+      continue;
+    }
+    break;
   }
   return line.slice(index);
 };
@@ -335,7 +362,7 @@ const interruptsParagraph = (line, isBlank, listContentIndent) => {
   }
   const candidate =
     listContentIndent !== null
-      ? stripUpToIndent(line, listContentIndent)
+      ? stripUpToColumns(line, listContentIndent)
       : line;
   if (
     anyHeadingPattern.test(candidate) ||

@@ -229,31 +229,48 @@ jobs:
               exit 0
             fi
             if [[ "$pulls_lookup_ok" != "true" ]]; then
-              # If a paginated PR lookup failed partway through, determine
-              # whether this SHA is already a verified eligible PR head (from
-              # partial page results, open PRs for this head branch, or an
-              # existing Workspace E2E status) so a failed preview cannot leave
-              # a prior green status in place.
+              # If a paginated commit-to-PR lookup failed partway through,
+              # require affirmative evidence tying BOTH $TARGET_REF and
+              # $TARGET_SHA to an eligible open internal PR before marking the
+              # head eligible. Honor a successful empty branch lookup so an
+              # unrelated branch sharing the same SHA never overwrites another
+              # PR's passing status.
               verified_head=false
               if [[ "$eligible_count" != "0" ]]; then
                 verified_head=true
               elif [[ "$TARGET_REF" != dependabot/* ]]; then
                 owner="${GITHUB_REPOSITORY%%/*}"
-                fallback_pulls="$(gh api \
+                fallback_raw_file="$(mktemp)"
+                fallback_ok=true
+                if ! gh api --paginate --method GET \
                   -H "Accept: application/vnd.github+json" \
-                  "repos/$GITHUB_REPOSITORY/pulls?state=open&head=$owner:$TARGET_REF&per_page=100" \
-                  2>/dev/null || echo '[]')"
-                if [[ "$(filter_eligible_pulls <<<"$fallback_pulls" 2>/dev/null | jq 'length' 2>/dev/null || echo 0)" != "0" ]]; then
+                  "repos/$GITHUB_REPOSITORY/pulls" \
+                  -f state=open \
+                  -f head="$owner:$TARGET_REF" \
+                  -f per_page=100 >"$fallback_raw_file" 2>/dev/null; then
+                  fallback_ok=false
+                fi
+                fallback_pulls="$(jq -s '
+                  if length == 0 then []
+                  elif all(.[]; type == "array") then add
+                  else empty
+                  end
+                ' "$fallback_raw_file" 2>/dev/null)" || {
+                  fallback_ok=false
+                  fallback_pulls="[]"
+                }
+                rm -f "$fallback_raw_file"
+                if [[ -z "$fallback_pulls" ]]; then
+                  fallback_ok=false
+                  fallback_pulls="[]"
+                fi
+                fallback_eligible_count="$(filter_eligible_pulls <<<"$fallback_pulls" 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
+                if [[ "$fallback_eligible_count" != "0" ]]; then
                   verified_head=true
-                else
-                  existing_statuses="$(gh api --paginate --slurp \
-                    -H "Accept: application/vnd.github+json" \
-                    "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/statuses?per_page=100" \
-                    2>/dev/null | jq 'add // []' 2>/dev/null || echo '[]')"
-                  if jq -e 'any(.[]; .context == "Workspace E2E" and .creator.login == "github-actions[bot]")' \
-                    <<<"$existing_statuses" >/dev/null 2>&1; then
-                    verified_head=true
-                  fi
+                elif [[ "$fallback_ok" == "true" ]]; then
+                  echo "No eligible open internal PR matches the exact deployment SHA"
+                  echo "eligible=false" >> "$GITHUB_OUTPUT"
+                  exit 0
                 fi
               fi
               if [[ "$verified_head" == "true" ]]; then
