@@ -305,10 +305,24 @@ describe("scheduleUpdateChecks", () => {
   });
 
   test("checks only when the app becomes active", () => {
-    const { appState, checks } = session(androidPlan);
+    const appState = fakeAppState("active");
+    const clock = { now: launchedAt };
+    const checks: Array<UpdateCheckPlan> = [];
+    scheduleUpdateChecks({
+      plan: androidPlan,
+      appState: appState.source,
+      now: () => clock.now,
+      check: (planned) => checks.push(planned),
+    });
+    clock.now = launchedAt + fifteenMinutesMs;
     appState.change("inactive");
     appState.change("background");
     expect(checks).toEqual([{ otaUpdate: false, nativeRelease: true }]);
+    appState.change("active");
+    expect(checks).toEqual([
+      { otaUpdate: false, nativeRelease: true },
+      androidPlan,
+    ]);
   });
 
   test("checks nothing once stopped", () => {
