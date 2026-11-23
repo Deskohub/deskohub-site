@@ -96,29 +96,36 @@ export const shareUntilShutdown = <A, E>(
   // run registers nothing on the process scope.
   let shared: Deferred.Deferred<Context.Context<A>, E> | undefined;
 
-  const build = Effect.suspend(() => {
-    if (scope.state._tag === "Closed") {
-      return Effect.die(new Error("A shared layer was used after shutdown."));
-    }
-    if (shared) return Deferred.await(shared);
-    const deferred = Deferred.makeUnsafe<Context.Context<A>, E>();
-    shared = deferred;
-    // Each attempt builds in its own scope, so a failed one releases what it
-    // acquired and leaves the next run to build again.
-    const attemptScope = Scope.forkUnsafe(scope);
-    return Layer.buildWithScope(layer, attemptScope).pipe(
-      Effect.onExit((exit) =>
-        Exit.isSuccess(exit)
-          ? Deferred.done(deferred, exit)
-          : Effect.sync(() => {
-              if (shared === deferred) shared = undefined;
-            }).pipe(
-              Effect.andThen(Scope.close(attemptScope, exit)),
-              Effect.andThen(Deferred.done(deferred, exit))
-            )
-      )
-    );
-  });
+  // Uninterruptible until the attempt's exit handler is installed, so an
+  // interruption can never leave a published build that nothing settles.
+  const build = Effect.uninterruptibleMask((restore) =>
+    Effect.suspend(() => {
+      if (scope.state._tag === "Closed") {
+        return Effect.die(new Error("A shared layer was used after shutdown."));
+      }
+      if (shared) return restore(Deferred.await(shared));
+      const deferred = Deferred.makeUnsafe<Context.Context<A>, E>();
+      shared = deferred;
+      // Each attempt builds in its own scope, so a failed one releases what
+      // it acquired and leaves the next run to build again, and with its own
+      // memo map, so it never reuses a layer the first run built for itself.
+      const attemptScope = Scope.forkUnsafe(scope);
+      return restore(
+        Layer.buildWithMemoMap(layer, Layer.makeMemoMapUnsafe(), attemptScope)
+      ).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit)
+            ? Deferred.done(deferred, exit)
+            : Effect.sync(() => {
+                if (shared === deferred) shared = undefined;
+              }).pipe(
+                Effect.andThen(Scope.close(attemptScope, exit)),
+                Effect.andThen(Deferred.done(deferred, exit))
+              )
+        )
+      );
+    })
+  );
 
   return {
     layer: Layer.fromBuild(() => build),

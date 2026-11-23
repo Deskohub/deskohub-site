@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { Context, Deferred, Effect, Exit, Layer, Logger } from "effect";
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Logger,
+  Scheduler,
+} from "effect";
 import { NextEffect } from "..";
 import { shareAcrossRequests, shareUntilShutdown } from "./shared-layer";
 
@@ -242,6 +250,59 @@ describe("shareAcrossRequests", () => {
 
     expect(fromShared).toEqual({ build: 1 });
     expect([own.build, ownAgain.build]).toEqual([2, 3]);
+  });
+
+  test("builds what it is built from itself, even after a run built it first", async () => {
+    const connection = counted(Connection, (build) => ({ build }));
+    const shared = shareAcrossRequests(
+      Layer.effect(
+        Provider,
+        Effect.map(Effect.service(Connection), ({ build }) => ({ build }))
+      ).pipe(Layer.provide(connection.layer))
+    );
+    const runtime = NextEffect.make({ layer: connection.layer });
+
+    const own = await runtime.run(Effect.service(Connection));
+    const fromShared = await runtime.run(
+      Effect.service(Provider).pipe(Effect.provide(shared))
+    );
+
+    expect(own).toEqual({ build: 1 });
+    expect(fromShared).toEqual({ build: 2 });
+  });
+
+  test("serves the next run whenever the first one is interrupted", async () => {
+    // Interrupts the first run after each of its scheduler steps in turn, so
+    // every point of the build, its publication included, is covered.
+    for (let interruptAt = 1; interruptAt <= 60; interruptAt++) {
+      const shared = shareAcrossRequests(
+        Layer.succeed(Provider, { build: interruptAt })
+      );
+      const run = Effect.service(Provider).pipe(Effect.provide(shared));
+      const queue: Array<() => void> = [];
+      let steps = 0;
+      const steppedScheduler: Scheduler.Scheduler = {
+        executionMode: "sync",
+        shouldYield: () => ++steps === interruptAt,
+        makeDispatcher: () => ({
+          scheduleTask: (task) => {
+            queue.push(task);
+          },
+          flush: () => {
+            while (queue.length > 0) queue.shift()?.();
+          },
+        }),
+      };
+      const first = Effect.runFork(
+        run.pipe(Effect.provideService(Scheduler.Scheduler, steppedScheduler))
+      );
+      if (!first.pollUnsafe()) first.interruptUnsafe();
+      while (queue.length > 0) queue.shift()?.();
+
+      expect(
+        await Effect.runPromise(run.pipe(Effect.timeout("1 second")))
+      ).toEqual({ build: interruptAt });
+    }
   });
 
   test("shares a shared layer it is built from with the runs that use it directly", async () => {

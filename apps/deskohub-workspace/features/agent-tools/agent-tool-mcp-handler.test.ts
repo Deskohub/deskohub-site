@@ -320,6 +320,15 @@ describe("answerAgentToolMcpRequest", () => {
       });
     });
 
+    test("serves a client that sends no Origin", async () => {
+      const response = await callLegacy({ seats: 3 }, { url: listenUrl });
+
+      expect(response.status).toBe(200);
+      expect(await readEventStreamResult(response)).toMatchObject({
+        structuredContent: { seats: 3 },
+      });
+    });
+
     test("rejects its listen origin and other origins", async () => {
       for (const origin of [
         "http://0.0.0.0:3000",
@@ -328,6 +337,7 @@ describe("answerAgentToolMcpRequest", () => {
         // Its public host on another scheme or port is another origin.
         "http://workspace-public.example",
         "https://workspace-public.example:8443",
+        "",
       ]) {
         const response = await callLegacy(
           { seats: 1 },

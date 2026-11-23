@@ -71,18 +71,31 @@ import type { CustomerAgentCaller } from "./customer-agent-caller";
 const agentToolServerVersion = "1.0.0";
 
 /**
- * The Origin hostnames a browser may call the endpoint from: the site's own.
- * The SDK compares hostnames only, which on Vercel's HTTPS-only hosts names
- * the origin. A container's own host may also answer on other schemes or
- * ports, so there a present Origin must be its public origin exactly, and
- * any other gets an empty allowlist, which the SDK rejects.
+ * Rejects a browser request from any origin but the site's own. The SDK
+ * compares hostnames only, which on Vercel's HTTPS-only hosts names the
+ * origin, and lets an empty Origin through. A container's own host may also
+ * answer on other schemes or ports, so there any Origin a request carries
+ * must be its public origin exactly; a request without one stays allowed.
+ * The rejection has the SDK's own shape.
  */
-const allowedOriginHostnames = (request: Request) => {
+const originRejection = (request: Request): Response | undefined => {
   const siteUrl = publicUrl(request.url);
   const origin = request.headers.get("origin");
-  return containerPublicOrigin(env) && origin && origin !== siteUrl.origin
-    ? []
-    : [siteUrl.hostname];
+  if (
+    containerPublicOrigin(env) &&
+    origin !== null &&
+    origin !== siteUrl.origin
+  ) {
+    return Response.json(
+      {
+        jsonrpc: "2.0",
+        error: { code: -32000, message: `Invalid Origin: ${origin}` },
+        id: null,
+      },
+      { status: 403 }
+    );
+  }
+  return originValidationResponse(request, [siteUrl.hostname]);
 };
 
 /**
@@ -143,12 +156,7 @@ export const answerAgentToolMcpRequest = <
 }) =>
   // One Effect type for both branches, so callers can handle its errors.
   Effect.suspend(() =>
-    Option.fromNullishOr(
-      originValidationResponse(
-        request.request,
-        allowedOriginHostnames(request.request)
-      )
-    ).pipe(
+    Option.fromNullishOr(originRejection(request.request)).pipe(
       Option.match({
         onSome: (rejection) =>
           Effect.logWarning(
