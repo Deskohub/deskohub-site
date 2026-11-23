@@ -36,7 +36,8 @@ const groupMinimums: Partial<Record<string, DhwVersion>> = {
   campaigns: campaignsMinimumDhwVersion,
   automations: automationsMinimumDhwVersion,
 };
-const repeatVisitMinimum = DhwVersion.make("1.41.0");
+const repeatVisitMinimum = DhwVersion.make("1.42.0");
+const passReminderMinimum = DhwVersion.make("1.40.0");
 const endpointMinimums: Partial<Record<string, DhwVersion>> = {
   "campaigns.listCampaignAudiences": repeatVisitMinimum,
   "campaigns.getCampaignAudience": repeatVisitMinimum,
@@ -53,11 +54,11 @@ const endpointMinimums: Partial<Record<string, DhwVersion>> = {
   "automations.pauseAutomation": repeatVisitMinimum,
   "automations.resumeAutomation": repeatVisitMinimum,
   "automations.archiveAutomation": repeatVisitMinimum,
-  "automations.listAutomationVersions": DhwVersion.make("1.40.0"),
+  "automations.listAutomationVersions": passReminderMinimum,
   "automations.getAutomationVersion": repeatVisitMinimum,
   "automations.getAutomationRunStats": repeatVisitMinimum,
-  "automations.listAutomationRuns": repeatVisitMinimum,
-  "automations.getAutomationRun": repeatVisitMinimum,
+  "automations.listAutomationRuns": passReminderMinimum,
+  "automations.getAutomationRun": passReminderMinimum,
   "administration.listInvoices": invoicesMinimumDhwVersion,
   "administration.getInvoice": invoicesMinimumDhwVersion,
   "administration.getReservation": reservationsMinimumDhwVersion,

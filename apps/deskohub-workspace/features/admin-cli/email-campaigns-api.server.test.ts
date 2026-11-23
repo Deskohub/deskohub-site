@@ -80,7 +80,7 @@ const otherCustomerId = AdministrationDotyposCustomerId.make("1002");
 const createdAt = Temporal.Instant.from("2026-10-14T08:00:00Z");
 const AuthorizedCliRequest = authorizedCliRequest();
 /** The newest minimum a campaign endpoint requires. */
-const repeatVisitDhwVersion = "1.41.0";
+const repeatVisitDhwVersion = "1.42.0";
 const TestDhwVersionHeader = cliClientVersion(repeatVisitDhwVersion);
 
 const campaignRow = (overrides: Partial<CampaignRow> = {}): CampaignRow => ({

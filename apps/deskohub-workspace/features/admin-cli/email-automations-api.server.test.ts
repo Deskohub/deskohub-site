@@ -106,7 +106,7 @@ const callAutomationsApi = <A, E>(
   } = {}
 ) => {
   const dhwVersion =
-    options.dhwVersion === undefined ? "1.41.0" : options.dhwVersion;
+    options.dhwVersion === undefined ? "1.42.0" : options.dhwVersion;
   return automationsClient.pipe(
     Effect.flatMap(call),
     Effect.provide(AdminCliAutomationsApiHandlers),
@@ -154,7 +154,7 @@ describe("automation admin API", () => {
     expect(error).toBeInstanceOf(CliSessionUnauthorized);
   });
 
-  test.each(["1.31.0", "1.40.0", "1.41.0-rc.1"])(
+  test.each(["1.31.0", "1.41.0", "1.42.0-rc.1"])(
     "refuses dhw %s, which cannot decode repeat-visit automations",
     async (dhwVersion) => {
       const error = await callAutomationsApi(
@@ -169,7 +169,7 @@ describe("automation admin API", () => {
     }
   );
 
-  test.each(["1.41.0", "1.41.0+pr.762.abc1234", "1.42.0"])(
+  test.each(["1.42.0", "1.42.0+pr.762.abc1234", "1.43.0"])(
     "accepts dhw %s at or above the repeat-visit minimum",
     async (dhwVersion) => {
       const detail = await callAutomationsApi(

@@ -122,7 +122,7 @@ export type CampaignRetryInput = typeof CampaignRetryInput.Type;
  * policies, the `pass-holder` and `already-sent-once` skip reasons, the
  * `one-off-campaign-gap` deferral, and skipped dry-run rows.
  */
-const repeatVisitDhwVersion = DhwVersion.make("1.41.0");
+const repeatVisitDhwVersion = DhwVersion.make("1.42.0");
 
 /** The operations on campaigns, their audiences and templates. */
 export const emailCampaignOperations = defineOperations({
@@ -305,12 +305,12 @@ export const emailAutomationOperations = defineOperations({
     output: AutomationRunStats,
   }),
   listAutomationRuns: query({
-    minimumDhwVersion: repeatVisitDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: AutomationRunListInput,
     output: AutomationRunPage,
   }),
   getAutomationRun: query({
-    minimumDhwVersion: repeatVisitDhwVersion,
+    minimumDhwVersion: passReminderDhwVersion,
     input: AutomationRunRef,
     output: AutomationRunDetail,
   }),
