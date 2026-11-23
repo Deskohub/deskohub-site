@@ -1,15 +1,17 @@
-import { Credentials } from "@alchemy.run/gcp";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClientRequest } from "effect/http";
 import * as Layer from "effect/Layer";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import {
   ImageDigest,
   type WorkspaceStackConfig,
   type WorkspaceWorkload,
 } from "../config/stack-config";
+import {
+  type GoogleApiNoAnswer,
+  type GoogleApiRetryPolicy,
+  makeGoogleApi,
+} from "../google-api";
 import type { ObservedService, ObservedTrafficStatus } from "../readback";
 import {
   workloadServiceIds,
@@ -33,7 +35,7 @@ const cloudRunReadRetry = {
   attemptTimeout: "10 seconds",
   backoff: "250 millis",
   retries: 4,
-} as const;
+} as const satisfies GoogleApiRetryPolicy;
 
 /*
  * Only the fields the readback uses. Proto3 JSON omits default values, so
@@ -133,9 +135,16 @@ const servingImageDigest = (revision: CloudRunRevision) => {
   return isImageDigest(digest) ? digest : null;
 };
 
-/** No answer, rate limiting, or a server error: a later read can succeed. */
-const isTransientReadFailure = ({ status }: ReleaseReadbackUnavailable) =>
-  status === null || status === 429 || status >= 500;
+const noAnswerReasons: Record<GoogleApiNoAnswer, string> = {
+  unreachable: "no response from Cloud Run",
+  "no-answer-in-time": "Cloud Run timed out",
+  // Unreachable with a token looked up once per read.
+  "credentials-stalled": "credentials unavailable",
+};
+
+/** A body cut off mid-read: a later read can succeed. */
+const isInterruptedBody = ({ status }: ReleaseReadbackUnavailable) =>
+  status === null;
 
 const isRevisionName = Schema.is(ReleaseDeployment.fields.revision);
 
@@ -155,10 +164,7 @@ const isReady = (revision: CloudRunRevision) =>
 export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
   config: WorkspaceStackConfig
 ) {
-  const credentials = yield* Credentials;
-  // Each attempt owns its request: closing the attempt's scope aborts the
-  // transport and any body a status-only answer left unread.
-  const client = (yield* HttpClient.HttpClient).pipe(HttpClient.withScope);
+  const googleApi = yield* makeGoogleApi();
   const serviceResource = (serviceId: string) =>
     `projects/${config.projectId}/locations/${config.region}/services/${serviceId}`;
 
@@ -169,62 +175,41 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
     Effect.gen(function* () {
       const unavailable = (status: number | null, reason: string) =>
         new ReleaseReadbackUnavailable({ resource, status, reason });
-      // Providers may die on a failed token lookup; any outcome but the
-      // caller's interruption becomes the same sanitized failure.
-      const { accessToken, quotaProject } = yield* credentials.pipe(
-        Effect.timeout(cloudRunReadRetry.attemptTimeout),
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.interrupt
-            : Effect.fail(unavailable(null, "credentials unavailable"))
-        )
-      );
-      const request = HttpClientRequest.get(
-        `${cloudRunApiRoot}/${resource}`
-      ).pipe(
-        HttpClientRequest.bearerToken(accessToken),
-        HttpClientRequest.acceptJson,
-        // User credentials bill quota to an explicit project.
-        quotaProject
-          ? HttpClientRequest.setHeader("x-goog-user-project", quotaProject)
-          : (unchanged) => unchanged
-      );
-      // One attempt runs through the whole body, under one timeout; 404 is
-      // the only answer that means absence.
-      const attempt = Effect.gen(function* () {
-        const response = yield* client
-          .execute(request)
-          .pipe(
+      // One attempt runs through the whole body; 404 is the only answer
+      // that means absence.
+      const body = yield* googleApi.call({
+        request: HttpClientRequest.get(`${cloudRunApiRoot}/${resource}`).pipe(
+          HttpClientRequest.acceptJson
+        ),
+        policy: cloudRunReadRetry,
+        // One lookup per read: a stalled one fails the read at its own
+        // deadline instead of spending the retries.
+        tokenLookup: "once",
+        handle: (response) => {
+          if (response.status === 404) {
+            return Effect.succeed(null);
+          }
+          if (response.status !== 200) {
+            return Effect.fail(
+              unavailable(
+                response.status,
+                `Cloud Run answered HTTP ${response.status}`
+              )
+            );
+          }
+          return response.text.pipe(
             Effect.mapError(() =>
-              unavailable(null, "no response from Cloud Run")
+              unavailable(null, "Cloud Run body interrupted")
             )
           );
-        if (response.status === 404) {
-          return null;
-        }
-        if (response.status !== 200) {
-          return yield* unavailable(
-            response.status,
-            `Cloud Run answered HTTP ${response.status}`
-          );
-        }
-        return yield* response.text.pipe(
-          Effect.mapError(() => unavailable(null, "Cloud Run body interrupted"))
-        );
-      }).pipe(
-        Effect.scoped,
-        Effect.timeoutOrElse({
-          duration: cloudRunReadRetry.attemptTimeout,
-          orElse: () => Effect.fail(unavailable(null, "Cloud Run timed out")),
-        })
-      );
-      const body = yield* attempt.pipe(
-        Effect.retry({
-          schedule: Schedule.exponential(cloudRunReadRetry.backoff),
-          times: cloudRunReadRetry.retries,
-          while: isTransientReadFailure,
-        })
-      );
+        },
+        retryHandledFailure: isInterruptedBody,
+        transientStatus: (status) =>
+          unavailable(status, `Cloud Run answered HTTP ${status}`),
+        noAnswer: (cause) => unavailable(null, noAnswerReasons[cause]),
+        credentialsUnavailable: () =>
+          unavailable(null, "credentials unavailable"),
+      });
       if (body === null) {
         return null;
       }

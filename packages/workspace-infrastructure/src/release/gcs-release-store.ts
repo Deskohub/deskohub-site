@@ -1,17 +1,20 @@
-import { Credentials } from "@alchemy.run/gcp";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { HttpClientResponse } from "effect/http";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClientRequest } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type {
   GcsBucketName,
   WorkspaceStackConfig,
   WorkspaceStage,
 } from "../config/stack-config";
+import {
+  type GoogleApiNoAnswer,
+  type GoogleApiRetryPolicy,
+  makeGoogleApi,
+} from "../google-api";
 import { emptyReleaseRecord, ReleaseRecord } from "./release-record";
 import {
   ReleaseRecordConflict,
@@ -23,11 +26,16 @@ import {
 
 const cloudStorageApi = "https://storage.googleapis.com";
 
-/** Retries after the first attempt for 429, 5xx, transport and timeouts. */
-const retriesAfterFirstAttempt = 4;
-const retryBackoff = Schedule.exponential("200 millis");
-/** Generous: the store is only called from CI and operator runs. */
-const attemptTimeout = "30 seconds";
+/**
+ * Four retries after the first attempt for 429, 5xx, transport failures
+ * and timeouts. The timeout is generous: the store is only called from CI
+ * and operator runs.
+ */
+const storeRetryPolicy = {
+  attemptTimeout: "30 seconds",
+  backoff: "200 millis",
+  retries: 4,
+} as const satisfies GoogleApiRetryPolicy;
 
 /** Where one stage's release record lives in Cloud Storage. */
 export interface GcsReleaseRecordLocation {
@@ -77,44 +85,30 @@ const encodeStoredRecord = Schema.encodeEffect(StoredRecordJson);
 const decodeUploadedObject = Schema.decodeUnknownEffect(UploadedObjectJson);
 const sameRecord = Schema.toEquivalence(ReleaseRecord);
 
-const statusFailure = (
-  operation: "read" | "write",
-  status: number
-): RetryableAttempt | ReleaseStoreUnavailable =>
-  status === 429 || status >= 500
-    ? new RetryableAttempt({
-        status,
-        reason: `Cloud Storage answered ${status}`,
-        // A rate-limited request was not applied; a server error may have been.
-        outcomeUnknown: status >= 500,
-      })
-    : new ReleaseStoreUnavailable({
-        operation,
-        status,
-        reason:
-          status === 401 || status === 403
-            ? `Cloud Storage refused the credentials (${status})`
-            : `Cloud Storage refused the request (${status})`,
-      });
+const noAnswerReasons: Record<GoogleApiNoAnswer, string> = {
+  unreachable: "Cloud Storage could not be reached",
+  "no-answer-in-time": "Cloud Storage did not answer in time",
+  "credentials-stalled": "Google Cloud credentials did not resolve in time",
+};
+
+/** A refusal no retry can fix; 429 and 5xx never reach it. */
+const refusal = (operation: "read" | "write", status: number) =>
+  new ReleaseStoreUnavailable({
+    operation,
+    status,
+    reason:
+      status === 401 || status === 403
+        ? `Cloud Storage refused the credentials (${status})`
+        : `Cloud Storage refused the request (${status})`,
+  });
 
 const unavailableAfterRetries =
   (operation: "read" | "write") => (attempt: RetryableAttempt) =>
     new ReleaseStoreUnavailable({
       operation,
       status: attempt.status,
-      reason: `${attempt.reason}; gave up after ${retriesAfterFirstAttempt + 1} attempts`,
+      reason: `${attempt.reason}; gave up after ${storeRetryPolicy.retries + 1} attempts`,
     });
-
-const retryTransient = <A, E extends { readonly _tag: string }, R>(
-  attempt: Effect.Effect<A, E, R>
-) =>
-  attempt.pipe(
-    Effect.retry({
-      while: isRetryable,
-      times: retriesAfterFirstAttempt,
-      schedule: retryBackoff,
-    })
-  );
 
 /**
  * The release record store on one Cloud Storage object. The object
@@ -125,70 +119,54 @@ const retryTransient = <A, E extends { readonly _tag: string }, R>(
 export const makeGcsReleaseRecordStore = Effect.fn(
   "WorkspaceRelease.makeGcsReleaseRecordStore"
 )(function* (location: GcsReleaseRecordLocation) {
-  const http = yield* HttpClient.HttpClient;
-  const credentials = yield* Credentials;
+  const googleApi = yield* makeGoogleApi();
   const bucketPath = encodeURIComponent(location.bucket);
   const objectUrl = `${cloudStorageApi}/storage/v1/b/${bucketPath}/o/${encodeURIComponent(location.object)}`;
   const uploadUrl = `${cloudStorageApi}/upload/storage/v1/b/${bucketPath}/o`;
 
   /**
-   * One attempt under one deadline: resolve a bearer token, dispatch, and
-   * handle the response. Only once the request is dispatched can a lost
-   * answer leave a write's outcome unknown; a token exchange that stalls
-   * or fails sends nothing.
+   * One authorized call: each attempt resolves a token, dispatches and
+   * handles the response under one deadline. Only once the request is
+   * dispatched can a lost answer leave a write's outcome unknown; a token
+   * exchange that stalls sends nothing, and one that fails is final.
    */
-  const attempt = <A, E>(
+  const call = <A, E extends PreconditionLost | ReleaseStoreUnavailable>(
     operation: "read" | "write",
     request: HttpClientRequest.HttpClientRequest,
     handle: (
       response: HttpClientResponse.HttpClientResponse
-    ) => Effect.Effect<A, E>
+    ) => Effect.Effect<A, E | RetryableAttempt>,
+    onAttemptFailure?: (
+      error: E | RetryableAttempt | ReleaseStoreUnavailable
+    ) => Effect.Effect<void>
   ) =>
-    Ref.make(false).pipe(
-      Effect.flatMap((dispatched) =>
-        credentials.pipe(
-          Effect.mapError(
-            () =>
-              new ReleaseStoreUnavailable({
-                operation,
-                status: null,
-                reason: "Google Cloud credentials are unavailable",
-              })
-          ),
-          Effect.tap(() => Ref.set(dispatched, true)),
-          Effect.flatMap(({ accessToken }) =>
-            http
-              .execute(request.pipe(HttpClientRequest.bearerToken(accessToken)))
-              .pipe(
-                Effect.mapError(
-                  () =>
-                    new RetryableAttempt({
-                      status: null,
-                      reason: "Cloud Storage could not be reached",
-                      outcomeUnknown: true,
-                    })
-                )
-              )
-          ),
-          Effect.flatMap(handle),
-          Effect.timeoutOrElse({
-            duration: attemptTimeout,
-            orElse: () =>
-              Effect.flatMap(Ref.get(dispatched), (sent) =>
-                Effect.fail(
-                  new RetryableAttempt({
-                    status: null,
-                    reason: sent
-                      ? "Cloud Storage did not answer in time"
-                      : "Google Cloud credentials did not resolve in time",
-                    outcomeUnknown: sent,
-                  })
-                )
-              ),
-          })
-        )
-      )
-    );
+    googleApi.call<A, E | RetryableAttempt | ReleaseStoreUnavailable>({
+      request,
+      policy: storeRetryPolicy,
+      handle,
+      retryHandledFailure: isRetryable,
+      transientStatus: (status) =>
+        new RetryableAttempt({
+          status,
+          reason: `Cloud Storage answered ${status}`,
+          // A rate-limited request was not applied; a server error may have been.
+          outcomeUnknown: status >= 500,
+        }),
+      noAnswer: (cause) =>
+        new RetryableAttempt({
+          status: null,
+          reason: noAnswerReasons[cause],
+          // Only a stalled token lookup is known to have sent nothing.
+          outcomeUnknown: cause !== "credentials-stalled",
+        }),
+      credentialsUnavailable: () =>
+        new ReleaseStoreUnavailable({
+          operation,
+          status: null,
+          reason: "Google Cloud credentials are unavailable",
+        }),
+      ...(onAttemptFailure ? { onAttemptFailure } : {}),
+    });
 
   const bodyText = (response: HttpClientResponse.HttpClientResponse) =>
     response.text.pipe(
@@ -212,7 +190,7 @@ export const makeGcsReleaseRecordStore = Effect.fn(
       return Effect.succeed(null);
     }
     if (response.status !== 200) {
-      return Effect.fail(statusFailure("read", response.status));
+      return Effect.fail(refusal("read", response.status));
     }
     const generation = response.headers["x-goog-generation"];
     return isObjectGeneration(generation)
@@ -249,14 +227,13 @@ export const makeGcsReleaseRecordStore = Effect.fn(
     );
 
   /** The stored record, or null while no object exists. */
-  const readPresent = attempt(
+  const readPresent = call(
     "read",
     HttpClientRequest.get(objectUrl).pipe(
       HttpClientRequest.setUrlParam("alt", "media")
     ),
     storedObject
   ).pipe(
-    retryTransient,
     Effect.catchTag("RetryableAttempt", (last) =>
       Effect.fail(unavailableAfterRetries("read")(last))
     ),
@@ -286,7 +263,7 @@ export const makeGcsReleaseRecordStore = Effect.fn(
       return Effect.fail(new PreconditionLost());
     }
     if (response.status !== 200) {
-      return Effect.fail(statusFailure("write", response.status));
+      return Effect.fail(refusal("write", response.status));
     }
     // The write landed, but without its generation the version is
     // unknown; the retry's precondition check settles it.
@@ -310,7 +287,7 @@ export const makeGcsReleaseRecordStore = Effect.fn(
     readonly ifVersion: string;
     readonly outcomeUnknown: Ref.Ref<boolean>;
   }) =>
-    attempt(
+    call(
       "write",
       HttpClientRequest.post(uploadUrl).pipe(
         HttpClientRequest.setUrlParams({
@@ -320,14 +297,12 @@ export const makeGcsReleaseRecordStore = Effect.fn(
         }),
         HttpClientRequest.bodyText(input.body, "application/json")
       ),
-      uploadedGeneration
-    ).pipe(
-      Effect.tapError((error) =>
+      uploadedGeneration,
+      (error) =>
         error._tag === "RetryableAttempt" && error.outcomeUnknown
           ? Ref.set(input.outcomeUnknown, true)
           : Effect.void
-      ),
-      retryTransient,
+    ).pipe(
       Effect.catchTag("RetryableAttempt", (last) =>
         Effect.fail(unavailableAfterRetries("write")(last))
       )

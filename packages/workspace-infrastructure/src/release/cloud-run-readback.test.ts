@@ -621,6 +621,38 @@ describe("Cloud Run service readback", () => {
     }
   });
 
+  test("a stalled credential lookup fails the read at ten seconds, looked up once", async () => {
+    let lookups = 0;
+    const fake = fakeCloudRun(steadyRoutes);
+    const settled = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(
+          Effect.gen(function* () {
+            return yield* (yield* ReleaseServiceReadback).service("web");
+          })
+        );
+        yield* TestClock.adjust("9999 millis");
+        const early = fiber.pollUnsafe();
+        yield* TestClock.adjust("1 millis");
+        return { early, late: fiber.pollUnsafe() };
+      }).pipe(
+        Effect.provide(
+          readbackLayer(
+            fake,
+            Effect.suspend(() => {
+              lookups += 1;
+              return Effect.never;
+            })
+          )
+        )
+      )
+    );
+    expect(settled.early).toBeUndefined();
+    expect(settled.late && Exit.isFailure(settled.late)).toBe(true);
+    expect(lookups).toBe(1);
+    expect(fake.requests).toHaveLength(0);
+  });
+
   test("times out each attempt at ten seconds and backs off from 250 ms", async () => {
     const fake = fakeCloudRun({
       ...steadyRoutes,
