@@ -137,11 +137,23 @@ const runLiveBootstrap = (
     jwksLookupFails?: boolean;
     /** `location<TAB>location_type`, as gcloud prints the state bucket's. */
     bucketLocation?: string;
+    /** `key=value;key=value`, as gcloud prints the project's labels. */
+    labels?: string;
+    labelsLookupFails?: boolean;
+    /** Quota refusals before `workspace-web` is created. */
+    serviceAccountQuotaFailures?: number;
+    /** `workspace-deployer` creation races another run that created it. */
+    deployerAlreadyExists?: boolean;
   },
   ...args: ReadonlyArray<string>
 ) => {
   const directory = mkdtempSync(join(tmpdir(), "bootstrap-gcloud-"));
   const log = join(directory, "calls.log");
+  const curlLog = join(directory, "curl.log");
+  const curlStdin = join(directory, "curl.stdin");
+  const sleepLog = join(directory, "sleep.log");
+  const billingLog = join(directory, "billing.log");
+  const quotaCounter = join(directory, "quota.count");
   const stub = join(directory, "gcloud");
   writeFileSync(
     stub,
@@ -149,7 +161,21 @@ const runLiveBootstrap = (
 echo "$*" >> "${log}"
 case "$*" in
   *"projects describe"*"value(projectNumber)"*) echo "$STUB_PROJECT_NUMBER" ;;
-  *"billing projects describe"*) echo True ;;
+  *"projects describe"*"value(labels)"*) [ -n "$STUB_LABELS_FAILS" ] && exit 1; echo "$STUB_LABELS" ;;
+  *"billing projects describe"*) echo "$CLOUDSDK_BILLING_QUOTA_PROJECT" >> "${billingLog}"; echo True ;;
+  *"auth print-access-token"*) echo stub-access-token ;;
+  *"service-accounts create workspace-deployer "*)
+    if [ -n "$STUB_DEPLOYER_EXISTS" ]; then
+      echo "ERROR: (gcloud.iam.service-accounts.create) Resource in projects is the subject of a conflict: Service account workspace-deployer already exists within project" >&2
+      exit 1
+    fi ;;
+  *"service-accounts create workspace-web "*)
+    count=$(cat "${quotaCounter}" 2>/dev/null || echo 0)
+    if [ "$count" -lt "\${STUB_SA_QUOTA_FAILURES:-0}" ]; then
+      echo $((count + 1)) > "${quotaCounter}"
+      echo "ERROR: (gcloud.iam.service-accounts.create) RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'Service Account Creation Requests'" >&2
+      exit 1
+    fi ;;
   *"providers list"*) echo "projects/$STUB_PROJECT_NUMBER/locations/global/workloadIdentityPools/workspace-sandbox-github/providers/deskohub-workspace" ;;
   *"value(oidc.issuerUri)"*) echo https://token.actions.githubusercontent.com ;;
   *"value(oidc.jwksJson)"*) [ -n "$STUB_JWKS_FAILS" ] && exit 1; echo "$STUB_JWKS" ;;
@@ -159,6 +185,22 @@ esac
 `
   );
   chmodSync(stub, 0o755);
+  writeFileSync(
+    join(directory, "curl"),
+    `#!/usr/bin/env bash
+echo "$*" >> "${curlLog}"
+cat > "${curlStdin}"
+echo '{"done":true}'
+`
+  );
+  chmodSync(join(directory, "curl"), 0o755);
+  writeFileSync(
+    join(directory, "sleep"),
+    `#!/usr/bin/env bash
+echo "$*" >> "${sleepLog}"
+`
+  );
+  chmodSync(join(directory, "sleep"), 0o755);
   const result = Bun.spawnSync(["bash", bootstrapScript, ...args], {
     env: {
       PATH: `${directory}:${process.env.PATH ?? "/usr/bin:/bin"}`,
@@ -166,11 +208,23 @@ esac
       STUB_JWKS: answers.jwksJson ?? "",
       STUB_JWKS_FAILS: answers.jwksLookupFails ? "1" : "",
       STUB_BUCKET_LOCATION: answers.bucketLocation ?? "EUROPE-WEST1\tregion",
+      STUB_LABELS: answers.labels ?? "",
+      STUB_LABELS_FAILS: answers.labelsLookupFails ? "1" : "",
+      STUB_SA_QUOTA_FAILURES: String(answers.serviceAccountQuotaFailures ?? 0),
+      STUB_DEPLOYER_EXISTS: answers.deployerAlreadyExists ? "1" : "",
     },
   });
-  const calls = Bun.spawnSync(["cat", log]).stdout.toString();
+  const lines = (path: string) =>
+    Bun.spawnSync(["cat", path]).stdout.toString().split("\n").filter(Boolean);
+  const recorded = {
+    calls: lines(log),
+    curlCalls: lines(curlLog),
+    curlStdin: lines(curlStdin),
+    sleeps: lines(sleepLog),
+    billingQuotaProjects: lines(billingLog),
+  };
   rmSync(directory, { recursive: true, force: true });
-  return { result, calls: calls.split("\n").filter(Boolean) };
+  return { result, ...recorded };
 };
 
 const liveArgs = dryRunArgs.filter((arg) => arg !== "--dry-run");
@@ -236,6 +290,141 @@ describe("sandbox bootstrap script", () => {
       expect(
         calls.some((call) => call.startsWith("storage buckets update"))
       ).toBe(false);
+    }
+  });
+
+  test("merges the spend and teardown labels with the project's other labels", () => {
+    const { result, calls, curlCalls, curlStdin } = runLiveBootstrap(
+      {
+        projectNumber: "123456789012",
+        labels: "cost-centre=ops;workspace-sandbox-teardown=2026-01-01",
+      },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(0);
+    expect(calls.some((call) => call.startsWith("projects update"))).toBe(
+      false
+    );
+    expect(curlCalls).toEqual([
+      '-sS --fail-with-body -X PATCH https://cloudresourcemanager.googleapis.com/v3/projects/deskohub-ws-sandbox?updateMask=labels -H @- -H Content-Type: application/json --data {"labels":{"cost-centre":"ops","workspace-sandbox-max-spend":"200-eur","workspace-sandbox-teardown":"2026-12-31"}}',
+    ]);
+    // The token reaches curl on stdin, never its arguments or the output.
+    expect(curlStdin).toEqual(["Authorization: Bearer stub-access-token"]);
+    expect(result.stdout.toString()).not.toContain("stub-access-token");
+  });
+
+  test("leaves the labels untouched when they cannot be read", () => {
+    const { result, curlCalls } = runLiveBootstrap(
+      { projectNumber: "123456789012", labelsLookupFails: true },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("could not read the labels");
+    expect(curlCalls).toEqual([]);
+  });
+
+  test("charges the billing check to the sandbox project's quota", () => {
+    const { billingQuotaProjects } = runLiveBootstrap(
+      { projectNumber: "123456789012" },
+      ...liveArgs
+    );
+    expect(billingQuotaProjects).toEqual(["deskohub-ws-sandbox"]);
+  });
+
+  test("retries service account creation through the per-minute quota", () => {
+    const { result, calls, sleeps } = runLiveBootstrap(
+      {
+        projectNumber: "123456789012",
+        serviceAccountQuotaFailures: 2,
+        deployerAlreadyExists: true,
+      },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(0);
+    expect(
+      calls.filter((call) =>
+        call.startsWith("iam service-accounts create workspace-web ")
+      )
+    ).toHaveLength(3);
+    expect(sleeps).toEqual(["15", "30"]);
+    // An account another run already created counts as created.
+    expect(result.stdout.toString()).toContain("already exists; continuing");
+  });
+
+  test("stops after bounded quota retries", () => {
+    const { result, calls, sleeps } = runLiveBootstrap(
+      { projectNumber: "123456789012", serviceAccountQuotaFailures: 100 },
+      ...liveArgs
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("RESOURCE_EXHAUSTED");
+    expect(
+      calls.filter((call) =>
+        call.startsWith("iam service-accounts create workspace-web ")
+      )
+    ).toHaveLength(6);
+    expect(sleeps).toEqual(["15", "30", "60", "60", "60"]);
+    expect(
+      calls.some((call) =>
+        call.startsWith("iam service-accounts create workspace-tasks-worker ")
+      )
+    ).toBe(false);
+  });
+
+  test("prints the label update without a token and enables the trace APIs", () => {
+    const output = runBootstrap(...dryRunArgs).stdout.toString();
+    expect(output).not.toContain("projects update");
+    expect(output).toContain(
+      "+ curl -sS --fail-with-body -X PATCH https://cloudresourcemanager.googleapis.com/v3/projects/deskohub-ws-sandbox\\?updateMask=labels -H Authorization:\\ Bearer\\ \\<gcloud\\ auth\\ print-access-token\\>"
+    );
+    expect(output).toContain(
+      'workspace-sandbox-max-spend\\":\\"200-eur\\"\\,\\"workspace-sandbox-teardown\\":\\"2026-12-31'
+    );
+    expect(output).toMatch(
+      /gcloud services enable [^\n]* cloudtrace\.googleapis\.com [^\n]* telemetry\.googleapis\.com\n/
+    );
+  });
+
+  test("lets the runtime accounts write traces and the deployer read logs and traces", () => {
+    const firstPhase = runBootstrap(...dryRunArgs).stdout.toString();
+    for (const account of [
+      "workspace-web",
+      "workspace-tasks-worker",
+      "workspace-scheduler-worker",
+    ]) {
+      for (const role of [
+        "roles/telemetry.tracesWriter",
+        "roles/cloudtrace.agent",
+      ]) {
+        expect(firstPhase).toContain(
+          `gcloud projects add-iam-policy-binding deskohub-ws-sandbox --condition=None --quiet --member serviceAccount:${sandboxServiceAccount(account)} --role ${role} --format=none`
+        );
+      }
+    }
+    const traceGrantees = [
+      ...firstPhase.matchAll(
+        /--member serviceAccount:([\w-]+)@[^ ]+ --role roles\/(?:telemetry|cloudtrace)\./g
+      ),
+    ].map((match) => match[1]);
+    expect(new Set(traceGrantees)).toEqual(
+      new Set([
+        "workspace-web",
+        "workspace-tasks-worker",
+        "workspace-scheduler-worker",
+      ])
+    );
+    expect(firstPhase).not.toMatch(
+      /roles\/(?:logging\.viewer|cloudtrace\.user)\b/
+    );
+
+    const secondPhase = runBootstrap(
+      ...dryRunArgs,
+      "--grant-deploy-roles"
+    ).stdout.toString();
+    for (const role of ["roles/logging.viewer", "roles/cloudtrace.user"]) {
+      expect(secondPhase).toContain(
+        `--member serviceAccount:${sandboxServiceAccount("workspace-deployer")} --role ${role} --format=none`
+      );
     }
   });
 
