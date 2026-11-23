@@ -106,6 +106,31 @@ export const readFencedReleaseRecord = (expectedGeneration: number) =>
     return record;
   });
 
+/**
+ * The record names no serving release, yet the web service is live: the
+ * record object was deleted or reset. Nothing proceeds from it, because a
+ * fresh history would skip candidate verification and drop the previous
+ * release; an operator restores the object's last good version instead.
+ */
+export class ReleaseRecordLost extends Data.TaggedError("ReleaseRecordLost")<{
+  readonly liveRevisions: ReadonlyArray<string>;
+}> {}
+
+/** Refuse a record without a serving release while the web service exists. */
+export const requireRecordCoversLiveService = (record: ReleaseRecord) =>
+  Effect.gen(function* () {
+    if (record.active !== null || record.pendingApply !== null) {
+      return;
+    }
+    const readback = yield* ReleaseServiceReadback;
+    const web = yield* readback.service("web");
+    if (web !== null) {
+      return yield* new ReleaseRecordLost({
+        liveRevisions: web.traffic.map((entry) => entry.revision),
+      });
+    }
+  });
+
 const releaseWorkloads: ReadonlyArray<WorkspaceWorkload> = [
   "web",
   "tasks-worker",
@@ -235,6 +260,8 @@ export const deliverRelease = Effect.fn("WorkspaceRelease.deliver")(function* (
   input: DeliverReleaseInput,
   policy: ReleaseReadbackPolicy = defaultReleaseReadbackPolicy
 ) {
+  const current = yield* (yield* ReleaseRecordStore).read;
+  yield* requireRecordCoversLiveService(current.record);
   const staged = yield* runReleaseStep((record) =>
     stage(record, {
       expectedGeneration: record.generation,

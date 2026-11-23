@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import { configuredWorkspaceStack } from "./src/config/stack-config";
 import { workspaceGcpAccess, workspaceGoogleApiAccess } from "./src/gcp-access";
 import { releaseApplyGenerationVariable } from "./src/release/alchemy-service-apply";
+import { cloudRunServiceReadbackLayer } from "./src/release/cloud-run-readback";
 import {
   gcsReleaseRecordStoreLayer,
   releaseRecordLocation,
@@ -62,11 +63,12 @@ export default Alchemy.Stack(
       yield* releaseGeneration
     ).pipe(
       Effect.provide(
-        gcsReleaseRecordStoreLayer(releaseRecordLocation(config)).pipe(
-          Layer.provide(workspaceGoogleApiAccess)
-        )
+        Layer.mergeAll(
+          gcsReleaseRecordStoreLayer(releaseRecordLocation(config)),
+          cloudRunServiceReadbackLayer(config)
+        ).pipe(Layer.provide(workspaceGoogleApiAccess))
       ),
-      // A stale fence, unreadable record or unprotected preview stops the
+      // A stale fence, lost or unreadable record or unprotected preview stops the
       // deploy before any service is planned.
       Effect.orDie
     );

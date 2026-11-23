@@ -15,7 +15,10 @@ import type {
 } from "./config/stack-config";
 import { workspaceQueueContracts } from "./contracts/queue-contracts";
 import { workspaceScheduleContracts } from "./contracts/schedule-contracts";
-import { readFencedReleaseRecord } from "./release/release-delivery";
+import {
+  readFencedReleaseRecord,
+  requireRecordCoversLiveService,
+} from "./release/release-delivery";
 import type { ReleaseRecord } from "./release/release-record";
 import { ReleaseRecordStore } from "./release/release-record-store";
 import {
@@ -201,7 +204,9 @@ export const declareWorkspaceServices = (
  * The release-owned services as the authoritative release record declares
  * them now. Every deploy of a stage that serves a release must declare them,
  * or Alchemy would delete them; a fenced apply passes the generation it
- * persisted and refuses a record any other run has since moved on. Preview
+ * persisted and refuses a record any other run has since moved on, and a
+ * record without a serving release is refused while the web service is
+ * live (`ReleaseRecordLost`). Preview
  * declares none until #1455.
  */
 export const declareRecordedWorkspaceServices = (
@@ -218,5 +223,7 @@ export const declareRecordedWorkspaceServices = (
       expectedGeneration === undefined
         ? (yield* (yield* ReleaseRecordStore).read).record
         : yield* readFencedReleaseRecord(expectedGeneration);
+    // Declaring nothing from a lost record would delete the live services.
+    yield* requireRecordCoversLiveService(record);
     return yield* declareWorkspaceServices(config, record, yield* DateTime.now);
   });

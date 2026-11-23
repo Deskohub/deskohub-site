@@ -594,4 +594,35 @@ describe("fenced release delivery", () => {
     });
     expect(result.record.pendingApply).not.toBeNull();
   });
+
+  test("a lost record never restarts history over a live service", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, provide } = yield* setup();
+        yield* provide(
+          deliverRelease(
+            sandboxConfig,
+            { sha: shaA, imageDigest: digestA },
+            policy
+          )
+        );
+        // The record object is deleted: the store reads the empty record.
+        const live = yield* store.read;
+        yield* store.write(emptyReleaseRecord, live.version);
+        const exit = yield* provide(
+          deliverRelease(
+            sandboxConfig,
+            { sha: shaB, imageDigest: digestB },
+            policy
+          ).pipe(Effect.exit)
+        );
+        return { exit, record: (yield* store.read).record };
+      })
+    );
+    expect(errorOf(result.exit)).toMatchObject({
+      _tag: "ReleaseRecordLost",
+      liveRevisions: ["workspace-web-r1-aaaaaaa"],
+    });
+    expect(result.record).toEqual(emptyReleaseRecord);
+  });
 });

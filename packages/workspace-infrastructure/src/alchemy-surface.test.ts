@@ -17,6 +17,7 @@ import {
   productionConfig,
   sandboxConfig,
 } from "./config/stack-config.test-utils";
+import { ReleaseServiceReadback } from "./release/release-platform";
 import { promote, settleApply, stage } from "./release/release-reconciler";
 import { emptyReleaseRecord, GitSha } from "./release/release-record";
 import {
@@ -264,6 +265,55 @@ describe("Alchemy beta.87 surface", () => {
         )
       ).toHaveLength(3);
     }
+  });
+
+  test("refuses an empty record while the web service is live", async () => {
+    const liveWeb = (live: boolean) =>
+      ReleaseServiceReadback.of({
+        service: (workload) =>
+          Effect.succeed(
+            live && workload === "web"
+              ? {
+                  workload,
+                  uri: undefined,
+                  urls: [],
+                  ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
+                  invokerIamDisabled: true,
+                  terminalConditionState: "CONDITION_SUCCEEDED",
+                  reconciling: false,
+                  traffic: [
+                    { revision: "workspace-web-r3-aaaaaaa", percent: 100 },
+                  ],
+                  revisionDigests: {},
+                  annotations: {},
+                }
+              : null
+          ),
+        revision: () => Effect.succeed(null),
+      });
+    const declare = (live: boolean) =>
+      evaluate(
+        Effect.gen(function* () {
+          const store =
+            yield* makeInMemoryReleaseRecordStore(emptyReleaseRecord);
+          return yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            undefined
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.provideService(ReleaseServiceReadback, liveWeb(live))
+          );
+        })
+      );
+
+    const lost = await declare(true);
+    expect(lost.exit._tag).toBe("Failure");
+    expect(String(lost.exit)).toContain("ReleaseRecordLost");
+    expect(lost.resources).toEqual({});
+
+    const fresh = await declare(false);
+    expect(fresh.exit._tag).toBe("Success");
+    expect(fresh.resources).toEqual({});
   });
 
   test("declares no preview services and refuses a fenced preview apply", async () => {
