@@ -145,7 +145,8 @@ test("lints and tests the Workspace infrastructure", () => {
   expect(
     steps.filter(
       (step) =>
-        step.uses?.startsWith("hashicorp/") || /\bterraform\b/.test(step.run ?? "")
+        step.uses?.startsWith("hashicorp/") ||
+        /\bterraform\b/.test(step.run ?? "")
     )
   ).toEqual([]);
   expect(doc.jobs["test-functional"]?.needs).toContain("validate-workspace");

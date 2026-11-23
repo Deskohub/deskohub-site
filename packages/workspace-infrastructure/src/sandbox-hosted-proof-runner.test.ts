@@ -787,8 +787,14 @@ describe("edge readback from the stack outputs", () => {
     );
 
   test("records the edge the locked deploy output and checks v1 through it", () => {
-    const { exitCode, output, edgeEnv, filter: recorded, kept, calls } =
-      readback(edgeOutputs);
+    const {
+      exitCode,
+      output,
+      edgeEnv,
+      filter: recorded,
+      kept,
+      calls,
+    } = readback(edgeOutputs);
     expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
       exitCode: 0,
       output: "",

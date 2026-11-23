@@ -427,7 +427,10 @@ describe("sandbox proof stack config", () => {
     expect(config.secrets).toEqual([]);
     expect(config.schedulesEnabled).toBe(false);
     // The plain-HTTP proof edge, allowed in the approved sandbox only.
-    expect(config.edge).toEqual(sandboxProofEdge);
+    expect(config.edge).toEqual({
+      ...sandboxProofEdge,
+      authRateLimitPerMinute: 120,
+    });
     expect(
       JSON.parse(await Effect.runPromise(sandboxProofStackConfig(identity)))
     ).toMatchObject({ projectNumber: "759037106024", stage: "sandbox" });
