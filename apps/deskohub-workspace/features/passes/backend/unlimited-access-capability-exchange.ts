@@ -6,6 +6,7 @@ import { localeCookieName } from "@/features/i18n/routing";
 import { orderIdSchema } from "@/features/order";
 import { parseCanonicalReservationAccessUrl } from "@/features/reservation/backend/reservation-access-cookie";
 import { runWorkspaceEffect } from "@/shared/backend/workspace-effect";
+import { publicUrl } from "@/shared/deployment/public-origin";
 import { markPrivateResponse } from "@/shared/utils/private-response";
 import { getUnlimitedAccessPath } from "../routes";
 import { unlimitedAccessTokenQueryParam } from "../unlimited-access";
@@ -39,7 +40,7 @@ export const exchangeUnlimitedAccessCapability = (
       locale,
     });
     const response = NextResponse.redirect(
-      new URL(getUnlimitedAccessPath(locale, orderId), request.url)
+      publicUrl(getUnlimitedAccessPath(locale, orderId), request.url)
     );
     response.cookies.set(cookie);
     setLocaleCookie(response, localeCookieName, locale);

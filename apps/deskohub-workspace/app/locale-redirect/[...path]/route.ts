@@ -3,6 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { exactLocaleRedirect } from "@/features/i18n/exact-locale-redirect";
 import { resolveWorkspaceLocale } from "@/features/i18n/locale-resolution";
 import { locales } from "@/features/i18n/routing";
+import { publicUrl } from "@/shared/deployment/public-origin";
 
 type LocaleRedirectContext = {
   params: Promise<{ path: string[] }>;
@@ -34,7 +35,7 @@ export async function GET(
     ),
     locales
   );
-  const response = NextResponse.redirect(url);
+  const response = NextResponse.redirect(publicUrl(url));
   response.headers.set("Vary", "Accept-Language");
   return response;
 }

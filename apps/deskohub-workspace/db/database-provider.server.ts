@@ -3,7 +3,7 @@ import "server-only";
 import { Duration, Effect, Layer } from "effect";
 import { SqlClient } from "effect/sql";
 import { env } from "@/env";
-import { shareAcrossRequests } from "@/shared/backend/share-across-requests";
+import { shareUntilShutdown } from "@/shared/backend/share-across-requests";
 import { onRuntimeShutdown } from "@/shared/deployment/runtime-lifecycle";
 import { WorkspaceDatabase } from "./database.service";
 import {
@@ -47,13 +47,21 @@ onRuntimeShutdown({
 });
 
 /** The Workspace's native pool, opened once per process. */
-const workspacePostgres = shareAcrossRequests(
+const workspacePostgresPool = shareUntilShutdown(
   databasePostgresLayer({
     connectionString: env.DATABASE_URL,
     maxConnections: workspaceDatabaseConnections,
     onRelease: reportRelease,
   })
 );
+const workspacePostgres = workspacePostgresPool.layer;
+// A container closes the Workspace's connections, like Better Auth's, once
+// its requests have drained.
+onRuntimeShutdown({
+  name: "database.workspace-pool",
+  stage: "close",
+  run: workspacePostgresPool.close,
+});
 
 export const workspaceDatabaseLayer = Layer.effect(
   WorkspaceDatabase,

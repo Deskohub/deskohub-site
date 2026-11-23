@@ -3,6 +3,7 @@ import "server-only";
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
 import type { StaticMapImageOptions } from "osm";
+import { publicUrl } from "@/shared/deployment/public-origin";
 import { generateWorkspaceLocationMapImage } from "./workspace-location-map";
 import { WorkspaceRouteFailure } from "./workspace-route";
 
@@ -29,7 +30,7 @@ export const respondWithWorkspaceLocationMap = (
   const canonicalUrl = new URL(canonicalPath, request.url);
   if (request.url !== canonicalUrl.href) {
     return Effect.succeed(
-      NextResponse.redirect(canonicalUrl, {
+      NextResponse.redirect(publicUrl(canonicalUrl), {
         status: 308,
         headers: { "Cache-Control": cacheControl },
       })

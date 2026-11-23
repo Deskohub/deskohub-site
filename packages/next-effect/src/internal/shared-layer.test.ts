@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { Context, Deferred, Effect, Exit, Layer, Logger } from "effect";
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Logger,
+  Scheduler,
+} from "effect";
 import { NextEffect } from "..";
-import { shareAcrossRequests } from "./shared-layer";
+import { shareAcrossRequests, shareUntilShutdown } from "./shared-layer";
 
 class Provider extends Context.Service<Provider, { readonly build: number }>()(
   "@deskohub/next-effect/test/Provider"
@@ -244,6 +252,59 @@ describe("shareAcrossRequests", () => {
     expect([own.build, ownAgain.build]).toEqual([2, 3]);
   });
 
+  test("builds what it is built from itself, even after a run built it first", async () => {
+    const connection = counted(Connection, (build) => ({ build }));
+    const shared = shareAcrossRequests(
+      Layer.effect(
+        Provider,
+        Effect.map(Effect.service(Connection), ({ build }) => ({ build }))
+      ).pipe(Layer.provide(connection.layer))
+    );
+    const runtime = NextEffect.make({ layer: connection.layer });
+
+    const own = await runtime.run(Effect.service(Connection));
+    const fromShared = await runtime.run(
+      Effect.service(Provider).pipe(Effect.provide(shared))
+    );
+
+    expect(own).toEqual({ build: 1 });
+    expect(fromShared).toEqual({ build: 2 });
+  });
+
+  test("serves the next run whenever the first one is interrupted", async () => {
+    // Interrupts the first run after each of its scheduler steps in turn, so
+    // every point of the build, its publication included, is covered.
+    for (let interruptAt = 1; interruptAt <= 60; interruptAt++) {
+      const shared = shareAcrossRequests(
+        Layer.succeed(Provider, { build: interruptAt })
+      );
+      const run = Effect.service(Provider).pipe(Effect.provide(shared));
+      const queue: Array<() => void> = [];
+      let steps = 0;
+      const steppedScheduler: Scheduler.Scheduler = {
+        executionMode: "sync",
+        shouldYield: () => ++steps === interruptAt,
+        makeDispatcher: () => ({
+          scheduleTask: (task) => {
+            queue.push(task);
+          },
+          flush: () => {
+            while (queue.length > 0) queue.shift()?.();
+          },
+        }),
+      };
+      const first = Effect.runFork(
+        run.pipe(Effect.provideService(Scheduler.Scheduler, steppedScheduler))
+      );
+      if (!first.pollUnsafe()) first.interruptUnsafe();
+      while (queue.length > 0) queue.shift()?.();
+
+      expect(
+        await Effect.runPromise(run.pipe(Effect.timeout("1 second")))
+      ).toEqual({ build: interruptAt });
+    }
+  });
+
   test("shares a shared layer it is built from with the runs that use it directly", async () => {
     const provider = counted(Provider, (build) => ({ build }));
     const sharedProvider = shareAcrossRequests(provider.layer);
@@ -277,5 +338,101 @@ describe("shareAcrossRequests", () => {
     await Effect.runPromise(Effect.provide(run, Logger.layer([logger])));
 
     expect(messages.flat()).toContain("building provider");
+  });
+});
+
+describe("shareUntilShutdown", () => {
+  const pooled = () => {
+    const events: string[] = [];
+    const layer = Layer.effect(
+      Connection,
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          events.push("open");
+          return { build: events.length };
+        }),
+        () =>
+          Effect.sync(() => {
+            events.push("close");
+          })
+      )
+    );
+    return { events, shared: shareUntilShutdown(layer) };
+  };
+
+  test("shares one instance until close runs its finalizers once", async () => {
+    const { events, shared } = pooled();
+    const run = provideTo(shared.layer);
+
+    const [first, second] = await Promise.all([
+      run(Connection),
+      run(Connection),
+    ]);
+    expect(second).toBe(first);
+    expect(events).toEqual(["open"]);
+
+    await shared.close();
+    expect(events).toEqual(["open", "close"]);
+
+    await shared.close();
+    expect(events).toEqual(["open", "close"]);
+  });
+
+  test("lets no run build it again after close", async () => {
+    const { events, shared } = pooled();
+    const run = provideTo(shared.layer);
+    await run(Connection);
+    await shared.close();
+
+    const exit = await Effect.runPromiseExit(
+      Connection.pipe(Effect.provide(shared.layer))
+    );
+    expect(Exit.hasDies(exit)).toBe(true);
+    expect(events).toEqual(["open", "close"]);
+  });
+
+  test("releases a failed build's resources and builds again", async () => {
+    const events: string[] = [];
+    const unavailable = new Error("unavailable");
+    let attempts = 0;
+    const shared = shareUntilShutdown(
+      Layer.effect(
+        Connection,
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            attempts += 1;
+            events.push(`open ${attempts}`);
+          }),
+          () =>
+            Effect.sync(() => {
+              events.push(`close ${attempts}`);
+            })
+        ).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              attempts === 1
+                ? Effect.fail(unavailable)
+                : Effect.succeed({ build: attempts })
+            )
+          )
+        )
+      )
+    );
+
+    const failed = await Effect.runPromiseExit(
+      Connection.pipe(Effect.provide(shared.layer))
+    );
+    expect(Exit.isFailure(failed)).toBe(true);
+    expect(events).toEqual(["open 1", "close 1"]);
+
+    expect(await provideTo(shared.layer)(Connection)).toEqual({ build: 2 });
+    await shared.close();
+    expect(events).toEqual(["open 1", "close 1", "open 2", "close 2"]);
+  });
+
+  test("closes nothing when no run built it", async () => {
+    const { events, shared } = pooled();
+    await shared.close();
+    expect(events).toEqual([]);
   });
 });

@@ -16,6 +16,7 @@ import {
   workspaceReservationIdSchema,
 } from "@/features/reservation/persistence-contracts";
 import { defineWorkspaceRoute } from "@/shared/backend/workspace-route";
+import { publicUrl } from "@/shared/deployment/public-origin";
 import { getSearchParamsDecoder } from "@/shared/utils";
 import type { CheckoutStatusReturnOutcome } from "./checkout-status.service";
 import { getPaymentReturnDestination } from "./payment-return-destination";
@@ -129,18 +130,16 @@ const redirectCheckoutPaymentReturn = Effect.fn(
     : yield* findAppDestination(input.orderId);
   // Provider returns may lack cookies; the status page owns authorization and reconciliation.
   const response = NextResponse.redirect(
-    Option.getOrElse(
-      appDestination,
-      () =>
-        new URL(
-          getReservationStatusPath({
-            locale: input.locale,
-            orderId: input.orderId,
-            outcome: input.outcome,
-            setBypassCookie: true,
-          }),
-          request.url
-        )
+    Option.getOrElse(appDestination, () =>
+      publicUrl(
+        getReservationStatusPath({
+          locale: input.locale,
+          orderId: input.orderId,
+          outcome: input.outcome,
+          setBypassCookie: true,
+        }),
+        request.url
+      )
     )
   );
   response.headers.set("Cache-Control", "private, no-store");

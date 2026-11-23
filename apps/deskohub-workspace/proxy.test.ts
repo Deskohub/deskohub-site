@@ -394,6 +394,54 @@ test("moves a container Preview's plain HTTP page loads to its HTTPS origin", as
   expect(response.location).toBe("https://workspace-public.example/en-US/faq");
 });
 
+// Every redirect the proxy answers a container with names its public origin:
+// its listen address, in the request URL, is unreachable for the client.
+test("keeps a container's redirects on its public origin", async () => {
+  const publicHost = { headers: { host: "workspace-public.example" } };
+  const result = await inspectProxyResponses(
+    [
+      ["http://0.0.0.0:3000/faq?utm_source=synthetic", publicHost],
+      ["http://0.0.0.0:3000/en-us/faq", publicHost],
+      ["http://0.0.0.0:3000/app", publicHost],
+      ["http://0.0.0.0:3000/admin/bookings", publicHost],
+      ["http://0.0.0.0:3000/en-US/account?section=profile", publicHost],
+      ["http://127.0.0.1:3000/en-US/faq", publicHost],
+      // A path that spells another host stays a path on the public origin.
+      [
+        "http://0.0.0.0:3000//attacker.example/x",
+        { headers: { host: "workspace-service.run.example" } },
+      ],
+    ],
+    {
+      ...Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([name]) => !name.startsWith("VERCEL")
+        )
+      ),
+      EMAIL_API_KEY: "re_test",
+      WORKSPACE_DEPLOYMENT_STAGE: "production",
+      WORKSPACE_PUBLIC_ORIGIN: "https://workspace-public.example",
+      WORKSPACE_RUNTIME_HOST: "container",
+      WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER: "x-client-address",
+    }
+  );
+  expect(result.exitCode).toBe(0);
+  const locations = inspectedResponses(result).map(
+    (response: { readonly location: string | null }) => response.location
+  );
+  expect(locations[0]).toMatch(
+    /^https:\/\/workspace-public\.example\/[a-z]{2}-[A-Z]{2}\/faq\?utm_source=synthetic$/
+  );
+  expect(locations[1]).toBe("https://workspace-public.example/en-US/faq");
+  expect(locations[2]).toBe("https://workspace-public.example/app/");
+  expect(locations[3]).toStartWith("https://workspace-public.example/");
+  expect(locations[4]).toStartWith("https://workspace-public.example/en-US/");
+  expect(locations[5]).toBeNull();
+  expect(locations[6]).toBe(
+    "https://workspace-public.example//attacker.example/x"
+  );
+});
+
 const unprefixedAdministrationPaths = [
   "/admin",
   "/admin/",
