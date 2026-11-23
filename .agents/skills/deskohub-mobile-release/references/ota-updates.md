@@ -115,16 +115,19 @@ rollback stays hidden for the session and applies at the next cold start.
 manifest endpoint first and waits up to 15 seconds for a new update or a
 rollback to download, then launches it, so starting the app never ends on a
 restart offer. Offline, the app launches the update it has once the request
-fails; a download that outlasts the wait finishes in the background and
-applies at the next cold start. Error recovery after a failed launch still
-works as before.
+fails, which a stalled connection can hold up for the same 15 seconds. A
+download that outlasts the wait finishes in the background and applies at
+the next cold start, unless a foreground check (below) finds it first and
+offers the restart. Error recovery after a failed launch still works as
+before. Both settings are part of the native runtime fingerprint, so they
+reach installed apps only with a new APK.
 
 `app/_layout.tsx` mounts `UpdateBanner`. `use-update-prompt.ts` records an
 applied update on launch, and `scheduleUpdateChecks` (`update-check.ts`) plans
 the JS checks: launch checks only for a newer APK on Android, and returning to
 the foreground at least 15 minutes after launch or the previous check runs
-every planned check, so the OTA banner only offers an update or rollback
-published while the app ran. On Android it also reads
+every planned check, so the OTA banner offers an update or rollback
+published while the app ran, including while it waited in the background. On Android it also reads
 `GET /api/mobile/releases/latest` and compares its `versionCode` with the
 installed build: a newer APK takes precedence and opens that version's
 `/android/download/deskohub-X.Y.Z.apk`, an OTA update restarts the app on

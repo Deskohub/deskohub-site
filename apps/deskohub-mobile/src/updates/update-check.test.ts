@@ -295,11 +295,28 @@ describe("scheduleUpdateChecks", () => {
     ]);
   });
 
-  test("stops listening to the app state once stopped", () => {
-    const { appState, stop } = session(androidPlan);
-    expect(appState.listeners.size).toBe(1);
+  test("checks nothing at launch on iOS and waits as long before the JS check", () => {
+    const iosPlan = { otaUpdate: true, nativeRelease: false };
+    const { checks, returnAt } = session(iosPlan);
+    returnAt(launchedAt + fifteenMinutesMs - 1);
+    expect(checks).toEqual([]);
+    returnAt(launchedAt + fifteenMinutesMs);
+    expect(checks).toEqual([iosPlan]);
+  });
+
+  test("checks only when the app becomes active", () => {
+    const { appState, checks } = session(androidPlan);
+    appState.change("inactive");
+    appState.change("background");
+    expect(checks).toEqual([{ otaUpdate: false, nativeRelease: true }]);
+  });
+
+  test("checks nothing once stopped", () => {
+    const { appState, checks, returnAt, stop } = session(androidPlan);
     stop();
     expect(appState.listeners.size).toBe(0);
+    returnAt(launchedAt + fifteenMinutesMs);
+    expect(checks).toEqual([{ otaUpdate: false, nativeRelease: true }]);
   });
 
   const promptAfterReturn = async (
@@ -351,7 +368,7 @@ describe("scheduleUpdateChecks", () => {
     return { atLaunch, afterReturn: prompt() };
   };
 
-  test("offers a restart into an update published while the app ran", async () => {
+  test("offers a JS update only from a check on a later return, not at launch", async () => {
     const sources = recordingSources();
     const { atLaunch, afterReturn } = await promptAfterReturn(
       sources,
@@ -367,7 +384,7 @@ describe("scheduleUpdateChecks", () => {
     ]);
   });
 
-  test("offers a restart into a rollback published while the app ran", async () => {
+  test("offers a rollback only from a check on a later return, not at launch", async () => {
     const sources = recordingSources({
       answer: async () => rollBackCheckResult,
       download: async () => rollBackFetchResult,

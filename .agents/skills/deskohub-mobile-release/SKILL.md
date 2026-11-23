@@ -61,9 +61,10 @@ list to the user when an agent can't:
   published while the app ran, on a return to the foreground at least 15
   minutes after launch. Also the native-update prompt and Download link
   against a real `mobile-v` release.
-- An OTA rollback (`--rollback`) published while the app ran: the Restart
-  banner returns the app to its embedded update, and a dismissed one applies
-  at the next cold start.
+- An OTA rollback (`--rollback`): a cold start after it launches the
+  embedded update with no banner; one published while the app ran shows the
+  Restart banner, which returns the app to its embedded update, and a
+  dismissed one applies at the next cold start.
 - The live Obtainium badge and import on `/android`, installing without the
   APK-origin warning, and no native-update prompt in an app Obtainium
   installed (one installed from the browser still shows it).
