@@ -134,6 +134,7 @@ describe("edge configuration", () => {
       "*.example.com",
       "*-preview.example.com",
       "example.com:80",
+      `${"a".repeat(63)}.example.com:65535`,
     ];
     expect(
       decoded({
@@ -150,9 +151,17 @@ describe("edge configuration", () => {
         "edge.domains.1",
         "edge.domains.2",
         "edge.domains.3",
+        "edge.domains.4",
       ],
     });
-    for (const host of ["*example.com", "Workspace.example.com", "a..b"]) {
+    for (const host of [
+      "*example.com",
+      "Workspace.example.com",
+      "a..b",
+      `${"a".repeat(64)}.example.com`,
+      "example.com:65536",
+      "example.com:0",
+    ]) {
       expect(
         rejection({
           ...proofInput,

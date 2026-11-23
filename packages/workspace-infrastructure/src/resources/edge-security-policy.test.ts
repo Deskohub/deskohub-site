@@ -408,4 +408,45 @@ describe("EdgeSecurityPolicy provider", () => {
     expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
     expect(mutations(compute.calls)).toEqual(["POST global/securityPolicies"]);
   });
+  test("never replays a rule write against a policy replaced after a lost answer", async () => {
+    const replacement = {
+      ...converged(policyProps(true), description),
+      id: "9999",
+    };
+    const compute = fake({
+      existing: [converged(policyProps(true))],
+      lostAnswers: ["patchRule"],
+      replaceAfter: { kind: "patchRule", with: replacement },
+    });
+    const exit = await run(compute, (provider) =>
+      reconcile(provider, policyProps(false), {
+        project,
+        name: "workspace-sandbox-edge",
+        id: "5678",
+      } as EdgeSecurityPolicyAttributes)
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
+    const patchRules = compute.calls.filter((call) =>
+      call.path.endsWith("/patchRule")
+    );
+    expect(patchRules).toHaveLength(1);
+    expect(patchRules[0]?.requestId).toBeNull();
+    const rules = compute.objects.get("workspace-sandbox-edge")
+      ?.rules as ReadonlyArray<Live>;
+    expect(rules.find((rule) => rule.priority === 1000)?.preview).toBe(true);
+  });
+
+  test("rereads the rules after a lost answer instead of resending", async () => {
+    const compute = fake({
+      existing: [converged(policyProps(true))],
+      lostAnswers: ["patchRule"],
+    });
+    const exit = await run(compute, (provider) =>
+      reconcile(provider, policyProps(false))
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(mutations(compute.calls)).toEqual([
+      "POST workspace-sandbox-edge/patchRule?priority=1000",
+    ]);
+  });
 });

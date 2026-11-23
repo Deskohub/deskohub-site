@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import {
   type GoogleApiNoAnswer,
   type GoogleApiRetryPolicy,
+  isTransientGoogleApiStatus,
   makeGoogleApi,
 } from "../google-api";
 
@@ -19,6 +20,14 @@ import {
  * native beta.87 providers cannot send: authorized calls, the global
  * operation waiter, and the ownership marker kept in a description.
  */
+
+/**
+ * Whether a failed request may or may not have been applied: no answer,
+ * rate limiting or a server error.
+ */
+export const isAmbiguousFailure = (error: { readonly _tag: string }) =>
+  error instanceof EdgeComputeRequestFailed &&
+  (error.status === null || isTransientGoogleApiStatus(error.status));
 
 /** A Compute request about one edge object failed or was refused. */
 export class EdgeComputeRequestFailed extends Data.TaggedError(
@@ -175,13 +184,14 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
     request: HttpClientRequest.HttpClientRequest,
     handle: (
       response: HttpClientResponse.HttpClientResponse
-    ) => Effect.Effect<A, EdgeComputeRequestFailed> | undefined
+    ) => Effect.Effect<A, EdgeComputeRequestFailed> | undefined,
+    policy: GoogleApiRetryPolicy = computeRetry
   ) => {
     const failed = (status: number | null, reason: string) =>
       new EdgeComputeRequestFailed({ resource, operation, status, reason });
     return googleApi.call({
       request: request.pipe(HttpClientRequest.acceptJson),
-      policy: computeRetry,
+      policy,
       handle: (response) =>
         handle(response) ??
         response.text.pipe(
@@ -261,9 +271,25 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
       operationAnswer(resource, operation)
     );
 
+  /**
+   * A mutation Compute cannot deduplicate (it takes no `requestId`, such
+   * as the Cloud Armor rule methods): sent in one attempt only, so a lost
+   * answer is never replayed blindly. The caller rereads before any retry.
+   */
+  const mutateOnce = (
+    resource: string,
+    operation: string,
+    request: HttpClientRequest.HttpClientRequest
+  ) =>
+    send(resource, operation, request, operationAnswer(resource, operation), {
+      ...computeRetry,
+      retries: 0,
+    });
+
   return {
     get,
     mutate,
+    mutateOnce,
     /** An insert's operation, or `conflict` when the name is taken. */
     insert: (resource: string, url: string, body: object) =>
       send<"conflict" | ComputeOperation>(

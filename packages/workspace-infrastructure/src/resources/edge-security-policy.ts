@@ -9,6 +9,7 @@ import {
   EdgeComputeResourceNotConverged,
   EdgeComputeResourceUnowned,
   isAdmitted,
+  isAmbiguousFailure,
   isOwnedDescription,
   makeEdgeComputeApi,
   ownedDescription,
@@ -81,6 +82,9 @@ export type EdgeSecurityPolicy = Resource<
 export const EdgeSecurityPolicy = Resource<EdgeSecurityPolicy>(
   "DeskohubWorkspace.EdgeSecurityPolicy"
 );
+
+/** Rule sync passes; a pass ends early only on a lost answer. */
+const ruleSyncPasses = 3;
 
 /** The rule Compute keeps at the lowest priority; it can only be patched. */
 const defaultRulePriority = 2147483647;
@@ -364,36 +368,68 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
         )
       );
     }
-    const changes = ruleChanges(news.rules, live.rules ?? []);
-    for (const rule of changes.add) {
-      yield* write(
-        "addRule",
-        HttpClientRequest.post(`${url}/addRule`).pipe(
-          HttpClientRequest.bodyJsonUnsafe(ruleBody(rule))
+    // Rule methods take no request ID, so each is sent once, after the
+    // policy is confirmed still admitted. A lost answer restarts the pass
+    // from a fresh read of the policy and its rules, so nothing is replayed
+    // blindly against a change that may already apply.
+    const ruleWrite = (
+      operation: string,
+      request: HttpClientRequest.HttpClientRequest
+    ) =>
+      read(operation).pipe(
+        Effect.andThen(api.mutateOnce(resource, operation, request)),
+        Effect.flatMap((pending) => settleGlobalOperation(project, pending)),
+        Effect.flatMap((settled) =>
+          requireAdmittedTarget(resource, admittedId, settled)
         )
       );
-    }
-    for (const rule of changes.patch) {
-      yield* write(
-        "patchRule",
-        HttpClientRequest.post(`${url}/patchRule`).pipe(
-          HttpClientRequest.setUrlParam("priority", String(rule.priority)),
-          HttpClientRequest.bodyJsonUnsafe(
-            ruleBody(
-              rule,
-              live.rules?.find((current) => current.priority === rule.priority)
+    const syncRules = Effect.gen(function* () {
+      const current = yield* read("rules");
+      const changes = ruleChanges(news.rules, current.rules ?? []);
+      for (const rule of changes.add) {
+        yield* ruleWrite(
+          "addRule",
+          HttpClientRequest.post(`${url}/addRule`).pipe(
+            HttpClientRequest.bodyJsonUnsafe(ruleBody(rule))
+          )
+        );
+      }
+      for (const rule of changes.patch) {
+        yield* ruleWrite(
+          "patchRule",
+          HttpClientRequest.post(`${url}/patchRule`).pipe(
+            HttpClientRequest.setUrlParam("priority", String(rule.priority)),
+            HttpClientRequest.bodyJsonUnsafe(
+              ruleBody(
+                rule,
+                current.rules?.find(
+                  (candidate) => candidate.priority === rule.priority
+                )
+              )
             )
           )
+        );
+      }
+      for (const priority of changes.remove) {
+        yield* ruleWrite(
+          "removeRule",
+          HttpClientRequest.post(`${url}/removeRule`).pipe(
+            HttpClientRequest.setUrlParam("priority", String(priority))
+          )
+        );
+      }
+    });
+    for (let pass = 1; ; pass++) {
+      const synced = yield* syncRules.pipe(
+        Effect.as(true),
+        Effect.catchIf(
+          (error) => pass < ruleSyncPasses && isAmbiguousFailure(error),
+          () => Effect.succeed(false)
         )
       );
-    }
-    for (const priority of changes.remove) {
-      yield* write(
-        "removeRule",
-        HttpClientRequest.post(`${url}/removeRule`).pipe(
-          HttpClientRequest.setUrlParam("priority", String(priority))
-        )
-      );
+      if (synced) {
+        break;
+      }
     }
     live = yield* read("readback");
 

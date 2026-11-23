@@ -157,6 +157,18 @@ export const GcpProjectNumber = Schema.String.check(
 );
 export type GcpProjectNumber = typeof GcpProjectNumber.Type;
 
+/** DNS size limits (RFC 1035) and the TCP port range of a host pattern. */
+const isWithinHostLimits = (host: string) => {
+  const separator = host.lastIndexOf(":");
+  const name = separator < 0 ? host : host.slice(0, separator);
+  const port = separator < 0 ? undefined : Number(host.slice(separator + 1));
+  return (
+    (port === undefined || (port >= 1 && port <= 65_535)) &&
+    name.length <= 253 &&
+    name.split(".").every((label) => label.length <= 63)
+  );
+};
+
 /**
  * A host pattern the edge's URL map routes, in Compute URL map syntax: a
  * lowercase host with an optional port, where `*` may lead and is then
@@ -165,6 +177,11 @@ export type GcpProjectNumber = typeof GcpProjectNumber.Type;
 export const EdgeHost = Schema.String.check(
   Schema.isPattern(
     /^(?=.{1,255}$)(?:\*(?:[-.][a-z0-9-]+(?:\.[a-z0-9-]+)*)?|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)(?::[0-9]{1,5})?$/
+  ),
+  Schema.makeFilter(
+    (host: string): boolean | string =>
+      isWithinHostLimits(host) ||
+      "DNS labels are at most 63 characters, names 253, ports 1-65535"
   )
 ).annotate({
   identifier: "EdgeHost",
