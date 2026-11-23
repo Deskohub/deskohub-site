@@ -484,3 +484,96 @@ describe("payment provider deployment policy", () => {
     }
   );
 });
+
+describe("deployment host environment", () => {
+  const containerHost = {
+    WORKSPACE_RUNTIME_HOST: "container",
+    WORKSPACE_PUBLIC_ORIGIN: "https://workspace-preview.deskohub.invalid",
+    WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER: "x-deskohub-client-address",
+    VERCEL_URL: undefined,
+    VERCEL_PROJECT_PRODUCTION_URL: undefined,
+    VERCEL_ENV: "preview",
+  } as const;
+
+  test("a container host needs neither Vercel host", () => {
+    expect(invalidVariables(containerHost)).toEqual([]);
+  });
+
+  test("a container host requires its public origin and trusted client address header", () => {
+    expect(
+      invalidVariables({
+        ...containerHost,
+        WORKSPACE_PUBLIC_ORIGIN: undefined,
+        WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER: undefined,
+      })
+    ).toEqual([
+      "WORKSPACE_PUBLIC_ORIGIN",
+      "WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER",
+    ]);
+  });
+
+  test("Vercel keeps requiring its hosts unless a public origin replaces them", () => {
+    expect(
+      invalidVariables({
+        VERCEL_URL: undefined,
+        VERCEL_PROJECT_PRODUCTION_URL: undefined,
+      })
+    ).toEqual(["VERCEL_URL", "VERCEL_PROJECT_PRODUCTION_URL"]);
+    expect(
+      invalidVariables({
+        VERCEL_URL: undefined,
+        VERCEL_PROJECT_PRODUCTION_URL: undefined,
+        WORKSPACE_PUBLIC_ORIGIN: "https://workspace.deskohub.invalid",
+      })
+    ).toEqual([]);
+  });
+
+  test("accepts only a bare origin as the public origin", () => {
+    for (const origin of [
+      "https://workspace.deskohub.invalid/",
+      "https://workspace.deskohub.invalid/app",
+      "https://workspace.deskohub.invalid?token=synthetic",
+      "workspace.deskohub.invalid",
+    ]) {
+      expect(
+        new Set(
+          invalidVariables({
+            ...containerHost,
+            WORKSPACE_PUBLIC_ORIGIN: origin,
+          })
+        )
+      ).toEqual(new Set(["WORKSPACE_PUBLIC_ORIGIN"]));
+    }
+  });
+
+  test("never trusts a client-appendable header as the client address", () => {
+    expect(
+      invalidVariables({
+        ...containerHost,
+        WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER: "x-forwarded-for",
+      })
+    ).toEqual(["WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER"]);
+  });
+
+  test("accepts the container's stage, identity and telemetry settings", () => {
+    expect(
+      invalidVariables({
+        ...containerHost,
+        WORKSPACE_DEPLOYMENT_STAGE: "preview",
+        WORKSPACE_REVISION_SHA: "synthetic-sha",
+        WORKSPACE_DEPLOYMENT_ID: "workspace-00007-abc",
+        K_REVISION: "workspace-00007-abc",
+        WORKSPACE_SERVICE_ROLE: "web",
+        WORKSPACE_LOG_FORMAT: "cloud-logging-json",
+        WORKSPACE_OTLP_ENDPOINT: "http://127.0.0.1:4318",
+        WORKSPACE_TRACE_PROJECT_ID: "synthetic-project",
+      })
+    ).toEqual([]);
+    expect(
+      invalidVariables({
+        ...containerHost,
+        WORKSPACE_DEPLOYMENT_STAGE: "staging",
+      })
+    ).toEqual(["WORKSPACE_DEPLOYMENT_STAGE"]);
+  });
+});

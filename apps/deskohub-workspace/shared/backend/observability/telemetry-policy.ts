@@ -47,3 +47,12 @@ export const workspaceMinimumLogLevel = ({
   readonly logLevel?: LogLevel.LogLevel | undefined;
 }): LogLevel.LogLevel =>
   logLevel ?? (deploymentEnvironment === "production" ? "Info" : "Debug");
+
+/**
+ * How Workspace server logs reach the console: logfmt lines, which Vercel's
+ * log drains read, or Cloud Logging structured JSON on a container host.
+ */
+export const workspaceLogFormatSchema = Schema.Literals([
+  "logfmt",
+  "cloud-logging-json",
+]);

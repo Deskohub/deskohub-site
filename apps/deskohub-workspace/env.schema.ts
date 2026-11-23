@@ -20,8 +20,15 @@ import {
 } from "./features/feature-flags/feature-flag-overrides.schema";
 import {
   postHogLogsExportSchema,
+  workspaceLogFormatSchema,
   workspaceLogLevelSchema,
 } from "./shared/backend/observability/telemetry-policy";
+import { deploymentStageSchema } from "./shared/deployment/deployment-stage";
+import {
+  runtimeHostSchema,
+  serviceRoleSchema,
+} from "./shared/deployment/runtime-host";
+import { trustedClientAddressHeaderSchema } from "./shared/deployment/trusted-client-address";
 import { urlStringSchema } from "./shared/utils/url-schema";
 
 const nonEmptyStringSchema = toEnvSchema(Schema.NonEmptyString);
@@ -54,6 +61,57 @@ const igloohomeProductionEnvironmentCheck = Schema.makeFilter<{
 
 const isBlank = (value: string | undefined): boolean =>
   value === undefined || value.trim() === "";
+
+/** An origin alone: scheme, host and port, with no path, query or fragment. */
+const originSchema = urlStringSchema.check(
+  Schema.makeFilter(
+    (value) => URL.canParse(value) && new URL(value).origin === value,
+    { expected: "an origin such as https://workspace.example, without a path" }
+  )
+);
+
+/**
+ * Vercel supplies the deployment and production hosts. A container host has
+ * neither, so it must name its public origin and the header its trusted
+ * ingress sets to the client address; without that header no forwarded
+ * address is trusted at all.
+ */
+const deploymentHostEnvironmentCheck = Schema.makeFilter<{
+  readonly WORKSPACE_RUNTIME_HOST?: "vercel" | "container" | undefined;
+  readonly WORKSPACE_PUBLIC_ORIGIN?: string | undefined;
+  readonly WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER?: string | undefined;
+  readonly VERCEL_URL?: string | undefined;
+  readonly VERCEL_PROJECT_PRODUCTION_URL?: string | undefined;
+}>((environment) => {
+  if (environment.WORKSPACE_RUNTIME_HOST === "container") {
+    return [
+      ...(environment.WORKSPACE_PUBLIC_ORIGIN
+        ? []
+        : [
+            {
+              path: ["WORKSPACE_PUBLIC_ORIGIN"],
+              issue: "A container deployment requires its public origin.",
+            },
+          ]),
+      ...(environment.WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER
+        ? []
+        : [
+            {
+              path: ["WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER"],
+              issue:
+                "A container deployment requires the client address header its ingress sets.",
+            },
+          ]),
+    ];
+  }
+  if (environment.WORKSPACE_PUBLIC_ORIGIN) return undefined;
+  return (["VERCEL_URL", "VERCEL_PROJECT_PRODUCTION_URL"] as const)
+    .filter((key) => !environment[key])
+    .map((key) => ({
+      path: [key],
+      issue: "Required unless WORKSPACE_PUBLIC_ORIGIN names the public origin.",
+    }));
+});
 
 const paymentProviderEnvironmentCheck = Schema.makeFilter<{
   readonly WORKSPACE_PAYMENT_PROVIDER?:
@@ -268,23 +326,53 @@ export const workspaceServerEnvSchema = Schema.Struct({
   POSTHOG_PERSON_PRIVACY_API_KEY: optionalNonEmptyStringSchema,
   POSTHOG_PROJECT_ID: toEnvSchema(Schema.optional(PostHogProjectId)),
   PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: optionalStringSchema,
+  // Cloud Run's revision name, which identifies a container rollout.
+  K_REVISION: optionalNonEmptyStringSchema,
   VERCEL_BRANCH_URL: optionalStringSchema,
+  VERCEL_DEPLOYMENT_ID: optionalNonEmptyStringSchema,
+  // The deployment stage. `env.ts` resolves it from WORKSPACE_DEPLOYMENT_STAGE
+  // where a host sets that, else from Vercel's VERCEL_ENV.
   VERCEL_ENV: toEnvSchema(vercelEnvironmentSchema),
   VERCEL_GIT_COMMIT_SHA: optionalStringSchema,
   VERCEL_AUTOMATION_BYPASS_SECRET: optionalStringSchema,
-  VERCEL_PROJECT_PRODUCTION_URL: nonEmptyStringSchema,
-  VERCEL_URL: nonEmptyStringSchema,
+  VERCEL_PROJECT_PRODUCTION_URL: optionalNonEmptyStringSchema,
+  VERCEL_URL: optionalNonEmptyStringSchema,
   // Read by `next.config.mjs` at build time for the `Origin-Trial` header.
   WEBMCP_ORIGIN_TRIAL_TOKENS: optionalNonEmptyStringSchema,
+  // Overrides the Vercel-derived deployment identity on another host.
+  WORKSPACE_DEPLOYMENT_ID: optionalNonEmptyStringSchema,
+  WORKSPACE_DEPLOYMENT_STAGE: toEnvSchema(
+    Schema.optional(deploymentStageSchema)
+  ),
   WORKSPACE_E2E_BASE_URL: optionalUrlEnvSchema,
   // The least severe level Workspace server runs log, as an Effect log level
   // name ("All", "Fatal", "Error", "Warn", "Info", "Debug", "Trace", "None").
   // Unset, production logs from Info and every other deployment from Debug.
   WORKSPACE_LOG_LEVEL: toEnvSchema(Schema.optional(workspaceLogLevelSchema)),
+  // "logfmt" (the default) or "cloud-logging-json" for a container host.
+  WORKSPACE_LOG_FORMAT: toEnvSchema(Schema.optional(workspaceLogFormatSchema)),
+  // A loopback OTLP/HTTP collector, such as the Cloud Run sidecar at
+  // http://127.0.0.1:4318, that receives the server's allowlisted spans.
+  WORKSPACE_OTLP_ENDPOINT: optionalUrlEnvSchema,
   WORKSPACE_PAYMENT_PROVIDER: toEnvSchema(
     Schema.optional(Schema.Literals(["nexi", "mock", "fallback"]))
   ),
+  // The canonical public origin on a host other than Vercel, which then
+  // replaces the Vercel deployment and production hosts.
+  WORKSPACE_PUBLIC_ORIGIN: toEnvSchema(Schema.optional(originSchema)),
+  // The source commit the build was made from, on a host other than Vercel.
+  WORKSPACE_REVISION_SHA: optionalNonEmptyStringSchema,
+  WORKSPACE_RUNTIME_HOST: toEnvSchema(Schema.optional(runtimeHostSchema)),
+  WORKSPACE_SERVICE_ROLE: toEnvSchema(Schema.optional(serviceRoleSchema)),
+  // The Google Cloud project whose traces structured logs link to.
+  WORKSPACE_TRACE_PROJECT_ID: optionalNonEmptyStringSchema,
+  // The lowercase header the trusted ingress sets to the client address on a
+  // container host. Unset, only Vercel's own header is trusted, on Vercel.
+  WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER: toEnvSchema(
+    Schema.optional(trustedClientAddressHeaderSchema)
+  ),
 }).check(
+  deploymentHostEnvironmentCheck,
   postHogFeatureFlagOverridesEnvironmentCheck,
   igloohomeProductionEnvironmentCheck,
   accountOperationsEnvironmentCheck,
@@ -307,6 +395,7 @@ export const createEnvironmentSchema = (
   return Schema.toStandardSchemaV1(
     isServer
       ? schema.check(
+          deploymentHostEnvironmentCheck,
           postHogFeatureFlagOverridesEnvironmentCheck,
           igloohomeProductionEnvironmentCheck,
           accountOperationsEnvironmentCheck,

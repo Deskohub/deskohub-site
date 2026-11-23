@@ -204,3 +204,23 @@ test("keeps Turbopack's build cache out of Vercel's build cache", () => {
     "rm -rf .next/cache/turbopack && "
   );
 });
+
+test("emits the standalone server only for a container image build", async () => {
+  // Vercel and CI builds leave the output to Next's default.
+  expect(nextConfig.output).toBeUndefined();
+
+  const buildTargetBefore = process.env.WORKSPACE_BUILD_TARGET;
+  process.env.WORKSPACE_BUILD_TARGET = "oci";
+  try {
+    const { default: containerConfig } = await import(
+      "./next.config.mjs?build-target=oci"
+    );
+    expect(containerConfig.output).toBe("standalone");
+  } finally {
+    if (buildTargetBefore === undefined) {
+      delete process.env.WORKSPACE_BUILD_TARGET;
+    } else {
+      process.env.WORKSPACE_BUILD_TARGET = buildTargetBefore;
+    }
+  }
+});

@@ -1,19 +1,74 @@
+import { ProxyTracerProvider, trace } from "@opentelemetry/api";
 import type { LoggerProvider } from "@opentelemetry/sdk-logs";
-import { Effect, Layer, References } from "effect";
+import { Effect, Layer, Logger, Predicate, References } from "effect";
 import { env } from "@/env";
+import { resolveDeploymentIdentity } from "@/shared/deployment/deployment-identity";
+import { defaultServiceRole } from "@/shared/deployment/runtime-host";
 import {
+  createCensoredOtelLogger,
   createWorkspaceOtelLoggerLive,
   WorkspaceLoggerLive,
 } from "../logging/censorship";
+import {
+  type CloudLoggingIdentity,
+  makeCloudLoggingLogger,
+} from "./cloud-logging";
 import { workspaceMinimumLogLevel } from "./telemetry-policy";
 import {
   createIdentifiedTracingLive,
   createPostHogLoggerProvider,
+  createWorkspaceOTelRegistration,
   flushLoggerProvider,
 } from "./telemetry-sinks";
 import { WorkspaceClockLive } from "./workspace-clock";
 
-export { workspaceOTelRegistration } from "./telemetry-sinks";
+/** The build and rollout this process serves, whichever host runs it. */
+const workspaceDeploymentIdentity = () => resolveDeploymentIdentity(env);
+
+/**
+ * `registerOTel` options for this process: the Workspace identity, the span
+ * allowlist, and the loopback collector when `WORKSPACE_OTLP_ENDPOINT` names
+ * one.
+ */
+export const workspaceOTelRegistration = () => {
+  const identity = workspaceDeploymentIdentity();
+  return createWorkspaceOTelRegistration({
+    serviceVersion: identity.revisionSha,
+    deploymentId: identity.deploymentId,
+    otlpEndpoint: env.WORKSPACE_OTLP_ENDPOINT,
+  });
+};
+
+/** Who emits this process's structured log records. */
+const workspaceCloudLoggingIdentity = (): CloudLoggingIdentity => {
+  const identity = workspaceDeploymentIdentity();
+  return {
+    deploymentStage: env.VERCEL_ENV,
+    serviceRole: env.WORKSPACE_SERVICE_ROLE ?? defaultServiceRole,
+    revisionSha: identity.revisionSha,
+    deploymentId: identity.deploymentId,
+    traceProjectId: env.WORKSPACE_TRACE_PROJECT_ID,
+  };
+};
+
+/**
+ * The loggers of every run, all censoring: the console's logfmt lines, or
+ * Cloud Logging structured JSON when `WORKSPACE_LOG_FORMAT` asks for it, plus
+ * the PostHog export when `loggerProvider` is on.
+ */
+const workspaceLoggerLive = (loggerProvider: LoggerProvider | undefined) => {
+  if (env.WORKSPACE_LOG_FORMAT !== "cloud-logging-json") {
+    return loggerProvider
+      ? createWorkspaceOtelLoggerLive(loggerProvider)
+      : WorkspaceLoggerLive;
+  }
+  const consoleLogger = makeCloudLoggingLogger(workspaceCloudLoggingIdentity());
+  return Logger.layer(
+    loggerProvider
+      ? [consoleLogger, createCensoredOtelLogger(loggerProvider)]
+      : [consoleLogger]
+  );
+};
 
 /**
  * The process's Workspace telemetry, kept on `globalThis` under this key.
@@ -61,7 +116,7 @@ export const workspaceLoggerProvider = () => {
       logsExport: env.POSTHOG_LOGS_EXPORT,
       posthogHost: env.POSTHOG_INGEST_HOST,
       posthogProjectToken: env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN,
-      serviceVersion: env.VERCEL_GIT_COMMIT_SHA,
+      serviceVersion: workspaceDeploymentIdentity().revisionSha,
     }),
   };
   return processGlobals[workspaceTelemetryHandle].loggerProvider;
@@ -79,11 +134,9 @@ export const WorkspaceObservabilityLive: Layer.Layer<never> = Layer.unwrap(
     const loggerProvider = workspaceLoggerProvider();
     return Layer.mergeAll(
       WorkspaceClockLive,
-      loggerProvider
-        ? createWorkspaceOtelLoggerLive(loggerProvider)
-        : WorkspaceLoggerLive,
+      workspaceLoggerLive(loggerProvider),
       createIdentifiedTracingLive({
-        serviceVersion: env.VERCEL_GIT_COMMIT_SHA,
+        serviceVersion: workspaceDeploymentIdentity().revisionSha,
       }),
       Layer.succeed(
         References.MinimumLogLevel,
@@ -138,3 +191,19 @@ export const flushWorkspaceLogs: Effect.Effect<void> = Effect.suspend(() => {
       }
   );
 });
+
+/**
+ * Exports the spans the registered tracer provider still batches, for a
+ * container's shutdown. Resolves at once when no SDK provider is registered.
+ */
+export const flushWorkspaceTraces = (): Promise<void> => {
+  const registered = trace.getTracerProvider();
+  const provider: object =
+    registered instanceof ProxyTracerProvider
+      ? registered.getDelegate()
+      : registered;
+  return Predicate.hasProperty(provider, "forceFlush") &&
+    Predicate.isFunction(provider.forceFlush)
+    ? Promise.resolve(provider.forceFlush()).then(() => undefined)
+    : Promise.resolve();
+};

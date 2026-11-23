@@ -162,6 +162,11 @@ export type WorkspaceAuthConfig = {
   /** Test-only stub for fetching agents' Client ID Metadata Documents. */
   readonly clientMetadataTransport?: CustomerAgentClientMetadataTransport;
   readonly httpsOnly: boolean;
+  /**
+   * The headers the host's trusted edge sets to the client address
+   * (`trustedClientAddressHeaders`). Defaults to Vercel's.
+   */
+  readonly clientAddressHeaders?: readonly string[];
   /** The allowlisted review logins, from `REVIEW_ACCOUNT_CREDENTIALS`. */
   readonly reviewAccountCredentials: readonly ReviewAccountCredential[];
   readonly sendMagicLink: MagicLinkSendFunction;
@@ -1216,6 +1221,15 @@ export const makeWorkspaceAuth = (config: WorkspaceAuthConfig) => {
 
   const auth = betterAuth({
     ...authOptions,
+    advanced: {
+      ...authOptions.advanced,
+      ipAddress: {
+        ipAddressHeaders: [
+          ...(config.clientAddressHeaders ??
+            authOptions.advanced.ipAddress.ipAddressHeaders),
+        ],
+      },
+    },
     secrets: config.secrets,
     baseURL,
     // The hosts in `baseURL` are trusted already; the native app adds its

@@ -5,6 +5,7 @@ import {
   createEnvironmentSchema,
   workspaceServerEnvSchema,
 } from "./env.schema";
+import { selectDeploymentStageSetting } from "./shared/deployment/deployment-stage";
 
 // Next only transforms statically named environment accesses. Key rotation is
 // additive: configure the new variable, add its direct access here, deploy,
@@ -175,15 +176,32 @@ export const env = createWorkspaceEnv({
   PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH:
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
   VERCEL_AUTOMATION_BYPASS_SECRET: process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+  K_REVISION: process.env.K_REVISION,
   VERCEL_BRANCH_URL: process.env.VERCEL_BRANCH_URL,
-  VERCEL_ENV: process.env.VERCEL_ENV,
+  VERCEL_DEPLOYMENT_ID: process.env.VERCEL_DEPLOYMENT_ID,
+  // The deployment stage, whichever host sets it.
+  VERCEL_ENV: selectDeploymentStageSetting({
+    WORKSPACE_DEPLOYMENT_STAGE: process.env.WORKSPACE_DEPLOYMENT_STAGE,
+    VERCEL_ENV: process.env.VERCEL_ENV,
+  }),
   VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA,
   VERCEL_PROJECT_PRODUCTION_URL: process.env.VERCEL_PROJECT_PRODUCTION_URL,
   VERCEL_URL: process.env.VERCEL_URL,
   WEBMCP_ORIGIN_TRIAL_TOKENS: process.env.WEBMCP_ORIGIN_TRIAL_TOKENS,
+  WORKSPACE_DEPLOYMENT_ID: process.env.WORKSPACE_DEPLOYMENT_ID,
+  WORKSPACE_DEPLOYMENT_STAGE: process.env.WORKSPACE_DEPLOYMENT_STAGE,
   WORKSPACE_E2E_BASE_URL: process.env.WORKSPACE_E2E_BASE_URL,
+  WORKSPACE_LOG_FORMAT: process.env.WORKSPACE_LOG_FORMAT,
   WORKSPACE_LOG_LEVEL: process.env.WORKSPACE_LOG_LEVEL,
+  WORKSPACE_OTLP_ENDPOINT: process.env.WORKSPACE_OTLP_ENDPOINT,
   WORKSPACE_PAYMENT_PROVIDER: process.env.WORKSPACE_PAYMENT_PROVIDER,
+  WORKSPACE_PUBLIC_ORIGIN: process.env.WORKSPACE_PUBLIC_ORIGIN,
+  WORKSPACE_REVISION_SHA: process.env.WORKSPACE_REVISION_SHA,
+  WORKSPACE_RUNTIME_HOST: process.env.WORKSPACE_RUNTIME_HOST,
+  WORKSPACE_SERVICE_ROLE: process.env.WORKSPACE_SERVICE_ROLE,
+  WORKSPACE_TRACE_PROJECT_ID: process.env.WORKSPACE_TRACE_PROJECT_ID,
+  WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER:
+    process.env.WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER,
   NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME:
     process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME,
   NEXT_PUBLIC_GTM_ID: process.env.NEXT_PUBLIC_GTM_ID,

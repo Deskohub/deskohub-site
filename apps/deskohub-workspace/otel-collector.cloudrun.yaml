@@ -1,0 +1,84 @@
+# Configuration of the Google-Built OpenTelemetry Collector (otelcol-google)
+# that runs as the Workspace's Cloud Run sidecar. The Workspace container sends
+# its allowlisted, censored spans over OTLP/HTTP to the loopback receiver
+# (WORKSPACE_OTLP_ENDPOINT=http://127.0.0.1:4318); the collector forwards them
+# over authenticated OTLP gRPC to the Telemetry API with the revision service
+# account's credentials. Logs go to Cloud Logging through stdout instead.
+#
+# Pin the collector image by digest in the service definition. Validated
+# against otelcol-google 0.165.1:
+# us-docker.pkg.dev/cloud-ops-agents-artifacts/google-cloud-opentelemetry-collector/otelcol-google@sha256:8cdd5c85128a7f0b73710761487ee747ff9eadc7d7c090d91873aa3fdc1663cd
+# https://cloud.google.com/stackdriver/docs/instrumentation/opentelemetry-collector-cloud-run
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        # Loopback only: the containers of a Cloud Run instance share it.
+        endpoint: 127.0.0.1:4318
+
+extensions:
+  google_client_auth: {}
+  # The sidecar's startup and liveness probe target.
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 65
+    spike_limit_percentage: 20
+  resource_detection:
+    detectors: [env, gcp]
+    timeout: 2s
+    override: false
+  # The Telemetry API files spans under the project in `gcp.project_id`.
+  resource/gcp_project_id:
+    attributes:
+      - key: gcp.project_id
+        from_attribute: cloud.account.id
+        action: insert
+  # Defense in depth behind the Workspace span allowlist: no full URL, query
+  # string, request target or credential header leaves the instance even if
+  # an instrumentation the allowlist doesn't know records one.
+  attributes/drop_request_urls:
+    actions:
+      - key: url.full
+        action: delete
+      - key: url.query
+        action: delete
+      - key: url.path
+        action: delete
+      - key: http.url
+        action: delete
+      - key: http.target
+        action: delete
+      - key: http.request.header.authorization
+        action: delete
+      - key: http.request.header.cookie
+        action: delete
+  # Request-billed instances get CPU only while serving; export batches fast
+  # so they leave within a request or the 10-second SIGTERM grace period.
+  batch:
+    send_batch_size: 200
+    send_batch_max_size: 200
+    timeout: 2s
+
+exporters:
+  otlp_grpc/telemetry_api:
+    endpoint: telemetry.googleapis.com:443
+    auth:
+      authenticator: google_client_auth
+
+service:
+  extensions: [google_client_auth, health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors:
+        - memory_limiter
+        - resource_detection
+        - resource/gcp_project_id
+        - attributes/drop_request_urls
+        - batch
+      exporters: [otlp_grpc/telemetry_api]

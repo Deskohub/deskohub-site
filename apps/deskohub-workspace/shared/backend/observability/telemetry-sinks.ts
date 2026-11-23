@@ -18,6 +18,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { Data, Effect, Layer } from "effect";
 import { createCensoredOtelSpanExporter } from "../logging/censorship";
+import { SpanAllowlistProcessor } from "./span-allowlist";
 import {
   isPostHogLogsExportEnabled,
   type PostHogLogsExport,
@@ -40,29 +41,71 @@ export interface TelemetryIdentity {
   readonly deploymentEnvironment?: string;
   readonly serviceName?: string;
   readonly serviceVersion?: string;
+  readonly deploymentId?: string;
 }
 
 const identityResource = ({
   deploymentEnvironment,
   serviceName = WORKSPACE_SERVICE_NAME,
   serviceVersion,
+  deploymentId,
 }: TelemetryIdentity) =>
   resourceFromAttributes({
     "deployment.environment.name": deploymentEnvironment,
     "service.name": serviceName,
     "service.namespace": WORKSPACE_SERVICE_NAMESPACE,
     "service.version": serviceVersion,
+    ...(deploymentId && { "deployment.id": deploymentId }),
   });
 
+export interface WorkspaceOTelRegistrationOptions {
+  /** The source commit the process serves. */
+  readonly serviceVersion?: string | undefined;
+  /** The host's rollout, such as a Cloud Run revision. */
+  readonly deploymentId?: string | undefined;
+  /**
+   * A loopback OTLP/HTTP collector, such as the Cloud Run sidecar at
+   * `http://127.0.0.1:4318`. Unset, `registerOTel` keeps its automatic
+   * exporters.
+   */
+  readonly otlpEndpoint?: string | undefined;
+}
+
 /**
- * `registerOTel` options for the Workspace: its identity, with the span
- * redactors ahead of the automatic exporting processors.
+ * `registerOTel` options for the Workspace server: its identity, with the
+ * span redactors and the span allowlist ahead of every exporting processor.
+ * With an OTLP endpoint, its exporter also censors span data and replaces
+ * the automatic OTLP exporter `registerOTel` would add off Vercel; on Vercel
+ * its collector export stays as it is.
  */
-export const workspaceOTelRegistration = () => ({
+export const createWorkspaceOTelRegistration = ({
+  serviceVersion,
+  deploymentId,
+  otlpEndpoint,
+}: WorkspaceOTelRegistrationOptions = {}) => ({
   serviceName: WORKSPACE_SERVICE_NAME,
-  attributes: { "service.namespace": WORKSPACE_SERVICE_NAMESPACE },
-  spanProcessors: [...createWorkspaceSpanRedactors(), "auto" as const],
+  attributes: {
+    "service.namespace": WORKSPACE_SERVICE_NAMESPACE,
+    ...(serviceVersion && { "service.version": serviceVersion }),
+    ...(deploymentId && { "deployment.id": deploymentId }),
+  },
+  spanProcessors: [
+    ...createWorkspaceSpanRedactors(),
+    new SpanAllowlistProcessor(),
+    "auto" as const,
+  ],
+  ...(otlpEndpoint && {
+    traceExporter: createCensoredOtelSpanExporter(
+      new OTLPTraceExporter({
+        timeoutMillis: loopbackExportTimeoutMs,
+        url: new URL("/v1/traces", otlpEndpoint).toString(),
+      })
+    ),
+  }),
 });
+
+/** A loopback collector answers fast or is down; either way, don't wait. */
+const loopbackExportTimeoutMs = 1_000;
 
 /**
  * Span processors that scrub credentials, such as signed Cloudinary URL
@@ -141,7 +184,9 @@ export function createPostHogLoggerProvider({
     );
   }
   if (!identity.deploymentEnvironment) {
-    throw new Error("VERCEL_ENV is required when PostHog logging is enabled");
+    throw new Error(
+      "The deployment stage (WORKSPACE_DEPLOYMENT_STAGE or VERCEL_ENV) is required when PostHog logging is enabled"
+    );
   }
 
   return createWorkspaceLoggerProvider(

@@ -26,9 +26,9 @@ import {
   createPostHogLoggerProvider,
   createPostHogTracerProvider,
   createWorkspaceLoggerProvider,
+  createWorkspaceOTelRegistration,
   createWorkspaceTracerProvider,
   flushLoggerProvider,
-  workspaceOTelRegistration,
 } from "./telemetry-sinks";
 
 /** Stand-in for a Cloudinary URL signature; never a real signature. */
@@ -108,7 +108,7 @@ describe("Workspace span redaction", () => {
     const exporter = new InMemorySpanExporter();
     // The SDK's in-memory exporter stands in for the automatic exporters.
     const provider = new BasicTracerProvider({
-      spanProcessors: workspaceOTelRegistration().spanProcessors.map(
+      spanProcessors: createWorkspaceOTelRegistration().spanProcessors.map(
         (processor): SpanProcessor =>
           processor === "auto" ? new SimpleSpanProcessor(exporter) : processor
       ),
@@ -117,10 +117,16 @@ describe("Workspace span redaction", () => {
     try {
       await fetchSignedUrlTraced(provider, () => exporter.getFinishedSpans());
 
-      expectSignatureRedacted(exporter);
-      expect(exporter.getFinishedSpans()[0]?.attributes["http.url"]).toContain(
-        "s--REDACTED--"
+      const [span] = exporter.getFinishedSpans();
+      expect(exporter.getFinishedSpans()).toHaveLength(1);
+      // The span allowlist keeps the method and provider host, not the URL.
+      expect(span?.name).not.toContain("://");
+      expect(span?.attributes["http.url"]).toBeUndefined();
+      expect(span?.attributes["url.full"]).toBeUndefined();
+      expect(JSON.stringify(span?.attributes)).not.toContain(
+        syntheticSignature
       );
+      expect(span?.name).not.toContain(syntheticSignature);
     } finally {
       await provider.shutdown();
     }

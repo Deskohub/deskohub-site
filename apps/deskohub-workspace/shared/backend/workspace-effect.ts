@@ -1,10 +1,13 @@
 import { NextEffect } from "@deskohub/next-effect";
 import { NodeHttpServer } from "@effect/platform-node";
-import { waitUntil } from "@vercel/functions";
 import { Cause, Data, Effect, Exit, identity, Layer, Result } from "effect";
 import { HttpRouter } from "effect/http";
 import { unstable_rethrow } from "next/navigation";
 import { after } from "next/server";
+import {
+  keepRuntimeAliveUntil,
+  onRuntimeShutdown,
+} from "@/shared/deployment/runtime-lifecycle";
 import {
   flushServerAnalytics,
   isServerAnalyticsEnabled,
@@ -93,7 +96,7 @@ const runWorkspaceExit = <A, E>(
   // once the shell is ready, so a revalidation started by a later-streamed
   // boundary can outlive the response. The suspended instance then fires
   // the run's timers on its next invocation as spurious timeouts.
-  waitUntil(exit.then(ignoreSettlement));
+  keepRuntimeAliveUntil(exit.then(ignoreSettlement));
   if (flushTiming === "after-response") {
     // Scheduled now, in the caller's request context, which the run's fibers
     // may not keep.
@@ -343,6 +346,14 @@ const runTelemetryFlush = () =>
     )
   );
 
+// A container flushes what this module's runtime still buffers before it
+// exits; on Vercel the hook never runs.
+onRuntimeShutdown({
+  name: "telemetry.logs-and-analytics",
+  stage: "flush",
+  run: runTelemetryFlush,
+});
+
 const sendsTelemetry = () =>
   isServerAnalyticsEnabled || workspaceLoggerProvider() !== undefined;
 
@@ -361,7 +372,7 @@ const flushAfterResponse = (settled: Promise<unknown>) => {
   const flushOnceSettled = () =>
     settled.then(runTelemetryFlush, runTelemetryFlush);
   if (Result.isFailure(Result.try(() => after(flushOnceSettled)))) {
-    waitUntil(flushOnceSettled());
+    keepRuntimeAliveUntil(flushOnceSettled());
   }
 };
 
