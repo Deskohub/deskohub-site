@@ -1,7 +1,6 @@
 import {
   AdministrationCampaignId,
   type AdministrationCampaignIdType,
-  AdministrationCampaignRecipientSkipReason,
   AdministrationDotyposCustomerId,
   type AutomationActivationType,
   type AutomationDetailType,
@@ -17,6 +16,7 @@ import {
   AutomationRunId,
   AutomationRunOutcome,
   type AutomationRunPageType,
+  AutomationRunSkipReason,
   AutomationRunState,
   type AutomationRunStatsType,
   type AutomationRunSummaryType,
@@ -345,7 +345,9 @@ const formatDryRun = (dryRun: AutomationDryRunType) => {
         row.customerId,
         customer?.name ?? "",
         customer?.email ?? "",
-        row.outcome,
+        row.skipReason === null
+          ? row.outcome
+          : `${row.outcome} (${row.skipReason})`,
         row.stepId ?? "",
         row.sendAt ?? "",
         [
@@ -663,7 +665,7 @@ const automationsRunsCommand = Command.make(
     ),
     skipReason: Flag.Literals(
       "skip-reason",
-      AdministrationCampaignRecipientSkipReason.literals
+      AutomationRunSkipReason.literals
     ).pipe(
       Flag.optional,
       Flag.withDescription("Only runs skipped for this reason")
@@ -774,7 +776,7 @@ const formatRunStats = (stats: AutomationRunStatsType) =>
     ...AutomationRunOutcome.literals.map(
       (outcome) => `${outcome}\t${stats.byOutcome[outcome]}`
     ),
-    ...AdministrationCampaignRecipientSkipReason.literals.flatMap((reason) =>
+    ...AutomationRunSkipReason.literals.flatMap((reason) =>
       stats.bySkipReason[reason] === 0
         ? []
         : [`skipped (${reason})\t${stats.bySkipReason[reason]}`]

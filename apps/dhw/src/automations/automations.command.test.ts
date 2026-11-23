@@ -118,6 +118,7 @@ const dryRunFor = (
       "not-in-audience": 0,
       "already-active": 0,
       withdrawn: 0,
+      skipped: 0,
       unavailable: 0,
     },
     eventsTotal: null,
@@ -662,6 +663,44 @@ describe("dhw automations show and dry-run", () => {
         .at(-1)
     ).toBe("projected, approximate reservation status");
   });
+  test("dry-run prints why a row was skipped and counts skipped rows", async () => {
+    const fake = makeAutomationLayer({
+      getAutomationDryRun: () =>
+        Effect.succeed(
+          dryRunFor(hourly, "completed", {
+            counts: {
+              "would-send": 0,
+              "condition-failed": 0,
+              "not-in-audience": 0,
+              "already-active": 0,
+              withdrawn: 0,
+              skipped: 1,
+              unavailable: 0,
+            },
+            rows: [
+              {
+                triggerAt: timestamp,
+                customerId: "customer-1",
+                customerEventId: "event-1",
+                outcome: "skipped",
+                skipReason: "already-sent-once",
+                stepId: "send",
+                sendAt: null,
+                projected: false,
+              },
+            ],
+          })
+        ),
+    });
+
+    await runSuccess(["automations", "dry-run", campaignId], fake.layer);
+
+    const lines = fake.output.join("\n").split("\n");
+    expect(lines).toContain("skipped\t1");
+    expect(
+      lines.find((line) => line.includes("customer-1\tAda"))?.split("\t")[4]
+    ).toBe("skipped (already-sent-once)");
+  });
 });
 
 describe("dhw automations activate", () => {
@@ -802,7 +841,7 @@ describe("dhw automations lifecycle and runs", () => {
         "--outcome",
         "skipped",
         "--skip-reason",
-        "missing-email",
+        "already-sent-once",
         "--version",
         "2",
         "--customer",
@@ -823,7 +862,7 @@ describe("dhw automations lifecycle and runs", () => {
           state: "ended",
           stepId: "send",
           outcome: "skipped",
-          skipReason: "missing-email",
+          skipReason: "already-sent-once",
           versionNumber: 2,
           customerId: "customer-1",
           cursor: "page-2",
@@ -912,6 +951,8 @@ describe("dhw automations lifecycle and runs", () => {
                 "invalid-email": 0,
                 "consent-withdrawn": 1,
                 "outside-test-domain": 0,
+                "pass-holder": 0,
+                "already-sent-once": 3,
               },
             })
           )
@@ -929,7 +970,11 @@ describe("dhw automations lifecycle and runs", () => {
         .join("\n")
         .split("\n")
         .filter((line) => line.startsWith("skipped ("))
-    ).toEqual(["skipped (missing-email)\t2", "skipped (consent-withdrawn)\t1"]);
+    ).toEqual([
+      "skipped (missing-email)\t2",
+      "skipped (consent-withdrawn)\t1",
+      "skipped (already-sent-once)\t3",
+    ]);
   });
 
   test("run prints the timeline with each entry's detail", async () => {

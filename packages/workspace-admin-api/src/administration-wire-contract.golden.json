@@ -20020,7 +20020,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -20034,7 +20034,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -20206,7 +20206,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -20220,7 +20220,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -20381,7 +20381,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -20395,7 +20395,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -20604,7 +20604,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -20618,7 +20618,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -20821,7 +20821,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -20835,7 +20835,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -21013,7 +21013,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -21027,7 +21027,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -26540,7 +26540,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -26554,7 +26554,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -26720,6 +26720,7 @@
                                             "invalid-email",
                                             "consent-withdrawn",
                                             "outside-test-domain",
+                                            "pass-holder",
                                             "missing-email-language"
                                           ]
                                         },
@@ -26877,7 +26878,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -26891,7 +26892,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -27247,7 +27248,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -27261,7 +27262,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -27632,7 +27633,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -27646,7 +27647,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -27883,7 +27884,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -27897,7 +27898,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -28051,6 +28052,11 @@
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "skipped": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "unavailable": {
                             "type": "integer",
                             "minimum": 0,
@@ -28111,6 +28117,7 @@
                                 "not-in-audience",
                                 "already-active",
                                 "withdrawn",
+                                "skipped",
                                 "unavailable"
                               ]
                             },
@@ -28128,6 +28135,26 @@
                               "anyOf": [
                                 {
                                   "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "skipReason": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "missing-from-dotypos",
+                                    "deleted-customer",
+                                    "missing-email",
+                                    "invalid-email",
+                                    "consent-withdrawn",
+                                    "outside-test-domain",
+                                    "pass-holder",
+                                    "already-sent-once"
+                                  ]
                                 },
                                 {
                                   "type": "null"
@@ -28365,7 +28392,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -28379,7 +28406,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -28623,7 +28650,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -28637,7 +28664,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -28995,7 +29022,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -29009,7 +29036,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -29367,7 +29394,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -29381,7 +29408,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -29979,7 +30006,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -29993,7 +30020,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -30434,7 +30461,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -30448,7 +30475,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.31.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -30700,6 +30727,16 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "pass-holder": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "already-sent-once": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -30850,7 +30887,9 @@
                     "missing-email",
                     "invalid-email",
                     "consent-withdrawn",
-                    "outside-test-domain"
+                    "outside-test-domain",
+                    "pass-holder",
+                    "already-sent-once"
                   ]
                 },
                 "versionNumber": {
@@ -30905,7 +30944,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -30919,7 +30958,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -30986,7 +31025,9 @@
                   "missing-email",
                   "invalid-email",
                   "consent-withdrawn",
-                  "outside-test-domain"
+                  "outside-test-domain",
+                  "pass-holder",
+                  "already-sent-once"
                 ]
               },
               "required": false
@@ -31324,7 +31365,7 @@
           },
           "@deskohub/workspace-admin-api/MinimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "effect/http-api/HttpApi/PayloadParseOptions": {
             "errors": "all",
@@ -31338,7 +31379,7 @@
         "effectiveAnnotations": {
           "minimumDhwVersion": {
             "_tag": "Some",
-            "value": "1.40.0"
+            "value": "1.41.0"
           },
           "outdatedDhwRefusal": "CliInputInvalid"
         },
@@ -33148,6 +33189,12 @@
                       "needs_refund"
                     ]
                   },
+                  "stay": {
+                    "$ref": "#/components/schemas/ReservationStay"
+                  },
+                  "payment": {
+                    "$ref": "#/components/schemas/ReservationPayment"
+                  },
                   "product": {
                     "$ref": "#/components/schemas/ReservationProductFilter"
                   }
@@ -33717,6 +33764,12 @@
                       "cancelled",
                       "needs_refund"
                     ]
+                  },
+                  "stay": {
+                    "$ref": "#/components/schemas/ReservationStay"
+                  },
+                  "payment": {
+                    "$ref": "#/components/schemas/ReservationPayment"
                   },
                   "product": {
                     "$ref": "#/components/schemas/ReservationProductFilter"
@@ -34352,6 +34405,12 @@
                       "needs_refund"
                     ]
                   },
+                  "stay": {
+                    "$ref": "#/components/schemas/ReservationStay"
+                  },
+                  "payment": {
+                    "$ref": "#/components/schemas/ReservationPayment"
+                  },
                   "product": {
                     "$ref": "#/components/schemas/ReservationProductFilter"
                   }
@@ -34895,6 +34954,20 @@
         ],
         "additionalProperties": false
       },
+      "AutomationOneOffCampaignGap": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 90
+          }
+        },
+        "required": [
+          "days"
+        ],
+        "additionalProperties": false
+      },
       "AutomationPageCursor": {
         "type": "string",
         "minLength": 1
@@ -35187,7 +35260,8 @@
                   "cause": {
                     "type": "string",
                     "enum": [
-                      "trigger-not-reached"
+                      "trigger-not-reached",
+                      "one-off-campaign-gap"
                     ]
                   },
                   "recheckAt": {
@@ -35377,7 +35451,9 @@
                       "missing-email",
                       "invalid-email",
                       "consent-withdrawn",
-                      "outside-test-domain"
+                      "outside-test-domain",
+                      "pass-holder",
+                      "already-sent-once"
                     ]
                   }
                 },
@@ -35625,6 +35701,21 @@
               },
               "id": {
                 "$ref": "#/components/schemas/AutomationStepId"
+              },
+              "oncePerCustomer": {
+                "type": "boolean",
+                "enum": [
+                  true
+                ]
+              },
+              "oneOffCampaignGap": {
+                "$ref": "#/components/schemas/AutomationOneOffCampaignGap"
+              },
+              "skipPassHolders": {
+                "type": "boolean",
+                "enum": [
+                  true
+                ]
               }
             },
             "required": [
@@ -35671,6 +35762,12 @@
               },
               "product": {
                 "$ref": "#/components/schemas/ReservationProductFilter"
+              },
+              "stay": {
+                "$ref": "#/components/schemas/ReservationStay"
+              },
+              "payment": {
+                "$ref": "#/components/schemas/ReservationPayment"
               }
             },
             "required": [
@@ -35689,6 +35786,12 @@
               },
               "product": {
                 "$ref": "#/components/schemas/ReservationProductFilter"
+              },
+              "stay": {
+                "$ref": "#/components/schemas/ReservationStay"
+              },
+              "payment": {
+                "$ref": "#/components/schemas/ReservationPayment"
               }
             },
             "required": [
@@ -35707,6 +35810,12 @@
               },
               "product": {
                 "$ref": "#/components/schemas/ReservationProductFilter"
+              },
+              "stay": {
+                "$ref": "#/components/schemas/ReservationStay"
+              },
+              "payment": {
+                "$ref": "#/components/schemas/ReservationPayment"
               }
             },
             "required": [
@@ -35725,6 +35834,12 @@
               },
               "product": {
                 "$ref": "#/components/schemas/ReservationProductFilter"
+              },
+              "stay": {
+                "$ref": "#/components/schemas/ReservationStay"
+              },
+              "payment": {
+                "$ref": "#/components/schemas/ReservationPayment"
               }
             },
             "required": [
@@ -36714,6 +36829,13 @@
         "minLength": 1,
         "description": "Opaque identifier for a persisted payment attempt."
       },
+      "ReservationPayment": {
+        "type": "string",
+        "enum": [
+          "individual"
+        ],
+        "description": "individual: paid by the reservation's own order with a positive amount, not covered by a pass."
+      },
       "ReservationProductFilter": {
         "type": "object",
         "properties": {
@@ -36824,6 +36946,14 @@
         ],
         "additionalProperties": false,
         "description": "A reservation product family and conditions on its catalog properties."
+      },
+      "ReservationStay": {
+        "type": "string",
+        "enum": [
+          "day",
+          "overnight"
+        ],
+        "description": "The booked cowork stay: overnight for a noon-to-noon Reserved Desk booking, day otherwise."
       },
       "StoredDiscountId": {
         "type": "string"

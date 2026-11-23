@@ -116,36 +116,44 @@ export const CampaignRetryInput = Schema.Struct({
 });
 export type CampaignRetryInput = typeof CampaignRetryInput.Type;
 
+/**
+ * Requires a stable dhw release that decodes repeat-visit automations: the
+ * stay and payment of reservation counts and triggers, Send delivery
+ * policies, the `pass-holder` and `already-sent-once` skip reasons, the
+ * `one-off-campaign-gap` deferral, and skipped dry-run rows.
+ */
+const repeatVisitDhwVersion = DhwVersion.make("1.41.0");
+
 /** The operations on campaigns, their audiences and templates. */
 export const emailCampaignOperations = defineOperations({
   listCampaignAudiences: query({
-    minimumDhwVersion: campaignsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: NoInput,
     output: AdministrationCampaignAudiences,
   }),
   getCampaignAudience: query({
-    minimumDhwVersion: campaignsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignAudienceRef,
     output: AdministrationCampaignAudience,
   }),
   createCampaignAudience: mutation({
-    minimumDhwVersion: campaignsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: AdministrationCampaignAudienceCreateRequest,
     output: AdministrationCampaignAudience,
     ledger: true,
   }),
   updateCampaignAudience: mutation({
-    minimumDhwVersion: campaignsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignAudiencePatchInput,
     output: AdministrationCampaignAudience,
   }),
   archiveCampaignAudience: mutation({
-    minimumDhwVersion: campaignsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignAudienceRef,
     output: AdministrationCampaignAudience,
   }),
   unarchiveCampaignAudience: mutation({
-    minimumDhwVersion: campaignsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignAudienceRef,
     output: AdministrationCampaignAudience,
   }),
@@ -228,7 +236,7 @@ export const emailCampaignOperations = defineOperations({
     output: AdministrationCampaignRetryResult,
   }),
   getCampaignSendStatus: query({
-    minimumDhwVersion: campaignsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignRef,
     output: AdministrationCampaignSendStatusResult,
   }),
@@ -240,44 +248,44 @@ const passReminderDhwVersion = DhwVersion.make("1.40.0");
 /** The operations on automated campaigns and their engine. */
 export const emailAutomationOperations = defineOperations({
   getAutomation: query({
-    minimumDhwVersion: passReminderDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignRef,
     output: AutomationDetail,
   }),
   updateAutomationFlow: mutation({
-    minimumDhwVersion: passReminderDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: AutomationFlowUpdate,
     output: AutomationDetail,
   }),
   /** Starts the dry run of the current draft, or returns its job. */
   dryRunAutomation: mutation({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignRef,
     output: AutomationPreviewStatus,
   }),
   getAutomationDryRun: query({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: AutomationPreviewRef,
     output: AutomationDryRun,
   }),
   /** A retried activation returns the version the first one published. */
   activateAutomation: mutation({
-    minimumDhwVersion: passReminderDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: AutomationActivateInput,
     output: AutomationVersionSummary,
   }),
   pauseAutomation: mutation({
-    minimumDhwVersion: passReminderDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignRef,
     output: AutomationDetail,
   }),
   resumeAutomation: mutation({
-    minimumDhwVersion: passReminderDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignRef,
     output: AutomationDetail,
   }),
   archiveAutomation: mutation({
-    minimumDhwVersion: passReminderDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: CampaignRef,
     output: AutomationDetail,
   }),
@@ -287,22 +295,22 @@ export const emailAutomationOperations = defineOperations({
     output: Schema.Array(AutomationVersionSummary),
   }),
   getAutomationVersion: query({
-    minimumDhwVersion: passReminderDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: AutomationVersionRef,
     output: AutomationVersionDetail,
   }),
   getAutomationRunStats: query({
-    minimumDhwVersion: automationsMinimumDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: AutomationRunStatsInput,
     output: AutomationRunStats,
   }),
   listAutomationRuns: query({
-    minimumDhwVersion: passReminderDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: AutomationRunListInput,
     output: AutomationRunPage,
   }),
   getAutomationRun: query({
-    minimumDhwVersion: passReminderDhwVersion,
+    minimumDhwVersion: repeatVisitDhwVersion,
     input: AutomationRunRef,
     output: AutomationRunDetail,
   }),
