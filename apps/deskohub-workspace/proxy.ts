@@ -54,6 +54,7 @@ import { addressedOrigin } from "./shared/deployment/addressed-origin";
 import {
   containerPublicOrigin,
   publicUrl,
+  withOrigin,
 } from "./shared/deployment/public-origin";
 import { isOpenedFromApp } from "./shared/utils/opened-from-app";
 import { markPrivateResponse } from "./shared/utils/private-response";
@@ -520,10 +521,7 @@ const canonicalHostRedirect = (request: NextRequest) => {
   }
 
   return NextResponse.redirect(
-    new URL(
-      `${request.nextUrl.pathname}${request.nextUrl.search}`,
-      canonicalOrigin
-    ),
+    withOrigin(request.nextUrl, canonicalOrigin),
     308
   );
 };
@@ -604,10 +602,7 @@ const previewCallbackOriginRedirect = (request: NextRequest) => {
     return undefined;
   }
 
-  const redirectUrl = new URL(
-    `${request.nextUrl.pathname}${request.nextUrl.search}`,
-    callbackOrigin
-  );
+  const redirectUrl = withOrigin(request.nextUrl, callbackOrigin);
   appendVercelPreviewProtectionBypass(redirectUrl, { setBypassCookie: true });
   return markPrivateResponse(NextResponse.redirect(redirectUrl));
 };

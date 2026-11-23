@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { containerPublicOrigin, toPublicUrl } from "./public-origin";
+import {
+  containerPublicOrigin,
+  toPublicUrl,
+  withOrigin,
+} from "./public-origin";
 
 const container = {
   WORKSPACE_RUNTIME_HOST: "container",
@@ -64,5 +68,16 @@ describe("containerPublicOrigin", () => {
         WORKSPACE_PUBLIC_ORIGIN: "https://workspace-public.example",
       })
     ).toBeUndefined();
+  });
+});
+
+describe("withOrigin", () => {
+  test("keeps a path that spells another host on the given origin", () => {
+    expect(
+      withOrigin(
+        new URL("https://workspace-alias.example//attacker.example/x?a=1"),
+        new URL("https://workspace.example")
+      ).href
+    ).toBe("https://workspace.example//attacker.example/x?a=1");
   });
 });

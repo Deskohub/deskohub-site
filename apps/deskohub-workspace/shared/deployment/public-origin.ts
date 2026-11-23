@@ -30,13 +30,23 @@ export const containerPublicOrigin = (
  */
 export const toPublicUrl = (url: URL, settings: PublicOriginSettings): URL => {
   const origin = containerPublicOrigin(settings);
-  if (!origin) return new URL(url);
-  // Copied part by part: resolving the path against the origin would read a
-  // path such as `//attacker.example` as another host.
-  origin.pathname = url.pathname;
-  origin.search = url.search;
-  origin.hash = url.hash;
-  return origin;
+  return origin ? withOrigin(url, origin) : new URL(url);
+};
+
+/**
+ * `url`'s path, query, and fragment on `origin`. They are copied part by
+ * part: resolving the path against the origin would read a path such as
+ * `//attacker.example` as another host.
+ */
+export const withOrigin = (
+  url: Pick<URL, "pathname" | "search" | "hash">,
+  origin: URL
+): URL => {
+  const result = new URL(origin.origin);
+  result.pathname = url.pathname;
+  result.search = url.search;
+  result.hash = url.hash;
+  return result;
 };
 
 /**

@@ -406,6 +406,11 @@ test("keeps a container's redirects on its public origin", async () => {
       ["http://0.0.0.0:3000/admin/bookings", publicHost],
       ["http://0.0.0.0:3000/en-US/account?section=profile", publicHost],
       ["http://127.0.0.1:3000/en-US/faq", publicHost],
+      // A path that spells another host stays a path on the public origin.
+      [
+        "http://0.0.0.0:3000//attacker.example/x",
+        { headers: { host: "workspace-service.run.example" } },
+      ],
     ],
     {
       ...Object.fromEntries(
@@ -432,6 +437,9 @@ test("keeps a container's redirects on its public origin", async () => {
   expect(locations[3]).toStartWith("https://workspace-public.example/");
   expect(locations[4]).toStartWith("https://workspace-public.example/en-US/");
   expect(locations[5]).toBeNull();
+  expect(locations[6]).toBe(
+    "https://workspace-public.example//attacker.example/x"
+  );
 });
 
 const unprefixedAdministrationPaths = [

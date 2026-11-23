@@ -1,4 +1,12 @@
-import { Effect, Exit, Layer, ManagedRuntime, Scope } from "effect";
+import {
+  type Context,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Scope,
+} from "effect";
 
 /**
  * Returns a function that provides `layer` to an Effect through a
@@ -68,8 +76,8 @@ export interface SharedUntilShutdown<A, E> {
    * Closes the build's scope, running its finalizers, such as a pool's
    * `end()`, and settles once they have. A process that shuts itself down,
    * such as a container on SIGTERM, calls it once its requests have drained.
-   * Runs after it get the closed instance, so nothing may use the layer
-   * afterwards. Closing again, or a layer no run built, does nothing.
+   * It is final: a run that provides the layer afterwards dies instead of
+   * building it again. Closing again, or a layer no run built, does nothing.
    */
   readonly close: () => Promise<void>;
 }
@@ -83,11 +91,37 @@ export interface SharedUntilShutdown<A, E> {
 export const shareUntilShutdown = <A, E>(
   layer: Layer.Layer<A, E, never>
 ): SharedUntilShutdown<A, E> => {
-  const memoMap = Layer.makeMemoMapUnsafe();
   const scope = Scope.makeUnsafe();
+  // The current build, or the successful one. Runs reuse its context, so a
+  // run registers nothing on the process scope.
+  let shared: Deferred.Deferred<Context.Context<A>, E> | undefined;
+
+  const build = Effect.suspend(() => {
+    if (scope.state._tag === "Closed") {
+      return Effect.die(new Error("A shared layer was used after shutdown."));
+    }
+    if (shared) return Deferred.await(shared);
+    const deferred = Deferred.makeUnsafe<Context.Context<A>, E>();
+    shared = deferred;
+    // Each attempt builds in its own scope, so a failed one releases what it
+    // acquired and leaves the next run to build again.
+    const attemptScope = Scope.forkUnsafe(scope);
+    return Layer.buildWithScope(layer, attemptScope).pipe(
+      Effect.onExit((exit) =>
+        Exit.isSuccess(exit)
+          ? Deferred.done(deferred, exit)
+          : Effect.sync(() => {
+              if (shared === deferred) shared = undefined;
+            }).pipe(
+              Effect.andThen(Scope.close(attemptScope, exit)),
+              Effect.andThen(Deferred.done(deferred, exit))
+            )
+      )
+    );
+  });
 
   return {
-    layer: Layer.fromBuild(() => Layer.buildWithMemoMap(layer, memoMap, scope)),
+    layer: Layer.fromBuild(() => build),
     close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
   };
 };

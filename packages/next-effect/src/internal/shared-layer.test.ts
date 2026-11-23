@@ -317,6 +317,58 @@ describe("shareUntilShutdown", () => {
     expect(events).toEqual(["open", "close"]);
   });
 
+  test("lets no run build it again after close", async () => {
+    const { events, shared } = pooled();
+    const run = provideTo(shared.layer);
+    await run(Connection);
+    await shared.close();
+
+    const exit = await Effect.runPromiseExit(
+      Connection.pipe(Effect.provide(shared.layer))
+    );
+    expect(Exit.hasDies(exit)).toBe(true);
+    expect(events).toEqual(["open", "close"]);
+  });
+
+  test("releases a failed build's resources and builds again", async () => {
+    const events: string[] = [];
+    const unavailable = new Error("unavailable");
+    let attempts = 0;
+    const shared = shareUntilShutdown(
+      Layer.effect(
+        Connection,
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            attempts += 1;
+            events.push(`open ${attempts}`);
+          }),
+          () =>
+            Effect.sync(() => {
+              events.push(`close ${attempts}`);
+            })
+        ).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              attempts === 1
+                ? Effect.fail(unavailable)
+                : Effect.succeed({ build: attempts })
+            )
+          )
+        )
+      )
+    );
+
+    const failed = await Effect.runPromiseExit(
+      Connection.pipe(Effect.provide(shared.layer))
+    );
+    expect(Exit.isFailure(failed)).toBe(true);
+    expect(events).toEqual(["open 1", "close 1"]);
+
+    expect(await provideTo(shared.layer)(Connection)).toEqual({ build: 2 });
+    await shared.close();
+    expect(events).toEqual(["open 1", "close 1", "open 2", "close 2"]);
+  });
+
   test("closes nothing when no run built it", async () => {
     const { events, shared } = pooled();
     await shared.close();
