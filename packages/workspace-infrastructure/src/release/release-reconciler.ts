@@ -127,32 +127,25 @@ const keepsTemplate = (
       input.specFingerprintOf(deployment.imageDigest));
 
 /**
- * A template for `target` under a name of the record's own, for when the
- * live one cannot be kept. A name minted earlier for the same release and
- * spec that has not landed is reused, so a re-apply declares the same
- * revision; otherwise the new generation mints a fresh one. Traffic keeps
- * targeting the release's own revision.
+ * A template for `target` under a name minted for this decision's
+ * generation, for when the live one cannot be kept. Every new decision
+ * mints its own name, even when an earlier one minted a name for the same
+ * release and spec: that name may have landed and been displaced since, and
+ * Cloud Run never re-creates a revision name with another spec. Only
+ * re-applying the persisted decision (recovery) declares a name again.
+ * Traffic keeps targeting the release's own revision.
  */
 const freshTemplate = (
-  record: ReleaseRecord,
   target: ReleaseDeployment,
   generation: number,
   input: TemplateInput
-): MaterializedDeployment => {
-  const specFingerprint = input.specFingerprintOf(target.imageDigest);
-  const minted = record.materialized?.template;
-  const reusable =
-    minted !== undefined &&
-    record.materialized?.releaseId === target.releaseId &&
-    minted.specFingerprint === specFingerprint &&
-    input.liveTemplate?.revision !== minted.revision;
-  return {
-    ...deploymentOf(target),
-    template: reusable
-      ? minted
-      : { revision: `${target.revision}-t${generation}`, specFingerprint },
-  };
-};
+): MaterializedDeployment => ({
+  ...deploymentOf(target),
+  template: {
+    revision: `${target.revision}-t${generation}`,
+    specFingerprint: input.specFingerprintOf(target.imageDigest),
+  },
+});
 
 const templateIs = (
   live: LiveTemplate | null,
@@ -337,15 +330,15 @@ export const promote = Effect.fn("WorkspaceRelease.promote")(function* (
 export interface RestoreInput extends TrafficChangeInput, TemplateInput {}
 
 /**
- * The template the web service keeps once restore drops the candidate: the
- * candidate or the materialized template, whichever Cloud Run runs ready
- * from the current spec. Otherwise the restored release's image gets a
- * template under a fresh name, since a failed or outdated revision name
- * can never be re-declared with another spec.
+ * The template the web service keeps once restore or a plain deploy drops
+ * the candidate: the candidate or the materialized template, whichever
+ * Cloud Run runs ready from the current spec. Otherwise `target`'s image
+ * gets a template under a fresh name, since a failed or outdated revision
+ * name can never be re-declared with another spec.
  */
-const restoredTemplate = (
+const templateWithoutCandidate = (
   record: ReleaseRecord,
-  input: RestoreInput,
+  input: TemplateInput,
   target: ReleaseDeployment,
   generation: number
 ): MaterializedDeployment => {
@@ -354,7 +347,7 @@ const restoredTemplate = (
   }
   return keepsTemplate(input, record.candidate)
     ? deploymentOf(record.candidate)
-    : freshTemplate(record, target, generation, input);
+    : freshTemplate(target, generation, input);
 };
 
 /**
@@ -384,7 +377,7 @@ export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
   }
   return {
     ...record,
-    materialized: restoredTemplate(
+    materialized: templateWithoutCandidate(
       record,
       input,
       target,
@@ -510,25 +503,21 @@ export interface RefreshTemplateInput extends TemplateInput {
 
 /**
  * Decide the template a plain deploy declares, before it runs. It keeps
- * the template Cloud Run runs when that is ready and current, and an
- * unlanded candidate, whose new revision name the deploy creates from the
- * current spec.
- * Otherwise the active release's image gets a template under a fresh name,
- * and a candidate declared from an older spec is dropped: re-declaring its
- * revision name with another spec would be refused.
+ * the template Cloud Run runs when that is ready and current. A staged
+ * candidate is always dropped: only its own verification apply may declare
+ * its name, and a plain deploy only ever finds one a failed delivery left.
+ * The web service then keeps the candidate or materialized template Cloud
+ * Run runs ready from the current spec, else the active release's image
+ * gets a template under a fresh name.
  */
 export const refreshTemplate = Effect.fn("WorkspaceRelease.refreshTemplate")(
   function* (record: ReleaseRecord, input: RefreshTemplateInput) {
     yield* fence(record, input.expectedGeneration);
     yield* requireNoPendingApply(record);
     const active = record.active;
-    const candidateUnlanded =
-      record.candidate !== null &&
-      input.liveTemplate?.revision !== record.candidate.revision;
     if (
       active === null ||
-      candidateUnlanded ||
-      keepsTemplate(input, record.candidate ?? record.materialized)
+      (record.candidate === null && keepsTemplate(input, record.materialized))
     ) {
       return record;
     }
@@ -536,7 +525,7 @@ export const refreshTemplate = Effect.fn("WorkspaceRelease.refreshTemplate")(
     return {
       ...record,
       generation,
-      materialized: freshTemplate(record, active, generation, input),
+      materialized: templateWithoutCandidate(record, input, active, generation),
       candidate: null,
     } satisfies ReleaseRecord;
   }

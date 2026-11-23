@@ -527,7 +527,7 @@ describe("declared web template", () => {
     });
   });
 
-  test("a minted name that has not landed is reused on the next decision", () => {
+  test("every new decision mints its own name, never an earlier one", () => {
     const settled = twoReleases();
     const oldTemplate = templateOf(settled.materialized);
     const changed = () => "spec-b";
@@ -542,7 +542,8 @@ describe("declared web template", () => {
     expect(minted?.revision).toBe(
       `workspace-web-r4-bbbbbbb-t${first.generation}`
     );
-    // The deploy failed before the template landed: the retry reuses it.
+    // The minted name may have landed and been displaced since: the next
+    // decision never declares it again.
     const retried = run(
       refreshTemplate(first, {
         expectedGeneration: first.generation,
@@ -550,7 +551,45 @@ describe("declared web template", () => {
         specFingerprintOf: changed,
       })
     );
-    expect(retried.materialized?.template).toEqual(minted);
+    expect(retried.materialized?.template).toEqual({
+      revision: `workspace-web-r4-bbbbbbb-t${retried.generation}`,
+      specFingerprint: "spec-b",
+    });
+  });
+
+  test("restore after a failed candidate never re-declares a displaced minted name", () => {
+    // A minted template landed, then a candidate's verification apply
+    // displaced it and failed.
+    const settled = twoReleases();
+    const minted = run(
+      refreshTemplate(settled, {
+        expectedGeneration: settled.generation,
+        liveTemplate: templateOf(settled.materialized),
+        specFingerprintOf: () => "spec-a2",
+      })
+    );
+    const mintedName = minted.materialized?.template?.revision;
+    expect(mintedName).toBe(`workspace-web-r4-bbbbbbb-t${minted.generation}`);
+    const staged = stageRelease(minted, shaC, digestC).record;
+    const failedCandidate = templateOf(staged.candidate);
+    const pending = run(
+      restore(staged, {
+        expectedGeneration: staged.generation,
+        releaseId: "r4-bbbbbbb" as ReleaseId,
+        now: later(2),
+        liveTemplate:
+          failedCandidate === null
+            ? null
+            : { ...failedCandidate, ready: false },
+        specFingerprintOf: () => "spec-a2",
+      })
+    );
+    expect(pending.candidate).toBeNull();
+    expect(pending.materialized?.template).toEqual({
+      revision: `workspace-web-r4-bbbbbbb-t${pending.generation}`,
+      specFingerprint: "spec-a2",
+    });
+    expect(pending.materialized?.template?.revision).not.toBe(mintedName);
   });
 
   test("a plain deploy after a config change mints a name once", () => {
@@ -598,19 +637,68 @@ describe("declared web template", () => {
     );
     expect(refreshed.candidate).toBeNull();
     expect(refreshed.materialized?.releaseId).toBe("r4-bbbbbbb" as ReleaseId);
-    // An unlanded candidate is created from the current spec instead,
-    // whether or not the spec changed.
-    for (const fingerprint of [specFingerprintOf, () => "spec-b"]) {
-      expect(
-        run(
-          refreshTemplate(staged, {
-            expectedGeneration: staged.generation,
-            liveTemplate: templateOf(staged.materialized),
-            specFingerprintOf: fingerprint,
-          })
-        )
-      ).toEqual(staged);
-    }
+    // A candidate whose verification apply never ran is dropped too: only
+    // that apply may declare its name.
+    const kept = run(
+      refreshTemplate(staged, {
+        expectedGeneration: staged.generation,
+        liveTemplate: templateOf(staged.materialized),
+        specFingerprintOf,
+      })
+    );
+    expect(kept.candidate).toBeNull();
+    expect(kept.materialized).toEqual(staged.materialized);
+    const changed = run(
+      refreshTemplate(staged, {
+        expectedGeneration: staged.generation,
+        liveTemplate: templateOf(staged.materialized),
+        specFingerprintOf: () => "spec-b",
+      })
+    );
+    expect(changed.candidate).toBeNull();
+    expect(changed.materialized?.template?.revision).toBe(
+      `workspace-web-r4-bbbbbbb-t${changed.generation}`
+    );
+  });
+
+  test("a plain deploy never re-declares a created candidate a later rollout displaced", () => {
+    const settled = twoReleases();
+    const staged = stageRelease(settled, shaC, digestC).record;
+    // The candidate's verification apply created its revision, then an
+    // external rollout replaced the live template, then the spec changed.
+    const external = {
+      revision: "workspace-web-external-00001",
+      imageDigest: digestB,
+      specFingerprint: "spec-external",
+      ready: true,
+    };
+    const refreshed = run(
+      refreshTemplate(staged, {
+        expectedGeneration: staged.generation,
+        liveTemplate: external,
+        specFingerprintOf: () => "spec-b",
+      })
+    );
+    expect(refreshed.candidate).toBeNull();
+    expect(
+      webServiceProps(sandboxConfig, refreshed, later(2))?.template
+    ).toMatchObject({
+      revision: `workspace-web-r4-bbbbbbb-t${refreshed.generation}`,
+    });
+  });
+
+  test("a dropped candidate keeps the materialized template Cloud Run still runs", () => {
+    const settled = twoReleases();
+    const staged = stageRelease(settled, shaC, digestC).record;
+    const refreshed = run(
+      refreshTemplate(staged, {
+        expectedGeneration: staged.generation,
+        liveTemplate: templateOf(staged.materialized),
+        specFingerprintOf,
+      })
+    );
+    expect(refreshed.candidate).toBeNull();
+    expect(refreshed.materialized).toEqual(staged.materialized);
   });
 
   test("restaging an unsettled first release keeps its landed template", () => {

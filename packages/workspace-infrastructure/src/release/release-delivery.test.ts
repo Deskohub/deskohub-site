@@ -30,6 +30,7 @@ import {
   recoverRelease,
   restoreRelease,
   runStack,
+  stackRunRecord,
 } from "./release-delivery";
 import {
   ReleaseServiceApply,
@@ -123,6 +124,8 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
     const faults: CloudRunFaults = { resolvedDigest: options.resolvedDigest };
     const applies: Array<number | null> = [];
     const revisions = new Map<string, ImageDigest>();
+    /** The spec fingerprint each revision was created with. */
+    const revisionSpecs = new Map<string, string | undefined>();
     let web: ObservedService | null = null;
     let visible: ObservedService | null = null;
     let lagReads = 0;
@@ -134,6 +137,8 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
       readonly revision: string | undefined;
       readonly specFingerprint: string | undefined;
     }> = [];
+    /** The web template each plan previewed, in order. */
+    const plannedTemplates: Array<string | undefined> = [];
 
     const apply = ReleaseServiceApply.of({
       apply: (request) =>
@@ -180,19 +185,44 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
           ) {
             return yield* failed("interrupted");
           }
+          const config = faults.config ?? sandboxConfig;
+          // The record the stack declares under the held lock's operation.
+          const declaring = yield* stackRunRecord(
+            config,
+            record,
+            record.writer.operation
+          ).pipe(
+            Effect.provideService(ReleaseServiceReadback, readback),
+            Effect.mapError((error) => failed(error._tag))
+          );
           if (request.action === "plan") {
+            plannedTemplates.push(
+              webServiceProps(config, declaring, yield* DateTime.now)?.template
+                ?.revision
+            );
             return;
           }
-          const props = webServiceProps(
-            faults.config ?? sandboxConfig,
-            record,
-            yield* DateTime.now
-          );
+          const props = webServiceProps(config, declaring, yield* DateTime.now);
           if (props === undefined) {
             return;
           }
           const revision = props.template?.revision;
           const image = props.template?.containers?.[0]?.image;
+          const specFingerprint =
+            props.template?.annotations?.[templateSpecAnnotation];
+          // Cloud Run never re-creates an existing revision name: only the
+          // live template's own name from its own spec re-declares cleanly.
+          if (
+            revision !== undefined &&
+            revisionSpecs.has(revision) &&
+            (web?.templateRevision !== revision ||
+              revisionSpecs.get(revision) !== specFingerprint)
+          ) {
+            return yield* failed(`revision ${revision} already exists`);
+          }
+          if (revision !== undefined) {
+            revisionSpecs.set(revision, specFingerprint);
+          }
           if (revision !== undefined && typeof image === "string") {
             revisions.set(
               revision,
@@ -324,7 +354,30 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
         ),
     });
 
-    return { apply, readback, applies, faults, declaredTemplates };
+    /** Someone outside the release flow rolls out another web template. */
+    const rollOutExternally = () => {
+      const revision = "workspace-web-external-00001";
+      revisions.set(revision, digestA);
+      revisionSpecs.set(revision, "external");
+      if (web !== null) {
+        web = {
+          ...web,
+          templateRevision: revision,
+          templateImageDigest: digestA,
+          templateSpecFingerprint: "external",
+        };
+      }
+    };
+
+    return {
+      apply,
+      readback,
+      applies,
+      faults,
+      declaredTemplates,
+      plannedTemplates,
+      rollOutExternally,
+    };
   });
 
 const setup = (options?: FakeCloudRunOptions) =>
@@ -350,6 +403,8 @@ const setup = (options?: FakeCloudRunOptions) =>
       applies: cloudRun.applies,
       faults: cloudRun.faults,
       declaredTemplates: cloudRun.declaredTemplates,
+      plannedTemplates: cloudRun.plannedTemplates,
+      rollOutExternally: cloudRun.rollOutExternally,
       provide,
     };
   });
@@ -694,10 +749,12 @@ describe("fenced release delivery", () => {
   test("a competing run that stages first fences out the promotion", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
+        let armed = false;
         let competed = false;
         const { store, provide } = yield* setup({
+          // The competing run stages while the second delivery verifies.
           beforeRevisionRead: Effect.suspend(() => {
-            if (competed) {
+            if (!armed || competed) {
               return Effect.void;
             }
             competed = true;
@@ -725,6 +782,7 @@ describe("fenced release delivery", () => {
             policy
           )
         );
+        armed = true;
         const exit = yield* provide(
           deliverRelease(
             sandboxConfig,
@@ -1659,6 +1717,229 @@ describe("declared web template", () => {
     expect(
       result.declaredTemplates.filter(({ revision }) => revision === minted)
     ).toHaveLength(1);
+  });
+  /** The web max-instances change of the reviewer's capacity change. */
+  const capacityChanged: WorkspaceStackConfig = {
+    ...sandboxConfig,
+    capacity: {
+      ...sandboxConfig.capacity,
+      webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+    },
+  };
+
+  /** A third release whose candidate lands with the wrong digest. */
+  const failCandidateVerification = (
+    cloudRun: Effect.Success<ReturnType<typeof setup>>,
+    config: WorkspaceStackConfig
+  ) =>
+    Effect.gen(function* () {
+      const { store, faults, provide } = cloudRun;
+      faults.resolvedDigest = digestA;
+      const failed = yield* provide(
+        deliverRelease(config, { sha: shaC, imageDigest: digestC }, policy)
+      ).pipe(Effect.exit);
+      faults.resolvedDigest = undefined;
+      const pending = (yield* store.read).record;
+      if (pending.writer !== null) {
+        yield* provide(unlockReleaseWriter(config, fingerprintOf(pending)));
+      }
+      return failed;
+    });
+
+  test("restore after a failed candidate never re-declares a displaced minted template", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const cloudRun = yield* setup();
+        const { store, faults, declaredTemplates, provide } = cloudRun;
+        yield* provide(deliver(shaA, digestA));
+        yield* provide(deliver(shaB, digestB));
+        faults.config = capacityChanged;
+        yield* provide(runStack(capacityChanged, "deploy"));
+        const minted = (yield* store.read).record.materialized?.template;
+        const failed = yield* failCandidateVerification(
+          cloudRun,
+          capacityChanged
+        );
+        // The candidate displaced the minted template and is not ready.
+        faults.failedTemplate = true;
+        const restored = yield* provide(
+          restoreRelease(
+            capacityChanged,
+            {
+              releaseId: ReleaseId.make("r4-bbbbbbb"),
+              expectedGeneration: (yield* store.read).record.generation,
+            },
+            policy
+          )
+        ).pipe(Effect.exit);
+        return {
+          minted,
+          failed,
+          restored,
+          declaredTemplates,
+          record: (yield* store.read).record,
+        };
+      })
+    );
+    expect(errorOf(result.failed)).toMatchObject({
+      _tag: "CandidateNotVerified",
+    });
+    expect(result.minted?.revision).toMatch(/^workspace-web-r4-bbbbbbb-t\d+$/);
+    expect(result.restored._tag).toBe("Success");
+    expect(result.record.materialized?.template?.revision).toBe(
+      `workspace-web-r4-bbbbbbb-t${result.record.generation - 1}`
+    );
+    expect(
+      result.declaredTemplates.filter(
+        (entry) => entry.revision === result.minted?.revision
+      )
+    ).toHaveLength(1);
+  });
+
+  test("a plain deploy never re-declares a staged candidate a later rollout displaced", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const cloudRun = yield* setup();
+        const { store, faults, declaredTemplates, provide } = cloudRun;
+        yield* provide(deliver(shaA, digestA));
+        yield* provide(deliver(shaB, digestB));
+        const failed = yield* failCandidateVerification(
+          cloudRun,
+          sandboxConfig
+        );
+        const staged = (yield* store.read).record.candidate;
+        cloudRun.rollOutExternally();
+        faults.config = capacityChanged;
+        const deployed = yield* provide(
+          runStack(capacityChanged, "deploy")
+        ).pipe(Effect.exit);
+        return {
+          failed,
+          staged,
+          deployed,
+          declaredTemplates,
+          record: (yield* store.read).record,
+        };
+      })
+    );
+    expect(errorOf(result.failed)).toMatchObject({
+      _tag: "CandidateNotVerified",
+    });
+    expect(result.staged?.revision).toBe("workspace-web-r7-ccccccc");
+    expect(result.deployed._tag).toBe("Success");
+    expect(result.record.candidate).toBeNull();
+    // Only the candidate's own verification apply declared its name.
+    expect(
+      result.declaredTemplates.filter(
+        (entry) => entry.revision === "workspace-web-r7-ccccccc"
+      )
+    ).toHaveLength(1);
+    expect(result.declaredTemplates.at(-1)?.revision).toBe(
+      `workspace-web-r4-bbbbbbb-t${result.record.generation}`
+    );
+  });
+
+  test("recovery refuses a pending template name a later rollout displaced", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const cloudRun = yield* setup({
+          // Generation 5 is the second release's promotion apply.
+          interruptApplyOf: new Set([5]),
+        });
+        const { store, applies, provide } = cloudRun;
+        yield* provide(deliver(shaA, digestA));
+        yield* provide(deliver(shaB, digestB).pipe(Effect.exit));
+        const pending = (yield* store.read).record;
+        yield* provide(
+          unlockReleaseWriter(sandboxConfig, fingerprintOf(pending))
+        );
+        cloudRun.rollOutExternally();
+        const appliesBefore = applies.length;
+        const recovered = yield* provide(
+          recoverRelease(sandboxConfig, policy)
+        ).pipe(Effect.exit);
+        return { pending, recovered, applied: applies.length - appliesBefore };
+      })
+    );
+    expect(result.pending.pendingApply?.target.revision).toBe(
+      "workspace-web-r4-bbbbbbb"
+    );
+    expect(errorOf(result.recovered)).toMatchObject({
+      _tag: "ReleaseTemplateSpecChanged",
+      revision: "workspace-web-r4-bbbbbbb",
+      liveSpecFingerprint: null,
+    });
+    expect(result.applied).toBe(0);
+  });
+
+  test("a plain run never declares a candidate whose verification apply never started", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, plannedTemplates, declaredTemplates, provide } =
+          yield* setup({
+            // Generation 4 stages the second release's candidate.
+            notStartedApplyOf: new Set([4]),
+          });
+        yield* provide(deliver(shaA, digestA));
+        const failed = yield* provide(deliver(shaB, digestB)).pipe(Effect.exit);
+        const staged = (yield* store.read).record;
+        yield* provide(runStack(sandboxConfig, "plan"));
+        const deployed = yield* provide(runStack(sandboxConfig, "deploy")).pipe(
+          Effect.exit
+        );
+        return {
+          failed,
+          staged,
+          deployed,
+          plannedTemplates,
+          declaredTemplates,
+          record: (yield* store.read).record,
+        };
+      })
+    );
+    expect(errorOf(result.failed)).toMatchObject({
+      _tag: "ReleaseServiceApplyFailed",
+      outcome: "not-started",
+    });
+    expect(result.staged.candidate?.revision).toBe("workspace-web-r4-bbbbbbb");
+    expect(result.staged.writer).toBeNull();
+    expect(result.deployed._tag).toBe("Success");
+    expect(result.record.candidate).toBeNull();
+    expect(result.plannedTemplates).toEqual(["workspace-web-r1-aaaaaaa"]);
+    expect(
+      result.declaredTemplates.map((entry) => entry.revision)
+    ).not.toContain("workspace-web-r4-bbbbbbb");
+    expect(result.declaredTemplates.at(-1)?.revision).toBe(
+      "workspace-web-r1-aaaaaaa"
+    );
+  });
+
+  test("plan previews the template the following deploy declares", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, plannedTemplates, declaredTemplates, provide } =
+          yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        faults.config = capacityChanged;
+        const beforePlan = (yield* store.read).record;
+        yield* provide(runStack(capacityChanged, "plan"));
+        const afterPlan = (yield* store.read).record;
+        yield* provide(runStack(capacityChanged, "deploy"));
+        return {
+          beforePlan,
+          afterPlan,
+          plannedTemplates,
+          deployed: declaredTemplates.at(-1)?.revision,
+        };
+      })
+    );
+    expect(result.deployed).toMatch(/^workspace-web-r1-aaaaaaa-t\d+$/);
+    expect(result.plannedTemplates).toEqual([result.deployed]);
+    // The plan persisted nothing.
+    expect({ ...result.afterPlan, writer: null }).toEqual({
+      ...result.beforePlan,
+      writer: null,
+    });
   });
 });
 
