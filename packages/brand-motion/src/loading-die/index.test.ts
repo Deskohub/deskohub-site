@@ -252,3 +252,11 @@ describe("loadingDieFrame", () => {
     }
   });
 });
+
+describe("loadingDieTiming", () => {
+  test("types its fields as numbers, so a copy can be adjusted", () => {
+    const playback = { ...loadingDieTiming };
+    playback.frameCount = playback.frameCount / 2;
+    expect(playback.frameCount).toBe(loadingDieTiming.frameCount / 2);
+  });
+});
