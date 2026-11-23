@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
 import type { User } from "better-auth";
+import { DrizzleQueryError } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { censorLogValue } from "@/shared/backend/logging/censorship";
+import { withInstantSleeps } from "@/shared/testing/workspace-test-clock.test-utils";
 import type { CustomerAccountId } from "../../customer-account";
 import { CustomerAuthentication } from "../customer-authentication.service";
 import {
@@ -467,5 +469,158 @@ describe("readAgentAccessToken", () => {
     ["a scheme without a separator", "Bearerabc"],
   ])("reads nothing from %s", (_name, header) => {
     expect(read(header)).toEqual(Option.none());
+  });
+});
+
+/** A node-postgres read that timed out, as Drizzle reports it. */
+const databaseTimeout = () =>
+  new DrizzleQueryError(
+    'select "id" from "auth"."oauth_resource" where "identifier" = $1',
+    [RESOURCE],
+    new Error("Query read timeout")
+  );
+
+/** A node-postgres read the database refused for good. */
+const missingTable = () =>
+  new DrizzleQueryError(
+    'select "id" from "auth"."user" where "id" = $1',
+    [ACCOUNT_ID],
+    Object.assign(new Error('relation "auth.user" does not exist'), {
+      code: "42P01",
+    })
+  );
+
+/** Rejects with each failure in turn, then answers with the value. */
+const failingThen = <A>(failures: ReadonlyArray<unknown>, value: A) => {
+  let attempts = 0;
+  const read = async () => {
+    const failure = failures[attempts];
+    attempts += 1;
+    if (attempts <= failures.length) throw failure;
+    return value;
+  };
+  return { read, attempts: () => attempts };
+};
+
+const authorizeRetrying = (authority: CustomerAgentAuthority) =>
+  Effect.flatMap(CustomerAgentAuthorization, (authorization) =>
+    authorization.authorize(TOKEN)
+  ).pipe(
+    Effect.provide(CustomerAgentAuthorization.fromAuthority(authority)),
+    Effect.result,
+    withInstantSleeps,
+    Effect.runPromise
+  );
+
+describe("CustomerAgentAuthorization database retries", () => {
+  test("retries a token check that timed out in the database", async () => {
+    const check = failingThen([databaseTimeout(), databaseTimeout()], {
+      ...activeClaims(),
+    });
+
+    const outcome = await authorizeRetrying(
+      authorityWith({ validateAccessToken: check.read })
+    );
+
+    expect(outcome._tag).toBe("Success");
+    expect(check.attempts()).toBe(3);
+  });
+
+  test("retries an account read that timed out in the database", async () => {
+    const lookup = failingThen([databaseTimeout()], userRow());
+
+    const outcome = await authorizeRetrying(
+      authorityWith({ findUser: lookup.read })
+    );
+
+    expect(outcome._tag).toBe("Success");
+    expect(lookup.attempts()).toBe(2);
+  });
+
+  test.each([
+    [
+      "token check",
+      "validateAccessToken",
+      "authentication.agent-token.verification",
+    ],
+    ["account read", "findUser", "authentication.agent-token.account-lookup"],
+  ] as const)(
+    "reports the %s unavailable once its retries are exhausted",
+    async (_name, read, failureCode) => {
+      const timeouts = failingThen(
+        Array.from({ length: 10 }, databaseTimeout),
+        null
+      );
+
+      const outcome = await authorizeRetrying(
+        authorityWith({ [read]: timeouts.read })
+      );
+
+      expect(outcome._tag === "Failure" && outcome.failure).toMatchObject({
+        reason: "unavailable",
+        failureCode,
+      });
+      expect(timeouts.attempts()).toBe(3);
+    }
+  );
+
+  test("never retries a token the provider refuses", async () => {
+    const check = failingThen([providerRejection()], activeClaims());
+
+    const outcome = await authorizeRetrying(
+      authorityWith({ validateAccessToken: check.read })
+    );
+
+    expect(outcome._tag === "Failure" && outcome.failure.reason).toBe(
+      "invalid-token"
+    );
+    expect(check.attempts()).toBe(1);
+  });
+
+  test.each([
+    [
+      "token check",
+      "validateAccessToken",
+      "authentication.agent-token.verification",
+    ],
+    ["account read", "findUser", "authentication.agent-token.account-lookup"],
+  ] as const)(
+    "never retries a permanent database error in the %s",
+    async (_name, read, failureCode) => {
+      const refusal = failingThen([missingTable()], null);
+
+      const outcome = await authorizeRetrying(
+        authorityWith({ [read]: refusal.read })
+      );
+
+      expect(outcome._tag === "Failure" && outcome.failure).toMatchObject({
+        reason: "unavailable",
+        failureCode,
+      });
+      expect(refusal.attempts()).toBe(1);
+    }
+  );
+});
+
+describe("CustomerAgentAuthorization.fromAuthorityLoader", () => {
+  test("loads the authority only when a token is authorized", async () => {
+    let loads = 0;
+    const layer = CustomerAgentAuthorization.fromAuthorityLoader(
+      Effect.sync(() => {
+        loads += 1;
+        return authorityWith();
+      })
+    );
+
+    const authorization = await Effect.runPromise(
+      Effect.provide(CustomerAgentAuthorization, layer)
+    );
+    expect(loads).toBe(0);
+
+    const outcome = await Effect.runPromise(
+      authorization.authorize(TOKEN).pipe(Effect.result)
+    );
+    expect(outcome._tag).toBe("Success");
+    expect(loads).toBe(1);
   });
 });
