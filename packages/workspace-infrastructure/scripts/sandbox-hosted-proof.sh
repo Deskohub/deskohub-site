@@ -247,8 +247,9 @@ ensure_alchemy_token() {
       curl -sS --fail-with-body --data-urlencode 'access_token@-' \
         https://oauth2.googleapis.com/tokeninfo | jq -r '.expires_in // empty')" ||
       fail "the minted access token's lifetime is unreadable"
-    [[ "$expires_in" =~ ^[0-9]+$ ]] && ((expires_in >= 1800)) ||
+    if ! [[ "$expires_in" =~ ^[0-9]+$ ]] || ((expires_in < 1800)); then
       fail "the minted access token expires in ${expires_in:-an unknown time} s, under the 30-minute step budget"
+    fi
     GOOGLE_ACCESS_TOKEN_MINTED_AT="$now"
   fi
   export GOOGLE_ACCESS_TOKEN GOOGLE_ACCESS_TOKEN_MINTED_AT
