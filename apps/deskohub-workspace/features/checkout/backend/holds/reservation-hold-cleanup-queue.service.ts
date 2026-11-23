@@ -88,25 +88,34 @@ export class ReservationHoldCleanupScheduleService extends Context.Service<
   );
 }
 
+/** A delivery exactly at the deadline is still on time. */
+const isPastCleanupDeadline = (
+  payload: ReservationHoldCleanupSchedulePayload,
+  now: Temporal.Instant
+) =>
+  payload.cleanupDeadlineIso !== undefined &&
+  Temporal.Instant.compare(
+    now,
+    Temporal.Instant.from(payload.cleanupDeadlineIso)
+  ) > 0;
+
+const acknowledgePastCleanupDeadline = (
+  payload: ReservationHoldCleanupSchedulePayload,
+  now: Temporal.Instant
+) =>
+  Effect.logWarning(
+    "Reservation hold cleanup queue message acknowledged: past its cleanup deadline",
+    { payload, checkedAt: now }
+  ).pipe(Effect.as("past_deadline" as const));
+
 export const processReservationHoldCleanupScheduleMessage = Effect.fn(
   "reservationHoldCleanupSchedule.processMessage"
 )(function* (
   payload: ReservationHoldCleanupSchedulePayload,
   now = Temporal.Now.instant()
 ) {
-  // A delivery exactly at the deadline is still on time.
-  if (
-    payload.cleanupDeadlineIso !== undefined &&
-    Temporal.Instant.compare(
-      now,
-      Temporal.Instant.from(payload.cleanupDeadlineIso)
-    ) > 0
-  ) {
-    yield* Effect.logWarning(
-      "Reservation hold cleanup queue message acknowledged: past its cleanup deadline",
-      { payload, checkedAt: now }
-    );
-    return "past_deadline" as const;
+  if (isPastCleanupDeadline(payload, now)) {
+    return yield* acknowledgePastCleanupDeadline(payload, now);
   }
 
   const reservationHoldExpiresAt = Temporal.Instant.from(
@@ -164,3 +173,20 @@ export const reservationHoldCleanupRedelivery = (cause: unknown) =>
   cause instanceof ReservationHoldCleanupDeferredError
     ? QueueRedelivery.At({ instant: cause.redeliverAt })
     : QueueRedelivery.Default();
+
+/**
+ * The queue delivery: a message past its cleanup deadline is acknowledged
+ * before `dependencies` are built, so a late delivery never retries even when
+ * they can't be.
+ */
+export const reservationHoldCleanupConsumer = <ROut, E, RIn>(
+  dependencies: Layer.Layer<ROut | ReservationHoldCleanupService, E, RIn>
+) =>
+  reservationHoldCleanupTopic.consume((message) => {
+    const now = Temporal.Now.instant();
+    return isPastCleanupDeadline(message, now)
+      ? acknowledgePastCleanupDeadline(message, now)
+      : processReservationHoldCleanupScheduleMessage(message, now).pipe(
+          Effect.provide(dependencies)
+        );
+  }, reservationHoldCleanupRedelivery);

@@ -362,6 +362,45 @@ describe("ReservationHoldCleanupScheduleService", () => {
     ]);
   });
 
+  test("acknowledges a late delivery before building its cleanup dependencies", async () => {
+    const { reservationHoldCleanupConsumer } = await import(
+      "./reservation-hold-cleanup-queue.service"
+    );
+    const { ReservationHoldCleanupService } = await import(
+      "./reservation-hold-cleanup.service"
+    );
+    const builds = mock(() => undefined);
+    const consume = reservationHoldCleanupConsumer(
+      Layer.effect(
+        ReservationHoldCleanupService,
+        Effect.sync(builds).pipe(
+          Effect.andThen(Effect.fail(new Error("database unavailable")))
+        )
+      )
+    );
+    const deliver = (payload: typeof scheduledPayload) =>
+      consume(
+        {
+          messageId: "message-id",
+          deliveryCount: 1,
+          topic: "workspace-reservation-hold-cleanup",
+          payload,
+        },
+        "durable"
+      ).pipe(Effect.runPromise);
+
+    // The deadline is long past on the real clock.
+    expect(await deliver(scheduledPayload)).toEqual({ _tag: "Handled" });
+    expect(builds).not.toHaveBeenCalled();
+
+    const onTime = await deliver({
+      ...scheduledPayload,
+      cleanupDeadlineIso: Temporal.Now.instant().add({ hours: 1 }).toString(),
+    });
+    expect(onTime._tag).not.toBe("Handled");
+    expect(builds).toHaveBeenCalledTimes(1);
+  });
+
   test("keeps the enqueue clock's full precision in the cleanup deadline", async () => {
     const { reservationHoldCleanupTopic } = await import(
       "./reservation-hold-cleanup-topic"

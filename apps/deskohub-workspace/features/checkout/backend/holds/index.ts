@@ -3,6 +3,7 @@ export { ReservationHoldCleanupService } from "./reservation-hold-cleanup.servic
 export {
   processReservationHoldCleanupScheduleMessage,
   ReservationHoldCleanupScheduleService,
+  reservationHoldCleanupConsumer,
   reservationHoldCleanupRedelivery,
 } from "./reservation-hold-cleanup-queue.service";
 export { reservationHoldCleanupTopic } from "./reservation-hold-cleanup-topic";
