@@ -105,9 +105,12 @@ export {
   optionalChoiceParam,
   optionValues,
   periodParam,
+  ReservationPayment,
   ReservationProductFilter,
   type ReservationProductFilter as ReservationProductFilterType,
   type ReservationProductPropertyCondition,
+  ReservationStay,
+  reservationStayIssue,
   setAttribute,
 } from "./audience-attribute-kinds";
 export {

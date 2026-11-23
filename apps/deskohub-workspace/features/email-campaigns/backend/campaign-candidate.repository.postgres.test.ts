@@ -379,6 +379,16 @@ describe.skipIf(!testDatabase)(
 
     const reservationCounts = (selection: CampaignReservationSelection) =>
       repository((candidates) => candidates.countReservations(selection));
+
+    test("counts among more reservation IDs than a query has parameters", async () => {
+      const counts = await reservationCounts({
+        product: { family: "cowork", properties: [] },
+        dotyposReservationIds: Array.from({ length: 65_536 }, (_, index) =>
+          DotyposReservationIdSchema.make(`unbooked-visit-${index}`)
+        ),
+      });
+      expect(counts.size).toBe(0);
+    });
     const matches = async (
       selection: CampaignReservationSelection,
       customer = reserved

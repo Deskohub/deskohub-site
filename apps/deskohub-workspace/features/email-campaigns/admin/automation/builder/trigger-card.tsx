@@ -1,6 +1,10 @@
 "use client";
 
-import type { CalendarExpressionType as CalendarExpression } from "@deskohub/workspace-admin-api";
+import type {
+  CalendarExpressionType as CalendarExpression,
+  ReservationPayment,
+  ReservationStay,
+} from "@deskohub/workspace-admin-api";
 import {
   CalendarCheck,
   CalendarClock,
@@ -17,9 +21,17 @@ import type { Locale } from "@/features/i18n";
 import { useRouteLocale } from "@/features/i18n/route-locale";
 import { ChoiceCard } from "@/shared/components/ui/choice-card";
 import { SegmentedControl } from "@/shared/components/ui/segmented-control";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/shared/components/ui/select";
 import { cn } from "@/shared/utils";
 import { isPassReminderKind } from "../../../automation/automation-triggers";
 import {
+  compactSelectClassName,
   FieldError,
   type FieldErrorLookup,
   fieldErrorAttributes,
@@ -34,7 +46,9 @@ import {
   eventTrigger,
   eventTriggerKindOf,
   eventTriggerKinds,
-  takesProductFilter,
+  isReservationTrigger,
+  type ReservationTrigger,
+  withReservationQualifier,
 } from "./automation-flow-editing";
 import type { FlowTriggerValue } from "./automation-flow-form";
 import { CalendarExpressionEditor } from "./calendar-expression-editor";
@@ -371,26 +385,144 @@ function EventTriggerFields({
           })}
         </div>
       </fieldset>
-      {takesProductFilter(trigger) && (
-        <div className="space-y-1.5 rounded-lg border border-navy-blue/12 bg-navy-blue/[0.02] p-3">
-          <ProductFilterControl
-            value={trigger.product}
-            onChange={(product) =>
-              onChange(
-                product === undefined
-                  ? { _tag: trigger._tag }
-                  : { _tag: trigger._tag, product }
-              )
-            }
-            errorAt={(field) =>
-              errorAt(field === "" ? "product" : `product.${field}`)
-            }
-          />
-          <p className="text-navy-blue/55 text-xs leading-5">
-            {m.emailAutomationFlowEventProductHint({}, { locale })}
-          </p>
-        </div>
+      {isReservationTrigger(trigger) && (
+        <ReservationTriggerQualifiers
+          trigger={trigger}
+          onChange={onChange}
+          errorAt={errorAt}
+        />
       )}
+    </div>
+  );
+}
+
+/** The select value standing for an unset qualifier. */
+const anyQualifier = "any";
+
+/**
+ * The reservation product, booked stay, and payment a reservation event must
+ * have to start a run. The contract rejects a stay without the cowork
+ * product, so the stay stays offered and explains that error.
+ */
+function ReservationTriggerQualifiers({
+  trigger,
+  onChange,
+  errorAt,
+}: {
+  readonly trigger: ReservationTrigger;
+  readonly onChange: (trigger: EventTrigger) => void;
+  readonly errorAt: FieldErrorLookup;
+}) {
+  const locale = useRouteLocale();
+  const stayErrorId = useId();
+  const stayInvalid = errorAt("stay") !== undefined;
+  const stayOptions = {
+    day: m.emailAutomationFlowTriggerStayDay({}, { locale }),
+    overnight: m.emailAutomationFlowTriggerStayOvernight({}, { locale }),
+  } satisfies Record<ReservationStay, string>;
+  const paymentOptions = {
+    individual: m.emailAutomationFlowTriggerPaymentIndividual({}, { locale }),
+  } satisfies Record<ReservationPayment, string>;
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-navy-blue/12 bg-navy-blue/[0.02] p-3">
+      <ProductFilterControl
+        value={trigger.product}
+        onChange={(product) =>
+          onChange(withReservationQualifier(trigger, "product", product))
+        }
+        errorAt={(field) =>
+          errorAt(field === "" ? "product" : `product.${field}`)
+        }
+      />
+      <div className="grid gap-3 @lg:grid-cols-2">
+        <QualifierSelect
+          label={m.emailAutomationFlowTriggerStayLabel({}, { locale })}
+          any={m.emailAutomationFlowTriggerStayAny({}, { locale })}
+          options={stayOptions}
+          value={trigger.stay}
+          onChange={(stay) =>
+            onChange(withReservationQualifier(trigger, "stay", stay))
+          }
+          errorId={stayErrorId}
+          invalid={stayInvalid}
+        />
+        <QualifierSelect
+          label={m.emailAutomationFlowTriggerPaymentLabel({}, { locale })}
+          any={m.emailAutomationFlowTriggerPaymentAny({}, { locale })}
+          options={paymentOptions}
+          value={trigger.payment}
+          onChange={(payment) =>
+            onChange(withReservationQualifier(trigger, "payment", payment))
+          }
+        />
+      </div>
+      <FieldError
+        id={stayErrorId}
+        messages={[
+          stayInvalid
+            ? m.emailAutomationFlowTriggerStayNeedsCowork({}, { locale })
+            : undefined,
+        ]}
+      />
+      <div className="space-y-1 text-navy-blue/55 text-xs leading-5">
+        <p>{m.emailAutomationFlowEventProductHint({}, { locale })}</p>
+        <p>{m.emailAutomationFlowTriggerQualifiersHint({}, { locale })}</p>
+      </div>
+    </div>
+  );
+}
+
+/** A labelled choice of one optional qualifier, unset meaning any. */
+function QualifierSelect<Value extends string>({
+  label,
+  any,
+  options,
+  value,
+  onChange,
+  errorId,
+  invalid = false,
+}: {
+  readonly label: string;
+  /** The label of the qualifier left unset. */
+  readonly any: string;
+  readonly options: Readonly<Record<Value, string>>;
+  readonly value: Value | undefined;
+  readonly onChange: (value: Value | undefined) => void;
+  readonly errorId?: string;
+  readonly invalid?: boolean;
+}) {
+  const labelId = useId();
+  const values = Object.keys(options) as Value[];
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span id={labelId} className="font-semibold text-sm">
+        {label}
+      </span>
+      <Select
+        value={value ?? anyQualifier}
+        onValueChange={(next) =>
+          onChange(values.find((option) => option === next))
+        }
+      >
+        <SelectTrigger
+          aria-labelledby={labelId}
+          className={cn(
+            compactSelectClassName,
+            invalid && "border-burned-orange"
+          )}
+          {...(errorId ? fieldErrorAttributes(errorId, invalid) : {})}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={anyQualifier}>{any}</SelectItem>
+          {values.map((option) => (
+            <SelectItem key={option} value={option}>
+              {options[option]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

@@ -174,6 +174,9 @@ const dotyposState = {
   failNextCustomerPage: false,
   customerPageCalls: [] as number[],
   reservationReads: 0,
+  /** Fails every reservation lookup by id that asks for any id. */
+  failReservationLookups: false,
+  reservationLookups: [] as number[],
 };
 const dotypos = DotyposServiceMock({
   getCustomersByIds: (ids) => {
@@ -201,6 +204,17 @@ const dotypos = DotyposServiceMock({
   },
   getReservationsByIds: (ids, readOptions) => {
     dotyposState.reservationReads += 1;
+    const asked = [...ids].length;
+    dotyposState.reservationLookups.push(asked);
+    if (dotyposState.failReservationLookups && asked > 0) {
+      return Effect.fail(
+        new DotyposUnavailable({
+          operation: "getReservationsByIds",
+          reason: "server",
+          httpStatus: 503,
+        })
+      );
+    }
     return makeInMemoryDotypos({
       reservations: dotyposState.reservations,
     }).service.getReservationsByIds(ids, readOptions);
@@ -1362,6 +1376,357 @@ describe.skipIf(!testDatabase)(
         kind: "replay",
       });
       expect(await unitsOf(started.previewId)).toEqual([]);
+    });
+
+    test("a stay trigger replays only the visits of its stay", async () => {
+      const [ida, jack, lena] = ["ida", "jack", "lena"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const noonDaysAgo = (days: number) =>
+        pragueOf(ago({ hours: 24 * days }))
+          .toPlainDate()
+          .toZonedDateTime({ timeZone: "Europe/Prague", plainTime: "12:00" })
+          .toInstant();
+      /** 09:00 to 17:00 in Prague. */
+      const dayOf = (days: number) => ({
+        startsAt: noonDaysAgo(days).subtract({ hours: 3 }),
+        endsAt: noonDaysAgo(days).add({ hours: 5 }),
+      });
+      /** Noon to noon the next day in Prague. */
+      const overnightFrom = (days: number) => ({
+        startsAt: noonDaysAgo(days),
+        endsAt: noonDaysAgo(days - 1),
+      });
+      const visits = {
+        "ida-overnight": { customer: ida, ...overnightFrom(8) },
+        "jack-day": { customer: jack, ...dayOf(7) },
+        // Ends while jack's day run still waits.
+        "jack-overnight": { customer: jack, ...overnightFrom(6) },
+        "lena-day": { customer: lena, ...dayOf(10) },
+      };
+      await seedReservations(
+        Object.entries(visits).map(([label, visit]) => ({
+          label,
+          ...visit,
+          // Workspace cancelled lena's visit after its email went out.
+          ...(label === "lena-day" && { workspaceCancelledAt: noonDaysAgo(2) }),
+        }))
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "reserved-desk",
+              coffee: true,
+            },
+          })
+          .where(
+            inArray(
+              workspaceReservations.id,
+              Object.keys(visits).map(reservationIdOf)
+            )
+          )
+      );
+      const [idaEvent, jackDay, jackOvernight, lenaDay] = await seedEvents(
+        Object.entries(visits).map(([reservation, visit]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer: visit.customer,
+          occurredAt: visit.endsAt,
+        }))
+      );
+      const campaignId = await seedAutomation({
+        flow: decodeFlow({
+          trigger: {
+            _tag: "ReservationFinished",
+            product: { family: "cowork", properties: [] },
+            stay: "day",
+          },
+          steps: [waitHours("hold", 72), send],
+        }),
+      });
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+
+      const outcomes = new Map(
+        (await rowsOf(started.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      expect(outcomes.has(idaEvent!)).toBe(false);
+      expect(outcomes.get(jackDay!)).toBe("would-send");
+      expect(outcomes.has(jackOvernight!)).toBe(false);
+      expect(outcomes.get(lenaDay!)).toBe("would-send");
+    });
+
+    test("a payment trigger replays only individually paid reservations", async () => {
+      const [mona, nina] = ["mona", "nina"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const finishedAt = ago({ hours: 24 * 4 });
+      await seedReservations(
+        [
+          { label: "mona-card", customer: mona },
+          { label: "nina-unpaid-attempt", customer: nina },
+        ].map((reservation) => ({
+          ...reservation,
+          startsAt: finishedAt.subtract({ hours: 2 }),
+          endsAt: finishedAt,
+        }))
+      );
+      // Only mona's order has a paid attempt that keeps its amount.
+      const attemptId = `dry-run-card-${runId}`;
+      await testDatabase.pool.query(
+        `insert into payment_attempts (id, order_id, workspace_reservation_id, provider,
+           provider_order_id, state, amount_value, amount_exponent, currency)
+         values ($1, $2, $2, 'nexi', $1, 'paid', 29000, 2, 'CZK')`,
+        [attemptId, reservationIdOf("mona-card")]
+      );
+      await testDatabase.pool.query(
+        "update workspace_reservations set active_payment_attempt_id = $2 where id = $1",
+        [reservationIdOf("mona-card"), attemptId]
+      );
+      const [monaEvent, ninaEvent] = await seedEvents([
+        {
+          kind: "reservation-finished",
+          reservation: "mona-card",
+          customer: mona,
+          occurredAt: finishedAt,
+        },
+        {
+          kind: "reservation-finished",
+          reservation: "nina-unpaid-attempt",
+          customer: nina,
+          occurredAt: finishedAt,
+        },
+      ]);
+      const campaignId = await seedAutomation({
+        flow: decodeFlow({
+          trigger: { _tag: "ReservationFinished", payment: "individual" },
+          steps: [send],
+        }),
+      });
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+
+      const outcomes = new Map(
+        (await rowsOf(started.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      expect(outcomes.get(monaEvent!)).toBe("would-send");
+      expect(outcomes.has(ninaEvent!)).toBe(false);
+
+      // A unit that kept missing its deadline still judges payment locally.
+      const fallback = await start(
+        await seedAutomation({
+          flow: decodeFlow({
+            trigger: { _tag: "ReservationFinished", payment: "individual" },
+            steps: [send],
+          }),
+        })
+      );
+      for (const unit of await unitsOf(fallback.previewId)) {
+        await query(
+          db
+            .update(emailCampaignAutomationWorkUnits)
+            .set({ deadlineMisses: 3 })
+            .where(eq(emailCampaignAutomationWorkUnits.id, unit.id))
+        );
+      }
+      await processAll(fallback.previewId);
+      const fallbackOutcomes = new Map(
+        (await rowsOf(fallback.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      expect(fallbackOutcomes.get(monaEvent!)).toBe("unavailable");
+      expect(fallbackOutcomes.has(ninaEvent!)).toBe(false);
+    });
+
+    test("a unit past its deadline still drops events payment and stored tiers settle", async () => {
+      const [ola, pia, quin] = ["ola", "pia", "quin"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const finishedAt = ago({ hours: 24 * 3 });
+      const reservations = {
+        "ola-open-space": ola,
+        "pia-reserved-desk": pia,
+        "quin-reserved-desk-unpaid": quin,
+      };
+      await seedReservations(
+        Object.entries(reservations).map(([label, customer]) => ({
+          label,
+          customer,
+          startsAt: finishedAt.subtract({ hours: 24 }),
+          endsAt: finishedAt,
+        }))
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "reserved-desk",
+              coffee: true,
+            },
+          })
+          .where(
+            inArray(workspaceReservations.id, [
+              reservationIdOf("pia-reserved-desk"),
+              reservationIdOf("quin-reserved-desk-unpaid"),
+            ])
+          )
+      );
+      for (const label of ["ola-open-space", "pia-reserved-desk"]) {
+        const attemptId = `dry-run-card-${runId}-${label}`;
+        await testDatabase.pool.query(
+          `insert into payment_attempts (id, order_id, workspace_reservation_id, provider,
+             provider_order_id, state, amount_value, amount_exponent, currency)
+           values ($1, $2, $2, 'nexi', $1, 'paid', 29000, 2, 'CZK')`,
+          [attemptId, reservationIdOf(label)]
+        );
+        await testDatabase.pool.query(
+          "update workspace_reservations set active_payment_attempt_id = $2 where id = $1",
+          [reservationIdOf(label), attemptId]
+        );
+      }
+      const [olaEvent, piaEvent, quinEvent] = await seedEvents(
+        Object.entries(reservations).map(([reservation, customer]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer,
+          occurredAt: finishedAt,
+        }))
+      );
+      const started = await start(
+        await seedAutomation({
+          flow: decodeFlow({
+            trigger: {
+              _tag: "ReservationFinished",
+              product: { family: "cowork", properties: [] },
+              stay: "overnight",
+              payment: "individual",
+            },
+            steps: [send],
+          }),
+        })
+      );
+      for (const unit of await unitsOf(started.previewId)) {
+        await query(
+          db
+            .update(emailCampaignAutomationWorkUnits)
+            .set({ deadlineMisses: 3 })
+            .where(eq(emailCampaignAutomationWorkUnits.id, unit.id))
+        );
+      }
+      await processAll(started.previewId);
+
+      const outcomes = new Map(
+        (await rowsOf(started.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      // Open Space can't be overnight; the unpaid one fails payment; only
+      // the paid Reserved Desk visit needs its unread interval.
+      expect(outcomes.has(olaEvent!)).toBe(false);
+      expect(outcomes.has(quinEvent!)).toBe(false);
+      expect(outcomes.get(piaEvent!)).toBe("unavailable");
+    });
+
+    test("a stay its stored tiers rule out reads no visits, so Dotypos can't stall the replay", async () => {
+      const [rita, sven] = ["rita", "sven"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const finishedAt = ago({ hours: 24 * 2 });
+      const labels = { "rita-open-space": rita, "sven-open-space": sven };
+      await seedReservations(
+        Object.entries(labels).map(([label, customer]) => ({
+          label,
+          customer,
+          startsAt: finishedAt.subtract({ hours: 24 }),
+          endsAt: finishedAt,
+        }))
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "open-space",
+              coffee: false,
+            },
+          })
+          .where(
+            inArray(
+              workspaceReservations.id,
+              Object.keys(labels).map(reservationIdOf)
+            )
+          )
+      );
+      const events = await seedEvents(
+        Object.entries(labels).map(([reservation, customer]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer,
+          occurredAt: finishedAt,
+        }))
+      );
+      const started = await start(
+        await seedAutomation({
+          flow: decodeFlow({
+            trigger: {
+              _tag: "ReservationFinished",
+              // Only this test's Open Space visits are candidates.
+              product: {
+                family: "cowork",
+                properties: [
+                  {
+                    property: "tier",
+                    operator: "anyOf",
+                    value: ["open-space"],
+                  },
+                ],
+              },
+              stay: "overnight",
+            },
+            steps: [send],
+          }),
+        })
+      );
+
+      dotyposState.reservationLookups = [];
+      dotyposState.failReservationLookups = true;
+      try {
+        await processAll(started.previewId);
+      } finally {
+        dotyposState.failReservationLookups = false;
+      }
+
+      expect(
+        dotyposState.reservationLookups.filter((asked) => asked > 0)
+      ).toEqual([]);
+      expect(
+        (await unitsOf(started.previewId)).map(({ status }) => status)
+      ).toEqual(["done"]);
+      const rows = await rowsOf(started.previewId);
+      expect(
+        rows.filter(({ customerEventId }) =>
+          events.includes(customerEventId ?? "")
+        )
+      ).toEqual([]);
     });
 
     test("a reschedule in Dotypos changes the next preview without local writes", async () => {

@@ -1,5 +1,10 @@
 import { Array as Arr, Order, Schema, Struct } from "effect";
-import { ReservationProductFilter } from "./audience-attribute-kinds";
+import {
+  ReservationPayment,
+  ReservationProductFilter,
+  ReservationStay,
+  reservationStayIssue,
+} from "./audience-attribute-kinds";
 import {
   type AudienceCondition,
   AudienceFilter,
@@ -45,10 +50,21 @@ export const AutomationStepId = Schema.String.check(
   });
 export type AutomationStepId = typeof AutomationStepId.Type;
 
-/** The reservation product filter of a reservation trigger; audiences use the same schema. */
+/**
+ * What a reservation trigger's event must be: of the product, of the booked
+ * cowork stay, and paid individually, each only when set. Audiences'
+ * reservation counts use the same schemas and rules.
+ */
 const reservationTriggerFields = {
   product: Schema.optionalKey(ReservationProductFilter),
+  stay: Schema.optionalKey(ReservationStay),
+  payment: Schema.optionalKey(ReservationPayment),
 };
+
+const reservationTrigger = <const Tag extends string>(tag: Tag) =>
+  Schema.TaggedStruct(tag, reservationTriggerFields).check(
+    Schema.makeFilter(reservationStayIssue)
+  );
 
 const passReminderTriggerFields = {
   /** Stored on published flows so later copy revisions don't change a run. */
@@ -58,10 +74,10 @@ const passReminderTriggerFields = {
 /** What starts a run: a calendar schedule, customer event, or pass reminder. */
 export const AutomationTrigger = Schema.Union([
   Schema.TaggedStruct("Schedule", { calendar: CalendarExpression }),
-  Schema.TaggedStruct("ReservationBooked", reservationTriggerFields),
-  Schema.TaggedStruct("ReservationCancelled", reservationTriggerFields),
-  Schema.TaggedStruct("ReservationStarted", reservationTriggerFields),
-  Schema.TaggedStruct("ReservationFinished", reservationTriggerFields),
+  reservationTrigger("ReservationBooked"),
+  reservationTrigger("ReservationCancelled"),
+  reservationTrigger("ReservationStarted"),
+  reservationTrigger("ReservationFinished"),
   Schema.TaggedStruct("AccountCreated", {}),
   Schema.TaggedStruct("EntryPackExpiring", passReminderTriggerFields),
   Schema.TaggedStruct("UnlimitedEnding", passReminderTriggerFields),
