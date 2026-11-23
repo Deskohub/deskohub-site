@@ -13,6 +13,7 @@ import {
   makeEdgeComputeApi,
   ownedDescription,
   parseOwnedDescription,
+  requireAdmittedTarget,
   requirePresent,
   settleGlobalOperation,
 } from "./edge-compute-api";
@@ -307,15 +308,19 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
           () => new EdgeComputeResourceUnowned({ resource })
         )
       );
+    // Each write first checks the policy is still the admitted one, and
+    // afterwards that its operation changed that one.
     const write = (
       operation: string,
       request: HttpClientRequest.HttpClientRequest
     ) =>
-      api
-        .mutate(resource, operation, request)
-        .pipe(
-          Effect.flatMap((pending) => settleGlobalOperation(project, pending))
-        );
+      read(operation).pipe(
+        Effect.andThen(api.mutate(resource, operation, request)),
+        Effect.flatMap((pending) => settleGlobalOperation(project, pending)),
+        Effect.flatMap((settled) =>
+          requireAdmittedTarget(resource, admittedId, settled)
+        )
+      );
 
     let live = yield* api.get(resource, url, decodePolicy);
     if (live === undefined) {
@@ -325,14 +330,14 @@ export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
         type: news.type,
         rules: news.rules.map((rule) => ruleBody(rule)),
       });
-      if (inserted !== "conflict") {
-        yield* settleGlobalOperation(project, inserted);
-      }
+      // Admitted by the insert's own target ID, or else by the marker: a
+      // conflict is ours only after a retried insert that went through.
+      const insertedId =
+        inserted === "conflict"
+          ? undefined
+          : (yield* settleGlobalOperation(project, inserted)).targetId;
       live = yield* read("insert");
-      if (
-        inserted === "conflict" &&
-        !(yield* isOwnedDescription(id, live.description))
-      ) {
+      if (!(yield* isAdmitted(id, insertedId, live))) {
         return yield* new EdgeComputeResourceUnowned({ resource });
       }
     } else if (!(yield* isAdmitted(id, output?.id, live))) {

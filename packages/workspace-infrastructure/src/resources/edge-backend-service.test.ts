@@ -494,4 +494,58 @@ describe("EdgeBackendService provider", () => {
       "PATCH backendServices/workspace-sandbox-dynamic",
     ]);
   });
+  test("a retried delete never removes a same-name replacement", async () => {
+    const replacement = {
+      ...converged(dynamicProps, ""),
+      id: "9999",
+    };
+    const fake = fakeCompute({
+      existing: [converged(dynamicProps)],
+      lostAnswers: ["delete"],
+      replaceAfter: { kind: "delete", with: replacement },
+    });
+    const exit = await run(fake, (provider) =>
+      provider.delete({
+        ...lifecycleInput,
+        olds: dynamicProps,
+        output: {
+          project,
+          name: "workspace-sandbox-dynamic",
+          id: "1234",
+        } as EdgeBackendServiceAttributes,
+      })
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const deletes = fake.calls.filter((call) => call.method === "DELETE");
+    expect(deletes).toHaveLength(2);
+    expect(deletes[1]?.requestId).toBe(deletes[0]?.requestId ?? "");
+    expect(fake.objects.get("workspace-sandbox-dynamic")?.id).toBe("9999");
+  });
+
+  test("a retried insert is applied once", async () => {
+    const fake = fakeCompute({ lostAnswers: ["insert"] });
+    const exit = await run(fake, (provider) =>
+      reconcile(provider, dynamicProps)
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const inserts = fake.calls.filter(
+      (call) => call.method === "POST" && call.path.endsWith("/backendServices")
+    );
+    expect(inserts).toHaveLength(2);
+    expect(inserts[1]?.requestId).toBe(inserts[0]?.requestId ?? "");
+  });
+
+  test("an insert never admits a replacement it did not create", async () => {
+    const fake = fakeCompute({
+      replaceAfter: {
+        kind: "insert",
+        with: { ...converged(dynamicProps, ""), id: "9999" },
+      },
+    });
+    const exit = await run(fake, (provider) =>
+      reconcile(provider, dynamicProps)
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
+    expect(mutations(fake.calls)).toEqual(["POST global/backendServices"]);
+  });
 });

@@ -76,6 +76,8 @@ const noAnswerReasons: Record<GoogleApiNoAnswer, string> = {
 export const ComputeOperation = Schema.Struct({
   name: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
+  /** The Compute ID of the object the operation changed. */
+  targetId: Schema.optional(Schema.String),
   error: Schema.optional(
     Schema.Struct({
       code: Schema.optional(Schema.Finite),
@@ -104,7 +106,39 @@ export const settleGlobalOperation = (
     // The waiter reads only the operation's name, status and error.
     operation as Parameters<typeof waitGlobalOperation>[1],
     options
+  ).pipe(
+    Effect.map(
+      (settled): ComputeOperation => ({
+        name: settled.name,
+        status: settled.status,
+        targetId: settled.targetId ?? operation.targetId,
+      })
+    )
   );
+
+/**
+ * Fail when a settled operation changed another object than the admitted
+ * one: a same-name replacement appeared between the check and the write.
+ */
+export const requireAdmittedTarget = (
+  resource: string,
+  admittedId: string | undefined,
+  settled: ComputeOperation
+) =>
+  admittedId !== undefined &&
+  settled.targetId !== undefined &&
+  settled.targetId !== admittedId
+    ? Effect.fail(new EdgeComputeResourceUnowned({ resource }))
+    : Effect.void;
+
+/**
+ * A Compute mutation request with its own request ID. The ID is fixed
+ * before the first attempt, so a retried attempt (after a 5xx or a lost
+ * answer) is the same request: Compute returns the original operation
+ * instead of applying it again, possibly to a same-name replacement.
+ */
+const idempotent = (request: HttpClientRequest.HttpClientRequest) =>
+  request.pipe(HttpClientRequest.setUrlParam("requestId", crypto.randomUUID()));
 
 /** `projects/…` of a Compute URL, so full and partial links compare equal. */
 export const computeResourcePath = (link: string | undefined) => {
@@ -219,7 +253,13 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
     resource: string,
     operation: string,
     request: HttpClientRequest.HttpClientRequest
-  ) => send(resource, operation, request, operationAnswer(resource, operation));
+  ) =>
+    send(
+      resource,
+      operation,
+      idempotent(request),
+      operationAnswer(resource, operation)
+    );
 
   return {
     get,
@@ -229,8 +269,10 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
       send<"conflict" | ComputeOperation>(
         resource,
         "insert",
-        HttpClientRequest.post(url).pipe(
-          HttpClientRequest.bodyJsonUnsafe(body)
+        idempotent(
+          HttpClientRequest.post(url).pipe(
+            HttpClientRequest.bodyJsonUnsafe(body)
+          )
         ),
         (response) =>
           response.status === 409
@@ -242,7 +284,7 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
       send<"gone" | ComputeOperation>(
         resource,
         "delete",
-        HttpClientRequest.delete(url),
+        idempotent(HttpClientRequest.delete(url)),
         (response) =>
           response.status === 404
             ? Effect.succeed("gone" as const)

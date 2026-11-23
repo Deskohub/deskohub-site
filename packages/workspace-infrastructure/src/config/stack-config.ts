@@ -158,21 +158,26 @@ export const GcpProjectNumber = Schema.String.check(
 export type GcpProjectNumber = typeof GcpProjectNumber.Type;
 
 /**
- * A host the edge's URL map routes: a lowercase DNS hostname, or a
- * `*.`-prefixed wildcard, which only an edge without its managed
- * certificate may route.
+ * A host pattern the edge's URL map routes, in Compute URL map syntax: a
+ * lowercase host with an optional port, where `*` may lead and is then
+ * followed by `-` or `.`, or stands alone for any host.
  */
 export const EdgeHost = Schema.String.check(
   Schema.isPattern(
-    /^(?=.{1,253}$)(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
+    /^(?=.{1,255}$)(?:\*(?:[-.][a-z0-9-]+(?:\.[a-z0-9-]+)*)?|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*)(?::[0-9]{1,5})?$/
   )
 ).annotate({
   identifier: "EdgeHost",
   description:
-    "A lowercase hostname such as workspace.example.com, or *.example.com.",
+    "A URL map host pattern such as workspace.example.com, *.example.com or example.com:80.",
 });
 
-const isWildcardHost = (host: string) => host.startsWith("*.");
+/**
+ * A name a Google-managed certificate can cover: a plain DNS hostname, no
+ * wildcard and no port.
+ */
+const certificateDomain =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 /**
  * The only project whose sandbox edge may serve plain HTTP, for a hosted
@@ -402,7 +407,7 @@ export const decodeWorkspaceStackConfig = (input: unknown) =>
 /**
  * Preview declares no web service for an edge to front (#1455). Plain HTTP
  * is a sandbox proof mode in its approved project only. An HTTPS edge needs
- * at least one hostname, and no wildcard, for its managed certificate.
+ * at least one hostname, each one its managed certificate can cover.
  */
 const edgeProblems = (config: WorkspaceStackConfig) => {
   const edge = config.edge;
@@ -422,7 +427,7 @@ const edgeProblems = (config: WorkspaceStackConfig) => {
     return ["edge.domains"];
   }
   return edge.domains.flatMap((host, index) =>
-    isWildcardHost(host) ? [`edge.domains.${index}`] : []
+    certificateDomain.test(host) ? [] : [`edge.domains.${index}`]
   );
 };
 

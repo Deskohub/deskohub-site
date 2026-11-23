@@ -128,17 +128,38 @@ describe("edge configuration", () => {
     ).toMatchObject({ reason: "edge", paths: ["edge"] });
   });
 
-  test("routes wildcard hosts only without the managed certificate", () => {
-    const wildcard = ["*.example.com"];
+  test("routes URL map host patterns only without the managed certificate", () => {
+    const patterns = [
+      "*",
+      "*.example.com",
+      "*-preview.example.com",
+      "example.com:80",
+    ];
     expect(
       decoded({
         ...proofInput,
-        edge: { domains: wildcard, enableHttps: false },
+        edge: { domains: patterns, enableHttps: false },
       }).edge?.domains
-    ).toEqual(wildcard);
+    ).toEqual(patterns);
     expect(
-      rejection({ ...sandboxConfigInput, edge: { domains: wildcard } })
-    ).toMatchObject({ reason: "edge", paths: ["edge.domains.0"] });
+      rejection({ ...sandboxConfigInput, edge: { domains: patterns } })
+    ).toMatchObject({
+      reason: "edge",
+      paths: [
+        "edge.domains.0",
+        "edge.domains.1",
+        "edge.domains.2",
+        "edge.domains.3",
+      ],
+    });
+    for (const host of ["*example.com", "Workspace.example.com", "a..b"]) {
+      expect(
+        rejection({
+          ...proofInput,
+          edge: { domains: [host], enableHttps: false },
+        })?.reason
+      ).toBe("schema");
+    }
   });
 
   test("takes any positive auth rate limit", () => {

@@ -374,4 +374,38 @@ describe("EdgeSecurityPolicy provider", () => {
     expect(mutations(compute.calls)).toEqual([]);
     expect(compute.objects.size).toBe(1);
   });
+  test("stops before writing rules to a policy replaced mid-reconcile", async () => {
+    const compute = fake({
+      existing: [converged(policyProps(true), description)],
+      replaceAfter: {
+        kind: "patch",
+        with: { ...converged(policyProps(true), description), id: "9999" },
+      },
+    });
+    const exit = await run(compute, (provider) =>
+      reconcile(provider, policyProps(false), {
+        project,
+        name: "workspace-sandbox-edge",
+        id: "5678",
+      } as EdgeSecurityPolicyAttributes)
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
+    expect(mutations(compute.calls)).toEqual([
+      "PATCH securityPolicies/workspace-sandbox-edge",
+    ]);
+  });
+
+  test("an insert never admits a replacement it did not create", async () => {
+    const compute = fake({
+      replaceAfter: {
+        kind: "insert",
+        with: { ...converged(policyProps(true), description), id: "9999" },
+      },
+    });
+    const exit = await run(compute, (provider) =>
+      reconcile(provider, policyProps(true))
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
+    expect(mutations(compute.calls)).toEqual(["POST global/securityPolicies"]);
+  });
 });

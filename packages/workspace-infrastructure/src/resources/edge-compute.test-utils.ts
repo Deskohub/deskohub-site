@@ -27,7 +27,9 @@ export type Live = Record<string, unknown>;
 export type Call = {
   readonly method: string;
   readonly path: string;
+  /** Query parameters other than the request ID. */
   readonly query: string;
+  readonly requestId: string | null;
   readonly body: Live | undefined;
 };
 
@@ -44,6 +46,10 @@ export interface FakeComputeOptions {
   readonly failureCode?: string;
   /** PATCHes whose fingerprint a concurrent writer changes first. */
   readonly stalePatches?: number;
+  /** Operation kinds applied once but answered 503, so the client retries. */
+  readonly lostAnswers?: ReadonlyArray<string>;
+  /** Right after an operation of `kind`, someone recreates the object. */
+  readonly replaceAfter?: { readonly kind: string; readonly with: Live };
 }
 
 type Collection = "backendServices" | "securityPolicies";
@@ -57,6 +63,9 @@ export const fakeCompute = (
     (options.existing ?? []).map((live) => [String(live.name), { ...live }])
   );
   const calls: Array<Call> = [];
+  const answered = new Map<string, Live>();
+  const lostAnswers = new Set(options.lostAnswers ?? []);
+  let replaceAfter = options.replaceAfter;
   const operations = new Map<string, string>();
   let fingerprint = 0;
   let stalePatches = options.stalePatches ?? 0;
@@ -68,12 +77,19 @@ export const fakeCompute = (
       ],
     },
   };
-  const operation = (kind: string) => {
+  let lastOperation: { readonly kind: string; readonly body: Live } | undefined;
+  const operation = (kind: string, targetId: unknown) => {
     const name = `operation-${operations.size + 1}`;
     operations.set(name, kind);
-    return options.failingAtOnce?.includes(kind)
-      ? { name, status: "DONE", ...operationError }
-      : { name, status: "RUNNING" };
+    const body = {
+      name,
+      targetId: String(targetId),
+      ...(options.failingAtOnce?.includes(kind)
+        ? { status: "DONE", ...operationError }
+        : { status: "RUNNING" }),
+    };
+    lastOperation = { kind, body };
+    return body;
   };
   const answer = (status: number, body?: unknown) =>
     new Response(body === undefined ? null : JSON.stringify(body), {
@@ -121,7 +137,10 @@ export const fakeCompute = (
           creationTimestamp: "2026-11-23T00:00:00Z",
         }
       );
-      return answer(200, operation("insert"));
+      return answer(
+        200,
+        operation("insert", objects.get(String(body.name))?.id)
+      );
     }
     const live = name === undefined ? undefined : objects.get(name);
     if (live === undefined || name === undefined) {
@@ -141,11 +160,11 @@ export const fakeCompute = (
       }
       const { fingerprint: _sent, ...fields } = body;
       touch(name, live, fields);
-      return answer(200, operation("patch"));
+      return answer(200, operation("patch", live.id));
     }
     if (method === "DELETE") {
       objects.delete(name);
-      return answer(200, operation("delete"));
+      return answer(200, operation("delete", live.id));
     }
     if (method !== "POST" || action === undefined) {
       return answer(500);
@@ -174,7 +193,7 @@ export const fakeCompute = (
       default:
         return answer(500);
     }
-    return answer(200, operation(action));
+    return answer(200, operation(action, live.id));
   };
 
   const client = HttpClient.make((request) => {
@@ -188,20 +207,44 @@ export const fakeCompute = (
     const params = new URLSearchParams(
       request.urlParams.params.map(([key, value]) => [key, String(value)])
     );
+    const requestId = params.get("requestId");
+    params.delete("requestId");
     if (!url.pathname.includes("/global/operations/")) {
       calls.push({
         method: request.method,
         path: url.pathname,
         query: params.toString(),
+        requestId,
         body,
       });
     }
-    return Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        route(request.method, url.pathname, params, body)
-      )
-    );
+    const respond = (response: Response) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, response));
+    // A repeated request ID gets the original operation, applied once.
+    const original = requestId === null ? undefined : answered.get(requestId);
+    if (original !== undefined) {
+      return respond(answer(200, original));
+    }
+    lastOperation = undefined;
+    const response = route(request.method, url.pathname, params, body);
+    const applied = lastOperation as
+      | { readonly kind: string; readonly body: Live }
+      | undefined;
+    if (applied === undefined) {
+      return respond(response);
+    }
+    if (requestId !== null) {
+      answered.set(requestId, applied.body);
+    }
+    if (replaceAfter?.kind === applied.kind) {
+      objects.set(String(replaceAfter.with.name), { ...replaceAfter.with });
+      replaceAfter = undefined;
+    }
+    if (lostAnswers.has(applied.kind)) {
+      lostAnswers.delete(applied.kind);
+      return respond(answer(503));
+    }
+    return respond(response);
   });
   return { client, calls, objects };
 };

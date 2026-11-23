@@ -14,6 +14,7 @@ import {
   makeEdgeComputeApi,
   ownedDescription,
   parseOwnedDescription,
+  requireAdmittedTarget,
   requirePresent,
   settleGlobalOperation,
 } from "./edge-compute-api";
@@ -318,16 +319,16 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
         `${computeRoot}/projects/${project}/global/backendServices`,
         body
       );
-      if (inserted !== "conflict") {
-        yield* settleGlobalOperation(project, inserted);
-      }
+      // Admitted by the insert's own target ID, or else by the marker: a
+      // conflict is ours only after a retried insert that went through.
+      const insertedId =
+        inserted === "conflict"
+          ? undefined
+          : (yield* settleGlobalOperation(project, inserted)).targetId;
       live = yield* read("insert");
       // A conflict is success only if the existing backend is ours, as
       // after a retried insert whose first attempt went through.
-      if (
-        inserted === "conflict" &&
-        !(yield* isOwnedDescription(id, live.description))
-      ) {
+      if (!(yield* isAdmitted(id, insertedId, live))) {
         return yield* new EdgeComputeResourceUnowned({ resource });
       }
     } else if (!(yield* isAdmitted(id, output?.id, live))) {
@@ -372,7 +373,11 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
           )
         );
       if (patched.operation !== undefined) {
-        yield* settleGlobalOperation(project, patched.operation);
+        yield* requireAdmittedTarget(
+          resource,
+          admittedId,
+          yield* settleGlobalOperation(project, patched.operation)
+        );
       }
       live = yield* read("patch");
       if (patched.operation !== undefined) {
@@ -390,7 +395,11 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
           })
         )
       );
-      yield* settleGlobalOperation(project, attached);
+      yield* requireAdmittedTarget(
+        resource,
+        admittedId,
+        yield* settleGlobalOperation(project, attached)
+      );
       live = yield* read("setSecurityPolicy");
     }
 
