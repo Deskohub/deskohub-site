@@ -32,6 +32,7 @@ import {
 } from "../automation-versions";
 import { takenReceiptKeys } from "./automation-run-entry";
 import {
+  stayTierCondition,
   triggerPayment,
   triggerStay,
 } from "./automation-trigger-qualification";
@@ -97,8 +98,9 @@ const intakeDedupKey = (event: IntakeEvent) =>
  * event can trigger at all (D37), the version in force at the occurrence
  * has a trigger of the event's kind, the event occurred at or after
  * `accepting_since` (D21, D12), the receipt key is free, and the trigger's
- * product filter (D27) and payment (D1) hold on the Workspace reservation.
- * A reservation trigger's stay needs the live visit; intake judges it.
+ * product filter (D27), payment and stored tier for its stay (D1) hold on
+ * the Workspace reservation. The stay itself needs the live visit; intake
+ * judges it.
  * Reads only; the caller's transaction gives it one snapshot.
  */
 export const matchIntakeEvents = Effect.fn("automationIntake.match")(function* (
@@ -216,23 +218,30 @@ type ProductFilter = NonNullable<
   >["product"]
 >;
 
-/** What a reservation trigger's Workspace reservation must be, in SQL. */
+/**
+ * What a reservation trigger's Workspace reservation must be, in SQL: of
+ * the product, paid the way named, and of a stored tier that can give the
+ * stay (the visit decides the rest at intake).
+ */
 type ReservationQualifiers = {
   readonly product?: ProductFilter;
   readonly payment?: ReservationPayment;
+  readonly stay?: ReservationStay;
 };
 
-/** The trigger's product filter and payment; none when it sets neither. */
+/** The trigger's product filter, payment and stay; none when it sets none. */
 const reservationQualifiers = (
   trigger: AutomationVersionActivation["trigger"]
 ): Option.Option<ReservationQualifiers> => {
   const product = "product" in trigger ? trigger.product : undefined;
   const payment = Option.getOrUndefined(triggerPayment(trigger));
-  return product === undefined && payment === undefined
+  const stay = Option.getOrUndefined(triggerStay(trigger));
+  return product === undefined && payment === undefined && stay === undefined
     ? Option.none()
     : Option.some({
         ...(product !== undefined && { product }),
         ...(payment !== undefined && { payment }),
+        ...(stay !== undefined && { stay }),
       });
 };
 
@@ -266,7 +275,10 @@ const reservationsQualifying = (
                 : reservationProductCondition(qualifiers.product),
               qualifiers.payment === undefined
                 ? undefined
-                : reservationPaymentCondition(qualifiers.payment)
+                : reservationPaymentCondition(qualifiers.payment),
+              qualifiers.stay === undefined
+                ? undefined
+                : stayTierCondition(qualifiers.stay)
             )
           )
           .pipe(

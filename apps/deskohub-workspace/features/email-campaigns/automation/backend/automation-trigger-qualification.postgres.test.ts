@@ -324,5 +324,45 @@ describe.skipIf(!database)(
         [cancelledKey(day)]: "started",
       });
     });
+
+    test("an expired event takes no receipt when its stored tier rules the stay out", async () => {
+      const at = await begin(9);
+      const overnightOnly = await activate(
+        finishedSend({ product: cowork, stay: "overnight" }),
+        at
+      );
+      const expired = async (label: string, reservedDesk: boolean) => {
+        const customer = await fixtures.addCustomer(label);
+        // Visits far ahead, so the sweep records nothing of its own.
+        const reservationId = await fixtures.book({
+          label,
+          customer,
+          startsAt: at.add({ hours: 90 }),
+          endsAt: at.add({ hours: 100 }),
+          reservedDesk,
+        });
+        await fixtures.recordEvent({
+          kind: "reservation-finished",
+          customer,
+          occurredAt: at.add({ hours: 1 }),
+          reservationId,
+        });
+        return reservationId;
+      };
+      const openSpace = await expired("expire-open-space", false);
+      const reservedDesk = await expired("expire-reserved-desk", true);
+
+      // A day later the events are past intake's limit and expire unfetched.
+      await scenario.runUntil({
+        from: at.add({ hours: 26 }),
+        until: at.add({ hours: 27 }),
+      });
+
+      expect(await unprocessedFinishes([openSpace, reservedDesk])).toEqual([]);
+      // Open Space can't be overnight; a Reserved Desk stay needs the visit.
+      expect(await dispositions(overnightOnly)).toEqual({
+        [finishedKey(reservedDesk)]: "failed",
+      });
+    });
   }
 );

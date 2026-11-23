@@ -10,11 +10,14 @@ import type {
   ReservationPayment,
   ReservationStay,
 } from "@deskohub/workspace-admin-api";
-import { and, inArray, isNotNull } from "drizzle-orm";
+import { and, inArray, isNotNull, type SQL, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { workspaceReservations } from "@/db/schema";
-import type { WorkspaceCoworkProductTier } from "@/features/checkout/product-catalog";
+import {
+  type WorkspaceCoworkProductTier,
+  workspaceCoworkTiers,
+} from "@/features/checkout/product-catalog";
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
 import type { ReservationVisit } from "@/features/reservation/backend/reservation-visits.service";
 import { StoredReservationDetails } from "@/features/reservation/backend/stored-reservation-details.server";
@@ -218,6 +221,23 @@ export const loadStayTiers = (
             )
         )
       );
+
+/**
+ * Selects `workspace_reservations` rows whose stored tier can give the
+ * stay, as `mayBeOfTriggerStay` judges a tier: cowork reservations, and
+ * for an overnight stay only Reserved Desk ones.
+ */
+export const stayTierCondition = (stay: ReservationStay): SQL => {
+  const tiers =
+    stay === "overnight" ? [overnightCoworkStayTier] : workspaceCoworkTiers;
+  return and(
+    sql`${StoredReservationDetails.kind} = 'cowork'`,
+    sql`${StoredReservationDetails.property("cowork", "tier")} in (${sql.join(
+      tiers.map((tier) => sql`${tier}`),
+      sql`, `
+    )})`
+  )!;
+};
 
 /**
  * Whether a visit of this stored tier can be of the trigger's stay without
