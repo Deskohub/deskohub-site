@@ -1,32 +1,35 @@
 import { describe, expect, test } from "bun:test";
-import { Credentials } from "@alchemy.run/gcp";
 import { Unowned } from "alchemy/AdoptPolicy";
 import * as Provider from "alchemy/Provider";
-import { Stack } from "alchemy/Stack";
-import { Stage } from "alchemy/Stage";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { HttpClient, HttpClientResponse } from "effect/http";
-import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import {
   EdgeBackendService,
   type EdgeBackendServiceAttributes,
   type EdgeBackendServiceProps,
   EdgeBackendServiceProvider,
 } from "./edge-backend-service";
+import {
+  computeLinkRoot,
+  type FakeComputeOptions,
+  failureTag,
+  fakeCompute as fakeComputeOf,
+  foreignMarker as foreignMarkerOf,
+  type Live,
+  lifecycleInput as lifecycleInputOf,
+  mutations,
+  ownMarker as ownMarkerOf,
+  project,
+  runLifecycle,
+} from "./edge-compute.test-utils";
 
-const project = "deskohub-ws-sandbox";
 const logicalId = "EdgeDynamicBackend";
-const stackName = "DeskohubWorkspaceTest";
-const stageName = "test";
-// GCP label values are lowercase, so the marker is too.
-const ownMarker = `[alchemy alchemy-stack=${stackName.toLowerCase()} alchemy-stage=${stageName} alchemy-id=${logicalId.toLowerCase()}]`;
-const foreignMarker = `[alchemy alchemy-stack=other alchemy-stage=${stageName} alchemy-id=${logicalId.toLowerCase()}]`;
-const computeRoot = `https://www.googleapis.com/compute/v1/projects/${project}`;
-const negLink = `${computeRoot}/regions/europe-west1/networkEndpointGroups/workspace-sandbox-web`;
-const policyLink = `${computeRoot}/global/securityPolicies/workspace-sandbox-edge`;
-const otherPolicyLink = `${computeRoot}/global/securityPolicies/legacy`;
+const ownMarker = ownMarkerOf(logicalId);
+const foreignMarker = foreignMarkerOf(logicalId);
+const lifecycleInput = lifecycleInputOf(logicalId);
+const negLink = `${computeLinkRoot}/regions/europe-west1/networkEndpointGroups/workspace-sandbox-web`;
+const policyLink = `${computeLinkRoot}/global/securityPolicies/workspace-sandbox-edge`;
+const otherPolicyLink = `${computeLinkRoot}/global/securityPolicies/legacy`;
 
 const dynamicProps: EdgeBackendServiceProps = {
   project,
@@ -55,172 +58,18 @@ const staticProps: EdgeBackendServiceProps = {
   cdnPolicy,
 };
 
-type Live = Record<string, unknown>;
-type Call = {
-  readonly method: string;
-  readonly path: string;
-  readonly body: Live | undefined;
-};
-
-interface FakeOptions {
-  /** Backends already in the project. */
-  readonly existing?: ReadonlyArray<Live>;
-  /** Backends a concurrent insert creates between our GET and insert. */
-  readonly appearOnInsert?: ReadonlyArray<Live>;
-  /** Operation kinds whose operation finishes with an error. */
-  readonly failing?: ReadonlyArray<string>;
-}
-
-/** An in-memory Compute API holding global backend services. */
-const fakeCompute = (options: FakeOptions = {}) => {
-  const backends = new Map<string, Live>(
-    (options.existing ?? []).map((live) => [String(live.name), { ...live }])
-  );
-  const calls: Array<Call> = [];
-  const operations = new Map<string, string>();
-  let fingerprint = 0;
-  const nextFingerprint = () => `fp-${++fingerprint}`;
-  const operation = (kind: string) => {
-    const name = `operation-${operations.size + 1}`;
-    operations.set(name, kind);
-    return { name, status: "RUNNING" };
-  };
-  const answer = (status: number, body?: unknown) =>
-    new Response(body === undefined ? null : JSON.stringify(body), {
-      status,
-    });
-
-  const route = (method: string, path: string, body: Live | undefined) => {
-    const operationMatch = path.match(/\/global\/operations\/([^/]+)$/);
-    if (operationMatch && method === "GET") {
-      const kind = operations.get(operationMatch[1] ?? "") ?? "";
-      return answer(200, {
-        name: operationMatch[1],
-        status: "DONE",
-        ...(options.failing?.includes(kind)
-          ? {
-              error: {
-                errors: [{ code: "QUOTA_EXCEEDED", message: "synthetic" }],
-              },
-            }
-          : {}),
-      });
-    }
-    const match = path.match(
-      /\/projects\/([^/]+)\/global\/backendServices(?:\/([^/]+))?(?:\/(setSecurityPolicy))?$/
-    );
-    if (match === null) {
-      return answer(500);
-    }
-    const [, , name, action] = match;
-    if (method === "POST" && name === undefined && body !== undefined) {
-      for (const live of options.appearOnInsert ?? []) {
-        backends.set(String(live.name), { ...live });
-      }
-      if (backends.has(String(body.name))) {
-        return answer(409, { error: { message: "already exists" } });
-      }
-      backends.set(String(body.name), {
-        ...body,
-        id: "1234",
-        selfLink: `${computeRoot}/global/backendServices/${body.name}`,
-        creationTimestamp: "2026-11-23T00:00:00Z",
-        fingerprint: nextFingerprint(),
-      });
-      return answer(200, operation("insert"));
-    }
-    const live = name === undefined ? undefined : backends.get(name);
-    if (live === undefined || name === undefined) {
-      return answer(404, { error: { message: "not found" } });
-    }
-    if (method === "GET") {
-      return answer(200, live);
-    }
-    if (method === "PATCH" && body !== undefined) {
-      if (body.fingerprint !== live.fingerprint) {
-        return answer(412, { error: { message: "fingerprint mismatch" } });
-      }
-      const { fingerprint: _sent, ...fields } = body;
-      backends.set(name, {
-        ...live,
-        ...fields,
-        fingerprint: nextFingerprint(),
-      });
-      return answer(200, operation("patch"));
-    }
-    if (method === "POST" && action === "setSecurityPolicy" && body) {
-      backends.set(name, { ...live, securityPolicy: body.securityPolicy });
-      return answer(200, operation("setSecurityPolicy"));
-    }
-    if (method === "DELETE") {
-      backends.delete(name);
-      return answer(200, operation("delete"));
-    }
-    return answer(500);
-  };
-
-  const client = HttpClient.make((request) => {
-    const url = new URL(request.url);
-    const bytes =
-      request.body._tag === "Uint8Array" ? request.body.body : undefined;
-    const body =
-      bytes === undefined
-        ? undefined
-        : (JSON.parse(new TextDecoder().decode(bytes)) as Live);
-    if (!url.pathname.includes("/global/operations/")) {
-      calls.push({ method: request.method, path: url.pathname, body });
-    }
-    return Effect.succeed(
-      HttpClientResponse.fromWeb(
-        request,
-        route(request.method, url.pathname, body)
-      )
-    );
-  });
-  return { client, calls, backends };
-};
+const fakeCompute = (options?: FakeComputeOptions) =>
+  fakeComputeOf("backendServices", options);
 
 const lifecycle = Provider.Provider<EdgeBackendService>(
   EdgeBackendService.Type
 );
-
 type Lifecycle = Provider.ProviderService<EdgeBackendService>;
 
 const run = <A, E>(
   fake: ReturnType<typeof fakeCompute>,
   use: (provider: Lifecycle) => Effect.Effect<A, E, unknown>
-) =>
-  Effect.runPromiseExit(
-    Effect.gen(function* () {
-      return yield* use((yield* lifecycle) as Lifecycle);
-    }).pipe(
-      Effect.provide(
-        EdgeBackendServiceProvider.pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              Layer.succeed(HttpClient.HttpClient, fake.client),
-              Layer.succeed(
-                Credentials,
-                Effect.succeed({
-                  accessToken: Redacted.make("synthetic-access-token"),
-                }) as typeof Credentials.Service
-              ),
-              Layer.succeed(Stack, { name: stackName } as never),
-              Layer.succeed(Stage, stageName)
-            )
-          )
-        )
-      )
-    ) as Effect.Effect<A, E>
-  );
-
-const lifecycleInput = {
-  id: logicalId,
-  fqn: logicalId,
-  instanceId: "instance",
-  session: {} as never,
-  bindings: [],
-};
+) => runLifecycle(EdgeBackendServiceProvider, lifecycle, fake, use);
 
 const reconcile = (
   provider: Lifecycle,
@@ -243,13 +92,6 @@ const readBackend = (
     ? Effect.die(new Error("the provider has no read"))
     : provider.read(input);
 
-const mutations = (calls: ReadonlyArray<Call>) =>
-  calls
-    .filter((call) => call.method !== "GET")
-    .map(
-      (call) => `${call.method} ${call.path.split("/").slice(-2).join("/")}`
-    );
-
 /** A backend as Compute reports it after it converged on `props`. */
 const converged = (
   props: EdgeBackendServiceProps,
@@ -257,7 +99,7 @@ const converged = (
 ): Live => ({
   name: props.name,
   id: "1234",
-  selfLink: `${computeRoot}/global/backendServices/${props.name}`,
+  selfLink: `${computeLinkRoot}/global/backendServices/${props.name}`,
   creationTimestamp: "2026-11-01T00:00:00Z",
   description,
   fingerprint: "fp-existing",
@@ -269,16 +111,6 @@ const converged = (
   enableCDN: props.cdnPolicy !== undefined,
   ...(props.cdnPolicy === undefined ? {} : { cdnPolicy: props.cdnPolicy }),
 });
-
-const failureTag = (exit: Exit.Exit<unknown, unknown>) => {
-  if (Exit.isSuccess(exit)) {
-    throw new Error("expected a failure");
-  }
-  const error = exit.cause.reasons
-    .map((reason) => (reason._tag === "Fail" ? reason.error : undefined))
-    .find((value) => value !== undefined) as { _tag?: string } | undefined;
-  return error?._tag;
-};
 
 describe("EdgeBackendService provider", () => {
   test("inserts a dynamic backend without CDN, then attaches Cloud Armor", async () => {
@@ -426,7 +258,7 @@ describe("EdgeBackendService provider", () => {
     const exit = await run(fake, (provider) =>
       reconcile(provider, dynamicProps)
     );
-    expect(failureTag(exit)).toBe("EdgeBackendServiceUnowned");
+    expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
     expect(mutations(fake.calls)).toEqual(["POST global/backendServices"]);
   });
 
@@ -435,7 +267,7 @@ describe("EdgeBackendService provider", () => {
     const exit = await run(fake, (provider) =>
       reconcile(provider, dynamicProps)
     );
-    expect(failureTag(exit)).toBe("EdgeBackendServiceUnowned");
+    expect(failureTag(exit)).toBe("EdgeComputeResourceUnowned");
     expect(mutations(fake.calls)).toEqual([]);
   });
 
@@ -457,7 +289,7 @@ describe("EdgeBackendService provider", () => {
       })
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    expect(fake.backends.get("workspace-sandbox-dynamic")?.description).toBe(
+    expect(fake.objects.get("workspace-sandbox-dynamic")?.description).toBe(
       ownMarker
     );
   });
@@ -519,7 +351,7 @@ describe("EdgeBackendService provider", () => {
       ])
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    expect(fake.backends.size).toBe(0);
+    expect(fake.objects.size).toBe(0);
     expect(mutations(fake.calls)).toEqual([
       "DELETE backendServices/workspace-sandbox-dynamic",
       "DELETE backendServices/workspace-sandbox-dynamic",
@@ -560,5 +392,55 @@ describe("EdgeBackendService provider", () => {
       deleteFirst: true,
     });
     expect(Exit.isSuccess(reprotocol) && reprotocol.value).toBeUndefined();
+  });
+  test("an operation already DONE with an error fails the reconcile", async () => {
+    const fake = fakeCompute({ failingAtOnce: ["insert"] });
+    const exit = await run(fake, (provider) =>
+      reconcile(provider, dynamicProps)
+    );
+    expect(failureTag(exit)).toBe("GCP.OperationFailed");
+    expect(mutations(fake.calls)).toEqual(["POST global/backendServices"]);
+  });
+
+  test("a delete fails on an operation error other than not found", async () => {
+    const output = {
+      project,
+      name: "workspace-sandbox-dynamic",
+    } as EdgeBackendServiceAttributes;
+    const remove = (options: FakeComputeOptions) =>
+      run(
+        fakeCompute({ existing: [converged(dynamicProps)], ...options }),
+        (provider) =>
+          provider.delete({ ...lifecycleInput, olds: dynamicProps, output })
+      );
+    expect(failureTag(await remove({ failingAtOnce: ["delete"] }))).toBe(
+      "GCP.OperationFailed"
+    );
+    expect(
+      Exit.isSuccess(
+        await remove({
+          failingAtOnce: ["delete"],
+          failureCode: "RESOURCE_NOT_FOUND",
+        })
+      )
+    ).toBe(true);
+  });
+
+  test("rereads and retries a PATCH whose fingerprint went stale", async () => {
+    const fake = fakeCompute({
+      existing: [{ ...converged(dynamicProps), logConfig: { enable: true } }],
+      stalePatches: 1,
+    });
+    const exit = await run(fake, (provider) =>
+      reconcile(provider, dynamicProps)
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const patches = fake.calls.filter((call) => call.method === "PATCH");
+    expect(patches).toHaveLength(2);
+    expect(patches[1]?.body?.name).toBeUndefined();
+    expect(patches[1]?.body?.loadBalancingScheme).toBeUndefined();
+    expect(fake.objects.get("workspace-sandbox-dynamic")?.logConfig).toEqual({
+      enable: false,
+    });
   });
 });

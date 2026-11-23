@@ -1,21 +1,21 @@
-import { waitGlobalOperation } from "@alchemy.run/gcp/Compute/operations";
-import {
-  alchemyLabelKeys,
-  createInternalLabels,
-  hasAlchemyLabels,
-} from "@alchemy.run/gcp/Labels";
 import { Unowned } from "alchemy/AdoptPolicy";
 import * as Provider from "alchemy/Provider";
 import { Resource } from "alchemy/Resource";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import { HttpClientRequest, type HttpClientResponse } from "effect/http";
+import { HttpClientRequest } from "effect/http";
 import * as Schema from "effect/Schema";
 import {
-  type GoogleApiNoAnswer,
-  type GoogleApiRetryPolicy,
-  makeGoogleApi,
-} from "../google-api";
+  computeResourcePath,
+  computeRoot,
+  EdgeComputeResourceNotConverged,
+  EdgeComputeResourceUnowned,
+  isOwnedDescription,
+  makeEdgeComputeApi,
+  ownedDescription,
+  parseOwnedDescription,
+  requirePresent,
+  settleGlobalOperation,
+} from "./edge-compute-api";
 
 /**
  * Cloud CDN settings of a backend that caches. Only the fields the
@@ -87,55 +87,6 @@ export const EdgeBackendService = Resource<EdgeBackendService>(
   "DeskohubWorkspace.EdgeBackendService"
 );
 
-/** A Compute request about one backend failed or was refused. */
-export class EdgeBackendServiceRequestFailed extends Data.TaggedError(
-  "EdgeBackendServiceRequestFailed"
-)<{
-  readonly backendService: string;
-  readonly operation: string;
-  readonly status: number | null;
-  readonly reason: string;
-}> {
-  override get message() {
-    return `Backend service ${this.backendService}: ${this.operation} failed (${this.status ?? "no answer"}): ${this.reason}`;
-  }
-}
-
-/**
- * A backend of this name exists and carries no ownership marker of this
- * resource, so it belongs to someone else and is never changed.
- */
-export class EdgeBackendServiceUnowned extends Data.TaggedError(
-  "EdgeBackendServiceUnowned"
-)<{ readonly backendService: string }> {
-  override get message() {
-    return `Backend service ${this.backendService} exists and is not owned by this stack`;
-  }
-}
-
-/** The live backend still differs from the declaration after an update. */
-export class EdgeBackendServiceNotConverged extends Data.TaggedError(
-  "EdgeBackendServiceNotConverged"
-)<{ readonly backendService: string; readonly fields: ReadonlyArray<string> }> {
-  override get message() {
-    return `Backend service ${this.backendService} did not converge: ${this.fields.join(", ")}`;
-  }
-}
-
-const computeRoot = "https://compute.googleapis.com/compute/v1";
-
-const computeRetry: GoogleApiRetryPolicy = {
-  attemptTimeout: "30 seconds",
-  backoff: "1 second",
-  retries: 4,
-};
-
-const noAnswerReasons: Record<GoogleApiNoAnswer, string> = {
-  unreachable: "Compute API unreachable",
-  "no-answer-in-time": "Compute API did not answer in time",
-  "credentials-stalled": "credentials lookup stalled",
-};
-
 const LiveBackendService = Schema.Struct({
   id: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
@@ -170,59 +121,12 @@ const LiveBackendService = Schema.Struct({
     })
   ),
 });
+
 type LiveBackendService = typeof LiveBackendService.Type;
+const decodeBackend = Schema.decodeUnknownEffect(LiveBackendService);
 
-const ComputeOperation = Schema.Struct({
-  name: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.String),
-});
-type LiveOperation = typeof ComputeOperation.Type;
-
-/** `projects/…` of a Compute URL, so full and partial links compare equal. */
-const resourcePath = (link: string | undefined) => {
-  if (link === undefined) {
-    return undefined;
-  }
-  const index = link.indexOf("projects/");
-  return index < 0 ? link : link.slice(index);
-};
-
-const ownershipMarker = (labels: Record<string, string>) =>
-  `[alchemy ${alchemyLabelKeys.stack}=${labels[alchemyLabelKeys.stack]} ${alchemyLabelKeys.stage}=${labels[alchemyLabelKeys.stage]} ${alchemyLabelKeys.id}=${labels[alchemyLabelKeys.id]}]`;
-
-/**
- * Backend services have no labels, so ownership is a `[alchemy …]` prefix
- * of the description, the same marker the native Logging exclusion uses.
- */
-const encodeDescription = (
-  labels: Record<string, string>,
-  description: string | undefined
-) => {
-  const marker = ownershipMarker(labels);
-  return description ? `${marker}\n${description}` : marker;
-};
-
-const parseDescription = (description: string | undefined) => {
-  if (!description?.startsWith("[alchemy ")) {
-    return { labels: {}, description };
-  }
-  const end = description.indexOf("]");
-  if (end < 0) {
-    return { labels: {}, description };
-  }
-  const labels: Record<string, string> = {};
-  for (const part of description.slice("[alchemy ".length, end).split(/\s+/)) {
-    const separator = part.indexOf("=");
-    if (separator > 0) {
-      labels[part.slice(0, separator)] = part.slice(separator + 1);
-    }
-  }
-  const rest = description.slice(end + 1).replace(/^\n/, "");
-  return { labels, description: rest.length > 0 ? rest : undefined };
-};
-
-const isOwned = (id: string, live: LiveBackendService) =>
-  hasAlchemyLabels(id, parseDescription(live.description).labels);
+const backendServiceUrl = (project: string, name: string) =>
+  `${computeRoot}/projects/${project}/global/backendServices/${name}`;
 
 const toAttributes = (
   project: string,
@@ -262,7 +166,7 @@ const toAttributes = (
         ? { sampleRate: live.logConfig.sampleRate }
         : {}),
     },
-    description: parseDescription(live.description).description,
+    description: parseOwnedDescription(live.description).description,
   };
 };
 
@@ -295,9 +199,12 @@ export const backendServiceDrift = (
   if ((live.description ?? "") !== description) drift.push("description");
   if (live.protocol !== props.protocol) drift.push("protocol");
   const groups = (live.backends ?? []).map((backend) =>
-    resourcePath(backend.group)
+    computeResourcePath(backend.group)
   );
-  if (groups.length !== 1 || groups[0] !== resourcePath(props.backendGroup)) {
+  if (
+    groups.length !== 1 ||
+    groups[0] !== computeResourcePath(props.backendGroup)
+  ) {
     drift.push("backends");
   }
   const logEnabled = live.logConfig?.enable === true;
@@ -332,165 +239,12 @@ export const backendServiceDrift = (
 const securityPolicyDrift = (
   props: EdgeBackendServiceProps,
   live: LiveBackendService
-) => resourcePath(live.securityPolicy) !== resourcePath(props.securityPolicy);
-
-/** Compute REST calls about the backends of one project. */
-const makeBackendServiceApi = Effect.fnUntraced(function* () {
-  const googleApi = yield* makeGoogleApi();
-  const backendServices = (project: string) =>
-    `${computeRoot}/projects/${project}/global/backendServices`;
-
-  const send = <A>(
-    name: string,
-    operation: string,
-    request: HttpClientRequest.HttpClientRequest,
-    handle: (
-      response: HttpClientResponse.HttpClientResponse
-    ) => Effect.Effect<A, EdgeBackendServiceRequestFailed> | undefined
-  ) => {
-    const failed = (status: number | null, reason: string) =>
-      new EdgeBackendServiceRequestFailed({
-        backendService: name,
-        operation,
-        status,
-        reason,
-      });
-    return googleApi.call({
-      request: request.pipe(HttpClientRequest.acceptJson),
-      policy: computeRetry,
-      handle: (response) =>
-        handle(response) ??
-        response.text.pipe(
-          Effect.orElseSucceed(() => ""),
-          Effect.flatMap((body) =>
-            Effect.fail(failed(response.status, errorReason(body)))
-          )
-        ),
-      transientStatus: (status) =>
-        failed(status, `Compute answered HTTP ${status}`),
-      noAnswer: (cause) => failed(null, noAnswerReasons[cause]),
-      credentialsUnavailable: () => failed(null, "credentials unavailable"),
-    });
-  };
-
-  const decodeJson =
-    <A>(
-      decodeBody: (body: unknown) => Effect.Effect<A, unknown>,
-      name: string,
-      operation: string,
-      status: number
-    ) =>
-    (response: HttpClientResponse.HttpClientResponse) =>
-      response.json.pipe(
-        Effect.flatMap(decodeBody),
-        Effect.mapError(
-          () =>
-            new EdgeBackendServiceRequestFailed({
-              backendService: name,
-              operation,
-              status,
-              reason: "unreadable Compute answer",
-            })
-        )
-      );
-  const decodeBackend = Schema.decodeUnknownEffect(LiveBackendService);
-  const decodeOperation = Schema.decodeUnknownEffect(ComputeOperation);
-
-  const operationAnswer =
-    (name: string, operation: string, accept: ReadonlyArray<number>) =>
-    (response: HttpClientResponse.HttpClientResponse) =>
-      accept.includes(response.status)
-        ? decodeJson(
-            decodeOperation,
-            name,
-            operation,
-            response.status
-          )(response)
-        : undefined;
-
-  return {
-    get: (project: string, name: string) =>
-      send(
-        name,
-        "get",
-        HttpClientRequest.get(`${backendServices(project)}/${name}`),
-        (response) => {
-          if (response.status === 404) {
-            return Effect.undefined;
-          }
-          return response.status === 200
-            ? decodeJson(decodeBackend, name, "get", 200)(response)
-            : undefined;
-        }
-      ),
-    /** The insert's operation, or `conflict` when the name is taken. */
-    insert: (project: string, name: string, body: object) =>
-      send<"conflict" | LiveOperation>(
-        name,
-        "insert",
-        HttpClientRequest.post(backendServices(project)).pipe(
-          HttpClientRequest.bodyJsonUnsafe(body)
-        ),
-        (response) =>
-          response.status === 409
-            ? Effect.succeed("conflict" as const)
-            : operationAnswer(name, "insert", [200])(response)
-      ),
-    patch: (project: string, name: string, body: object) =>
-      send(
-        name,
-        "patch",
-        HttpClientRequest.patch(`${backendServices(project)}/${name}`).pipe(
-          HttpClientRequest.bodyJsonUnsafe(body)
-        ),
-        operationAnswer(name, "patch", [200])
-      ),
-    setSecurityPolicy: (project: string, name: string, policy: string) =>
-      send(
-        name,
-        "setSecurityPolicy",
-        HttpClientRequest.post(
-          `${backendServices(project)}/${name}/setSecurityPolicy`
-        ).pipe(HttpClientRequest.bodyJsonUnsafe({ securityPolicy: policy })),
-        operationAnswer(name, "setSecurityPolicy", [200])
-      ),
-    /** The delete's operation, or `gone` when nothing has the name. */
-    delete: (project: string, name: string) =>
-      send<"gone" | LiveOperation>(
-        name,
-        "delete",
-        HttpClientRequest.delete(`${backendServices(project)}/${name}`),
-        (response) =>
-          response.status === 404
-            ? Effect.succeed("gone" as const)
-            : operationAnswer(name, "delete", [200])(response)
-      ),
-  };
-});
-
-/** The message of a Google error body, never the request. */
-const errorReason = (body: string) => {
-  try {
-    const parsed = JSON.parse(body) as { error?: { message?: unknown } };
-    return typeof parsed.error?.message === "string"
-      ? parsed.error.message
-      : "request refused";
-  } catch {
-    return "request refused";
-  }
-};
-
-const settle = (
-  project: string,
-  operation: LiveOperation,
-  options?: { readonly ignore?: ReadonlyArray<string> }
 ) =>
-  waitGlobalOperation(
-    project,
-    // The waiter reads only the operation's name, status and error.
-    operation as Parameters<typeof waitGlobalOperation>[1],
-    options
-  );
+  computeResourcePath(live.securityPolicy) !==
+  computeResourcePath(props.securityPolicy);
+
+/** A PATCH under a stale fingerprint is reread and retried this often. */
+const stalePatchRetries = 2;
 
 /**
  * The provider of `EdgeBackendService`. It uses the stack's GCP
@@ -520,78 +274,119 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
   }),
 
   read: Effect.fn(function* ({ id, olds, output, previous }) {
-    const api = yield* makeBackendServiceApi();
+    const api = yield* makeEdgeComputeApi();
     const project = output?.project ?? olds.project;
     const name = output?.name ?? olds.name;
-    const live = yield* api.get(project, name);
+    const live = yield* api.get(
+      `Backend service ${name}`,
+      backendServiceUrl(project, name),
+      decodeBackend
+    );
     if (live === undefined) {
       return undefined;
     }
     const attributes = toAttributes(project, live);
     const owned =
-      (yield* isOwned(id, live)) ||
+      (yield* isOwnedDescription(id, live.description)) ||
       (previous !== undefined && previous.selfLink === live.selfLink);
     return owned ? attributes : Unowned(attributes);
   }),
 
   reconcile: Effect.fn(function* ({ id, news, output }) {
-    const api = yield* makeBackendServiceApi();
+    const api = yield* makeEdgeComputeApi();
     const { project, name } = news;
-    const description = encodeDescription(
-      yield* createInternalLabels(id),
-      news.description
-    );
+    const resource = `Backend service ${name}`;
+    const url = backendServiceUrl(project, name);
+    const description = yield* ownedDescription(id, news.description);
     const body = desiredBody(news, description);
+    const read = (operation: string) =>
+      api
+        .get(resource, url, decodeBackend)
+        .pipe(
+          Effect.flatMap((live) => requirePresent(resource, operation, live))
+        );
 
-    let live = yield* api.get(project, name);
+    let live = yield* api.get(resource, url, decodeBackend);
     if (live === undefined) {
-      const inserted = yield* api.insert(project, name, body);
+      const inserted = yield* api.insert(
+        resource,
+        `${computeRoot}/projects/${project}/global/backendServices`,
+        body
+      );
       if (inserted !== "conflict") {
-        yield* settle(project, inserted);
+        yield* settleGlobalOperation(project, inserted);
       }
-      live = yield* api.get(project, name);
-      if (live === undefined) {
-        return yield* new EdgeBackendServiceRequestFailed({
-          backendService: name,
-          operation: "insert",
-          status: null,
-          reason: "the backend is missing after its insert",
-        });
-      }
+      live = yield* read("insert");
       // A conflict is success only if the existing backend is ours, as
       // after a retried insert whose first attempt went through.
-      if (inserted === "conflict" && !(yield* isOwned(id, live))) {
-        return yield* new EdgeBackendServiceUnowned({ backendService: name });
+      if (
+        inserted === "conflict" &&
+        !(yield* isOwnedDescription(id, live.description))
+      ) {
+        return yield* new EdgeComputeResourceUnowned({ resource });
       }
-    } else if (output === undefined && !(yield* isOwned(id, live))) {
+    } else if (
+      output === undefined &&
+      !(yield* isOwnedDescription(id, live.description))
+    ) {
       // Never take over a foreign backend; adoption arrives with `output`.
-      return yield* new EdgeBackendServiceUnowned({ backendService: name });
+      return yield* new EdgeComputeResourceUnowned({ resource });
     }
 
     if (live.loadBalancingScheme !== news.loadBalancingScheme) {
-      return yield* new EdgeBackendServiceNotConverged({
-        backendService: name,
+      return yield* new EdgeComputeResourceNotConverged({
+        resource,
         fields: ["loadBalancingScheme"],
       });
     }
 
-    if (backendServiceDrift(news, description, live).length > 0) {
-      const patched = yield* api.patch(project, name, {
-        ...body,
-        fingerprint: live.fingerprint,
-      });
-      yield* settle(project, patched);
-      live = (yield* api.get(project, name)) ?? live;
+    // Only mutable fields, under the fingerprint just read; a concurrent
+    // change (or a retried PATCH that already applied) is reread.
+    const { name: _name, loadBalancingScheme: _scheme, ...mutable } = body;
+    for (
+      let attempt = 0;
+      backendServiceDrift(news, description, live).length > 0;
+      attempt++
+    ) {
+      const patched = yield* api
+        .mutate(
+          resource,
+          "patch",
+          HttpClientRequest.patch(url).pipe(
+            HttpClientRequest.bodyJsonUnsafe({
+              ...mutable,
+              fingerprint: live.fingerprint,
+            })
+          )
+        )
+        .pipe(
+          Effect.map((operation) => ({ operation })),
+          Effect.catchIf(
+            (error) => error.status === 412 && attempt < stalePatchRetries,
+            () => Effect.succeed({ operation: undefined })
+          )
+        );
+      if (patched.operation !== undefined) {
+        yield* settleGlobalOperation(project, patched.operation);
+      }
+      live = yield* read("patch");
+      if (patched.operation !== undefined) {
+        break;
+      }
     }
 
     if (securityPolicyDrift(news, live)) {
-      const attached = yield* api.setSecurityPolicy(
-        project,
-        name,
-        news.securityPolicy
+      const attached = yield* api.mutate(
+        resource,
+        "setSecurityPolicy",
+        HttpClientRequest.post(`${url}/setSecurityPolicy`).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            securityPolicy: news.securityPolicy,
+          })
+        )
       );
-      yield* settle(project, attached);
-      live = (yield* api.get(project, name)) ?? live;
+      yield* settleGlobalOperation(project, attached);
+      live = yield* read("setSecurityPolicy");
     }
 
     const remaining = [
@@ -599,8 +394,8 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
       ...(securityPolicyDrift(news, live) ? ["securityPolicy"] : []),
     ];
     if (remaining.length > 0) {
-      return yield* new EdgeBackendServiceNotConverged({
-        backendService: name,
+      return yield* new EdgeComputeResourceNotConverged({
+        resource,
         fields: remaining,
       });
     }
@@ -608,10 +403,13 @@ export const EdgeBackendServiceProvider = Provider.succeed(EdgeBackendService, {
   }),
 
   delete: Effect.fn(function* ({ output }) {
-    const api = yield* makeBackendServiceApi();
-    const deleted = yield* api.delete(output.project, output.name);
+    const api = yield* makeEdgeComputeApi();
+    const deleted = yield* api.delete(
+      `Backend service ${output.name}`,
+      backendServiceUrl(output.project, output.name)
+    );
     if (deleted !== "gone") {
-      yield* settle(output.project, deleted, {
+      yield* settleGlobalOperation(output.project, deleted, {
         ignore: ["RESOURCE_NOT_FOUND"],
       });
     }

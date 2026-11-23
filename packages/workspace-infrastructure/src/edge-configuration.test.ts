@@ -144,7 +144,7 @@ describe("workspace edge declaration", () => {
     expect(typesOf(resources)).toEqual({
       EdgeAddress: "GCP.Compute.GlobalAddress",
       EdgeWebEndpointGroup: "GCP.Compute.RegionNetworkEndpointGroup",
-      EdgeSecurityPolicy: "GCP.Compute.SecurityPolicy",
+      EdgeSecurityPolicy: "DeskohubWorkspace.EdgeSecurityPolicy",
       EdgeDynamicBackend: "DeskohubWorkspace.EdgeBackendService",
       EdgeStaticBackend: "DeskohubWorkspace.EdgeBackendService",
       EdgeUrlMap: "GCP.Compute.UrlMap",
@@ -289,7 +289,8 @@ describe("workspace edge declaration", () => {
   test("starts Cloud Armor with WAF in preview, auth throttling and a default allow", async () => {
     const { resources } = await declare(httpsConfig);
     expect(resources.EdgeSecurityPolicy?.Props).toEqual({
-      securityPolicyName: "workspace-sandbox-edge",
+      project: httpsConfig.projectId,
+      name: "workspace-sandbox-edge",
       description: "Workspace sandbox edge policy",
       type: "CLOUD_ARMOR",
       rules: [
@@ -321,6 +322,7 @@ describe("workspace edge declaration", () => {
           action: "throttle",
           priority: 2000,
           description: "Throttle auth endpoints per client IP",
+          preview: false,
           match: {
             expr: { expression: "request.path.startsWith('/api/auth/')" },
           },
@@ -335,6 +337,7 @@ describe("workspace edge declaration", () => {
           action: "allow",
           priority: 2147483647,
           description: "Default allow",
+          preview: false,
           match: {
             versionedExpr: "SRC_IPS_V1",
             config: { srcIpRanges: ["*"] },

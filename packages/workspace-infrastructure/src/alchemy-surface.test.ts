@@ -46,6 +46,8 @@ import {
   testWriterToken,
 } from "./release/release-writer.test-utils";
 import { EdgeBackendService } from "./resources/edge-backend-service";
+import { declareWorkspaceEdge } from "./resources/edge-declarations";
+import { EdgeSecurityPolicy } from "./resources/edge-security-policy";
 import {
   alertPolicyDeclarations,
   artifactRepositoryProps,
@@ -145,7 +147,6 @@ describe("Alchemy beta.87 surface", () => {
       "GCP.Compute.GlobalForwardingRule": Compute.GlobalForwardingRule,
       "GCP.Compute.RegionNetworkEndpointGroup":
         Compute.RegionNetworkEndpointGroup,
-      "GCP.Compute.SecurityPolicy": Compute.SecurityPolicy,
       "GCP.Compute.SslCertificate": Compute.SslCertificate,
       "GCP.Compute.TargetHttpProxy": Compute.TargetHttpProxy,
       "GCP.Compute.TargetHttpsProxy": Compute.TargetHttpsProxy,
@@ -155,6 +156,7 @@ describe("Alchemy beta.87 surface", () => {
       "GCP.Monitoring.AlertPolicy": Monitoring.AlertPolicy,
       "GCP.Storage.Bucket": Storage.Bucket,
       "DeskohubWorkspace.EdgeBackendService": EdgeBackendService,
+      "DeskohubWorkspace.EdgeSecurityPolicy": EdgeSecurityPolicy,
     };
     const alchemyOwned = workspaceSurfaceClassification.flatMap((item) =>
       item.owner.kind === "alchemy" ? [item.owner.resourceType] : []
@@ -252,6 +254,36 @@ describe("Alchemy beta.87 surface", () => {
       expect(secretOf(id)?.version).toBe("3");
     }
     expect(secretOf("WorkspaceSchedulerWorker")).toBeUndefined();
+  });
+
+  test("points the edge's endpoint group at the declared web service ID", async () => {
+    const served = await evaluate(
+      Effect.gen(function* () {
+        const services = yield* declareWorkspaceServices(
+          sandboxConfig,
+          servingRecord(),
+          now
+        );
+        return yield* declareWorkspaceEdge(
+          sandboxConfig,
+          {
+            domains: ["workspace.example.com"],
+            enableHttps: true,
+            staticCdnEnabled: false,
+            wafPreview: true,
+            authRateLimitPerMinute: 120,
+          },
+          services?.webServiceId
+        );
+      })
+    );
+    expect(served.exit._tag).toBe("Success");
+    const { resources } = served;
+    // The NEG takes the short ID, the same as its fallback, by reference.
+    expect(resources.WorkspaceWeb?.Props.serviceId).toBe("workspace-web");
+    expect(
+      isOutput(resources.EdgeWebEndpointGroup?.Props.cloudRun.service)
+    ).toBe(true);
   });
 
   test("declares services only from the record at the fenced generation", async () => {

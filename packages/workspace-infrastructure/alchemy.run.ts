@@ -21,6 +21,7 @@ import {
 import { requireStackWriter } from "./src/release/release-writer";
 import { EdgeBackendServiceProvider } from "./src/resources/edge-backend-service";
 import { declareWorkspaceEdge } from "./src/resources/edge-declarations";
+import { EdgeSecurityPolicyProvider } from "./src/resources/edge-security-policy";
 import { verifyStackTarget } from "./src/stack-target";
 import {
   declareRecordedWorkspaceServices,
@@ -72,11 +73,12 @@ const releasePlatform = (config: WorkspaceStackConfig) =>
 export default Alchemy.Stack(
   "DeskohubWorkspace",
   {
-    // The edge backends' provider reuses the GCP credentials and HTTP
-    // client the native providers resolve.
-    providers: EdgeBackendServiceProvider.pipe(
-      Layer.provideMerge(GCP.providers())
-    ),
+    // The edge's own providers reuse the GCP credentials and HTTP client
+    // the native providers resolve.
+    providers: Layer.mergeAll(
+      EdgeBackendServiceProvider,
+      EdgeSecurityPolicyProvider
+    ).pipe(Layer.provideMerge(GCP.providers())),
     state: Layer.unwrap(
       stackConfig.pipe(
         Effect.map((config) =>
@@ -119,7 +121,7 @@ export default Alchemy.Stack(
         : yield* declareWorkspaceEdge(
             config,
             config.edge,
-            services?.webService
+            services?.webServiceId
           );
     return { ...foundation, services, ...edge };
   })

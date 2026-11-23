@@ -71,8 +71,8 @@ export const workspaceSurfaceClassification: ReadonlyArray<SurfaceItem> = [
     owner: alchemy("GCP.Compute.RegionNetworkEndpointGroup"),
   },
   {
-    capability: "Cloud Armor security policy",
-    owner: alchemy("GCP.Compute.SecurityPolicy"),
+    capability: "Cloud Armor security policy and rules",
+    owner: alchemy("DeskohubWorkspace.EdgeSecurityPolicy"),
   },
   {
     capability:

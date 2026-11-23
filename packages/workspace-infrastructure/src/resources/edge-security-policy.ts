@@ -1,0 +1,391 @@
+import { Unowned } from "alchemy/AdoptPolicy";
+import * as Provider from "alchemy/Provider";
+import { Resource } from "alchemy/Resource";
+import * as Effect from "effect/Effect";
+import { HttpClientRequest } from "effect/http";
+import * as Schema from "effect/Schema";
+import {
+  computeRoot,
+  EdgeComputeResourceNotConverged,
+  EdgeComputeResourceUnowned,
+  isOwnedDescription,
+  makeEdgeComputeApi,
+  ownedDescription,
+  parseOwnedDescription,
+  requirePresent,
+  settleGlobalOperation,
+} from "./edge-compute-api";
+
+/** One Cloud Armor rule, with only the fields the Workspace edge sets. */
+export interface EdgeSecurityPolicyRule {
+  readonly priority: number;
+  readonly action: string;
+  readonly description: string;
+  /** Sent on every write, so a rule leaves preview when this turns false. */
+  readonly preview: boolean;
+  readonly match:
+    | { readonly expr: { readonly expression: string } }
+    | {
+        readonly versionedExpr: "SRC_IPS_V1";
+        readonly config: { readonly srcIpRanges: ReadonlyArray<string> };
+      };
+  readonly rateLimitOptions?: {
+    readonly conformAction: string;
+    readonly exceedAction: string;
+    readonly enforceOnKey: string;
+    readonly rateLimitThreshold: {
+      readonly count: number;
+      readonly intervalSec: number;
+    };
+  };
+}
+
+export interface EdgeSecurityPolicyProps {
+  /** Project of the policy; identity, so a change replaces it. */
+  readonly project: string;
+  /** Policy name; identity, so a change replaces it. */
+  readonly name: string;
+  readonly description?: string;
+  /** Immutable in Compute, so a change replaces the policy. */
+  readonly type: "CLOUD_ARMOR";
+  /** Every rule of the policy, the default rule at 2147483647 included. */
+  readonly rules: ReadonlyArray<EdgeSecurityPolicyRule>;
+}
+
+export interface EdgeSecurityPolicyAttributes {
+  readonly project: string;
+  readonly name: string;
+  readonly id: string;
+  readonly selfLink: string;
+  readonly creationTimestamp: string;
+  readonly type: string;
+  /** The description with the Alchemy ownership marker stripped. */
+  readonly description: string | undefined;
+  /** Live rules by priority, in the compared form. */
+  readonly rules: ReadonlyArray<string>;
+}
+
+/**
+ * The Workspace edge's Cloud Armor policy. The native beta.87
+ * `GCP.Compute.SecurityPolicy` drops `preview: false` from rule writes, so
+ * a WAF rule could never leave preview; this resource alone owns the
+ * policy and all its rules.
+ */
+export type EdgeSecurityPolicy = Resource<
+  "DeskohubWorkspace.EdgeSecurityPolicy",
+  EdgeSecurityPolicyProps,
+  EdgeSecurityPolicyAttributes
+>;
+export const EdgeSecurityPolicy = Resource<EdgeSecurityPolicy>(
+  "DeskohubWorkspace.EdgeSecurityPolicy"
+);
+
+/** The rule Compute keeps at the lowest priority; it can only be patched. */
+const defaultRulePriority = 2147483647;
+
+const LiveRule = Schema.Struct({
+  priority: Schema.optional(Schema.Finite),
+  action: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  preview: Schema.optional(Schema.Boolean),
+  match: Schema.optional(
+    Schema.Struct({
+      expr: Schema.optional(
+        Schema.Struct({ expression: Schema.optional(Schema.String) })
+      ),
+      versionedExpr: Schema.optional(Schema.String),
+      config: Schema.optional(
+        Schema.Struct({
+          srcIpRanges: Schema.optional(Schema.Array(Schema.String)),
+        })
+      ),
+    })
+  ),
+  rateLimitOptions: Schema.optional(
+    Schema.Struct({
+      conformAction: Schema.optional(Schema.String),
+      exceedAction: Schema.optional(Schema.String),
+      enforceOnKey: Schema.optional(Schema.String),
+      rateLimitThreshold: Schema.optional(
+        Schema.Struct({
+          count: Schema.optional(Schema.Finite),
+          intervalSec: Schema.optional(Schema.Finite),
+        })
+      ),
+    })
+  ),
+});
+type LiveRule = typeof LiveRule.Type;
+
+const LiveSecurityPolicy = Schema.Struct({
+  id: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
+  selfLink: Schema.optional(Schema.String),
+  creationTimestamp: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  fingerprint: Schema.optional(Schema.String),
+  type: Schema.optional(Schema.String),
+  rules: Schema.optional(Schema.Array(LiveRule)),
+});
+type LiveSecurityPolicy = typeof LiveSecurityPolicy.Type;
+const decodePolicy = Schema.decodeUnknownEffect(LiveSecurityPolicy);
+
+/**
+ * A rule in a form both sides share: absent booleans are false, absent
+ * strings empty, so a live rule equals its declaration exactly when every
+ * field the edge sets matches.
+ */
+export const comparedRule = (rule: LiveRule | EdgeSecurityPolicyRule) => {
+  const match = rule.match as LiveRule["match"];
+  const limit = rule.rateLimitOptions;
+  return JSON.stringify({
+    priority: rule.priority,
+    action: rule.action ?? "",
+    description: rule.description ?? "",
+    preview: rule.preview === true,
+    expression: match?.expr?.expression ?? "",
+    versionedExpr: match?.versionedExpr ?? "",
+    srcIpRanges: [...(match?.config?.srcIpRanges ?? [])].sort(),
+    rateLimit:
+      limit === undefined
+        ? null
+        : {
+            conformAction: limit.conformAction ?? "",
+            exceedAction: limit.exceedAction ?? "",
+            enforceOnKey: limit.enforceOnKey ?? "",
+            count: limit.rateLimitThreshold?.count ?? 0,
+            intervalSec: limit.rateLimitThreshold?.intervalSec ?? 0,
+          },
+  });
+};
+
+const toAttributes = (
+  project: string,
+  live: LiveSecurityPolicy
+): EdgeSecurityPolicyAttributes => ({
+  project,
+  name: live.name ?? "",
+  id: live.id ?? "",
+  selfLink: live.selfLink ?? "",
+  creationTimestamp: live.creationTimestamp ?? "",
+  type: live.type ?? "",
+  description: parseOwnedDescription(live.description).description,
+  rules: [...(live.rules ?? [])]
+    .sort((left, right) => (left.priority ?? 0) - (right.priority ?? 0))
+    .map(comparedRule),
+});
+
+/** The rule changes that bring the live rules to the declared ones. */
+export const ruleChanges = (
+  desired: ReadonlyArray<EdgeSecurityPolicyRule>,
+  live: ReadonlyArray<LiveRule>
+) => {
+  const liveByPriority = new Map(live.map((rule) => [rule.priority, rule]));
+  const desiredPriorities = new Set(desired.map((rule) => rule.priority));
+  return {
+    add: desired.filter((rule) => !liveByPriority.has(rule.priority)),
+    patch: desired.filter((rule) => {
+      const current = liveByPriority.get(rule.priority);
+      return (
+        current !== undefined && comparedRule(current) !== comparedRule(rule)
+      );
+    }),
+    remove: live.flatMap((rule) =>
+      rule.priority === undefined ||
+      rule.priority === defaultRulePriority ||
+      desiredPriorities.has(rule.priority)
+        ? []
+        : [rule.priority]
+    ),
+  };
+};
+
+const policyDrift = (
+  props: EdgeSecurityPolicyProps,
+  description: string,
+  live: LiveSecurityPolicy
+) => {
+  const changes = ruleChanges(props.rules, live.rules ?? []);
+  return [
+    ...((live.description ?? "") === description ? [] : ["description"]),
+    ...changes.add.map((rule) => `rule ${rule.priority} missing`),
+    ...changes.patch.map((rule) => `rule ${rule.priority} differs`),
+    ...changes.remove.map((priority) => `rule ${priority} undeclared`),
+  ];
+};
+
+/** The rule as written: `preview` is always sent, false included. */
+const ruleBody = (rule: EdgeSecurityPolicyRule) => ({
+  priority: rule.priority,
+  action: rule.action,
+  description: rule.description,
+  preview: rule.preview,
+  match: rule.match,
+  ...(rule.rateLimitOptions === undefined
+    ? {}
+    : { rateLimitOptions: rule.rateLimitOptions }),
+});
+
+const policiesUrl = (project: string) =>
+  `${computeRoot}/projects/${project}/global/securityPolicies`;
+
+/**
+ * The provider of `EdgeSecurityPolicy`: insert with every rule, then keep
+ * the description and rules in step with `addRule`, `patchRule` and
+ * `removeRule`, waiting on each global operation.
+ */
+export const EdgeSecurityPolicyProvider = Provider.succeed(EdgeSecurityPolicy, {
+  stables: ["project", "name", "id", "selfLink", "creationTimestamp"],
+
+  diff: Effect.fn(function* ({ news, olds, output }) {
+    const previous = olds ?? output;
+    if (previous === undefined) {
+      return undefined;
+    }
+    const next = news as Partial<Record<string, unknown>>;
+    const changed = (key: "project" | "name" | "type") =>
+      typeof next[key] === "string" && next[key] !== previous[key];
+    if (changed("project") || changed("name")) {
+      return { action: "replace" as const, deleteFirst: false };
+    }
+    if (changed("type")) {
+      return { action: "replace" as const, deleteFirst: true };
+    }
+    return undefined;
+  }),
+
+  read: Effect.fn(function* ({ id, olds, output, previous }) {
+    const api = yield* makeEdgeComputeApi();
+    const project = output?.project ?? olds.project;
+    const name = output?.name ?? olds.name;
+    const live = yield* api.get(
+      `Security policy ${name}`,
+      `${policiesUrl(project)}/${name}`,
+      decodePolicy
+    );
+    if (live === undefined) {
+      return undefined;
+    }
+    const attributes = toAttributes(project, live);
+    const owned =
+      (yield* isOwnedDescription(id, live.description)) ||
+      (previous !== undefined && previous.selfLink === live.selfLink);
+    return owned ? attributes : Unowned(attributes);
+  }),
+
+  reconcile: Effect.fn(function* ({ id, news, output }) {
+    const api = yield* makeEdgeComputeApi();
+    const { project, name } = news;
+    const resource = `Security policy ${name}`;
+    const url = `${policiesUrl(project)}/${name}`;
+    const description = yield* ownedDescription(id, news.description);
+    const read = (operation: string) =>
+      api
+        .get(resource, url, decodePolicy)
+        .pipe(
+          Effect.flatMap((live) => requirePresent(resource, operation, live))
+        );
+    const write = (
+      operation: string,
+      request: HttpClientRequest.HttpClientRequest
+    ) =>
+      api
+        .mutate(resource, operation, request)
+        .pipe(
+          Effect.flatMap((pending) => settleGlobalOperation(project, pending))
+        );
+
+    let live = yield* api.get(resource, url, decodePolicy);
+    if (live === undefined) {
+      const inserted = yield* api.insert(resource, policiesUrl(project), {
+        name,
+        description,
+        type: news.type,
+        rules: news.rules.map(ruleBody),
+      });
+      if (inserted !== "conflict") {
+        yield* settleGlobalOperation(project, inserted);
+      }
+      live = yield* read("insert");
+      if (
+        inserted === "conflict" &&
+        !(yield* isOwnedDescription(id, live.description))
+      ) {
+        return yield* new EdgeComputeResourceUnowned({ resource });
+      }
+    } else if (
+      output === undefined &&
+      !(yield* isOwnedDescription(id, live.description))
+    ) {
+      return yield* new EdgeComputeResourceUnowned({ resource });
+    }
+
+    if (live.type !== news.type) {
+      return yield* new EdgeComputeResourceNotConverged({
+        resource,
+        fields: ["type"],
+      });
+    }
+
+    if ((live.description ?? "") !== description) {
+      yield* write(
+        "patch",
+        HttpClientRequest.patch(url).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            description,
+            fingerprint: live.fingerprint,
+          })
+        )
+      );
+    }
+    const changes = ruleChanges(news.rules, live.rules ?? []);
+    for (const rule of changes.add) {
+      yield* write(
+        "addRule",
+        HttpClientRequest.post(`${url}/addRule`).pipe(
+          HttpClientRequest.bodyJsonUnsafe(ruleBody(rule))
+        )
+      );
+    }
+    for (const rule of changes.patch) {
+      yield* write(
+        "patchRule",
+        HttpClientRequest.post(`${url}/patchRule`).pipe(
+          HttpClientRequest.setUrlParam("priority", String(rule.priority)),
+          HttpClientRequest.bodyJsonUnsafe(ruleBody(rule))
+        )
+      );
+    }
+    for (const priority of changes.remove) {
+      yield* write(
+        "removeRule",
+        HttpClientRequest.post(`${url}/removeRule`).pipe(
+          HttpClientRequest.setUrlParam("priority", String(priority))
+        )
+      );
+    }
+    live = yield* read("readback");
+
+    const remaining = policyDrift(news, description, live);
+    if (remaining.length > 0) {
+      return yield* new EdgeComputeResourceNotConverged({
+        resource,
+        fields: remaining,
+      });
+    }
+    return toAttributes(project, live);
+  }),
+
+  delete: Effect.fn(function* ({ output }) {
+    const api = yield* makeEdgeComputeApi();
+    const deleted = yield* api.delete(
+      `Security policy ${output.name}`,
+      `${policiesUrl(output.project)}/${output.name}`
+    );
+    if (deleted !== "gone") {
+      yield* settleGlobalOperation(output.project, deleted, {
+        ignore: ["RESOURCE_NOT_FOUND"],
+      });
+    }
+  }),
+});

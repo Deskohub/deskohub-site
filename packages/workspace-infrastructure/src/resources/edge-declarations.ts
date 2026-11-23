@@ -8,6 +8,10 @@ import type {
   WorkspaceStackConfig,
 } from "../config/stack-config";
 import { EdgeBackendService } from "./edge-backend-service";
+import {
+  EdgeSecurityPolicy,
+  type EdgeSecurityPolicyProps,
+} from "./edge-security-policy";
 import { workspaceWebServiceId } from "./workload-names";
 
 /**
@@ -54,8 +58,9 @@ export const tokenRouteExclusionFilter = [
 export const edgeSecurityPolicyProps = (
   config: WorkspaceStackConfig,
   edge: WorkspaceEdgeConfig
-): Compute.SecurityPolicyProps => ({
-  securityPolicyName: edgeResourceName(config, "edge"),
+): EdgeSecurityPolicyProps => ({
+  project: config.projectId,
+  name: edgeResourceName(config, "edge"),
   description: `Workspace ${config.stage} edge policy`,
   type: "CLOUD_ARMOR",
   rules: [
@@ -87,6 +92,7 @@ export const edgeSecurityPolicyProps = (
       action: "throttle",
       priority: 2000,
       description: "Throttle auth endpoints per client IP",
+      preview: false,
       match: { expr: { expression: "request.path.startsWith('/api/auth/')" } },
       rateLimitOptions: {
         conformAction: "allow",
@@ -102,6 +108,7 @@ export const edgeSecurityPolicyProps = (
       action: "allow",
       priority: 2147483647,
       description: "Default allow",
+      preview: false,
       match: { versionedExpr: "SRC_IPS_V1", config: { srcIpRanges: ["*"] } },
     },
   ],
@@ -219,7 +226,8 @@ const declaredLink = (resource: string) =>
 export const declareWorkspaceEdge = (
   config: WorkspaceStackConfig,
   edge: WorkspaceEdgeConfig,
-  webService: Input<string> | undefined
+  /** The declared web service's ID (not its full resource name). */
+  webServiceId: Input<string> | undefined
 ) =>
   Effect.gen(function* () {
     const address = yield* Compute.GlobalAddress("EdgeAddress", {
@@ -232,10 +240,10 @@ export const declareWorkspaceEdge = (
         networkEndpointGroupName: edgeResourceName(config, "web"),
         region: config.region,
         networkEndpointType: "SERVERLESS",
-        cloudRun: { service: webService ?? workspaceWebServiceId },
+        cloudRun: { service: webServiceId ?? workspaceWebServiceId },
       }
     );
-    const policy = yield* Compute.SecurityPolicy(
+    const policy = yield* EdgeSecurityPolicy(
       "EdgeSecurityPolicy",
       edgeSecurityPolicyProps(config, edge)
     );
@@ -243,7 +251,7 @@ export const declareWorkspaceEdge = (
       backendGroup: endpointGroup.selfLink.pipe(
         declaredLink("EdgeWebEndpointGroup")
       ),
-      securityPolicy: policy.selfLink.pipe(declaredLink("EdgeSecurityPolicy")),
+      securityPolicy: policy.selfLink,
     };
     const dynamicBackend = yield* EdgeBackendService(
       "EdgeDynamicBackend",
@@ -323,7 +331,7 @@ export const declareWorkspaceEdge = (
     return {
       edgeIpAddress: address.address,
       edgeProtocol: edge.enableHttps ? ("https" as const) : ("http" as const),
-      securityPolicy: policy.securityPolicyName,
+      securityPolicy: policy.name,
       backendServices: {
         dynamic: dynamicBackend.name,
         static: staticBackend.name,
