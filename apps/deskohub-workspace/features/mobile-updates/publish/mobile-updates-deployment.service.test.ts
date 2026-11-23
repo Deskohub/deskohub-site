@@ -37,6 +37,11 @@ const deployment = (answers: ReadonlyArray<() => Response>) => {
           blobToken: Option.none(),
           publishToken: Redacted.make("synthetic-publish-token"),
           protectionBypass: Option.none(),
+          cloudStorage: {
+            bucket: Option.none(),
+            accessToken: Option.none(),
+            assetOrigin: Option.none(),
+          },
         }),
         Layer.succeed(FetchHttpClient.Fetch, fetch as typeof globalThis.fetch)
       )

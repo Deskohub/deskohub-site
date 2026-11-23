@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { Console, Data, Effect, Layer, Schema } from "effect";
+import { Console, Data, Effect, Layer, Option, Schema } from "effect";
 import { MobileUpdatePlatform } from "@/features/mobile-updates/mobile-update-publication";
 import { MobileUpdatePublishConfig } from "@/features/mobile-updates/publish/mobile-update-publish-config";
 import { MobileUpdatesDeployment } from "@/features/mobile-updates/publish/mobile-updates-deployment.service";
@@ -51,6 +51,7 @@ const expoCommandTimeoutMs = 3 * 60_000;
 /** Secrets the script reads that the Expo CLI never needs. */
 const publishSecrets = [
   "BLOB_READ_WRITE_TOKEN",
+  "MOBILE_UPDATES_GCS_ACCESS_TOKEN",
   "MOBILE_UPDATES_PUBLISH_TOKEN",
   "VERCEL_AUTOMATION_BYPASS_SECRET",
 ] as const;
@@ -111,7 +112,20 @@ const rollBack = Effect.fn("MobileUpdates.rollBack")(function* (
   return yield* rollBackMobileUpdates(yield* readAppTarget(options));
 });
 
-/** A rollback stores no files, so it never needs the Blob store. */
+/**
+ * Update files go to the Blob store unless `MOBILE_UPDATES_GCS_BUCKET`
+ * selects Cloud Storage.
+ */
+const selectedAssetStorage = Layer.unwrap(
+  Effect.gen(function* () {
+    const { cloudStorage } = yield* MobileUpdatePublishConfig;
+    return Option.isSome(cloudStorage.bucket)
+      ? UpdateAssetStorage.CloudStorage
+      : UpdateAssetStorage.Default;
+  })
+);
+
+/** A rollback stores no files, so it never needs the asset store. */
 const run = Effect.fn("MobileUpdates.run")(function* (options: PublishOptions) {
   const config = MobileUpdatePublishConfig.Default(options.target);
   return yield* options.rollback
@@ -121,7 +135,7 @@ const run = Effect.fn("MobileUpdates.run")(function* (options: PublishOptions) {
     : publishUpdate(options).pipe(
         Effect.provide(
           Layer.mergeAll(
-            UpdateAssetStorage.Default,
+            selectedAssetStorage,
             MobileUpdatesDeployment.Live
           ).pipe(Layer.provide(config))
         )

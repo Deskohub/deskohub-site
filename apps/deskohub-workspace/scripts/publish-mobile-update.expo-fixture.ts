@@ -4,7 +4,8 @@
  * project's `node_modules/.bin`. `expo export` copies the fixture export to
  * `--output-dir`, `expo config` prints a public config, and `expo-updates
  * runtimeversion:resolve` prints `fixture-runtime-<platform>`. Each call is
- * appended as a JSON line to `PUBLISH_FIXTURE_RECORD`.
+ * appended as a JSON line to `PUBLISH_FIXTURE_RECORD`, with the names of
+ * the publish secrets its environment carries.
  */
 import { appendFileSync, cpSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,7 +15,18 @@ const recordFile = process.env.PUBLISH_FIXTURE_RECORD;
 if (recordFile) {
   appendFileSync(
     recordFile,
-    `${JSON.stringify({ kind: "expo", cli, args, cwd: process.cwd() })}\n`
+    `${JSON.stringify({
+      kind: "expo",
+      cli,
+      args,
+      cwd: process.cwd(),
+      secrets: [
+        "BLOB_READ_WRITE_TOKEN",
+        "MOBILE_UPDATES_GCS_ACCESS_TOKEN",
+        "MOBILE_UPDATES_PUBLISH_TOKEN",
+        "VERCEL_AUTOMATION_BYPASS_SECRET",
+      ].filter((name) => process.env[name]),
+    })}\n`
   );
 }
 
