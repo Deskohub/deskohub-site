@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
-import { createCloudinaryCacheTags } from "./cache-tags";
+import {
+  createCloudinaryCacheTags,
+  createStableHash,
+  type StableHashValue,
+} from "./cache-tags";
 import { CloudinaryPublicIdSchema } from "./schema";
 
 describe("createCloudinaryCacheTags", () => {
@@ -28,5 +32,29 @@ describe("createCloudinaryCacheTags", () => {
     expect(tags.search([["hero"], ["desk"]])).not.toBe(searchTag);
     expect(tags.search(undefined, 12)).toBe("workspace:search:limit:12");
     expect(tags.search(query, 12)).toBe(`${searchTag}:limit:12`);
+  });
+
+  test("keeps the hashes earlier releases gave tag expressions and other values", () => {
+    const cyclic: StableHashValue[] = ["a"];
+    cyclic.push(cyclic);
+    const deep: StableHashValue[] = [];
+    let level = deep;
+    for (let index = 0; index < 12; index += 1) {
+      const next: StableHashValue[] = [];
+      level.push(next);
+      level = next;
+    }
+
+    expect(
+      createCloudinaryCacheTags({ namespace: "n" }).search({ tag: "gallery" })
+    ).toBe("n:search:tags:2npry2");
+    expect(createStableHash([["hero", "desk"]])).toBe("gkbr7v");
+    expect(createStableHash(cyclic)).toBe("kai4a4");
+    expect(createStableHash({ b: [1, true, null], a: { c: undefined } })).toBe(
+      "i4ojs8"
+    );
+    expect(createStableHash("x".repeat(150))).toBe("p2uufm");
+    expect(createStableHash(deep)).toBe("8uvnji");
+    expect(createStableHash(12)).toBe("17l");
   });
 });
