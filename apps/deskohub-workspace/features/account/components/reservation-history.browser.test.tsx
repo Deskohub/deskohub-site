@@ -28,7 +28,7 @@ const pastVisits = Array.from(
       endsAt: `2026-10-${day}T16:00:00Z`,
       seats: 1,
       status: "confirmed",
-      ...(index === 0 && { paidIndividually: true }),
+      ...(index === 0 && { settlement: "paid" as const }),
     };
   }
 );

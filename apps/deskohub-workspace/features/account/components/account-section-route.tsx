@@ -63,7 +63,7 @@ async function AccountSectionsContent({ locale }: { readonly locale: Locale }) {
       : findAccountSectionOfPathname(locale, pathname)
   );
   const [state, unlimitedPasses] = await Promise.all([
-    loadCustomerAccountPage(passesEnabled),
+    loadCustomerAccountPage(),
     passesEnabled ? loadCustomerAccountUnlimitedPasses(locale) : [],
   ]);
 

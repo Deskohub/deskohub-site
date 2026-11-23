@@ -206,6 +206,7 @@ export {
   CustomerReservationParty,
   CustomerReservationPeople,
   CustomerReservationProduct,
+  type CustomerReservationSettlement,
   CustomerReservationStatus,
   CustomerReservationSummary,
   CustomerReservationsApi,

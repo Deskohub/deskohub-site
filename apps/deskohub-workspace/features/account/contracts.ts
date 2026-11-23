@@ -1,4 +1,5 @@
 import {
+  type CustomerReservationSettlement,
   customerInputParseOptions,
   customerProfileSchemas,
 } from "@deskohub/workspace-customer-api";
@@ -83,15 +84,14 @@ export type CustomerReservationSummary = {
    * but never an access code.
    */
   readonly reviewSandbox?: true;
-  /** The account page marks a booking backed by a consumed Entry pack claim. */
-  readonly paidWithEntryPack?: true;
   /**
-   * The booking was paid for on its own, with money: a paid website order
-   * whose payment kept a nonzero amount after refunds, not funded by an Entry
-   * pack claim or an Unlimited pass and not fully discounted. Absent for a
-   * booking with no website order, and whenever passes aren't released.
+   * The current coverage of the visit's price, apart from `status` and the
+   * order's payment status: with money, free, or from an Entry pack. Absent
+   * when none applies: a booking with no website order, an unpaid or fully
+   * refunded order, an Unlimited pass day, or an Entry pack claim released
+   * without being used.
    */
-  readonly paidIndividually?: true;
+  readonly settlement?: CustomerReservationSettlement;
   /** Absent when the account's own customer booked it for itself. */
   readonly party?: CustomerReservationParty;
   readonly product: CustomerReservationProduct;

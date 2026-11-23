@@ -377,7 +377,7 @@ function FeaturedReservationItem({
                     )}
               </span>
             </p>
-            {reservation.paidWithEntryPack && (
+            {reservation.settlement === "entry-pack" && (
               <p className="mt-2 text-sm text-[#64748b]">
                 {m.accountReservationPaidWithEntryPack({}, { locale })}
               </p>
@@ -617,7 +617,7 @@ function CompactReservationItem({
                       )}
                 </span>
               </span>
-              {reservation.paidWithEntryPack && (
+              {reservation.settlement === "entry-pack" && (
                 <span>
                   {m.accountReservationPaidWithEntryPack({}, { locale })}
                 </span>
@@ -791,7 +791,7 @@ function PastReservationTable({
                   </span>
                   <span className="min-w-0 break-words">
                     {getReservationProductName(reservation.product, locale)}
-                    {reservation.paidWithEntryPack && (
+                    {reservation.settlement === "entry-pack" && (
                       <span className="mt-1 block text-xs font-normal text-[#64748b]">
                         {m.accountReservationPaidWithEntryPack({}, { locale })}
                       </span>

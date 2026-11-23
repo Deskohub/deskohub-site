@@ -42,6 +42,7 @@ const listedFields = [
   "setupStartsAt",
   "seats",
   "status",
+  "settlement",
   "bookedSelection",
 ];
 
@@ -126,6 +127,25 @@ describe("reservations cache", () => {
         expect(listedFields).toContain(key);
       }
     }
+  });
+
+  test("keeps a settlement it doesn't know yet, so the entry still reads", async () => {
+    const device = makeFakeDevice();
+    const [first, ...rest] = history.past;
+    if (!first) throw new Error("The sample history has no past reservation");
+
+    const saved = await run(
+      device,
+      saveReservations({
+        ...history,
+        past: [{ ...first, settlement: "voucher" }, ...rest],
+      }).pipe(Effect.andThen(readSavedReservations))
+    );
+
+    expect(Option.getOrThrow(saved).history.past[0]).toMatchObject({
+      id: first.id,
+      settlement: "voucher",
+    });
   });
 
   test("keeps saved reservations for 30 days, then drops them", async () => {

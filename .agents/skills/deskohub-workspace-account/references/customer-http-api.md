@@ -330,7 +330,21 @@ project what the reservation services return.
   before sending (a request without a query string still decodes on the
   server, so older apps keep working). A website order carries
   `accessStartsAt`/`accessEndsAt`, the span Dotypos holds (early setup
-  included), from which issuance derives the code's window. An entry whose
+  included), from which issuance derives the code's window. Every
+  authorized history summary may carry `settlement`, the current coverage of
+  the visit's price apart from `status` and the payment status, from one SQL
+  derivation in the history service: `entry-pack` for a consumed Entry pack
+  claim (even with paid add-ons); otherwise `free` for a paid order's zero
+  amount and `paid` for money kept after refunds made or owed. It is absent
+  when none applies: a Dotypos-only reservation, an unpaid or fully refunded
+  order, an Unlimited pass day, and any other Entry pack claim (a released
+  one must not fall through to the payment). The wire type is an open
+  string: clients match the values they know and treat any other as absent,
+  so a new value needs no API version, and the app's reservations cache keeps
+  it. It is not gated by the pass rollout: Entry pack labels on past visits
+  show by default, offline too, while pass offers and actions stay gated.
+  The site's and the app's pass savings offers count only `paid`.
+  `GET /passes/reservation-funding` stays for builds that predate it. An entry whose
   stored product can still be booked carries `bookedSelection`
   (`{ selection: CustomerBookingSelection, earlySetup? }`, what
   `createCheckout` takes), from `getStoredRebookingSelection`

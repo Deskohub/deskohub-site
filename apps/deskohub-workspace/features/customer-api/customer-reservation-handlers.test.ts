@@ -132,6 +132,7 @@ describe("listReservations", () => {
     endsAt: "2099-07-01T22:00:00Z",
     seats: 1,
     status: "confirmed",
+    settlement: "paid",
   };
   const bookedForOther: CustomerReservationSummary = {
     id: "dotypos-2",
@@ -202,6 +203,7 @@ describe("listReservations", () => {
           endsAt: "2099-07-01T22:00:00Z",
           seats: 1,
           status: "confirmed",
+          settlement: "paid",
         },
       ],
       past: [

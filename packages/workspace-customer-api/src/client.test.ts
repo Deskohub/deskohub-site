@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Result } from "effect";
+import { Effect, Result, Schema, Struct } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import {
   customerApiClientHeader,
@@ -29,6 +29,7 @@ import { CustomerLocale } from "./customer-locale";
 import {
   CustomerInvoiceNotIssued,
   CustomerReservationOrderId,
+  CustomerReservationSummary,
 } from "./customer-reservations-api";
 import {
   CustomerAccountId,
@@ -118,6 +119,58 @@ describe("makeWorkspaceCustomerApiClient", () => {
     );
 
     expect(result).toEqual(Result.succeed(account));
+  });
+
+  test("decodes a reservation's settlement, and one it doesn't know yet as a plain value", async () => {
+    const summary = {
+      id: "reservation",
+      orderId: CustomerReservationOrderId.make("order"),
+      product: { kind: "cowork", tier: "open-space" },
+      startsAt: "2026-11-02T08:00:00.000Z",
+      endsAt: "2026-11-02T16:00:00.000Z",
+      seats: 1,
+      status: "confirmed",
+    } as const;
+    const past = [
+      { ...summary, settlement: "paid" },
+      { ...summary, id: "later-value", settlement: "voucher" },
+      { ...summary, id: "provider-only", orderId: undefined },
+    ];
+    const { client } = recordingClient(() =>
+      json({ current: [], past, unavailable: [] })
+    );
+
+    const result = await run(
+      Effect.flatMap(makeWorkspaceCustomerApiClient({ baseUrl }), (api) =>
+        api.reservations.listReservations({ query: {} })
+      ),
+      client
+    );
+
+    expect(result).toEqual(
+      Result.succeed({ current: [], past, unavailable: [] })
+    );
+  });
+
+  test("a build that predates settlement still decodes a summary carrying one", () => {
+    const shippedSummary = Schema.Struct(
+      Struct.omit(CustomerReservationSummary.fields, ["settlement"])
+    );
+    const summary = {
+      id: "reservation",
+      product: { kind: "other" },
+      startsAt: null,
+      endsAt: null,
+      seats: null,
+      status: "confirmed",
+    } as const;
+
+    expect(
+      Schema.decodeUnknownSync(shippedSummary)({
+        ...summary,
+        settlement: "entry-pack",
+      })
+    ).toEqual(summary);
   });
 
   test("keeps the client header when the caller's transform overwrites it", async () => {

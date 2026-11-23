@@ -4,15 +4,16 @@ import type { CustomerReservationSummary } from "./contracts";
 
 /**
  * A completed coworking visit of the customer's own, paid for one visit at a
- * time: confirmed, past, and paid as a single order rather than from an Entry
- * pack or an Unlimited pass. Another account may have booked it for the
- * customer; a visit this account booked for another customer isn't its own.
+ * time: confirmed, past, and settled with money the customer kept paying,
+ * not free, refunded, or from an Entry pack or an Unlimited pass. Another
+ * account may have booked it for the customer; a visit this account booked
+ * for another customer isn't its own.
  */
 const isPaidOwnCoworkVisit = (reservation: CustomerReservationSummary) =>
   reservation.product.kind === "cowork" &&
   reservation.status === "confirmed" &&
   reservation.party?.kind !== "booked-for" &&
-  reservation.paidIndividually === true;
+  reservation.settlement === "paid";
 
 /**
  * Whether the Past reservations section offers Entry packs and Unlimited

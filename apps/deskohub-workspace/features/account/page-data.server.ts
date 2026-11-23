@@ -27,8 +27,8 @@ export {
  * separate language preference.
  */
 export const loadCustomerAccountPage = cache(
-  (includeFunding = false): Promise<CustomerAccountStateWithHistory> =>
-    loadAccountStateWithHistory(includeFunding).pipe(
+  (): Promise<CustomerAccountStateWithHistory> =>
+    loadAccountStateWithHistory().pipe(
       Effect.provide(accountPageCapabilities(liveAccountPageLayers)),
       runWorkspaceEffect("account.page", { boundary: "page" })
     )

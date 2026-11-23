@@ -20,6 +20,7 @@ const visit = (
   endsAt: "2026-11-02T16:00:00Z",
   seats: 1,
   status: "confirmed",
+  settlement: "paid",
   ...change,
 });
 
@@ -54,7 +55,6 @@ const shows = (facts: Partial<SavingsOfferFacts> = {}) =>
   showsSavingsOffer({
     past: [visit("paid")],
     held: [],
-    entryPackFunded: new Set(),
     ...facts,
   });
 
@@ -63,12 +63,18 @@ describe("showsSavingsOffer", () => {
     expect(shows()).toBe(true);
   });
 
-  test("visits an Entry pack paid for don't count", () => {
-    expect(shows({ entryPackFunded: new Set([orderId("paid")]) })).toBe(false);
+  test("free, Entry pack, unsettled and unknown settlements don't count", () => {
+    for (const settlement of ["free", "entry-pack", undefined, "voucher"]) {
+      expect(shows({ past: [visit("v", { settlement })] })).toBe(false);
+    }
     expect(
       shows({
-        past: [visit("pack"), visit("paid")],
-        entryPackFunded: new Set([orderId("pack")]),
+        past: [
+          visit("free", { settlement: "free" }),
+          visit("later-value", { settlement: "voucher" }),
+          visit("pack", { settlement: "entry-pack" }),
+          visit("paid"),
+        ],
       })
     ).toBe(true);
   });
@@ -117,8 +123,14 @@ describe("showsSavingsOffer", () => {
     ).toBe(false);
   });
 
-  test("a visit without an order shows nothing about its payment", () => {
-    expect(shows({ past: [visit("dotypos", { orderId: undefined })] })).toBe(
+  test("a visit without a settlement shows nothing about its payment", () => {
+    // Dotypos-only, an order not paid, or a Workspace that sends none yet.
+    expect(
+      shows({
+        past: [visit("dotypos", { orderId: undefined, settlement: undefined })],
+      })
+    ).toBe(false);
+    expect(shows({ past: [visit("unpaid", { settlement: undefined })] })).toBe(
       false
     );
   });
@@ -152,8 +164,6 @@ describe("showsSavingsOffer", () => {
   test("nothing shows until the pass reads succeed", () => {
     // The pass rollout closed, or the held passes loading or failed.
     expect(shows({ held: undefined })).toBe(false);
-    // The Entry pack funding loading or failed.
-    expect(shows({ entryPackFunded: undefined })).toBe(false);
   });
 
   test("an empty Past group shows nothing", () => {

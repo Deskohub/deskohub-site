@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import {
-  type CustomerPassList,
-  CustomerReservationOrderId,
-} from "@deskohub/workspace-customer-api";
+import type { CustomerPassList } from "@deskohub/workspace-customer-api";
 import { Effect, Layer, Result } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { CustomerApi } from "../customer-api/customer-api.service";
@@ -24,13 +21,11 @@ import {
   heldPassesAtom,
   passCatalogAtom,
   resendPassInvitationAtom,
-  reservationFundingAtom,
   unlimitedAccessAtom,
 } from "./pass-reads";
 
 const passId = "642ef6b9-48aa-495f-83a8-9a53f4791692";
 const otherPassId = "c8459948-3d78-45bf-8876-c0f9310c52a2";
-const orderId = CustomerReservationOrderId.make("sample-entry-pack-booking");
 const period = {
   passId,
   tier: "reserved-desk",
@@ -94,16 +89,6 @@ const harness = () => {
         invitationQueued = true;
         return Effect.succeed(response({ status: "queued" }));
       }
-      if (path === "reservation-funding")
-        return Effect.succeed(
-          response({
-            entryPackOrderIds: url.searchParams
-              .getAll("orderIds")
-              .includes(orderId)
-              ? [orderId]
-              : [],
-          })
-        );
       return Effect.succeed(response({ _tag: "CustomerPassNotFound" }, 404));
     })
   );
@@ -150,27 +135,14 @@ test("the signed-in reads expose owned periods, the existing renewal path and ma
   }
 });
 
-test("the pass reads keep release closure and reservation funding out of the legacy history response", async () => {
-  const { registry, calls } = harness();
+test("the pass catalog read keeps the release closure", async () => {
+  const { registry } = harness();
   try {
     const catalog = await settle(registry, passCatalogAtom);
     expect(catalog).toMatchObject({
       _tag: "Failure",
       failure: { _tag: "CustomerPassesUnavailable" },
     });
-    const otherIds = Array.from({ length: 50 }, (_, n) =>
-      CustomerReservationOrderId.make(`sample-booking-${n}`)
-    );
-    const funding = await settle(
-      registry,
-      reservationFundingAtom([orderId, ...otherIds])
-    );
-    expect(funding).toEqual(Result.succeed(new Set([orderId])));
-    expect(
-      calls
-        .filter(({ path }) => path === "reservation-funding")
-        .map(({ query }) => query.getAll("orderIds").length)
-    ).toEqual([50, 1]);
   } finally {
     registry.dispose();
   }

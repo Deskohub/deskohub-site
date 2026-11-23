@@ -253,7 +253,7 @@ describe("ReservationHistory", () => {
     const packDay = (id: string) =>
       reservation({
         id,
-        paidWithEntryPack: true,
+        settlement: "entry-pack",
         product: { kind: "cowork", tier: "open-space" },
       });
     const view = renderHistory("en-US", {
@@ -966,7 +966,7 @@ describe("ReservationHistory", () => {
       product: { kind: "cowork", tier: "open-space" },
       startsAt: "2026-08-21T08:00:00Z",
       endsAt: "2026-08-21T16:00:00Z",
-      paidIndividually: true,
+      settlement: "paid",
     });
     const historyOf = (
       past: readonly CustomerReservationSummary[]

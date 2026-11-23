@@ -25,6 +25,8 @@ const savedReservationFields = [
   "setupStartsAt",
   "seats",
   "status",
+  // What the list's Entry pack label reads.
+  "settlement",
   "accessStartsAt",
   "accessEndsAt",
   // What booking again, or paying a failed order again, opens.
