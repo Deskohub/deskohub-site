@@ -32,6 +32,8 @@ export interface FakeRule {
   readonly exit?: number;
   /** World keys this call sets before it answers. */
   readonly set?: Record<string, unknown>;
+  /** Seconds this call advances the fake clock by. */
+  readonly advance?: number;
 }
 
 /** One state object: its live generation, if any, and every generation. */
@@ -161,6 +163,7 @@ export const withProofFakes = <A>(
         SANDBOX_PROOF_DIR: proofDir,
         FAKE_WORLD: worldFile,
         FAKE_CALLS: callsLog,
+        FAKE_CLOCK: clockFile,
       },
       proofDir,
       world: () => readWorld(worldFile),
@@ -371,6 +374,12 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
   if (rule !== undefined) {
     if (rule.set !== undefined) {
       save({ ...world, ...rule.set });
+    }
+    if (rule.advance !== undefined) {
+      const clock = process.env.FAKE_CLOCK ?? "";
+      const now = Number(readFileSync(clock, "utf8").trim());
+      writeFileSync(`${clock}.next`, `${now + rule.advance}\n`);
+      renameSync(`${clock}.next`, clock);
     }
     if (rule.stdout !== undefined) {
       print(rule.stdout);

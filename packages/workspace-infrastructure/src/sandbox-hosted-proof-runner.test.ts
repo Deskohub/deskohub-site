@@ -40,15 +40,15 @@ const sandboxEnv = {
   GITHUB_RUN_ATTEMPT: "1",
   GOOGLE_ACCESS_TOKEN: "fake-access-token",
   // Far in the future, so the runner never mints a token.
-  GOOGLE_ACCESS_TOKEN_MINTED_AT: "99999999999",
+  GOOGLE_ACCESS_TOKEN_EXPIRES_AT: "99999999999",
 };
 
 const runPhase = (
   fakes: ProofFakes,
-  phase: string,
+  phase: string | ReadonlyArray<string>,
   env: Record<string, string> = {}
 ) => {
-  const result = Bun.spawnSync(["bash", runner, phase], {
+  const result = Bun.spawnSync(["bash", runner, ...[phase].flat()], {
     cwd: packageRoot,
     env: {
       HOME: process.env.HOME ?? "/tmp",
@@ -706,45 +706,76 @@ describe("interrupting a deliver mid-apply", () => {
 });
 
 describe("Alchemy access token", () => {
-  // Every step must start with the stack destroy's 30-minute budget left.
+  // Every Alchemy phase must start with the stack destroy's 30-minute
+  // budget left on the token it hands Alchemy.
+  const now = 1_800_000_000;
   const lifetime = (seconds: number): FakeRule => ({
     tool: "curl",
     pattern: "oauth2\\.googleapis\\.com/tokeninfo",
     stdout: JSON.stringify({ expires_in: String(seconds) }),
   });
+  const run = (
+    phases: string | ReadonlyArray<string>,
+    expiresIn: number,
+    rules: ReadonlyArray<FakeRule> = [lifetime(3599)]
+  ) =>
+    withProofFakes({ now, rules }, (fakes) => {
+      const result = runPhase(fakes, phases, {
+        GOOGLE_ACCESS_TOKEN_EXPIRES_AT: String(now + expiresIn),
+      });
+      return {
+        ...result,
+        // A minted token is masked before any use.
+        mints: result.output.split("::add-mask::").length - 1,
+        calls: fakes.calls(),
+      };
+    });
 
-  test("mints a fresh token once the current one is 30 minutes old", () => {
-    const now = 1_800_000_000;
-    for (const [age, minted] of [
-      [29 * 60, false],
-      [30 * 60, true],
+  test("mints a fresh token once under 30 minutes remain", () => {
+    for (const [left, mints] of [
+      [1800, 0],
+      [1799, 1],
     ] as const) {
-      // A minted token is masked before any use.
-      const { output } = withProofFakes(
-        { now, rules: [lifetime(3599)] },
-        (fakes) =>
-          runPhase(fakes, "baseline-inventory", {
-            GOOGLE_ACCESS_TOKEN_MINTED_AT: String(now - age),
-          })
-      );
-      expect({ age, minted: output.includes("::add-mask::") }).toEqual({
-        age,
-        minted,
+      const result = run("foundation", left);
+      expect({ left, exitCode: result.exitCode, mints: result.mints }).toEqual({
+        left,
+        exitCode: 0,
+        mints,
       });
     }
   });
 
+  test("refreshes between phases of one run by the token's real expiry", () => {
+    // The minted token has 1805 s; the first deploy takes 600 s of it.
+    const { exitCode, mints } = run(["foundation", "foundation"], 0, [
+      lifetime(1805),
+      { tool: "bun", pattern: "^release\\.run\\.ts deploy", advance: 600 },
+    ]);
+    expect({ exitCode, mints }).toEqual({ exitCode: 0, mints: 2 });
+  });
+
   test("refuses a token with less than 30 minutes left", () => {
     for (const rules of [[lifetime(600)], []]) {
-      const { exitCode, output } = withProofFakes({ rules }, (fakes) =>
-        runPhase(fakes, "baseline-inventory", {
-          GOOGLE_ACCESS_TOKEN_MINTED_AT: "0",
-        })
-      );
-      expect({ exitCode, refused: output.includes("access token") }).toEqual({
-        exitCode: 1,
-        refused: true,
-      });
+      const { exitCode, output, calls } = run("foundation", 0, rules);
+      expect({
+        exitCode,
+        refused: output.includes("access token"),
+        deployed: calls.some((call) => call.includes("release.run.ts deploy")),
+      }).toEqual({ exitCode: 1, refused: true, deployed: false });
+    }
+  });
+
+  test("takes the inventories even when no token can be verified", () => {
+    for (const phase of ["baseline-inventory", "post-destroy-inventory"]) {
+      const { exitCode, mints, calls } = run(phase, 0, []);
+      expect({
+        phase,
+        exitCode,
+        mints,
+        listed: calls.includes(
+          "gcloud run services list --project=deskohub-workspace-sandbox --region=europe-west1 --format=value(metadata.name)"
+        ),
+      }).toEqual({ phase, exitCode: 0, mints: 0, listed: true });
     }
   });
 });

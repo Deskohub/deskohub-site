@@ -222,21 +222,21 @@ project_exclusion_names() {
 
 # Alchemy beta.87 rejects federated credential files, so it gets a bearer
 # token (google-github-actions/auth `token_format: access_token`). The token
-# lives at most one hour; a step past 30 minutes mints a fresh one from the
-# federated gcloud credentials, masked before use, so every step starts with
-# at least its 30-minute budget (the longest, the stack destroy) left. An
-# empty gcloud config has no token cache, so gcloud cannot hand back a
-# cached token near its expiry, and the token's own remaining lifetime is
-# checked before any use.
+# lives at most one hour. Every phase that runs Alchemy starts with at
+# least its 30-minute budget (the longest, the stack destroy) left: a token
+# closer to its recorded expiry is replaced by a fresh one from the
+# federated gcloud credentials, masked before use. An empty gcloud config
+# has no token cache, so gcloud cannot hand back a cached token near its
+# expiry, and the expiry recorded is the token's own, from tokeninfo.
 ensure_alchemy_token() {
   if $dry_run; then
-    echo "+ (GOOGLE_ACCESS_TOKEN from token_format: access_token; refreshed past 30 minutes)" >&2
+    echo "+ (GOOGLE_ACCESS_TOKEN from token_format: access_token; refreshed under 30 minutes left)" >&2
     return
   fi
-  local now
+  local now expires_at="${GOOGLE_ACCESS_TOKEN_EXPIRES_AT:-}"
   now="$(date +%s)"
-  if [[ -z "${GOOGLE_ACCESS_TOKEN:-}" ]] ||
-    ((now - ${GOOGLE_ACCESS_TOKEN_MINTED_AT:-0} >= 1800)); then
+  [[ "$expires_at" =~ ^[0-9]+$ ]] || expires_at=0
+  if [[ -z "${GOOGLE_ACCESS_TOKEN:-}" ]] || ((expires_at - now < 1800)); then
     local config expires_in
     config="$(mktemp -d)"
     GOOGLE_ACCESS_TOKEN="$(CLOUDSDK_CONFIG="$config" gcloud auth print-access-token)"
@@ -250,9 +250,9 @@ ensure_alchemy_token() {
     if ! [[ "$expires_in" =~ ^[0-9]+$ ]] || ((expires_in < 1800)); then
       fail "the minted access token expires in ${expires_in:-an unknown time} s, under the 30-minute step budget"
     fi
-    GOOGLE_ACCESS_TOKEN_MINTED_AT="$now"
+    GOOGLE_ACCESS_TOKEN_EXPIRES_AT=$((now + expires_in))
   fi
-  export GOOGLE_ACCESS_TOKEN GOOGLE_ACCESS_TOKEN_MINTED_AT
+  export GOOGLE_ACCESS_TOKEN GOOGLE_ACCESS_TOKEN_EXPIRES_AT
 }
 
 stack_config_file="${proof_dir}/stack-config.json"
@@ -1327,7 +1327,9 @@ run_phase() {
   local name="$1"
   phase "$name"
   case "$name" in
-    guard | readonly-inventory | state-snapshot-locked | state-restore-locked) ;;
+    # Inventories list with gcloud alone, so a token problem never hides
+    # what a failed teardown left behind.
+    guard | readonly-inventory | baseline-inventory | post-destroy-inventory | state-snapshot-locked | state-restore-locked) ;;
     # Refreshed in this shell, never inside a command substitution, so
     # the mask applies and every later command sees the token.
     *) ensure_alchemy_token ;;
