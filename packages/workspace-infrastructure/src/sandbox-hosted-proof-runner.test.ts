@@ -720,10 +720,12 @@ describe("Alchemy access token", () => {
       [30 * 60, true],
     ] as const) {
       // A minted token is masked before any use.
-      const { output } = withProofFakes({ now, rules: [lifetime(3599)] }, (fakes) =>
-        runPhase(fakes, "baseline-inventory", {
-          GOOGLE_ACCESS_TOKEN_MINTED_AT: String(now - age),
-        })
+      const { output } = withProofFakes(
+        { now, rules: [lifetime(3599)] },
+        (fakes) =>
+          runPhase(fakes, "baseline-inventory", {
+            GOOGLE_ACCESS_TOKEN_MINTED_AT: String(now - age),
+          })
       );
       expect({ age, minted: output.includes("::add-mask::") }).toEqual({
         age,
