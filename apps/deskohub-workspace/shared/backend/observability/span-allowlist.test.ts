@@ -202,7 +202,6 @@ describe("Workspace span allowlist", () => {
     expect(handleRequest?.name).toBe("GET /api/auth/magic-link/verify");
     expect(handleRequest?.attributes).toEqual({
       "next.span_type": "BaseServer.handleRequest",
-      "next.span_name": "GET /api/auth/magic-link/verify",
       "http.method": "GET",
       "http.status_code": 302,
       "http.route": "/api/auth/magic-link/verify",
@@ -290,6 +289,24 @@ describe("Workspace span allowlist", () => {
       );
       expect(bodies.length).toBeGreaterThan(0);
       expect(received).toContain(controlRoute);
+      // The collector keeps the validated hosts, database and operation
+      // names the shared log censorship would mask.
+      for (const kept of [
+        "api.provider.invalid",
+        "db.provider.invalid",
+        "fetch.GET",
+        '"key":"db.namespace","value":{"stringValue":"workspace"}',
+      ]) {
+        expect(received).toContain(kept);
+      }
+      for (const key of [
+        "db.query.text",
+        "url.full",
+        "resource.name",
+        "next.span_name",
+      ]) {
+        expect(received).not.toContain(key);
+      }
       for (const marker of leakingMarkers) {
         expect(received).not.toContain(marker);
       }
@@ -329,6 +346,10 @@ describe("isAllowedSpanName", () => {
       "reservation 4f1c2a9e-0b7d-4a51-9a3e-2d4b6c8e1f00",
       "order 1234567890",
       "session aZ3kQpLm9xWr",
+      `render route (app) /[locale]/@${tokenMarker}/page`,
+      `render route (app) /[locale]/(.)${tokenMarker}`,
+      `render route (app) /[locale]/(${tokenMarker})/page`,
+      `render route (app) /[locale]/(..)(..)${pathMarker}`,
       "key deadbeef1234abcd",
       "",
     ]) {

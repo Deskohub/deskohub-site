@@ -4,7 +4,13 @@ import type {
   SpanStatus,
   TimeInput,
 } from "@opentelemetry/api";
-import type { Span, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import type {
+  ReadableSpan,
+  Span,
+  SpanExporter,
+  SpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import { Predicate } from "effect";
 
 /**
@@ -22,7 +28,8 @@ import { Predicate } from "effect";
  * The attributes a span keeps; every other key is dropped, whichever
  * instrumentation or application code wrote it. The keys are the ones the
  * Workspace's instrumentations emit with an operational meaning: Next.js
- * spans (`next.*`, `http.route`, `http.method`, `http.status_code`),
+ * spans (`next.*` except `next.span_name`, which repeats the raw span name;
+ * `http.route`, `http.method`, `http.status_code`),
  * `@vercel/otel`'s fetch instrumentation (`http.method`, `http.status_code`,
  * `net.peer.name`, `net.peer.port`, `operation.name`), Effect's HTTP client
  * (`http.request.method`, `http.response.status_code`, `server.address`,
@@ -64,7 +71,6 @@ const allowedAttributes = new Set([
   "exception.type",
   "operation.name",
   "next.span_type",
-  "next.span_name",
   "next.span_category",
   "next.route",
   "next.page",
@@ -138,12 +144,28 @@ const isTokenLike = (word: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(word) ||
   word.split(/[._:-]/).some(isTokenLikePart);
 
+/** A dynamic route segment, such as `[id]`, `[...all]` or `[[...slug]]`. */
+const dynamicRouteSegment = /^\[{1,2}(\.\.\.)?[A-Za-z_][\w-]*\]{1,2}$/;
+
+/** A static segment name: short, and not shaped like a value. */
+const isStaticSegmentName = (name: string) =>
+  /^[\w.-]{1,48}$/.test(name) && !isTokenLike(name);
+
 /**
- * An intercepting route segment, such as `(.)photo`, `(..)(..)[id]` or
- * `(...)account`.
+ * A route group `(marketing)`, a parallel route slot `@modal`, or an
+ * intercepting route segment such as `(.)photo`, `(..)(..)[id]` or
+ * `(...)account`, whose names pass the static segment check.
  */
-const interceptingRouteSegment =
-  /^(?:\(\.{1,3}\))+(?:[\w-]+|\[{1,2}(?:\.\.\.)?[A-Za-z_][\w-]*\]{1,2})$/;
+const isRouteConventionSegment = (segment: string) => {
+  const group = /^\(([\w-]+)\)$/.exec(segment);
+  if (group) return isStaticSegmentName(group[1] ?? "");
+  const slot = /^@([\w-]+)$/.exec(segment);
+  if (slot) return isStaticSegmentName(slot[1] ?? "");
+  const intercepting = /^(?:\(\.{1,3}\)){1,4}(.+)$/.exec(segment);
+  if (!intercepting) return false;
+  const target = intercepting[1] ?? "";
+  return dynamicRouteSegment.test(target) || isStaticSegmentName(target);
+};
 
 /**
  * Route template and static path segments, parallel route slots (`@modal`)
@@ -151,12 +173,10 @@ const interceptingRouteSegment =
  */
 const isSafePathSegment = (segment: string) =>
   segment === "" ||
-  /^\[{1,2}(\.\.\.)?[A-Za-z_][\w-]*\]{1,2}$/.test(segment) ||
-  /^\([\w-]+\)$/.test(segment) ||
-  interceptingRouteSegment.test(segment) ||
-  /^@[\w-]+$/.test(segment) ||
+  dynamicRouteSegment.test(segment) ||
+  isRouteConventionSegment(segment) ||
   /^:[A-Za-z_]\w*$/.test(segment) ||
-  (/^[\w.-]{1,48}$/.test(segment) && !isTokenLike(segment));
+  isStaticSegmentName(segment);
 
 const isSafeWord = (word: string) =>
   word.includes("/")
@@ -343,3 +363,92 @@ export class SpanAllowlistProcessor implements SpanProcessor {
     return Promise.resolve();
   }
 }
+
+/**
+ * Resource attributes a span keeps at the loopback collector: the
+ * Workspace's own identity and the SDK's. Host and process details the
+ * resource detectors add stay in the process.
+ */
+const allowedResourceAttributes = new Set([
+  "service.name",
+  "service.namespace",
+  "service.version",
+  "deployment.id",
+  "deployment.environment.name",
+  "telemetry.sdk.name",
+  "telemetry.sdk.language",
+  "telemetry.sdk.version",
+]);
+
+const allowlistedCopy = (attributes: Attributes | undefined) => {
+  const copy: Attributes = { ...attributes };
+  sanitizeAttributesInPlace(copy);
+  return copy;
+};
+
+/**
+ * A copy of an ended span that satisfies the allowlist, whatever processors
+ * that ran after `SpanAllowlistProcessor` added, such as the attributes
+ * `@vercel/otel` derives when a span ends.
+ */
+const toAllowlistedSpan = (span: ReadableSpan): ReadableSpan => {
+  const attributes = allowlistedCopy(span.attributes);
+  const resourceAttributes = Object.fromEntries(
+    Object.entries(span.resource.attributes).filter(([key]) =>
+      allowedResourceAttributes.has(key)
+    )
+  );
+  return {
+    attributes,
+    droppedAttributesCount: span.droppedAttributesCount,
+    droppedEventsCount: span.droppedEventsCount,
+    droppedLinksCount: span.droppedLinksCount,
+    duration: span.duration,
+    ended: span.ended,
+    endTime: span.endTime,
+    events: span.events.map((event) => {
+      const {
+        "exception.message": _message,
+        "exception.stacktrace": _stack,
+        ...eventAttributes
+      } = event.attributes ?? {};
+      return {
+        ...event,
+        name: isAllowedSpanName(event.name) ? event.name : "event",
+        attributes: allowlistedCopy(eventAttributes),
+      };
+    }),
+    instrumentationScope: span.instrumentationScope,
+    kind: span.kind,
+    links: span.links.map((link) => ({
+      ...link,
+      attributes: allowlistedCopy(link.attributes),
+    })),
+    name: allowedSpanName(span.name, attributes),
+    parentSpanContext: span.parentSpanContext,
+    resource: resourceFromAttributes(
+      resourceAttributes,
+      span.resource.schemaUrl
+        ? { schemaUrl: span.resource.schemaUrl }
+        : undefined
+    ),
+    spanContext: () => span.spanContext(),
+    startTime: span.startTime,
+    status: { code: span.status.code },
+  };
+};
+
+/**
+ * The exporter of the loopback collector: every span it receives satisfies
+ * the allowlist again, after every processor has run. The allowlist is
+ * stricter than the shared log censorship, which would also mask the hosts,
+ * database names and operation names the collector is meant to keep.
+ */
+export const createAllowlistedSpanExporter = (
+  exporter: SpanExporter
+): SpanExporter => ({
+  export: (spans, resultCallback) =>
+    exporter.export(spans.map(toAllowlistedSpan), resultCallback),
+  forceFlush: () => exporter.forceFlush?.() ?? Promise.resolve(),
+  shutdown: () => exporter.shutdown(),
+});

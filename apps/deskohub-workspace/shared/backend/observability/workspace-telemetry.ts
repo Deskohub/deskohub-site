@@ -26,9 +26,9 @@ import { WorkspaceClockLive } from "./workspace-clock";
 const workspaceDeploymentIdentity = () => resolveDeploymentIdentity(env);
 
 /**
- * `registerOTel` options for this process: the Workspace identity, the span
- * allowlist, and the loopback collector when `WORKSPACE_OTLP_ENDPOINT` names
- * one.
+ * `registerOTel` options for this process: Vercel's by default; on a
+ * container host the span allowlist and the loopback collector when
+ * `WORKSPACE_OTLP_ENDPOINT` names one, and no automatic exporter.
  */
 export const workspaceOTelRegistration = () => {
   const identity = workspaceDeploymentIdentity();
@@ -36,6 +36,7 @@ export const workspaceOTelRegistration = () => {
     serviceVersion: identity.revisionSha,
     deploymentId: identity.deploymentId,
     otlpEndpoint: env.WORKSPACE_OTLP_ENDPOINT,
+    automaticExport: env.WORKSPACE_RUNTIME_HOST !== "container",
   });
 };
 

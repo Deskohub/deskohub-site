@@ -129,6 +129,18 @@ describe("createWorkspaceOTelRegistration", () => {
     expect(registration.spanProcessors[1]).toBe("auto");
   });
 
+  test("exports nothing without an OTLP endpoint when automatic export is off", () => {
+    const registration = createWorkspaceOTelRegistration({
+      serviceVersion: "synthetic-sha",
+      automaticExport: false,
+    });
+
+    const [redactor, allowlist, ...rest] = registration.spanProcessors;
+    expect(redactor).toBeInstanceOf(CloudinarySignatureRedactor);
+    expect(allowlist).toBeInstanceOf(SpanAllowlistProcessor);
+    expect(rest).toEqual([]);
+  });
+
   test("exports only through the allowlist and one bounded collector export with an OTLP endpoint", () => {
     const registration = createWorkspaceOTelRegistration({
       serviceVersion: "synthetic-sha",
