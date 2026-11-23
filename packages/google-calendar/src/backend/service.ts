@@ -274,11 +274,11 @@ const getCalendarClient = (config: IGoogleCalendarRuntimeConfig) => {
 };
 
 const decodeGoogleIdentifier = <A>(
-  schema: Schema.Decoder<A>,
-  value: unknown,
+  schema: Schema.Codec<A, string>,
+  value: string,
   operation: string
 ) =>
-  Schema.decodeUnknownEffect(schema)(value).pipe(
+  Schema.decodeEffect(schema)(value).pipe(
     Effect.mapError(
       (cause) =>
         new GoogleCalendarAPIError({
@@ -290,46 +290,45 @@ const decodeGoogleIdentifier = <A>(
   );
 
 const decodeOptionalGoogleIdentifier = <A>(
-  schema: Schema.Decoder<A>,
-  value: unknown | null | undefined,
+  schema: Schema.Codec<A, string>,
+  value: string | null | undefined,
   operation: string
 ): Effect.Effect<Option.Option<A>, GoogleCalendarAPIError> =>
   value === null || value === undefined
     ? Effect.succeed(Option.none<A>())
-    : decodeGoogleIdentifier(schema, value, operation).pipe(
-        Effect.map(Option.some)
-      );
+    : decodeGoogleIdentifier(schema, value, operation).pipe(Effect.asSome);
 
-const toGoogleCalendarEvent = (event: calendar_v3.Schema$Event) =>
-  Effect.gen(function* () {
-    const id = yield* decodeOptionalGoogleIdentifier(
-      GoogleCalendarEventIdSchema,
-      event.id,
-      "events.list"
-    );
-    const iCalUID = yield* decodeOptionalGoogleIdentifier(
-      GoogleCalendarICalUidSchema,
-      event.iCalUID,
-      "events.list"
-    );
-    const recurringEventId = yield* decodeOptionalGoogleIdentifier(
-      GoogleCalendarEventIdSchema,
-      event.recurringEventId,
-      "events.list"
-    );
+const toGoogleCalendarEvent = Effect.fn(function* (
+  event: calendar_v3.Schema$Event
+) {
+  const id = yield* decodeOptionalGoogleIdentifier(
+    GoogleCalendarEventIdSchema,
+    event.id,
+    "events.list"
+  );
+  const iCalUID = yield* decodeOptionalGoogleIdentifier(
+    GoogleCalendarICalUidSchema,
+    event.iCalUID,
+    "events.list"
+  );
+  const recurringEventId = yield* decodeOptionalGoogleIdentifier(
+    GoogleCalendarEventIdSchema,
+    event.recurringEventId,
+    "events.list"
+  );
 
-    const result: GoogleCalendarEvent = {
-      ...toGoogleCalendarEventIdentity({
-        id,
-        iCalUID,
-        htmlLink: event.htmlLink,
-        recurringEventId,
-      }),
-      ...toGoogleCalendarEventDetails(event),
-    };
+  const result: GoogleCalendarEvent = {
+    ...toGoogleCalendarEventIdentity({
+      id,
+      iCalUID,
+      htmlLink: event.htmlLink,
+      recurringEventId,
+    }),
+    ...toGoogleCalendarEventDetails(event),
+  };
 
-    return result;
-  });
+  return result;
+});
 
 /** The event's decoded identifiers and link, omitting the absent ones. */
 const toGoogleCalendarEventIdentity = ({
@@ -371,31 +370,30 @@ const toGoogleCalendarEventDateTime = (
   ...(input.timeZone && { timeZone: input.timeZone }),
 });
 
-const toGoogleCalendarWatchChannel = (
+const toGoogleCalendarWatchChannel = Effect.fn(function* (
   channel: calendar_v3.Schema$Channel,
   input: GoogleCalendarWatchEventsInput
-) =>
-  Effect.gen(function* () {
-    const returnedChannelId = yield* decodeOptionalGoogleIdentifier(
-      GoogleCalendarChannelIdSchema,
-      channel.id,
-      "events.watch"
-    );
-    const resourceId = yield* decodeOptionalGoogleIdentifier(
-      GoogleCalendarResourceIdSchema,
-      channel.resourceId,
-      "events.watch"
-    );
+) {
+  const returnedChannelId = yield* decodeOptionalGoogleIdentifier(
+    GoogleCalendarChannelIdSchema,
+    channel.id,
+    "events.watch"
+  );
+  const resourceId = yield* decodeOptionalGoogleIdentifier(
+    GoogleCalendarResourceIdSchema,
+    channel.resourceId,
+    "events.watch"
+  );
 
-    const result: GoogleCalendarWatchChannel = {
-      channelId: Option.getOrElse(returnedChannelId, () => input.channelId),
-      ...(Option.isSome(resourceId) && { resourceId: resourceId.value }),
-      ...(channel.resourceUri && { resourceUri: channel.resourceUri }),
-      ...(channel.expiration && { expiration: Number(channel.expiration) }),
-    };
+  const result: GoogleCalendarWatchChannel = {
+    channelId: Option.getOrElse(returnedChannelId, () => input.channelId),
+    ...(Option.isSome(resourceId) && { resourceId: resourceId.value }),
+    ...(channel.resourceUri && { resourceUri: channel.resourceUri }),
+    ...(channel.expiration && { expiration: Number(channel.expiration) }),
+  };
 
-    return result;
-  });
+  return result;
+});
 
 const googleCalendarTimeout = (operation: string) =>
   new GoogleCalendarAPIError({
@@ -447,19 +445,17 @@ const addDays = (date: string, days: number) => {
 const toCalendarBoundary = (date: string) => `${date}T00:00:00Z`;
 
 const getGoogleStatusCode = (cause: unknown) => {
-  if (!cause || typeof cause !== "object") {
-    return undefined;
-  }
-
-  const status = Object.getOwnPropertyDescriptor(cause, "status")?.value;
-  return typeof status === "number" ? status : undefined;
+  const status = getOwnPropertyValue(cause, "status");
+  return Predicate.isNumber(status) ? status : undefined;
 };
 
 const getGoogleErrorMessage = (cause: unknown) => {
-  if (!cause || typeof cause !== "object") {
-    return undefined;
-  }
-
-  const message = Object.getOwnPropertyDescriptor(cause, "message")?.value;
-  return typeof message === "string" ? message : undefined;
+  const message = getOwnPropertyValue(cause, "message");
+  return Predicate.isString(message) ? message : undefined;
 };
+
+/** Reads an own property without invoking an inherited getter. */
+const getOwnPropertyValue = (cause: unknown, property: string) =>
+  Predicate.isObject(cause)
+    ? Object.getOwnPropertyDescriptor(cause, property)?.value
+    : undefined;

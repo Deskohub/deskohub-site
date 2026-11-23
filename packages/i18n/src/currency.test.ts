@@ -98,7 +98,13 @@ describe("formatCurrencyName", () => {
 
   describe("on a runtime without currency display names", () => {
     const displayNames = Intl.DisplayNames;
-    const replaceDisplayNames = (replacement: unknown) => {
+    const replaceDisplayNames = (
+      replacement:
+        | (new (
+            ...args: never[]
+          ) => { of(code: string): string | undefined })
+        | undefined
+    ) => {
       Object.defineProperty(Intl, "DisplayNames", {
         configurable: true,
         value: replacement,

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { Effect, Fiber, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
@@ -7,79 +7,79 @@ import { GamesService } from "./service";
 describe("GamesService", () => {
   test("loads and validates the documented games response", async () => {
     const requests: Request[] = [];
-    const fetchMock = mock(
-      async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request =
-          input instanceof Request ? input : new Request(input, init);
-        requests.push(request.clone());
+    const fetchHandler = async (
+      input: RequestInfo | URL,
+      init?: RequestInit
+    ) => {
+      const request =
+        input instanceof Request ? input : new Request(input, init);
+      requests.push(request.clone());
 
-        return Response.json({
-          games: [
-            {
-              id: 1,
-              bggId: 13,
-              name: "Catan",
-              yearPublished: 1995,
-              imageUrl: "https://images.example.test/game.jpg",
-              thumbnailUrl: "https://images.example.test/game-small.jpg",
-              description: "A complete game",
-              minPlayers: 3,
-              maxPlayers: 4,
-              playingTimeMinutes: 120,
-              minAge: 10,
-              weight: 2.31,
-              rating: 7.4,
-              categories: ["Economic"],
-              mechanics: ["Dice Rolling"],
-              inStock: true,
-              note: null,
-              language: "cz",
-              addedAt: "2026-08-20T14:32:00.000Z",
-              updatedAt: "2026-08-28T09:10:00.000Z",
-            },
-            {
-              id: 2,
-              bggId: 173346,
-              name: "Darwin&#039;s &amp; &quot;Journey&quot; &#x1F3B2;",
-              yearPublished: null,
-              imageUrl: null,
-              thumbnailUrl: null,
-              description: null,
-              minPlayers: null,
-              maxPlayers: null,
-              playingTimeMinutes: null,
-              minAge: null,
-              weight: null,
-              rating: null,
-              categories: null,
-              mechanics: null,
-              inStock: true,
-              note: null,
-              language: null,
-              addedAt: "2026-08-30T11:45:06.698Z",
-              updatedAt: "2026-08-30T11:45:06.698Z",
-            },
-            {
-              id: 3,
-              bggId: 224517,
-              name: "Brass: Birmingham",
-              inStock: true,
-              addedAt: "2026-08-30T12:00:00.000Z",
-              updatedAt: "2026-08-30T12:00:00.000Z",
-            },
-          ],
-        });
-      }
-    ) as unknown as typeof globalThis.fetch;
-    const httpClientLayer = FetchHttpClient.layer.pipe(
-      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
-    );
+      return Response.json({
+        games: [
+          {
+            id: 1,
+            bggId: 13,
+            name: "Catan",
+            yearPublished: 1995,
+            imageUrl: "https://images.example.test/game.jpg",
+            thumbnailUrl: "https://images.example.test/game-small.jpg",
+            description: "A complete game",
+            minPlayers: 3,
+            maxPlayers: 4,
+            playingTimeMinutes: 120,
+            minAge: 10,
+            weight: 2.31,
+            rating: 7.4,
+            categories: ["Economic"],
+            mechanics: ["Dice Rolling"],
+            inStock: true,
+            note: null,
+            language: "cz",
+            addedAt: "2026-08-20T14:32:00.000Z",
+            updatedAt: "2026-08-28T09:10:00.000Z",
+          },
+          {
+            id: 2,
+            bggId: 173346,
+            name: "Darwin&#039;s &amp; &quot;Journey&quot; &#x1F3B2;",
+            yearPublished: null,
+            imageUrl: null,
+            thumbnailUrl: null,
+            description: null,
+            minPlayers: null,
+            maxPlayers: null,
+            playingTimeMinutes: null,
+            minAge: null,
+            weight: null,
+            rating: null,
+            categories: null,
+            mechanics: null,
+            inStock: true,
+            note: null,
+            language: null,
+            addedAt: "2026-08-30T11:45:06.698Z",
+            updatedAt: "2026-08-30T11:45:06.698Z",
+          },
+          {
+            id: 3,
+            bggId: 224517,
+            name: "Brass: Birmingham",
+            inStock: true,
+            addedAt: "2026-08-30T12:00:00.000Z",
+            updatedAt: "2026-08-30T12:00:00.000Z",
+          },
+        ],
+      });
+    };
 
     const games = await Effect.gen(function* () {
       const service = yield* GamesService;
       return yield* service.listGames;
     }).pipe(
-      Effect.provide(GamesService.Default.pipe(Layer.provide(httpClientLayer))),
+      Effect.provide(
+        GamesService.Default.pipe(Layer.provide(fetchLayer(fetchHandler)))
+      ),
       Effect.runPromise
     );
 
@@ -104,19 +104,19 @@ describe("GamesService", () => {
 
   test("retries a transient catalog failure", async () => {
     let requestCount = 0;
-    const fetchMock = mock(async () => {
+    const fetchHandler = async () => {
       requestCount += 1;
       return requestCount === 1
         ? new Response("unavailable", { status: 503 })
         : Response.json({ games: [] });
-    }) as unknown as typeof globalThis.fetch;
+    };
 
     const games = await Effect.gen(function* () {
       const service = yield* GamesService;
       return yield* service.listGames;
     }).pipe(
       Effect.provide(
-        GamesService.Default.pipe(Layer.provide(fetchLayer(fetchMock)))
+        GamesService.Default.pipe(Layer.provide(fetchLayer(fetchHandler)))
       ),
       Effect.runPromise
     );
@@ -126,9 +126,7 @@ describe("GamesService", () => {
   });
 
   test("fails a stalled catalog request", async () => {
-    const fetchMock = mock(
-      () => new Promise<Response>(() => {})
-    ) as unknown as typeof globalThis.fetch;
+    const fetchHandler = () => new Promise<Response>(() => {});
 
     const failure = await Effect.gen(function* () {
       const service = yield* GamesService;
@@ -141,7 +139,7 @@ describe("GamesService", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          GamesService.Default.pipe(Layer.provide(fetchLayer(fetchMock))),
+          GamesService.Default.pipe(Layer.provide(fetchLayer(fetchHandler))),
           TestClock.layer()
         )
       ),
@@ -155,7 +153,14 @@ describe("GamesService", () => {
   });
 });
 
-const fetchLayer = (fetchMock: typeof globalThis.fetch) =>
+const fetchLayer = (
+  handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+) =>
   FetchHttpClient.layer.pipe(
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchMock))
+    Layer.provide(
+      Layer.succeed(
+        FetchHttpClient.Fetch,
+        Object.assign(handler, { preconnect: globalThis.fetch.preconnect })
+      )
+    )
   );
