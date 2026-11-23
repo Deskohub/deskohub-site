@@ -370,6 +370,31 @@ describe("automation admin API", () => {
     expect(requested).toEqual([{ campaignId, versionNumber: 2 }]);
   });
 
+  test("serves run counts to dhw 1.41.0, which predates the new skip reasons", async () => {
+    const stats = Schema.decodeUnknownSync(AutomationRunStats)({
+      campaignId,
+      versionNumber: null,
+      bySkipReason: {
+        "missing-from-dotypos": 0,
+        "deleted-customer": 0,
+        "missing-email": 2,
+        "invalid-email": 0,
+        "consent-withdrawn": 0,
+        "outside-test-domain": 0,
+        "pass-holder": 1,
+      },
+    });
+
+    const served = await callAutomationsApi(
+      (client) =>
+        client.getAutomationRunStats({ params: { campaignId }, query: {} }),
+      { runLog: { getRunStats: () => Effect.succeed(stats) } },
+      { dhwVersion: "1.41.0" }
+    );
+
+    expect(served.bySkipReason["missing-email"]).toBe(2);
+  });
+
   test("reads one version by the number in its path", async () => {
     const requested: unknown[] = [];
     const error = await callAutomationsApi(

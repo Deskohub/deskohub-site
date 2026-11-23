@@ -56,7 +56,6 @@ const endpointMinimums: Partial<Record<string, DhwVersion>> = {
   "automations.archiveAutomation": repeatVisitMinimum,
   "automations.listAutomationVersions": passReminderMinimum,
   "automations.getAutomationVersion": repeatVisitMinimum,
-  "automations.getAutomationRunStats": repeatVisitMinimum,
   "automations.listAutomationRuns": passReminderMinimum,
   "automations.getAutomationRun": passReminderMinimum,
   "administration.listInvoices": invoicesMinimumDhwVersion,

@@ -300,7 +300,7 @@ export const emailAutomationOperations = defineOperations({
     output: AutomationVersionDetail,
   }),
   getAutomationRunStats: query({
-    minimumDhwVersion: repeatVisitDhwVersion,
+    minimumDhwVersion: automationsMinimumDhwVersion,
     input: AutomationRunStatsInput,
     output: AutomationRunStats,
   }),
