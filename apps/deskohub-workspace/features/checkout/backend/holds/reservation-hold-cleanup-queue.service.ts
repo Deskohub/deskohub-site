@@ -108,16 +108,13 @@ const acknowledgePastCleanupDeadline = (
     { payload, checkedAt: now }
   ).pipe(Effect.as("past_deadline" as const));
 
-export const processReservationHoldCleanupScheduleMessage = Effect.fn(
+/** Cleans up a delivery already accepted against its cleanup deadline. */
+const cleanUpScheduledHold = Effect.fn(
   "reservationHoldCleanupSchedule.processMessage"
 )(function* (
   payload: ReservationHoldCleanupSchedulePayload,
   now = Temporal.Now.instant()
 ) {
-  if (isPastCleanupDeadline(payload, now)) {
-    return yield* acknowledgePastCleanupDeadline(payload, now);
-  }
-
   const reservationHoldExpiresAt = Temporal.Instant.from(
     payload.reservationHoldExpiresAtIso
   );
@@ -168,6 +165,14 @@ export const processReservationHoldCleanupScheduleMessage = Effect.fn(
   return outcome satisfies ReservationHoldCleanupOutcome;
 });
 
+export const processReservationHoldCleanupScheduleMessage = (
+  payload: ReservationHoldCleanupSchedulePayload,
+  now = Temporal.Now.instant()
+) =>
+  isPastCleanupDeadline(payload, now)
+    ? acknowledgePastCleanupDeadline(payload, now)
+    : cleanUpScheduledHold(payload, now);
+
 /** Classifies a failed delivery; the route's Layer failures stay unclassified. */
 export const reservationHoldCleanupRedelivery = (cause: unknown) =>
   cause instanceof ReservationHoldCleanupDeferredError
@@ -175,9 +180,10 @@ export const reservationHoldCleanupRedelivery = (cause: unknown) =>
     : QueueRedelivery.Default();
 
 /**
- * The queue delivery: a message past its cleanup deadline is acknowledged
+ * The queue delivery: the receive instant alone decides the cleanup deadline,
  * before `dependencies` are built, so a late delivery never retries even when
- * they can't be. The cleanup reads its own clock once they are built.
+ * they can't be. An accepted delivery's cleanup reads its own clock once they
+ * are built.
  */
 export const reservationHoldCleanupConsumer = <ROut, E, RIn>(
   dependencies: Layer.Layer<ROut | ReservationHoldCleanupService, E, RIn>
@@ -186,7 +192,5 @@ export const reservationHoldCleanupConsumer = <ROut, E, RIn>(
     const receivedAt = Temporal.Now.instant();
     return isPastCleanupDeadline(message, receivedAt)
       ? acknowledgePastCleanupDeadline(message, receivedAt)
-      : processReservationHoldCleanupScheduleMessage(message).pipe(
-          Effect.provide(dependencies)
-        );
+      : cleanUpScheduledHold(message).pipe(Effect.provide(dependencies));
   }, reservationHoldCleanupRedelivery);

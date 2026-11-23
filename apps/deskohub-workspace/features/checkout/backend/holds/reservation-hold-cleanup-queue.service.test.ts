@@ -452,6 +452,43 @@ describe("ReservationHoldCleanupScheduleService", () => {
     ).toBeGreaterThanOrEqual(0);
   });
 
+  test("cleans up a delivery received by its deadline even when dependencies build past it", async () => {
+    const { reservationHoldCleanupConsumer } = await import(
+      "./reservation-hold-cleanup-queue.service"
+    );
+    const { ReservationHoldCleanupService } = await import(
+      "./reservation-hold-cleanup.service"
+    );
+    const cancelOrderHold = mock(() => Effect.succeed("cancelled" as const));
+    const consume = reservationHoldCleanupConsumer(
+      Layer.effect(
+        ReservationHoldCleanupService,
+        Effect.sleep("150 millis").pipe(
+          Effect.as({
+            cancelOrderHold,
+            sweepExpiredHolds: mock(() =>
+              Effect.succeed({ cancelled: 0, skipped: 0, failed: 0 })
+            ),
+          } satisfies ReservationHoldCleanupServiceType)
+        )
+      )
+    );
+    const deadline = Temporal.Now.instant().add({ milliseconds: 50 });
+
+    const outcome = await consume(
+      {
+        messageId: "message-id",
+        deliveryCount: 1,
+        topic: "workspace-reservation-hold-cleanup",
+        payload: { ...duePayload, cleanupDeadlineIso: deadline.toString() },
+      },
+      "durable"
+    ).pipe(Effect.runPromise);
+
+    expect(outcome).toEqual({ _tag: "Handled" });
+    expect(cancelOrderHold).toHaveBeenCalledTimes(1);
+  });
+
   test("keeps the enqueue clock's full precision in the cleanup deadline", async () => {
     const { reservationHoldCleanupTopic } = await import(
       "./reservation-hold-cleanup-topic"
