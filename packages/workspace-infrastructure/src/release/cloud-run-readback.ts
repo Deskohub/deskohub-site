@@ -1,4 +1,5 @@
 import { Credentials } from "@alchemy.run/gcp";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import * as Layer from "effect/Layer";
@@ -152,7 +153,9 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
   config: WorkspaceStackConfig
 ) {
   const credentials = yield* Credentials;
-  const client = yield* HttpClient.HttpClient;
+  // Each attempt owns its request: closing the attempt's scope aborts the
+  // transport and any body a status-only answer left unread.
+  const client = (yield* HttpClient.HttpClient).pipe(HttpClient.withScope);
   const serviceResource = (serviceId: string) =>
     `projects/${config.projectId}/locations/${config.region}/services/${serviceId}`;
 
@@ -163,9 +166,15 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
     Effect.gen(function* () {
       const unavailable = (status: number | null, reason: string) =>
         new ReleaseReadbackUnavailable({ resource, status, reason });
+      // Providers may die on a failed token lookup; any outcome but the
+      // caller's interruption becomes the same sanitized failure.
       const { accessToken, quotaProject } = yield* credentials.pipe(
         Effect.timeout(cloudRunReadRetry.attemptTimeout),
-        Effect.mapError(() => unavailable(null, "credentials unavailable"))
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : Effect.fail(unavailable(null, "credentials unavailable"))
+        )
       );
       const request = HttpClientRequest.get(
         `${cloudRunApiRoot}/${resource}`
@@ -200,6 +209,7 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
           Effect.mapError(() => unavailable(null, "Cloud Run body interrupted"))
         );
       }).pipe(
+        Effect.scoped,
         Effect.timeoutOrElse({
           duration: cloudRunReadRetry.attemptTimeout,
           orElse: () => Effect.fail(unavailable(null, "Cloud Run timed out")),

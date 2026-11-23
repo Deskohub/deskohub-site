@@ -99,13 +99,17 @@ const fakeCloudRun = (
     readonly path: string;
     readonly authorization: string | undefined;
     readonly quotaProject: string | undefined;
+    readonly origin: string;
+    readonly signal: AbortSignal;
   }> = [];
-  const client = HttpClient.make((request, url) => {
+  const client = HttpClient.make((request, url, signal) => {
     requests.push({
       method: request.method,
       path: url.pathname,
       authorization: request.headers.authorization,
       quotaProject: request.headers["x-goog-user-project"],
+      origin: url.origin,
+      signal,
     });
     const queue = queues.get(url.pathname);
     const answer: Answer = (queue && queue.length > 1
@@ -141,15 +145,32 @@ const fakeCloudRun = (
   return { client, requests };
 };
 
-/** Run one readback against the fake under a test clock that skips backoff. */
+/** The live readback over the fake, with a test clock that tests advance. */
+const readbackLayer = (
+  fake: ReturnType<typeof fakeCloudRun>,
+  credentials: typeof Credentials.Service = Effect.succeed({
+    accessToken: Redacted.make(accessToken),
+  })
+) =>
+  Layer.mergeAll(
+    cloudRunServiceReadbackLayer(sandboxConfig).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(HttpClient.HttpClient, fake.client),
+          Layer.succeed(Credentials, credentials)
+        )
+      )
+    ),
+    TestClock.layer()
+  );
+
+/** Run one readback against the fake, skipping every timeout and backoff. */
 const readback = <A>(
   fake: ReturnType<typeof fakeCloudRun>,
   use: (
     port: typeof ReleaseServiceReadback.Service
   ) => Effect.Effect<A, ReleaseReadbackUnavailable>,
-  credentials: typeof Credentials.Service = Effect.succeed({
-    accessToken: Redacted.make(accessToken),
-  })
+  credentials?: typeof Credentials.Service
 ) =>
   Effect.runPromiseExit(
     Effect.gen(function* () {
@@ -160,21 +181,7 @@ const readback = <A>(
       );
       yield* TestClock.adjust("10 minutes");
       return yield* Fiber.join(fiber);
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          cloudRunServiceReadbackLayer(sandboxConfig).pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                Layer.succeed(HttpClient.HttpClient, fake.client),
-                Layer.succeed(Credentials, credentials)
-              )
-            )
-          ),
-          TestClock.layer()
-        )
-      )
-    )
+    }).pipe(Effect.provide(readbackLayer(fake, credentials)))
   );
 
 const success = async <A>(
@@ -254,6 +261,7 @@ describe("Cloud Run service readback", () => {
     );
     for (const request of fake.requests) {
       expect(request.method).toBe("GET");
+      expect(request.origin).toBe("https://run.googleapis.com");
       expect(request.authorization).toBe(`Bearer ${accessToken}`);
       expect(request.quotaProject).toBeUndefined();
     }
@@ -598,6 +606,7 @@ describe("Cloud Run service readback", () => {
       // of the credential lookup must surface the same way.
       Effect.fail("no credentials") as unknown as typeof Credentials.Service,
       Effect.never,
+      Effect.die("token lookup crashed"),
     ]) {
       const fake = fakeCloudRun(steadyRoutes);
       const error = await failure(
@@ -610,5 +619,51 @@ describe("Cloud Run service readback", () => {
       });
       expect(fake.requests).toHaveLength(0);
     }
+  });
+
+  test("times out each attempt at ten seconds and backs off from 250 ms", async () => {
+    const fake = fakeCloudRun({
+      ...steadyRoutes,
+      [webPath]: [{ transport: "stalled" }, steadyWebAnswer],
+    });
+    const attempts = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(
+          Effect.gen(function* () {
+            return yield* (yield* ReleaseServiceReadback).service("web");
+          })
+        );
+        const seen: Array<number> = [];
+        for (const step of [
+          "9999 millis",
+          "1 millis",
+          "249 millis",
+          "1 millis",
+        ] as const) {
+          yield* TestClock.adjust(step);
+          seen.push(
+            fake.requests.filter(({ path }) => path === webPath).length
+          );
+        }
+        yield* Fiber.join(fiber);
+        return seen;
+      }).pipe(Effect.provide(readbackLayer(fake)))
+    );
+    expect(attempts).toEqual([1, 1, 1, 2]);
+  });
+
+  test("releases every attempt's request, bodies left unread included", async () => {
+    const fake = fakeCloudRun({
+      [webPath]: [
+        { status: 503, stallBody: true },
+        { status: 503, stallBody: true },
+        { status: 404, stallBody: true },
+      ],
+    });
+    expect(
+      await success(readback(fake, (port) => port.service("web")))
+    ).toBeNull();
+    expect(fake.requests).toHaveLength(3);
+    expect(fake.requests.every(({ signal }) => signal.aborted)).toBe(true);
   });
 });
