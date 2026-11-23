@@ -40,6 +40,14 @@ export interface GoogleApiCall<A, E> {
   readonly request: HttpClientRequest.HttpClientRequest;
   readonly policy: GoogleApiRetryPolicy;
   /**
+   * When the bearer token is looked up. `each-attempt` (the default) puts
+   * the lookup inside every attempt's deadline, so a stalled lookup is
+   * retried. `once` looks it up before the first attempt under a deadline
+   * of its own; a lookup that fails or stalls ends the call, and every
+   * attempt then gets its full deadline for the request.
+   */
+  readonly tokenLookup?: "each-attempt" | "once";
+  /**
    * Handles any answer but 429 and 5xx, inside the attempt's deadline and
    * scope; a body read here counts against the deadline, and a body left
    * unread is released when the attempt ends.
@@ -79,8 +87,8 @@ class HandledFailure<E> extends Data.TaggedError("HandledFailure")<{
 
 /**
  * Authorized access to Google REST APIs with the workspace GCP identity.
- * Every attempt resolves a fresh bearer token (billing user credentials to
- * their quota project), runs under one deadline in its own scope, and
+ * Every attempt sends a bearer token (billing user credentials to their
+ * quota project), looked up per attempt or once per call, runs under one deadline in its own scope, and
  * retries transport failures, timeouts, 429 and 5xx with exponential
  * backoff within one bounded budget. A failed token lookup is never
  * retried and never reaches the caller's error.
@@ -112,15 +120,32 @@ export const makeGoogleApi = Effect.fnUntraced(function* () {
     )
   );
 
-  const call = <A, E>(options: GoogleApiCall<A, E>): Effect.Effect<A, E> => {
+  const call = <A, E>(options: GoogleApiCall<A, E>): Effect.Effect<A, E> =>
+    options.tokenLookup === "once"
+      ? authorization.pipe(
+          Effect.timeoutOrElse({
+            duration: options.policy.attemptTimeout,
+            orElse: () => Effect.fail(new CredentialsUnavailable()),
+          }),
+          Effect.mapError(() => options.credentialsUnavailable()),
+          Effect.flatMap((authorize) =>
+            callWith(Effect.succeed(authorize), options)
+          )
+        )
+      : callWith(authorization, options);
+
+  const callWith = <A, E>(
+    authorize: typeof authorization,
+    options: GoogleApiCall<A, E>
+  ): Effect.Effect<A, E> => {
     const transient = (error: E) => new TransientAttempt({ error });
     const attempt = Ref.make(false).pipe(
       Effect.flatMap((dispatched) =>
-        authorization.pipe(
+        authorize.pipe(
           Effect.tap(() => Ref.set(dispatched, true)),
-          Effect.flatMap((authorize) =>
+          Effect.flatMap((authorized) =>
             client
-              .execute(authorize(options.request))
+              .execute(authorized(options.request))
               .pipe(
                 Effect.mapError(() =>
                   transient(options.noAnswer("unreachable"))

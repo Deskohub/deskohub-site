@@ -10,9 +10,9 @@ import * as Layer from "effect/Layer";
  * GCP credentials and the effective project, resolved exactly as the
  * Alchemy GCS state store resolves them, so the state, the release record
  * and Cloud Run readback all act as one identity. Environment credentials
- * come first: `GOOGLE_ACCESS_TOKEN` with `GOOGLE_PROJECT_ID` (or
- * `GOOGLE_CLOUD_PROJECT`), else a service-account JSON key at
- * `GOOGLE_APPLICATION_CREDENTIALS`. In CI nothing else is consulted;
+ * come first: a set `GOOGLE_ACCESS_TOKEN` requires `GOOGLE_PROJECT_ID` (or
+ * `GOOGLE_CLOUD_PROJECT`) and fails without one; only without a token is
+ * `GOOGLE_APPLICATION_CREDENTIALS` read, as a service-account JSON key. In CI nothing else is consulted;
  * elsewhere the selected Alchemy profile (`ALCHEMY_PROFILE`, default
  * `default`) supplies a gcloud configuration, a service-account key or a
  * stored token. Application Default Credentials are not searched: no

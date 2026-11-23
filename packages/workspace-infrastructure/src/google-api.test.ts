@@ -290,4 +290,39 @@ describe("Google API calls", () => {
     });
     expect(fake.requests).toHaveLength(0);
   });
+
+  test("looks a token up once per call when asked, ending on a stalled lookup", async () => {
+    let lookups = 0;
+    const counted = (lookup: typeof Credentials.Service) =>
+      Effect.suspend(() => {
+        lookups += 1;
+        return lookup;
+      }) as typeof Credentials.Service;
+    const fake = fakeGoogleApi([{ status: 503 }, { status: 200 }]);
+    expect(
+      success(
+        await run(
+          fake,
+          readCall({ tokenLookup: "once" }),
+          counted(fixedCredentials)
+        )
+      )
+    ).toBe("ok");
+    expect(fake.requests).toHaveLength(2);
+    expect(lookups).toBe(1);
+
+    lookups = 0;
+    const stalled = fakeGoogleApi([{ status: 200 }]);
+    expect(
+      failure(
+        await run(
+          stalled,
+          readCall({ tokenLookup: "once" }),
+          counted(Effect.never)
+        )
+      )
+    ).toMatchObject({ reason: "credentials unavailable" });
+    expect(lookups).toBe(1);
+    expect(stalled.requests).toHaveLength(0);
+  });
 });

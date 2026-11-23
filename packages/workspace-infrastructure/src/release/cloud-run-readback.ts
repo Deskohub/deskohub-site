@@ -135,6 +135,7 @@ const servingImageDigest = (revision: CloudRunRevision) => {
 const noAnswerReasons: Record<GoogleApiNoAnswer, string> = {
   unreachable: "no response from Cloud Run",
   "no-answer-in-time": "Cloud Run timed out",
+  // Unreachable with a token looked up once per read.
   "credentials-stalled": "credentials unavailable",
 };
 
@@ -178,6 +179,9 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
           HttpClientRequest.acceptJson
         ),
         policy: cloudRunReadRetry,
+        // One lookup per read: a stalled one fails the read at its own
+        // deadline instead of spending the retries.
+        tokenLookup: "once",
         handle: (response) => {
           if (response.status === 404) {
             return Effect.succeed(null);
