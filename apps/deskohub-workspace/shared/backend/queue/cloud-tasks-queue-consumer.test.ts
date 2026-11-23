@@ -10,6 +10,7 @@ import {
   serveGoogleSigningKeys,
   tasksInvoker,
 } from "@/shared/testing/google-oidc.test-utils";
+import { captureWorkspaceLogs } from "@/shared/testing/workspace-telemetry.test-utils";
 import type {
   QueueConsumer,
   QueueDelivery,
@@ -17,6 +18,7 @@ import type {
   QueueDeliveryOutcome,
 } from "./queue-consumer";
 
+const workspaceLogs = captureWorkspaceLogs();
 const nextServer = await import("next/server");
 // Outside a Next request, scheduling the telemetry flush would log a warning.
 mock.module("next/server", () => ({ ...nextServer, after: () => undefined }));
@@ -173,6 +175,23 @@ describe("Cloud Tasks authentication", () => {
     expect(deliveries).toHaveLength(0);
   });
 
+  test("accepts any scheme casing and spaces before the token", async () => {
+    const { POST, deliveries } = recordingRoute();
+    const token = await google.token(tasksInvoker);
+    const otherAccount = await google.token(schedulerInvoker, {
+      aud: tasksInvoker.audience,
+    });
+
+    const lower = await POST(taskRequest(`bearer ${token}`));
+    const spaced = await POST(taskRequest(`BEARER   ${token}`));
+    const wrongAccount = await POST(taskRequest(`bearer  ${otherAccount}`));
+
+    expect([lower.status, spaced.status, wrongAccount.status]).toEqual([
+      200, 200, 403,
+    ]);
+    expect(deliveries).toHaveLength(2);
+  });
+
   test("accepts Google's bare issuer", async () => {
     const { POST, deliveries } = recordingRoute();
 
@@ -274,6 +293,7 @@ describe("Cloud Tasks delivery", () => {
   });
 
   test("acknowledges a body that is not JSON without delivering it", async () => {
+    workspaceLogs.reset();
     const { POST, deliveries } = recordingRoute();
 
     const response = await POST(
@@ -282,6 +302,13 @@ describe("Cloud Tasks delivery", () => {
 
     expect(response.status).toBe(200);
     expect(deliveries).toHaveLength(0);
+    const ignored = workspaceLogs
+      .records()
+      .find(({ severityText }) => severityText === "warn");
+    expect(ignored?.attributes).toMatchObject({
+      cloudTasksQueue: "workspace-test-parcel-queue",
+      cloudTasksEta: "1795000000.5",
+    });
   });
 });
 

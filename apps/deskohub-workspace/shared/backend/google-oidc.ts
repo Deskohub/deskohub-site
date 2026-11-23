@@ -67,7 +67,7 @@ const clockToleranceSeconds = 30;
  * Why a request is not from the expected invoker. It never carries the token
  * or its claims, so it is safe to log.
  */
-export class GoogleInvokerRejection extends Data.TaggedError(
+class GoogleInvokerRejection extends Data.TaggedError(
   "GoogleInvokerRejection"
 )<{
   /**
@@ -92,10 +92,14 @@ const decodeVerifiedIdentity = Schema.decodeUnknownOption(
   })
 );
 
+/**
+ * The token of a Bearer credential. The scheme is case-insensitive and one or
+ * more spaces separate it from the token (RFC 9110, RFC 6750).
+ */
 const bearerToken = (request: Request) =>
   request.headers
     .get("authorization")
-    ?.match(/^Bearer ([\w-]+\.[\w-]+\.[\w-]+)$/)?.[1];
+    ?.match(/^bearer +([\w-]+\.[\w-]+\.[\w-]+)$/i)?.[1];
 
 /**
  * Fetching Google's key set fails with a timeout, an invalid set, a generic

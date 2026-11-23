@@ -1,6 +1,6 @@
 import { mock, spyOn } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import type { env } from "@/env";
 import type { GoogleInvoker } from "@/shared/backend/google-oidc";
 
@@ -135,6 +135,8 @@ export const serveGoogleSigningKeys = async (
 
   return {
     token,
+    /** The served key set, for a verifier given its keys directly. */
+    keys: createLocalJWKSet(keySet),
     /**
      * Sets how Google's certificate URL answers. Verification caches a
      * served key set, so an outage shows only before the first success.
