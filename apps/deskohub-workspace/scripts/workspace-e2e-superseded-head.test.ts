@@ -16,6 +16,10 @@ import {
 const workflow = parseWorkflow(
   resolve(import.meta.dir, "../../../.github/workflows/workspace-e2e.yml")
 );
+const flowsPublish = resolve(
+  import.meta.dir,
+  "../../../.github/actions/workspace-e2e-flows/publish-status.mjs"
+);
 const testJob = workflow.jobs["test-e2e"];
 const guardJob = workflow.jobs["cancel-superseded-run"];
 const headCheckStep = findStepByName(
@@ -45,7 +49,12 @@ afterAll(cleanup);
 const prNumber = "7";
 const shaA = "a".repeat(40);
 const shaB = "b".repeat(40);
-const headIsB = { [`pulls/${prNumber}`]: { head: { sha: shaB } } };
+const headIsB = {
+  [`pulls/${prNumber}`]: {
+    body: "## E2E flows\n- all\n",
+    head: { sha: shaB },
+  },
+};
 const ownCancel = `actions/runs/${workflowStepRunId}/cancel`;
 const testJobCompleted = {
   [`actions/runs/${workflowStepRunId}/attempts/1/jobs`]: {
@@ -93,16 +102,43 @@ const guard = (targetSha: string, fixtures: GhFixtures = headIsB) =>
     { POLL_SECONDS: "0", PR_NUMBER: prNumber, TARGET_SHA: targetSha }
   );
 
-const publishFinal = (targetSha: string, state: "failure" | "success") =>
+const previewDeploymentOk: GhFixtures = {
+  deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+  "deployments/11/statuses": [
+    {
+      description: "Deployment has completed",
+      environment_url:
+        "https://deskohub-workspace-site-abc123-team.vercel.app/",
+      state: "success",
+    },
+  ],
+};
+
+const publishFinal = (
+  targetSha: string,
+  state: "failure" | "success",
+  extraFixtures: GhFixtures = {},
+  envOverrides: Readonly<Record<string, string>> = {}
+) =>
   runStep(
     finalStep,
-    { ...headIsB, [`statuses/${shaA}`]: {}, [`statuses/${shaB}`]: {} },
+    {
+      ...headIsB,
+      ...previewDeploymentOk,
+      [`commits/${shaA}/statuses`]: [],
+      [`commits/${shaB}/statuses`]: [],
+      [`statuses/${shaA}`]: {},
+      [`statuses/${shaB}`]: {},
+      ...extraFixtures,
+    },
     {
       ALLOCATION_DESCRIPTION: "Workspace E2E shard allocation failed",
       ALLOCATION_SHARD: "",
+      FLOWS_PUBLISH: flowsPublish,
       PR_NUMBER: prNumber,
       STATUS_STATE: state,
       TARGET_SHA: targetSha,
+      ...envOverrides,
     }
   );
 
@@ -169,9 +205,181 @@ describe("Workspace E2E run superseded before its test job", () => {
   test("keeps a pass that finished before the head moved", async () => {
     const { calls } = await publishFinal(shaA, "success");
     const [e2e] = statusPosts(calls);
+    expect(e2e).toContain(`statuses/${shaA}`);
+    expect(e2e).toContain("state=success");
     expect(e2e).toContain("description=Protected preview E2E passed");
-    expect(calls.some((call) => call.includes(`pulls/${prNumber}`))).toBe(
-      false
+  });
+
+  test("blocks green on the current head if the PR description became invalid mid-run", async () => {
+    const { calls, result } = await publishFinal(shaB, "success", {
+      [`pulls/${prNumber}`]: {
+        body: "## Summary\nRemoved E2E flows",
+        head: { sha: shaB },
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    const [e2e] = statusPosts(calls);
+    expect(e2e).toContain(`statuses/${shaB}`);
+    expect(e2e).toContain("state=failure");
+    expect(e2e).toContain("Invalid or missing ## E2E flows");
+  });
+
+  test("records a stale run failure in history and reconciles to none on a valid preview", async () => {
+    const { calls, result } = await publishFinal(
+      shaB,
+      "failure",
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: shaB },
+        },
+      },
+      { FLOWS: "admin" }
+    );
+    expect(result.exitCode).toBe(0);
+    const e2ePosts = statusPosts(calls).filter(
+      (call) =>
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
+    );
+    expect(e2ePosts).toHaveLength(2);
+    expect(e2ePosts[0]).toContain("state=failure");
+    expect(e2ePosts[0]).toContain(
+      "description=Protected preview E2E failed [flows: admin]"
+    );
+    expect(e2ePosts[1]).toContain("state=success");
+    expect(e2ePosts[1]).toContain(
+      "description=Protected preview E2E skipped [flows: none]"
+    );
+  });
+
+  test("reconciles a failed run to none even when the PR body was initially invalid and fixed concurrently", async () => {
+    const statefulGh = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+state_file="$GH_FIXTURES/state.txt"
+[[ -f "$state_file" ]] || echo "invalid" > "$state_file"
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  if [[ "$(cat "$state_file")" == "invalid" ]]; then
+    echo '{"head":{"sha":"${shaB}"},"body":"## Summary\\nMissing flows"}'
+  else
+    echo '{"head":{"sha":"${shaB}"},"body":"## E2E flows\\n- none\\n"}'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"https://deskohub-workspace-site-abc123-team.vercel.app/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${shaB}/statuses"* ]]; then
+  echo '[[]]'
+  exit 0
+fi
+if [[ "$*" == *"/statuses/${shaB}"* ]]; then
+  echo "fixed" > "$state_file"
+  echo '{"id":301}'
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const { calls, result } = await runStep(
+      finalStep,
+      {},
+      {
+        ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
+        ALLOCATION_SHARD: "1",
+        FLOWS: "admin",
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: prNumber,
+        STATUS_STATE: "failure",
+        TARGET_SHA: shaB,
+      },
+      { gh: statefulGh }
+    );
+    expect(result.exitCode).toBe(0);
+    const e2ePosts = statusPosts(calls).filter(
+      (call) =>
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
+    );
+    expect(e2ePosts).toHaveLength(2);
+    expect(e2ePosts[0]).toContain("state=failure");
+    expect(e2ePosts[0]).toContain(
+      "description=Protected preview E2E failed [flows: admin]"
+    );
+    expect(e2ePosts[1]).toContain("state=success");
+    expect(e2ePosts[1]).toContain(
+      "description=Protected preview E2E skipped [flows: none]"
+    );
+  });
+
+  test("undoes tentative skipped-none success if the PR changes back to admin during failure reconciliation", async () => {
+    const statefulGh = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+state_file="$GH_FIXTURES/state.txt"
+[[ -f "$state_file" ]] || echo "none" > "$state_file"
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  if [[ "$(cat "$state_file")" == "none" ]]; then
+    echo '{"head":{"sha":"${shaB}"},"body":"## E2E flows\\n- none\\n"}'
+  else
+    echo '{"head":{"sha":"${shaB}"},"body":"## E2E flows\\n- admin\\n"}'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"https://deskohub-workspace-site-abc123-team.vercel.app/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${shaB}/statuses"* ]]; then
+  echo '[[]]'
+  exit 0
+fi
+if [[ "$*" == *"/statuses/${shaB}"* ]]; then
+  if [[ "$*" == *"state=success"* ]]; then
+    echo "admin" > "$state_file"
+    echo '{"id":302}'
+  else
+    echo '{"id":301}'
+  fi
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const { calls, result } = await runStep(
+      finalStep,
+      {},
+      {
+        ALLOCATION_DESCRIPTION: "Workspace E2E shard released",
+        ALLOCATION_SHARD: "1",
+        FLOWS: "admin",
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: prNumber,
+        STATUS_STATE: "failure",
+        TARGET_SHA: shaB,
+      },
+      { gh: statefulGh }
+    );
+    expect(result.exitCode).toBe(0);
+    const e2ePosts = statusPosts(calls).filter(
+      (call) =>
+        call.includes("context=Workspace E2E") &&
+        !call.includes("context=Workspace E2E allocation")
+    );
+    expect(e2ePosts.length).toBeGreaterThanOrEqual(3);
+    expect(e2ePosts.at(-1)).toContain("state=failure");
+    expect(e2ePosts.at(-1)).toContain(
+      "description=Protected preview E2E failed [flows: admin]"
     );
   });
 

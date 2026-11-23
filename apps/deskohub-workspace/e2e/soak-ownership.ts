@@ -5,8 +5,13 @@ import { workspaceE2EAccountCaseIds } from "./account/catalog";
 import { makeWorkspaceE2EAccountRecipientForRunId } from "./account/config";
 import { workspaceE2EAccountLaneId } from "./account/journal";
 import type { E2EEnvironment } from "./e2e-env";
-import { nightlyCasesEnabled } from "./e2e-env";
+import { nightlyCasesEnabled, workspaceE2EFlowSelection } from "./e2e-env";
 import {
+  isWorkspaceE2ECaseSelected,
+  isWorkspaceE2EFlowSelected,
+} from "./flows";
+import {
+  isWorkspaceE2ECaseId,
   isWorkspaceE2ENightlyCaseId,
   isWorkspaceE2EOfficeCaseId,
   workspaceE2ECaseIds,
@@ -37,8 +42,11 @@ export const readRunOwnership = async (
     resolve(artifactRoot, "run-plan.json")
   );
   const context = plan.runContext;
+  const flowSelection = workspaceE2EFlowSelection(environment);
   const caseExpected = (caseId: string) =>
-    (plan.preparation.office !== undefined ||
+    isWorkspaceE2ECaseId(caseId) &&
+    isWorkspaceE2ECaseSelected(caseId, flowSelection) &&
+    (plan.preparation?.office !== undefined ||
       !isWorkspaceE2EOfficeCaseId(caseId)) &&
     (nightlyCasesEnabled(environment) || !isWorkspaceE2ENightlyCaseId(caseId));
   if (
@@ -99,7 +107,11 @@ export const readRunOwnership = async (
       resolve(accounts, `${owner.ownerId}.json`)
     );
     if (!journal) {
-      if (caseId === workspaceE2EAccountLaneId || caseExpected(caseId))
+      if (
+        (caseId === workspaceE2EAccountLaneId &&
+          isWorkspaceE2EFlowSelected("account", flowSelection)) ||
+        caseExpected(caseId)
+      )
         throw new Error("Missing account ownership journal");
       continue;
     }

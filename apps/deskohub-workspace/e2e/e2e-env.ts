@@ -7,6 +7,11 @@ import {
 import { createEnv } from "@t3-oss/env-core";
 import { Effect, Schema } from "effect";
 import { urlStringSchema } from "../shared/utils/url-schema";
+import {
+  parseWorkspaceE2EFlowsInput,
+  resolveWorkspaceE2EFlowSelection,
+  type WorkspaceE2EFlowSelection,
+} from "./flows";
 
 const toEnvironmentSchema = <S extends Schema.Decoder<unknown>>(schema: S) =>
   Schema.toStandardSchemaV1(schema);
@@ -48,6 +53,15 @@ const optionalUrl = toEnvironmentSchema(Schema.optional(urlStringSchema));
 const url = toEnvironmentSchema(urlStringSchema);
 const optionalOptIn = toEnvironmentSchema(
   Schema.optional(Schema.Literals(["true"]))
+);
+const optionalFlowsInput = toEnvironmentSchema(
+  Schema.optional(
+    Schema.String.check(
+      Schema.makeFilter((value) => parseWorkspaceE2EFlowsInput(value).ok, {
+        expected: "valid Workspace E2E flow selection",
+      })
+    )
+  )
 );
 type RuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -114,6 +128,7 @@ const e2eEnvironmentSchema = Schema.Struct({
   WORKSPACE_E2E_DATABASE_URL_UNPOOLED: nonEmptyString,
   WORKSPACE_E2E_POSTHOG_HOST: optionalUrl,
   WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN: optionalNonEmptyString,
+  WORKSPACE_E2E_FLOWS: optionalFlowsInput,
   WORKSPACE_E2E_NIGHTLY_CASES: optionalOptIn,
   WORKSPACE_E2E_PR_NUMBER: optionalPositiveInteger,
   WORKSPACE_E2E_REVIEW_SCREENSHOTS: optionalOptIn,
@@ -179,6 +194,7 @@ export const makeE2EEnvironment = (
       WORKSPACE_E2E_POSTHOG_HOST: runtimeEnvironment.WORKSPACE_E2E_POSTHOG_HOST,
       WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN:
         runtimeEnvironment.WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN,
+      WORKSPACE_E2E_FLOWS: runtimeEnvironment.WORKSPACE_E2E_FLOWS,
       WORKSPACE_E2E_NIGHTLY_CASES:
         runtimeEnvironment.WORKSPACE_E2E_NIGHTLY_CASES,
       WORKSPACE_E2E_PR_NUMBER: runtimeEnvironment.WORKSPACE_E2E_PR_NUMBER,
@@ -239,6 +255,29 @@ export const makeReviewScreenshotEnvironment = (
     },
     server: { WORKSPACE_E2E_REVIEW_SCREENSHOTS: optionalOptIn },
   });
+
+/**
+ * Playwright configs and case registration read only the flow selection
+ * through this boundary so `WORKSPACE_E2E_FLOWS` stays decoded in one place.
+ */
+export const makeInstantNavigationFlowEnvironment = (
+  runtimeEnvironment: RuntimeEnvironment = process.env
+) =>
+  createEnv({
+    emptyStringAsUndefined: true,
+    onValidationError: () => {
+      throw new Error("Invalid workspace E2E environment variables.");
+    },
+    runtimeEnv: {
+      WORKSPACE_E2E_FLOWS: runtimeEnvironment.WORKSPACE_E2E_FLOWS,
+    },
+    server: { WORKSPACE_E2E_FLOWS: optionalFlowsInput },
+  });
+
+export const workspaceE2EFlowSelection = (
+  environment: Pick<E2EEnvironment, "WORKSPACE_E2E_FLOWS">
+): WorkspaceE2EFlowSelection =>
+  resolveWorkspaceE2EFlowSelection(environment.WORKSPACE_E2E_FLOWS);
 
 /**
  * Review screenshots are PR-review artifacts, not test evidence, so a run

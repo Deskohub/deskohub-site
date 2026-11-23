@@ -4,9 +4,15 @@ import { randomUUID } from "node:crypto";
 import { Cause, Effect, Exit, Layer } from "effect";
 import {
   makeWorkspaceE2EEnvironment,
+  nightlyCasesEnabled,
   toPlaywrightEnvironment,
+  workspaceE2EFlowSelection,
 } from "../e2e/e2e-env";
 import { formatWorkspaceE2EFailure, workspaceE2EError } from "../e2e/errors";
+import {
+  selectedWorkspaceE2ECheckoutProjects,
+  selectedWorkspaceE2EInstantNavigationPlan,
+} from "../e2e/flows";
 import { hasWorkspaceE2ERunContext } from "../e2e/playwright-checkout/run-context";
 import {
   runWorkspacePlaywrightSuites,
@@ -30,6 +36,19 @@ const telemetryServiceLayer = E2ETelemetryService.Default.pipe(
   Layer.provide(E2ERunContextService.layerValue(runContext))
 );
 const playwrightEnvironment = toPlaywrightEnvironment(environment);
+const flowSelection = workspaceE2EFlowSelection(environment);
+const checkoutProjects = selectedWorkspaceE2ECheckoutProjects(flowSelection, {
+  includeNightlyCases: nightlyCasesEnabled(environment),
+});
+const instantNavigationPlan =
+  selectedWorkspaceE2EInstantNavigationPlan(flowSelection);
+const runCheckoutSuite =
+  checkoutProjects === undefined || checkoutProjects.length > 0;
+const runInstantNavigationSuite =
+  instantNavigationPlan.projects === undefined ||
+  instantNavigationPlan.projects.length > 0;
+const projectFlags = (projects: readonly string[] | undefined) =>
+  projects ? projects.flatMap((project) => ["--project", project]) : [];
 const toInstantNavigationError = (
   instantNavigation: PromiseSettledResult<number>
 ) => {
@@ -76,10 +95,14 @@ const runPlaywright = Effect.gen(function* () {
         ).exited;
       // Read-only instant navigation runs beside the checkout graph instead
       // of gating its setup phase; both always target the remote preview.
+      if (!runCheckoutSuite && !runInstantNavigationSuite) {
+        return;
+      }
       const { checkout, instantNavigation } = yield* Effect.promise(() =>
         runWorkspacePlaywrightSuites({
-          checkout: (invocation) =>
-            spawnPlaywright(
+          checkout: (invocation) => {
+            if (!runCheckoutSuite) return Promise.resolve(0);
+            return spawnPlaywright(
               "playwright.e2e.config.ts",
               invocation === "failure-cleanup"
                 ? [
@@ -87,11 +110,19 @@ const runPlaywright = Effect.gen(function* () {
                     "--no-deps",
                     `--output=e2e-artifacts/checkout-cleanup-recovery-${randomUUID()}`,
                   ]
-                : []
-            ),
-          hasCheckoutRunContext: hasWorkspaceE2ERunContext,
+                : projectFlags(checkoutProjects)
+            );
+          },
+          hasCheckoutRunContext: runCheckoutSuite
+            ? hasWorkspaceE2ERunContext
+            : () => Promise.resolve(false),
           instantNavigation: () =>
-            spawnPlaywright("playwright.instant-navigation.config.ts"),
+            runInstantNavigationSuite
+              ? spawnPlaywright(
+                  "playwright.instant-navigation.config.ts",
+                  projectFlags(instantNavigationPlan.projects)
+                )
+              : Promise.resolve(0),
         })
       );
       const instantNavigationError =

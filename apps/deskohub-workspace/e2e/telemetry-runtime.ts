@@ -5,6 +5,7 @@ import {
   type TelemetryIdentity,
 } from "../shared/backend/observability/telemetry-sinks";
 import type { E2EEnvironment } from "./e2e-env";
+import { workspaceE2EFlowSelection } from "./e2e-env";
 import { runUntracedE2EEffect } from "./effect-edge";
 import { workspaceE2EError } from "./errors";
 import { makeNativeRunCapture, soakEvidenceService } from "./soak-native";
@@ -28,7 +29,8 @@ export const makeE2ETelemetryRuntime = (environment: E2EEnvironment) => {
     capture,
     complete:
       environment.GITHUB_ACTIONS === "true" &&
-      !environment.WORKSPACE_E2E_TRACE_PARENT
+      !environment.WORKSPACE_E2E_TRACE_PARENT &&
+      workspaceE2EFlowSelection(environment).kind === "all"
         ? Effect.try({
             try: () => capture.receipt(environment),
             catch: () =>

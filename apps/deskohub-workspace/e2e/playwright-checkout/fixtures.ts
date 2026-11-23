@@ -1,8 +1,10 @@
 import { Effect, Exit, Scope } from "effect";
 import { runUntracedE2EEffect } from "../effect-edge";
+import { isWorkspaceE2ECaseSelected } from "../flows";
 import {
   isWorkspaceE2ENightlyCaseId,
   isWorkspaceE2EOfficeCaseId,
+  type WorkspaceE2ECaseId,
 } from "./case-catalog";
 import { readWorkspaceE2ERunPlan } from "./run-plan";
 import { runtimeTest } from "./runtime-fixtures";
@@ -51,20 +53,30 @@ export type WorkspaceE2ECaseBinder = (input: {
 }) => Promise<import("../types").WorkspaceE2ECase>;
 
 export const registerWorkspaceE2ECases = (
-  caseIds: readonly string[],
+  caseIds: readonly WorkspaceE2ECaseId[],
   options: { readonly bindCase?: WorkspaceE2ECaseBinder } = {}
 ) => {
   for (const caseId of caseIds) {
     test(
       caseId,
       async ({ browser, environment, runEffect, runPlan, testScope }) => {
-        const { nightlyCasesEnabled } = await import("../e2e-env");
+        const { nightlyCasesEnabled, workspaceE2EFlowSelection } = await import(
+          "../e2e-env"
+        );
+        test.skip(
+          !isWorkspaceE2ECaseSelected(
+            caseId,
+            workspaceE2EFlowSelection(environment)
+          ),
+          "Excluded by WORKSPACE_E2E_FLOWS"
+        );
         test.skip(
           isWorkspaceE2ENightlyCaseId(caseId) &&
             !nightlyCasesEnabled(environment),
           "Runs only in the nightly Workspace E2E"
         );
-        const { makeWorkspaceE2ECases } = await import("../cases");
+        const { makePublicSiteWorkspaceE2ECases, makeWorkspaceE2ECases } =
+          await import("../cases");
         const { getConfig, getDatasourceConfig } = await import("../config");
         const { workspaceDir } = await import("../runtime");
         const { runWorkspaceE2ECase } = await import("../suite");
@@ -74,17 +86,18 @@ export const registerWorkspaceE2ECases = (
 
         const planned = await runEffect(
           Effect.gen(function* () {
-            const flowStates: import("../types").CheckoutFlowState[] = [];
-            const cases = yield* makeWorkspaceE2ECases({
-              allocation: runPlan.runContext.allocation,
-              config,
-              datasourceConfig,
-              flowStates,
-              preparation: runPlan.preparation,
-              traceConstruction: false,
-            });
-            const selected = cases.find((testCase) => testCase.id === caseId);
-            return selected;
+            const { preparation } = runPlan;
+            const cases = preparation
+              ? yield* makeWorkspaceE2ECases({
+                  allocation: runPlan.runContext.allocation,
+                  config,
+                  datasourceConfig,
+                  flowStates: [],
+                  preparation,
+                  traceConstruction: false,
+                })
+              : makePublicSiteWorkspaceE2ECases(config);
+            return cases.find((testCase) => testCase.id === caseId);
           })
         );
         if (!planned) {
