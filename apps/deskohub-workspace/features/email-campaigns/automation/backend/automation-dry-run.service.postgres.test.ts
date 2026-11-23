@@ -1474,6 +1474,99 @@ describe.skipIf(!testDatabase)(
       expect(fallbackOutcomes.has(ninaEvent!)).toBe(false);
     });
 
+    test("a unit past its deadline still drops events payment and stored tiers settle", async () => {
+      const [ola, pia, quin] = ["ola", "pia", "quin"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const finishedAt = ago({ hours: 24 * 3 });
+      const reservations = {
+        "ola-open-space": ola,
+        "pia-reserved-desk": pia,
+        "quin-reserved-desk-unpaid": quin,
+      };
+      await seedReservations(
+        Object.entries(reservations).map(([label, customer]) => ({
+          label,
+          customer,
+          startsAt: finishedAt.subtract({ hours: 24 }),
+          endsAt: finishedAt,
+        }))
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "reserved-desk",
+              coffee: true,
+            },
+          })
+          .where(
+            inArray(workspaceReservations.id, [
+              reservationIdOf("pia-reserved-desk"),
+              reservationIdOf("quin-reserved-desk-unpaid"),
+            ])
+          )
+      );
+      for (const label of ["ola-open-space", "pia-reserved-desk"]) {
+        const attemptId = `dry-run-card-${runId}-${label}`;
+        await testDatabase.pool.query(
+          `insert into payment_attempts (id, order_id, workspace_reservation_id, provider,
+             provider_order_id, state, amount_value, amount_exponent, currency)
+           values ($1, $2, $2, 'nexi', $1, 'paid', 29000, 2, 'CZK')`,
+          [attemptId, reservationIdOf(label)]
+        );
+        await testDatabase.pool.query(
+          "update workspace_reservations set active_payment_attempt_id = $2 where id = $1",
+          [reservationIdOf(label), attemptId]
+        );
+      }
+      const [olaEvent, piaEvent, quinEvent] = await seedEvents(
+        Object.entries(reservations).map(([reservation, customer]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer,
+          occurredAt: finishedAt,
+        }))
+      );
+      const started = await start(
+        await seedAutomation({
+          flow: decodeFlow({
+            trigger: {
+              _tag: "ReservationFinished",
+              product: { family: "cowork", properties: [] },
+              stay: "overnight",
+              payment: "individual",
+            },
+            steps: [send],
+          }),
+        })
+      );
+      for (const unit of await unitsOf(started.previewId)) {
+        await query(
+          db
+            .update(emailCampaignAutomationWorkUnits)
+            .set({ deadlineMisses: 3 })
+            .where(eq(emailCampaignAutomationWorkUnits.id, unit.id))
+        );
+      }
+      await processAll(started.previewId);
+
+      const outcomes = new Map(
+        (await rowsOf(started.previewId)).map(
+          (row): [string | null, string] => [row.customerEventId, row.outcome]
+        )
+      );
+      // Open Space can't be overnight; the unpaid one fails payment; only
+      // the paid Reserved Desk visit needs its unread interval.
+      expect(outcomes.has(olaEvent!)).toBe(false);
+      expect(outcomes.has(quinEvent!)).toBe(false);
+      expect(outcomes.get(piaEvent!)).toBe("unavailable");
+    });
+
     test("a reschedule in Dotypos changes the next preview without local writes", async () => {
       const hank = customerId("hank");
       await seedReservations([

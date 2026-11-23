@@ -86,7 +86,9 @@ import {
   isOfTriggerStay,
   isPaidAsTriggerRequires,
   loadPaidReservations,
+  loadStayTiers,
   loadStayVisits,
+  mayBeOfTriggerStay,
   type StayVisit,
   triggerPayment,
   triggerStay,
@@ -453,40 +455,58 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
 
   /**
    * The job with only the events that qualify for the trigger's payment
-   * and, when `judgeStay`, its stay (D1), as intake would take them in, and
-   * the stay visits it read. The 1,000 events stay fixed across units, so
+   * and stay (D1), as intake would take them in, and the stay visits it
+   * read. Payment comes first, so unpaid events read no visits. With
+   * `stayFrom: "tiers"` the stay is judged only as far as the stored tiers
+   * tell, reading no visits. The 1,000 events stay fixed across units, so
    * payment is judged per unit, as it is now, like the stay.
    */
-  const qualifiedJob = (job: PreviewJob, judgeStay: boolean) => {
-    const stay = judgeStay ? triggerStay(job.flow.trigger) : Option.none();
-    const reservationIds = reservationIdsOf(job.events);
+  const qualifiedJob = (job: PreviewJob, stayFrom: "visits" | "tiers") => {
+    const stay = triggerStay(job.flow.trigger);
+    const stayReservations = (events: readonly ReplayEvent[]) =>
+      Option.isSome(stay) ? reservationIdsOf(events) : [];
+    const stayOf = <Value>(
+      byReservation: ReadonlyMap<WorkspaceReservationId, Value>,
+      { workspaceReservationId }: ReplayEvent
+    ) =>
+      Option.fromUndefinedOr(
+        workspaceReservationId === null
+          ? undefined
+          : byReservation.get(workspaceReservationId)
+      );
     return Effect.Do.pipe(
       Effect.bind("paid", () =>
         loadPaidReservations(
           triggerPayment(job.flow.trigger),
-          reservationIds
+          reservationIdsOf(job.events)
         ).pipe(Effect.provideContext(context))
       ),
-      Effect.bind("stayVisits", () =>
-        loadStayVisits(Option.isSome(stay) ? reservationIds : []).pipe(
-          Effect.provideContext(context)
+      Effect.let("paidEvents", ({ paid }) =>
+        job.events.filter(({ workspaceReservationId }) =>
+          isPaidAsTriggerRequires(paid, workspaceReservationId)
         )
       ),
-      Effect.map(({ paid, stayVisits }) => ({
+      Effect.bind("stayVisits", ({ paidEvents }) =>
+        loadStayVisits(
+          stayFrom === "visits" ? stayReservations(paidEvents) : []
+        ).pipe(Effect.provideContext(context))
+      ),
+      Effect.bind("tiers", ({ paidEvents }) =>
+        loadStayTiers(
+          stayFrom === "tiers" ? stayReservations(paidEvents) : []
+        ).pipe(Effect.provideContext(context))
+      ),
+      Effect.map(({ paidEvents, stayVisits, tiers }) => ({
         stayVisits,
         job: {
           ...job,
-          events: job.events.filter(
-            ({ workspaceReservationId }) =>
-              isPaidAsTriggerRequires(paid, workspaceReservationId) &&
-              isOfTriggerStay(
-                stay,
-                Option.fromUndefinedOr(
-                  workspaceReservationId === null
-                    ? undefined
-                    : stayVisits.get(workspaceReservationId)
+          events: paidEvents.filter((event) =>
+            stayFrom === "visits"
+              ? isOfTriggerStay(stay, stayOf(stayVisits, event))
+              : mayBeOfTriggerStay(
+                  stay,
+                  Option.getOrUndefined(stayOf(tiers, event))
                 )
-              )
           ),
         },
       }))
@@ -496,16 +516,23 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
   /**
    * An event trigger's 30-day replay for the unit's customers (design
    * §8.2): each customer's qualifying events in time order with
-   * per-customer overlays only, so units are independent.
+   * per-customer overlays only, so units are independent. Customers
+   * without a qualifying event fetch no facts and show no rows.
    */
   const evaluateReplay = (
     job: PreviewJob,
     customers: readonly DotyposCustomerId[]
   ) =>
-    qualifiedJob(job, true).pipe(
-      Effect.flatMap((qualified) =>
-        replayQualified({ ...qualified, customers })
-      )
+    qualifiedJob(job, "visits").pipe(
+      Effect.flatMap((qualified) => {
+        const withEvents = new Set(
+          qualified.job.events.map(({ dotyposCustomerId }) => dotyposCustomerId)
+        );
+        const replayed = customers.filter((id) => withEvents.has(id));
+        return replayed.length === 0
+          ? Effect.succeed<readonly AutomationPreviewOutcomeRow[]>([])
+          : replayQualified({ ...qualified, customers: replayed });
+      })
     );
 
   /**
@@ -809,8 +836,9 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
     unit: ClaimedAutomationUnit<PreviewUnitSubject>
   ) =>
     unit.deadlineMisses >= unavailableAfterDeadlineMisses
-      ? // A stay needs the visit this unit can't read in time; payment is local.
-        qualifiedJob(job, false).pipe(
+      ? // The unit can't read visits in time: payment and the stored tiers
+        // still exclude what they can; a Reserved Desk visit stays unavailable.
+        qualifiedJob(job, "tiers").pipe(
           Effect.map((qualified) =>
             unavailableRows(qualified.job, unit.subject.customerIds)
           )

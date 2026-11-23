@@ -18,6 +18,7 @@ import type { WorkspaceCoworkProductTier } from "@/features/checkout/product-cat
 import { decodeBookedReservation } from "@/features/reservation/backend/booked-reservation";
 import type { ReservationVisit } from "@/features/reservation/backend/reservation-visits.service";
 import { StoredReservationDetails } from "@/features/reservation/backend/stored-reservation-details.server";
+import { overnightCoworkStayTier } from "@/features/reservation/cowork-stay";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { reservationPaymentCondition } from "../../backend/reservation-payment-condition";
 import { isBookedStay, loadCoworkTiers } from "../../backend/reservation-stay";
@@ -175,6 +176,65 @@ export const loadStayVisits = (
             )
         )
       );
+
+/**
+ * The stored cowork tier of each of these reservations with a Dotypos
+ * reservation, whatever their Workspace state; another family's is absent.
+ */
+export const loadStayTiers = (
+  reservationIds: readonly WorkspaceReservationId[]
+): Effect.Effect<
+  ReadonlyMap<WorkspaceReservationId, WorkspaceCoworkProductTier>,
+  AutomationUnitFetchFailure,
+  WorkspaceDatabase
+> =>
+  reservationIds.length === 0
+    ? Effect.succeed(new Map())
+    : Effect.Do.pipe(
+        Effect.bind("linked", () => linkedReservations({ reservationIds })),
+        Effect.bind("tiers", ({ linked }) =>
+          Effect.flatMap(WorkspaceDatabase, ({ db }) =>
+            loadCoworkTiers(
+              db,
+              linked.map(({ dotyposReservationId }) => dotyposReservationId)
+            )
+          ).pipe(Effect.mapError(databaseFailure))
+        ),
+        Effect.map(
+          ({ linked, tiers }) =>
+            new Map(
+              linked.flatMap(
+                ({ workspaceReservationId, dotyposReservationId }) =>
+                  Option.match(
+                    Option.fromUndefinedOr(tiers.get(dotyposReservationId)),
+                    {
+                      onNone: () => [],
+                      onSome: (tier) => [
+                        [workspaceReservationId, tier] as const,
+                      ],
+                    }
+                  )
+              )
+            )
+        )
+      );
+
+/**
+ * Whether a visit of this stored tier can be of the trigger's stay without
+ * reading its interval (D1): a reservation without a cowork tier has no
+ * stay, and only Reserved Desk can be overnight, so another tier is a day
+ * stay. Only a Reserved Desk visit needs its interval to tell.
+ */
+export const mayBeOfTriggerStay = (
+  stay: Option.Option<ReservationStay>,
+  tier: WorkspaceCoworkProductTier | undefined
+): boolean =>
+  Option.match(stay, {
+    onNone: () => true,
+    onSome: (stay) =>
+      tier !== undefined &&
+      (tier === overnightCoworkStayTier || stay === "day"),
+  });
 
 /**
  * Whether the triggering visit is of the trigger's stay (D1): always
