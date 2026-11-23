@@ -2303,7 +2303,7 @@ const makeDotyposService: Effect.Effect<
       const normalizedCustomerData = normalizeCustomerLookupData(customerData);
       const call = { operation, request: "customers.lookup" } as const;
 
-      const searchByField = Effect.fn("searchByField")(function* (
+      const searchByField = Effect.fnUntraced(function* (
         fieldName: "email" | "phone",
         value: string
       ) {
@@ -2444,7 +2444,7 @@ const makeDotyposService: Effect.Effect<
   );
 
   /** Fills the details an existing customer lacks; a failed fill keeps the customer as it was. */
-  const fillExistingCustomer = Effect.fn("fillExistingCustomer")(function* (
+  const fillExistingCustomer = Effect.fnUntraced(function* (
     existingCustomer: DotyposCustomer,
     normalizedCustomerData: DotyposCustomerLookupData
   ) {
@@ -2503,7 +2503,7 @@ const makeDotyposService: Effect.Effect<
   });
 
   /** Creates the customer a lookup found no active match for. */
-  const createLookedUpCustomer = Effect.fn("createLookedUpCustomer")(function* (
+  const createLookedUpCustomer = Effect.fnUntraced(function* (
     normalizedCustomerData: DotyposCustomerLookupData
   ) {
     if (!normalizedCustomerData.email) {
@@ -2649,37 +2649,35 @@ const makeDotyposService: Effect.Effect<
       )
   );
 
-  const loadCustomerDiscountGroup = Effect.fn("loadCustomerDiscountGroup")(
-    function* (
-      customer: DotyposCustomer,
-      operation: "getCustomerDiscountGroup"
-    ) {
-      const rawDiscountGroupId = customer._discountGroupId?.toString().trim();
-      if (!rawDiscountGroupId) return undefined;
+  const loadCustomerDiscountGroup = Effect.fnUntraced(function* (
+    customer: DotyposCustomer,
+    operation: "getCustomerDiscountGroup"
+  ) {
+    const rawDiscountGroupId = customer._discountGroupId?.toString().trim();
+    if (!rawDiscountGroupId) return undefined;
 
-      const call = { operation, request: "discountGroup.get" } as const;
-      const discountGroupId = yield* decodeResponseIdentifier(
-        DotyposDiscountGroupIdSchema,
-        rawDiscountGroupId,
-        "Discount group ID",
-        call
-      );
+    const call = { operation, request: "discountGroup.get" } as const;
+    const discountGroupId = yield* decodeResponseIdentifier(
+      DotyposDiscountGroupIdSchema,
+      rawDiscountGroupId,
+      "Discount group ID",
+      call
+    );
 
-      return yield* runDotyposRequest(
-        client.getDiscountGroup(config.cloudId, discountGroupId, undefined),
-        call
-      ).pipe(
-        retryDotyposRequest(call.request),
-        Effect.map(
-          (discountGroup) =>
-            ({
-              discountGroupId,
-              discountPercent: discountGroup.discountPercent,
-            }) satisfies DotyposCustomerDiscountGroup
-        )
-      );
-    }
-  );
+    return yield* runDotyposRequest(
+      client.getDiscountGroup(config.cloudId, discountGroupId, undefined),
+      call
+    ).pipe(
+      retryDotyposRequest(call.request),
+      Effect.map(
+        (discountGroup) =>
+          ({
+            discountGroupId,
+            discountPercent: discountGroup.discountPercent,
+          }) satisfies DotyposCustomerDiscountGroup
+      )
+    );
+  });
 
   const getCustomerDiscountGroup = Effect.fn(
     "DotyposService.getCustomerDiscountGroup"

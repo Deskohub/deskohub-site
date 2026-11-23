@@ -99,19 +99,33 @@ type DotyposRequestProfiles = typeof dotyposRequestProfiles;
 
 /** The failures one request can surface: reads are never uncertain, and only conditional writes conflict. */
 export type DotyposRequestFailure<Request extends DotyposRequest> =
-  DotyposRequestProfiles[Request] extends { readonly effect: "read" }
+  DotyposRequestFailures[Request];
+
+/** Keyed per request so a union of requests unions their failures. */
+type DotyposRequestFailures = {
+  readonly [Request in DotyposRequest]: DotyposRequestProfiles[Request] extends {
+    readonly effect: "read";
+  }
     ? DotyposReadFailure
     : DotyposRequestProfiles[Request] extends {
           readonly repeat: "conditional";
         }
       ? DotyposConditionalWriteFailure
       : DotyposWriteFailure;
+};
 
 /** Only a replayed write can turn a later failure uncertain. */
-type DotyposReplayUncertainty<Request extends DotyposRequest> =
-  DotyposRequestProfiles[Request] extends { readonly retry: "replay" }
+export type DotyposReplayUncertainty<Request extends DotyposRequest> =
+  DotyposReplayUncertainties[Request];
+
+/** Keyed per request so a union of requests unions their replay uncertainty. */
+type DotyposReplayUncertainties = {
+  readonly [Request in DotyposRequest]: DotyposRequestProfiles[Request] extends {
+    readonly retry: "replay";
+  }
     ? DotyposUncertain
     : never;
+};
 
 const surfacesReplayUncertainty = <Request extends DotyposRequest>(
   request: Request,
