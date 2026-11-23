@@ -232,6 +232,32 @@ describe("validateAutomationFlow waits", () => {
   );
 });
 
+describe("validateAutomationFlow send policies", () => {
+  const skipsPassHolders = (trigger: AutomationTrigger): AutomationFlow => ({
+    trigger,
+    steps: [{ ...send, skipPassHolders: true }],
+  });
+
+  test.each([
+    { _tag: "EntryPackExpiring" },
+    { _tag: "UnlimitedEnding" },
+  ] as const)(
+    "rejects a Send that skips pass holders under a $_tag trigger",
+    async (trigger) => {
+      const failure = await failureOf(skipsPassHolders(trigger));
+      expect(failure).toBeInstanceOf(AutomationFlowInvalid);
+      expect(failure).toMatchObject({
+        location: { _tag: "Step", stepId: "send" },
+      });
+    }
+  );
+
+  test("accepts a Send that skips pass holders under another trigger", async () => {
+    const result = await validate(skipsPassHolders({ _tag: "AccountCreated" }));
+    expect(Result.isSuccess(result)).toBe(true);
+  });
+});
+
 describe("validateAutomationFlow calendars", () => {
   test("rejects a schedule that never occurs", async () => {
     const failure = await failureOf(

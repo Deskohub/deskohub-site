@@ -45,6 +45,7 @@
   "emailAutomationActivationOutcomeAlreadyActive": "पहले से रन में",
   "emailAutomationActivationOutcomeConditionFailed": "शर्त से रुका",
   "emailAutomationActivationOutcomeNotInAudience": "ऑडियंस से बाहर",
+  "emailAutomationActivationOutcomeSkipped": "छोड़ा गया",
   "emailAutomationActivationOutcomeUnavailable": "मूल्यांकन नहीं हो सका",
   "emailAutomationActivationOutcomeWithdrawn": "वापस लिया गया",
   "emailAutomationActivationOutcomeWouldSend": "भेजा जाता",

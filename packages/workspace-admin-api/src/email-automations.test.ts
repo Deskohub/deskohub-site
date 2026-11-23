@@ -4,6 +4,8 @@ import { Result, Schema } from "effect";
 import { administrationInputParseOptions } from "./administration-input-parse-options";
 import {
   AutomationDetail,
+  AutomationDryRun,
+  AutomationDryRunRow,
   AutomationEngineHealth,
   AutomationFlow,
   AutomationFlowUpdate,
@@ -12,6 +14,10 @@ import {
   AutomationRunStats,
   AutomationRunSummary,
   AutomationRunTimelineEntry,
+  automationOneOffCampaignGapMaxDays,
+  automationRunEventDetails,
+  automationRunSkipReasons,
+  automationSendDeferralCauses,
   scheduleMinutesOffTick,
 } from "./email-automations";
 
@@ -112,6 +118,60 @@ describe("automation flow contract", () => {
   });
 });
 
+describe("Send delivery rules", () => {
+  const ruledSend = {
+    ...send,
+    oncePerCustomer: true,
+    oneOffCampaignGap: { days: 14 },
+    skipPassHolders: true,
+  };
+
+  test.each([
+    ["no rules", send],
+    ["every rule", ruledSend],
+    ["only the shortest gap", { ...send, oneOffCampaignGap: { days: 1 } }],
+    [
+      "only the gap, at its longest",
+      {
+        ...send,
+        oneOffCampaignGap: { days: automationOneOffCampaignGapMaxDays },
+      },
+    ],
+    ["only once per customer", { ...send, oncePerCustomer: true }],
+    ["only skipping pass holders", { ...send, skipPassHolders: true }],
+  ])("a Send step with %s round-trips byte for byte", (_, step) => {
+    const wire = flowOf([settle, step]);
+    const flow = Result.getOrThrow(decodeFlow(wire));
+
+    expect(JSON.stringify(Result.getOrThrow(encodeFlow(flow)))).toBe(
+      JSON.stringify(wire)
+    );
+  });
+
+  test("a Send step without rules encodes none of their keys", () => {
+    const flow = Result.getOrThrow(decodeFlow(flowOf([send])));
+    const [encoded] = Result.getOrThrow(encodeFlow(flow)).steps;
+
+    expect(Object.keys(encoded ?? {}).sort()).toEqual(["_tag", "id"]);
+  });
+
+  test.each([
+    ["a gap of 0 days", { oneOffCampaignGap: { days: 0 } }],
+    [
+      "a gap past the longest",
+      { oneOffCampaignGap: { days: automationOneOffCampaignGapMaxDays + 1 } },
+    ],
+    ["a gap of part of a day", { oneOffCampaignGap: { days: 1.5 } }],
+    ["a gap without days", { oneOffCampaignGap: {} }],
+    ["oncePerCustomer false", { oncePerCustomer: false }],
+    ["skipPassHolders false", { skipPassHolders: false }],
+  ])("rejects %s", (_, rule) => {
+    expect(Result.isFailure(decodeFlow(flowOf([{ ...send, ...rule }])))).toBe(
+      true
+    );
+  });
+});
+
 describe("automation operation inputs", () => {
   const decodeStrict = (schema: Schema.Decoder<unknown>, input: unknown) =>
     Schema.decodeUnknownResult(schema, administrationInputParseOptions)(input);
@@ -147,6 +207,13 @@ describe("automation operation inputs", () => {
         })
       )
     ).toEqual({ ...input, skipReason: "missing-email" });
+    for (const skipReason of ["pass-holder", "already-sent-once"]) {
+      expect(
+        Result.getOrThrow(
+          decodeStrict(AutomationRunListInput, { ...input, skipReason })
+        )
+      ).toEqual({ ...input, skipReason });
+    }
     for (const skipReason of ["evaluation-unavailable", "Missing-Email", ""]) {
       expect(
         Result.isFailure(
@@ -230,6 +297,8 @@ describe("automation responses", () => {
       "invalid-email": 0,
       "consent-withdrawn": 0,
       "outside-test-domain": 0,
+      "pass-holder": 0,
+      "already-sent-once": 0,
     });
   });
 
@@ -242,6 +311,76 @@ describe("automation responses", () => {
         })
       )
     ).toBe(true);
+  });
+
+  test("decode an older server's counts by skip reason without the reasons it doesn't know as 0", () => {
+    expect(
+      Result.getOrThrow(
+        Schema.decodeUnknownResult(AutomationRunStats)({
+          campaignId: "campaign-1",
+          bySkipReason: {
+            "missing-from-dotypos": 1,
+            "deleted-customer": 2,
+            "missing-email": 3,
+            "invalid-email": 4,
+            "consent-withdrawn": 5,
+            "outside-test-domain": 6,
+          },
+        })
+      ).bySkipReason
+    ).toEqual({
+      "missing-from-dotypos": 1,
+      "deleted-customer": 2,
+      "missing-email": 3,
+      "invalid-email": 4,
+      "consent-withdrawn": 5,
+      "outside-test-domain": 6,
+      "pass-holder": 0,
+      "already-sent-once": 0,
+    });
+  });
+
+  describe("dry run counts", () => {
+    const olderDryRun = {
+      previewId: "preview-1",
+      campaignId: "campaign-1",
+      draftHash: "hash",
+      kind: "replay",
+      status: "completed",
+      asOf: "2026-10-19T10:00:00.000Z",
+      createdAt: "2026-10-19T10:00:00.000Z",
+    };
+    const olderCounts = {
+      "would-send": 1,
+      "condition-failed": 2,
+      "not-in-audience": 3,
+      "already-active": 4,
+      withdrawn: 5,
+      unavailable: 6,
+    };
+
+    test("decode an older server's counts without skipped as 0", () => {
+      expect(
+        Result.getOrThrow(
+          Schema.decodeUnknownResult(AutomationDryRun)({
+            ...olderDryRun,
+            counts: olderCounts,
+          })
+        ).counts
+      ).toEqual({ ...olderCounts, skipped: 0 });
+    });
+
+    test("refuse counts that leave out an outcome every server sends", () => {
+      const { withdrawn: _, ...withoutWithdrawn } = olderCounts;
+      expect(
+        Result.isFailure(
+          Schema.decodeUnknownResult(AutomationDryRun)({
+            ...olderDryRun,
+            counts: withoutWithdrawn,
+          })
+        )
+      ).toBe(true);
+    });
   });
 
   test("round-trip a run's live contact and the counts by skip reason", () => {
@@ -271,6 +410,8 @@ describe("automation responses", () => {
           "invalid-email": 0,
           "consent-withdrawn": 1,
           "outside-test-domain": 0,
+          "pass-holder": 1,
+          "already-sent-once": 3,
         },
       })
     );
@@ -294,6 +435,53 @@ describe("automation responses", () => {
         })
       )
     ).toBe(true);
+  });
+
+  test("read every deferral cause and every run skip reason in timeline details", () => {
+    const recheckAt = "2026-10-19T12:00:00.000Z";
+
+    for (const cause of automationSendDeferralCauses) {
+      expect(
+        Schema.is(automationRunEventDetails.deferred)(
+          Schema.decodeUnknownSync(automationRunEventDetails.deferred)({
+            cause,
+            recheckAt,
+          })
+        )
+      ).toBe(true);
+    }
+    for (const reason of automationRunSkipReasons) {
+      expect(
+        Schema.decodeUnknownSync(automationRunEventDetails.skipped)({ reason })
+      ).toEqual({ reason });
+    }
+    expect(
+      Result.isFailure(
+        Schema.decodeUnknownResult(automationRunEventDetails.deferred)({
+          cause: "customer-busy",
+          recheckAt,
+        })
+      )
+    ).toBe(true);
+  });
+
+  test("decode a dry-run row's skip reason, and none from an older server", () => {
+    const decodeRow = Schema.decodeUnknownSync(AutomationDryRunRow);
+    const row = {
+      triggerAt: "2026-10-19T08:00:00.000Z",
+      customerId: "customer-1",
+      customerEventId: null,
+      stepId: "send",
+      sendAt: null,
+    };
+
+    expect(
+      decodeRow({ ...row, outcome: "skipped", skipReason: "already-sent-once" })
+        .skipReason
+    ).toBe("already-sent-once");
+    expect(decodeRow({ ...row, outcome: "condition-failed" }).skipReason).toBe(
+      null
+    );
   });
 
   test("decode an unknown or unreadable timeline entry as a generic one", () => {

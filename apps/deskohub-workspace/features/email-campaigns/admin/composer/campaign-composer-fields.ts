@@ -17,6 +17,7 @@ import {
 import {
   type CampaignBodyIssue,
   campaignBodyIssues,
+  campaignPassOfferTextMaxLength,
   emptyCampaignBody,
   isCampaignBodyEmpty,
 } from "../../body/campaign-body-rules";
@@ -283,5 +284,16 @@ export const localeContentIssueMessage = (
         m.emailCampaignsBodyButtonLabelLineBreaks({}, { locale }),
       ButtonHrefInvalid: () =>
         m.emailCampaignsBodyButtonHrefInvalid({}, { locale }),
+      PassOfferProductInvalid: () =>
+        m.emailCampaignsBodyPassOfferProductInvalid({}, { locale }),
+      PassOfferSizeInvalid: () =>
+        m.emailCampaignsBodyPassOfferSizeInvalid({}, { locale }),
+      PassOfferTextInvalid: () =>
+        m.emailCampaignsBodyPassOfferTextInvalid(
+          { max: campaignPassOfferTextMaxLength },
+          { locale }
+        ),
+      PassOfferDetailWithoutHeadline: () =>
+        m.emailCampaignsBodyPassOfferDetailWithoutHeadline({}, { locale }),
     })
   );

@@ -242,3 +242,104 @@ for (const { locale, initialWidth } of [
     }
   );
 }
+
+test.skipIf(!chromiumAvailable)(
+  "updates and removes a pass offer card on a short landscape screen",
+  async () => {
+    if (!browser) throw new Error("Chromium did not launch");
+    const locale = "en-US";
+    const page = await browser.newPage({
+      viewport: { width: 667, height: 375 },
+    });
+    page.setDefaultTimeout(5000);
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    try {
+      const doc: CampaignBodyNode = {
+        type: "doc",
+        content: [
+          {
+            type: "passOffer",
+            attrs: {
+              product: "entry-pack",
+              size: 5,
+              headline: "Synthetic headline",
+              detail: "Synthetic detail",
+            },
+          },
+        ],
+      };
+      await page.route("**/*", (route) =>
+        route.request().url().startsWith(origin)
+          ? route.fulfill({
+              contentType: "text/html",
+              body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="editor-root" data-locale="${locale}"></div></body></html>`,
+            })
+          : route.abort()
+      );
+      await page.goto(origin);
+      await page.locator("#editor-root").evaluate((element, value) => {
+        (element as HTMLElement).dataset.document = JSON.stringify(value);
+      }, doc);
+      await page.addStyleTag({ content: styles });
+      await page.addScriptTag({ path: bundle });
+      const card = page.locator("[data-pass-offer] [data-drag-handle]");
+      try {
+        await card.waitFor();
+      } catch (cause) {
+        throw new Error(`Editor failed to mount: ${pageErrors.join("; ")}`, {
+          cause,
+        });
+      }
+      const openEditing = async () => {
+        await card.click();
+        await page
+          .locator("[data-pass-offer]")
+          .getByRole("button", {
+            name: m.emailCampaignsPassOfferEdit({}, { locale }),
+          })
+          .click();
+        return page.getByRole("dialog");
+      };
+      const savedCards = async () => {
+        const saved: CampaignBodyNode = JSON.parse(
+          (await page.getByTestId("document").textContent()) ?? "null"
+        );
+        return (saved.content ?? []).filter(({ type }) => type === "passOffer");
+      };
+
+      let dialog = await openEditing();
+      await dialog
+        .getByLabel(m.emailCampaignsPassOfferDetailLabel({}, { locale }))
+        .fill("");
+      await dialog
+        .getByRole("button", {
+          name: m.emailCampaignsPassOfferUpdate({}, { locale }),
+        })
+        .click();
+      await dialog.waitFor({ state: "detached" });
+      expect(await savedCards()).toEqual([
+        {
+          type: "passOffer",
+          attrs: {
+            product: "entry-pack",
+            size: 5,
+            headline: "Synthetic headline",
+            detail: null,
+          },
+        },
+      ]);
+
+      dialog = await openEditing();
+      await dialog
+        .getByRole("button", {
+          name: m.emailCampaignsPassOfferRemove({}, { locale }),
+        })
+        .click();
+      await dialog.waitFor({ state: "detached" });
+      expect(await savedCards()).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  }
+);

@@ -77,6 +77,7 @@ export const AdministrationCampaignRecipientSkipReason = Schema.Literals([
   "invalid-email",
   "consent-withdrawn",
   "outside-test-domain",
+  "pass-holder",
 ]);
 export type AdministrationCampaignRecipientSkipReason =
   typeof AdministrationCampaignRecipientSkipReason.Type;

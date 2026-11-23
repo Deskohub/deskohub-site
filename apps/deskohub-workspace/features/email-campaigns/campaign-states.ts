@@ -103,8 +103,9 @@ export const retryableRecipientStatuses = (includeUnconfirmed: boolean) =>
 
 /**
  * Why a recipient was skipped at delivery: their profile no longer gives a
- * reachable email, their marketing consent was withdrawn, or (outside
- * production) their email is outside the email test domain.
+ * reachable email, their marketing consent was withdrawn, (outside
+ * production) their email is outside the email test domain, or an
+ * automation that skips pass holders found them holding a usable pass.
  */
 export const campaignRecipientSkipReasons = [
   "missing-from-dotypos",
@@ -114,6 +115,7 @@ export const campaignRecipientSkipReasons = [
   "consent-withdrawn",
   "outside-test-domain",
   "missing-email-language",
+  "pass-holder",
 ] as const;
 const campaignRecipientSkipReasonSchema = Schema.Literals(
   campaignRecipientSkipReasons

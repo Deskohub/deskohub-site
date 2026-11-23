@@ -20,6 +20,7 @@ import {
 } from "@/db/database.service";
 import type { RootDatabaseClient } from "@/db/database-client";
 import {
+  emailCampaignAutomationCustomerClaims,
   emailCampaignAutomationRuns,
   emailCampaignAutomationScheduleFires,
   emailCampaignAutomations,
@@ -495,7 +496,7 @@ export const seedAutomatedSend = (
   });
 
 /**
- * Deletes campaigns with their automation rows, receipts, runs, units,
+ * Deletes campaigns with their automation rows, receipts, claims, runs, units,
  * fires, sends, recipients and versions. Versions are immutable, so
  * removing them takes the same exclusive lock and trigger toggle an
  * operator would need.
@@ -513,6 +514,15 @@ export const deleteAutomatedCampaigns = (
             .where(
               inArray(
                 emailCampaignAutomationTriggerReceipts.campaignId,
+                campaignIds
+              )
+            );
+          // Claims reference their runs.
+          yield* db
+            .delete(emailCampaignAutomationCustomerClaims)
+            .where(
+              inArray(
+                emailCampaignAutomationCustomerClaims.campaignId,
                 campaignIds
               )
             );

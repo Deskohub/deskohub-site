@@ -163,6 +163,12 @@ describe("campaign body Markdown", () => {
       "[[button: Rezervovat](https://workspace.deskohub.cz/cs-CZ/meeting-room)]",
       "ctaButton",
     ],
+    ["pass offer", "[[pass: unlimited]]", "passOffer"],
+    [
+      "pass offer with texts",
+      "[[pass: entry-pack 5 | Ušetři 460 Kč | za 5 vstupů s rezervovaným stolem]]",
+      "passOffer",
+    ],
   ])("round-trips a %s", async (_name, markdown, nodeType) => {
     const read = await readMarkdown(markdown);
 
@@ -183,6 +189,97 @@ describe("campaign body Markdown", () => {
       },
     ]);
   });
+
+  test("reads a pass offer's product, size, headline and detail", async () => {
+    const read = await readMarkdown(
+      "[[pass: entry-pack 5 | Save CZK 460 | on 5 visits]]\n\n[[pass: unlimited]]"
+    );
+
+    expect(read.doc.content).toEqual([
+      {
+        type: "passOffer",
+        attrs: {
+          product: "entry-pack",
+          size: 5,
+          headline: "Save CZK 460",
+          detail: "on 5 visits",
+        },
+      },
+      {
+        type: "passOffer",
+        attrs: {
+          product: "unlimited",
+          size: null,
+          headline: null,
+          detail: null,
+        },
+      },
+    ]);
+  });
+
+  test.each([
+    ["a fourth field", "[[pass: unlimited | Save | on visits | more]]"],
+    ["a word after the size", "[[pass: entry-pack 5 more | Save]]"],
+    ["a blank headline before a detail", "[[pass: unlimited |   | on visits]]"],
+  ])("refuses a pass offer line with %s", async (_name, bodyMarkdown) => {
+    const exit = await Effect.runPromiseExit(
+      readCampaignContent({ "en-US": { ...texts, bodyMarkdown } })
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+
+  test("refuses a stored pass offer text that Markdown couldn't keep", async () => {
+    const exit = await Effect.runPromiseExit(
+      readCampaignContent({
+        "en-US": {
+          ...texts,
+          bodyDocument: document({
+            type: "passOffer",
+            attrs: { product: "unlimited", headline: " Save " },
+          }),
+        },
+      })
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+
+  test("refuses a pass offer with an unknown product instead of sending it as text", async () => {
+    const exit = await Effect.runPromiseExit(
+      readCampaignContent({
+        "en-US": { ...texts, bodyMarkdown: "[[pass: unlimted]]" },
+      })
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+
+  test.each([
+    ["a pipe", "Save | more", "a | b"],
+    ["closing brackets", "Save ]] more", "x]"],
+    ["backslashes", "C:\\ \\| x\\", "\\"],
+  ])(
+    "keeps a pass offer with %s in its texts through writing and reading",
+    async (_name, headline, detail) => {
+      const stored = Schema.decodeUnknownSync(
+        campaignBodyDocument(Option.some("cloud"))
+      )(
+        document(
+          paragraph("Hi"),
+          {
+            type: "passOffer",
+            attrs: { product: "unlimited", size: null, headline, detail },
+          },
+          paragraph("Bye")
+        )
+      );
+
+      const read = await readMarkdown(writeMarkdown(stored));
+
+      expect(read).toEqual(stored);
+    }
+  );
 
   test.each([
     ["parentheses in the URL", "Book", "https://example.com/book(foo)"],

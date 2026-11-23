@@ -65,11 +65,15 @@ export const deliverProfile = (
 
 const decodeFlow = Schema.decodeUnknownSync(automationFlowContractSchema);
 
-/** A flow whose trigger is `trigger` and whose only step sends. */
+/**
+ * A flow whose trigger is `trigger` and whose only step sends, under the
+ * given once-per-customer policy.
+ */
 export const sendOnlyFlow = (
-  trigger: AutomationFlow["trigger"] = { _tag: "AccountCreated" }
+  trigger: AutomationFlow["trigger"] = { _tag: "AccountCreated" },
+  policies: { readonly oncePerCustomer?: true } = {}
 ): AutomationFlow =>
-  decodeFlow({ trigger, steps: [{ _tag: "Send", id: "send" }] });
+  decodeFlow({ trigger, steps: [{ _tag: "Send", id: "send", ...policies }] });
 
 /** An active automated campaign with one version of `flow` in force. */
 export const seedDeliverAutomation = async (

@@ -191,13 +191,14 @@ export const planReachedStep = Effect.fn("automationReachedSteps.plan")(
             at: target.at,
             chainedSteps: target.chainedSteps,
           }),
-        Send: () =>
+        Send: ({ skipPassHolders }) =>
           planDeliverRuns(
             runs.map((run) => ({
               id: run.runId,
               campaignId: target.campaignId,
               versionId: target.versionId,
               triggerKind: run.triggerKind,
+              skipsPassHolders: skipPassHolders === true,
             })),
             target.at
           ),

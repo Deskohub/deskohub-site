@@ -10,6 +10,7 @@ import Paragraph from "@tiptap/extension-paragraph";
 import Text from "@tiptap/extension-text";
 import { CampaignCtaButton } from "./campaign-cta-button";
 import { CampaignImage } from "./campaign-image";
+import { CampaignPassOffer } from "./campaign-pass-offer";
 
 const campaignHeadingLevels = [1, 2, 3] as const;
 
@@ -38,6 +39,7 @@ export const campaignBodyExtensions: Extensions = [
   CampaignImage.configure({ allowBase64: false, inline: false }),
   HorizontalRule,
   CampaignCtaButton,
+  CampaignPassOffer,
 ];
 
 export const campaignBodySchema = getSchema(campaignBodyExtensions);

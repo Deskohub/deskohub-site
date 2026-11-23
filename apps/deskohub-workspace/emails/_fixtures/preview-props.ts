@@ -149,6 +149,7 @@ export const workspaceCampaignPreviewProps = {
   locale: "cs-CZ",
   preview: "Nové zasedačky a podzimní akce ve Workspace",
   body: createElement(CampaignBodyContent, {
+    locale: "cs-CZ",
     body: {
       formatVersion: 1,
       doc: {

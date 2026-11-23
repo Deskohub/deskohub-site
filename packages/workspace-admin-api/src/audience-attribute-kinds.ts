@@ -108,6 +108,49 @@ export const ReservationProductFilter = Schema.Struct({
 });
 export type ReservationProductFilter = typeof ReservationProductFilter.Type;
 
+/**
+ * The booked stay of a cowork reservation, read from its provider interval
+ * and stored tier: a Reserved Desk reservation booked from the noon
+ * changeover on one Prague date to the next is `overnight`; every other
+ * cowork reservation is a `day` stay.
+ */
+export const ReservationStay = Schema.Literals(["day", "overnight"]).annotate({
+  identifier: "ReservationStay",
+  description:
+    "The booked cowork stay: overnight for a noon-to-noon Reserved Desk booking, day otherwise.",
+});
+export type ReservationStay = typeof ReservationStay.Type;
+
+/**
+ * How a reservation was paid. `individual`: by its own paid order with a
+ * positive amount, not covered by an Unlimited pass or an Entry pack entry.
+ * A reservation Workspace didn't book has no payment facts and never is.
+ */
+export const ReservationPayment = Schema.Literal("individual").annotate({
+  identifier: "ReservationPayment",
+  description:
+    "individual: paid by the reservation's own order with a positive amount, not covered by a pass.",
+});
+export type ReservationPayment = typeof ReservationPayment.Type;
+
+/**
+ * Rejects a stay qualifier whose product filter doesn't limit it to cowork,
+ * the one family with stays, rather than silently matching nothing else.
+ */
+export const reservationStayIssue = ({
+  stay,
+  product,
+}: {
+  readonly stay?: ReservationStay;
+  readonly product?: ReservationProductFilter;
+}): Schema.FilterIssue | undefined =>
+  stay !== undefined && product?.family !== "cowork"
+    ? {
+        path: ["stay"],
+        issue: "A stay needs the cowork product family.",
+      }
+    : undefined;
+
 /** Where the Admin UI lists an attribute, in menu order. */
 export const audienceAttributeSections = [
   "Reservations",

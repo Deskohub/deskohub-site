@@ -1,5 +1,4 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
-import { dotyposIdReadRequests } from "@deskohub/dotypos";
 import {
   and,
   asc,
@@ -41,7 +40,7 @@ import { loadAutomationEntryVersions } from "./automation-run-entry";
 import { AutomationRunTransitions } from "./automation-run-transitions";
 import { lockTriggeringReservations } from "./automation-triggering-reservations";
 import { planAutomationUnits } from "./automation-unit-planning";
-import { plannedIntakeUnit, revisitedReservations } from "./intake";
+import { plannedIntakeUnit, triggeringVisitRequests } from "./intake";
 import { planPassReminderPages } from "./pass-reminder-planning";
 
 /** What planner step 4 did, for the plan summary. */
@@ -308,7 +307,8 @@ export class AutomationIntakePlanning extends Context.Service<
        * Packs the matched events by customer, in id order, into units of
        * at most 100 customers and 8 requests: the gates' reads plus, unless
        * the gates read the customers' visits anyway, one request per 100
-       * triggering reservations to re-check. A customer too large for any
+       * triggering reservations to re-check, and one per 100 stay triggers'
+       * reservations (`triggeringVisitRequests`). A customer too large for any
        * unit alone stays a solo unit.
        */
       const pack = (
@@ -321,15 +321,10 @@ export class AutomationIntakePlanning extends Context.Service<
         );
         const customers = [...byCustomer.keys()].sort();
         const revisitCost = (ofCustomers: readonly DotyposCustomerId[]) =>
-          reads.visits
-            ? 0
-            : dotyposIdReadRequests(
-                revisitedReservations(
-                  ofCustomers.flatMap((id) =>
-                    (byCustomer.get(id) ?? []).map(({ event }) => event)
-                  )
-                ).length
-              );
+          triggeringVisitRequests(
+            ofCustomers.flatMap((id) => byCustomer.get(id) ?? []),
+            reads.visits
+          );
         const fit = (chunk: {
           readonly customers: readonly DotyposCustomerId[];
           readonly requestCost: number;

@@ -1,6 +1,10 @@
 import "@/shared/polyfills/temporal";
 
-import type { DotyposCustomerId, DotyposService } from "@deskohub/dotypos";
+import {
+  type DotyposCustomerId,
+  type DotyposService,
+  dotyposIdReadRequests,
+} from "@deskohub/dotypos";
 import type { AutomationFlowType as AutomationFlow } from "@deskohub/workspace-admin-api";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { Effect, Match, Option, Schema } from "effect";
@@ -48,6 +52,10 @@ import {
   loadAutomationEntryVersions,
   takenReceiptKeys,
 } from "./automation-run-entry";
+import {
+  isOfTriggerStay,
+  loadStayVisits,
+} from "./automation-trigger-qualification";
 import { lockTriggeringCustomerEvents } from "./automation-triggering-events";
 import { lockTriggeringReservations } from "./automation-triggering-reservations";
 import {
@@ -87,18 +95,50 @@ export const plannedIntakeUnit = (
   requestCost: unit.requestCost,
 });
 
-/** The triggering reservations whose visits intake re-checks, each once. */
-export const revisitedReservations = (
-  events: readonly IntakeEvent[]
+/**
+ * The stay triggers' reservations, each once: their own read judges both
+ * the stay (D1) and the re-check (D35), so both see one version of a visit.
+ */
+const stayReservations = (
+  matches: readonly IntakeMatch[]
 ): readonly WorkspaceReservationId[] => [
   ...new Set(
-    events.flatMap(({ kind, workspaceReservationId }) =>
-      readsTriggeringVisit(kind) && workspaceReservationId !== null
+    matches.flatMap(({ event: { workspaceReservationId }, stay }) =>
+      Option.isSome(stay) && workspaceReservationId !== null
         ? [workspaceReservationId]
         : []
     )
   ),
 ];
+
+/** The other triggering reservations whose visits intake re-checks (D35), each once. */
+const recheckedReservations = (
+  matches: readonly IntakeMatch[]
+): readonly WorkspaceReservationId[] => [
+  ...new Set(
+    matches.flatMap(({ event: { kind, workspaceReservationId }, stay }) =>
+      Option.isNone(stay) &&
+      readsTriggeringVisit(kind) &&
+      workspaceReservationId !== null
+        ? [workspaceReservationId]
+        : []
+    )
+  ),
+];
+
+/**
+ * The most Dotypos requests intake makes for the matches' triggering
+ * visits: the stay triggers' read (D1), and the re-checks' unless the
+ * gates read the customers' visits anyway (D35).
+ */
+export const triggeringVisitRequests = (
+  matches: readonly IntakeMatch[],
+  gatesReadVisits: boolean
+): number =>
+  dotyposIdReadRequests(stayReservations(matches).length) +
+  (gatesReadVisits
+    ? 0
+    : dotyposIdReadRequests(recheckedReservations(matches).length));
 
 /** What intake decided for one event and one automation. */
 type IntakeDecision = IntakeMatch & {
@@ -406,12 +446,12 @@ export const makeIntakeHandler = Effect.gen(function* () {
   const databaseFailure = (cause: unknown) =>
     new AutomationUnitFetchFailure({ code: "database", cause });
 
-  /** Each triggering visit, from the gates' visits when they read them. */
+  /** Each re-checked triggering visit, from the gates' visits when they read them. */
   const triggeringVisits = (
-    events: readonly IntakeEvent[],
+    matches: readonly IntakeMatch[],
     fetched: AudienceFactSource
   ) => {
-    const reservations = revisitedReservations(events);
+    const reservations = recheckedReservations(matches);
     const gateVisits = AudienceFactSource.$is("Fetched")(fetched)
       ? fetched.visits
       : Option.none();
@@ -514,41 +554,57 @@ export const makeIntakeHandler = Effect.gen(function* () {
         ...new Set(matches.map(({ event }) => event.dotyposCustomerId)),
       ].sort();
       const fetched = yield* facts.fetch({ reads, customers });
-      const visits = yield* triggeringVisits(
-        matches.map(({ event }) => event),
-        fetched
+      const visits = yield* triggeringVisits(matches, fetched);
+      const stayVisits = yield* loadStayVisits(stayReservations(matches)).pipe(
+        Effect.provideContext(context)
       );
+      const visitOf = <Visit>(
+        byReservation: ReadonlyMap<WorkspaceReservationId, Visit>,
+        { event }: IntakeMatch
+      ) =>
+        Option.fromUndefinedOr(
+          event.workspaceReservationId === null
+            ? undefined
+            : byReservation.get(event.workspaceReservationId)
+        );
       const now = yield* currentInstant;
 
-      return yield* Effect.forEach(
+      const decisions = yield* Effect.forEach(
         matches,
-        (match): Effect.Effect<IntakeDecision, AutomationUnitFetchFailure> => {
+        (
+          match
+        ): Effect.Effect<
+          Option.Option<IntakeDecision>,
+          AutomationUnitFetchFailure
+        > => {
+          // A visit not of the trigger's stay takes no receipt, as a
+          // product mismatch (D1), before the re-check could record one;
+          // a finished visit's stay can't change.
+          const stayVisit = visitOf(stayVisits, match);
+          if (!isOfTriggerStay(match.stay, stayVisit)) {
+            return Effect.succeed(Option.none());
+          }
           const version = versions.get(match.versionId);
           const flow = Option.flatMap(
             Option.fromUndefinedOr(version),
             ({ flow }) => flow
           );
           if (version === undefined || Option.isNone(flow)) {
-            return Effect.succeed({
-              ...match,
-              flow,
-              outcome: "failed",
-            });
+            return Effect.succeed(
+              Option.some({ ...match, flow, outcome: "failed" })
+            );
           }
-          const visit = Option.flatten(
-            Option.fromUndefinedOr(
-              match.event.workspaceReservationId === null
-                ? undefined
-                : visits.get(match.event.workspaceReservationId)
-            )
+          const recheck = recheckVisit(
+            match.event,
+            Option.isSome(match.stay)
+              ? Option.map(stayVisit, ({ visit }) => visit)
+              : Option.flatten(visitOf(visits, match)),
+            now
           );
-          const recheck = recheckVisit(match.event, visit, now);
           if (recheck !== "current") {
-            return Effect.succeed({
-              ...match,
-              flow,
-              outcome: recheck,
-            });
+            return Effect.succeed(
+              Option.some({ ...match, flow, outcome: recheck })
+            );
           }
           const customer = match.event.dotyposCustomerId;
           return recipients
@@ -572,29 +628,31 @@ export const makeIntakeHandler = Effect.gen(function* () {
             .pipe(
               Effect.mapError(databaseFailure),
               Effect.map(
-                (resolution): IntakeDecision => ({
-                  ...match,
-                  flow,
-                  // Unreachable customers still count as members;
-                  // reachability is checked at send time (§5.6).
-                  outcome: [
-                    ...resolution.recipients.map(
-                      ({ dotyposCustomerId }) => dotyposCustomerId
-                    ),
-                    ...resolution.exclusions.map(
-                      ({ dotyposCustomerId }) => dotyposCustomerId
-                    ),
-                    ...resolution.duplicates.flatMap(
-                      ({ duplicateCustomerIds }) => duplicateCustomerIds
-                    ),
-                  ].includes(customer)
-                    ? "member"
-                    : "not-in-audience",
-                })
+                (resolution): Option.Option<IntakeDecision> =>
+                  Option.some({
+                    ...match,
+                    flow,
+                    // Unreachable customers still count as members;
+                    // reachability is checked at send time (§5.6).
+                    outcome: [
+                      ...resolution.recipients.map(
+                        ({ dotyposCustomerId }) => dotyposCustomerId
+                      ),
+                      ...resolution.exclusions.map(
+                        ({ dotyposCustomerId }) => dotyposCustomerId
+                      ),
+                      ...resolution.duplicates.flatMap(
+                        ({ duplicateCustomerIds }) => duplicateCustomerIds
+                      ),
+                    ].includes(customer)
+                      ? "member"
+                      : "not-in-audience",
+                  })
               )
             );
         }
       );
+      return decisions.flatMap((decision) => Option.toArray(decision));
     }),
     commit: (unit, decisions, at) =>
       commitIntakeDecisions({

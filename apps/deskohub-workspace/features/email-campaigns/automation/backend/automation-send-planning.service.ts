@@ -54,11 +54,19 @@ export type DeliverStepRun = {
   readonly campaignId: CampaignId;
   readonly versionId: AutomationVersionId;
   readonly triggerKind: AutomationTriggerKind;
+  /**
+   * Whether its Send skips pass holders: the guard before the provider
+   * request decides each customer alone, so the run delivers alone.
+   */
+  readonly skipsPassHolders: boolean;
 };
 
 /**
  * Packs send-ready runs into deliver units of at most 100 runs per version,
- * in the given order, and each unit takes its runs by compare-and-set. The
+ * in the given order, and each unit takes its runs by compare-and-set.
+ * Pass reminders and runs whose Send skips pass holders each get a unit of
+ * their own, so one customer's guard verdict or unknown provider outcome
+ * never holds another's email. The
  * caller holds the automations' lifecycle locks and the runs' row locks
  * (§5.4): the planner after its locking read, a condition unit's commit for
  * the runs it just passed (D36).
@@ -70,8 +78,8 @@ export const planDeliverRuns = (
   // A send records one recipient row per customer. Each pass needs its own
   // send, even when two pass runs target the same customer.
   const byDelivery = Map.groupBy(ready, (run) =>
-    isPassReminderKind(run.triggerKind)
-      ? `pass:${run.id}`
+    isPassReminderKind(run.triggerKind) || run.skipsPassHolders
+      ? `run:${run.id}`
       : `version:${run.versionId}`
   );
   const planned = [...byDelivery.values()]
@@ -103,15 +111,18 @@ export const planDeliverRuns = (
   );
 };
 
+/** The run's version's Send step, when the run is at it, matching `extra`. */
+const atSendStep = (extra?: SQL) => sql`exists (
+    select 1 from jsonb_array_elements(${versions.flow} -> 'steps') as step
+    where step ->> '_tag' = 'Send' and step ->> 'id' = ${runs.stepId}${extra ? sql` and ${extra}` : sql``}
+  )`;
+
 /** An unplanned `ready` run at its version's Send step. */
 const readyToSend: SQL = and(
   eq(runs.status, "active"),
   eq(runs.phase, "ready"),
   isNull(runs.workUnitId),
-  sql`exists (
-    select 1 from jsonb_array_elements(${versions.flow} -> 'steps') as step
-    where step ->> '_tag' = 'Send' and step ->> 'id' = ${runs.stepId}
-  )`
+  atSendStep()
 )!;
 
 export class AutomationSendPlanning extends Context.Service<
@@ -157,6 +168,9 @@ export class AutomationSendPlanning extends Context.Service<
             versionId: runs.versionId,
             dotyposCustomerId: runs.dotyposCustomerId,
             triggerKind: runs.triggerKind,
+            skipsPassHolders: atSendStep(
+              sql`step -> 'skipPassHolders' = 'true'::jsonb`
+            ).mapWith(Boolean),
           })
           .from(runs)
           .innerJoin(versions, eq(versions.id, runs.versionId))

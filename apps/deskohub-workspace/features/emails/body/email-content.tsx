@@ -24,7 +24,8 @@ import {
 import type { JSONContent } from "@tiptap/core";
 import { Array as Arr, Match, Option, Predicate, Result, Schema } from "effect";
 import { Fragment, type ReactElement, type ReactNode } from "react";
-import { Column, Row, Section, Text } from "react-email";
+import { Column, Row, Section } from "react-email";
+import { DiscountCodeEmailVoucher } from "@/emails/_components/discount-code-email-voucher";
 import {
   compareSortKeys,
   valueAtPath,
@@ -388,12 +389,12 @@ const textListNode = (
     })
   );
 
-const richText = (...content: JSONContent[]) =>
-  renderEmailRichText({ type: "doc", content });
+const richText = (locale: Locale, ...content: JSONContent[]) =>
+  renderEmailRichText({ type: "doc", content }, { locale });
 
 /** A value component's fallback, worded as a body paragraph. */
-const fallbackParagraph = (text: string) =>
-  richText(paragraphNode(text === "" ? [] : [{ type: "text", text }]));
+const fallbackParagraph = (locale: Locale, text: string) =>
+  richText(locale, paragraphNode(text === "" ? [] : [{ type: "text", text }]));
 
 const EmailValueRows = ({
   rows,
@@ -453,7 +454,8 @@ const valueComponent = (
   resolvedValue(rendering, name).pipe(
     Result.flatMap(({ definition, snapshot }) =>
       Match.valueTags(snapshot, {
-        Fallback: ({ text }) => Result.succeed(fallbackParagraph(text)),
+        Fallback: ({ text }) =>
+          Result.succeed(fallbackParagraph(rendering.locale, text)),
         Resolved: ({ value }) => render(value, definition),
       })
     )
@@ -533,7 +535,7 @@ const listComponent = (
                   items.map((item) => scalarOf(name, item, rendering.locale))
                 ).pipe(
                   Result.map((texts) =>
-                    richText({
+                    richText(rendering.locale, {
                       type: "bulletList",
                       content: texts.map((text) => ({
                         type: "listItem",
@@ -562,34 +564,43 @@ const offerComponent = (
     return Result.fail(
       new EmailOfferBookingLinkInvalid({ componentId: component.id })
     );
-  return valueComponent(rendering, component.value, (value) =>
+  return valueComponent(rendering, component.value, (value, definition) =>
     Result.all({
       discount: discountValue(component.value, value),
       label: plainText(rendering, textOf(rendering, component.labelKey)),
     }).pipe(
       Result.map(({ discount, label }) => {
         bookingLink?.searchParams.set(discountCodeQueryParam, discount.code);
+        const { locale } = rendering;
+        const validity = [
+          m.emailContentOfferValidUntil(
+            { date: expiryDate(discount, locale) },
+            { locale }
+          ),
+          ...(definition.source.kind === "discount"
+            ? [
+                m.emailContentOfferUses(
+                  {
+                    count: Math.min(
+                      definition.source.maxUses,
+                      definition.source.maxUsesPerCustomer
+                    ),
+                  },
+                  { locale }
+                ),
+              ]
+            : []),
+        ].join(" · ");
         return (
-          <>
-            <Section className="mt-6 rounded-2xl border border-[#e6ded2] border-dashed px-6 py-5 text-center">
-              <Text className="m-0 text-[14px] leading-[20px] text-[#6b6e8a]">
-                {m.emailContentOfferCodeLabel({}, { locale: rendering.locale })}
-              </Text>
-              <Text className="m-0 mt-2 text-[24px] font-bold leading-[32px] tracking-[2px] text-navy">
-                {discount.code}
-              </Text>
-              <Text className="m-0 mt-2 text-[14px] leading-[20px] text-[#6b6e8a]">
-                {m.emailContentOfferValidUntil(
-                  { date: expiryDate(discount, rendering.locale) },
-                  { locale: rendering.locale }
-                )}
-              </Text>
-            </Section>
-            <EmailCtaButton
-              href={bookingLink?.href ?? component.href}
-              label={label}
-            />
-          </>
+          <DiscountCodeEmailVoucher
+            code={discount.code}
+            codeLabel={m.emailContentOfferCodeLabel({}, { locale })}
+            cue={label}
+            href={bookingLink?.href ?? component.href}
+            // Lint reads Result.map as an array map.
+            key={component.id}
+            validity={validity}
+          />
         );
       })
     )
@@ -603,18 +614,28 @@ const componentElement = (
   Match.valueTags(component, {
     Paragraph: ({ textKey, links }) =>
       richTextNodes(rendering, textOf(rendering, textKey), links).pipe(
-        Result.map((content) => richText(paragraphNode(content)))
+        Result.map((content) =>
+          richText(rendering.locale, paragraphNode(content))
+        )
       ),
     Heading: ({ textKey, level, links }) =>
       richTextNodes(rendering, textOf(rendering, textKey), links).pipe(
         Result.map((content) =>
-          richText({ type: "heading", attrs: { level }, content })
+          richText(rendering.locale, {
+            type: "heading",
+            attrs: { level },
+            content,
+          })
         )
       ),
     TextList: (list) =>
-      textListNode(rendering, list, list.links).pipe(Result.map(richText)),
-    Divider: () => Result.succeed(richText({ type: "horizontalRule" })),
-    Spacer: () => Result.succeed(richText({ type: "paragraph" })),
+      textListNode(rendering, list, list.links).pipe(
+        Result.map((node) => richText(rendering.locale, node))
+      ),
+    Divider: () =>
+      Result.succeed(richText(rendering.locale, { type: "horizontalRule" })),
+    Spacer: () =>
+      Result.succeed(richText(rendering.locale, { type: "paragraph" })),
     Image: ({ src, altKey, href, align, width }) =>
       Result.gen(function* () {
         const alt = yield* plainText(rendering, textOf(rendering, altKey));

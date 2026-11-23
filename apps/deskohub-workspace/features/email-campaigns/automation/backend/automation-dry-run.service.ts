@@ -56,7 +56,6 @@ import { campaignLocaleEntries, campaignLocales } from "../../recipient-locale";
 import type { AutomationDraftHash } from "../automation-draft-hash";
 import { automationPageCursor } from "../automation-page-cursor";
 import { automationTickAtOrAfter } from "../automation-ticks";
-import { readsTriggeringVisit } from "../automation-trigger-verification";
 import {
   automationTriggerKind,
   automationTriggerSummary,
@@ -88,6 +87,7 @@ import {
   replayEventScope,
   selectReplayEvents,
 } from "./automation-previews";
+import { readsTriggerVisit } from "./automation-trigger-qualification";
 import { planAutomationUnits } from "./automation-unit-planning";
 import {
   type AutomationWorkingCopy,
@@ -498,7 +498,7 @@ export class AutomationDryRun extends Context.Service<
                     ...chunk,
                     requestCost:
                       chunk.requestCost +
-                      (readsTriggeringVisit(kind)
+                      (readsTriggerVisit(input.flow.trigger)
                         ? recheckCost(events, chunk.customers)
                         : 0),
                   })),
@@ -818,6 +818,7 @@ export class AutomationDryRun extends Context.Service<
               outcome: row.outcome,
               stepId: row.stepId,
               sendAt: row.sendAt?.toString() ?? null,
+              skipReason: row.skipReason,
               projected: row.projected,
               reservationStatusesApproximate:
                 row.reservationStatusesApproximate,

@@ -1659,7 +1659,26 @@
   "faqQuestionRules": "Ở đây có những quy định nào?",
   "faqAnswerRules": "Quy định khi sử dụng không gian có trong <operatingRules>Nội quy</operatingRules>.",
   "emailContentOfferCodeLabel": "Mã giảm giá của bạn",
-  "emailContentOfferValidUntil": "Mã có hiệu lực đến {date}.",
+  "emailContentOfferValidUntil": "Có hiệu lực đến {date}",
+  "emailContentOfferUses": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{count} lượt dùng"
+      }
+    }
+  ],
+  "emailPassOfferEntryPackBenefit": "Trả ít hơn cho mỗi lần đến",
+  "emailPassOfferUnlimitedBenefit": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Vào cửa không giới hạn trong {count} ngày"
+      }
+    }
+  ],
   "emailContentYes": "Có",
   "emailContentNo": "Không",
   "androidPageMetadataTitle": "Ứng dụng Deskohub cho Android",

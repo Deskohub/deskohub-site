@@ -1,7 +1,7 @@
 import {
-  AdministrationCampaignRecipientSkipReason,
   type AutomationFlow,
   type AutomationRunStats,
+  automationRunSkipReasons,
 } from "@deskohub/workspace-admin-api";
 import type { ReactNode } from "react";
 import { AdministrationLink } from "@/features/administration/admin-link";
@@ -191,7 +191,7 @@ export function AutomationRunCounts({
           tone="attention"
         />
         <CountTile
-          breakdown={AdministrationCampaignRecipientSkipReason.literals
+          breakdown={automationRunSkipReasons
             .filter((reason) => bySkipReason[reason] > 0)
             .map((reason) => ({
               key: reason,

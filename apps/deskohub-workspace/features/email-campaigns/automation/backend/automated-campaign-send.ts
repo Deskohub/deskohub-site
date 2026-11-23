@@ -4,6 +4,7 @@ import { and, eq, inArray, isNull, type SQL } from "drizzle-orm";
 import { Data, Effect, Option, Result } from "effect";
 import {
   WorkspaceDatabase,
+  type WorkspaceDatabaseClient,
   type WorkspaceTransaction,
 } from "@/db/database.service";
 import {
@@ -58,6 +59,62 @@ type RequestedBatchOutcome = {
 const automatedAttempt = (sendId: CampaignSendId): CampaignDeliveryAttempt => ({
   sendId,
   deliveryAttempt: 1,
+});
+
+/**
+ * Each recipient's rendering, in their persisted locale, of the frozen Email
+ * Library email version an automated send's batch delivers. A missing
+ * version or a rendering that fails leaves the batch unrequested.
+ */
+export const renderFrozenEmailForBatch = Effect.fn(
+  "AutomatedCampaignSend.renderFrozenEmailForBatch"
+)(function* (
+  db: WorkspaceDatabaseClient,
+  input: {
+    readonly sendId: CampaignSendId;
+    readonly batch: PersistedBatch;
+    readonly frozenEmailVersionId: EmailVersionId;
+  }
+) {
+  const version = yield* getCampaignEmailVersion(
+    db,
+    input.frozenEmailVersionId
+  );
+  if (!version) {
+    return yield* new CampaignDeliveryIncomplete({
+      sendId: input.batch.sendId,
+      deliveryAttempt: input.batch.deliveryAttempt,
+    });
+  }
+  const recipientRows = yield* db
+    .select({
+      dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
+      locale: emailCampaignRecipients.locale,
+    })
+    .from(emailCampaignRecipients)
+    .where(
+      and(
+        eq(emailCampaignRecipients.sendId, input.sendId),
+        inArray(emailCampaignRecipients.dotyposCustomerId, [
+          ...input.batch.dotyposCustomerIds,
+        ])
+      )
+    );
+  const rendered = new Map<DotyposCustomerId, RenderedCustomerEmail>();
+  for (const recipient of recipientRows) {
+    const content = renderAutomatedPublishedEmail({
+      document: version.document,
+      recipientLocale: recipient.locale,
+    });
+    if (Result.isFailure(content)) {
+      return yield* new CampaignDeliveryIncomplete({
+        sendId: input.batch.sendId,
+        deliveryAttempt: input.batch.deliveryAttempt,
+      });
+    }
+    rendered.set(recipient.dotyposCustomerId, content.success);
+  }
+  return rendered;
 });
 
 /**
@@ -130,54 +187,6 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
       )
     );
 
-  const renderFrozenEmailForBatch = Effect.fn(
-    "AutomatedCampaignSend.renderFrozenEmailForBatch"
-  )(function* (input: {
-    readonly sendId: CampaignSendId;
-    readonly batch: PersistedBatch;
-    readonly frozenEmailVersionId: EmailVersionId;
-  }) {
-    const version = yield* getCampaignEmailVersion(
-      db,
-      input.frozenEmailVersionId
-    );
-    if (!version) {
-      return yield* new CampaignDeliveryIncomplete({
-        sendId: input.batch.sendId,
-        deliveryAttempt: input.batch.deliveryAttempt,
-      });
-    }
-    const recipientRows = yield* db
-      .select({
-        dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
-        locale: emailCampaignRecipients.locale,
-      })
-      .from(emailCampaignRecipients)
-      .where(
-        and(
-          eq(emailCampaignRecipients.sendId, input.sendId),
-          inArray(emailCampaignRecipients.dotyposCustomerId, [
-            ...input.batch.dotyposCustomerIds,
-          ])
-        )
-      );
-    const rendered = new Map<DotyposCustomerId, RenderedCustomerEmail>();
-    for (const recipient of recipientRows) {
-      const content = renderAutomatedPublishedEmail({
-        document: version.document,
-        recipientLocale: recipient.locale,
-      });
-      if (Result.isFailure(content)) {
-        return yield* new CampaignDeliveryIncomplete({
-          sendId: input.batch.sendId,
-          deliveryAttempt: input.batch.deliveryAttempt,
-        });
-      }
-      rendered.set(recipient.dotyposCustomerId, content.success);
-    }
-    return rendered;
-  });
-
   /**
    * §5.9 step 2, in a deliver unit's commit transaction: creates the
    * automated send of the version, with the version's audience snapshot and
@@ -220,7 +229,10 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
    * §5.9 step 2, after the runs moved to `sending`: freezes their
    * recipients and persists them as batch 0 from the profiles the unit
    * read, before any request. The delivery recheck skips whoever fails it;
-   * rendering that fails fails the rest, as nothing was requested.
+   * rendering that fails fails the rest, as nothing was requested. A
+   * `guarded` batch can only be requested through a guard
+   * (`BatchRequest.Guarded`); `renderedByCustomer` carries each
+   * recipient's rendering of the version's frozen Email Library email.
    */
   const persistBatch = (input: {
     readonly sendId: CampaignSendId;
@@ -289,14 +301,15 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
    * returns each batch's outcome for step 4. With the profiles the batch was
    * persisted from, it's the first request; without them it replays the
    * batch, re-reading its recipients, and past the replay window the batch
-   * is `Unconfirmed`. A send already completed requests nothing. An unknown
-   * outcome fails, so the unit retries the replay.
+   * is `Unconfirmed`. A guarded send's batches go through `requestGuarded`
+   * instead. A send already completed requests nothing. An unknown outcome
+   * fails, so the unit retries the replay.
    */
   const submit = Effect.fn("AutomatedCampaignSend.submit")(
     function* (input: {
       readonly sendId: CampaignSendId;
       readonly profiles: Option.Option<BatchProfiles>;
-      readonly requestPassReminder?: (
+      readonly requestGuarded?: (
         send: DeliveredAttempt,
         batch: PersistedBatch,
         frozenEmailVersionId: EmailVersionId | null
@@ -316,8 +329,8 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
       const submitted = yield* Effect.forEach(
         requested,
         Effect.fnUntraced(function* (batch) {
-          if (input.requestPassReminder) {
-            const outcome = yield* input.requestPassReminder(
+          if (input.requestGuarded) {
+            const outcome = yield* input.requestGuarded(
               send,
               batch,
               frozenEmailVersionId
@@ -330,7 +343,7 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
                   ...send,
                   campaign: {
                     ...send.campaign,
-                    renderedByCustomer: yield* renderFrozenEmailForBatch({
+                    renderedByCustomer: yield* renderFrozenEmailForBatch(db, {
                       sendId: input.sendId,
                       batch,
                       frozenEmailVersionId,

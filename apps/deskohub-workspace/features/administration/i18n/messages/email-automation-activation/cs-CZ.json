@@ -45,6 +45,7 @@
   "emailAutomationActivationOutcomeAlreadyActive": "Už v běhu",
   "emailAutomationActivationOutcomeConditionFailed": "Zastaveno podmínkou",
   "emailAutomationActivationOutcomeNotInAudience": "Mimo publikum",
+  "emailAutomationActivationOutcomeSkipped": "Přeskočeno",
   "emailAutomationActivationOutcomeUnavailable": "Nelze vyhodnotit",
   "emailAutomationActivationOutcomeWithdrawn": "Staženo",
   "emailAutomationActivationOutcomeWouldSend": "Odeslalo by se",

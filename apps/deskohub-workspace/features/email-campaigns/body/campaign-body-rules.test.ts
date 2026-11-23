@@ -6,6 +6,7 @@ import {
   campaignBodyIssues,
   campaignBodyStructureIssues,
   campaignButtonLabelIssue,
+  campaignPassOfferTextMaxLength,
   emptyCampaignBody,
   isCampaignBodyEmpty,
   isCampaignLinkHref,
@@ -34,6 +35,11 @@ const link = (href: string | null) =>
 const image = (src: string) => ({
   type: "image",
   attrs: { src, alt: "Workspace", title: null },
+});
+
+const passOffer = (attrs: CampaignBodyNode["attrs"]) => ({
+  type: "passOffer",
+  attrs,
 });
 
 const cta = (attrs: CampaignBodyNode["attrs"]) => ({
@@ -234,6 +240,101 @@ describe("campaignBodyIssues per node", () => {
     ).toEqual([]);
   });
 
+  test.each<[string, CampaignBodyNode["attrs"]]>([
+    ["only a product", { product: "unlimited" }],
+    [
+      "null optional fields",
+      { product: "unlimited", size: null, headline: null, detail: null },
+    ],
+    ["empty texts", { product: "entry-pack", headline: "", detail: "" }],
+    [
+      "a size, headline and detail",
+      {
+        product: "entry-pack",
+        size: 5,
+        headline: "Save CZK 460",
+        detail: "on 5 Reserved Desk visits",
+      },
+    ],
+    [
+      "a headline at the length limit",
+      {
+        product: "unlimited",
+        headline: "x".repeat(campaignPassOfferTextMaxLength),
+      },
+    ],
+  ])("accepts a pass offer with %s", (_name, attrs) => {
+    expect(issues(doc(passOffer(attrs)))).toEqual([]);
+  });
+
+  test.each<[string, CampaignBodyNode["attrs"], ReadonlyArray<string>]>([
+    ["no product", {}, ["PassOfferProductInvalid"]],
+    [
+      "an unknown product",
+      { product: "unlimted" },
+      ["PassOfferProductInvalid"],
+    ],
+    [
+      "a size on an Unlimited pass",
+      { product: "unlimited", size: 5 },
+      ["PassOfferSizeInvalid"],
+    ],
+    [
+      "an unsold size",
+      { product: "entry-pack", size: 7 },
+      ["PassOfferSizeInvalid"],
+    ],
+    [
+      "a size in words",
+      { product: "entry-pack", size: "five" },
+      ["PassOfferSizeInvalid"],
+    ],
+    [
+      "a line break in the headline",
+      { product: "unlimited", headline: "Save\nmore" },
+      ["PassOfferTextInvalid"],
+    ],
+    [
+      "an over-long detail",
+      {
+        product: "unlimited",
+        headline: "Save",
+        detail: "x".repeat(campaignPassOfferTextMaxLength + 1),
+      },
+      ["PassOfferTextInvalid"],
+    ],
+    [
+      "a number for a headline",
+      { product: "unlimited", headline: 460 },
+      ["PassOfferTextInvalid"],
+    ],
+    [
+      "a detail without a headline",
+      { product: "unlimited", detail: "across 20 visits" },
+      ["PassOfferDetailWithoutHeadline"],
+    ],
+    [
+      "a padded headline",
+      { product: "unlimited", headline: " Save " },
+      ["PassOfferTextInvalid"],
+    ],
+    [
+      "a blank headline before a detail",
+      { product: "unlimited", headline: "  ", detail: "across 20 visits" },
+      ["PassOfferTextInvalid"],
+    ],
+  ])("rejects a pass offer with %s", (_name, attrs, tags) => {
+    expect(issues(doc(passOffer(attrs))).map(([tag]) => tag)).toEqual([
+      ...tags,
+    ]);
+  });
+
+  test("points a pass offer's issue at the attribute at fault", () => {
+    expect(issues(doc(passOffer({ product: "unlimited", size: 10 })))).toEqual([
+      ["PassOfferSizeInvalid", ["content", 0, "attrs", "size"]],
+    ]);
+  });
+
   test("reports a button's label before its URL", () => {
     expect(issues(doc(cta({ label: "Book\rnow", href: "ftp://x" })))).toEqual([
       ["ButtonLabelLineBreaks", ["content", 0, "attrs", "label"]],
@@ -291,6 +392,7 @@ describe("isCampaignBodyEmpty", () => {
     ["text", doc(paragraph(text("Ahoj"))), false],
     ["an image", doc(image(cloudinaryImage)), false],
     ["a button", doc(cta({ label: "", href: "" })), false],
+    ["a pass offer", doc(passOffer({ product: "unlimited" })), false],
     ["a rule", doc({ type: "horizontalRule" }), false],
   ])("judges %s", (_name, body, expected) => {
     expect(isCampaignBodyEmpty(body)).toBe(expected);

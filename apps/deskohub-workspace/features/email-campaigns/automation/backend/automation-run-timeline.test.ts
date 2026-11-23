@@ -55,7 +55,7 @@ describe("timeline entry details", () => {
       waiting: { ".dueAt": "String" },
       woke: {},
       deferred: {
-        ".cause": '"trigger-not-reached"',
+        ".cause": '"trigger-not-reached" | "one-off-campaign-gap"',
         ".recheckAt": "String",
       },
       "send-queued": { ".sendId": "String" },
@@ -63,7 +63,7 @@ describe("timeline entry details", () => {
       unconfirmed: {},
       skipped: {
         ".reason":
-          '"missing-from-dotypos" | "deleted-customer" | "missing-email" | "invalid-email" | "consent-withdrawn" | "outside-test-domain"',
+          '"missing-from-dotypos" | "deleted-customer" | "missing-email" | "invalid-email" | "consent-withdrawn" | "outside-test-domain" | "pass-holder" | "already-sent-once"',
       },
       failed: { ".reason": '"delivery-refused" | "evaluation-unavailable"' },
       withdrawn: {},

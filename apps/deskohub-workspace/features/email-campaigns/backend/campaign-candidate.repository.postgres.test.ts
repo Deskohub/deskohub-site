@@ -2,6 +2,7 @@ import "@/shared/testing/workspace-test-env";
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
+  type DotyposCustomerId,
   DotyposCustomerIdSchema,
   DotyposReservationIdSchema,
 } from "@deskohub/dotypos";
@@ -14,6 +15,7 @@ import { customerMarketingConsents } from "@/db/schema";
 import { customerAccountIdSchema } from "@/features/account/customer-account";
 import { workspaceFixtures } from "@/shared/testing/workspace-fixtures.test-utils";
 import { connectWorkspacePostgresTestDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
+import { temporalInstantToDate } from "@/shared/utils/temporal";
 import {
   type AudienceCondition,
   audienceFactKey,
@@ -377,6 +379,16 @@ describe.skipIf(!testDatabase)(
 
     const reservationCounts = (selection: CampaignReservationSelection) =>
       repository((candidates) => candidates.countReservations(selection));
+
+    test("counts among more reservation IDs than a query has parameters", async () => {
+      const counts = await reservationCounts({
+        product: { family: "cowork", properties: [] },
+        dotyposReservationIds: Array.from({ length: 65_536 }, (_, index) =>
+          DotyposReservationIdSchema.make(`unbooked-visit-${index}`)
+        ),
+      });
+      expect(counts.size).toBe(0);
+    });
     const matches = async (
       selection: CampaignReservationSelection,
       customer = reserved
@@ -579,6 +591,167 @@ describe.skipIf(!testDatabase)(
       expect(
         await receivedEmails({ dispatched: { startsBefore: october } })
       ).toEqual({ [reserved]: 1 });
+    });
+
+    describe("one-off campaign emails a Send's gap reads", () => {
+      const now = Temporal.Instant.from("2026-11-20T12:00:00Z");
+      const sendingCampaign = `campaign-gap-sending-${run}`;
+      const abandonedCampaign = `campaign-gap-abandoned-${run}`;
+      const sendingSend = `send-gap-sending-${run}`;
+      const abandonedSend = `send-gap-abandoned-${run}`;
+      const requested = customerId("gap-requested");
+      const awaitingBatch = customerId("gap-awaiting-batch");
+      const settledBatch = customerId("gap-settled-batch");
+      const staleRequest = customerId("gap-stale-request");
+      const received = customerId("gap-received");
+      const gapCustomers = [
+        requested,
+        awaitingBatch,
+        settledBatch,
+        staleRequest,
+        received,
+      ];
+      const recentRequestAt = now.subtract({ hours: 1 });
+      // Past the 23-hour batch replay window.
+      const staleRequestAt = now.subtract({ hours: 24 });
+      const receivedRequestAt = Temporal.Instant.from("2026-11-10T10:00:00Z");
+
+      beforeAll(async () => {
+        await testDatabase.pool.query(
+          `insert into email_campaigns (id, title, purpose, template_key, status, delivery)
+           values ($1, 'Sending', 'marketing', 'workspace', 'sending', 'once'),
+                  ($2, 'Abandoned', 'marketing', 'workspace', 'failed', 'once')`,
+          [sendingCampaign, abandonedCampaign]
+        );
+        await testDatabase.pool.query(
+          `insert into email_campaign_sends (id, campaign_id, audience_filter, content_hash, delivery_attempt)
+           values ($1, $2, $5, 'hash', 1), ($3, $4, $5, 'hash', 1)`,
+          [
+            sendingSend,
+            sendingCampaign,
+            abandonedSend,
+            abandonedCampaign,
+            JSON.stringify({ _tag: "Group", operator: "and", filters: [] }),
+          ]
+        );
+        // Every pending status change is old: none says a request happened.
+        await testDatabase.pool.query(
+          `insert into email_campaign_recipients (send_id, dotypos_customer_id, locale, status, delivery_attempt, status_updated_at)
+           values ($1, $3, 'cs-CZ', 'pending', 1, '2026-10-01T10:00:00Z'),
+                  ($1, $4, 'cs-CZ', 'pending', 1, '2026-10-01T10:00:00Z'),
+                  ($2, $5, 'cs-CZ', 'pending', 1, '2026-10-01T10:00:00Z'),
+                  ($2, $6, 'cs-CZ', 'pending', 1, '2026-10-01T10:00:00Z'),
+                  ($2, $7, 'cs-CZ', 'sent', 1, '2026-11-10T10:00:05Z')`,
+          [
+            sendingSend,
+            abandonedSend,
+            requested,
+            awaitingBatch,
+            settledBatch,
+            staleRequest,
+            received,
+          ]
+        );
+        await testDatabase.pool.query(
+          `insert into email_campaign_delivery_batches (send_id, delivery_attempt, batch_index, dotypos_customer_ids, payload_hash, status, requested_at, settled_at)
+           values ($1, 1, 0, $3, 'hash', 'requested', $4, null),
+                  ($2, 1, 0, $5, 'hash', 'accepted', '2026-11-19T10:00:00Z', '2026-11-19T10:00:01Z'),
+                  ($2, 1, 1, $6, 'hash', 'requested', $7, null),
+                  ($2, 1, 2, $8, 'hash', 'accepted', $9, '2026-11-10T10:00:01Z')`,
+          [
+            sendingSend,
+            abandonedSend,
+            [requested],
+            temporalInstantToDate(recentRequestAt),
+            [settledBatch],
+            [staleRequest],
+            temporalInstantToDate(staleRequestAt),
+            [received],
+            temporalInstantToDate(receivedRequestAt),
+          ]
+        );
+      });
+
+      afterAll(async () => {
+        await testDatabase.pool.query(
+          "delete from email_campaign_sends where id = any($1)",
+          [[sendingSend, abandonedSend]]
+        );
+        await testDatabase.pool.query(
+          "delete from email_campaigns where id = any($1)",
+          [[sendingCampaign, abandonedCampaign]]
+        );
+      });
+
+      const latestOneOffEmails = async (query: {
+        readonly customers: readonly DotyposCustomerId[];
+        readonly now: Temporal.Instant;
+      }) =>
+        Object.fromEntries(
+          [
+            ...(await repository((candidates) =>
+              candidates.latestOneOffCampaignEmails(query)
+            )),
+          ].map(([customer, emails]) => [
+            customer,
+            {
+              latestReceivedAt: emails.latestReceivedAt?.toString() ?? null,
+              inFlight: emails.inFlight,
+            },
+          ])
+        );
+
+      test("reads in flight a pending email of a requested batch or a sending campaign, and as received a stale request", async () => {
+        expect(
+          await latestOneOffEmails({ customers: gapCustomers, now })
+        ).toEqual({
+          [requested]: { latestReceivedAt: null, inFlight: true },
+          [awaitingBatch]: { latestReceivedAt: null, inFlight: true },
+          [staleRequest]: {
+            latestReceivedAt: staleRequestAt.toString(),
+            inFlight: false,
+          },
+          [received]: {
+            latestReceivedAt: receivedRequestAt.toString(),
+            inFlight: false,
+          },
+        });
+      });
+
+      test("keeps a stale request in flight while it is inside the replay window", async () => {
+        expect(
+          await latestOneOffEmails({
+            customers: [staleRequest],
+            now: staleRequestAt.add({ hours: 22 }),
+          })
+        ).toEqual({
+          [staleRequest]: { latestReceivedAt: null, inFlight: true },
+        });
+      });
+
+      test("projects an in-flight email as dispatched at its request, or now without one", async () => {
+        const dispatched = await repository((candidates) =>
+          candidates.oneOffCampaignEmails({
+            customers: gapCustomers,
+            now,
+            since: Temporal.Instant.from("2026-11-01T00:00:00Z"),
+          })
+        );
+
+        expect(
+          Object.fromEntries(
+            [...dispatched].map(([customer, instants]) => [
+              customer,
+              instants.map(String),
+            ])
+          )
+        ).toEqual({
+          [requested]: [recentRequestAt.toString()],
+          [awaitingBatch]: [now.toString()],
+          [staleRequest]: [staleRequestAt.toString()],
+          [received]: [receivedRequestAt.toString()],
+        });
+      });
     });
 
     test("reads account creation from the account, not its login", async () => {

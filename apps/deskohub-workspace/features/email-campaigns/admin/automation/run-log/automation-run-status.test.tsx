@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { automationRunSkipReasons } from "@deskohub/workspace-admin-api";
 import type { ReactElement } from "react";
 import { formatAdministrationDateTime } from "@/features/administration/components";
 import { m } from "@/features/administration/i18n";
@@ -103,6 +104,26 @@ describe("AutomationRunStatus", () => {
       tone: "positive",
     });
   });
+
+  test.each(["en-US", "cs-CZ"] as const)(
+    "a skipped run reads as its own reason for every run skip reason in %s",
+    (locale) => {
+      const labels = automationRunSkipReasons.map(
+        (reason) =>
+          badgeOf({ outcome: "skipped", outcomeReason: reason }, locale).label
+      );
+
+      expect(labels).toEqual(
+        automationRunSkipReasons.map((reason) =>
+          m.emailAutomationRunsOutcomeSkippedBecause(
+            { reason: automationRunSkipReasonLabel(reason, locale) },
+            { locale }
+          )
+        )
+      );
+      expect(new Set(labels).size).toBe(automationRunSkipReasons.length);
+    }
+  );
 
   test("an ended run's reason of the wrong kind reads as the bare outcome", () => {
     const locale = "en-US";

@@ -8,6 +8,10 @@ import {
   hasPeriodEndingAtEvaluation,
 } from "./audience-filter-summary";
 import {
+  type AudienceCountWording,
+  audienceAttributeWording,
+} from "./audiences/audience-attribute-wording";
+import {
   reservationProductFamilyLabel,
   reservationProductPropertyLabel,
 } from "./audiences/reservation-product-wording";
@@ -579,6 +583,59 @@ describe("reservation product phrasing", () => {
       expect(describe_(filter, "cs-CZ")).toContain(
         label.toLocaleLowerCase("cs-CZ")
       );
+    }
+  });
+});
+
+describe("reservation stay and payment phrasing", () => {
+  const cowork = { family: "cowork", properties: [] } as const;
+
+  test.each(["en-US", "cs-CZ"] as const)(
+    "names the stay and payment after the product in %s",
+    (locale) => {
+      const { choices } = audienceAttributeWording(
+        "reservationCount",
+        locale
+      ) as AudienceCountWording;
+      const product = reservationProductFamilyLabel("cowork", locale);
+      const day = choices.stay?.options.day ?? "";
+      const individually = choices.payment?.options.individual ?? "";
+      for (const value of [0, 1, 2]) {
+        const summary = describe_(
+          reservations("gte", value, {
+            dateBasis: "visitEnd",
+            product: cowork,
+            stay: "day",
+            payment: "individual",
+          }),
+          locale
+        ).toLocaleLowerCase(locale);
+        const at = (phrase: string) =>
+          summary.indexOf(phrase.toLocaleLowerCase(locale));
+        expect(at(product)).toBeGreaterThan(-1);
+        expect(at(day)).toBeGreaterThan(at(product));
+        expect(at(individually)).toBeGreaterThan(at(day));
+      }
+    }
+  );
+
+  test("names each stay, and neither qualifier when unset", () => {
+    const { choices } = audienceAttributeWording(
+      "reservationCount",
+      "en-US"
+    ) as AudienceCountWording;
+    const overnight = describe_(
+      reservations("eq", 1, { product: cowork, stay: "overnight" })
+    );
+    expect(overnight).toContain(choices.stay?.options.overnight ?? "");
+    expect(overnight).not.toContain(choices.payment?.options.individual ?? "");
+
+    const unset = describe_(reservations("eq", 1, { product: cowork }));
+    for (const phrase of [
+      ...Object.values(choices.stay?.options ?? {}),
+      ...Object.values(choices.payment?.options ?? {}),
+    ]) {
+      expect(unset).not.toContain(phrase);
     }
   });
 });

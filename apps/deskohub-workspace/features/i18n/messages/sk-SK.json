@@ -1704,7 +1704,32 @@
   "faqQuestionRules": "Aké pravidlá u vás platia?",
   "faqAnswerRules": "Pravidlá pobytu v priestore nájdeš v <operatingRules>prevádzkovom poriadku</operatingRules>.",
   "emailContentOfferCodeLabel": "Tvoj zľavový kód",
-  "emailContentOfferValidUntil": "Kód platí do {date}.",
+  "emailContentOfferValidUntil": "Platí do {date}",
+  "emailContentOfferUses": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} použitie",
+        "countPlural=few": "{count} použitia",
+        "countPlural=many": "{count} použitia",
+        "countPlural=other": "{count} použití"
+      }
+    }
+  ],
+  "emailPassOfferEntryPackBenefit": "Plať menej za každú návštevu",
+  "emailPassOfferUnlimitedBenefit": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Neobmedzený prístup na {count} deň",
+        "countPlural=few": "Neobmedzený prístup na {count} dni",
+        "countPlural=many": "Neobmedzený prístup na {count} dňa",
+        "countPlural=other": "Neobmedzený prístup na {count} dní"
+      }
+    }
+  ],
   "emailContentYes": "Áno",
   "emailContentNo": "Nie",
   "androidPageMetadataTitle": "Aplikácia Deskohub pre Android",

@@ -89,10 +89,13 @@ const savedSteps = () =>
     (input) => (input as { flow: { steps: unknown } }).flow.steps
   );
 
-const renderBuilder = (steps: readonly FlowStepValue[]) => {
+const renderBuilder = (
+  steps: readonly FlowStepValue[],
+  status: "draft" | "archived" = "draft"
+) => {
   const automation = Schema.decodeUnknownSync(AutomationDetail)({
     campaignId,
-    status: "draft",
+    status,
     flow: { trigger: { _tag: "ReservationFinished" }, steps },
     trigger: {
       kind: "reservation-finished",
@@ -345,4 +348,77 @@ test("leave the flow editable when no save is in flight", () => {
   const { view } = renderBuilder([wait, send]);
 
   expect(view.container.querySelector("fieldset")?.disabled).toBe(false);
+});
+
+describe("Send delivery rules", () => {
+  const ruleLabels = () => [
+    m.emailAutomationFlowSendOncePerCustomerLabel({}, { locale }),
+    m.emailAutomationFlowSendGapLabel({}, { locale }),
+    m.emailAutomationFlowSendSkipPassHoldersLabel({}, { locale }),
+  ];
+  const ruledSend: FlowStepValue = {
+    ...send,
+    oncePerCustomer: true,
+    oneOffCampaignGap: { days: 14 },
+    skipPassHolders: true,
+  };
+
+  test("turning the rules on saves them on the Send step", async () => {
+    const { view, save } = renderBuilder([wait, send]);
+
+    for (const label of ruleLabels()) {
+      act(() => {
+        fireEvent.click(view.getByRole("checkbox", { name: label }));
+      });
+    }
+    await save();
+
+    expect(savedSteps()).toStrictEqual([[wait, ruledSend]]);
+  });
+
+  test("turning the rules off saves the Send step without their keys", async () => {
+    const { view, save } = renderBuilder([wait, ruledSend]);
+
+    for (const label of ruleLabels()) {
+      act(() => {
+        fireEvent.click(view.getByRole("checkbox", { name: label }));
+      });
+    }
+    await save();
+
+    expect(savedSteps()).toStrictEqual([[wait, send]]);
+  });
+
+  test("a gap outside 1 to 90 days isn't saved", async () => {
+    const { view, save } = renderBuilder([
+      wait,
+      { ...send, oneOffCampaignGap: { days: 14 } },
+    ]);
+    const days = view.getByRole("spinbutton", {
+      name: m.emailAutomationFlowSendGapDaysLabel({}, { locale }),
+    });
+
+    act(() => {
+      fireEvent.change(days, { target: { value: "91" } });
+    });
+    await save();
+
+    expect(savedSteps()).toEqual([]);
+    expect(days.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  test("an archived flow shows the Send step's rules without controls", () => {
+    const { view } = renderBuilder([wait, ruledSend], "archived");
+
+    expect(
+      ruleLabels().map((label) => view.queryByRole("checkbox", { name: label }))
+    ).toEqual([null, null, null]);
+    expect(
+      within(
+        view.getByRole("region", {
+          name: m.emailAutomationFlowSendPoliciesTitle({}, { locale }),
+        })
+      ).getAllByRole("listitem")
+    ).toHaveLength(3);
+  });
 });

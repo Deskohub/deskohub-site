@@ -102,6 +102,17 @@ describe("AutomationRunTimeline", () => {
           ),
         ],
         [
+          {
+            kind: "deferred",
+            stepId: "send",
+            detail: { cause: "one-off-campaign-gap", recheckAt },
+          },
+          m.emailAutomationRunsEventDeferredOneOffGap(
+            { date: date(recheckAt) },
+            options
+          ),
+        ],
+        [
           { kind: "send-queued", stepId: "send", detail: { sendId: "send-1" } },
           m.emailAutomationRunsEventSendQueued({}, options),
         ],
@@ -121,6 +132,17 @@ describe("AutomationRunTimeline", () => {
           },
           m.emailAutomationRunsOutcomeSkippedBecause(
             { reason: m.emailAutomationRunsSkipMissingEmail({}, options) },
+            options
+          ),
+        ],
+        [
+          {
+            kind: "skipped",
+            stepId: "send",
+            detail: { reason: "already-sent-once" },
+          },
+          m.emailAutomationRunsOutcomeSkippedBecause(
+            { reason: m.emailAutomationRunsSkipAlreadySentOnce({}, options) },
             options
           ),
         ],

@@ -1,7 +1,6 @@
 import {
   AdministrationCampaignId,
   type AdministrationCampaignIdType,
-  AdministrationCampaignRecipientSkipReason,
   AdministrationDotyposCustomerId,
   type AutomationActivationType,
   type AutomationDetailType,
@@ -13,17 +12,22 @@ import {
   AutomationPreviewId,
   type AutomationPreviewIdType,
   AutomationPreviewOutcome,
+  type AutomationPreviewOutcome as AutomationPreviewOutcomeType,
   type AutomationRunDetailType,
   AutomationRunId,
   AutomationRunOutcome,
   type AutomationRunPageType,
+  AutomationRunSkipReason,
+  type AutomationRunSkipReason as AutomationRunSkipReasonType,
   AutomationRunState,
   type AutomationRunStatsType,
   type AutomationRunSummaryType,
+  type AutomationSendDeferralCause as AutomationSendDeferralCauseType,
   AutomationStepId,
   type AutomationVersionDetailType,
   AutomationVersionNumber,
   type AutomationVersionSummaryType,
+  automationRunEventDetails,
   type CliAccessTokenType,
 } from "@deskohub/workspace-admin-api";
 import {
@@ -37,6 +41,7 @@ import {
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import type { WorkspaceAdminApiClient } from "../api/workspace-admin-api-client.service";
+import { knownCodeLabel } from "../code-labels";
 import {
   confirmationFlag,
   confirmChange,
@@ -295,6 +300,54 @@ const runDryRun = (
     return yield* readDryRunPages(api, accessToken, previewId);
   });
 
+const runSkipReasons = {
+  "missing-from-dotypos": "missing from Dotypos",
+  "deleted-customer": "deleted customer",
+  "missing-email": "no email address",
+  "invalid-email": "invalid email address",
+  "consent-withdrawn": "marketing consent withdrawn",
+  "outside-test-domain": "outside the test domain",
+  "pass-holder": "holds a usable pass",
+  "already-sent-once": "already sent this campaign once",
+} satisfies Record<AutomationRunSkipReasonType, string>;
+
+const sendDeferralCauses = {
+  "trigger-not-reached": "the triggering visit moved later",
+  "one-off-campaign-gap": "a one-off campaign email was sent too recently",
+} satisfies Record<AutomationSendDeferralCauseType, string>;
+
+const isSkippedDetail = Schema.is(automationRunEventDetails.skipped);
+const isDeferredDetail = Schema.is(automationRunEventDetails.deferred);
+
+/**
+ * A timeline entry's detail. A skipped or deferred entry whose whole detail
+ * this binary reads names its reason or cause; any other detail, such as one
+ * with a code this binary doesn't know, prints as JSON.
+ */
+const describeTimelineDetail = (kind: string, detail: unknown) => {
+  if (kind === "skipped" && isSkippedDetail(detail)) {
+    return runSkipReasons[detail.reason];
+  }
+  if (kind === "deferred" && isDeferredDetail(detail)) {
+    return `${sendDeferralCauses[detail.cause]}; rechecks at ${detail.recheckAt}`;
+  }
+  return typeof detail === "object" &&
+    detail !== null &&
+    Object.keys(detail).length === 0
+    ? ""
+    : JSON.stringify(detail);
+};
+
+const previewOutcomes = {
+  "would-send": "would send",
+  "condition-failed": "condition failed",
+  "not-in-audience": "not in audience",
+  "already-active": "already active",
+  withdrawn: "withdrawn",
+  skipped: "skipped",
+  unavailable: "unavailable",
+} satisfies Record<AutomationPreviewOutcomeType, string>;
+
 const formatDryRun = (dryRun: AutomationDryRunType) => {
   // A matching pass draft supplies its forecast date without a schedule frequency.
   const passForecast =
@@ -330,7 +383,7 @@ const formatDryRun = (dryRun: AutomationDryRunType) => {
         ]
       : []),
     ...AutomationPreviewOutcome.literals.map(
-      (outcome) => `${outcome}\t${dryRun.counts[outcome]}`
+      (outcome) => `${previewOutcomes[outcome]}\t${dryRun.counts[outcome]}`
     ),
     ...(dryRun.profileFactsAreCurrent
       ? [
@@ -345,7 +398,9 @@ const formatDryRun = (dryRun: AutomationDryRunType) => {
         row.customerId,
         customer?.name ?? "",
         customer?.email ?? "",
-        row.outcome,
+        row.skipReason === null
+          ? previewOutcomes[row.outcome]
+          : `${previewOutcomes[row.outcome]} (${runSkipReasons[row.skipReason]})`,
         row.stepId ?? "",
         row.sendAt ?? "",
         [
@@ -612,9 +667,12 @@ const automationsVersionsCommand = Command.make(
 
 const describeRunProgress = (run: AutomationRunSummaryType) => {
   if (run.outcome === null) return run.phase ?? "";
-  return run.outcomeReason === null
-    ? run.outcome
-    : `${run.outcome} (${run.outcomeReason})`;
+  if (run.outcomeReason === null) return run.outcome;
+  const reason =
+    run.outcome === "skipped"
+      ? knownCodeLabel(runSkipReasons, run.outcomeReason)
+      : undefined;
+  return `${run.outcome} (${reason ?? run.outcomeReason})`;
 };
 
 /** The customer's current name and email, or why they're missing. */
@@ -663,7 +721,7 @@ const automationsRunsCommand = Command.make(
     ),
     skipReason: Flag.Literals(
       "skip-reason",
-      AdministrationCampaignRecipientSkipReason.literals
+      AutomationRunSkipReason.literals
     ).pipe(
       Flag.optional,
       Flag.withDescription("Only runs skipped for this reason")
@@ -737,9 +795,7 @@ const formatRunDetail = (run: AutomationRunDetailType) =>
         entry.at,
         entry.kind,
         entry.stepId ?? "",
-        Object.keys(entry.detail).length === 0
-          ? ""
-          : JSON.stringify(entry.detail),
+        describeTimelineDetail(entry.kind, entry.detail),
       ].join("\t")
     ),
   ].join("\n");
@@ -774,10 +830,10 @@ const formatRunStats = (stats: AutomationRunStatsType) =>
     ...AutomationRunOutcome.literals.map(
       (outcome) => `${outcome}\t${stats.byOutcome[outcome]}`
     ),
-    ...AdministrationCampaignRecipientSkipReason.literals.flatMap((reason) =>
+    ...AutomationRunSkipReason.literals.flatMap((reason) =>
       stats.bySkipReason[reason] === 0
         ? []
-        : [`skipped (${reason})\t${stats.bySkipReason[reason]}`]
+        : [`skipped (${runSkipReasons[reason]})\t${stats.bySkipReason[reason]}`]
     ),
     `Steps: ${stats.bySteps.length}`,
     ...stats.bySteps.map((step) =>

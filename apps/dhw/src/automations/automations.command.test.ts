@@ -118,6 +118,7 @@ const dryRunFor = (
       "not-in-audience": 0,
       "already-active": 0,
       withdrawn: 0,
+      skipped: 0,
       unavailable: 0,
     },
     eventsTotal: null,
@@ -662,6 +663,46 @@ describe("dhw automations show and dry-run", () => {
         .at(-1)
     ).toBe("projected, approximate reservation status");
   });
+  test("dry-run prints why a row was skipped and counts skipped rows", async () => {
+    const fake = makeAutomationLayer({
+      getAutomationDryRun: () =>
+        Effect.succeed(
+          dryRunFor(hourly, "completed", {
+            counts: {
+              "would-send": 0,
+              "condition-failed": 0,
+              "not-in-audience": 0,
+              "already-active": 0,
+              withdrawn: 0,
+              skipped: 1,
+              unavailable: 0,
+            },
+            rows: [
+              {
+                triggerAt: timestamp,
+                customerId: "customer-1",
+                customerEventId: "event-1",
+                outcome: "skipped",
+                skipReason: "already-sent-once",
+                stepId: "send",
+                sendAt: null,
+                projected: false,
+              },
+            ],
+          })
+        ),
+    });
+
+    await runSuccess(["automations", "dry-run", campaignId], fake.layer);
+
+    const lines = fake.output.join("\n").split("\n");
+    expect(lines).toContain("skipped\t1");
+    const outcome = lines
+      .find((line) => line.includes("customer-1\tAda"))
+      ?.split("\t")[4];
+    expect(outcome).toStartWith("skipped (");
+    expect(outcome).not.toContain("already-sent-once");
+  });
 });
 
 describe("dhw automations activate", () => {
@@ -802,7 +843,7 @@ describe("dhw automations lifecycle and runs", () => {
         "--outcome",
         "skipped",
         "--skip-reason",
-        "missing-email",
+        "already-sent-once",
         "--version",
         "2",
         "--customer",
@@ -823,7 +864,7 @@ describe("dhw automations lifecycle and runs", () => {
           state: "ended",
           stepId: "send",
           outcome: "skipped",
-          skipReason: "missing-email",
+          skipReason: "already-sent-once",
           versionNumber: 2,
           customerId: "customer-1",
           cursor: "page-2",
@@ -894,7 +935,8 @@ describe("dhw automations lifecycle and runs", () => {
       ["customer-3", "(profile not-found)", ""],
       ["customer-4", "(profile unavailable)", ""],
     ]);
-    expect(rows[1]!.split("\t").at(-1)).toBe("skipped (missing-email)");
+    expect(rows[1]!.split("\t").at(-1)).toStartWith("skipped (");
+    expect(rows[1]!.split("\t").at(-1)).not.toContain("missing-email");
   });
 
   test("stats prints the skipped runs by each reason that has any", async () => {
@@ -912,6 +954,8 @@ describe("dhw automations lifecycle and runs", () => {
                 "invalid-email": 0,
                 "consent-withdrawn": 1,
                 "outside-test-domain": 0,
+                "pass-holder": 0,
+                "already-sent-once": 3,
               },
             })
           )
@@ -929,7 +973,61 @@ describe("dhw automations lifecycle and runs", () => {
         .join("\n")
         .split("\n")
         .filter((line) => line.startsWith("skipped ("))
-    ).toEqual(["skipped (missing-email)\t2", "skipped (consent-withdrawn)\t1"]);
+        .map((line) => line.split("\t")[1])
+    ).toEqual(["2", "1", "3"]);
+  });
+
+  test("run names a known deferral cause and falls back to an unknown one's detail", async () => {
+    const deferred = (sequence: number, cause: string) => ({
+      sequence,
+      at: timestamp,
+      kind: "deferred",
+      stepId: "send",
+      detail: { cause, recheckAt: timestamp },
+    });
+    const deferredRun = Schema.decodeUnknownSync(AutomationRunDetail)({
+      ...run,
+      timeline: [
+        deferred(1, "one-off-campaign-gap"),
+        deferred(2, "cause-from-a-newer-server"),
+        {
+          ...deferred(3, "trigger-not-reached"),
+          detail: { cause: "trigger-not-reached" },
+        },
+      ],
+    });
+    const fake = makeAutomationLayer({
+      getAutomationRun: () => Effect.succeed(deferredRun),
+    });
+
+    await runSuccess(["automations", "run", "run-1"], fake.layer);
+    await runSuccess(["automations", "run", "run-1", "--json"], fake.layer);
+
+    const [text, json] = fake.output;
+    const entry = (sequence: number) =>
+      text
+        ?.split("\n")
+        .find((line) => line.startsWith(`${sequence}\t`))
+        ?.split("\t")[4];
+    expect(entry(1)).not.toContain("one-off-campaign-gap");
+    expect(entry(1)).toContain(timestamp);
+    expect(entry(2)).toBe(
+      JSON.stringify({
+        cause: "cause-from-a-newer-server",
+        recheckAt: timestamp,
+      })
+    );
+    expect(entry(3)).toBe(JSON.stringify({ cause: "trigger-not-reached" }));
+    expect(
+      JSON.parse(json ?? "").timeline.map(
+        (timelineEntry: { detail: { cause: string } }) =>
+          timelineEntry.detail.cause
+      )
+    ).toEqual([
+      "one-off-campaign-gap",
+      "cause-from-a-newer-server",
+      "trigger-not-reached",
+    ]);
   });
 
   test("run prints the timeline with each entry's detail", async () => {
