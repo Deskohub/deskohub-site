@@ -499,13 +499,16 @@ const customerAgentSignInRedirect = (request: NextRequest) => {
 
 // Production also answers on its `*.vercel.app` aliases, and a container on
 // its host's service URL. Their page loads move permanently to the canonical
-// origin, so search engines index one host. Preview deployments serve their
+// origin, so search engines index one host: the configured public origin
+// where a host names one, else the site's. Preview deployments serve their
 // own hosts.
 const canonicalHostRedirect = (request: NextRequest) => {
   if (env.VERCEL_ENV !== "production" || !isPageLoad(request)) {
     return undefined;
   }
-  const canonicalOrigin = new URL(workspaceSiteOrigin);
+  const canonicalOrigin = new URL(
+    env.WORKSPACE_PUBLIC_ORIGIN ?? workspaceSiteOrigin
+  );
   if (
     addressedOrigin(request, env.WORKSPACE_RUNTIME_HOST).host ===
     canonicalOrigin.host

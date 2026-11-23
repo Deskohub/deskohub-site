@@ -308,11 +308,7 @@ test("lets Preview deployments serve a bare language on their own host", async (
 const containerRequests: readonly InspectedRequest[] = [
   [
     "https://0.0.0.0:8080/en-US/faq",
-    { headers: { host: "workspace.deskohub.cz" } },
-  ],
-  [
-    "https://0.0.0.0:8080/en-US/faq",
-    { headers: { host: "workspace-preview.example" } },
+    { headers: { host: "workspace-public.example" } },
   ],
   [
     "https://0.0.0.0:8080/en-US/faq?utm_source=synthetic",
@@ -324,23 +320,19 @@ const containerRequests: readonly InspectedRequest[] = [
     {
       headers: {
         host: "workspace-service.run.example",
-        "x-forwarded-host": "workspace.deskohub.cz",
-      },
-    },
-  ],
-  [
-    "https://0.0.0.0:8080/en-US/faq",
-    {
-      headers: {
-        host: "workspace-service.run.example",
-        "x-forwarded-host": "workspace-preview.example",
+        "x-forwarded-host": "workspace-public.example",
       },
     },
   ],
   // Plain HTTP that reached the server without TLS.
   [
     "http://0.0.0.0:8080/en-US/faq",
-    { headers: { host: "workspace-preview.example" } },
+    { headers: { host: "workspace-public.example" } },
+  ],
+  // The configured public origin is canonical, even over the site's.
+  [
+    "https://0.0.0.0:8080/en-US/faq",
+    { headers: { host: "workspace.deskohub.cz" } },
   ],
 ];
 
@@ -351,44 +343,38 @@ const inspectContainer = (deploymentStage: "preview" | "production") =>
     ),
     EMAIL_API_KEY: "re_test",
     WORKSPACE_DEPLOYMENT_STAGE: deploymentStage,
-    WORKSPACE_PUBLIC_ORIGIN: "https://workspace-preview.example",
+    WORKSPACE_PUBLIC_ORIGIN: "https://workspace-public.example",
     WORKSPACE_RUNTIME_HOST: "container",
     WORKSPACE_TRUSTED_CLIENT_ADDRESS_HEADER: "x-client-address",
   });
 
-test("serves a TLS-terminated container Preview on its public origin and moves other hosts there", async () => {
-  const result = await inspectContainer("preview");
-  expect(result.exitCode).toBe(0);
-  const responses = inspectedResponses(result);
-  expect(responses[1]).toMatchObject({ status: 200, location: null });
-  expect(responses[2].location).toBe(
-    "https://workspace-preview.example/en-US/faq?utm_source=synthetic"
-  );
-  expect(responses[3].location).toBe(
-    "https://workspace-preview.example/en-US/faq"
-  );
-  expect(responses[4].location).toBe(
-    "https://workspace-preview.example/en-US/faq"
-  );
-  expect(responses[5].location).toBe(
-    "https://workspace-preview.example/en-US/faq"
-  );
-});
-
-test("serves a TLS-terminated container Production on the canonical host and moves other hosts there", async () => {
-  const result = await inspectContainer("production");
-  expect(result.exitCode).toBe(0);
-  const responses = inspectedResponses(result);
-  expect(responses[0]).toMatchObject({ status: 200, location: null });
-  for (const index of [1, 3]) {
-    expect(responses[index]).toMatchObject({
-      status: 308,
-      location: "https://workspace.deskohub.cz/en-US/faq",
+test.each([
+  ["Preview", "preview", 307],
+  ["Production", "production", 308],
+] as const)(
+  "serves a TLS-terminated container %s on its public origin and moves other hosts there",
+  async (_name, deploymentStage, redirectStatus) => {
+    const result = await inspectContainer(deploymentStage);
+    expect(result.exitCode).toBe(0);
+    const responses = inspectedResponses(result);
+    expect(responses[0]).toMatchObject({ status: 200, location: null });
+    expect(responses[1]).toMatchObject({
+      status: redirectStatus,
+      location:
+        "https://workspace-public.example/en-US/faq?utm_source=synthetic",
     });
+    for (const index of [2, 4]) {
+      expect(responses[index]).toMatchObject({
+        status: redirectStatus,
+        location: "https://workspace-public.example/en-US/faq",
+      });
+    }
   }
-  expect(responses[2].location).toBe(
-    "https://workspace.deskohub.cz/en-US/faq?utm_source=synthetic"
-  );
+);
+
+test("moves a container Preview's plain HTTP page loads to its HTTPS origin", async () => {
+  const response = inspectedResponses(await inspectContainer("preview"))[3];
+  expect(response.location).toBe("https://workspace-public.example/en-US/faq");
 });
 
 const unprefixedAdministrationPaths = [
