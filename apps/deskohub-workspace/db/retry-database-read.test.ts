@@ -197,6 +197,14 @@ test.each([
     nodePostgresFailure(codedError("Connection terminated", "42P01")),
   ],
   [
+    "a connection timeout around rejected credentials",
+    nodePostgresFailure(
+      new Error("timeout exceeded when trying to connect", {
+        cause: codedError("password authentication failed", "28P01"),
+      })
+    ),
+  ],
+  [
     "a failure whose causes form a cycle",
     (() => {
       const cyclic = new Error("unexpected driver state");

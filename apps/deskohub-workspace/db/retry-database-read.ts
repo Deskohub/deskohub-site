@@ -47,22 +47,30 @@ const isTransientCode = (code: string) =>
 const isTransientMessage = <E>(error: E) =>
   error instanceof Error && transientDriverMessage.test(error.message);
 
-// The first coded error in the chain decides, so a permanent SQLSTATE never
-// retries whatever it wraps or says. Uncoded links decide by their message.
-const hasTransientDriverCause = <E>(error: E, depth: number): boolean => {
-  if (depth >= maxCauseDepth || !Predicate.hasProperty(error, "cause")) {
-    return false;
-  }
-  const { cause } = error;
-  if (Predicate.hasProperty(cause, "code") && Predicate.isString(cause.code)) {
-    return isTransientCode(cause.code);
-  }
-  return isTransientMessage(cause) || hasTransientDriverCause(cause, depth + 1);
+const codeOf = <E>(error: E) =>
+  Predicate.hasProperty(error, "code") && Predicate.isString(error.code)
+    ? error.code
+    : undefined;
+
+const causesOf = <E>(error: E, depth: number): ReadonlyArray<unknown> =>
+  depth < maxCauseDepth && Predicate.hasProperty(error, "cause")
+    ? [error.cause, ...causesOf(error.cause, depth + 1)]
+    : [];
+
+// The first code in the chain decides, so a permanent SQLSTATE never retries
+// whatever wraps it, wraps, or says. A chain without codes decides by its
+// messages.
+const hasTransientDriverCause = <E>(error: E) => {
+  const causes = causesOf(error, 0);
+  const code = causes.map(codeOf).find(Predicate.isString);
+  return code === undefined
+    ? causes.some(isTransientMessage)
+    : isTransientCode(code);
 };
 
 const isRetryableFailure = <E>(error: E) =>
   isRetryableEffectSqlFailure(error) ||
-  (error instanceof DrizzleQueryError && hasTransientDriverCause(error, 0));
+  (error instanceof DrizzleQueryError && hasTransientDriverCause(error));
 
 // `Effect.tryPromise` wraps a rejected promise's reason in an UnknownError.
 const isRetryableDatabaseReadError = <E>(error: E) =>

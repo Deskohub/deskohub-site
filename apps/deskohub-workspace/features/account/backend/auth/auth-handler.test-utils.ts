@@ -12,8 +12,9 @@ import type {
 } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { EffectDrizzleQueryError } from "drizzle-orm/effect-core";
-import { Cause, Effect } from "effect";
+import { Cause, Effect, Predicate } from "effect";
 import * as SqlError from "effect/sql/SqlError";
+import type { Pool, QueryConfig } from "pg";
 import { makeAuthDatabase } from "@/db/auth-database-client";
 import { drizzleAuthTables } from "@/db/schema/auth";
 import {
@@ -334,3 +335,29 @@ export const verifyMagicLink = (
   callHandler(auth, verifyLinkPath(link), {
     headers: { "x-vercel-forwarded-for": ip },
   });
+
+/**
+ * The pool, recording the SQL of every query it runs. A query whose SQL
+ * `failing` matches rejects with a node-postgres read timeout instead.
+ */
+export const observedPool = (pool: Pool) => {
+  const observed = {
+    queries: [] as string[],
+    failing: (_sql: string) => false,
+  };
+  const query = (config: string | QueryConfig, values?: unknown[]) => {
+    const sql = Predicate.isString(config) ? config : config.text;
+    observed.queries.push(sql);
+    return observed.failing(sql)
+      ? Promise.reject(new Error("Query read timeout"))
+      : pool.query(config, values);
+  };
+  const proxy = new Proxy(pool, {
+    get: (target, property) => {
+      if (property === "query") return query;
+      const value = Reflect.get(target, property, target);
+      return Predicate.isFunction(value) ? value.bind(target) : value;
+    },
+  });
+  return { pool: proxy, observed };
+};

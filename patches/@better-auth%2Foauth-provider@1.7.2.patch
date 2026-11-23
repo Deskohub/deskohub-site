@@ -121,10 +121,10 @@ index 42c943dd45aa3d297a14edcc056a14e7ddd54680..c184286b679b7b17cb58cee2ec5feb78
  	};
  	await ctx.context.internalAdapter.createVerificationValue({
 diff --git a/dist/introspect-C6P1zrTr.mjs b/dist/introspect-C6P1zrTr.mjs
-index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9a7145309 100644
+index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6f8bfd5b3e0865097e21b295cca1224cdf48b4d5 100644
 --- a/dist/introspect-C6P1zrTr.mjs
 +++ b/dist/introspect-C6P1zrTr.mjs
-@@ -802,6 +802,14 @@ function getSeedState(ctx) {
+@@ -802,6 +802,17 @@ function getSeedState(ctx) {
  *
  * @internal
  */
@@ -136,10 +136,13 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
 +	for (let current = err; current != null && messages.length < 5; current = current instanceof Error ? current.cause : void 0) messages.push(current instanceof Error ? current.message : String(current));
 +	return messages.join("\n");
 +}
++// Workspace patch: a seed deferred for a missing table is not a completed
++// one, so the next resource lookup seeds once the migration has run.
++const SEED_DEFERRED = Symbol("oauth-provider seed deferred");
  async function seedResources(ctx, opts) {
  	const inputs = collectResourceInputs(opts);
  	if (inputs.length === 0) return;
-@@ -829,7 +837,7 @@ async function seedResources(ctx, opts) {
+@@ -829,10 +840,10 @@ async function seedResources(ctx, opts) {
  				}]
  			});
  		} catch (err) {
@@ -147,8 +150,12 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
 +			const message = describeSeedError(err);
  			if (MISSING_TABLE_PATTERN.test(message)) {
  				logger.debug("oauth-provider: oauthResource table not yet created; deferring resource seed to first access.");
- 				return;
-@@ -844,7 +852,7 @@ async function seedResources(ctx, opts) {
+-				return;
++				return SEED_DEFERRED;
+ 			}
+ 			throw err;
+ 		}
+@@ -844,14 +855,14 @@ async function seedResources(ctx, opts) {
  					data: buildSeedRow(input, now)
  				});
  			} catch (err) {
@@ -157,7 +164,27 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  				if (/unique|duplicate|UNIQUE/i.test(message)) {
  					logger.debug(`oauth-provider: resource ${input.identifier} already inserted by a concurrent process — skipping.`);
  					continue;
-@@ -1067,7 +1075,8 @@ const verificationValueSchema = z.object({
+ 				}
+ 				if (MISSING_TABLE_PATTERN.test(message)) {
+ 					logger.debug("oauth-provider: oauthResource table not yet created; deferring resource seed to first access.");
+-					return;
++					return SEED_DEFERRED;
+ 				}
+ 				throw err;
+ 			}
+@@ -884,8 +895,9 @@ async function seedResourcesOnce(ctx, opts) {
+ 	const state = getSeedState(ctx);
+ 	if (state.completed === true) return;
+ 	if (state.promise !== null) return state.promise;
+-	state.promise = seedResources(ctx, opts).then(() => {
+-		state.completed = true;
++	state.promise = seedResources(ctx, opts).then((outcome) => {
++		if (outcome === SEED_DEFERRED) state.promise = null;
++		else state.completed = true;
+ 	}).catch((err) => {
+ 		state.promise = null;
+ 		throw err;
+@@ -1067,7 +1079,8 @@ const verificationValueSchema = z.object({
  	userId: z.string(),
  	referenceId: z.string().optional(),
  	authTime: z.number().optional(),
@@ -167,7 +194,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  }).passthrough();
  /**
  * Request body accepted at `POST /oauth2/register` (RFC 7591 §2 client
-@@ -1454,7 +1463,7 @@ async function decodeRefreshToken(opts, token) {
+@@ -1454,7 +1467,7 @@ async function decodeRefreshToken(opts, token) {
  	});
  	return opts.formatRefreshToken?.decrypt ? opts.formatRefreshToken?.decrypt(token) : { token };
  }
@@ -176,7 +203,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  	const iat = payload.iat ?? Math.floor(Date.now() / 1e3);
  	const exp = payload?.exp ?? iat + (opts.accessTokenExpiresIn ?? 3600);
  	const token = opts.generateOpaqueAccessToken ? await opts.generateOpaqueAccessToken() : generateRandomString(32, "A-Z", "a-z");
-@@ -1471,6 +1480,7 @@ async function createOpaqueAccessToken(ctx, opts, user, client, scopes, payload,
+@@ -1471,6 +1484,7 @@ async function createOpaqueAccessToken(ctx, opts, user, client, scopes, payload,
  			refreshId,
  			confirmation,
  			requestedUserInfoClaims: requestedUserInfoClaims?.length ? requestedUserInfoClaims : void 0,
@@ -184,7 +211,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  			scopes,
  			createdAt: /* @__PURE__ */ new Date(iat * 1e3),
  			expiresAt: /* @__PURE__ */ new Date(exp * 1e3)
-@@ -1525,6 +1535,47 @@ async function invalidateRefreshFamily(ctx, clientId, userId) {
+@@ -1525,6 +1539,47 @@ async function invalidateRefreshFamily(ctx, clientId, userId) {
  		}]
  	});
  }
@@ -232,7 +259,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  async function revokeTokensIssuedForAuthorizationCode(ctx, authorizationCodeId) {
  	const deleteIssuedTokens = async (model) => {
  		try {
-@@ -1542,7 +1593,7 @@ async function revokeTokensIssuedForAuthorizationCode(ctx, authorizationCodeId)
+@@ -1542,7 +1597,7 @@ async function revokeTokensIssuedForAuthorizationCode(ctx, authorizationCodeId)
  	await deleteIssuedTokens("oauthAccessToken");
  	await deleteIssuedTokens("oauthRefreshToken");
  }
@@ -241,7 +268,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  	const iat = payload.iat ?? Math.floor(Date.now() / 1e3);
  	const exp = payload?.exp ?? iat + (opts.refreshTokenExpiresIn ?? 2592e3);
  	const token = opts.generateRefreshToken ? await opts.generateRefreshToken() : generateRandomString(32, "A-Z", "a-z");
-@@ -1557,6 +1608,7 @@ async function createRefreshToken(ctx, opts, user, referenceId, authorizationCod
+@@ -1557,6 +1612,7 @@ async function createRefreshToken(ctx, opts, user, referenceId, authorizationCod
  		authTime,
  		confirmation,
  		requestedUserInfoClaims: requestedUserInfoClaims?.length ? requestedUserInfoClaims : void 0,
@@ -249,7 +276,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  		scopes,
  		resources,
  		createdAt: /* @__PURE__ */ new Date(iat * 1e3),
-@@ -1830,11 +1882,14 @@ async function createUserTokens(ctx, opts, params) {
+@@ -1830,11 +1886,14 @@ async function createUserTokens(ctx, opts, params) {
  		refreshToken: existingRefreshToken
  	});
  	const requestedUserInfoClaims = params.requestedUserInfoClaims ?? existingRefreshToken?.requestedUserInfoClaims ?? [];
@@ -265,7 +292,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  	const accessTokenClaims = isJwtAccessToken ? await resolveAccessTokenClaims({
  		ctx,
  		opts,
-@@ -1861,11 +1916,11 @@ async function createUserTokens(ctx, opts, params) {
+@@ -1861,11 +1920,11 @@ async function createUserTokens(ctx, opts, params) {
  		iat,
  		exp,
  		sid: sessionId
@@ -279,7 +306,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  	const idToken = isIdToken ? await createIdToken(ctx, opts, user, client, effectiveScopes, nonce, sessionId, authTime, accessToken, additionalIdTokenClaims) : void 0;
  	const responseBody = {
  		...customFields,
-@@ -1889,6 +1944,31 @@ async function createUserTokens(ctx, opts, params) {
+@@ -1889,6 +1948,31 @@ async function createUserTokens(ctx, opts, params) {
  	}
  	return ctx.json(responseBody);
  }
@@ -311,7 +338,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  /** Checks verification value */
  async function checkVerificationValue(ctx, opts, code, client_id, redirect_uri, resource) {
  	const authorizationCodeId = await storeToken(opts.storeTokens, code, "authorization_code");
-@@ -1919,6 +1999,14 @@ async function checkVerificationValue(ctx, opts, code, client_id, redirect_uri,
+@@ -1919,6 +2003,14 @@ async function checkVerificationValue(ctx, opts, code, client_id, redirect_uri,
  		error_description: "invalid client_id",
  		error: "invalid_grant"
  	});
@@ -326,7 +353,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  	const boundRedirectUri = verificationValue.query.redirect_uri;
  	if (boundRedirectUri) {
  		if (!redirect_uri) throw new APIError("BAD_REQUEST", {
-@@ -1980,6 +2068,13 @@ async function handleAuthorizationCodeGrant(ctx, opts) {
+@@ -1980,6 +2072,13 @@ async function handleAuthorizationCodeGrant(ctx, opts) {
  	});
  	/** Verify Client */
  	const client = await validateClientCredentials(ctx, opts, client_id, client_secret, scopes, preVerified, "authorization_code", authMethod);
@@ -340,7 +367,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  	if (isPKCERequired(client, {
  		scopes: (verificationValue.query?.scope)?.split(" ") || [],
  		nonce: verificationValue.query?.nonce
-@@ -2032,6 +2127,10 @@ async function handleAuthorizationCodeGrant(ctx, opts) {
+@@ -2032,6 +2131,10 @@ async function handleAuthorizationCodeGrant(ctx, opts) {
  	});
  	const authTime = verificationValue.authTime != null ? normalizeTimestampValue(verificationValue.authTime) : resolveSessionAuthTime(session);
  	const requestedUserInfoClaims = getRequestedUserInfoClaims(verificationValue.query.claims, getSupportedClaims(opts));
@@ -351,7 +378,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  	return createUserTokens(ctx, opts, {
  		client,
  		scopes: verificationValue.query.scope?.split(" ") ?? [],
-@@ -2045,7 +2144,8 @@ async function handleAuthorizationCodeGrant(ctx, opts) {
+@@ -2045,7 +2148,8 @@ async function handleAuthorizationCodeGrant(ctx, opts) {
  		authorizationCodeId,
  		requestedUserInfoClaims,
  		resources: effectiveResources,
@@ -361,7 +388,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  	});
  }
  /**
-@@ -2143,6 +2243,15 @@ async function handleRefreshTokenGrant(ctx, opts) {
+@@ -2143,6 +2247,15 @@ async function handleRefreshTokenGrant(ctx, opts) {
  		});
  	}
  	const client = await validateClientCredentials(ctx, opts, client_id, client_secret, requestedScopes ?? scopes, preVerified, "refresh_token", authMethod);
@@ -377,7 +404,7 @@ index 0b3934dd6724d408a84624a3fb0215f6d3274fea..6d1fb63b2a8454884340a63197c707b9
  	if (refreshToken.revoked) {
  		if (isWithinRefreshTokenReuseInterval(refreshToken)) {
  			const replay = await getRefreshTokenRotationReplay(ctx, refreshToken, await resolveRefreshTokenRotationReplayRequest(ctx, opts, {
-@@ -2320,6 +2429,16 @@ async function validateOpaqueAccessToken(ctx, opts, token, clientId) {
+@@ -2320,6 +2433,16 @@ async function validateOpaqueAccessToken(ctx, opts, token, clientId) {
  			issuerClientId: accessToken.clientId,
  			audienceResources: resources ?? []
  		})) return inactiveAccessToken();

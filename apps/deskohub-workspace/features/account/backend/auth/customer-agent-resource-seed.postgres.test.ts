@@ -1,8 +1,6 @@
 import "@/shared/testing/workspace-test-env";
 
 import { describe, expect, test } from "bun:test";
-import { Predicate } from "effect";
-import type { Pool, QueryConfig } from "pg";
 import {
   type CapturedMagicLink,
   callHandler,
@@ -10,6 +8,7 @@ import {
   getSessionCookie,
   HOST,
   makeTestAuth,
+  observedPool,
   signInForMagicLink,
   type TestAuth,
   testDatabase,
@@ -17,29 +16,9 @@ import {
   verifyMagicLink,
 } from "./auth-handler.test-utils";
 
-/**
- * The test pool, except that reads of the OAuth resource table time out
- * while `timingOut` is set. Counts every resource read.
- */
-const resourceReadsTimingOut = (pool: Pool) => {
-  const resource = { reads: 0, timingOut: true };
-  const query = (config: string | QueryConfig, values?: unknown[]) => {
-    const text = Predicate.isString(config) ? config : config.text;
-    if (!text.includes("oauth_resource")) return pool.query(config, values);
-    resource.reads += 1;
-    return resource.timingOut
-      ? Promise.reject(new Error("Query read timeout"))
-      : pool.query(config, values);
-  };
-  const proxy = new Proxy(pool, {
-    get: (target, property) => {
-      if (property === "query") return query;
-      const value = Reflect.get(target, property, target);
-      return Predicate.isFunction(value) ? value.bind(target) : value;
-    },
-  });
-  return { pool: proxy, resource };
-};
+const RESOURCE = `https://${HOST}/api/mcp`;
+
+const isResourceQuery = (sql: string) => sql.includes("oauth_resource");
 
 const signIn = async (auth: TestAuth, sentLinks: CapturedMagicLink[]) => {
   const before = sentLinks.length;
@@ -72,30 +51,53 @@ const registerClient = (auth: TestAuth, cookie: string) =>
       (error: Error) => error.name
     );
 
+const withResourceTableMissing = async (run: () => Promise<void>) => {
+  await testDatabase!.pool.query(
+    "alter table auth.oauth_resource rename to oauth_resource_pending"
+  );
+  try {
+    await run();
+  } finally {
+    await testDatabase!.pool.query(
+      "alter table auth.oauth_resource_pending rename to oauth_resource"
+    );
+  }
+};
+
 // The OAuth provider seeds the MCP resource row on an instance's first
 // resource lookup. Deployments start before migrations run (a preview is
 // Ready before its database is migrated), so a missing OAuth table must defer
-// the seed, not fail the auth requests of the instance. The Drizzle adapter wraps the
-// Postgres error, which the patched provider reads through `cause`.
+// the seed, not fail the auth requests of the instance. The Drizzle adapter
+// wraps the Postgres error, which the patched provider reads through `cause`.
 describe.skipIf(!testDatabase)(
   "customer agent resource seed before the OAuth migration",
   () => {
     test("starts and serves auth while the resource table is missing", async () => {
-      await testDatabase!.pool.query(
-        "alter table auth.oauth_resource rename to oauth_resource_pending"
-      );
-      try {
+      await withResourceTableMissing(async () => {
         const auth = makeTestAuth();
 
         const ok = await callHandler(auth, "/ok");
         expect(ok.status).toBe(200);
         const session = await callHandler(auth, "/get-session");
         expect(session.status).toBe(200);
-      } finally {
-        await testDatabase!.pool.query(
-          "alter table auth.oauth_resource_pending rename to oauth_resource"
-        );
-      }
+      });
+    });
+
+    test("seeds the resource on the first lookup after the migration", async () => {
+      const sentLinks: CapturedMagicLink[] = [];
+      const auth = makeTestAuth({ sentLinks });
+      const cookie = await signIn(auth, sentLinks);
+
+      await withResourceTableMissing(async () => {
+        expect(await registerClient(auth, cookie)).not.toBe("registered");
+      });
+      // Only the seed can bring the row back.
+      await testDatabase!.pool.query(
+        "delete from auth.oauth_resource where identifier = $1",
+        [RESOURCE]
+      );
+
+      expect(await registerClient(auth, cookie)).toBe("registered");
     });
 
     // Better Auth keeps the promise of its startup for the instance's
@@ -103,7 +105,10 @@ describe.skipIf(!testDatabase)(
     // every later request. The first resource lookup seeds instead, and a
     // failed seed is retried on the next lookup.
     test("starts without reading the resource and recovers from a seed that timed out", async () => {
-      const database = resourceReadsTimingOut(testDatabase!.pool);
+      const database = observedPool(testDatabase!.pool);
+      database.observed.failing = isResourceQuery;
+      const resourceReads = () =>
+        database.observed.queries.filter(isResourceQuery).length;
       const sentLinks: CapturedMagicLink[] = [];
       const auth = makeTestAuth({
         postgres: { ...testDatabase!, pool: database.pool },
@@ -111,13 +116,13 @@ describe.skipIf(!testDatabase)(
       });
 
       await auth.$context;
-      expect(database.resource.reads).toBe(0);
+      expect(resourceReads()).toBe(0);
       const cookie = await signIn(auth, sentLinks);
 
       expect(await registerClient(auth, cookie)).toBe("DrizzleQueryError");
-      expect(database.resource.reads).toBe(1);
+      expect(resourceReads()).toBe(1);
 
-      database.resource.timingOut = false;
+      database.observed.failing = () => false;
       expect(await registerClient(auth, cookie)).toBe("registered");
     });
   }
