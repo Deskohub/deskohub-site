@@ -1,18 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import {
   GoogleAccessToken,
   MetadataServerGoogleAccessToken,
-  metadataServerTokenUrl,
 } from "./google-access-token";
 
 type TokenRequest = { readonly url: string; readonly headers: Headers };
 
 const withMetadataServer = <A, E>(
   respond: (count: number) => Response,
-  run: (token: Effect.Effect<string, unknown>) => Effect.Effect<A, E>
+  run: (accessToken: GoogleAccessToken["Service"]) => Effect.Effect<A, E>
 ) => {
   const requests: TokenRequest[] = [];
   const fetch = Object.assign(
@@ -23,8 +22,7 @@ const withMetadataServer = <A, E>(
     { preconnect: globalThis.fetch.preconnect }
   );
   return Effect.gen(function* () {
-    const { get } = yield* GoogleAccessToken;
-    return yield* run(get);
+    return yield* run(yield* GoogleAccessToken);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(MetadataServerGoogleAccessToken, TestClock.layer())
@@ -47,19 +45,21 @@ describe("MetadataServerGoogleAccessToken", () => {
   test("asks the metadata server for the service account token", async () => {
     const { outcome, requests } = await withMetadataServer(
       tokenResponse,
-      (get) => get
+      ({ get }) => get
     );
 
     expect(outcome).toMatchObject({ success: "token-1" });
     expect(requests).toHaveLength(1);
-    expect(requests[0]?.url).toBe(metadataServerTokenUrl);
+    expect(requests[0]?.url).toBe(
+      "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+    );
     expect(requests[0]?.headers.get("metadata-flavor")).toBe("Google");
   });
 
   test("reuses the token until shortly before it expires", async () => {
     const { outcome, requests } = await withMetadataServer(
       tokenResponse,
-      (get) =>
+      ({ get }) =>
         Effect.gen(function* () {
           const first = yield* get;
           yield* TestClock.adjust("58 minutes");
@@ -79,7 +79,7 @@ describe("MetadataServerGoogleAccessToken", () => {
   test("shares one refresh between concurrent callers", async () => {
     const { outcome, requests } = await withMetadataServer(
       tokenResponse,
-      (get) => Effect.all([get, get, get], { concurrency: "unbounded" })
+      ({ get }) => Effect.all([get, get, get], { concurrency: "unbounded" })
     );
 
     expect(outcome).toMatchObject({
@@ -88,29 +88,78 @@ describe("MetadataServerGoogleAccessToken", () => {
     expect(requests).toHaveLength(1);
   });
 
-  test("fails on an error status and retries on the next call", async () => {
+  test("retries an unavailable metadata server within one call", async () => {
     const { outcome, requests } = await withMetadataServer(
       (count) =>
         count === 1
           ? new Response(null, { status: 503 })
           : tokenResponse(count),
-      (get) =>
+      ({ get }) =>
         Effect.gen(function* () {
-          const failure = yield* Effect.flip(get);
-          const token = yield* get;
-          return { failure, token };
+          const fiber = yield* Effect.forkChild(get);
+          yield* TestClock.adjust("1 second");
+          return yield* Fiber.join(fiber);
+        })
+    );
+
+    expect(outcome).toMatchObject({ success: "token-2" });
+    expect(requests).toHaveLength(2);
+  });
+
+  test("fails on a rejected request without retrying it", async () => {
+    const { outcome, requests } = await withMetadataServer(
+      () => new Response(null, { status: 403 }),
+      ({ get }) => get
+    );
+
+    expect(outcome).toMatchObject({
+      failure: {
+        _tag: "GoogleAccessTokenError",
+        reason: "status",
+        httpStatus: 403,
+      },
+    });
+    expect(requests).toHaveLength(1);
+  });
+
+  test("times out a token response whose body never arrives", async () => {
+    const { outcome, requests } = await withMetadataServer(
+      () =>
+        new Response(new ReadableStream({ start: () => undefined }), {
+          status: 200,
+        }),
+      ({ get }) =>
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(get);
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            yield* TestClock.adjust("11 seconds");
+          }
+          return yield* Fiber.join(fiber);
         })
     );
 
     expect(outcome).toMatchObject({
-      success: {
-        failure: {
-          _tag: "GoogleAccessTokenError",
-          reason: "status",
-          httpStatus: 503,
-        },
-        token: "token-2",
-      },
+      failure: { _tag: "GoogleAccessTokenError", reason: "timeout" },
+    });
+    expect(requests).toHaveLength(3);
+  });
+
+  test("fetches another token after the current one is invalidated", async () => {
+    const { outcome, requests } = await withMetadataServer(
+      tokenResponse,
+      ({ get, invalidate }) =>
+        Effect.gen(function* () {
+          const first = yield* get;
+          yield* invalidate("token-0");
+          const kept = yield* get;
+          yield* invalidate(first);
+          const replaced = yield* get;
+          return [first, kept, replaced];
+        })
+    );
+
+    expect(outcome).toMatchObject({
+      success: ["token-1", "token-1", "token-2"],
     });
     expect(requests).toHaveLength(2);
   });
@@ -118,7 +167,7 @@ describe("MetadataServerGoogleAccessToken", () => {
   test("fails on an unreadable token response", async () => {
     const { outcome } = await withMetadataServer(
       () => Response.json({ token_type: "Bearer" }),
-      (get) => get
+      ({ get }) => get
     );
 
     expect(outcome).toMatchObject({

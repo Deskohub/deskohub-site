@@ -6,10 +6,16 @@ import {
   Effect,
   Layer,
   Option,
+  Schedule,
   Schema,
   SynchronizedRef,
 } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  type HttpClientResponse,
+} from "effect/http";
 
 /**
  * No OAuth access token for Google APIs. Carries no token or response body.
@@ -24,6 +30,11 @@ export class GoogleAccessTokenError extends Data.TaggedError(
 interface IGoogleAccessToken {
   /** An OAuth access token of the runtime's service account. */
   readonly get: Effect.Effect<string, GoogleAccessTokenError>;
+  /**
+   * Drops `token` after a Google API rejected it, so the next `get` fetches
+   * another. A newer token stays.
+   */
+  readonly invalidate: (token: string) => Effect.Effect<void>;
 }
 
 /** Authorizes calls to Google APIs as the runtime's service account. */
@@ -34,9 +45,12 @@ export class GoogleAccessToken extends Context.Service<
 
 /** Where a Cloud Run service reads its service account's access token. */
 export const metadataServerTokenUrl =
-  "http://metadata.google.internal/computeMetadata/v1/instance/service-account/token";
+  "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
 
-const requestTimeout = Duration.seconds(10);
+/** Bounds each attempt, response body included. */
+const attemptTimeout = Duration.seconds(10);
+const retrySchedule = Schedule.exponential("200 millis");
+const retries = 2;
 /** Refreshes a token this long before it expires. */
 const expiryMargin = Duration.minutes(1);
 
@@ -44,6 +58,7 @@ const TokenResponse = Schema.Struct({
   access_token: Schema.String,
   expires_in: Schema.Finite,
 });
+type TokenResponse = typeof TokenResponse.Type;
 
 type CachedToken = {
   readonly accessToken: string;
@@ -61,58 +76,103 @@ export const MetadataServerGoogleAccessToken: Layer.Layer<GoogleAccessToken> =
       const client = yield* HttpClient.HttpClient;
       const cache = yield* SynchronizedRef.make(Option.none<CachedToken>());
 
-      const fetchToken = Effect.gen(function* () {
-        const response = yield* client
-          .execute(
-            HttpClientRequest.get(metadataServerTokenUrl).pipe(
-              HttpClientRequest.setHeader("Metadata-Flavor", "Google")
-            )
+      const requestToken = client
+        .execute(
+          HttpClientRequest.get(metadataServerTokenUrl).pipe(
+            HttpClientRequest.setHeader("Metadata-Flavor", "Google")
           )
-          .pipe(
-            Effect.mapError(
-              () => new GoogleAccessTokenError({ reason: "transport" })
-            ),
-            Effect.timeoutOrElse({
-              duration: requestTimeout,
-              orElse: () =>
-                Effect.fail(new GoogleAccessTokenError({ reason: "timeout" })),
-            })
-          );
-        if (response.status < 200 || response.status >= 300) {
-          return yield* new GoogleAccessTokenError({
-            reason: "status",
-            httpStatus: response.status,
-          });
-        }
-        const token = yield* response.json.pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(TokenResponse)),
+        )
+        .pipe(
           Effect.mapError(
-            () => new GoogleAccessTokenError({ reason: "invalid-response" })
+            () => new GoogleAccessTokenError({ reason: "transport" })
+          ),
+          Effect.filterOrElse(isSuccessful, (response) =>
+            Effect.fail(
+              new GoogleAccessTokenError({
+                reason: "status",
+                httpStatus: response.status,
+              })
+            )
+          ),
+          Effect.flatMap(readTokenResponse),
+          Effect.timeoutOrElse({
+            duration: attemptTimeout,
+            orElse: () =>
+              Effect.fail(new GoogleAccessTokenError({ reason: "timeout" })),
+          }),
+          Effect.retry({
+            schedule: retrySchedule,
+            times: retries,
+            while: isTransient,
+          })
+        );
+
+      const fetchToken = Effect.Do.pipe(
+        Effect.bind("response", () => requestToken),
+        Effect.bind("now", () => Clock.currentTimeMillis),
+        Effect.map(toCachedToken)
+      );
+
+      const reuseOrRefresh = (cached: Option.Option<CachedToken>) =>
+        Clock.currentTimeMillis.pipe(
+          Effect.map((now) =>
+            Option.filter(
+              cached,
+              ({ refreshAtMillis }) => now < refreshAtMillis
+            )
+          ),
+          Effect.flatMap(
+            Option.match({
+              onSome: ({ accessToken }) =>
+                Effect.succeed([accessToken, cached] as const),
+              onNone: () =>
+                fetchToken.pipe(
+                  Effect.map(
+                    (token) => [token.accessToken, Option.some(token)] as const
+                  )
+                ),
+            })
           )
         );
-        const now = yield* Clock.currentTimeMillis;
-        return {
-          accessToken: token.access_token,
-          refreshAtMillis:
-            now + token.expires_in * 1000 - Duration.toMillis(expiryMargin),
-        } satisfies CachedToken;
-      });
 
-      const reuseOrRefresh = Effect.fn("GoogleAccessToken.get")(function* (
-        cached: Option.Option<CachedToken>
-      ) {
-        const now = yield* Clock.currentTimeMillis;
-        const fresh = Option.filter(
-          cached,
-          ({ refreshAtMillis }) => now < refreshAtMillis
-        );
-        if (Option.isSome(fresh)) {
-          return [fresh.value.accessToken, cached] as const;
-        }
-        const token = yield* fetchToken;
-        return [token.accessToken, Option.some(token)] as const;
-      });
-
-      return { get: SynchronizedRef.modifyEffect(cache, reuseOrRefresh) };
+      return {
+        get: SynchronizedRef.modifyEffect(cache, reuseOrRefresh).pipe(
+          Effect.withSpan("GoogleAccessToken.get")
+        ),
+        invalidate: (token) =>
+          SynchronizedRef.update(
+            cache,
+            Option.filter(({ accessToken }) => accessToken !== token)
+          ),
+      };
     })
   ).pipe(Layer.provide(FetchHttpClient.layer));
+
+const isSuccessful = ({ status }: HttpClientResponse.HttpClientResponse) =>
+  status >= 200 && status < 300;
+
+const readTokenResponse = (response: HttpClientResponse.HttpClientResponse) =>
+  response.json.pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(TokenResponse)),
+    Effect.mapError(
+      () => new GoogleAccessTokenError({ reason: "invalid-response" })
+    )
+  );
+
+const isTransient = ({ reason, httpStatus }: GoogleAccessTokenError) =>
+  reason === "transport" ||
+  reason === "timeout" ||
+  httpStatus === 429 ||
+  (httpStatus !== undefined && httpStatus >= 500);
+
+const toCachedToken = ({
+  response,
+  now,
+}: {
+  readonly response: TokenResponse;
+  readonly now: number;
+}): CachedToken => ({
+  accessToken: response.access_token,
+  refreshAtMillis:
+    now + response.expires_in * 1000 - Duration.toMillis(expiryMargin),
+});

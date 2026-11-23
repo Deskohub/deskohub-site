@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { testEmailAddress } from "@deskohub/test-email";
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import {
@@ -54,6 +54,7 @@ const publish = async (
   } = {}
 ) => {
   const requests: SentRequest[] = [];
+  const invalidated: string[] = [];
   const fetch = Object.assign(
     async (url: RequestInfo | URL, init?: RequestInit) => {
       requests.push({
@@ -68,12 +69,22 @@ const publish = async (
   const result = await Effect.gen(function* () {
     yield* TestClock.setTime(now);
     const publisher = yield* QueuePublisher;
-    return yield* publisher.publish(input);
+    const fiber = yield* Effect.forkChild(publisher.publish(input));
+    yield* TestClock.adjust("11 seconds");
+    return yield* Fiber.join(fiber);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
         CloudTasksQueuePublisher(settings).pipe(
-          Layer.provide(Layer.succeed(GoogleAccessToken, { get: token }))
+          Layer.provide(
+            Layer.succeed(GoogleAccessToken, {
+              get: token,
+              invalidate: (rejected) =>
+                Effect.sync(() => {
+                  invalidated.push(rejected);
+                }),
+            })
+          )
         ),
         TestClock.layer()
       )
@@ -82,7 +93,7 @@ const publish = async (
     Effect.result,
     Effect.runPromise
   );
-  return { result, requests };
+  return { result, requests, invalidated };
 };
 
 describe("CloudTasksQueuePublisher", () => {
@@ -117,6 +128,8 @@ describe("CloudTasksQueuePublisher", () => {
   test("names tasks deterministically from the idempotency key", () => {
     const id = taskId("paid-fulfillment:order-1");
 
+    // SHA-256 in base64url; changing it renames every pending task.
+    expect(id).toBe("eWUfUv5h-KHd7jRFOi228FORHtAhX6e6sfghtS30RYM");
     expect(taskId("paid-fulfillment:order-1")).toBe(id);
     expect(taskId("paid-fulfillment:order-2")).not.toBe(id);
     expect(id).toMatch(/^[A-Za-z0-9_-]{1,500}$/);
@@ -177,6 +190,42 @@ describe("CloudTasksQueuePublisher", () => {
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(accessToken);
     expect(serialized).not.toContain("order-1");
+  });
+
+  test("drops a rejected access token", async () => {
+    const { result, invalidated } = await publish(publication, {
+      respond: () =>
+        Response.json(
+          { error: { code: 401, status: "UNAUTHENTICATED" } },
+          { status: 401 }
+        ),
+    });
+
+    expect(result).toMatchObject({
+      failure: { cause: { reason: "status", httpStatus: 401 } },
+    });
+    expect(invalidated).toEqual([accessToken]);
+  });
+
+  test("keeps the access token on other rejections", async () => {
+    const { invalidated } = await publish(publication, {
+      respond: () => new Response(null, { status: 403 }),
+    });
+
+    expect(invalidated).toEqual([]);
+  });
+
+  test("times out an error response whose body never arrives", async () => {
+    const { result } = await publish(publication, {
+      respond: () =>
+        new Response(new ReadableStream({ start: () => undefined }), {
+          status: 500,
+        }),
+    });
+
+    expect(result).toMatchObject({
+      failure: { cause: { _tag: "CloudTasksPublishError", reason: "timeout" } },
+    });
   });
 
   test("fails when the request does not reach Cloud Tasks", async () => {
