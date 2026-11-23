@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Schema } from "effect";
 import { readJsonFile } from "./json-file";
@@ -31,10 +31,14 @@ export function readCoverageRun(runDirectory: string): CoverageRun {
 /** Paths of the coverage dumps test processes wrote for the run. */
 export function coverageDumpFiles(runDirectory: string): string[] {
   const directory = coverageDumpDirectory(runDirectory);
-  if (!existsSync(directory)) {
-    return [];
+  try {
+    return readdirSync(directory)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => join(directory, name));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
   }
-  return readdirSync(directory)
-    .filter((name) => name.endsWith(".json"))
-    .map((name) => join(directory, name));
 }

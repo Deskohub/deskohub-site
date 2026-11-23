@@ -63,16 +63,15 @@ const Location = Schema.Struct({ line: Schema.Int, column: Schema.Int });
 
 const Range = Schema.Struct({ start: Location, end: Location });
 
+const EmptyLocation = Schema.Record(Schema.String, Schema.Never);
+
 /**
  * A branch path's location. Istanbul's instrumenter clones a missing location
  * into `{ start: {}, end: {} }`, as it does for an `if` without an `else`.
  */
 const BranchPathLocation = Schema.Union([
   Range,
-  Schema.Struct({
-    start: Schema.Struct({}),
-    end: Schema.Struct({}),
-  }),
+  Schema.Struct({ start: EmptyLocation, end: EmptyLocation }),
 ]);
 
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
@@ -113,10 +112,19 @@ const FileCoverageData = Schema.StructWithRest(
 /** The coverage map a test process dumps, keyed by absolute source path. */
 const CoverageDump = Schema.Record(Schema.String, FileCoverageData);
 
-function readCoverageDump(dumpFile: string): CoverageMapData {
-  const dump = readJsonFile(CoverageDump, dumpFile, "coverage dump");
-  // `@types/istanbul-lib-coverage` declares every branch path location
-  // complete, though the instrumenter writes empty ones; Istanbul's merge
-  // reads only `locations[0]`, which is always complete.
-  return dump as CoverageMapData;
+type CoverageDump = typeof CoverageDump.Type;
+
+declare module "istanbul-lib-coverage" {
+  interface CoverageMap {
+    /**
+     * `@types/istanbul-lib-coverage` declares every branch path location
+     * complete, but the instrumenter writes empty ones that the merge keys
+     * and copies like any other.
+     */
+    merge(data: CoverageDump): void;
+  }
+}
+
+function readCoverageDump(dumpFile: string): CoverageDump {
+  return readJsonFile(CoverageDump, dumpFile, "coverage dump");
 }

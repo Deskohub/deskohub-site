@@ -101,6 +101,7 @@ export function measuresCurrentSource(
 ): boolean {
   const recorded = manifest.files[relativePath];
   return (
+    recorded !== undefined &&
     recorded !== null &&
     recorded === hashSourceFile(join(repositoryRoot, relativePath))
   );
