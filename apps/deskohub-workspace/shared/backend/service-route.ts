@@ -4,13 +4,19 @@ import { isMatchingSecret } from "@deskohub/secret-comparison";
 import { Data, Effect } from "effect";
 import { NextResponse } from "next/server";
 import { env } from "@/env";
+import {
+  authenticateGoogleInvoker,
+  cloudSchedulerInvoker,
+  type GoogleInvoker,
+} from "./google-oidc";
 import { defineWorkspaceRoute, WorkspaceRouteFailure } from "./workspace-route";
 
 /**
- * A route a service calls, such as Vercel Cron or a provider webhook. Its
- * work serves no customer request and must finish without the caller.
+ * A route a service calls, such as a cron job, a queue delivery, or a
+ * provider webhook. Its work serves no customer request and must finish
+ * without the caller.
  */
-const defineServiceRoute = <A extends Response>(
+export const defineServiceRoute = <A extends Response>(
   operation: string,
   handler: (request: Request) => Effect.Effect<A, WorkspaceRouteFailure>
 ) =>
@@ -63,25 +69,64 @@ const isAuthorizedCronRequest = (request: Request) => {
 };
 
 /**
- * Defines a Vercel Cron route. It answers 401 to a request without the cron
- * secret, logs the job's start and finish with its input and summary, answers
- * the summary as JSON, and turns a job failure into a 500 with
- * `failureMessage`.
+ * Requires a Google-signed OIDC token from `invoker`, the authentication
+ * boundary of a private Cloud Run worker. The response names only the status;
+ * the logged cause names the reason, never the token.
  */
-export const defineWorkspaceCron = <Input, Summary, E>(
-  job: WorkspaceCronJob<Input, Summary, E>
+export const requireGoogleInvoker = (
+  request: Request,
+  invoker: GoogleInvoker | undefined
 ) =>
-  defineServiceRoute(job.operation, (request) => {
-    if (!isAuthorizedCronRequest(request)) {
-      return Effect.fail(
+  authenticateGoogleInvoker(request, invoker).pipe(
+    Effect.tapError((rejection) =>
+      rejection.reason === "key-set-unavailable"
+        ? Effect.logError("Google signing keys are unavailable", {
+            code: rejection.code,
+          })
+        : Effect.void
+    ),
+    Effect.mapError(
+      (rejection) =>
+        new WorkspaceRouteFailure({
+          statusCode: rejection.status,
+          publicMessage:
+            rejection.status === 403 ? "Forbidden" : "Unauthorized",
+          cause: rejection,
+        })
+    )
+  );
+
+/**
+ * On Vercel, Vercel Cron calls with the cron secret. On a container host,
+ * Cloud Scheduler calls the private scheduler worker with its invoker's OIDC
+ * token.
+ */
+const authorizeCronRequest = (request: Request) => {
+  if (env.WORKSPACE_RUNTIME_HOST === "container") {
+    return requireGoogleInvoker(request, cloudSchedulerInvoker());
+  }
+  return isAuthorizedCronRequest(request)
+    ? Effect.void
+    : Effect.fail(
         new WorkspaceRouteFailure({
           statusCode: 401,
           publicMessage: "Unauthorized",
         })
       );
-    }
+};
 
-    return Effect.gen(function* () {
+/**
+ * Defines a cron route for Vercel Cron or Cloud Scheduler. It answers 401 to
+ * a request without the cron secret on Vercel, and 401 or 403 to one without
+ * the scheduler invoker's OIDC token on a container host. It logs the job's
+ * start and finish with its input and summary, answers the summary as JSON,
+ * and turns a job failure into a 500 with `failureMessage`.
+ */
+export const defineWorkspaceCron = <Input, Summary, E>(
+  job: WorkspaceCronJob<Input, Summary, E>
+) =>
+  defineServiceRoute(job.operation, (request) => {
+    const run = Effect.gen(function* () {
       if (job.input) {
         const input = job.input();
         // The input goes on the start and completion rows, not every row of
@@ -107,6 +152,8 @@ export const defineWorkspaceCron = <Input, Summary, E>(
       Effect.scoped,
       Effect.mapError(WorkspaceRouteFailure.internal(job.failureMessage))
     );
+
+    return authorizeCronRequest(request).pipe(Effect.andThen(run));
   });
 
 type WebhookFailureSeverity = "warning" | "error" | "fatal";
