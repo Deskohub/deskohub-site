@@ -107,14 +107,11 @@ export const ComputeOperation = Schema.Struct({
 export type ComputeOperation = typeof ComputeOperation.Type;
 
 /**
- * Compute operations on edge objects settle in seconds; the budget is the
- * one Alchemy's native Compute waiter allows, polled every two seconds.
+ * Compute operations on edge objects settle in seconds; the wall-clock
+ * budget is the one Alchemy's native Compute waiter allows.
  */
 const operationBudget = Duration.minutes(15);
 const operationInterval = Duration.seconds(2);
-const operationPolls = Math.ceil(
-  Duration.toMillis(operationBudget) / Duration.toMillis(operationInterval)
-);
 
 /** The Compute error codes (`error.errors[].code`) an operation reports. */
 const operationErrorCodes = (operation: ComputeOperation) =>
@@ -145,6 +142,22 @@ export class EdgeComputeOperationTimedOut extends Data.TaggedError(
 )<{ readonly resource: string; readonly operation: string }> {
   override get message() {
     return `${this.resource}: operation ${this.operation} did not finish within ${Duration.format(operationBudget)}`;
+  }
+}
+
+/**
+ * The status of an accepted operation could not be read. The change may
+ * still apply, so this is never retried as a lost answer.
+ */
+export class EdgeComputeOperationUnreadable extends Data.TaggedError(
+  "EdgeComputeOperationUnreadable"
+)<{
+  readonly resource: string;
+  readonly operation: string;
+  readonly reason: string;
+}> {
+  override get message() {
+    return `${this.resource}: operation ${this.operation} status unreadable: ${this.reason}`;
   }
 }
 
@@ -366,19 +379,35 @@ export const makeEdgeComputeApi = Effect.fnUntraced(function* () {
         (current) => current.status === "DONE",
         () => new EdgeComputeOperationPending()
       ),
+      Effect.catchTag("EdgeComputeRequestFailed", (error) =>
+        Effect.fail(
+          new EdgeComputeOperationUnreadable({
+            resource,
+            operation: name,
+            reason: error.message,
+          })
+        )
+      ),
       Effect.retry({
         while: (error) => error._tag === "EdgeComputeOperationPending",
-        times: operationPolls,
         schedule: Schedule.spaced(operationInterval),
       }),
-      Effect.catchTag("EdgeComputeOperationPending", () =>
-        Effect.fail(
-          new EdgeComputeOperationTimedOut({ resource, operation: name })
-        )
-      )
+      Effect.timeoutOrElse({
+        duration: operationBudget,
+        orElse: () =>
+          Effect.fail(
+            new EdgeComputeOperationTimedOut({ resource, operation: name })
+          ),
+      })
     );
-    const settled =
-      operation.status === "DONE" || name === "" ? operation : yield* poll;
+    if (operation.status !== "DONE" && name === "") {
+      return yield* new EdgeComputeOperationUnreadable({
+        resource,
+        operation: name,
+        reason: "Compute answered an unfinished operation without a name",
+      });
+    }
+    const settled = operation.status === "DONE" ? operation : yield* poll;
     const failure = operationFailure(resource, settled);
     const ignore = options?.ignore ?? [];
     if (

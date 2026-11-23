@@ -918,7 +918,7 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
     ],
   },
   {
-    name: "no-type-assertions-in-workspace-infrastructure", diagnostic: "only `as const` is allowed",
+    name: "no-type-assertions-in-workspace-infrastructure", diagnostic: "only `as const` (or `<const>`) is allowed",
     module: "packages/workspace-infrastructure/src/resources/edge-compute-api.ts",
     cases: [
       ["rejects asserting an operation to a library parameter type", "export const settle = waitGlobalOperation(project, operation as Parameters<typeof waitGlobalOperation>[1]);\n", true],
@@ -927,6 +927,8 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects as unknown as", "export const credentials = failure as unknown as Credentials;\n", true],
       ["rejects an angle-bracket assertion", "export const policy = <EdgeCdnPolicy>live;\n", true, "packages/workspace-infrastructure/scripts/probe.ts"],
       ["rejects assertions in tests", "export const value = exit.value as EdgeBackendServiceAttributes;\n", true, "packages/workspace-infrastructure/src/resources/edge-backend-service.test.ts"],
+      ["rejects assertions in the sandbox probe tests", "export const { port } = server.address() as AddressInfo;\n", true, "packages/workspace-infrastructure/sandbox-probe/probe.test.ts"],
+      ["permits a const angle-bracket assertion", "export const codes = <const>[0, 2];\n", false, "packages/workspace-infrastructure/scripts/probe.ts"],
       ["permits as const", 'export const conflict = { status: "conflict" as const, codes: [0, 2] as const };\n', false],
       ["permits satisfies", "export const settled = { name } satisfies ComputeOperation;\n", false],
       ["permits assertions outside workspace infrastructure", "export const value = input as Settled;\n", false, "packages/workspace-admin-api/src/probe.ts"],

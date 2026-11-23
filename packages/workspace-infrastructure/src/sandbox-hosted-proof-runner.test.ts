@@ -381,7 +381,7 @@ describe("state snapshot and restore", () => {
     },
   });
   const locked = { WORKSPACE_RELEASE_WRITER: "fake-writer" };
-  const manifest = (fakes: ProofFakes, file: string) =>
+  const manifest = (fakes: ProofFakes, file: string): unknown =>
     JSON.parse(readFileSync(join(fakes.proofDir, file), "utf8"));
 
   test("snapshots one live generation per object despite noncurrent history", () => {

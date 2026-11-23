@@ -100,6 +100,16 @@
   },
   "overrides": [
     {
+      "includes": ["packages/workspace-infrastructure/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "error"
+          }
+        }
+      }
+    },
+    {
       "includes": ["apps/deskohub-workspace/**"],
       "linter": {
         "rules": {

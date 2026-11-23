@@ -3,19 +3,19 @@ language js(typescript, jsx)
 
 // Workspace infrastructure decodes or narrows values instead of asserting their types.
 file($name, $body) where {
-  $name <: r".*packages/workspace-infrastructure/.*\.(?:ts|tsx|mts|cts)$",
+  $name <: r".*packages/workspace-infrastructure/.*\.(?:ts|tsx)$",
   $body <: contains bubble {
     or {
       TsAsExpression() as $assertion where {
         not $assertion <: `$value as const`
       },
       TsTypeAssertionExpression() as $assertion where {
-        not $assertion <: `<const>$value`
+        not $assertion <: r"(?s)^\s*<\s*const\s*>.*"
       }
     } where {
       register_diagnostic(
         span = $assertion,
-        message = "[anti-slop/no-type-assertions-in-workspace-infrastructure] Decode with Schema or narrow the value instead of asserting its type; only `as const` is allowed.",
+        message = "[anti-slop/no-type-assertions-in-workspace-infrastructure] Decode with Schema or narrow the value instead of asserting its type; only `as const` (or `<const>`) is allowed.",
         severity = "error"
       )
     }

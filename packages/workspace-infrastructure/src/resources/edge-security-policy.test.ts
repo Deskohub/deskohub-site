@@ -4,6 +4,7 @@ import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import {
+  afterElapsed,
   computeLinkRoot,
   type FakeComputeOptions,
   failureTag,
@@ -253,6 +254,20 @@ describe("EdgeSecurityPolicy provider", () => {
       )
     ).toBe("EdgeComputeResourceUnowned");
     expect(mutations(raced.calls)).toEqual(["POST global/securityPolicies"]);
+  });
+
+  test("never resends a rule write whose operation status cannot be read", async () => {
+    const compute = fake({
+      existing: [converged(policyProps(true))],
+      unknownOperationPolls: 6,
+    });
+    const exit = await run(compute, (provider) =>
+      afterElapsed("10 seconds", reconcile(provider, policyProps(false)))
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeOperationUnreadable");
+    expect(mutations(compute.calls)).toEqual([
+      "POST workspace-sandbox-edge/patchRule?priority=1000",
+    ]);
   });
 
   test("a rule operation that fails fails the reconcile", async () => {

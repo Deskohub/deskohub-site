@@ -10,6 +10,7 @@ import {
   EdgeBackendServiceProvider,
 } from "./edge-backend-service";
 import {
+  afterElapsed,
   computeLinkRoot,
   type FakeComputeOptions,
   failureTag,
@@ -552,7 +553,7 @@ describe("EdgeBackendService provider", () => {
       unknownOperationPolls: 2,
     });
     const exit = await run(fake, (provider) =>
-      reconcile(provider, staticProps)
+      afterElapsed("1 second", reconcile(provider, staticProps))
     );
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(mutations(fake.calls)).toEqual([
@@ -561,15 +562,44 @@ describe("EdgeBackendService provider", () => {
     expect([...fake.operationPolls]).toEqual([["operation-1", 3]]);
   });
 
+  test("fails with an unreadable operation, never a lost answer, when its status stays unknown", async () => {
+    const fake = fakeCompute({
+      existing: [{ ...converged(staticProps), enableCDN: false }],
+      unknownOperationPolls: 6,
+    });
+    const exit = await run(fake, (provider) =>
+      afterElapsed("10 seconds", reconcile(provider, staticProps))
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeOperationUnreadable");
+    expect(mutations(fake.calls)).toEqual([
+      "PATCH backendServices/workspace-sandbox-static",
+    ]);
+    expect([...fake.operationPolls]).toEqual([["operation-1", 6]]);
+  });
+
   test("polls a running operation again until it is done", async () => {
     const fake = fakeCompute({
       existing: [{ ...converged(staticProps), enableCDN: false }],
       runningOperationPolls: 1,
     });
     const exit = await run(fake, (provider) =>
-      reconcile(provider, staticProps)
+      afterElapsed("2 seconds", reconcile(provider, staticProps))
     );
     expect(Exit.isSuccess(exit)).toBe(true);
     expect([...fake.operationPolls]).toEqual([["operation-1", 2]]);
+  });
+
+  test("gives up on an operation still running after fifteen minutes", async () => {
+    const fake = fakeCompute({
+      existing: [{ ...converged(staticProps), enableCDN: false }],
+      runningOperationPolls: Number.POSITIVE_INFINITY,
+    });
+    const exit = await run(fake, (provider) =>
+      afterElapsed("15 minutes", reconcile(provider, staticProps))
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeOperationTimedOut");
+    expect(mutations(fake.calls)).toEqual([
+      "PATCH backendServices/workspace-sandbox-static",
+    ]);
   });
 });

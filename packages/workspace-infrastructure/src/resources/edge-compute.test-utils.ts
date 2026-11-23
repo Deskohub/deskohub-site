@@ -4,12 +4,15 @@ import { noopSession } from "alchemy/Report";
 import type { ResourceLike } from "alchemy/Resource";
 import { Stack } from "alchemy/Stack";
 import { Stage } from "alchemy/Stage";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import { TestClock } from "effect/testing";
 
 export const project = "deskohub-ws-sandbox";
 export const computeLinkRoot = `https://www.googleapis.com/compute/v1/projects/${project}`;
@@ -362,3 +365,17 @@ export const failureTag = (exit: Exit.Exit<unknown, unknown>) => {
     ? error._tag
     : undefined;
 };
+
+/**
+ * Run `effect` on a test clock moved `elapsed` forward, so operation polls
+ * and retry backoffs settle without real sleeps.
+ */
+export const afterElapsed = <A, E, R>(
+  elapsed: Duration.Input,
+  effect: Effect.Effect<A, E, R>
+) =>
+  Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(effect);
+    yield* TestClock.adjust(elapsed);
+    return yield* Fiber.join(fiber);
+  }).pipe(Effect.provide(TestClock.layer()));
