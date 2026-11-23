@@ -57,7 +57,13 @@ export type AutomationPreviewRow = typeof previews.$inferSelect;
 /** How far back an event-trigger dry run replays (D20). */
 const replayWindow = { hours: 30 * 24 } as const;
 
-/** The most events one replay evaluates; `events_total` counts the rest. */
+/**
+ * The most events one replay evaluates; `events_total` counts the rest.
+ * Both count events of the trigger's kind and product before the trigger's
+ * stay and payment qualification, which the preview unit applies per unit,
+ * so fewer than 1,000 events may qualify, and `events_total` overstates the
+ * events that could start a run.
+ */
 export const replayEventLimit = 1000;
 
 /** A running dry run with no progress for this long has failed. */

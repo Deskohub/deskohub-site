@@ -2272,6 +2272,173 @@ describe.skipIf(!testDatabase)(
       ]);
     });
 
+    test("a stay and payment trigger replays only qualifying visits through its Send's policies", async () => {
+      const [repeat, holder, unpaidHolder, overnight] = [
+        "qualified-repeat",
+        "qualified-holder",
+        "qualified-unpaid-holder",
+        "qualified-overnight",
+      ].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const noonDaysAgo = (days: number) =>
+        pragueOf(ago({ hours: 24 * days }))
+          .toPlainDate()
+          .toZonedDateTime({ timeZone: "Europe/Prague", plainTime: "12:00" })
+          .toInstant();
+      /** 09:00 to 17:00 in Prague. */
+      const dayOf = (days: number) => ({
+        startsAt: noonDaysAgo(days).subtract({ hours: 3 }),
+        endsAt: noonDaysAgo(days).add({ hours: 5 }),
+      });
+      /** Noon to noon the next day in Prague. */
+      const overnightFrom = (days: number) => ({
+        startsAt: noonDaysAgo(days),
+        endsAt: noonDaysAgo(days - 1),
+      });
+      const visits = {
+        "qualified-repeat-first": {
+          customer: repeat,
+          ...dayOf(10),
+          paid: true,
+        },
+        "qualified-repeat-overnight": {
+          customer: repeat,
+          ...overnightFrom(8),
+          paid: true,
+        },
+        "qualified-repeat-later": { customer: repeat, ...dayOf(5), paid: true },
+        "qualified-holder-day": { customer: holder, ...dayOf(9), paid: true },
+        "qualified-unpaid-holder-day": {
+          customer: unpaidHolder,
+          ...dayOf(9),
+          paid: false,
+        },
+        "qualified-overnight-stay": {
+          customer: overnight,
+          ...overnightFrom(7),
+          paid: true,
+        },
+      };
+      await seedReservations(
+        Object.entries(visits).map(
+          ([label, { customer, startsAt, endsAt }]) => ({
+            label,
+            customer,
+            startsAt,
+            endsAt,
+          })
+        )
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "reserved-desk",
+              coffee: true,
+            },
+          })
+          .where(
+            inArray(
+              workspaceReservations.id,
+              Object.keys(visits).map(reservationIdOf)
+            )
+          )
+      );
+      for (const [label, { paid }] of Object.entries(visits)) {
+        if (!paid) continue;
+        const attemptId = `dry-run-${label}-${runId}`;
+        await testDatabase.pool.query(
+          `insert into payment_attempts (id, order_id, workspace_reservation_id, provider,
+             provider_order_id, state, amount_value, amount_exponent, currency)
+           values ($1, $2, $2, 'nexi', $1, 'paid', 29000, 2, 'CZK')`,
+          [attemptId, reservationIdOf(label)]
+        );
+        await testDatabase.pool.query(
+          "update workspace_reservations set active_payment_attempt_id = $2 where id = $1",
+          [reservationIdOf(label), attemptId]
+        );
+      }
+      const validUntil = pragueOf(now)
+        .toPlainDate()
+        .add({ days: 30 })
+        .toString();
+      for (const passHolder of [holder, unpaidHolder]) {
+        await seedPass({
+          holder: await seedPassHolder(passHolder),
+          kind: "entry-pack",
+          validUntil,
+        });
+      }
+      dotyposState.customers.push(
+        ...[repeat, overnight].map((id) => profile(id))
+      );
+      await seedKnownCustomers(db, [repeat, holder, unpaidHolder, overnight]);
+      const [
+        repeatFirst,
+        repeatOvernight,
+        repeatLater,
+        holderDay,
+        unpaidHolderDay,
+        overnightStay,
+      ] = await seedEvents(
+        Object.entries(visits).map(([reservation, visit]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer: visit.customer,
+          occurredAt: visit.endsAt,
+        }))
+      );
+      const campaignId = await seedAutomation({
+        flow: decodeFlow({
+          trigger: {
+            _tag: "ReservationFinished",
+            product: { family: "cowork", properties: [] },
+            stay: "day",
+            payment: "individual",
+          },
+          steps: [{ ...send, oncePerCustomer: true, skipPassHolders: true }],
+        }),
+      });
+
+      const started = await start(campaignId);
+      await processAll(started.previewId);
+
+      const rows = await rowsOf(started.previewId);
+      const rowOf = (eventId: string | undefined) =>
+        rows.find((row) => row.customerEventId === eventId);
+      expect(rowOf(repeatFirst)).toMatchObject({
+        outcome: "would-send",
+        skipReason: null,
+      });
+      expect(rowOf(repeatLater)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "already-sent-once",
+      });
+      expect(rowOf(holderDay)).toMatchObject({
+        outcome: "skipped",
+        skipReason: "pass-holder",
+      });
+      for (const ruledOut of [
+        repeatOvernight,
+        unpaidHolderDay,
+        overnightStay,
+      ]) {
+        expect(rowOf(ruledOut)).toBeUndefined();
+      }
+      // A customer whose every event the trigger rules out shows no row.
+      expect(
+        rows
+          .map((row) => row.dotyposCustomerId)
+          .filter((id) => id === unpaidHolder || id === overnight)
+      ).toEqual([]);
+    });
+
     test("an earlier version's sent run counts as sent once, and skipping pass holders reads marketing consent on an operational campaign", async () => {
       const triggerAt = ago({ hours: 24 * 10 });
       const [plain, sentEarlier, withdrawn] = [
