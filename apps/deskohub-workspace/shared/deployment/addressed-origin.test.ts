@@ -57,7 +57,8 @@ describe("addressedOrigin", () => {
   });
 
   test("falls back to the request URL without a usable Host in a container", () => {
-    for (const headers of [{}, { host: "[" }]) {
+    const headerSets: Record<string, string>[] = [{}, { host: "[" }];
+    for (const headers of headerSets) {
       expect(
         addressedOrigin(addressedRequest(listenUrl, headers), "container")
           .origin
