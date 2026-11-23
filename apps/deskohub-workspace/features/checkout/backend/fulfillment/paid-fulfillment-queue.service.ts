@@ -81,6 +81,4 @@ export class PaidFulfillmentQueueService extends Context.Service<
       };
     })
   );
-
-  static Live = this.Default.pipe(Layer.provide(QueuePublisher.Default));
 }

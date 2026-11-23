@@ -3,6 +3,7 @@ import type {
   AutomationRunEventDetail,
   AutomationTrigger,
   EmailId,
+  EmailVersionId,
 } from "@deskohub/workspace-admin-api";
 import { sql } from "drizzle-orm";
 import {
@@ -78,7 +79,7 @@ import {
   emailCampaignSends,
   emailCampaigns,
 } from "./email-campaigns";
-import { emails } from "./emails";
+import { emails, emailVersions } from "./emails";
 import { passPurchases } from "./pass-purchases";
 import { quotedSqlList } from "./sql-list";
 import { workspaceReservations } from "./workspace-reservations";
@@ -104,6 +105,9 @@ export const emailCampaignAutomationVersions = pgTable(
     emailId: text("email_id")
       .references(() => emails.id)
       .$type<EmailId>(),
+    frozenEmailVersionId: text("frozen_email_version_id")
+      .references(() => emailVersions.id)
+      .$type<EmailVersionId>(),
     // Saved-audience conditions store ids only; they're evaluated live.
     flow: jsonb("flow").notNull(),
     // The flow trigger's tag, such as "Schedule" or "ReservationBooked".
@@ -141,6 +145,10 @@ export const emailCampaignAutomationVersions = pgTable(
     check(
       "email_campaign_automation_versions_purpose_check",
       sql`${t.purpose} in (${quotedSqlList(campaignPurposes)})`
+    ),
+    check(
+      "email_campaign_automation_versions_published_email_check",
+      sql`(${t.emailId} is null) = (${t.frozenEmailVersionId} is null) and (${t.emailId} is null or (${t.purpose} = 'marketing' and ${t.content} = '{}'::jsonb))`
     ),
   ]
 );

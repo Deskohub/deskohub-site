@@ -1310,5 +1310,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "One of the addresses isn't a valid email address. Check them and try again.",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "Outside production, campaign email can only go to @{domain} addresses, and some recipients are outside it. Nothing was sent.",
   "emailCampaignsSendingFailureRecipientsUnavailable": "Recipients couldn't be resolved because Dotypos or the database is unavailable. Nothing was sent and the code still works; try again in a moment.",
-  "emailCampaignsSendingFailureEmailSetupMissing": "Campaign email isn't configured for this deployment. Ask a developer to check its campaign email environment variables."
+  "emailCampaignsSendingFailureEmailSetupMissing": "Campaign email isn't configured for this deployment. Ask a developer to check its campaign email environment variables.",
+  "emailCampaignsComposerEditPublishedEmail": "Edit email in library",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "This email uses trigger values that don’t match this automation’s trigger. Choose a matching email or update the flow."
 }

@@ -164,8 +164,10 @@ export const toOperationError = (
             unavailable: "Select an available published marketing email.",
             "inline-content":
               "Choose a published email or enter campaign content.",
-            automated:
-              "Published emails can be selected for one-off campaigns.",
+            "trigger-required":
+              "This published email uses automation trigger values and can only be linked to an automated campaign.",
+            "automated-values-unsupported":
+              "Automated campaigns support published emails with static text or matching trigger values (customer and discount values are not supported on automations yet).",
           }[reason],
           cause,
         })

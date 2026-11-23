@@ -1,5 +1,6 @@
 import { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
 import { RegistryProvider, useAtomValue } from "@effect/atom-react";
+import { Layer } from "effect";
 import { Atom } from "effect/reactivity";
 import { Redirect, useLocalSearchParams } from "expo-router";
 import { type ReactNode, useState } from "react";
@@ -34,6 +35,8 @@ const sampleData = __DEV__
       historyOf: (
         require("../../src/customer-api/testing/sample-history") as typeof import("../../src/customer-api/testing/sample-history")
       ).sampleHistoryOf,
+      pastVisits:
+        require("../../src/account/reservations/testing/past-visits-sample") as typeof import("../../src/account/reservations/testing/past-visits-sample"),
     }
   : undefined;
 
@@ -46,6 +49,9 @@ const sampleData = __DEV__
  * (`deskohub://dev/reservations?order=sample-desk-pending&after=payment`),
  * and `?access=<id>` its access PIN
  * (`deskohub://dev/reservations?access=sample-desk-fulfilled&history=upcoming`).
+ * `?pastVisits=<count>` lists that many past coworking visits paid one by
+ * one, with nothing ahead and the pass rollout open, for the Past group's
+ * packs and passes offer.
  */
 export default function ReservationsSampleRoute() {
   const params = useLocalSearchParams<{
@@ -54,14 +60,16 @@ export default function ReservationsSampleRoute() {
     after?: string;
     access?: string;
     withdraw?: string;
+    pastVisits?: string;
   }>();
   if (!__DEV__ || sampleData === undefined) return <Redirect href="/" />;
   // A fresh registry for each state, as a new account would get.
   return (
     <SampleRegistry
-      key={`${params.history ?? ""}/${params.order ?? ""}/${params.after ?? ""}/${params.access ?? ""}/${params.withdraw ?? ""}`}
+      key={`${params.history ?? ""}/${params.order ?? ""}/${params.after ?? ""}/${params.access ?? ""}/${params.withdraw ?? ""}/${params.pastVisits ?? ""}`}
       history={params.history}
       withdraw={params.withdraw}
+      pastVisits={params.pastVisits}
     >
       <SampleScreen params={params} />
     </SampleRegistry>
@@ -71,26 +79,41 @@ export default function ReservationsSampleRoute() {
 function SampleRegistry({
   history,
   withdraw,
+  pastVisits,
   children,
 }: {
   readonly history: string | undefined;
   readonly withdraw?: string | undefined;
+  readonly pastVisits?: string | undefined;
   readonly children: ReactNode;
 }) {
-  const [initialValues] = useState(() =>
-    sampleData === undefined
-      ? []
-      : [
-          Atom.initialValue(
-            customerDataLayer,
-            sampleData.layer(
-              "linked",
-              sampleData.historyOf(history),
-              (workspace) => configureWithdrawal(workspace, withdraw)
+  const [initialValues] = useState(() => {
+    if (sampleData === undefined) return [];
+    let sampled: FakeWorkspace | undefined;
+    const layer = sampleData.layer(
+      "linked",
+      sampleData.historyOf(history),
+      (workspace) => {
+        sampled = workspace;
+        configureWithdrawal(workspace, withdraw);
+      }
+    );
+    const visits = Number(pastVisits);
+    return [
+      Atom.initialValue(
+        customerDataLayer,
+        sampled === undefined || !(visits > 0)
+          ? layer
+          : Layer.merge(
+              layer,
+              sampleData.pastVisits.pastVisitsApiLayer({
+                workspace: sampled,
+                past: sampleData.pastVisits.samplePastVisits(visits),
+              })
             )
-          ),
-        ]
-  );
+      ),
+    ];
+  });
   return (
     <RegistryProvider initialValues={initialValues}>
       {children}

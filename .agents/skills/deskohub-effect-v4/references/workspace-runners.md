@@ -27,18 +27,18 @@ A handler from `toWorkspaceWebHandler` lives for the process, and an `HttpApiBui
 
 ## Queue topics
 
-Define each Vercel Queue topic once with `defineQueueTopic({ topic, label, message, publish, retention })` from `shared/backend/queue/queue-topic.ts`, next to the service that publishes it. `message` is the payload's Standard Schema. `publish(input)` returns the wire `message` and its idempotency `key`, plus an optional per-message `delay` or `retention`; the key may use input fields the message omits.
+Define each Workspace queue topic once with `defineQueueTopic({ topic, label, message, publish, retention })` from `shared/backend/queue/queue-topic.ts`, next to the service that publishes it. `message` is the payload's Standard Schema. `publish(input)` returns the wire `message` and its idempotency `key`, plus an optional per-message `delay` or `retention`. The key may use input fields the message omits.
 
-- `topic.publish(input)` requires the `QueuePublisher` capability (`shared/backend/queue/queue-publisher.ts`). Its `Default` sends through `@vercel/queue` and is the one place a `DuplicateMessageError` becomes a `duplicate` success. A publishing service resolves `QueuePublisher` in its `Default` and provides `QueuePublisher.Default` in its `Live`. Tests provide `makeMemoryQueue().layer` or `unavailableQueue()` from `memory-queue.test-utils.ts`.
-- A route is `export const POST = topic.consume(operation, handle, redelivery)`. It decodes the message, logs `<label> queue message ignored: invalid payload` and acknowledges one that doesn't decode, and hands `handle` the decoded message.
-- Keep the route's queue trigger literal in `vercel.json`; `vercel.test.ts` checks that every topic has exactly one trigger, on `app/api/queues/workspace/<topic without workspace->/route.ts`. Add a new topic to that test.
+- `topic.publish(input)` requires the `QueuePublisher` capability. A publishing service resolves it in its `Default`. The caller's live Layer composition supplies `VercelQueuePublisher`, which turns the SDK's `DuplicateMessageError` into a `duplicate` success. Tests provide `makeMemoryQueue().layer` or `unavailableQueue()` from `memory-queue.test-utils.ts`.
+- A Vercel route exports `POST = defineVercelQueueRoute(operation, topic.consume(handle, redelivery))`. Provide the handler's dependencies in the route. Keep the route's queue trigger literal in `vercel.json`. `vercel.test.ts` checks that every topic has exactly one trigger, on `app/api/queues/workspace/<topic without workspace->/route.ts`. Add a new topic to that test.
 
 ## Queue consumers
 
-`topic.consume` is built on `defineQueueConsumer(operation, consume, redelivery)` from `shared/backend/queue/queue-consumer.ts`. It runs the task, logs a failure once with its cause through the censored logger, and hands the SDK only a `QueueDeliveryFailure` carrying the `retry` directive. The SDK `console.error`s a rethrown handler error outside censorship, so never let a raw cause escape a queue route.
+`topic.consume(handle, redelivery)` returns the Effect-based delivery function. Run it with a payload, the topic, message ID and delivery count as metadata, and the delivery mode. It logs `<label> queue message ignored: invalid payload` for an invalid message. Its result distinguishes handled, invalid, and failed messages. A failure returns a reason and an action after censoring and logging its cause.
 
-- The consumer's `redelivery` classifies only its own lone typed failure: `QueueRedelivery.Never` acknowledges, `WithBackoff` redelivers after 60 s doubling to 15 min, `At` redelivers at a known instant (up to the 1 h visibility limit), and `Default` keeps the trigger's `retryAfterSeconds`.
-- Only `VERCEL_ENV === "preview"` acknowledges a message whose database is gone (SQLSTATE class 28, 3D000, Neon endpoint not found) or that reached `previewQueueDeliveryLimit` deliveries. Elsewhere an unavailable database backs off and wins over any consumer classification, so nothing is dropped without one.
+- The consumer's `redelivery` classifies only its own lone typed failure. `QueueRedelivery.Never` acknowledges, `WithBackoff` redelivers after 60 s doubling to 15 min, `At` gives the instant when work becomes due, and `Default` uses the transport's default retry.
+- The `preview` mode acknowledges a message whose database is gone (SQLSTATE class 28, 3D000, Neon endpoint not found) or that reached `previewQueueDeliveryLimit` deliveries. In `durable` mode a database outage backs off and takes precedence over the consumer's classification.
+- The Vercel adapter selects preview mode only for `VERCEL_ENV === "preview"`. It runs delivery through `defineWorkspaceTask`, bounds scheduled retries to 1 s through 1 h, and translates the action to the SDK retry directive. The SDK prints rethrown errors outside the censored logger. Only the sanitized `QueueDeliveryFailure` reaches it after the delivery function logs the original cause.
 
 ## Shared runtime
 

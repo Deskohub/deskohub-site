@@ -1,0 +1,14 @@
+{
+  "$schema": "https://v2-9-14.turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/deskohub-workspace/vercel.json",
+        "$TURBO_ROOT$/infra/workspace-edge/**",
+        "$TURBO_ROOT$/.github/workflows/workspace-gcp-sandbox-smoke.yml"
+      ]
+    }
+  }
+}

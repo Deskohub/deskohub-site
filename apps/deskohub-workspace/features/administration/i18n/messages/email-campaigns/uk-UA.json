@@ -1349,5 +1349,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "Одна з адрес не є дійсною електронною адресою. Перевірте адреси та спробуйте ще раз.",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "Поза робочим середовищем листи кампаній можна надсилати лише на адреси @{domain}, а деякі одержувачі до них не належать. Нічого не надіслано.",
   "emailCampaignsSendingFailureRecipientsUnavailable": "Не вдалося визначити одержувачів, бо Dotypos або база даних недоступні. Нічого не надіслано, і код досі дійсний; спробуйте ще раз трохи згодом.",
-  "emailCampaignsSendingFailureEmailSetupMissing": "Листи кампаній не налаштовано в цьому розгортанні. Зверніться до команди розробки, щоб перевірити змінні середовища для листів кампаній."
+  "emailCampaignsSendingFailureEmailSetupMissing": "Листи кампаній не налаштовано в цьому розгортанні. Зверніться до команди розробки, щоб перевірити змінні середовища для листів кампаній.",
+  "emailCampaignsComposerEditPublishedEmail": "Редагувати лист у бібліотеці",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "Цей лист використовує значення тригера, що не відповідають тригеру цієї автоматизації. Виберіть відповідний лист або оновіть сценарій."
 }

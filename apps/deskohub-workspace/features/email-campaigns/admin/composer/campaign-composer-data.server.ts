@@ -1,12 +1,16 @@
 import "server-only";
 
+import { emailDocumentRequiredTriggers } from "@deskohub/workspace-admin-api";
 import { Effect, Layer } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { m } from "@/features/administration/i18n";
 import { runAdministrationPage } from "@/features/administrators/server/administration-request.server";
 import type { Locale } from "@/features/i18n";
 import { getRequestLocale } from "@/features/i18n/server/request-locale";
-import { listCampaignEmailPublications } from "../../backend/campaign-published-email";
+import {
+  isPublishedEmailCompatibleWithDelivery,
+  listCampaignEmailPublications,
+} from "../../backend/campaign-published-email";
 import { campaignBodyFormatVersion } from "../../body/campaign-body-document";
 import type {
   CampaignLocaleContent,
@@ -121,6 +125,15 @@ const loadPublishedEmails = Effect.flatMap(WorkspaceDatabase, ({ db }) =>
         locales: campaignContentLocaleOrder.filter((locale) =>
           Object.hasOwn(document.translations, locale)
         ),
+        compatibleWithOnce: isPublishedEmailCompatibleWithDelivery(
+          document,
+          "once"
+        ),
+        compatibleWithAutomated: isPublishedEmailCompatibleWithDelivery(
+          document,
+          "automated"
+        ),
+        requiredTriggers: emailDocumentRequiredTriggers(document),
       }))
     )
   )

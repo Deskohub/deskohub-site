@@ -5,9 +5,12 @@ import {
   getWorkspaceMeetingRoomProductTitle,
   getWorkspaceProductTierTitle,
 } from "@/features/checkout/product-catalog.i18n";
+import { GlobalReleaseGate } from "@/features/feature-flags/components/global-release-gate";
 import { type Locale, m } from "@/features/i18n";
 import { isMeetingRoomPageEnabled } from "@/features/meeting-room/backend/meeting-room-release-gate.server";
 import { isOfficePageEnabled } from "@/features/office/backend/office-release-gate.server";
+import { isCoworkPassesPageOpenAfterConnection } from "@/features/passes/backend/cowork-passes-release-gate.server";
+import { PassProductMarks } from "@/features/passes/components/pass-product-marks";
 import {
   getCoworkReservationPath,
   getMeetingRoomReservationPath,
@@ -79,9 +82,27 @@ export async function LandingPageOfferingSection({
                     {m.coworkReservationLink({}, { locale })}
                   </Link>
                 </Button>
-                <Link href={`${localePath}/coworking`} className={textLink()}>
-                  {m.landingOfferingCoworkPageLink({}, { locale })}
-                </Link>
+                <div className="flex grow flex-col items-start gap-x-3 gap-y-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between lg:has-[>a+a]:text-[0.9375rem]">
+                  <Link href={`${localePath}/coworking`} className={textLink()}>
+                    {m.landingOfferingCoworkPageLink({}, { locale })}
+                  </Link>
+                  <GlobalReleaseGate
+                    flag="cowork_passes"
+                    isEnabled={isCoworkPassesPageOpenAfterConnection}
+                  >
+                    <Link
+                      href={`${localePath}/pricing`}
+                      className={textLink({
+                        className: "inline-flex items-center gap-[0.4em]",
+                      })}
+                    >
+                      <PassProductMarks />
+                      <span className="text-balance">
+                        {m.landingOfferingPassesLink({}, { locale })}
+                      </span>
+                    </Link>
+                  </GlobalReleaseGate>
+                </div>
               </OfferingActions>
             </OfferingRow>
 

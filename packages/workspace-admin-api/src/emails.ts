@@ -6,6 +6,7 @@ import {
   EmailCustomerSelection,
 } from "./email-customer-selection";
 import { EmailValueName } from "./email-identifiers";
+import { EmailTriggerSelection } from "./email-trigger-selection";
 import { AdministrationStoredDiscountId } from "./workspace-admin-api";
 
 const key = Schema.NonEmptyString;
@@ -117,25 +118,44 @@ export const EmailDiscountSelection = Schema.Struct({
 });
 export type EmailDiscountSelection = typeof EmailDiscountSelection.Type;
 
+export const EmailValueReference = Schema.Struct({
+  name: EmailValueName,
+  field: Schema.optionalKey(path),
+});
+export type EmailValueReference = typeof EmailValueReference.Type;
+
+export const EmailComponentCondition = Schema.Struct({
+  name: EmailValueName,
+  field: Schema.optionalKey(path),
+  present: Schema.Boolean,
+});
+export type EmailComponentCondition = typeof EmailComponentCondition.Type;
+
 /** Position in this array is generation order; unused definitions are not generated. */
 export const EmailValueDefinition = Schema.Struct({
   name: EmailValueName,
-  source: Schema.Union([EmailCustomerSelection, EmailDiscountSelection]),
+  source: Schema.Union([
+    EmailCustomerSelection,
+    EmailDiscountSelection,
+    EmailTriggerSelection,
+  ]),
   fallback: Schema.optionalKey(Schema.Record(key, Schema.String)),
   customerShape: Schema.optionalKey(EmailCustomerField),
   customerSortShape: Schema.optionalKey(EmailCustomerField),
 });
 export type EmailValueDefinition = typeof EmailValueDefinition.Type;
 
+const when = Schema.optionalKey(EmailComponentCondition);
 const componentField = Schema.Struct({ field: path, labelKey: key });
 const fields = Schema.Array(componentField).check(Schema.isMinLength(1));
 export const EmailBodyComponent = Schema.Union([
-  Schema.TaggedStruct("Paragraph", { id: key, textKey: key, links }),
+  Schema.TaggedStruct("Paragraph", { id: key, textKey: key, links, when }),
   Schema.TaggedStruct("Heading", {
     id: key,
     textKey: key,
     level: Schema.Literals([1, 2, 3]),
     links,
+    when,
   }),
   /** A bulleted or numbered list of translated rich texts. */
   Schema.TaggedStruct("TextList", {
@@ -144,10 +164,11 @@ export const EmailBodyComponent = Schema.Union([
     start: listStart,
     items: textListItems,
     links,
+    when,
   }),
-  Schema.TaggedStruct("Divider", { id: key }),
+  Schema.TaggedStruct("Divider", { id: key, when }),
   /** An empty line, as a blank paragraph renders. */
-  Schema.TaggedStruct("Spacer", { id: key }),
+  Schema.TaggedStruct("Spacer", { id: key, when }),
   Schema.TaggedStruct("Image", {
     id: key,
     src: httpUrl,
@@ -156,9 +177,21 @@ export const EmailBodyComponent = Schema.Union([
     align: Schema.optionalKey(Schema.Literals(["left", "center", "right"])),
     /** Intrinsic width in whole pixels; unset fills the body column. */
     width: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+    when,
   }),
-  Schema.TaggedStruct("Button", { id: key, labelKey: key, href: destination }),
-  Schema.TaggedStruct("Record", { id: key, value: EmailValueName, fields }),
+  Schema.TaggedStruct("Button", {
+    id: key,
+    labelKey: key,
+    href: Schema.optionalKey(destination),
+    hrefValue: Schema.optionalKey(EmailValueReference),
+    when,
+  }),
+  Schema.TaggedStruct("Record", {
+    id: key,
+    value: EmailValueName,
+    fields,
+    when,
+  }),
   Schema.TaggedStruct("List", {
     id: key,
     value: EmailValueName,
@@ -170,6 +203,7 @@ export const EmailBodyComponent = Schema.Union([
       })
     ),
     limit: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+    when,
   }),
   Schema.TaggedStruct("Offer", {
     id: key,
@@ -177,6 +211,7 @@ export const EmailBodyComponent = Schema.Union([
     labelKey: key,
     href: destination,
     prefillDiscountCode: Schema.optionalKey(Schema.Boolean),
+    when,
   }),
 ]);
 export type EmailBodyComponent = typeof EmailBodyComponent.Type;
@@ -192,7 +227,7 @@ export type EmailTranslation = typeof EmailTranslation.Type;
 
 /** Partly configured controls remain serializable until explicit publication. */
 const draftSource = Schema.Struct({
-  kind: Schema.Literals(["customer", "discount"]),
+  kind: Schema.Literals(["customer", "discount", "trigger"]),
   path: Schema.optionalKey(Schema.Array(Schema.String)),
   fields: Schema.optionalKey(Schema.Array(Schema.Array(Schema.String))),
   sort: Schema.optionalKey(
@@ -206,6 +241,11 @@ const draftSource = Schema.Struct({
   validDays: Schema.optionalKey(Schema.Int),
   maxUses: Schema.optionalKey(Schema.Int),
   maxUsesPerCustomer: Schema.optionalKey(Schema.Int),
+  trigger: Schema.optionalKey(Schema.String),
+});
+const draftValueReference = Schema.Struct({
+  name: Schema.optionalKey(Schema.String),
+  field: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 const draftComponent = Schema.Struct({
   _tag: Schema.Literals([
@@ -230,11 +270,19 @@ const draftComponent = Schema.Struct({
   src: Schema.optionalKey(Schema.String),
   altKey: Schema.optionalKey(Schema.String),
   href: Schema.optionalKey(Schema.String),
+  hrefValue: Schema.optionalKey(draftValueReference),
   prefillDiscountCode: Schema.optionalKey(Schema.Boolean),
   align: Schema.optionalKey(Schema.Literals(["left", "center", "right"])),
   width: Schema.optionalKey(Schema.Int),
   labelKey: Schema.optionalKey(Schema.String),
   value: Schema.optionalKey(Schema.String),
+  when: Schema.optionalKey(
+    Schema.Struct({
+      name: Schema.optionalKey(Schema.String),
+      field: Schema.optionalKey(Schema.Array(Schema.String)),
+      present: Schema.optionalKey(Schema.Boolean),
+    })
+  ),
   sort: Schema.optionalKey(
     Schema.Struct({
       path: Schema.optionalKey(Schema.Array(Schema.String)),

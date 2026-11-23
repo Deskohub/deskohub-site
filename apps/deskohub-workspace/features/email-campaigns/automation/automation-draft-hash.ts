@@ -1,10 +1,17 @@
 import { createHash } from "node:crypto";
-import type { AutomationFlowType as AutomationFlow } from "@deskohub/workspace-admin-api";
+import type {
+  AutomationFlowType as AutomationFlow,
+  EmailId,
+  EmailVersionId,
+} from "@deskohub/workspace-admin-api";
 import { Schema } from "effect";
 import type { CampaignRow } from "@/db/schema";
 import { canonicalJson } from "@/shared/utils/canonical-json";
 import type { AudienceFilter } from "../audience-filter";
-import { hashCampaignContent } from "../body/campaign-content-hash";
+import {
+  hashCampaignContent,
+  hashCampaignEmailVersion,
+} from "../body/campaign-content-hash";
 import { canonicalAutomationFlow } from "./automation-flow";
 
 export const AutomationDraftHash = Schema.String.pipe(
@@ -17,14 +24,16 @@ export const AutomationDraftHash = Schema.String.pipe(
 export type AutomationDraftHash = typeof AutomationDraftHash.Type;
 
 /**
- * What an activation publishes: the campaign's content, purpose and
- * template, its working-copy flow, and its audience's current filter. A
- * campaign row spreads into it.
+ * What an activation publishes: the campaign's content (or linked published
+ * email version), purpose and template, its working-copy flow, and its
+ * audience's current filter. A campaign row spreads into it.
  */
 export type AutomationPublishableCopy = Pick<
   CampaignRow,
   "purpose" | "templateKey" | "content"
 > & {
+  readonly emailId?: EmailId | null;
+  readonly emailVersionId?: EmailVersionId | null;
   readonly flow: AutomationFlow;
   readonly audienceFilter: AudienceFilter;
 };
@@ -37,15 +46,20 @@ export type AutomationPublishableCopy = Pick<
 export function hashAutomationDraft(
   copy: AutomationPublishableCopy
 ): AutomationDraftHash {
+  const content =
+    copy.emailVersionId != null
+      ? hashCampaignEmailVersion(copy.emailVersionId)
+      : hashCampaignContent({
+          purpose: copy.purpose,
+          templateKey: copy.templateKey,
+          locales: copy.content,
+        });
   return AutomationDraftHash.make(
     createHash("sha256")
       .update(
         canonicalJson({
-          content: hashCampaignContent({
-            purpose: copy.purpose,
-            templateKey: copy.templateKey,
-            locales: copy.content,
-          }),
+          content,
+          ...(copy.emailId && { emailId: copy.emailId }),
           flow: canonicalAutomationFlow(copy.flow),
           audienceFilter: copy.audienceFilter,
         })

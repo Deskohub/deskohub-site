@@ -1,10 +1,19 @@
 import type { DotyposCustomerId } from "@deskohub/dotypos";
+import { mapSupportedLocales } from "@deskohub/i18n/locale-registry";
 import type {
   AutomationFlowType as AutomationFlow,
   AutomationTriggerType as AutomationTrigger,
+  EmailDocument,
+  EmailId,
+  EmailTriggerEvent,
+  EmailVersionId,
+} from "@deskohub/workspace-admin-api";
+import {
+  EmailDocumentForPublication,
+  requiredEmailValueNames,
 } from "@deskohub/workspace-admin-api";
 import { inArray, sql } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import {
   WorkspaceDatabase,
   type WorkspaceDatabaseClient,
@@ -20,6 +29,8 @@ import {
   emailCampaignRecipients,
   emailCampaignSends,
   emailCampaigns,
+  emails,
+  emailVersions,
 } from "@/db/schema";
 import type { Locale } from "@/features/i18n";
 import type { AudienceFilter } from "../audience-filter";
@@ -28,7 +39,10 @@ import type {
   CampaignLocalizedContent,
   CampaignPurpose,
 } from "../body/campaign-content";
-import { hashCampaignContent } from "../body/campaign-content-hash";
+import {
+  hashCampaignContent,
+  hashCampaignEmailVersion,
+} from "../body/campaign-content-hash";
 import type {
   CampaignAudienceId,
   CampaignId,
@@ -178,6 +192,163 @@ export const seedCampaignSend = async (
   return { campaignId: campaign!.id, sendId };
 };
 
+/** Reusable 7-locale pass reminder Email Library document for tests. */
+export const passReminderEmailDocumentFixture = (
+  trigger: EmailTriggerEvent
+): typeof EmailDocument.Encoded => ({
+  purpose: "marketing",
+  templateKey: "workspace",
+  values: [{ name: "pass", source: { kind: "trigger", trigger } }],
+  structure: [
+    {
+      _tag: "Paragraph",
+      id: "greeting_named",
+      textKey: "greeting_named",
+      when: { name: "pass", field: ["firstName"], present: true },
+    },
+    {
+      _tag: "Paragraph",
+      id: "greeting_unnamed",
+      textKey: "greeting_unnamed",
+      when: { name: "pass", field: ["firstName"], present: false },
+    },
+    {
+      _tag: "Paragraph",
+      id: "body",
+      textKey: "body",
+    },
+    ...(trigger === "unlimited-ending"
+      ? [
+          {
+            _tag: "Paragraph" as const,
+            id: "desk_note",
+            textKey: "desk_note",
+            when: { name: "pass", field: ["deskLabel"], present: true },
+          },
+        ]
+      : []),
+    {
+      _tag: "Button",
+      id: "cta",
+      labelKey: "cta_label",
+      hrefValue: { name: "pass", field: ["actionUrl"] },
+    },
+  ],
+  translations: mapSupportedLocales((locale) => ({
+    subject:
+      trigger === "entry-pack-expiring"
+        ? [
+            { _tag: "Text" as const, text: `[${locale}] Entries left: ` },
+            {
+              _tag: "Value" as const,
+              name: "pass",
+              field: ["remainingEntries"],
+            },
+            { _tag: "Text" as const, text: " until " },
+            { _tag: "Value" as const, name: "pass", field: ["endsOn"] },
+          ]
+        : [
+            { _tag: "Text" as const, text: `[${locale}] Pass ends ` },
+            { _tag: "Value" as const, name: "pass", field: ["endsOn"] },
+          ],
+    preheader: [
+      { _tag: "Value" as const, name: "pass", field: ["tier"] },
+      { _tag: "Text" as const, text: " · " },
+      { _tag: "Value" as const, name: "pass", field: ["endsOn"] },
+    ],
+    texts: {
+      greeting_named: [
+        { _tag: "Text" as const, text: "Hi " },
+        { _tag: "Value" as const, name: "pass", field: ["firstName"] },
+        { _tag: "Text" as const, text: "," },
+      ],
+      greeting_unnamed: [{ _tag: "Text" as const, text: "Hello," }],
+      body:
+        trigger === "entry-pack-expiring"
+          ? [
+              { _tag: "Text" as const, text: "Remaining: " },
+              {
+                _tag: "Value" as const,
+                name: "pass",
+                field: ["remainingEntries"],
+                bold: true,
+              },
+              { _tag: "Text" as const, text: "/" },
+              { _tag: "Value" as const, name: "pass", field: ["totalEntries"] },
+              { _tag: "Text" as const, text: " (" },
+              { _tag: "Value" as const, name: "pass", field: ["tier"] },
+              { _tag: "Text" as const, text: ")" },
+            ]
+          : [
+              { _tag: "Text" as const, text: "Renew starting " },
+              {
+                _tag: "Value" as const,
+                name: "pass",
+                field: ["renewalStartsOn"],
+                bold: true,
+              },
+              { _tag: "Text" as const, text: " (" },
+              { _tag: "Value" as const, name: "pass", field: ["tier"] },
+              { _tag: "Text" as const, text: ")" },
+            ],
+      ...(trigger === "unlimited-ending" && {
+        desk_note: [
+          { _tag: "Text" as const, text: "Reserved desk: " },
+          {
+            _tag: "Value" as const,
+            name: "pass",
+            field: ["deskLabel"],
+            bold: true,
+          },
+        ],
+      }),
+      cta_label: [
+        {
+          _tag: "Text" as const,
+          text: trigger === "entry-pack-expiring" ? "Book a day" : "Renew pass",
+        },
+      ],
+    },
+  })),
+});
+
+/** Publishes a reusable Email Library document and returns its IDs. */
+export const seedPublishedEmail = async (
+  db: WorkspaceDatabaseClient,
+  input: {
+    readonly title?: string;
+    readonly document: typeof EmailDocument.Encoded;
+  }
+): Promise<{
+  readonly emailId: EmailId;
+  readonly versionId: EmailVersionId;
+}> => {
+  const published = Schema.decodeUnknownSync(EmailDocumentForPublication)(
+    input.document
+  );
+  const [email] = await Effect.runPromise(
+    db
+      .insert(emails)
+      .values({
+        title: input.title ?? "Synthetic published email",
+        draft: input.document,
+      })
+      .returning({ id: emails.id })
+  );
+  const [version] = await Effect.runPromise(
+    db
+      .insert(emailVersions)
+      .values({
+        emailId: email!.id,
+        versionNumber: 1,
+        document: published,
+        requiredValueNames: [...requiredEmailValueNames(published)],
+      })
+      .returning({ id: emailVersions.id })
+  );
+  return { emailId: email!.id, versionId: version!.id };
+};
+
 /**
  * Inserts an automated campaign in `status` (Active by default) whose own
  * purpose and content differ from anything its versions publish.
@@ -187,6 +358,7 @@ export const seedAutomatedCampaign = async (
   input: {
     readonly purpose: CampaignPurpose;
     readonly status?: (typeof automatedCampaignStatuses)[number];
+    readonly emailId?: EmailId;
   }
 ) => {
   const [campaign] = await Effect.runPromise(
@@ -196,7 +368,10 @@ export const seedAutomatedCampaign = async (
         title: "Come back soon",
         purpose: input.purpose,
         templateKey: "workspace",
-        content: campaignContentFixture("Rozpracovaný koncept"),
+        content: input.emailId
+          ? {}
+          : campaignContentFixture("Rozpracovaný koncept"),
+        emailId: input.emailId ?? null,
         delivery: "automated",
         status: input.status ?? "active",
       })
@@ -222,14 +397,17 @@ export const seedAutomationVersion = async (
     readonly text?: string;
     /** Replaces the content `text` builds. */
     readonly content?: CampaignLocalizedContent;
+    readonly emailId?: EmailId;
+    readonly frozenEmailVersionId?: EmailVersionId;
     readonly trigger?: AutomationTrigger;
     readonly audienceFilter?: AudienceFilter;
     readonly activatedAt?: Temporal.Instant;
     readonly flow?: unknown;
   }
 ) => {
-  const content =
-    input.content ?? campaignContentFixture(input.text ?? "Verze");
+  const content = input.emailId
+    ? {}
+    : (input.content ?? campaignContentFixture(input.text ?? "Verze"));
   const [version] = await Effect.runPromise(
     db
       .insert(emailCampaignAutomationVersions)
@@ -243,11 +421,15 @@ export const seedAutomationVersion = async (
         purpose: input.purpose,
         templateKey: "workspace",
         content,
-        contentHash: hashCampaignContent({
-          purpose: input.purpose,
-          templateKey: "workspace",
-          locales: content,
-        }),
+        emailId: input.emailId ?? null,
+        frozenEmailVersionId: input.frozenEmailVersionId ?? null,
+        contentHash: input.frozenEmailVersionId
+          ? hashCampaignEmailVersion(input.frozenEmailVersionId)
+          : hashCampaignContent({
+              purpose: input.purpose,
+              templateKey: "workspace",
+              locales: content,
+            }),
         audienceFilter: input.audienceFilter ?? everyoneFilter,
         draftHash: `draft-${input.versionNumber ?? 1}`,
         activatedAt:

@@ -1,0 +1,87 @@
+name: Workspace GCP sandbox smoke
+
+# Manual only: proves GitHub federation reaches the approved sandbox project
+# and runs read-only project, billing and state bucket checks. It never runs
+# on pushes or pull requests and changes nothing in Google Cloud.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-gcp-sandbox-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Sandbox identity and state check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: workspace-gcp-sandbox
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_SANDBOX_PROJECT_ID: ${{ vars.GCP_SANDBOX_PROJECT_ID }}
+      GCP_SANDBOX_WIF_PROVIDER: ${{ vars.GCP_SANDBOX_WIF_PROVIDER }}
+      GCP_SANDBOX_DEPLOY_SA: ${{ vars.GCP_SANDBOX_DEPLOY_SA }}
+      GCP_SANDBOX_STATE_BUCKET: ${{ vars.GCP_SANDBOX_STATE_BUCKET }}
+    steps:
+      - name: Require sandbox configuration
+        run: |
+          for name in GCP_SANDBOX_PROJECT_ID GCP_SANDBOX_WIF_PROVIDER GCP_SANDBOX_DEPLOY_SA GCP_SANDBOX_STATE_BUCKET; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Set the $name variable on the workspace-gcp-sandbox environment."
+              exit 1
+            fi
+          done
+          case "$GCP_SANDBOX_DEPLOY_SA" in
+            *"@${GCP_SANDBOX_PROJECT_ID}.iam.gserviceaccount.com") ;;
+            *)
+              echo "::error::The deploy service account must belong to the sandbox project."
+              exit 1
+              ;;
+          esac
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ vars.GCP_SANDBOX_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_SANDBOX_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SANDBOX_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Prove the federated identity and project
+        run: |
+          account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
+          if [ "$account" != "$GCP_SANDBOX_DEPLOY_SA" ]; then
+            echo "::error::Active account is not the sandbox deploy service account."
+            exit 1
+          fi
+          project="$(gcloud projects describe "$GCP_SANDBOX_PROJECT_ID" --format='value(projectId)')"
+          if [ "$project" != "$GCP_SANDBOX_PROJECT_ID" ]; then
+            echo "::error::The deploy identity cannot read the approved sandbox project."
+            exit 1
+          fi
+          gcloud projects describe "$GCP_SANDBOX_PROJECT_ID" \
+            --format='value(labels.workspace-sandbox-max-spend,labels.workspace-sandbox-teardown)'
+
+      - name: Check billing
+        run: |
+          billing="$(gcloud billing projects describe "$GCP_SANDBOX_PROJECT_ID" --format='value(billingEnabled)')"
+          if [ "$billing" != "True" ]; then
+            echo "::error::Billing is not enabled on the sandbox project."
+            exit 1
+          fi
+
+      - name: Check the state bucket
+        run: |
+          versioning="$(gcloud storage buckets describe "gs://${GCP_SANDBOX_STATE_BUCKET}" --format='value(versioning_enabled)')"
+          if [ "$versioning" != "True" ]; then
+            echo "::error::The state bucket must have object versioning enabled."
+            exit 1
+          fi
+          gcloud storage ls "gs://${GCP_SANDBOX_STATE_BUCKET}" > /dev/null

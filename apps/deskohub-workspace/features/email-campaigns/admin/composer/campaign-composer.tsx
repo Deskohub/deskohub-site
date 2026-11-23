@@ -1,7 +1,11 @@
 "use client";
 
 import { effectSchemaResolver } from "@deskohub/effect-schema-resolver";
-import type { EmailId } from "@deskohub/workspace-admin-api";
+import type {
+  AutomationTriggerKind,
+  EmailId,
+  EmailTriggerEvent,
+} from "@deskohub/workspace-admin-api";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { m } from "@/features/administration/i18n";
@@ -44,6 +48,9 @@ export type CampaignComposerPublishedEmail = {
   readonly emailId: EmailId;
   readonly title: string;
   readonly locales: readonly Locale[];
+  readonly compatibleWithOnce?: boolean;
+  readonly compatibleWithAutomated?: boolean;
+  readonly requiredTriggers?: readonly EmailTriggerEvent[];
 };
 
 /**
@@ -57,6 +64,8 @@ export type CampaignComposerCampaign = {
   readonly delivery: CampaignDelivery;
   /** An archived automated campaign can no longer change. */
   readonly readOnly: boolean;
+  /** Saved automation trigger kind, when editing an automated campaign. */
+  readonly automationTriggerKind?: AutomationTriggerKind | null;
 };
 
 export function CampaignComposer({
@@ -97,9 +106,32 @@ export function CampaignComposer({
   /** Chosen while creating; a saved campaign's delivery never changes. */
   const [newDelivery, setNewDelivery] = useState<CampaignDelivery>("once");
   const delivery = campaign?.delivery ?? newDelivery;
-  const linkedEmailId = delivery === "once" ? emailId || undefined : undefined;
-  const publishedEmail = publishedEmails.find(
+  const linkedEmailId = emailId || undefined;
+  const automationTriggerKind = campaign?.automationTriggerKind ?? null;
+  const selectablePublishedEmails = publishedEmails.filter((option) => {
+    if (option.emailId === linkedEmailId) return true;
+    if (delivery === "once") return option.compatibleWithOnce !== false;
+    if (option.compatibleWithAutomated === false) return false;
+    if (
+      automationTriggerKind &&
+      option.requiredTriggers &&
+      option.requiredTriggers.length > 0
+    ) {
+      return option.requiredTriggers.every(
+        (trigger) => trigger === automationTriggerKind
+      );
+    }
+    return true;
+  });
+  const publishedEmail = selectablePublishedEmails.find(
     (option) => option.emailId === linkedEmailId
+  );
+  const triggerMismatch = Boolean(
+    delivery === "automated" &&
+      automationTriggerKind &&
+      publishedEmail?.requiredTriggers?.some(
+        (trigger) => trigger !== automationTriggerKind
+      )
   );
 
   const audience = audiences.find((option) => option.id === audienceId);
@@ -193,8 +225,9 @@ export function CampaignComposer({
                 linkedEmailId={linkedEmailId}
                 onDeliveryChange={setNewDelivery}
                 template={template}
-                publishedEmails={publishedEmails}
+                publishedEmails={selectablePublishedEmails}
                 templates={templates}
+                triggerMismatch={triggerMismatch}
               />
             </ComposerSection>
             {!linkedEmailId && (

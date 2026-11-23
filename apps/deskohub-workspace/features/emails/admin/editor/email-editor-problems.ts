@@ -50,6 +50,7 @@ const componentSettingMessages = {
   level: m.emailsEditorProblemComponentLevel,
   sort: m.emailsEditorProblemComponentSort,
   limit: m.emailsEditorProblemComponentLimit,
+  when: m.emailsEditorProblemComponentWhen,
 } as const;
 
 const valueSettingMessages = {
@@ -59,6 +60,7 @@ const valueSettingMessages = {
   validDays: m.emailsEditorProblemValueValidDays,
   maxUses: m.emailsEditorProblemValueMaxUses,
   maxUsesPerCustomer: m.emailsEditorProblemValueMaxUsesPerCustomer,
+  trigger: m.emailsEditorProblemValueTrigger,
 } as const;
 
 const selectionMessages = {
@@ -94,10 +96,12 @@ const mismatchMessages = {
  */
 const valueSettingField = (
   field: string,
-  kind: "customer" | "discount" | undefined
+  kind: "customer" | "discount" | "trigger" | undefined
 ): string => {
   if (field !== "source") return field;
-  return kind === "discount" ? "discountId" : "path";
+  if (kind === "discount") return "discountId";
+  if (kind === "trigger") return "trigger";
+  return "path";
 };
 
 type Placed = Pick<EmailEditorProblem, "fieldId" | "locale" | "place">;

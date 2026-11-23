@@ -172,7 +172,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
     const {
       reservationHoldCleanupScheduleMaxDelaySeconds,
       reservationHoldCleanupTopic,
-    } = await import("./reservation-hold-cleanup-queue.service");
+    } = await import("./reservation-hold-cleanup-topic");
 
     const message = reservationHoldCleanupTopic.publication({
       orderId: "order-id" as WorkspaceReservationId,
@@ -263,7 +263,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
 
   test("decodes only well-formed messages", async () => {
     const { reservationHoldCleanupTopic } = await import(
-      "./reservation-hold-cleanup-queue.service"
+      "./reservation-hold-cleanup-topic"
     );
     const { decodeStandardSchema } = await import("@deskohub/standard-schema");
 
@@ -354,7 +354,7 @@ describe("ReservationHoldCleanupScheduleService", () => {
 
   test("cancels a due hold whose deadline came from the nanosecond clock", async () => {
     const { reservationHoldCleanupTopic } = await import(
-      "./reservation-hold-cleanup-queue.service"
+      "./reservation-hold-cleanup-topic"
     );
     const { toStoredInstant } = await import("@/db/instant");
     // Temporal.Now has nanoseconds; the reservation row keeps microseconds.

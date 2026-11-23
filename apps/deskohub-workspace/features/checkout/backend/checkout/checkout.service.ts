@@ -43,6 +43,7 @@ import {
 } from "@/features/reservation/persistence-contracts";
 import { hasReservationIntervalEnded } from "@/features/reservation/reservation-interval";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
+import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
 import { SealedStateKeys } from "@/shared/backend/sealed-state-keys.service";
 import { type Money, moneyEquals } from "@/shared/money/money";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
@@ -51,6 +52,7 @@ import {
   localDateTimeToInstant,
 } from "@/shared/utils/temporal";
 import { CheckoutAnalytics } from "../analytics/checkout-analytics.service";
+import { FioAccountPollRepository } from "../fio/fio-account-poll.repository";
 import { FioPollWake } from "../fio/fio-poll-wake.service";
 import { OrderPaymentHandlers } from "../payment/order-payment-handlers.service";
 import { getPaymentCustomer } from "../payment/payment-customer";
@@ -262,7 +264,13 @@ export class CheckoutService extends Context.Service<
     Layer.provide(PaymentLifecycleRepository.Live),
     Layer.provide(QrPaymentRepository.Default),
     Layer.provide(AccountingStorage.Live),
-    Layer.provide(FioPollWake.Live),
+    Layer.provide(
+      FioPollWake.Default.pipe(
+        Layer.provide(
+          Layer.mergeAll(FioAccountPollRepository.Default, VercelQueuePublisher)
+        )
+      )
+    ),
     Layer.provide(WorkspaceReservationRepository.Default),
     Layer.provide(WorkspaceDatabase.Default),
     Layer.provide(WorkspaceDotyposLayer),

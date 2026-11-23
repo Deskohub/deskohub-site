@@ -44,6 +44,8 @@ const EmailDraftPreviewInput = Schema.Struct({
   locale: Schema.Literals(locales),
   /** Values the host prepared; every other value shows a synthetic sample. */
   values: Schema.optionalKey(Schema.Record(Schema.String, EmailValueSnapshot)),
+  /** Optional fields (`value.field`) to omit in the sample preview. */
+  omittedFields: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 const previewEmailDraftAction = defineAdministrationAction(
@@ -72,7 +74,11 @@ const previewEmailDraftAction = defineAdministrationAction(
       document,
       locale: input.locale,
       values: {
-        ...sampleEmailValues(document, input.locale, now),
+        ...sampleEmailValues(document, input.locale, now, {
+          omittedFields: input.omittedFields
+            ? new Set(input.omittedFields)
+            : undefined,
+        }),
         ...input.values,
       },
     });

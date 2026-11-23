@@ -17,6 +17,12 @@ export interface AccountSectionPanelProps
   /** Content rendered on the trailing side of the header row. */
   readonly actions?: ReactNode;
   readonly footer?: ReactNode;
+  /**
+   * `inset` sets the footer inside the panel padding below a divider, as form
+   * actions sit; `edge-to-edge` spans the panel's full width and bottom edge
+   * and leaves its chrome to the footer content.
+   */
+  readonly footerLayout?: "inset" | "edge-to-edge";
   /** Classes for the body below the header, such as centering its content. */
   readonly bodyClassName?: string;
   readonly variant?: "default" | "destructive";
@@ -30,6 +36,7 @@ export function AccountSectionPanel({
   children,
   className,
   footer,
+  footerLayout = "inset",
   size = "default",
   title,
   titleId,
@@ -72,6 +79,13 @@ export function AccountSectionPanel({
         "min-w-0 rounded-2xl border bg-white p-5 text-navy-blue shadow-[0_18px_40px_-28px_rgba(0,2,79,0.45)] @xl:p-8 [&_input]:scroll-mb-[calc(12rem+env(safe-area-inset-bottom))] [&_select]:scroll-mb-[calc(12rem+env(safe-area-inset-bottom))]",
         tone.border,
         density.section,
+        // An edge-to-edge footer with content takes the bottom padding's place,
+        // since a negative margin would push a docked sticky footer off
+        // screen. Clipping keeps it inside the rounded corners without
+        // creating a scroll container, so it stays sticky.
+        footer !== undefined &&
+          footerLayout === "edge-to-edge" &&
+          "has-[>[data-footer-layout=edge-to-edge]>:not(template)]:overflow-clip has-[>[data-footer-layout=edge-to-edge]>:not(template)]:pb-0!",
         className
       )}
       {...rest}
@@ -106,9 +120,21 @@ export function AccountSectionPanel({
       {footer !== undefined && (
         <div
           className={cn(
-            "sticky bottom-[var(--install-bar-space,0px)] z-10 mt-8 min-w-0 border-t bg-white pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]",
-            tone.divider
+            "sticky z-10 min-w-0",
+            {
+              inset: cn(
+                "bottom-[var(--install-bar-space,0px)] mt-8 border-t bg-white pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]",
+                tone.divider
+              ),
+              // Docks above the install bar or the safe area, whichever is
+              // taller, since its tint would otherwise fill the safe area. A
+              // footer that renders nothing, or is still streaming in (React
+              // holds its place with a `template`), leaves the panel as is.
+              "edge-to-edge":
+                "bottom-[max(var(--install-bar-space,0px),env(safe-area-inset-bottom))] mt-[18px] -mx-5 not-has-[>:not(template)]:hidden @xl:-mx-8",
+            }[footerLayout]
           )}
+          data-footer-layout={footerLayout}
         >
           {footer}
         </div>
