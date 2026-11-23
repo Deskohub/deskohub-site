@@ -603,6 +603,16 @@ describe("Workspace E2E status after a failed resolution", () => {
     expect(calls[0]).toContain(
       "No Vercel deployment record matches this preview yet"
     );
+    expect(calls[0]).toMatch(/\[preview: success:[0-9a-f]{8}\]/);
+
+    // A failed event whose URL only has a successful deployment record must
+    // also fail closed and persist the expected `failed` outcome in its tag.
+    const failedOutcomeMismatch = await publishedStatus(
+      await resolveTarget("failed", deploymentSucceeded)
+    );
+    expect(failedOutcomeMismatch).toHaveLength(1);
+    expect(failedOutcomeMismatch[0]).toContain("state=failure");
+    expect(failedOutcomeMismatch[0]).toMatch(/\[preview: failed:[0-9a-f]{8}\]/);
   });
 
   test("publishes a failure when the target step failed without a description", async () => {

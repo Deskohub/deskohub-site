@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   classifyE2EStatusDescription,
   diffFlowIds,
+  findCoveringCarriedSource,
   formatE2EStatusDescription,
   parseFlowsInput,
   parsePrBodyE2EFlows,
@@ -97,6 +98,7 @@ switch (command) {
     let allCovered = false;
     let realCoversRequested = false;
     let carriedCoversRequested = false;
+    let coveringCarriedSource = null;
     let unionCoversRequested = false;
     let coveredByRunning = false;
     let requestedHasFailed = false;
@@ -114,10 +116,11 @@ switch (command) {
       );
       allCovered = missing.length === 0;
       realCoversRequested = missingReal.length === 0;
-      carriedCoversRequested =
-        summary.carriedSourceSha !== "" &&
-        diffFlowIds(parsedRequested.selected, summary.carriedPassedFlows)
-          .length === 0;
+      coveringCarriedSource = findCoveringCarriedSource(
+        summary.carriedSources,
+        parsedRequested.selected
+      );
+      carriedCoversRequested = coveringCarriedSource !== null;
       unionCoversRequested =
         diffFlowIds(parsedRequested.selected, union).length === 0;
       const inFlightCovered = unionFlowIds(
@@ -146,6 +149,7 @@ switch (command) {
       allCovered,
       realCoversRequested,
       carriedCoversRequested,
+      coveringCarriedSource,
       unionCoversRequested,
       coveredByRunning,
       requestedHasFailed,

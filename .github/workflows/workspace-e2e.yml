@@ -331,7 +331,7 @@ jobs:
           if [[ "$deployment_matches_target" != "true" ]]; then
             preview_tag="$(printf '%s' "$normalized_url" | sha256sum | cut -c1-8)"
             fail "No $TARGET_DEPLOYMENT exact-SHA Workspace deployment matches the target URL" \
-              "No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: $preview_tag]" \
+              "No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: $TARGET_DEPLOYMENT:$preview_tag]" \
               preview-record-mismatch
           fi
 

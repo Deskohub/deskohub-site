@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import {
   classifyE2EStatusDescription,
   diffFlowIds,
+  findCoveringCarriedSource,
   formatE2EStatusDescription,
   isWorkspaceE2ECaseSelected,
   needsWorkspaceE2ECheckoutPreparation,
@@ -104,6 +105,28 @@ describe("PR description ## E2E flows parser", () => {
       flows: "account",
     });
 
+    // Per GFM §4.3 / §4.1, trailing HTML comments prevent Setext underlines
+    // and thematic breaks from closing a paragraph, so a following `<span>`
+    // stays inline paragraph text and does not hide `## E2E flows`.
+    expect(
+      parsePrBodyE2EFlows(
+        "Summary\n=== <!-- note -->\n<span>\n## E2E flows\n- admin\n"
+      )
+    ).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "admin",
+    });
+    expect(
+      parsePrBodyE2EFlows(
+        "Summary\n--- <!-- note -->\n<span>\n## E2E flows\n- admin\n"
+      )
+    ).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "admin",
+    });
+
     // Listing every individual flow normalizes to `all`.
     const everyFlowBody = `## E2E flows\n${workspaceE2EFlowIds.map((id) => `- ${id}`).join("\n")}\n`;
     expect(parsePrBodyE2EFlows(everyFlowBody)).toMatchObject({
@@ -184,6 +207,10 @@ describe("PR description ## E2E flows parser", () => {
       "heading inside unclosed HTML comment",
       "## Summary\n<!-- unclosed template comment\n## E2E flows\n- none\n## End\n",
     ],
+    [
+      "heading inside inline unclosed HTML comment",
+      "## Summary <!-- unclosed\n## E2E flows\n- none\n## End\n",
+    ],
   ])("reports missing section for %s", (_label, body) => {
     const parsed = parsePrBodyE2EFlows(body);
     expect(parsed.ok).toBe(false);
@@ -196,10 +223,6 @@ describe("PR description ## E2E flows parser", () => {
     ["missing section", "## Summary\nNo flows here"],
     ["level-three heading", "### E2E flows\n- none"],
     ["closing hashes without preceding space", "## E2E flows##\n- none\n"],
-    [
-      "heading inside inline unclosed HTML comment",
-      "## Summary <!-- unclosed\n## E2E flows\n- none\n",
-    ],
     [
       "indented code block only",
       "## Summary\n\n    ## E2E flows\n    - none\n",
@@ -560,5 +583,71 @@ describe("commit status description encoding and coverage summary", () => {
     expect(partialAndCarried.carriedPassedFlows).toEqual(["email-campaigns"]);
     expect(partialAndCarried.carriedSourceSha).toBe("bbbbbbb");
     expect(partialAndCarried.passedFlows).toEqual(["admin", "email-campaigns"]);
+
+    // Retain per-source provenance through head-failure filtering so surviving
+    // carried coverage cites only the commit that actually passed those flows.
+    const filteredProvenance = summarizeCommitStatuses(
+      [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E failed [flows: admin]",
+          state: "failure",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Same tree as aaaaaaa, which passed E2E [flows: admin]",
+          state: "success",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Same tree as bbbbbbb, which passed E2E [flows: webkit]",
+          state: "success",
+        },
+      ],
+      { includeCarried: true }
+    );
+    expect(filteredProvenance.failedFlows).toEqual(["admin"]);
+    expect(filteredProvenance.carriedPassedFlows).toEqual(["webkit"]);
+    expect(filteredProvenance.carriedSourceSha).toBe("bbbbbbb");
+    expect(filteredProvenance.carriedSources).toEqual([
+      { flows: ["webkit"], flowsCsv: "webkit", sourceSha: "bbbbbbb" },
+    ]);
+    expect(
+      findCoveringCarriedSource(filteredProvenance.carriedSources, ["webkit"])
+    ).toEqual({ flows: ["webkit"], flowsCsv: "webkit", sourceSha: "bbbbbbb" });
+
+    // Distinct carried sources must not be merged under one commit SHA.
+    const splitSources = summarizeCommitStatuses(
+      [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Same tree as aaaaaaa, which passed E2E [flows: admin]",
+          state: "success",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Same tree as bbbbbbb, which passed E2E [flows: webkit]",
+          state: "success",
+        },
+      ],
+      { includeCarried: true }
+    );
+    expect(
+      findCoveringCarriedSource(splitSources.carriedSources, ["admin"])
+    ).toEqual({ flows: ["admin"], flowsCsv: "admin", sourceSha: "aaaaaaa" });
+    expect(
+      findCoveringCarriedSource(splitSources.carriedSources, ["webkit"])
+    ).toEqual({ flows: ["webkit"], flowsCsv: "webkit", sourceSha: "bbbbbbb" });
+    expect(
+      findCoveringCarriedSource(splitSources.carriedSources, [
+        "admin",
+        "webkit",
+      ])
+    ).toBeNull();
   });
 });

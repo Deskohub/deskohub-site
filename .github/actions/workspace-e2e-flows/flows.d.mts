@@ -104,6 +104,12 @@ export type GitHubCommitStatusRecord = {
   readonly target_url?: string;
 };
 
+export type CarriedCoverageSource = {
+  readonly sourceSha: string;
+  readonly flows: readonly WorkflowE2EFlowId[];
+  readonly flowsCsv: string;
+};
+
 export type CommitStatusFlowSummary = {
   readonly latestState: string;
   readonly latestDescription: string;
@@ -116,6 +122,7 @@ export type CommitStatusFlowSummary = {
   readonly realPassedFlowsCsv: string;
   readonly carriedPassedFlows: readonly WorkflowE2EFlowId[];
   readonly carriedPassedFlowsCsv: string;
+  readonly carriedSources: readonly CarriedCoverageSource[];
   readonly failedFlows: readonly WorkflowE2EFlowId[];
   readonly failedFlowsCsv: string;
   readonly carriedSourceSha: string;
@@ -140,3 +147,8 @@ export declare const summarizeCommitStatuses: (
     readonly includeCarried?: boolean;
   }
 ) => CommitStatusFlowSummary;
+
+export declare const findCoveringCarriedSource: (
+  carriedSources: readonly CarriedCoverageSource[],
+  requestedSelected: readonly WorkflowE2EFlowId[]
+) => CarriedCoverageSource | null;

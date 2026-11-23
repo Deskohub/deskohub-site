@@ -440,14 +440,15 @@ const scanVisibleLines = (lines) => {
     previousBlank = false;
     // Setext heading underlines close the preceding paragraph (GFM §4.3), and
     // ATX headings / thematic breaks do not open a paragraph, so a standalone
-    // GFM type-7 HTML tag on the immediately following line starts an HTML block.
+    // GFM type-7 HTML tag on the immediately following line starts an HTML
+    // block. Test the raw line because GFM resolves block structure before
+    // inline HTML comments (so `=== <!-- note -->` stays paragraph text).
     const closesSetextHeading =
-      inParagraph && setextUnderlinePattern.test(stripped.text);
+      inParagraph && setextUnderlinePattern.test(line);
     inParagraph =
       !closesSetextHeading &&
-      !anyHeadingPattern.test(stripped.text) &&
-      !thematicBreakPattern.test(stripped.text) &&
-      !/^[ \t]*$/.test(stripped.text);
+      !anyHeadingPattern.test(line) &&
+      !thematicBreakPattern.test(line);
     visible.push({
       index,
       line,
@@ -728,12 +729,14 @@ export const summarizeCommitStatuses = (
   // Compute real head-SHA verdicts (`passed`, `partial`, active `running`,
   // `failed`) independently of any carried (`same-tree-passed`) statuses so a
   // carried status above a real failure or active rerun can never hide it.
+  // Track carried flows per source SHA so filtering out head-failed/running
+  // flows retains accurate provenance and never cites a commit for flows it
+  // did not pass.
   const realDecidedFlows = new Set();
-  const carriedDecidedFlows = new Set();
   const realPassedFlowIds = [];
-  const rawCarriedPassedFlowIds = [];
+  const carriedSourcesOrder = [];
+  const carriedFlowsBySource = new Map();
   const failedFlowIds = [];
-  let carriedSourceSha = "";
 
   for (const status of relevant) {
     const classified = classifyE2EStatusDescription(status.description);
@@ -786,16 +789,17 @@ export const summarizeCommitStatuses = (
         latestRunKind = "carried-passed";
         latestRunState = "success";
       }
-      let addedFromCarry = false;
-      for (const flow of classified.selected) {
-        if (!carriedDecidedFlows.has(flow)) {
-          carriedDecidedFlows.add(flow);
-          rawCarriedPassedFlowIds.push(flow);
-          addedFromCarry = true;
+      const sourceSha = classified.sourceSha ?? "";
+      if (sourceSha) {
+        let sourceFlows = carriedFlowsBySource.get(sourceSha);
+        if (!sourceFlows) {
+          sourceFlows = new Set();
+          carriedFlowsBySource.set(sourceSha, sourceFlows);
+          carriedSourcesOrder.push(sourceSha);
         }
-      }
-      if (addedFromCarry && !carriedSourceSha) {
-        carriedSourceSha = classified.sourceSha ?? "";
+        for (const flow of classified.selected) {
+          sourceFlows.add(flow);
+        }
       }
       continue;
     }
@@ -851,14 +855,28 @@ export const summarizeCommitStatuses = (
   }
 
   // Never let carried coverage include any flow that failed or is actively
-  // running on the head SHA itself.
+  // running on the head SHA itself, and retain each surviving flow's source.
   const headBlockedSet = new Set([...failedFlowIds, ...runningFlowIds]);
-  const carriedPassedFlowIds = rawCarriedPassedFlowIds.filter(
-    (flow) => !headBlockedSet.has(flow)
-  );
-  if (carriedPassedFlowIds.length === 0) {
-    carriedSourceSha = "";
+  const carriedSources = [];
+  for (const sourceSha of carriedSourcesOrder) {
+    const surviving = sortUniqueFlowIds(
+      [...(carriedFlowsBySource.get(sourceSha) ?? [])].filter(
+        (flow) => !headBlockedSet.has(flow)
+      )
+    );
+    if (surviving.length > 0) {
+      const built = buildFlowSelection(surviving);
+      carriedSources.push({
+        sourceSha,
+        flows: built.selected,
+        flowsCsv: built.flows,
+      });
+    }
   }
+  const carriedSourceSha = carriedSources[0]?.sourceSha ?? "";
+  const carriedPassedFlowIds = unionFlowIds(
+    ...carriedSources.map((entry) => entry.flows)
+  );
 
   const realPassed = buildFlowSelection(realPassedFlowIds);
   const carriedPassed = buildFlowSelection(carriedPassedFlowIds);
@@ -889,6 +907,7 @@ export const summarizeCommitStatuses = (
     realPassedFlowsCsv: realPassed.flows,
     carriedPassedFlows: carriedPassed.selected,
     carriedPassedFlowsCsv: carriedPassed.flows,
+    carriedSources,
     failedFlows: failed.selected,
     failedFlowsCsv: failed.flows,
     carriedSourceSha,
@@ -900,4 +919,25 @@ export const summarizeCommitStatuses = (
     activeRuns,
     anyPassed: allPassed.selected.length > 0,
   };
+};
+
+export const findCoveringCarriedSource = (
+  carriedSources,
+  requestedSelected
+) => {
+  if (
+    !Array.isArray(carriedSources) ||
+    carriedSources.length === 0 ||
+    !Array.isArray(requestedSelected) ||
+    requestedSelected.length === 0
+  ) {
+    return null;
+  }
+  return (
+    carriedSources.find(
+      (entry) =>
+        Boolean(entry?.sourceSha) &&
+        diffFlowIds(requestedSelected, entry.flows ?? []).length === 0
+    ) ?? null
+  );
 };

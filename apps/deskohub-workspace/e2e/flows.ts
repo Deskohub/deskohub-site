@@ -1,6 +1,7 @@
 import {
   classifyE2EStatusDescription,
   diffFlowIds,
+  findCoveringCarriedSource,
   formatE2EStatusDescription,
   parseFlowsInput,
   parsePrBodyE2EFlows,
@@ -314,6 +315,7 @@ export const selectedWorkspaceE2EInstantNavigationPlan = (
 export {
   classifyE2EStatusDescription,
   diffFlowIds,
+  findCoveringCarriedSource,
   formatE2EStatusDescription,
   parsePrBodyE2EFlows,
   summarizeCommitStatuses,

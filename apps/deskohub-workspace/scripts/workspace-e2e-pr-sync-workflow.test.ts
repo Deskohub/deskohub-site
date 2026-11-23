@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { findStepByName, parseWorkflow } from "./shared/workflow-contract";
 import {
@@ -972,7 +973,14 @@ exit 1
     );
 
     // 2. An unresolved exact-preview mismatch failure must NOT be cleared by an
-    // unrelated succeeded preview deployment on the same SHA.
+    // unrelated succeeded preview deployment on the same SHA — even across an
+    // intervening PR validation failure — nor by a matching URL whose recorded
+    // deployment outcome differs from the failed event's expected outcome.
+    const previewUrlTag = createHash("sha256")
+      .update(previewUrl)
+      .digest("hex")
+      .slice(0, 8);
+
     const unresolvedMismatch = await runSync({
       body: "## E2E flows\n- none\n",
       statuses: [
@@ -980,7 +988,7 @@ exit 1
           context: "Workspace E2E",
           creator: { login: "github-actions[bot]" },
           description:
-            "No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: 00000000]",
+            "No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: success:00000000]",
           state: "failure",
         },
       ],
@@ -988,7 +996,129 @@ exit 1
     expect(unresolvedMismatch.result.exitCode).toBe(0);
     expect(statusPosts(unresolvedMismatch.calls)).toEqual([]);
 
-    // 3. When sync tentatively restores `admin` and a genuine `admin` pass from
+    const mismatchUnderValidationFailure = await runSync({
+      body: "## E2E flows\n- none\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "Invalid or missing ## E2E flows in PR description; list valid flows, all, or none",
+          state: "failure",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: success:00000000]",
+          state: "failure",
+        },
+      ],
+    });
+    expect(mismatchUnderValidationFailure.result.exitCode).toBe(0);
+    const restoredMismatchPosts = statusPosts(
+      mismatchUnderValidationFailure.calls
+    );
+    expect(restoredMismatchPosts).toHaveLength(1);
+    expect(restoredMismatchPosts[0]).toContain("state=failure");
+    expect(restoredMismatchPosts[0]).toContain("[preview: success:00000000]");
+
+    const wrongOutcomeSameUrl = await runSync({
+      body: "## E2E flows\n- none\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: `No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: failed:${previewUrlTag}]`,
+          state: "failure",
+        },
+      ],
+    });
+    expect(wrongOutcomeSameUrl.result.exitCode).toBe(0);
+    expect(statusPosts(wrongOutcomeSameUrl.calls)).toEqual([]);
+
+    const matchingOutcomeSameUrl = await runSync({
+      body: "## E2E flows\n- none\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: `No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: success:${previewUrlTag}]`,
+          state: "failure",
+        },
+      ],
+    });
+    expect(matchingOutcomeSameUrl.result.exitCode).toBe(0);
+    expect(statusPosts(matchingOutcomeSameUrl.calls)).toHaveLength(1);
+    expect(statusPosts(matchingOutcomeSameUrl.calls)[0]).toContain(
+      "state=success"
+    );
+    expect(statusPosts(matchingOutcomeSameUrl.calls)[0]).toContain(
+      "Protected preview E2E skipped [flows: none]"
+    );
+
+    // 3. Restoring carried coverage must cite only the commit that actually
+    // passed the surviving flows and must never merge distinct carried sources
+    // under a single source SHA.
+    const carriedProvenanceAfterHeadFail = await runSync({
+      body: "## E2E flows\n- webkit\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E failed [flows: admin]",
+          state: "failure",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Same tree as ccccccc, which passed E2E [flows: admin]",
+          state: "success",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Same tree as bbbbbbb, which passed E2E [flows: webkit]",
+          state: "success",
+        },
+      ],
+    });
+    expect(carriedProvenanceAfterHeadFail.result.exitCode).toBe(0);
+    const provenancePosts = statusPosts(carriedProvenanceAfterHeadFail.calls);
+    expect(provenancePosts).toHaveLength(1);
+    expect(provenancePosts[0]).toContain("state=success");
+    expect(provenancePosts[0]).toContain(
+      "description=Same tree as bbbbbbb, which passed E2E [flows: webkit]"
+    );
+    expect(provenancePosts[0]).not.toContain("ccccccc");
+
+    const splitCarriedSources = await runSync({
+      body: "## E2E flows\n- admin\n- webkit\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Same tree as ccccccc, which passed E2E [flows: admin]",
+          state: "success",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Same tree as bbbbbbb, which passed E2E [flows: webkit]",
+          state: "success",
+        },
+      ],
+    });
+    expect(splitCarriedSources.result.exitCode).toBe(0);
+    const splitPosts = statusPosts(splitCarriedSources.calls);
+    expect(splitPosts).toHaveLength(1);
+    expect(splitPosts[0]).toContain("state=failure");
+    expect(workflowDispatches(splitCarriedSources.calls)).toHaveLength(1);
+    expect(workflowDispatches(splitCarriedSources.calls)[0]).toContain(
+      "flows=admin,webkit"
+    );
+
+    // 4. When sync tentatively restores `admin` and a genuine `admin` pass from
     // another run lands concurrently, post-write verification must accept it
     // without overwriting the check with a race failure.
     const statefulConcurrentPassGh = `#!/usr/bin/env bash
