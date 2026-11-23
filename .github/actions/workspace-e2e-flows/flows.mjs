@@ -295,11 +295,16 @@ const stripInlineHtmlComments = (
   return { text: out, inComment };
 };
 
-const listItemStartPattern = /^ {0,3}(?:[-*+]|[0-9]{1,9}[.)])[ \t]/;
+const listItemStartPattern = /^ {0,3}(?:[-*+]|1[.)])(?:[ \t]|$)/;
+const blockquoteStartPattern = /^ {0,3}>/;
 
 const interruptsParagraph = (line, isBlank) => {
   if (isBlank) return true;
-  if (anyHeadingPattern.test(line) || thematicBreakPattern.test(line)) {
+  if (
+    anyHeadingPattern.test(line) ||
+    thematicBreakPattern.test(line) ||
+    blockquoteStartPattern.test(line)
+  ) {
     return true;
   }
   const fenceMatch = fenceOpenPattern.exec(line);
@@ -383,6 +388,22 @@ const scanVisibleLines = (lines) => {
     }
 
     if (inInlineComment) {
+      // Setext underlines close the open paragraph at the block-parsing stage
+      // (GFM §4.3), terminating any unclosed inline comment before the next
+      // block (such as a type-7 HTML block) begins.
+      if (setextUnderlinePattern.test(line)) {
+        inInlineComment = false;
+        inParagraph = false;
+        previousBlank = false;
+        visible.push({
+          index,
+          line,
+          visibleLine: "",
+          hidden: false,
+          hiddenKind: "",
+        });
+        continue;
+      }
       // Inline comments cannot cross a Markdown block boundary (GFM parses
       // block structure before inlines). If this line ends or interrupts the
       // open paragraph, abandon the unclosed inline comment and parse this
@@ -394,8 +415,8 @@ const scanVisibleLines = (lines) => {
         const stripped = stripInlineHtmlComments(line, true);
         inInlineComment = stripped.inComment;
         const blankAfter = /^[ \t]*$/.test(stripped.text);
-        previousBlank = blankAfter;
-        inParagraph = !blankAfter;
+        previousBlank = false;
+        inParagraph = true;
         visible.push({
           index,
           line,

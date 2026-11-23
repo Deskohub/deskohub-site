@@ -1412,6 +1412,92 @@ exit 1
       call.includes(`statuses/${targetSha}`)
     );
     expect(delayedPosts).toEqual([]);
+
+    // Historical PR-ambiguity failures must block while two eligible PRs still
+    // share the head, and clear once one PR closes and fresh resolution
+    // confirms a single eligible PR on the same SHA.
+    const ambiguityFailure = {
+      context: "Workspace E2E",
+      creator: { login: "github-actions[bot]" },
+      description: "More than one open PR has this head; E2E needs exactly one",
+      state: "failure",
+    };
+    const stillAmbiguous = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/pulls`]: [
+          pullRequest,
+          { ...pullRequest, number: prNumber + 1 },
+        ],
+        [`commits/${targetSha}/statuses`]: [ambiguityFailure],
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(stillAmbiguous.result.exitCode).toBe(0);
+    expect(
+      stillAmbiguous.calls.filter((call) =>
+        call.includes(`statuses/${targetSha}`)
+      )
+    ).toEqual([]);
+
+    const ambiguityCleared = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/pulls`]: [
+          pullRequest,
+          { ...pullRequest, number: prNumber + 1, state: "closed" },
+        ],
+        [`commits/${targetSha}/statuses`]: [ambiguityFailure],
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(ambiguityCleared.result.exitCode).toBe(0);
+    const clearedPosts = ambiguityCleared.calls.filter((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(clearedPosts).toHaveLength(1);
+    expect(clearedPosts[0]).toContain("state=success");
+    expect(clearedPosts[0]).toContain(
+      "description=Protected preview E2E skipped [flows: none]"
+    );
   });
 
   test("reconciles a delayed metadata failure that raced with a concurrent fix to none", async () => {

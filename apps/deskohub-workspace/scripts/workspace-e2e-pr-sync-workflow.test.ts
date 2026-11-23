@@ -1142,6 +1142,54 @@ exit 1
       "description=Protected preview E2E skipped [flows: none]"
     );
 
+    // PR sync must stay blocked while two eligible PRs still share the head,
+    // and dispatch newly requested flows (or clear `none`) once one PR closes.
+    const ambiguityStatus = {
+      context: "Workspace E2E",
+      creator: { login: "github-actions[bot]" },
+      description: "More than one open PR has this head; E2E needs exactly one",
+      state: "failure",
+    };
+    const syncStillAmbiguous = await runSync({
+      body: "## E2E flows\n- admin\n",
+      extraFixtures: {
+        [`commits/${headSha}/pulls`]: [
+          makePr("## E2E flows\n- admin\n"),
+          { ...makePr("## E2E flows\n- admin\n"), number: prNumber + 1 },
+        ],
+      },
+      statuses: [ambiguityStatus],
+    });
+    expect(syncStillAmbiguous.result.exitCode).toBe(0);
+    expect(statusPosts(syncStillAmbiguous.calls)).toEqual([]);
+    expect(workflowDispatches(syncStillAmbiguous.calls)).toEqual([]);
+
+    const syncAmbiguityClearedDispatch = await runSync({
+      body: "## E2E flows\n- admin\n",
+      extraFixtures: {
+        [`commits/${headSha}/pulls`]: [
+          makePr("## E2E flows\n- admin\n"),
+          {
+            ...makePr("## E2E flows\n- admin\n"),
+            number: prNumber + 1,
+            state: "closed",
+          },
+        ],
+      },
+      statuses: [ambiguityStatus],
+    });
+    expect(syncAmbiguityClearedDispatch.result.exitCode).toBe(0);
+    expect(statusPosts(syncAmbiguityClearedDispatch.calls)).toHaveLength(1);
+    expect(statusPosts(syncAmbiguityClearedDispatch.calls)[0]).toContain(
+      "state=failure"
+    );
+    expect(workflowDispatches(syncAmbiguityClearedDispatch.calls)).toHaveLength(
+      1
+    );
+    expect(workflowDispatches(syncAmbiguityClearedDispatch.calls)[0]).toContain(
+      "flows=admin"
+    );
+
     // 3. Restoring carried coverage must cite only the commit that actually
     // passed the surviving flows and must never merge distinct carried sources
     // under a single source SHA.

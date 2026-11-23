@@ -132,6 +132,41 @@ const fetchPrCommits = (prNumber) =>
     slurp: true,
   });
 
+const fetchCommitPulls = (sha) => ghApiJson([`${repoApi}/commits/${sha}/pulls`]);
+
+const isEligibleInternalPr = (pr) =>
+  pr?.state === "open" &&
+  pr?.draft === false &&
+  pr?.head?.repo?.full_name === repoSlug &&
+  pr?.user?.login !== "dependabot[bot]" &&
+  !String(pr?.head?.ref ?? "").startsWith("dependabot/");
+
+const createSingleEligiblePrChecker = (sha, prNumber) => {
+  let checked = false;
+  let result = false;
+  return () => {
+    if (checked) return result;
+    checked = true;
+    if (!prNumber) {
+      result = false;
+      return false;
+    }
+    const pullsRes = fetchCommitPulls(sha);
+    if (!pullsRes.ok || !Array.isArray(pullsRes.data)) {
+      result = false;
+      return false;
+    }
+    const eligible = pullsRes.data.filter(
+      (entry) =>
+        isEligibleInternalPr(entry) && String(entry?.head?.sha ?? "") === sha
+    );
+    result =
+      eligible.length === 1 &&
+      String(eligible[0]?.number ?? "") === String(prNumber);
+    return result;
+  };
+};
+
 const normalizePreviewUrl = (url) => String(url ?? "").replace(/\/+$/, "");
 
 const previewUrlTag = (url) =>
@@ -163,15 +198,21 @@ const deploymentStatusMatchesOutcome = (status, expectedOutcome) => {
  * Scans `Workspace E2E` commit statuses from newest to oldest for any
  * unresolved exact-preview or target-resolution failure.
  *
- * Tagged preview mismatches (`[preview: <outcome>:<tag>]`) are NEVER cleared
- * by an unrelated `skipped-none`, `passed`, or `carried-passed` status (for
- * example from a delayed publisher for an older preview on the same SHA); they
- * clear ONLY when a GitHub deployment record on this SHA satisfies the
- * resolver's exact URL-and-state predicate. Untagged target-resolution
- * failures likewise stay unresolved across `skipped-none`, `carried-passed`,
- * `restored`, and validation writes.
+ * - Tagged preview mismatches (`[preview: <outcome>:<tag>]`) are NEVER cleared
+ *   by an unrelated `skipped-none`, `passed`, or `carried-passed` status (for
+ *   example from a delayed publisher for an older preview on the same SHA);
+ *   they clear ONLY when a GitHub deployment record on this SHA satisfies the
+ *   resolver's exact URL-and-state predicate.
+ * - PR ambiguity failures (`More than one open PR has this head...`) clear ONLY
+ *   when a fresh live query of `commits/<sha>/pulls` confirms exactly one
+ *   eligible open internal PR matches this SHA and PR number.
+ * - Untagged preview mismatches and invalid-URL failures stay unresolved.
  */
-const findUnresolvedExactPreviewFailure = (statuses, deployment) => {
+const findUnresolvedExactPreviewFailure = (
+  statuses,
+  deployment,
+  hasSingleEligiblePr = () => false
+) => {
   const relevant = (Array.isArray(statuses) ? statuses : []).filter(
     (status) =>
       status &&
@@ -195,10 +236,16 @@ const findUnresolvedExactPreviewFailure = (statuses, deployment) => {
       continue;
     }
 
+    if (desc.startsWith("More than one open PR has this head")) {
+      if (!hasSingleEligiblePr()) {
+        return { description: desc };
+      }
+      continue;
+    }
+
     if (
       desc.startsWith("No Vercel deployment record matches this preview yet") ||
-      desc.startsWith("The event named no immutable Vercel preview URL") ||
-      desc.startsWith("More than one open PR has this head")
+      desc.startsWith("The event named no immutable Vercel preview URL")
     ) {
       return { description: desc };
     }
@@ -719,6 +766,7 @@ const runPublishFinalStatus = () => {
           ? statusesRes.data
           : [],
       deployment,
+      hasSingleEligiblePr: createSingleEligiblePrChecker(targetSha, prNumber),
     };
   };
 
@@ -726,7 +774,14 @@ const runPublishFinalStatus = () => {
     publishWithCasReconcile({
       sha: targetSha,
       readSnapshot,
-      decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
+      decide: ({
+        prOk,
+        pr,
+        statusesOk,
+        statuses,
+        deployment,
+        hasSingleEligiblePr,
+      }) => {
         if (!prOk) {
           return { state: "failure", description: PR_UNAVAILABLE_DESCRIPTION };
         }
@@ -780,7 +835,8 @@ const runPublishFinalStatus = () => {
 
         const unresolvedExactPreview = findUnresolvedExactPreviewFailure(
           statuses,
-          deployment
+          deployment,
+          hasSingleEligiblePr
         );
         if (unresolvedExactPreview) {
           return {
@@ -880,7 +936,14 @@ const runPublishFinalStatus = () => {
     publishWithCasReconcile({
       sha: targetSha,
       readSnapshot,
-      decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
+      decide: ({
+        prOk,
+        pr,
+        statusesOk,
+        statuses,
+        deployment,
+        hasSingleEligiblePr,
+      }) => {
         if (!prOk) {
           return { skipPost: true, undoDecision: undoToFailure };
         }
@@ -903,7 +966,11 @@ const runPublishFinalStatus = () => {
           if (
             (deployment.state === "success" || deployment.state === "skipped") &&
             statusesOk &&
-            !findUnresolvedExactPreviewFailure(statuses, deployment)
+            !findUnresolvedExactPreviewFailure(
+              statuses,
+              deployment,
+              hasSingleEligiblePr
+            )
           ) {
             return {
               state: "success",
@@ -938,7 +1005,13 @@ const runPublishFinalStatus = () => {
                 },
                 ...statuses,
               ];
-          if (findUnresolvedExactPreviewFailure(effectiveStatuses, deployment)) {
+          if (
+            findUnresolvedExactPreviewFailure(
+              effectiveStatuses,
+              deployment,
+              hasSingleEligiblePr
+            )
+          ) {
             return { skipPost: true, undoDecision: undoToFailure };
           }
           const summary = summarizeCommitStatuses(effectiveStatuses, {
@@ -1017,6 +1090,7 @@ const runPublishStatusWithoutRun = () => {
           ? statusesRes.data
           : [],
       deployment,
+      hasSingleEligiblePr: createSingleEligiblePrChecker(targetSha, prNumber),
     };
   };
 
@@ -1038,7 +1112,14 @@ const runPublishStatusWithoutRun = () => {
     publishWithCasReconcile({
       sha: targetSha,
       readSnapshot,
-      decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
+      decide: ({
+        prOk,
+        pr,
+        statusesOk,
+        statuses,
+        deployment,
+        hasSingleEligiblePr,
+      }) => {
         const defaultFailure = {
           state: statusState,
           description: statusDescription,
@@ -1072,7 +1153,11 @@ const runPublishStatusWithoutRun = () => {
           if (
             parsedPr.flows === "none" &&
             statusesOk &&
-            !findUnresolvedExactPreviewFailure(statuses, deployment)
+            !findUnresolvedExactPreviewFailure(
+              statuses,
+              deployment,
+              hasSingleEligiblePr
+            )
           ) {
             return {
               state: "success",
@@ -1086,7 +1171,8 @@ const runPublishStatusWithoutRun = () => {
         }
         const unresolvedExactPreview = findUnresolvedExactPreviewFailure(
           statuses,
-          deployment
+          deployment,
+          hasSingleEligiblePr
         );
         if (unresolvedExactPreview) {
           return {
@@ -1158,7 +1244,14 @@ const runPublishStatusWithoutRun = () => {
   publishWithCasReconcile({
     sha: targetSha,
     readSnapshot,
-    decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
+    decide: ({
+      prOk,
+      pr,
+      statusesOk,
+      statuses,
+      deployment,
+      hasSingleEligiblePr,
+    }) => {
       if (!prOk) {
         return { state: "failure", description: PR_UNAVAILABLE_DESCRIPTION };
       }
@@ -1234,7 +1327,8 @@ const runPublishStatusWithoutRun = () => {
 
       const unresolvedExactPreview = findUnresolvedExactPreviewFailure(
         statuses,
-        deployment
+        deployment,
+        hasSingleEligiblePr
       );
       if (unresolvedExactPreview) {
         const currentSummary = summarizeCommitStatuses(statuses, {
@@ -1323,13 +1417,6 @@ const runPublishStatusWithoutRun = () => {
   });
 };
 
-const isEligibleInternalPr = (pr) =>
-  pr?.state === "open" &&
-  pr?.draft === false &&
-  pr?.head?.repo?.full_name === repoSlug &&
-  pr?.user?.login !== "dependabot[bot]" &&
-  !String(pr?.head?.ref ?? "").startsWith("dependabot/");
-
 const runSyncPrFlows = () => {
   const prNumber = process.env.PR_NUMBER ?? "";
   const initialPrRes = fetchPr(prNumber);
@@ -1390,13 +1477,21 @@ const runSyncPrFlows = () => {
           ? statusesRes.data
           : [],
       deployment,
+      hasSingleEligiblePr: createSingleEligiblePrChecker(headSha, prNumber),
     };
   };
 
   const outcome = publishWithCasReconcile({
     sha: headSha,
     readSnapshot,
-    decide: ({ prOk, pr, statusesOk, statuses, deployment }) => {
+    decide: ({
+      prOk,
+      pr,
+      statusesOk,
+      statuses,
+      deployment,
+      hasSingleEligiblePr,
+    }) => {
       if (!prOk) {
         return { state: "failure", description: PR_UNAVAILABLE_DESCRIPTION };
       }
@@ -1435,7 +1530,8 @@ const runSyncPrFlows = () => {
       });
       const unresolvedExactPreview = findUnresolvedExactPreviewFailure(
         statuses,
-        deployment
+        deployment,
+        hasSingleEligiblePr
       );
       if (unresolvedExactPreview) {
         if (

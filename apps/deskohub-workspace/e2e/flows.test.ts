@@ -147,6 +147,28 @@ describe("PR description ## E2E flows parser", () => {
       flows: "none",
     });
 
+    // Per GFM §4.3 / §4.6, a Setext underline closes an open paragraph even
+    // while an inline HTML comment is unfinished, so a following standalone
+    // type-7 HTML tag opens an HTML block and hides heading-like text inside it.
+    expect(
+      parsePrBodyE2EFlows(
+        "Summary <!-- open\n===\n<x-box>\n## E2E flows\n- fake\n</x-box>\n\n## E2E flows\n- admin\n"
+      )
+    ).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "admin",
+    });
+    expect(
+      parsePrBodyE2EFlows(
+        "Summary <!-- open\nline 2\n===\n<x-box>\n## E2E flows\n- fake\n</x-box>\n\n## E2E flows\n- admin\n"
+      )
+    ).toMatchObject({
+      ok: true,
+      kind: "subset",
+      flows: "admin",
+    });
+
     // Listing every individual flow normalizes to `all`.
     const everyFlowBody = `## E2E flows\n${workspaceE2EFlowIds.map((id) => `- ${id}`).join("\n")}\n`;
     expect(parsePrBodyE2EFlows(everyFlowBody)).toMatchObject({
