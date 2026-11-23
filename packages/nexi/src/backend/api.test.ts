@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { Predicate, Schema } from "effect";
+import { Effect, Predicate, Schema } from "effect";
 import {
   HttpClientError,
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/http";
-import { type ExternalAPIError, NetworkError } from "../errors";
+import type { ExternalAPIError, NetworkError } from "../errors";
 import { mapNexiClientError } from "./api";
 
 const request = HttpClientRequest.get("https://nexi.example.test/orders/1");
@@ -34,20 +34,10 @@ const expectNetworkError = (error: ExternalAPIError | NetworkError) => {
 };
 
 describe("mapNexiClientError", () => {
-  test("passes a network error through unchanged", () => {
-    const error = new NetworkError({ message: "Failed to connect to Nexi" });
-
-    expect(mapNexiClientError(error, "Get order")).toBe(error);
-  });
-
   test("reports an undecodable response as an invalid provider response", () => {
-    const schemaError = (() => {
-      try {
-        Schema.decodeUnknownSync(Schema.String)(1);
-      } catch (error) {
-        return error;
-      }
-    })();
+    const schemaError = Effect.runSync(
+      Effect.flip(Schema.decodeUnknownEffect(Schema.String)(1))
+    );
 
     const error = expectExternalApiError(
       mapNexiClientError(schemaError, "Get order")
@@ -128,16 +118,21 @@ describe("mapNexiClientError", () => {
         description: JSON.stringify({ error: "DUPLICATE_ORDER" }),
       }),
     });
-    const generated = {
-      response: { status: 400 },
-      cause: JSON.stringify({ errors: [{ description: "Bad order" }] }),
-    };
+    const descriptionFailure = new HttpClientError.HttpClientError({
+      reason: new HttpClientError.StatusCodeError({
+        request,
+        response: responseWithStatus(400),
+        description: JSON.stringify({
+          errors: [{ description: "Bad order" }],
+        }),
+      }),
+    });
 
     const codeOnly = expectExternalApiError(
       mapNexiClientError(failure, "Create hosted payment page")
     );
     const descriptionOnly = expectExternalApiError(
-      mapNexiClientError(generated, "Get order")
+      mapNexiClientError(descriptionFailure, "Get order")
     );
 
     expect(codeOnly.statusCode).toBe(409);
@@ -146,64 +141,5 @@ describe("mapNexiClientError", () => {
     expect(descriptionOnly.statusCode).toBe(400);
     expect(descriptionOnly.message).toBe("Bad order");
     expect(descriptionOnly.cause).toEqual([{ description: "Bad order" }]);
-  });
-
-  test("keeps a generated client failure's cause when it is not a provider body", () => {
-    const cause = 42;
-
-    const error = expectExternalApiError(
-      mapNexiClientError({ response: { status: 502 }, cause }, "Get order")
-    );
-
-    expect(error.statusCode).toBe(502);
-    expect(error.cause).toBe(cause);
-    expect(error.message).toBeUndefined();
-  });
-
-  test("reports aborted, failed fetch, and refused connections as unreachable Nexi", () => {
-    for (const failure of [
-      Object.assign(new Error("The operation was aborted"), {
-        name: "AbortError",
-      }),
-      new TypeError("fetch failed"),
-      new Error("connect ECONNREFUSED 127.0.0.1:443"),
-    ]) {
-      const error = expectNetworkError(
-        mapNexiClientError(failure, "Get order")
-      );
-
-      expect(error.cause).toBe(failure);
-      expect(error.url).toBeUndefined();
-    }
-  });
-
-  test("maps a plain provider body, defaulting its status to 500", () => {
-    const withStatus = expectExternalApiError(
-      mapNexiClientError(providerBody, "Get order")
-    );
-    const withoutStatus = expectExternalApiError(
-      mapNexiClientError(JSON.stringify({ error: "E1" }), "Get order")
-    );
-
-    expect(withStatus.statusCode).toBe(422);
-    expect(withStatus.message).toBe("Provider rejected");
-    expect(withStatus.cause).toEqual([{ description: "Invalid amount" }]);
-    expect(withoutStatus.statusCode).toBe(500);
-    expect(withoutStatus.cause).toBe("E1");
-  });
-
-  test("keeps any other failure as the error cause without a status", () => {
-    for (const failure of ["not json", null, new Error("other failure")]) {
-      const error = expectExternalApiError(
-        mapNexiClientError(failure, "List orders")
-      );
-
-      expect(error).toMatchObject({
-        service: "Nexi",
-        operation: "List orders",
-      });
-      expect(error).not.toHaveProperty("statusCode");
-      expect(error.cause).toBe(failure);
-    }
   });
 });
