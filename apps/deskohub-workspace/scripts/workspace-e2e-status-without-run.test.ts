@@ -839,6 +839,53 @@ describe("Workspace E2E selective PR flows", () => {
     );
     expect(noneConflict.result.exitCode).not.toBe(0);
     expect(noneConflict.outputs.resolution_error).toContain("flows=none");
+    expect(noneConflict.outputs.resolution_error_kind).toBe(
+      "manual-none-conflict"
+    );
+
+    // Even when an earlier `admin` pass exists, publishing a conflicting manual
+    // `flows=none` dispatch must keep the failure while the PR still requests
+    // `admin`, and only clear once the PR selection itself changes to `none`.
+    const keptConflict = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- admin\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description: "Protected preview E2E passed [flows: admin]",
+            state: "success",
+          },
+        ],
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION: noneConflict.outputs.resolution_error ?? "",
+        STATUS_REASON: "manual-none-conflict",
+        STATUS_STATE: "failure",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(keptConflict.result.exitCode).toBe(0);
+    const conflictPosts = keptConflict.calls.filter((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(conflictPosts.at(-1)).toContain("state=failure");
+    expect(conflictPosts.at(-1)).toContain("flows=none");
   });
 
   test("publishes partial failure when PR flows widened mid-run and later unions partial coverage to pass", async () => {
@@ -1419,5 +1466,47 @@ exit 1
       "description=Same tree as bbbbbbb, which passed E2E [flows: webkit]"
     );
     expect(posts[0]).not.toContain("admin");
+
+    // Delayed carried write after the PR head already moved must STILL strip
+    // flows that failed on targetSha.
+    const movedHeadCarried = await runStep(
+      publishStep,
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- all\n",
+          head: { sha: sha("f") },
+        },
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          { description: "Skipped - Not affected", state: "inactive" },
+        ],
+        [`commits/${targetSha}/statuses`]: [
+          {
+            context: "Workspace E2E",
+            creator: { login: "github-actions[bot]" },
+            description: "Protected preview E2E failed [flows: admin]",
+            state: "failure",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
+      {
+        FLOWS_PUBLISH: flowsPublish,
+        PR_NUMBER: String(prNumber),
+        STATUS_DESCRIPTION:
+          "Same tree as bbbbbbb, which passed E2E [flows: admin,webkit]",
+        STATUS_STATE: "success",
+        TARGET_SHA: targetSha,
+      }
+    );
+    expect(movedHeadCarried.result.exitCode).toBe(0);
+    const movedPosts = movedHeadCarried.calls.filter((call) =>
+      call.includes(`statuses/${targetSha}`)
+    );
+    expect(movedPosts).toHaveLength(1);
+    expect(movedPosts[0]).toContain(
+      "description=Same tree as bbbbbbb, which passed E2E [flows: webkit]"
+    );
+    expect(movedPosts[0]).not.toContain("admin");
   });
 });

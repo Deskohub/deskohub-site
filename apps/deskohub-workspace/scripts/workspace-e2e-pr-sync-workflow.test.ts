@@ -941,4 +941,97 @@ exit 1
     expect(posts[0]).toContain("state=failure");
     expect(posts[0]).toContain("Protected preview E2E failed on this commit");
   });
+
+  test("rejects carried coverage hiding a real head failure, keeps unresolved exact-preview failures, and accepts a genuine concurrent pass", async () => {
+    // 1. Carried `admin,webkit` above a real `admin` failure must NOT satisfy
+    // reselecting `admin`; sync must fail and dispatch `admin`.
+    const carriedAboveFail = await runSync({
+      body: "## E2E flows\n- admin\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "Same tree as bbbbbbb, which passed E2E [flows: admin,webkit]",
+          state: "success",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E failed [flows: admin]",
+          state: "failure",
+        },
+      ],
+    });
+    expect(carriedAboveFail.result.exitCode).toBe(0);
+    expect(statusPosts(carriedAboveFail.calls)).toHaveLength(1);
+    expect(statusPosts(carriedAboveFail.calls)[0]).toContain("state=failure");
+    expect(workflowDispatches(carriedAboveFail.calls)).toHaveLength(1);
+    expect(workflowDispatches(carriedAboveFail.calls)[0]).toContain(
+      "flows=admin"
+    );
+
+    // 2. An unresolved exact-preview mismatch failure must NOT be cleared by an
+    // unrelated succeeded preview deployment on the same SHA.
+    const unresolvedMismatch = await runSync({
+      body: "## E2E flows\n- none\n",
+      statuses: [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: 00000000]",
+          state: "failure",
+        },
+      ],
+    });
+    expect(unresolvedMismatch.result.exitCode).toBe(0);
+    expect(statusPosts(unresolvedMismatch.calls)).toEqual([]);
+
+    // 3. When sync tentatively restores `admin` and a genuine `admin` pass from
+    // another run lands concurrently, post-write verification must accept it
+    // without overwriting the check with a race failure.
+    const statefulConcurrentPassGh = `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
+state_file="$GH_FIXTURES/state.txt"
+[[ -f "$state_file" ]] || echo "before" > "$state_file"
+if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
+  echo '{"number":${prNumber},"state":"open","draft":false,"user":{"login":"author"},"head":{"ref":"${headRef}","sha":"${headSha}","repo":{"full_name":"${repository}"}},"body":"## E2E flows\\n- admin\\n"}'
+  exit 0
+fi
+if [[ "$*" == *"/deployments/11/statuses"* ]]; then
+  echo '[{"state":"success","description":"Deployment has completed","environment_url":"${previewUrl}/"}]'
+  exit 0
+fi
+if [[ "$*" == *"/deployments"* ]]; then
+  echo '[{"id":11,"creator":{"login":"vercel[bot]"}}]'
+  exit 0
+fi
+if [[ "$*" == *"/commits/${headSha}/statuses"* ]]; then
+  if [[ "$(cat "$state_file")" == "before" ]]; then
+    echo '[[{"id":10,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"failure","description":"Invalid or missing ## E2E flows in PR description; list valid flows, all, or none"},{"id":9,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
+  else
+    echo '[[{"id":12,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E restored [flows: admin]","target_url":"https://github.com/${repository}/actions/runs/99"},{"id":11,"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]","target_url":"https://github.com/${repository}/actions/runs/250"}]]'
+  fi
+  exit 0
+fi
+if [[ "$*" == *"/statuses/${headSha}"* ]]; then
+  echo "after" > "$state_file"
+  echo '{"id":12}'
+  exit 0
+fi
+echo "unexpected gh call: $*" >&2
+exit 1
+`;
+    const concurrentPass = await runSync({
+      body: "## E2E flows\n- admin\n",
+      commands: { gh: statefulConcurrentPassGh },
+    });
+    expect(concurrentPass.result.exitCode).toBe(0);
+    const concurrentPosts = statusPosts(concurrentPass.calls);
+    expect(concurrentPosts).toHaveLength(1);
+    expect(concurrentPosts[0]).toContain("state=success");
+    expect(workflowDispatches(concurrentPass.calls)).toEqual([]);
+  });
 });

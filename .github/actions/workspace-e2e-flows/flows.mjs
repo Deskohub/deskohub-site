@@ -170,6 +170,7 @@ export const parseFlowsInput = (raw) => {
 const stripClosingAtxHashes = (line) => line.replace(/[ \t]+#+[ \t]*$/, "");
 const sectionHeadingPattern = /^ {0,3}##[ \t]+e2e[ \t]+flows[ \t]*:?[ \t]*$/i;
 const anyHeadingPattern = /^ {0,3}#{1,6}(?:[ \t]+.*|[ \t]*)$/;
+const setextUnderlinePattern = /^ {0,3}(?:=+|-+)[ \t]*$/;
 const thematicBreakPattern =
   /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
 const fenceOpenPattern = /^ {0,3}(`{3,}|~{3,})/;
@@ -437,9 +438,13 @@ const scanVisibleLines = (lines) => {
     const stripped = stripInlineHtmlComments(line, false);
     inInlineComment = stripped.inComment;
     previousBlank = false;
-    // Headings and thematic breaks do not open a paragraph, so a standalone
+    // Setext heading underlines close the preceding paragraph (GFM §4.3), and
+    // ATX headings / thematic breaks do not open a paragraph, so a standalone
     // GFM type-7 HTML tag on the immediately following line starts an HTML block.
+    const closesSetextHeading =
+      inParagraph && setextUnderlinePattern.test(stripped.text);
     inParagraph =
+      !closesSetextHeading &&
       !anyHeadingPattern.test(stripped.text) &&
       !thematicBreakPattern.test(stripped.text) &&
       !/^[ \t]*$/.test(stripped.text);
@@ -720,11 +725,13 @@ export const summarizeCommitStatuses = (
   // decided stays active even when another flow's status was posted above it.
   const terminatedRunUrls = new Set();
   let unscopedSupersededSeen = false;
-  // Track the newest active/terminal verdict per flow so a newer failure OR an
-  // active rerun always invalidates an earlier pass for that flow.
-  const decidedFlows = new Set();
+  // Compute real head-SHA verdicts (`passed`, `partial`, active `running`,
+  // `failed`) independently of any carried (`same-tree-passed`) statuses so a
+  // carried status above a real failure or active rerun can never hide it.
+  const realDecidedFlows = new Set();
+  const carriedDecidedFlows = new Set();
   const realPassedFlowIds = [];
-  const carriedPassedFlowIds = [];
+  const rawCarriedPassedFlowIds = [];
   const failedFlowIds = [];
   let carriedSourceSha = "";
 
@@ -758,8 +765,8 @@ export const summarizeCommitStatuses = (
         latestRunState = status.state;
       }
       for (const flow of classified.selected) {
-        if (!decidedFlows.has(flow)) {
-          decidedFlows.add(flow);
+        if (!realDecidedFlows.has(flow)) {
+          realDecidedFlows.add(flow);
           realPassedFlowIds.push(flow);
         }
       }
@@ -781,9 +788,9 @@ export const summarizeCommitStatuses = (
       }
       let addedFromCarry = false;
       for (const flow of classified.selected) {
-        if (!decidedFlows.has(flow)) {
-          decidedFlows.add(flow);
-          carriedPassedFlowIds.push(flow);
+        if (!carriedDecidedFlows.has(flow)) {
+          carriedDecidedFlows.add(flow);
+          rawCarriedPassedFlowIds.push(flow);
           addedFromCarry = true;
         }
       }
@@ -800,7 +807,7 @@ export const summarizeCommitStatuses = (
         continue;
       }
       const activeFlows = classified.selected.filter(
-        (flow) => !decidedFlows.has(flow)
+        (flow) => !realDecidedFlows.has(flow)
       );
       if (activeFlows.length > 0) {
         if (latestRunKind === null) {
@@ -817,7 +824,7 @@ export const summarizeCommitStatuses = (
           flows: activeFlows,
         });
         for (const flow of activeFlows) {
-          decidedFlows.add(flow);
+          realDecidedFlows.add(flow);
           runningFlowIds.push(flow);
         }
       }
@@ -835,12 +842,22 @@ export const summarizeCommitStatuses = (
         latestRunState = status.state;
       }
       for (const flow of classified.selected) {
-        if (!decidedFlows.has(flow)) {
-          decidedFlows.add(flow);
+        if (!realDecidedFlows.has(flow)) {
+          realDecidedFlows.add(flow);
           failedFlowIds.push(flow);
         }
       }
     }
+  }
+
+  // Never let carried coverage include any flow that failed or is actively
+  // running on the head SHA itself.
+  const headBlockedSet = new Set([...failedFlowIds, ...runningFlowIds]);
+  const carriedPassedFlowIds = rawCarriedPassedFlowIds.filter(
+    (flow) => !headBlockedSet.has(flow)
+  );
+  if (carriedPassedFlowIds.length === 0) {
+    carriedSourceSha = "";
   }
 
   const realPassed = buildFlowSelection(realPassedFlowIds);

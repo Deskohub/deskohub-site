@@ -148,13 +148,54 @@ describe("PR description ## E2E flows parser", () => {
   });
 
   test.each([
+    [
+      "heading inside raw <pre> HTML block",
+      "<pre>\n## E2E flows\n- none\n## End\n</pre>\n",
+    ],
+    [
+      "heading inside raw <details> HTML block without blank line",
+      "<details><summary>Details</summary>\n## E2E flows\n- none\n## End\n</details>\n",
+    ],
+    [
+      "heading inside raw <div> HTML block",
+      "<div>\n## E2E flows\n- none\n## End\n</div>\n",
+    ],
+    [
+      "heading inside standalone type-7 HTML block immediately after an ATX heading",
+      "# Summary\n<x-box>\n## E2E flows\n- admin\n## End\n</x-box>\n",
+    ],
+    [
+      "heading inside standalone type-7 HTML block immediately after a Setext === heading",
+      "Summary\n===\n<x-box>\n## E2E flows\n- admin\n## End\n</x-box>\n",
+    ],
+    [
+      "heading inside standalone type-7 HTML block immediately after a Setext --- heading",
+      "Summary\n---\n<x-box>\n## E2E flows\n- admin\n## End\n</x-box>\n",
+    ],
+    [
+      "heading inside tag with > in double-quoted attribute",
+      '<span data-x="a>b">\n## E2E flows\n- admin\n## End\n</span>\n',
+    ],
+    [
+      "heading inside tag with > in single-quoted attribute",
+      "<span data-x='a>b'>\n## E2E flows\n- admin\n## End\n</span>\n",
+    ],
+    [
+      "heading inside unclosed HTML comment",
+      "## Summary\n<!-- unclosed template comment\n## E2E flows\n- none\n## End\n",
+    ],
+  ])("reports missing section for %s", (_label, body) => {
+    const parsed = parsePrBodyE2EFlows(body);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toContain("Missing `## E2E flows`");
+    }
+  });
+
+  test.each([
     ["missing section", "## Summary\nNo flows here"],
     ["level-three heading", "### E2E flows\n- none"],
     ["closing hashes without preceding space", "## E2E flows##\n- none\n"],
-    [
-      "heading inside unclosed HTML comment",
-      "## Summary\n<!-- unclosed template comment\n## E2E flows\n- none\n",
-    ],
     [
       "heading inside inline unclosed HTML comment",
       "## Summary <!-- unclosed\n## E2E flows\n- none\n",
@@ -165,30 +206,6 @@ describe("PR description ## E2E flows parser", () => {
     ],
     ["indented bullet inside section", "## E2E flows\n    - none\n"],
     ["code block inside section", "## E2E flows\n```\n- admin\n```\n"],
-    [
-      "heading inside raw <pre> HTML block",
-      "<pre>\n## E2E flows\n- none\n## End\n</pre>\n",
-    ],
-    [
-      "heading inside raw <details> HTML block without blank line",
-      "<details><summary>Details</summary>\n## E2E flows\n- none\n</details>\n",
-    ],
-    [
-      "heading inside raw <div> HTML block",
-      "<div>\n## E2E flows\n- none\n</div>\n",
-    ],
-    [
-      "heading inside standalone type-7 HTML block immediately after a heading",
-      "# Summary\n<x-box>\n## E2E flows\n- admin\n</x-box>\n",
-    ],
-    [
-      "heading inside tag with > in double-quoted attribute",
-      '<span data-x="a>b">\n## E2E flows\n- admin\n</span>\n',
-    ],
-    [
-      "heading inside tag with > in single-quoted attribute",
-      "<span data-x='a>b'>\n## E2E flows\n- admin\n</span>\n",
-    ],
     ["raw HTML block inside section", "## E2E flows\n<pre>\n- none\n</pre>\n"],
     ["empty section", "## E2E flows\n\n<!-- only comment -->\n## Next\nText"],
     ["duplicate sections", "## E2E flows\n- admin\n## E2E flows\n- account"],
@@ -495,6 +512,30 @@ describe("commit status description encoding and coverage summary", () => {
     ]);
     expect(terminatedByMetadataError.runningFlows).toEqual([]);
     expect(terminatedByMetadataError.activeRuns).toEqual([]);
+
+    // A carried status sitting above a genuine head failure must never hide
+    // that failure or advertise the failed flow as carried.
+    const carriedAboveRealFailure = summarizeCommitStatuses(
+      [
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description:
+            "Same tree as bbbbbbb, which passed E2E [flows: admin,webkit]",
+          state: "success",
+        },
+        {
+          context: "Workspace E2E",
+          creator: { login: "github-actions[bot]" },
+          description: "Protected preview E2E failed [flows: admin]",
+          state: "failure",
+        },
+      ],
+      { includeCarried: true }
+    );
+    expect(carriedAboveRealFailure.failedFlows).toEqual(["admin"]);
+    expect(carriedAboveRealFailure.carriedPassedFlows).toEqual(["webkit"]);
+    expect(carriedAboveRealFailure.passedFlows).toEqual(["webkit"]);
 
     const partialAndCarried = summarizeCommitStatuses(
       [

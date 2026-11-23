@@ -30,6 +30,7 @@
  *    an unrelated deployment.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import {
   classifyE2EStatusDescription,
@@ -130,10 +131,46 @@ const fetchPrCommits = (prNumber) =>
     slurp: true,
   });
 
+const previewUrlTag = (url) =>
+  createHash("sha256")
+    .update(String(url ?? "").replace(/\/+$/, ""))
+    .digest("hex")
+    .slice(0, 8);
+
+const PREVIEW_MISMATCH_TAG_PATTERN =
+  /^No Vercel deployment record matches this preview yet.*\[preview:\s*([0-9a-f]{8})\]$/;
+
+/**
+ * Detects an unresolved exact-preview or target-resolution failure currently
+ * sitting at the top of `Workspace E2E` commit statuses. Sync must NOT clear
+ * such a failure unless affirmative evidence proves that exact preview's
+ * deployment record now exists and resolved cleanly.
+ */
+const hasUnresolvedExactPreviewFailure = (summary, deployment) => {
+  if (summary.latestState !== "failure") return false;
+  const desc = summary.latestDescription;
+  const tagMatch = PREVIEW_MISMATCH_TAG_PATTERN.exec(desc);
+  if (tagMatch) {
+    const rejectedTag = tagMatch[1];
+    const resolvedTags = deployment.resolvedPreviewTags ?? [];
+    return !resolvedTags.includes(rejectedTag);
+  }
+  if (
+    desc.startsWith("No Vercel deployment record matches this preview yet") ||
+    desc.startsWith("The event named no immutable Vercel preview URL") ||
+    desc.startsWith("More than one open PR has this head")
+  ) {
+    return true;
+  }
+  return false;
+};
+
 /**
  * Resolves the current (newest) Vercel deployment's current (newest) status
  * for `sha`. Never falls through from an unresolved (`in_progress`, `queued`,
  * `pending`) current deployment or status to an older deployment or status.
+ * Also records the SHA-256 preview tag of the current resolved deployment so
+ * sync can verify whether a previously rejected exact preview now matches.
  */
 const fetchDeploymentState = (sha) => {
   const deploymentsRes = ghApiJson([
@@ -148,44 +185,47 @@ const fetchDeploymentState = (sha) => {
     "per_page=100",
   ]);
   if (!deploymentsRes.ok || !Array.isArray(deploymentsRes.data)) {
-    return { state: "unavailable", previewUrl: "" };
+    return { state: "unavailable", previewUrl: "", resolvedPreviewTags: [] };
   }
   const vercelDeployments = deploymentsRes.data.filter(
     (entry) => entry?.creator?.login === "vercel[bot]" && entry?.id != null
   );
   if (vercelDeployments.length === 0) {
-    return { state: "pending", previewUrl: "" };
+    return { state: "pending", previewUrl: "", resolvedPreviewTags: [] };
   }
   const currentDeployment = vercelDeployments[0];
   const statusesRes = ghApiJson([
     `${repoApi}/deployments/${currentDeployment.id}/statuses`,
   ]);
   if (!statusesRes.ok || !Array.isArray(statusesRes.data)) {
-    return { state: "unavailable", previewUrl: "" };
+    return { state: "unavailable", previewUrl: "", resolvedPreviewTags: [] };
   }
   if (statusesRes.data.length === 0) {
-    return { state: "pending", previewUrl: "" };
+    return { state: "pending", previewUrl: "", resolvedPreviewTags: [] };
   }
   const currentStatus = statusesRes.data[0];
-  if (
-    currentStatus?.state === "success" &&
-    (currentStatus?.environment_url ?? "") !== ""
-  ) {
+  const envUrl = String(currentStatus?.environment_url ?? "").replace(
+    /\/+$/,
+    ""
+  );
+  const resolvedPreviewTags = envUrl ? [previewUrlTag(envUrl)] : [];
+  if (currentStatus?.state === "success" && envUrl !== "") {
     return {
       state: "success",
-      previewUrl: String(currentStatus.environment_url).replace(/\/+$/, ""),
+      previewUrl: envUrl,
+      resolvedPreviewTags,
     };
   }
   if (
     currentStatus?.state === "inactive" &&
     currentStatus?.description === "Skipped - Not affected"
   ) {
-    return { state: "skipped", previewUrl: "" };
+    return { state: "skipped", previewUrl: "", resolvedPreviewTags };
   }
   if (currentStatus?.state === "failure" || currentStatus?.state === "error") {
-    return { state: "failed", previewUrl: "" };
+    return { state: "failed", previewUrl: "", resolvedPreviewTags: [] };
   }
-  return { state: "pending", previewUrl: "" };
+  return { state: "pending", previewUrl: "", resolvedPreviewTags: [] };
 };
 
 const postCommitStatus = (sha, { context, state, description, targetUrl }) => {
@@ -481,9 +521,19 @@ const publishWithCasReconcile = ({ sha, readSnapshot, decide }) => {
     }
 
     // If verification returned skipPost after we already wrote a tentative
-    // status, undo that tentative status immediately (never leave unauthorized
-    // tentative success in place!).
+    // status, accept it ONLY when verification affirmatively proved the live
+    // selection is already satisfied (`satisfiedSuccess: true`, e.g. a genuine
+    // concurrent pass landed). Otherwise undo the tentative status immediately.
     if (verifyDecision.skipPost) {
+      if (
+        decision.state === "success" &&
+        verifyDecision.satisfiedSuccess === true &&
+        after.prOk &&
+        (after.deployment.state === "success" ||
+          after.deployment.state === "skipped")
+      ) {
+        return decision;
+      }
       if (verifyDecision.undoDecision) {
         postCommitStatus(sha, {
           context: "Workspace E2E",
@@ -874,6 +924,18 @@ const runPublishStatusWithoutRun = () => {
         if (!parsedPr.ok) {
           return defaultFailure;
         }
+        if (statusReason === "manual-none-conflict") {
+          // A conflicting manual `flows=none` dispatch only resolves if the
+          // live PR selection itself changed to `none`; keep the failure while
+          // the PR still requests E2E flows.
+          if (parsedPr.flows === "none") {
+            return {
+              state: "success",
+              description: formatE2EStatusDescription({ kind: "skipped-none" }),
+            };
+          }
+          return defaultFailure;
+        }
         if (parsedPr.flows === "none") {
           return {
             state: "success",
@@ -961,6 +1023,46 @@ const runPublishStatusWithoutRun = () => {
 
       const headSha = String(pr?.head?.sha ?? "");
       if (/^[0-9a-f]{40}$/.test(headSha) && headSha !== targetSha) {
+        if (classified.kind === "carried-passed") {
+          if (!statusesOk) {
+            return {
+              state: "failure",
+              description: STATUSES_UNAVAILABLE_DESCRIPTION,
+            };
+          }
+          const summary = summarizeCommitStatuses(statuses, {
+            includeCarried: false,
+          });
+          const safeCarried = filterSafeCarriedFlows(
+            classified.selected,
+            summary
+          );
+          if (safeCarried.length === 0) {
+            if (summary.runningFlows.length > 0) {
+              const activeRun = findActiveRunForFlows(
+                summary,
+                classified.selected
+              );
+              return {
+                skipPost: true,
+                restorePendingDescription: activeRun?.description,
+                restorePendingTargetUrl: activeRun?.targetUrl,
+              };
+            }
+            return {
+              state: "failure",
+              description: "Protected preview E2E failed on this commit",
+            };
+          }
+          return {
+            state: "success",
+            description: formatE2EStatusDescription({
+              kind: "same-tree-passed",
+              flows: toCanonicalFlows(safeCarried),
+              sourceSha: classified.sourceSha,
+            }),
+          };
+        }
         return { state: "success", description: statusDescription };
       }
 
@@ -1149,6 +1251,15 @@ const runSyncPrFlows = () => {
       const summary = summarizeCommitStatuses(statuses, {
         includeCarried: true,
       });
+      if (hasUnresolvedExactPreviewFailure(summary, deployment)) {
+        return {
+          skipPost: true,
+          undoDecision: {
+            state: "failure",
+            description: summary.latestDescription,
+          },
+        };
+      }
       const requestedFlows = parsedPr.flows;
       const requestedSelected = parsedPr.selected;
       const deploymentResolved =
@@ -1166,7 +1277,7 @@ const runSyncPrFlows = () => {
               description: formatE2EStatusDescription({ kind: "skipped-none" }),
             };
           }
-          return { skipPost: true };
+          return { skipPost: true, satisfiedSuccess: true };
         }
         if (
           summary.latestState === "failure" &&
@@ -1208,7 +1319,7 @@ const runSyncPrFlows = () => {
             }),
           };
         }
-        return { skipPost: true };
+        return { skipPost: true, satisfiedSuccess: true };
       }
 
       const safeCarried = filterSafeCarriedFlows(
@@ -1244,7 +1355,7 @@ const runSyncPrFlows = () => {
             }),
           };
         }
-        return { skipPost: true };
+        return { skipPost: true, satisfiedSuccess: true };
       }
 
       const inFlightCovered = unionFlowIds(
