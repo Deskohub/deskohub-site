@@ -14,6 +14,7 @@ const bootstrapScript = new URL(
 ).pathname;
 
 interface WorkflowStep {
+  readonly if?: string;
   readonly uses?: string;
   readonly with?: Record<string, string>;
   readonly run?: string;
@@ -99,10 +100,21 @@ describe("sandbox smoke workflow", () => {
   });
 
   test("runs read-only checks without expanding expressions in scripts", () => {
-    const scripts = (workflow.jobs.smoke?.steps ?? [])
+    const allSteps = workflow.jobs.smoke?.steps ?? [];
+    expect(
+      allSteps.flatMap((step) => (step.run ? [step.run] : [])).join("\n")
+    ).not.toContain("${{");
+    // The default read-only mode runs exactly the steps without a mode
+    // condition; mutating phases carry one (sandbox-hosted-proof.test.ts).
+    const readOnlySteps = allSteps.filter((step) => step.if === undefined);
+    const scripts = readOnlySteps
       .flatMap((step) => (step.run ? [step.run] : []))
       .join("\n");
-    expect(scripts).not.toContain("${{");
+    expect(
+      [...scripts.matchAll(/"\$SANDBOX_PROOF_RUNNER" ([a-z0-9-]+)/g)].map(
+        (match) => match[1]
+      )
+    ).toEqual(["readonly-inventory"]);
     for (const check of [
       "gcloud projects describe",
       "gcloud billing projects describe",
