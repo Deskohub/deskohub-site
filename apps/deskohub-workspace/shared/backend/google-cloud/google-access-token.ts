@@ -1,10 +1,12 @@
 import {
+  Cause,
   Clock,
   Context,
   Data,
   Duration,
   Effect,
   Layer,
+  Match,
   Option,
   Schedule,
   Schema,
@@ -13,6 +15,7 @@ import {
 import {
   FetchHttpClient,
   HttpClient,
+  type HttpClientError,
   HttpClientRequest,
   type HttpClientResponse,
 } from "effect/http";
@@ -76,36 +79,28 @@ export const MetadataServerGoogleAccessToken: Layer.Layer<GoogleAccessToken> =
       const client = yield* HttpClient.HttpClient;
       const cache = yield* SynchronizedRef.make(Option.none<CachedToken>());
 
-      const requestToken = client
+      // Each attempt reads the whole body under its timeout, and a body
+      // that breaks off is retried like a lost connection.
+      const metadataClient = client.pipe(
+        HttpClient.filterStatusOk,
+        HttpClient.transformResponse(
+          Effect.tap((response) => response.arrayBuffer)
+        ),
+        HttpClient.timeout(attemptTimeout),
+        HttpClient.retryTransient({
+          schedule: retrySchedule,
+          times: retries,
+          while: isBodyReadFailure,
+        })
+      );
+
+      const requestToken = metadataClient
         .execute(
           HttpClientRequest.get(metadataServerTokenUrl).pipe(
             HttpClientRequest.setHeader("Metadata-Flavor", "Google")
           )
         )
-        .pipe(
-          Effect.mapError(
-            () => new GoogleAccessTokenError({ reason: "transport" })
-          ),
-          Effect.filterOrElse(isSuccessful, (response) =>
-            Effect.fail(
-              new GoogleAccessTokenError({
-                reason: "status",
-                httpStatus: response.status,
-              })
-            )
-          ),
-          Effect.flatMap(readTokenResponse),
-          Effect.timeoutOrElse({
-            duration: attemptTimeout,
-            orElse: () =>
-              Effect.fail(new GoogleAccessTokenError({ reason: "timeout" })),
-          }),
-          Effect.retry({
-            schedule: retrySchedule,
-            times: retries,
-            while: isTransient,
-          })
-        );
+        .pipe(Effect.mapError(toTokenError), Effect.flatMap(readTokenResponse));
 
       const fetchToken = Effect.Do.pipe(
         Effect.bind("response", () => requestToken),
@@ -148,9 +143,6 @@ export const MetadataServerGoogleAccessToken: Layer.Layer<GoogleAccessToken> =
     })
   ).pipe(Layer.provide(FetchHttpClient.layer));
 
-const isSuccessful = ({ status }: HttpClientResponse.HttpClientResponse) =>
-  status >= 200 && status < 300;
-
 const readTokenResponse = (response: HttpClientResponse.HttpClientResponse) =>
   response.json.pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(TokenResponse)),
@@ -159,11 +151,25 @@ const readTokenResponse = (response: HttpClientResponse.HttpClientResponse) =>
     )
   );
 
-const isTransient = ({ reason, httpStatus }: GoogleAccessTokenError) =>
-  reason === "transport" ||
-  reason === "timeout" ||
-  httpStatus === 429 ||
-  (httpStatus !== undefined && httpStatus >= 500);
+const isBodyReadFailure = ({ reason }: HttpClientError.HttpClientError) =>
+  reason._tag === "DecodeError";
+
+const toTokenError = ({ reason }: HttpClientError.HttpClientError) =>
+  Match.value(reason).pipe(
+    Match.tag(
+      "StatusCodeError",
+      ({ response }) =>
+        new GoogleAccessTokenError({
+          reason: "status",
+          httpStatus: response.status,
+        })
+    ),
+    Match.when(
+      { _tag: "TransportError", cause: Cause.isTimeoutError },
+      () => new GoogleAccessTokenError({ reason: "timeout" })
+    ),
+    Match.orElse(() => new GoogleAccessTokenError({ reason: "transport" }))
+  );
 
 const toCachedToken = ({
   response,

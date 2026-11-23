@@ -126,13 +126,13 @@ export const CloudTasksQueuePublisher = (
             () => Effect.succeed<QueuePublishOutcome>("published")
           ),
           Match.orElse(() =>
-            rejectionStatus(response).pipe(
-              Effect.tap(() =>
-                Effect.when(
-                  accessToken.invalidate(token),
-                  Effect.succeed(response.status === 401)
-                )
-              ),
+            // Drop a rejected token before the optional error body, which
+            // may never arrive.
+            Effect.when(
+              accessToken.invalidate(token),
+              Effect.succeed(response.status === 401)
+            ).pipe(
+              Effect.andThen(rejectionStatus(response)),
               // Only a decoded ALREADY_EXISTS proves the task exists; any
               // other 409 fails so the caller retries.
               Effect.filterOrFail(

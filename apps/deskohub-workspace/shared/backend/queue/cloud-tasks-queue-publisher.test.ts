@@ -209,6 +209,18 @@ describe("CloudTasksQueuePublisher", () => {
     expect(invalidated).toEqual([accessToken]);
   });
 
+  test("drops a rejected access token whose error body never arrives", async () => {
+    const { result, invalidated } = await publish(publication, {
+      respond: () =>
+        new Response(new ReadableStream({ start: () => undefined }), {
+          status: 401,
+        }),
+    });
+
+    expect(result).toMatchObject({ failure: { cause: { reason: "timeout" } } });
+    expect(invalidated).toEqual([accessToken]);
+  });
+
   test("keeps the access token on other rejections", async () => {
     const { invalidated } = await publish(publication, {
       respond: () => new Response(null, { status: 403 }),

@@ -106,6 +106,30 @@ describe("MetadataServerGoogleAccessToken", () => {
     expect(requests).toHaveLength(2);
   });
 
+  test("retries a token response whose body breaks off", async () => {
+    const { outcome, requests } = await withMetadataServer(
+      (count) =>
+        count === 1
+          ? new Response(
+              new ReadableStream({
+                start: (controller) =>
+                  controller.error(new Error("connection reset")),
+              }),
+              { status: 200 }
+            )
+          : tokenResponse(count),
+      ({ get }) =>
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(get);
+          yield* TestClock.adjust("1 second");
+          return yield* Fiber.join(fiber);
+        })
+    );
+
+    expect(outcome).toMatchObject({ success: "token-2" });
+    expect(requests).toHaveLength(2);
+  });
+
   test("fails on a rejected request without retrying it", async () => {
     const { outcome, requests } = await withMetadataServer(
       () => new Response(null, { status: 403 }),
@@ -181,14 +205,18 @@ describe("MetadataServerGoogleAccessToken", () => {
     });
   });
 
-  test("fails on an unreadable token response", async () => {
-    const { outcome } = await withMetadataServer(
-      () => Response.json({ token_type: "Bearer" }),
+  test.each([
+    ["a document without a token", JSON.stringify({ token_type: "Bearer" })],
+    ["a body that is not JSON", "not json"],
+  ])("fails on %s without retrying it", async (_, body) => {
+    const { outcome, requests } = await withMetadataServer(
+      () => new Response(body, { status: 200 }),
       ({ get }) => get
     );
 
     expect(outcome).toMatchObject({
       failure: { _tag: "GoogleAccessTokenError", reason: "invalid-response" },
     });
+    expect(requests).toHaveLength(1);
   });
 });
