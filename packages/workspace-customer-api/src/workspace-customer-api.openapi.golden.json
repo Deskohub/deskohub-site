@@ -9346,14 +9346,7 @@
             "$ref": "#/components/schemas/CustomerReservationStatus"
           },
           "settlement": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CustomerReservationSettlement"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/CustomerReservationSettlement"
           },
           "productName": {
             "anyOf": [

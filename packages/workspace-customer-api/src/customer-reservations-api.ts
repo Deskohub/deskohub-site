@@ -304,7 +304,7 @@ export const CustomerReservationSummary = Schema.Struct({
    * refunded order, an Unlimited pass day, or an Entry pack claim released
    * without being used.
    */
-  settlement: Schema.optional(CustomerReservationSettlementValue),
+  settlement: Schema.optionalKey(CustomerReservationSettlementValue),
   /**
    * The catalog name of `product` in the request's locale, as the website
    * names it.

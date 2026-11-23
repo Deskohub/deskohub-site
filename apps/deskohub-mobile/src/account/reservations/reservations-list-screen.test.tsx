@@ -350,17 +350,18 @@ test("an upcoming Entry pack visit keeps the withdrawal the server offers", asyn
     {},
     (hosts) => {
       const texts = findAll(hosts, "Text").map(textOf);
+      // The next visit's ticket and the later visit's row each carry both.
       expect(
         texts.filter(
           (text) => text === m.passes_paid_with_pack({}, { locale: "en-US" })
-        ).length
-      ).toBeGreaterThan(0);
+        )
+      ).toHaveLength(2);
       expect(
         texts.filter(
           (text) =>
             text === m.reservationWithdrawalAction({}, { locale: "en-US" })
-        ).length
-      ).toBeGreaterThan(0);
+        )
+      ).toHaveLength(2);
     },
     current
   );
