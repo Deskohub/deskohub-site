@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "biome check src scripts sandbox-probe alchemy.run.ts release.run.ts --config-path ../../biome.json --vcs-root ../..",
+    "lint": "biome check . --config-path ../../biome.json --vcs-root ../..",
     "release": "bun release.run.ts",
     "test": "bun test",
     "typecheck": "tsc --project tsconfig.json"

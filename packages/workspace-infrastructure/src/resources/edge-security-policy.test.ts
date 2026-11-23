@@ -270,6 +270,35 @@ describe("EdgeSecurityPolicy provider", () => {
     ]);
   });
 
+  test("never resends a rule write whose operation status stays unavailable", async () => {
+    const compute = fake({
+      existing: [converged(policyProps(true))],
+      unavailableOperationPolls: 5,
+    });
+    const exit = await run(compute, (provider) =>
+      afterElapsed("1 minute", reconcile(provider, policyProps(false)))
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeOperationUnreadable");
+    expect(mutations(compute.calls)).toEqual([
+      "POST workspace-sandbox-edge/patchRule?priority=1000",
+    ]);
+  });
+
+  test("rejects an unfinished rule operation without a name, unpolled", async () => {
+    const compute = fake({
+      existing: [converged(policyProps(true))],
+      unnamedOperations: ["patchRule"],
+    });
+    const exit = await run(compute, (provider) =>
+      reconcile(provider, policyProps(false))
+    );
+    expect(failureTag(exit)).toBe("EdgeComputeOperationUnreadable");
+    expect(mutations(compute.calls)).toEqual([
+      "POST workspace-sandbox-edge/patchRule?priority=1000",
+    ]);
+    expect(compute.operationPolls.size).toBe(0);
+  });
+
   test("a rule operation that fails fails the reconcile", async () => {
     const compute = fake({
       existing: [converged(policyProps(true))],

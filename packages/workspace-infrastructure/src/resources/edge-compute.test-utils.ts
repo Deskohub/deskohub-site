@@ -83,6 +83,10 @@ export interface FakeComputeOptions {
   readonly unknownOperationPolls?: number;
   /** Polls of an operation answered RUNNING before it reports DONE. */
   readonly runningOperationPolls?: number;
+  /** Polls of an operation answered 503, after any 404 ones. */
+  readonly unavailableOperationPolls?: number;
+  /** Operation kinds answered RUNNING without an operation name. */
+  readonly unnamedOperations?: ReadonlyArray<string>;
 }
 
 type Collection = "backendServices" | "securityPolicies";
@@ -117,7 +121,7 @@ export const fakeCompute = (
     const name = `operation-${operations.size + 1}`;
     operations.set(name, kind);
     const body = {
-      name,
+      ...(options.unnamedOperations?.includes(kind) ? {} : { name }),
       targetId: String(targetId),
       ...(options.failingAtOnce?.includes(kind)
         ? { status: "DONE", ...operationError }
@@ -133,7 +137,12 @@ export const fakeCompute = (
     if (polls <= unknownPolls) {
       return answer(404, { error: { message: "operation not found" } });
     }
-    if (polls <= unknownPolls + (options.runningOperationPolls ?? 0)) {
+    const unavailablePolls =
+      unknownPolls + (options.unavailableOperationPolls ?? 0);
+    if (polls <= unavailablePolls) {
+      return answer(503, { error: { message: "backend unavailable" } });
+    }
+    if (polls <= unavailablePolls + (options.runningOperationPolls ?? 0)) {
       return answer(200, { name, status: "RUNNING" });
     }
     const kind = operations.get(name) ?? "";
