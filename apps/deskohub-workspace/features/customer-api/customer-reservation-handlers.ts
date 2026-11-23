@@ -510,6 +510,7 @@ const answerReservationSummary = ({
   setupStartsAt,
   seats,
   status,
+  settlement,
   productName,
   accessStartsAt,
   accessEndsAt,
@@ -527,6 +528,7 @@ const answerReservationSummary = ({
   ...(setupStartsAt && { setupStartsAt }),
   seats,
   status,
+  ...(settlement && { settlement }),
   ...(productName !== undefined && { productName }),
   ...(accessStartsAt && accessEndsAt && { accessStartsAt, accessEndsAt }),
   ...(bookedSelection && {

@@ -23,7 +23,7 @@ const visit = (
   endsAt: "2026-11-10T16:00:00Z",
   seats: 1,
   status: "confirmed",
-  paidIndividually: true,
+  settlement: "paid",
   ...overrides,
 });
 
@@ -106,10 +106,11 @@ describe("offersPassSavings", () => {
 
   test("needs a past confirmed cowork visit of the customer's own paid with money", () => {
     const notIndividuallyPaid: CustomerReservationSummary[] = [
-      // Funded by an Entry pack claim, or covered by a fully discounted or
-      // Unlimited order: the history leaves `paidIndividually` absent.
-      visit({ paidIndividually: undefined, paidWithEntryPack: true }),
-      visit({ paidIndividually: undefined }),
+      // Settled free or from an Entry pack, or not settled at all, such as a
+      // refunded order or a booking with no website order.
+      visit({ settlement: "free" }),
+      visit({ settlement: "entry-pack" }),
+      visit({ settlement: undefined }),
     ];
     const cases = {
       "no reservations": [],

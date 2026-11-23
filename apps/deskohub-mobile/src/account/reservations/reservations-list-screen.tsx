@@ -38,11 +38,7 @@ import { formatInstant } from "../../i18n/date-time-format";
 import { useAppLocale } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
 import { passFeatureClosed } from "../../passes/pass-read-state";
-import {
-  heldPassesAtom,
-  passCatalogAtom,
-  reservationFundingAtom,
-} from "../../passes/pass-reads";
+import { heldPassesAtom, passCatalogAtom } from "../../passes/pass-reads";
 import { UnlimitedPeriodItem } from "../../passes/unlimited-period-item";
 import { Badge } from "../../ui/badge";
 import { Card } from "../../ui/card";
@@ -374,10 +370,7 @@ function ReservationsListView<E extends CustomerRequestFailure>({
   const { isExpanded } = useViewport();
   const open = useOpenReservation();
   const value = AsyncResult.value(list);
-  const passReads = useReservationPasses(
-    showPreferred,
-    Option.map(value, ({ groups }) => groups)
-  );
+  const passReads = useReservationPasses(showPreferred);
   const refreshAll = () => {
     refresh();
     passReads.refresh();
@@ -486,30 +479,20 @@ function BookButton() {
   ) : null;
 }
 
-const EntryPackFundingContext = createContext<
-  ReadonlySet<CustomerReservationOrderId> | undefined
->(undefined);
+/** Whether an Entry pack paid for the row's visit. */
+const isPackPaid = (row: ReservationListRow): boolean =>
+  row.settlement === "entry-pack";
 
-function EntryPackFundingBadge({
-  target,
-}: {
-  readonly target: Option.Option<CustomerReservationOrderId>;
-}) {
+function EntryPackBadge() {
   const locale = useAppLocale();
-  const funded = useContext(EntryPackFundingContext);
   return (
-    Option.exists(target, (orderId) => funded?.has(orderId) === true) && (
-      <View style={{ alignItems: "flex-start" }}>
-        <Badge tone="info" label={m.passes_paid_with_pack({}, { locale })} />
-      </View>
-    )
+    <View style={{ alignItems: "flex-start" }}>
+      <Badge tone="info" label={m.passes_paid_with_pack({}, { locale })} />
+    </View>
   );
 }
 
-function useReservationPasses(
-  enabled: boolean,
-  groups: Option.Option<ReservationGroups>
-) {
+function useReservationPasses(enabled: boolean) {
   const locale = useAppLocale();
   const catalogAtom = enabled ? passCatalogAtom : unneededReadAtom;
   const catalog = useAtomValue(catalogAtom);
@@ -520,50 +503,21 @@ function useReservationPasses(
   const refreshList = useAtomRefresh(listAtom);
   const held = AsyncResult.isSuccess(list) ? list.value.held : undefined;
   const unlimited = (held ?? []).filter((pass) => pass.kind === "unlimited");
-  const own = Option.match(groups, {
-    onNone: () => [],
-    onSome: ({ featured, moreCurrent, undated, past }) => [
-      ...Option.toArray(featured),
-      ...moreCurrent,
-      ...undated,
-      ...past,
-    ],
-  });
-  const ids = Array.from(
-    new Set(
-      own.flatMap((row) =>
-        row.product.kind === "cowork"
-          ? Option.toArray(reservationStatusTarget(row))
-          : []
-      )
-    )
-  ).sort();
-  const fundingAtom =
-    passesReleased && ids.length > 0
-      ? reservationFundingAtom(ids)
-      : unneededReadAtom;
-  const funding = useAtomValue(fundingAtom);
-  const refreshFunding = useAtomRefresh(fundingAtom);
   return {
     // Read only while the pass rollout is open.
     held: passesReleased ? held : undefined,
     unlimited,
-    funded: AsyncResult.isSuccess(funding) ? funding.value : undefined,
     initial:
       enabled &&
       (AsyncResult.isInitial(catalog) ||
         (passesReleased && AsyncResult.isInitial(list))),
     failed:
       (AsyncResult.isFailure(catalog) && !passFeatureClosed(catalog)) ||
-      (AsyncResult.isFailure(list) && !passFeatureClosed(list)) ||
-      (AsyncResult.isFailure(funding) && !passFeatureClosed(funding)),
-    refreshing:
-      (list.waiting && !AsyncResult.isInitial(list)) ||
-      (funding.waiting && !AsyncResult.isInitial(funding)),
+      (AsyncResult.isFailure(list) && !passFeatureClosed(list)),
+    refreshing: list.waiting && !AsyncResult.isInitial(list),
     refresh: () => {
       refreshCatalog();
       refreshList();
-      refreshFunding();
     },
   };
 }
@@ -620,50 +574,45 @@ function ReservationGroupsView({
   }
   const later = [...groups.moreCurrent, ...groups.undated];
   return (
-    <EntryPackFundingContext value={passes.funded}>
-      <View style={styles.stack}>
-        {passNotice}
-        {unlimited.map((pass) => (
-          <UnlimitedPeriodItem key={pass.passId} pass={pass} />
-        ))}
-        {Option.match(groups.featured, {
-          onSome: (row) =>
-            selection === undefined ? (
-              <NextReservation row={row} />
-            ) : (
-              <View style={styles.group}>
-                <ReservationRow row={row} place="later" featured />
-              </View>
-            ),
-          onNone: () =>
-            unlimited.length === 0 ? <NothingUpcoming /> : undefined,
-        })}
-        {savedNotice}
-        {later.length > 0 && (
-          <View>
-            <SectionHeader
-              title={m.reservations_section_later({}, { locale })}
-            />
-            <ReservationRows rows={later} place="later" />
-          </View>
-        )}
-        {(groups.past.length > 0 || ended.length > 0) && (
-          <PastReservations
-            rows={groups.past}
-            passes={ended}
-            // A saved list keeps no party, so only a fresh one decides.
-            savings={
-              fresh &&
-              showsSavingsOffer({
-                past: groups.past,
-                held: passes.held,
-                entryPackFunded: passes.funded,
-              })
-            }
-          />
-        )}
-      </View>
-    </EntryPackFundingContext>
+    <View style={styles.stack}>
+      {passNotice}
+      {unlimited.map((pass) => (
+        <UnlimitedPeriodItem key={pass.passId} pass={pass} />
+      ))}
+      {Option.match(groups.featured, {
+        onSome: (row) =>
+          selection === undefined ? (
+            <NextReservation row={row} />
+          ) : (
+            <View style={styles.group}>
+              <ReservationRow row={row} place="later" featured />
+            </View>
+          ),
+        onNone: () =>
+          unlimited.length === 0 ? <NothingUpcoming /> : undefined,
+      })}
+      {savedNotice}
+      {later.length > 0 && (
+        <View>
+          <SectionHeader title={m.reservations_section_later({}, { locale })} />
+          <ReservationRows rows={later} place="later" />
+        </View>
+      )}
+      {(groups.past.length > 0 || ended.length > 0) && (
+        <PastReservations
+          rows={groups.past}
+          passes={ended}
+          // A saved list keeps no party, so only a fresh one decides.
+          savings={
+            fresh &&
+            showsSavingsOffer({
+              past: groups.past,
+              held: passes.held,
+            })
+          }
+        />
+      )}
+    </View>
   );
 }
 
@@ -852,8 +801,7 @@ function ReservationRow({
   const { isExpanded, fontScale } = useViewport();
   const view = reservationRowView(row, place, locale);
   const target = reservationStatusTarget(row);
-  const funding = useContext(EntryPackFundingContext);
-  const packPaid = Option.exists(target, (id) => funding?.has(id) === true);
+  const packPaid = isPackPaid(row);
   const selected = Option.exists(target, (id) => id === selection?.orderId);
   const hasChevron = Option.isSome(target) && selection === undefined;
   const past = place === "past";
@@ -908,17 +856,14 @@ function ReservationRow({
         <Text variant="bodySmall" style={styles.rowDetail}>
           {view.detail}
         </Text>
-        <EntryPackFundingBadge target={target} />
-        {!packPaid &&
-          !past &&
-          rowOffersWithdrawal(row) &&
-          Option.isSome(target) && (
-            <WithdrawalLink
-              orderId={target.value}
-              style={styles.rowWithdrawal}
-              underlined
-            />
-          )}
+        {packPaid && <EntryPackBadge />}
+        {!past && rowOffersWithdrawal(row) && Option.isSome(target) && (
+          <WithdrawalLink
+            orderId={target.value}
+            style={styles.rowWithdrawal}
+            underlined
+          />
+        )}
       </View>
       {hasChevron && (
         <View
@@ -963,8 +908,7 @@ function NextReservation({ row }: { readonly row: ReservationListRow }) {
   const establishment = AsyncResult.value(useAtomValue(establishmentAtom));
   const view = nextReservationView(row, DateTime.nowUnsafe(), locale);
   const target = reservationStatusTarget(row);
-  const funding = useContext(EntryPackFundingContext);
-  const packPaid = Option.exists(target, (id) => funding?.has(id) === true);
+  const packPaid = isPackPaid(row);
   return (
     <BookingTicket
       onPress={Option.getOrUndefined(
@@ -985,11 +929,11 @@ function NextReservation({ row }: { readonly row: ReservationListRow }) {
       ]}
       stub={packPaid ? "column" : "row"}
     >
-      {packPaid && <EntryPackFundingBadge target={target} />}
+      {packPaid && <EntryPackBadge />}
       <NextAccessLine
         access={view.access}
         orderId={Option.getOrUndefined(target)}
-        withdrawable={!packPaid && rowOffersWithdrawal(row)}
+        withdrawable={rowOffersWithdrawal(row)}
       />
     </BookingTicket>
   );

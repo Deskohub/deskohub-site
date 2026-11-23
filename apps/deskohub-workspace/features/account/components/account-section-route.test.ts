@@ -12,7 +12,7 @@ const connection = mock(() => Promise.resolve());
 const getRequestPathname = mock(() =>
   Promise.resolve<string | undefined>("/en-US/account")
 );
-const loadCustomerAccountPage = mock((_passesEnabled: boolean) =>
+const loadCustomerAccountPage = mock(() =>
   Promise.resolve({ kind: "unavailable" as const })
 );
 const loadCustomerAccountPasses = mock((_locale: string) =>
@@ -156,7 +156,7 @@ describe("customer account route boundary", () => {
       "passes",
       "load",
     ]);
-    expect(loadCustomerAccountPage).toHaveBeenCalledWith(true);
+    expect(loadCustomerAccountPage).toHaveBeenCalledWith();
     expect(output).toMatchObject({
       type: AccountPage,
       props: { locale: "en-US", state: { kind: "unavailable" } },

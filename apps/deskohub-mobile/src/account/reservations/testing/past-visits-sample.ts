@@ -12,7 +12,8 @@ const dayMs = 24 * 60 * 60 * 1000;
 
 /**
  * `count` past coworking visits of the account's own, one a day from
- * yesterday back, each its own confirmed order `sample-visit-<n>`.
+ * yesterday back, each its own confirmed order `sample-visit-<n>` paid with
+ * money.
  */
 export const samplePastVisits = (count: number, now: Date = new Date()) =>
   Array.from({ length: count }, (_, index) => {
@@ -29,23 +30,23 @@ export const samplePastVisits = (count: number, now: Date = new Date()) =>
       endsAt: new Date(day.getTime() + 9 * 60 * 60 * 1000).toISOString(),
       seats: 1,
       status: "confirmed",
+      settlement: "paid",
     };
   });
 
 /**
  * The customer API over `workspace`, except that it lists nothing current
  * and `past` as the past reservations, and answers the pass reads as an
- * open pass rollout: no pass held, with the orders in `packFunded` paid by
- * an Entry pack.
+ * open pass rollout with no pass held.
  */
 export const pastVisitsApiLayer = ({
   workspace,
   past,
-  packFunded = [],
+  current = [],
 }: {
   readonly workspace: FakeWorkspace;
   readonly past: ReadonlyArray<unknown>;
-  readonly packFunded?: ReadonlyArray<string>;
+  readonly current?: ReadonlyArray<unknown>;
 }): Layer.Layer<CustomerApi> => {
   const transport = Layer.effect(
     HttpClient.HttpClient,
@@ -57,7 +58,7 @@ export const pastVisitsApiLayer = ({
           );
         switch (url.pathname.replace(/\/$/, "")) {
           case "/api/customer/reservations":
-            return respond({ current: [], past, unavailable: [] });
+            return respond({ current, past, unavailable: [] });
           case "/api/customer/passes/catalog":
             return respond({
               entryPacks: [],
@@ -66,12 +67,6 @@ export const pastVisitsApiLayer = ({
             });
           case "/api/customer/passes":
             return respond({ held: [], boughtForOthers: [] });
-          case "/api/customer/passes/reservation-funding":
-            return respond({
-              entryPackOrderIds: url.searchParams
-                .getAll("orderIds")
-                .filter((id) => packFunded.includes(id)),
-            });
           default:
             return fallback.execute(request);
         }

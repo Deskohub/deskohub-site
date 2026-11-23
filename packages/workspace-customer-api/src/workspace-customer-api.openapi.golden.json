@@ -9345,6 +9345,9 @@
           "status": {
             "$ref": "#/components/schemas/CustomerReservationStatus"
           },
+          "settlement": {
+            "$ref": "#/components/schemas/CustomerReservationSettlement"
+          },
           "productName": {
             "anyOf": [
               {
@@ -9424,6 +9427,11 @@
         },
         "required": ["eligible", "periodEndsAt"],
         "additionalProperties": false
+      },
+      "CustomerReservationSettlement": {
+        "type": "string",
+        "description": "Known values: paid, free, entry-pack. Clients ignore any other value.",
+        "examples": ["paid", "free", "entry-pack"]
       },
       "CustomerReservationParty": {
         "anyOf": [

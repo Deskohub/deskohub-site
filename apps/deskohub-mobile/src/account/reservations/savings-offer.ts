@@ -1,12 +1,5 @@
-import type {
-  CustomerPassList,
-  CustomerReservationOrderId,
-} from "@deskohub/workspace-customer-api";
-import { Option } from "effect";
-import {
-  type ReservationListRow,
-  reservationStatusTarget,
-} from "./reservation-list-model";
+import type { CustomerPassList } from "@deskohub/workspace-customer-api";
+import type { ReservationListRow } from "./reservation-list-model";
 
 /** A pass the account holds, as GET /passes lists it. */
 type HeldPass = CustomerPassList["held"][number];
@@ -20,10 +13,6 @@ export interface SavingsOfferFacts {
    * or the read hasn't succeeded.
    */
   readonly held: ReadonlyArray<HeldPass> | undefined;
-  /**
-   * The orders an Entry pack paid for; undefined until that read succeeds.
-   */
-  readonly entryPackFunded: ReadonlySet<CustomerReservationOrderId> | undefined;
 }
 
 /**
@@ -40,34 +29,20 @@ const covers = (pass: HeldPass): boolean =>
 
 /**
  * A paid coworking visit of the account's own: confirmed, not one it booked
- * for someone else (one booked for it by another account counts), and not
- * paid with an Entry pack. A row without an order is Dotypos-only, which
- * shows nothing about how it was paid.
+ * for someone else (one booked for it by another account counts), and
+ * settled with money the customer kept paying: not free, refunded, or from
+ * a pass. A Dotypos-only row has no settlement, so it never counts.
  */
-const paidIndividually = (
-  row: ReservationListRow,
-  entryPackFunded: ReadonlySet<CustomerReservationOrderId>
-): boolean =>
+const isPaidOwnCoworkVisit = (row: ReservationListRow): boolean =>
   row.product.kind === "cowork" &&
   row.status === "confirmed" &&
   row.party?.kind !== "booked-for" &&
-  Option.exists(
-    reservationStatusTarget(row),
-    (orderId) => !entryPackFunded.has(orderId)
-  );
+  row.settlement === "paid";
 
 /**
  * Whether the Past group ends with the packs and passes offer (board 06): a
  * coworking visit paid individually, and no pass covering the next ones.
- * The same rule as the site's past reservations, as far as the app's data
- * reaches: fully discounted orders read as paid here.
+ * The same rule as the site's past reservations.
  */
-export const showsSavingsOffer = ({
-  past,
-  held,
-  entryPackFunded,
-}: SavingsOfferFacts): boolean =>
-  held !== undefined &&
-  entryPackFunded !== undefined &&
-  !held.some(covers) &&
-  past.some((row) => paidIndividually(row, entryPackFunded));
+export const showsSavingsOffer = ({ past, held }: SavingsOfferFacts): boolean =>
+  held !== undefined && !held.some(covers) && past.some(isPaidOwnCoworkVisit);

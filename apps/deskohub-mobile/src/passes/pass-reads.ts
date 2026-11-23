@@ -2,9 +2,8 @@ import type {
   CustomerBookableCoworkTier,
   CustomerLocale,
   CustomerMonitorOption,
-  CustomerReservationOrderId,
 } from "@deskohub/workspace-customer-api";
-import { Array as Arr, Effect } from "effect";
+import { Effect } from "effect";
 import { Atom } from "effect/reactivity";
 import type { PragueDate } from "../booking/selection/prague-date";
 import { CustomerApi } from "../customer-api/customer-api.service";
@@ -50,27 +49,6 @@ export const unlimitedAccessAtom = Atom.family((passId: string) =>
       api.getUnlimitedAccess({ params: { passId } })
     ).pipe(customerRead({ accountRead: true }))
   )
-);
-
-export const reservationFundingAtom = Atom.family(
-  (orderIds: ReadonlyArray<CustomerReservationOrderId>) =>
-    customerDataRuntime.atom(
-      Effect.forEach(
-        Arr.chunksOf(orderIds, 50),
-        (batch) =>
-          Effect.flatMap(passes, (api) =>
-            api.getReservationPassFunding({ query: { orderIds: batch } })
-          ).pipe(workspaceRead),
-        { concurrency: 2 }
-      ).pipe(
-        Effect.map(
-          (batches) =>
-            new Set(
-              batches.flatMap(({ entryPackOrderIds }) => entryPackOrderIds)
-            )
-        )
-      )
-    )
 );
 
 export const resendPassInvitationAtom = customerDataRuntime.fn(

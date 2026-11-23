@@ -13,6 +13,8 @@ import {
  * Reservations tab's states (`EXPO_PUBLIC_ACCOUNT_SAMPLE_HISTORY`):
  * - `today`: the fixtures, the first booking running today with its PIN.
  * - `upcoming`: the next booking is a desk 16 days ahead, confirmed.
+ * - `entry-pack-upcoming`: as `upcoming`, both bookings paid with an Entry
+ *   pack and still withdrawable.
  * - `pending`: the next booking waits for payment.
  * - `nothing-upcoming`: only past bookings.
  * - `empty`: no bookings at all.
@@ -32,6 +34,7 @@ import {
 export const sampleHistories = [
   "today",
   "upcoming",
+  "entry-pack-upcoming",
   "upcoming-closed",
   "withdrawn",
   "pending",
@@ -69,6 +72,11 @@ export const withSampleHistory = (
     upcoming: () => [
       sampleDeskReservation(now),
       sampleLaterMeetingRoom(now),
+      ...later,
+    ],
+    "entry-pack-upcoming": () => [
+      { ...sampleDeskReservation(now), settlement: "entry-pack" },
+      { ...sampleLaterMeetingRoom(now), settlement: "entry-pack" },
       ...later,
     ],
     // The same bookings once withdrawal is no longer possible.

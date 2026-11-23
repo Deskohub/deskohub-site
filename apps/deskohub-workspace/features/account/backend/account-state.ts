@@ -211,21 +211,15 @@ export const loadAccountState: Effect.Effect<
  * after the state. An unavailable history degrades to the section's
  * unavailable notice.
  */
-export const loadAccountStateWithHistory = (
-  includeFunding = false
-): Effect.Effect<
+export const loadAccountStateWithHistory: Effect.Effect<
   CustomerAccountStateWithHistory,
   never,
   AccountStateCapabilities | CustomerReservationHistoryService
-> =>
-  Effect.suspend(() => loadAccount).pipe(
-    Effect.flatMap((loaded) => attachHistory(loaded, includeFunding))
-  );
+> = Effect.suspend(() => loadAccount).pipe(Effect.flatMap(attachHistory));
 
 /** Reads the history `loaded` shows and attaches it to its state. */
 function attachHistory(
-  loaded: LoadedAccount,
-  includeFunding: boolean
+  loaded: LoadedAccount
 ): Effect.Effect<
   CustomerAccountStateWithHistory,
   never,
@@ -235,11 +229,11 @@ function attachHistory(
     case undefined:
       return Effect.succeed(loaded.state);
     case "always":
-      return loadReservationHistory(loaded.history, includeFunding).pipe(
+      return loadReservationHistory(loaded.history).pipe(
         Effect.map((history) => ({ ...loaded.state, history }))
       );
     case "when-any":
-      return loadReservationHistory(loaded.history, includeFunding).pipe(
+      return loadReservationHistory(loaded.history).pipe(
         Effect.map((history) =>
           mayHaveReservations(history)
             ? { ...loaded.state, history }
@@ -527,14 +521,9 @@ const loadLinkedAccount = Effect.fn(function* (
  * The account's reservation history. An unavailable history degrades to the
  * section's unavailable notice.
  */
-const loadReservationHistory = (
-  account: ReservationHistoryAccount,
-  includeFunding: boolean
-) =>
+const loadReservationHistory = (account: ReservationHistoryAccount) =>
   Effect.flatMap(CustomerReservationHistoryService, (service) =>
-    includeFunding
-      ? service.load(account, { includeFunding })
-      : service.load(account)
+    service.load(account)
   ).pipe(
     degradable(
       "account.reservation-history.unavailable",

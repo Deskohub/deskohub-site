@@ -250,6 +250,29 @@ export const CustomerReservationWithdrawalAvailability = Schema.Struct({
   periodEndsAt: isoInstant,
 }).annotate({ identifier: "CustomerReservationWithdrawalAvailability" });
 
+/**
+ * The settlements the server produces, the current coverage of a visit's
+ * price, apart from the reservation's and its payment's status. `paid`: the
+ * customer paid money and keeps some of it paid after refunds made or owed;
+ * `free`: settled at no charge, such as a fully discounted order;
+ * `entry-pack`: an Entry pack entry paid the visit, even when money paid for
+ * add-ons.
+ */
+const customerReservationSettlements = ["paid", "free", "entry-pack"] as const;
+export type CustomerReservationSettlement =
+  (typeof customerReservationSettlements)[number];
+
+/**
+ * A settlement on the wire: an open string, so a later server can add a
+ * value without breaking shipped builds. Clients match the values they know
+ * and treat any other as absent.
+ */
+const CustomerReservationSettlementValue = Schema.String.annotate({
+  identifier: "CustomerReservationSettlement",
+  description: `Known values: ${customerReservationSettlements.join(", ")}. Clients ignore any other value.`,
+  examples: [...customerReservationSettlements],
+});
+
 export const CustomerReservationSummary = Schema.Struct({
   /** Unique within the history; only for telling entries apart. */
   id: Schema.String,
@@ -274,6 +297,14 @@ export const CustomerReservationSummary = Schema.Struct({
   /** Null when the provider's seat count can't be read. */
   seats: Schema.NullOr(Schema.Int),
   status: CustomerReservationStatus,
+  /**
+   * The current coverage of the visit's price (`customerReservationSettlements`),
+   * apart from `status` and the order's payment status. Absent when none
+   * applies: a reservation not booked on the website, an unpaid or fully
+   * refunded order, an Unlimited pass day, or an Entry pack claim released
+   * without being used.
+   */
+  settlement: Schema.optionalKey(CustomerReservationSettlementValue),
   /**
    * The catalog name of `product` in the request's locale, as the website
    * names it.

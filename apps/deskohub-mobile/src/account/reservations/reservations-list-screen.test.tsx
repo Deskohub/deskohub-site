@@ -1,5 +1,8 @@
 import { expect, mock, spyOn, test } from "bun:test";
-import type { CustomerReservationOrderId } from "@deskohub/workspace-customer-api";
+import {
+  CustomerReservationOrderId,
+  type CustomerReservationSummary,
+} from "@deskohub/workspace-customer-api";
 import { RegistryContext } from "@effect/atom-react";
 import { Effect, Layer, Result } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -23,14 +26,11 @@ import {
   fakeWorkspaceHttpClient,
   fakeWorkspaceOrigin,
 } from "../../customer-api/testing/fake-workspace";
+import { sampleLaterMeetingRoom } from "../../customer-api/testing/sample-fixtures";
 import { withSampleHistory } from "../../customer-api/testing/sample-history";
 import { AppLocaleProvider } from "../../i18n/locale-context";
 import { m } from "../../i18n/messages";
-import {
-  heldPassesAtom,
-  passCatalogAtom,
-  reservationFundingAtom,
-} from "../../passes/pass-reads";
+import { heldPassesAtom, passCatalogAtom } from "../../passes/pass-reads";
 import { sitePageUrl } from "../../routing/site-page";
 import { expoRouterStandIn } from "../../testing/expo-router-stand-in";
 import { findAll, hostTree, textOf } from "../../ui/testing/element-tree";
@@ -217,35 +217,37 @@ test("empty history shows a pass catalog outage and retry restores the Unlimited
 });
 
 /**
- * The linked account's screen over three past coworking visits, with the
- * pass rollout open, no pass held, and `packFunded` paid with an Entry pack.
+ * The linked account's screen over three past coworking visits paid with
+ * money, except as `settled` names (undefined: no settlement), with the pass
+ * rollout open and no pass held.
  */
 const withPastVisits = async (
-  packFunded: ReadonlyArray<string>,
-  check: (hosts: ReturnType<typeof hostTree>) => void
+  settled: Readonly<Record<string, string | undefined>>,
+  check: (hosts: ReturnType<typeof hostTree>) => void,
+  current: ReadonlyArray<CustomerReservationSummary> = []
 ) => {
   const workspace = FakeWorkspace.forKind("linked");
   const base = fakeCustomerDataLayer({ workspace, device: makeFakeDevice() });
   const locale = "en-US" as const;
-  const past = samplePastVisits(3);
-  const api = pastVisitsApiLayer({ workspace, past, packFunded });
+  const past = samplePastVisits(3).map(({ settlement, ...visit }) => {
+    const value = Object.hasOwn(settled, visit.orderId)
+      ? settled[visit.orderId]
+      : settlement;
+    return value === undefined ? visit : { ...visit, settlement: value };
+  });
+  const api = pastVisitsApiLayer({ workspace, past, current });
   const registry = makeCustomerDataRegistry(Layer.mergeAll(base, api));
-  const funding = reservationFundingAtom(
-    past.map(({ orderId }) => orderId as CustomerReservationOrderId).sort()
-  );
   const release = [
     registry.mount(accountAtom),
     registry.mount(reservationHistoryAtom),
     registry.mount(passCatalogAtom),
     registry.mount(heldPassesAtom(locale)),
-    registry.mount(funding),
   ];
   try {
     await settle(registry, accountAtom);
     await settle(registry, reservationHistoryAtom);
     await settle(registry, passCatalogAtom);
     await settle(registry, heldPassesAtom(locale));
-    expect(Result.isSuccess(await settle(registry, funding))).toBe(true);
     check(screenHosts(registry));
   } finally {
     for (const dispose of release) dispose();
@@ -261,7 +263,7 @@ const savingsLinks = (hosts: ReturnType<typeof hostTree>) =>
   );
 
 test("the Past group ends with the savings link, after Show all", async () => {
-  await withPastVisits(["sample-visit-1"], (hosts) => {
+  await withPastVisits({ "sample-visit-1": "entry-pack" }, (hosts) => {
     const [link] = savingsLinks(hosts);
     expect(savingsLinks(hosts)).toHaveLength(1);
     // Past's rows, then its Show all action, then the link, in one group.
@@ -281,7 +283,7 @@ test("the Past group ends with the savings link, after Show all", async () => {
 });
 
 test("the savings link opens Pricing in the app's language, unselected", async () => {
-  await withPastVisits([], (hosts) => {
+  await withPastVisits({}, (hosts) => {
     openedPages.length = 0;
     const press = savingsLinks(hosts)[0]?.props.onPress as () => void;
     press();
@@ -299,12 +301,69 @@ test("the savings link opens Pricing in the app's language, unselected", async (
   });
 });
 
-test("visits paid with an Entry pack offer no savings link", async () => {
+test("visits paid with an Entry pack offer no savings link, and carry its label", async () => {
   await withPastVisits(
-    ["sample-visit-1", "sample-visit-2", "sample-visit-3"],
+    {
+      "sample-visit-1": "entry-pack",
+      "sample-visit-2": "entry-pack",
+      "sample-visit-3": "entry-pack",
+    },
+    (hosts) => {
+      expect(savingsLinks(hosts)).toHaveLength(0);
+      expect(
+        findAll(hosts, "Text")
+          .map(textOf)
+          .filter(
+            (text) => text === m.passes_paid_with_pack({}, { locale: "en-US" })
+          ).length
+      ).toBeGreaterThan(0);
+    }
+  );
+});
+
+test("free, unsettled and unknown settlements offer no savings link", async () => {
+  await withPastVisits(
+    {
+      "sample-visit-1": "free",
+      // A refunded order, or a value a later server adds.
+      "sample-visit-2": undefined,
+      "sample-visit-3": "voucher",
+    },
     (hosts) => {
       expect(savingsLinks(hosts)).toHaveLength(0);
     }
+  );
+});
+
+test("an upcoming Entry pack visit keeps the withdrawal the server offers", async () => {
+  const room = sampleLaterMeetingRoom(new Date());
+  const current = [
+    { ...room, settlement: "entry-pack" },
+    {
+      ...room,
+      id: "sample-reservation-room-later-2",
+      orderId: CustomerReservationOrderId.make("sample-room-later-2"),
+      settlement: "entry-pack",
+    },
+  ];
+  await withPastVisits(
+    {},
+    (hosts) => {
+      const texts = findAll(hosts, "Text").map(textOf);
+      // The next visit's ticket and the later visit's row each carry both.
+      expect(
+        texts.filter(
+          (text) => text === m.passes_paid_with_pack({}, { locale: "en-US" })
+        )
+      ).toHaveLength(2);
+      expect(
+        texts.filter(
+          (text) =>
+            text === m.reservationWithdrawalAction({}, { locale: "en-US" })
+        )
+      ).toHaveLength(2);
+    },
+    current
   );
 });
 
@@ -317,7 +376,7 @@ test("a blocked Pricing page shows the neutral toast", async () => {
   });
   try {
     blockedPages = 1;
-    await withPastVisits([], (hosts) => {
+    await withPastVisits({}, (hosts) => {
       const press = savingsLinks(hosts)[0]?.props.onPress as () => void;
       press();
     });

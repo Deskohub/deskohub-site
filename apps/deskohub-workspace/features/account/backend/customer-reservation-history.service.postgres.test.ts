@@ -647,10 +647,7 @@ describe.skipIf(!testDatabase)(
       const history = await Effect.runPromise(
         Effect.gen(function* () {
           const service = yield* CustomerReservationHistoryService;
-          return yield* service.load(
-            { accountId: account, dotyposCustomerId },
-            { includeFunding: true }
-          );
+          return yield* service.load({ accountId: account, dotyposCustomerId });
         }).pipe(
           Effect.provide(
             makeHistoryLayer([
@@ -683,11 +680,11 @@ describe.skipIf(!testDatabase)(
       if (history.kind !== "available") throw new Error("History unavailable");
 
       const summaries = history.groups.past;
-      expect(summaries.map((summary) => summary.paidWithEntryPack)).toEqual([
+      expect(summaries.map((summary) => summary.settlement)).toEqual([
         undefined,
         undefined,
         undefined,
-        true,
+        "entry-pack",
       ]);
       expect(JSON.stringify(history)).not.toContain(passId);
       expect(summaries.map((summary) => summary.id)).toEqual([
@@ -775,7 +772,7 @@ describe.skipIf(!testDatabase)(
       expect(JSON.stringify(expiry)).not.toContain(passId);
     });
 
-    test("marks a booking paid individually only when its own payment collected money", async () => {
+    test("tells how each booking was settled, and leaves a refunded order or a released Entry pack claim unsettled", async () => {
       const account = customerAccountIdSchema.make(uniqueId());
       const dotyposCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
       await insertAuthUser(account, testEmailAddress(`p-${account}`));
@@ -795,6 +792,11 @@ describe.skipIf(!testDatabase)(
       const paidWithMoney = booking(1);
       const fullyDiscounted = booking(2);
       const packWithPaidAddOns = booking(3);
+      const packOnly = booking(10);
+      // Their Entry pack claims were released, so neither the zero amount
+      // nor the add-ons' money tells what covered the visit.
+      const releasedPackOnly = booking(11);
+      const releasedPackWithPaidAddOns = booking(12);
       const paidWithoutAttempt = booking(4);
       const unpaid = booking(5);
       const fullyRefunded = booking(6);
@@ -809,6 +811,9 @@ describe.skipIf(!testDatabase)(
         paidWithMoney,
         fullyDiscounted,
         packWithPaidAddOns,
+        packOnly,
+        releasedPackOnly,
+        releasedPackWithPaidAddOns,
         paidWithoutAttempt,
         fullyRefunded,
         refundOwed,
@@ -887,6 +892,18 @@ describe.skipIf(!testDatabase)(
         provider: "nexi",
         amount: 4000,
       });
+      await settleAttempt(packOnly.workspaceReservationId, {
+        provider: "internal",
+        amount: 0,
+      });
+      await settleAttempt(releasedPackOnly.workspaceReservationId, {
+        provider: "internal",
+        amount: 0,
+      });
+      await settleAttempt(releasedPackWithPaidAddOns.workspaceReservationId, {
+        provider: "nexi",
+        amount: 4000,
+      });
       await settleAttempt(fullyRefunded.workspaceReservationId, {
         provider: "nexi",
         amount: 7000,
@@ -922,74 +939,74 @@ describe.skipIf(!testDatabase)(
       );
       await testDatabase!.pool.query(
         `insert into pass_entry_claims (reservation_id, pass_id, date, status)
-         values ($1, $2, '2000-01-03', 'consumed')`,
-        [packWithPaidAddOns.workspaceReservationId, passId]
+         values ($1, $5, '2000-01-03', 'consumed'), ($2, $5, '2000-01-10', 'consumed'),
+           ($3, $5, '2000-01-11', 'released'), ($4, $5, '2000-01-12', 'released')`,
+        [
+          packWithPaidAddOns.workspaceReservationId,
+          packOnly.workspaceReservationId,
+          releasedPackOnly.workspaceReservationId,
+          releasedPackWithPaidAddOns.workspaceReservationId,
+          passId,
+        ]
       );
 
-      const loadHistory = (includeFunding: boolean) =>
-        Effect.runPromise(
-          Effect.gen(function* () {
-            const service = yield* CustomerReservationHistoryService;
-            return yield* service.load(
-              { accountId: account, dotyposCustomerId },
-              { includeFunding }
-            );
-          }).pipe(
-            Effect.provide(
-              makeHistoryLayer([
-                ...[
-                  paidWithMoney,
-                  fullyDiscounted,
-                  packWithPaidAddOns,
-                  paidWithoutAttempt,
-                  unpaid,
-                  fullyRefunded,
-                  refundOwed,
-                  partlyRefunded,
-                  partRefundOwed,
-                ].map(({ dotyposReservationId, day }) =>
-                  makeDotyposReservation({
-                    id: dotyposReservationId,
-                    startDate: `2000-01-0${day}T10:00:00.000Z`,
-                    endDate: `2000-01-0${day}T11:00:00.000Z`,
-                  })
-                ),
+      const history = await Effect.runPromise(
+        Effect.gen(function* () {
+          const service = yield* CustomerReservationHistoryService;
+          return yield* service.load({ accountId: account, dotyposCustomerId });
+        }).pipe(
+          Effect.provide(
+            makeHistoryLayer([
+              ...[
+                paidWithMoney,
+                fullyDiscounted,
+                packWithPaidAddOns,
+                packOnly,
+                releasedPackOnly,
+                releasedPackWithPaidAddOns,
+                paidWithoutAttempt,
+                unpaid,
+                fullyRefunded,
+                refundOwed,
+                partlyRefunded,
+                partRefundOwed,
+              ].map(({ dotyposReservationId, day }) =>
                 makeDotyposReservation({
-                  id: providerOnly,
-                  startDate: "2000-01-09T10:00:00.000Z",
-                  endDate: "2000-01-09T11:00:00.000Z",
-                }),
-              ])
-            )
+                  id: dotyposReservationId,
+                  startDate: `2000-01-${String(day).padStart(2, "0")}T10:00:00.000Z`,
+                  endDate: `2000-01-${String(day).padStart(2, "0")}T11:00:00.000Z`,
+                })
+              ),
+              makeDotyposReservation({
+                id: providerOnly,
+                startDate: "2000-01-09T10:00:00.000Z",
+                endDate: "2000-01-09T11:00:00.000Z",
+              }),
+            ])
           )
-        );
-      const paidIndividuallyById = async (includeFunding: boolean) => {
-        const history = await loadHistory(includeFunding);
-        if (history.kind !== "available")
-          throw new Error("History unavailable");
-        return Object.fromEntries(
-          history.groups.past.map((summary) => [
-            summary.id,
-            summary.paidIndividually,
-          ])
-        );
-      };
+        )
+      );
+      if (history.kind !== "available") throw new Error("History unavailable");
 
-      expect(await paidIndividuallyById(true)).toEqual({
-        [paidWithMoney.workspaceReservationId]: true,
-        [fullyDiscounted.workspaceReservationId]: undefined,
-        [packWithPaidAddOns.workspaceReservationId]: undefined,
+      expect(
+        Object.fromEntries(
+          history.groups.past.map((summary) => [summary.id, summary.settlement])
+        )
+      ).toEqual({
+        [paidWithMoney.workspaceReservationId]: "paid",
+        [fullyDiscounted.workspaceReservationId]: "free",
+        [packWithPaidAddOns.workspaceReservationId]: "entry-pack",
+        [packOnly.workspaceReservationId]: "entry-pack",
+        [releasedPackOnly.workspaceReservationId]: undefined,
+        [releasedPackWithPaidAddOns.workspaceReservationId]: undefined,
         [paidWithoutAttempt.workspaceReservationId]: undefined,
         [unpaid.workspaceReservationId]: undefined,
         [fullyRefunded.workspaceReservationId]: undefined,
         [refundOwed.workspaceReservationId]: undefined,
-        [partlyRefunded.workspaceReservationId]: true,
-        [partRefundOwed.workspaceReservationId]: true,
+        [partlyRefunded.workspaceReservationId]: "paid",
+        [partRefundOwed.workspaceReservationId]: "paid",
         [providerOnly]: undefined,
       });
-      expect(
-        Object.values(await paidIndividuallyById(false)).filter(Boolean)
-      ).toEqual([]);
     });
 
     test("keeps bought gifts and holder passes separate", async () => {
