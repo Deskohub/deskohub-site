@@ -66,6 +66,46 @@ export type WorkspaceE2EPreparation = {
   readonly office: OfficeE2EPreparation | undefined;
 };
 
+export const makePublicSiteWorkspaceE2ECases = (
+  config: WorkspaceE2EConfig
+): readonly WorkspaceE2ECase[] => [
+  {
+    checkoutStates: [],
+    execute: ({ openSession, runStep }) =>
+      assertLocaleSwitcher({ config, openSession, runStep }).pipe(
+        Effect.mapError((cause) =>
+          toWorkspaceE2EError("run locale switch e2e case", cause)
+        )
+      ),
+    id: "locale-switch",
+    timeoutMs: config.timeouts.localeCase,
+  },
+  ...localeSmokeLocales.map(
+    (locale): WorkspaceE2ECase => ({
+      checkoutStates: [],
+      execute: ({ openSession, runStep }) =>
+        assertLocaleSmoke({ config, locale, openSession, runStep }).pipe(
+          Effect.mapError((cause) =>
+            toWorkspaceE2EError(`run ${locale} locale smoke e2e case`, cause)
+          )
+        ),
+      id: localeSmokeCaseId(locale),
+      timeoutMs: config.timeouts.localeCase,
+    })
+  ),
+  {
+    checkoutStates: [],
+    execute: ({ openSession, runStep }) =>
+      assertContactForm({ config, openSession, runStep }).pipe(
+        Effect.mapError((cause) =>
+          toWorkspaceE2EError("run contact form e2e case", cause)
+        )
+      ),
+    id: "contact-form",
+    timeoutMs: config.timeouts.contactCase,
+  },
+];
+
 export const makeWorkspaceE2ECases = ({
   allocation,
   config,
@@ -110,44 +150,7 @@ export const makeWorkspaceE2ECases = ({
         }
       );
       const cases: WorkspaceE2ECase[] = [
-        {
-          checkoutStates: [],
-          execute: ({ openSession, runStep }) =>
-            assertLocaleSwitcher({ config, openSession, runStep }).pipe(
-              Effect.mapError((cause) =>
-                toWorkspaceE2EError("run locale switch e2e case", cause)
-              )
-            ),
-          id: "locale-switch",
-          timeoutMs: config.timeouts.localeCase,
-        },
-        ...localeSmokeLocales.map(
-          (locale): WorkspaceE2ECase => ({
-            checkoutStates: [],
-            execute: ({ openSession, runStep }) =>
-              assertLocaleSmoke({ config, locale, openSession, runStep }).pipe(
-                Effect.mapError((cause) =>
-                  toWorkspaceE2EError(
-                    `run ${locale} locale smoke e2e case`,
-                    cause
-                  )
-                )
-              ),
-            id: localeSmokeCaseId(locale),
-            timeoutMs: config.timeouts.localeCase,
-          })
-        ),
-        {
-          checkoutStates: [],
-          execute: ({ openSession, runStep }) =>
-            assertContactForm({ config, openSession, runStep }).pipe(
-              Effect.mapError((cause) =>
-                toWorkspaceE2EError("run contact form e2e case", cause)
-              )
-            ),
-          id: "contact-form",
-          timeoutMs: config.timeouts.contactCase,
-        },
+        ...makePublicSiteWorkspaceE2ECases(config),
       ];
       let nextDateIndex = 0;
 

@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      flows:
+        description: Comma-separated E2E flows to run, all, or none (empty defaults to all on manual/nightly dispatches)
+        required: false
+        default: ""
+        type: string
       include_nightly_cases:
         description: Also run the nightly-only cases, such as the automation journey (nightly target only)
         required: false
@@ -68,21 +73,36 @@ jobs:
     outputs:
       deployment: ${{ steps.target.outputs.deployment }}
       eligible: ${{ steps.target.outputs.eligible }}
+      flows: ${{ steps.target.outputs.flows }}
       head_ref: ${{ steps.target.outputs.head_ref }}
+      install_webkit: ${{ steps.target.outputs.install_webkit }}
       nightly: ${{ steps.target.outputs.nightly }}
       nightly_cases: ${{ steps.target.outputs.nightly_cases }}
       pr_number: ${{ steps.target.outputs.pr_number }}
+      run_e2e: ${{ steps.target.outputs.run_e2e }}
       sha: ${{ steps.target.outputs.sha }}
       status_description: ${{ steps.status-without-run.outputs.description }}
+      status_reason: ${{ steps.status-without-run.outputs.reason }}
       status_state: ${{ steps.status-without-run.outputs.state }}
       url: ${{ steps.target.outputs.url }}
     steps:
+      # Only the workflow commit's flow parser is checked out, never PR code.
+      - name: Checkout E2E flow parser
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workspace-e2e-flows
+          persist-credentials: false
+          sparse-checkout: .github/actions/workspace-e2e-flows
+
       - name: Resolve eligible PR and immutable preview
         id: target
         env:
           EVENT_NAME: ${{ github.event_name }}
+          FLOWS_CLI: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/cli.mjs
           GH_TOKEN: ${{ github.token }}
           INCLUDE_NIGHTLY_CASES: ${{ github.event_name == 'workflow_dispatch' && inputs.include_nightly_cases && 'true' || 'false' }}
+          INPUT_FLOWS: ${{ github.event_name == 'workflow_dispatch' && inputs.flows || '' }}
           # Only workspace-e2e-nightly.yml moves this branch, to a commit of
           # main whose Workspace preview it waits for.
           NIGHTLY_BRANCH: e2e/nightly
@@ -117,26 +137,31 @@ jobs:
             exit 1
           fi
 
-          pulls="$(gh api \
-            -H "Accept: application/vnd.github+json" \
+          pulls_result="$(node "$FLOWS_CLI" fetch-paginated-json \
             "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/pulls")"
-          eligible_pulls="$(jq \
-            --arg repo "$GITHUB_REPOSITORY" \
-            --arg ref "$TARGET_REF" \
-            --arg sha "$TARGET_SHA" \
-            '[.[] | select(
-              .state == "open" and
-              .draft == false and
-              .head.repo.full_name == $repo and
-              .head.ref == $ref and
-              .head.sha == $sha and
-              .user.login != "dependabot[bot]" and
-              (.head.ref | startswith("dependabot/") | not)
-            )]' <<<"$pulls")"
+          pulls_lookup_ok="$(jq -r '.ok' <<<"$pulls_result")"
+          pulls="$(jq -c '.items' <<<"$pulls_result")"
+          filter_eligible_pulls() {
+            jq \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg ref "$TARGET_REF" \
+              --arg sha "$TARGET_SHA" \
+              '[.[] | select(
+                .state == "open" and
+                .draft == false and
+                .head.repo.full_name == $repo and
+                .head.ref == $ref and
+                .head.sha == $sha and
+                .user.login != "dependabot[bot]" and
+                (.head.ref | startswith("dependabot/") | not)
+              )]'
+          }
+          eligible_pulls="$(filter_eligible_pulls <<<"$pulls")"
           eligible_count="$(jq 'length' <<<"$eligible_pulls")"
           fail() {
             echo "$1" >&2
             echo "resolution_error=$2" >> "$GITHUB_OUTPUT"
+            echo "resolution_error_kind=${3:-other}" >> "$GITHUB_OUTPUT"
             exit 1
           }
 
@@ -165,8 +190,15 @@ jobs:
               fail 'Nightly target SHA is not a commit of main' \
                 'The nightly branch points outside main; start workspace-e2e-nightly.yml again'
             fi
+            if [[ -n "$INPUT_FLOWS" && "$INPUT_FLOWS" != "all" ]]; then
+              fail 'Nightly runs must execute all E2E flows' \
+                'Nightly runs always execute all E2E flows; dispatch without a subset flows input'
+            fi
             {
+              echo "flows=all"
               echo "head_ref=$TARGET_REF"
+              echo "install_webkit=true"
+              echo "run_e2e=true"
               if [[ "$INCLUDE_NIGHTLY_CASES" == "true" ]]; then
                 echo "nightly_cases=true"
               fi
@@ -178,6 +210,46 @@ jobs:
               echo "Only workspace-e2e-nightly.yml starts E2E for the nightly branch"
               echo "eligible=false" >> "$GITHUB_OUTPUT"
               exit 0
+            fi
+            if [[ "$pulls_lookup_ok" != "true" ]]; then
+              # If a paginated commit-to-PR lookup failed partway through,
+              # require affirmative evidence tying BOTH $TARGET_REF and
+              # $TARGET_SHA to an eligible open internal PR before marking the
+              # head eligible. Honor a successful empty branch lookup so an
+              # unrelated branch sharing the same SHA never overwrites another
+              # PR's passing status.
+              verified_head=false
+              if [[ "$eligible_count" != "0" ]]; then
+                verified_head=true
+              elif [[ "$TARGET_REF" != dependabot/* ]]; then
+                owner="${GITHUB_REPOSITORY%%/*}"
+                fallback_result="$(node "$FLOWS_CLI" fetch-paginated-json \
+                  "repos/$GITHUB_REPOSITORY/pulls" \
+                  -f state=open \
+                  -f head="$owner:$TARGET_REF")"
+                fallback_ok="$(jq -r '.ok' <<<"$fallback_result")"
+                fallback_pulls="$(jq -c '.items' <<<"$fallback_result")"
+                fallback_eligible_count="$(filter_eligible_pulls <<<"$fallback_pulls" 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
+                if [[ "$fallback_eligible_count" != "0" ]]; then
+                  verified_head=true
+                elif [[ "$fallback_ok" == "true" ]]; then
+                  echo "No eligible open internal PR matches the exact deployment SHA"
+                  echo "eligible=false" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+              fi
+              if [[ "$verified_head" == "true" ]]; then
+                {
+                  echo "deployment=$TARGET_DEPLOYMENT"
+                  echo "eligible=true"
+                  echo "sha=$TARGET_SHA"
+                } >> "$GITHUB_OUTPUT"
+                fail 'Could not read all pull requests associated with this commit' \
+                  'Workspace E2E could not verify PR state; re-run the failed jobs' \
+                  pr-lookup-failed
+              fi
+              echo "Could not read pull requests associated with this commit" >&2
+              exit 1
             fi
             if [[ "$eligible_count" == "0" ]]; then
               echo "No eligible open internal PR matches the exact deployment SHA"
@@ -196,12 +268,50 @@ jobs:
 
             if [[ "$eligible_count" != "1" ]]; then
               fail 'More than one eligible PR matches the exact deployment SHA' \
-                'More than one open PR has this head; E2E needs exactly one'
+                'More than one open PR has this head; E2E needs exactly one' \
+                ambiguous-pr
             fi
             pr_number="$(jq -r '.[0].number' <<<"$eligible_pulls")"
+            pr_body="$(jq -r '.[0].body // ""' <<<"$eligible_pulls")"
             {
               echo "head_ref=$TARGET_REF"
               echo "pr_number=$pr_number"
+            } >> "$GITHUB_OUTPUT"
+
+            if ! parsed_pr_flows="$(PR_BODY="$pr_body" node "$FLOWS_CLI" parse-pr-body)"; then
+              parse_error="$(jq -r '.error // "Invalid ## E2E flows section"' <<<"$parsed_pr_flows" 2>/dev/null || echo "Invalid ## E2E flows section")"
+              fail "PR #$pr_number has invalid or missing ## E2E flows: $parse_error" \
+                'Invalid or missing ## E2E flows in PR description; list valid flows, all, or none' \
+                invalid-pr-flows
+            fi
+
+            pr_requested_flows="$(jq -r '.flows' <<<"$parsed_pr_flows")"
+            if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+              if [[ -z "$INPUT_FLOWS" ]]; then
+                parsed_flows='{"ok":true,"flows":"all","runE2E":true,"installWebkit":true}'
+              elif ! parsed_flows="$(FLOWS_INPUT="$INPUT_FLOWS" node "$FLOWS_CLI" parse-flows)"; then
+                parse_error="$(jq -r '.error // "Invalid flows input"' <<<"$parsed_flows" 2>/dev/null || echo "Invalid flows input")"
+                fail "Invalid flows input for PR #$pr_number: $parse_error" \
+                  'Invalid flows input; pass valid E2E flow IDs, all, or none' \
+                  invalid-flows-input
+              fi
+              dispatch_flows="$(jq -r '.flows' <<<"$parsed_flows")"
+              if [[ "$dispatch_flows" == "none" && "$pr_requested_flows" != "none" ]]; then
+                fail "Manual dispatch asked for flows=none while PR #$pr_number requests $pr_requested_flows" \
+                  'Manual flows=none dispatch conflicts with ## E2E flows in PR description' \
+                  manual-none-conflict
+              fi
+            else
+              parsed_flows="$parsed_pr_flows"
+            fi
+
+            resolved_flows="$(jq -r '.flows' <<<"$parsed_flows")"
+            resolved_run_e2e="$(jq -r '.runE2E' <<<"$parsed_flows")"
+            resolved_install_webkit="$(jq -r '.installWebkit' <<<"$parsed_flows")"
+            {
+              echo "flows=$resolved_flows"
+              echo "install_webkit=$resolved_install_webkit"
+              echo "run_e2e=$resolved_run_e2e"
             } >> "$GITHUB_OUTPUT"
           fi
 
@@ -225,7 +335,8 @@ jobs:
           NODE
           } 2>/dev/null)" ||
             fail 'Target must be an immutable HTTPS Vercel deployment origin' \
-              'The event named no immutable Vercel preview URL; redeploy the Workspace preview to run E2E'
+              'The event named no immutable Vercel preview URL; redeploy the Workspace preview to run E2E' \
+              invalid-url
 
           deployments="$(gh api \
             --method GET \
@@ -262,8 +373,10 @@ jobs:
             fi
           done < <(jq -r '.[] | select(.creator.login == "vercel[bot]") | .id' <<<"$deployments")
           if [[ "$deployment_matches_target" != "true" ]]; then
+            preview_tag="$(printf '%s' "$normalized_url" | sha256sum | cut -c1-8)"
             fail "No $TARGET_DEPLOYMENT exact-SHA Workspace deployment matches the target URL" \
-              'No Vercel deployment record matches this preview yet; re-run the failed jobs of this Workspace E2E run'
+              "No Vercel deployment record matches this preview yet; re-run the failed jobs [preview: $TARGET_DEPLOYMENT:$preview_tag]" \
+              preview-record-mismatch
           fi
 
           echo "url=$normalized_url" >> "$GITHUB_OUTPUT"
@@ -273,7 +386,9 @@ jobs:
         if: >-
           !cancelled() && steps.target.outputs.eligible == 'true' &&
           steps.target.outputs.nightly != 'true' &&
-          (steps.target.outcome != 'success' || steps.target.outputs.deployment != 'success')
+          (steps.target.outcome != 'success' ||
+           steps.target.outputs.deployment != 'success' ||
+           steps.target.outputs.run_e2e != 'true')
         env:
           DEPLOYMENT: ${{ steps.target.outputs.deployment }}
           # Descriptions only a run that tested its own commit publishes, as
@@ -285,9 +400,12 @@ jobs:
           # A run a newer head superseded publishes this over its own
           # "running" status. It tested nothing, so its commit is passed over.
           E2E_SUPERSEDED_DESCRIPTION: Superseded by a newer PR head before E2E finished
+          FLOWS: ${{ steps.target.outputs.flows }}
+          FLOWS_CLI: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/cli.mjs
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.target.outputs.pr_number }}
           RESOLUTION_ERROR: ${{ steps.target.outputs.resolution_error }}
+          RESOLUTION_ERROR_KIND: ${{ steps.target.outputs.resolution_error_kind }}
           TARGET_OUTCOME: ${{ steps.target.outcome }}
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
@@ -297,6 +415,7 @@ jobs:
             {
               echo "state=$1"
               echo "description=$2"
+              echo "reason=${3:-other}"
             } >> "$GITHUB_OUTPUT"
             echo "Workspace E2E for \`$TARGET_SHA\`: **$1**. $2" >> "$GITHUB_STEP_SUMMARY"
           }
@@ -305,13 +424,19 @@ jobs:
           # a generic one.
           if [[ "$TARGET_OUTCOME" != "success" ]]; then
             if [[ -n "$RESOLUTION_ERROR" ]]; then
-              decide failure "$RESOLUTION_ERROR"
+              decide failure "$RESOLUTION_ERROR" "${RESOLUTION_ERROR_KIND:-other}"
             fi
             exit 0
           fi
 
           if [[ "$DEPLOYMENT" == "failed" ]]; then
-            decide failure 'Vercel preview deployment failed; fix or redeploy it to run E2E'
+            decide failure 'Vercel preview deployment failed; fix or redeploy it to run E2E' deployment-failed
+            exit 0
+          fi
+
+          if [[ "${FLOWS:-}" == "none" ]]; then
+            skip_description="$(STATUS_KIND=skipped-none node "$FLOWS_CLI" format-status)"
+            decide success "$skip_description" skipped-none
             exit 0
           fi
 
@@ -337,34 +462,38 @@ jobs:
             '[.[] | select(.sha != $sha and .commit.tree.sha == $tree) | .sha] | reverse | .[]' \
             <<<"$pr_commits")
 
+          requested_flows="${FLOWS:-all}"
           for sha in "${same_tree_shas[@]}"; do
-            run_state="$(gh api --paginate --slurp \
+            commit_statuses="$(gh api --paginate --slurp \
               "repos/$GITHUB_REPOSITORY/commits/$sha/statuses?per_page=100" | \
-              jq -r \
-                --argjson descriptions "$E2E_RUN_DESCRIPTIONS" \
-                --arg superseded "$E2E_SUPERSEDED_DESCRIPTION" \
-                'add | first(.[] | select(
-                  .context == "Workspace E2E" and
-                  .creator.login == "github-actions[bot]" and
-                  (.description | IN($descriptions[], $superseded))
-                )) | if .description == $superseded then "superseded" else .state end')"
-            case "$run_state" in
-              success)
-                decide success "Same tree as ${sha:0:7}, which passed E2E"
-                exit 0
-                ;;
-              failure | error)
-                decide failure "Same tree as ${sha:0:7}, which failed E2E"
-                exit 0
-                ;;
-              pending)
-                decide failure "Same tree as ${sha:0:7}, whose E2E is still running; rerun this check after it ends"
-                exit 0
-                ;;
-            esac
+              jq 'add')"
+            summary="$(REQUESTED_FLOWS="$requested_flows" node "$FLOWS_CLI" summarize-statuses <<<"$commit_statuses")"
+            run_kind="$(jq -r '.latestRunKind' <<<"$summary")"
+            real_covers="$(jq -r '.realCoversRequested' <<<"$summary")"
+            requested_failed="$(jq -r '.requestedHasFailed' <<<"$summary")"
+            requested_running="$(jq -r '.requestedHasRunning' <<<"$summary")"
+            passed_flows_csv="$(jq -r '.realPassedFlowsCsv' <<<"$summary")"
+            if [[ -z "$run_kind" || "$run_kind" == "superseded" ]]; then
+              continue
+            fi
+            if [[ "$real_covers" == "true" ]]; then
+              same_tree_description="$(STATUS_KIND=same-tree-passed FLOWS="$passed_flows_csv" SOURCE_SHA="$sha" node "$FLOWS_CLI" format-status)"
+              decide success "$same_tree_description" deployment-skipped
+              exit 0
+            fi
+            if [[ "$requested_failed" == "true" || "$run_kind" == "failed" ]]; then
+              decide failure "Same tree as ${sha:0:7}, which failed E2E" deployment-skipped
+              exit 0
+            fi
+            if [[ "$requested_running" == "true" || "$run_kind" == "running" ]]; then
+              decide failure "Same tree as ${sha:0:7}, whose E2E is still running; rerun this check after it ends" deployment-skipped
+              exit 0
+            fi
+            decide failure "Same tree as ${sha:0:7} lacks required E2E flows; deploy its Workspace preview" deployment-skipped
+            exit 0
           done
 
-          decide failure 'Vercel skipped this SHA and no E2E-tested commit has its tree; deploy its Workspace preview'
+          decide failure 'Vercel skipped this SHA and no E2E-tested commit has its tree; deploy its Workspace preview' deployment-skipped
 
   # The only job here that can save a cache. It reads the exact SHA's
   # lockfile, manifests and patches as data and runs no exact-SHA code, so
@@ -375,7 +504,7 @@ jobs:
   # without restore-keys.
   fill-bun-package-cache:
     needs: resolve-target
-    if: needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success'
+    if: needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     cache-mode: write
@@ -462,7 +591,7 @@ jobs:
 
   test-e2e:
     needs: [resolve-target, fill-bun-package-cache]
-    if: needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success'
+    if: needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true'
     # Keyed by PR and SHA, so only a duplicate run for the same SHA cancels
     # this one. Runs for different SHAs never cancel each other: a run can
     # resolve its head as current, stall, and reach this job after a newer
@@ -538,6 +667,18 @@ jobs:
           fi
           echo "Checked out exact deployment SHA $actual_sha"
 
+      # Pre-rollout PR heads ignore WORKSPACE_E2E_FLOWS and always run WebKit.
+      # Check as data so WebKit is still restored and installed on those heads.
+      - name: Check exact-SHA flow-selection support
+        id: flow-support
+        run: |
+          set -euo pipefail
+          if [[ -f apps/deskohub-workspace/e2e/flows.ts ]]; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # The job's local actions come from the workflow commit, never from the
       # exact-SHA checkout.
       - name: Checkout workflow actions
@@ -548,6 +689,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             .github/actions/workspace-e2e-allocation
+            .github/actions/workspace-e2e-flows
             .github/actions/setup-bun
             .github/actions/restore-playwright-webkit
 
@@ -610,15 +752,22 @@ jobs:
       - name: Publish pending commit status
         if: needs.resolve-target.outputs.nightly != 'true'
         env:
+          FLOWS: ${{ needs.resolve-target.outputs.flows }}
+          FLOWS_CLI: .workspace-e2e-coordinator/.github/actions/workspace-e2e-flows/cli.mjs
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [[ -z "${FLOWS:-}" || "$FLOWS" == "all" ]]; then
+            description='Protected preview E2E is running'
+          else
+            description="$(STATUS_KIND=running FLOWS="$FLOWS" node "$FLOWS_CLI" format-status)"
+          fi
           gh api \
             --method POST \
             -H "Accept: application/vnd.github+json" \
             "repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
             -f state=pending \
             -f context='Workspace E2E' \
-            -f description='Protected preview E2E is running' \
+            -f description="$description" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             >/dev/null
 
@@ -654,6 +803,7 @@ jobs:
       # Workspace's exact Playwright pin as data, so it runs before any
       # exact-SHA code. On a miss, the install step below downloads WebKit.
       - name: Restore Workspace Playwright WebKit
+        if: needs.resolve-target.outputs.install_webkit == 'true' || steps.flow-support.outputs.supported != 'true'
         uses: ./.workspace-e2e-coordinator/.github/actions/restore-playwright-webkit
 
       - name: Install repository dependencies
@@ -781,6 +931,7 @@ jobs:
       # downloads the browser only when "Restore Workspace Playwright WebKit"
       # found no entry.
       - name: Install Workspace Playwright WebKit
+        if: needs.resolve-target.outputs.install_webkit == 'true' || steps.flow-support.outputs.supported != 'true'
         working-directory: apps/deskohub-workspace
         run: bun ./node_modules/@playwright/test/cli.js install --with-deps webkit
 
@@ -790,6 +941,7 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           WORKSPACE_E2E_BETTER_AUTH_SECRETS: ${{ secrets.WORKSPACE_E2E_BETTER_AUTH_SECRETS }}
           WORKSPACE_E2E_CRON_SECRET: ${{ secrets.WORKSPACE_E2E_CRON_SECRET }}
+          WORKSPACE_E2E_FLOWS: ${{ needs.resolve-target.outputs.flows }}
           # Set only for a validated nightly target that asked for them.
           WORKSPACE_E2E_NIGHTLY_CASES: ${{ needs.resolve-target.outputs.nightly == 'true' && needs.resolve-target.outputs.nightly_cases == 'true' && 'true' || '' }}
           # Set only for a manual dispatch that asked for review screenshots.
@@ -919,6 +1071,7 @@ jobs:
     if: >-
       needs.resolve-target.outputs.eligible == 'true' &&
       needs.resolve-target.outputs.deployment == 'success' &&
+      needs.resolve-target.outputs.run_e2e == 'true' &&
       needs.resolve-target.outputs.nightly != 'true'
     runs-on: ubuntu-latest
     # Covers fill-bun-package-cache and test-e2e, which run in sequence
@@ -965,60 +1118,46 @@ jobs:
 
   publish-final-status:
     needs: [resolve-target, fill-bun-package-cache, test-e2e]
-    if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.nightly != 'true'
+    if: always() && needs.resolve-target.result == 'success' && needs.resolve-target.outputs.eligible == 'true' && needs.resolve-target.outputs.deployment == 'success' && needs.resolve-target.outputs.run_e2e == 'true' && needs.resolve-target.outputs.nightly != 'true'
+    concurrency:
+      group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+      deployments: read
       pull-requests: read
       statuses: write
     steps:
+      - name: Checkout E2E flow parser for final status
+        if: always()
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workspace-e2e-flows
+          persist-credentials: false
+          sparse-checkout: .github/actions/workspace-e2e-flows
+
       - name: Publish final commit status
         if: always()
         env:
           ALLOCATION_SHARD: ${{ needs.test-e2e.outputs.shard }}
           ALLOCATION_DESCRIPTION: ${{ needs.fill-bun-package-cache.result != 'success' && 'Workspace E2E Bun package cache fill failed' || needs.test-e2e.outputs.shard == '' && 'Workspace E2E shard allocation failed' || needs.test-e2e.outputs.release_outcome == 'success' && 'Workspace E2E shard released' || 'Workspace E2E shard release failed' }}
+          FLOWS: ${{ needs.resolve-target.outputs.flows }}
+          FLOWS_PUBLISH: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/publish-status.mjs
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
+          PREVIEW_ENVIRONMENT: 'Preview – deskohub-workspace-site'
           STATUS_STATE: ${{ needs.test-e2e.result == 'success' && 'success' || 'failure' }}
           SUPERSEDED_DESCRIPTION: Superseded by a newer PR head before E2E finished
           TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
         run: |
           set -euo pipefail
-          if [[ "$STATUS_STATE" == "success" ]]; then
-            description='Protected preview E2E passed'
-          else
-            description='Protected preview E2E failed'
-            # A superseded run stopped itself, so its failure says nothing
-            # about this code. Statuses are per SHA, so this never touches
-            # the newer head's status.
-            head_sha="$(gh api \
-              -H "Accept: application/vnd.github+json" \
-              "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" | \
-              jq -r '.head.sha')" || head_sha=""
-            if [[ "$head_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" != "$TARGET_SHA" ]]; then
-              description="$SUPERSEDED_DESCRIPTION"
-              ALLOCATION_DESCRIPTION="$SUPERSEDED_DESCRIPTION"
-            fi
-          fi
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -f state="$STATUS_STATE" \
-            -f context='Workspace E2E' \
-            -f description="$description" \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            >/dev/null
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -f state="$STATUS_STATE" \
-            -f context='Workspace E2E allocation' \
-            -f description="$ALLOCATION_DESCRIPTION" \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            >/dev/null
+          # Publishes 'Protected preview E2E passed' / 'Protected preview E2E failed'
+          # (with [flows: ...] for subsets) and reconciles live PR, deployment, and
+          # commit-status state with post-write verification.
+          node "$FLOWS_PUBLISH" publish-final-status
 
   # Publishes for every eligible head E2E doesn't run against, including one
   # whose resolution failed, so its required status never stays absent.
@@ -1027,27 +1166,38 @@ jobs:
     if: >-
       !cancelled() && needs.resolve-target.outputs.eligible == 'true' &&
       needs.resolve-target.outputs.nightly != 'true' &&
-      (needs.resolve-target.result != 'success' || needs.resolve-target.outputs.deployment != 'success')
+      (needs.resolve-target.result != 'success' ||
+       needs.resolve-target.outputs.deployment != 'success' ||
+       needs.resolve-target.outputs.run_e2e != 'true')
+    concurrency:
+      group: workspace-e2e-status-${{ needs.resolve-target.outputs.pr_number }}-${{ needs.resolve-target.outputs.sha }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+      deployments: read
+      pull-requests: read
       statuses: write
     steps:
+      - name: Checkout E2E flow parser for status without run
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .workspace-e2e-flows
+          persist-credentials: false
+          sparse-checkout: .github/actions/workspace-e2e-flows
+
       - name: Publish status without an E2E run
         env:
+          FLOWS_PUBLISH: .workspace-e2e-flows/.github/actions/workspace-e2e-flows/publish-status.mjs
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.resolve-target.outputs.pr_number }}
+          PREVIEW_ENVIRONMENT: 'Preview – deskohub-workspace-site'
           STATUS_DESCRIPTION: ${{ needs.resolve-target.outputs.status_description || 'Workspace E2E could not resolve this preview; re-run the failed jobs of this Workspace E2E run' }}
+          STATUS_REASON: ${{ needs.resolve-target.outputs.status_reason }}
           STATUS_STATE: ${{ needs.resolve-target.outputs.status_state || 'failure' }}
           TARGET_SHA: ${{ needs.resolve-target.outputs.sha }}
         run: |
           set -euo pipefail
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
-            -f state="$STATUS_STATE" \
-            -f context='Workspace E2E' \
-            -f description="$STATUS_DESCRIPTION" \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            >/dev/null
+          node "$FLOWS_PUBLISH" publish-status-without-run

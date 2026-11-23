@@ -1,11 +1,23 @@
 import {
+  makeInstantNavigationFlowEnvironment,
+  workspaceE2EFlowSelection,
+} from "../e2e-env";
+import { isWorkspaceE2ECaseSelected } from "../flows";
+import {
   isWorkspaceE2EReferralCaseId,
   workspaceE2ECasePoolOrder,
 } from "./case-catalog";
 import { registerWorkspaceE2ECases, test } from "./fixtures";
 
+const flowSelection = workspaceE2EFlowSelection(
+  makeInstantNavigationFlowEnvironment()
+);
+const selectedCasePoolOrder = workspaceE2ECasePoolOrder.filter((caseId) =>
+  isWorkspaceE2ECaseSelected(caseId, flowSelection)
+);
+
 test.describe("workspace checkout", () => {
-  registerWorkspaceE2ECases(workspaceE2ECasePoolOrder, {
+  registerWorkspaceE2ECases(selectedCasePoolOrder, {
     // Checkout needs a verified account: referral cases, the someone-else
     // referral payment, the signed-out verification, and the agent booking
     // bind their own run-scoped identities, the automation journey wraps its

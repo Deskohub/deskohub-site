@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   makeAgentEvalEnvironment,
   makeE2EEnvironment,
+  makeInstantNavigationFlowEnvironment,
   makeWorkspaceE2EEnvironment,
   nightlyCasesEnabled,
   toPlaywrightEnvironment,
+  workspaceE2EFlowSelection,
 } from "./e2e-env";
 import {
   makeTestE2EEnvironment,
@@ -45,6 +47,30 @@ describe("Workspace E2E environment", () => {
         WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN: "",
       }).WORKSPACE_E2E_POSTHOG_PROJECT_TOKEN
     ).toBeUndefined();
+  });
+
+  test("decodes optional WORKSPACE_E2E_FLOWS and defaults to all", () => {
+    expect(workspaceE2EFlowSelection(makeTestE2EEnvironment({}))).toEqual({
+      kind: "all",
+    });
+    expect(
+      workspaceE2EFlowSelection(
+        makeTestE2EEnvironment({
+          WORKSPACE_E2E_FLOWS: "admin,email-campaigns",
+        })
+      )
+    ).toEqual({
+      kind: "subset",
+      flows: new Set(["admin", "email-campaigns"]),
+    });
+    expect(
+      workspaceE2EFlowSelection(
+        makeInstantNavigationFlowEnvironment({ WORKSPACE_E2E_FLOWS: "none" })
+      )
+    ).toEqual({ kind: "none" });
+    expect(() =>
+      makeTestE2EEnvironment({ WORKSPACE_E2E_FLOWS: "unknown-flow" })
+    ).toThrow("Invalid workspace E2E environment variables.");
   });
 
   test("includes nightly cases only when the run opts in", () => {

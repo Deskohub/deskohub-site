@@ -84,7 +84,7 @@ export const createWorkflowStepRunner = (prefix: string) => {
     const fixtureDir = join(dir, "fixtures");
     mkdirSync(bin, { recursive: true });
     mkdirSync(fixtureDir);
-    for (const [name, script] of Object.entries({ ...commands, gh: fakeGh })) {
+    for (const [name, script] of Object.entries({ gh: fakeGh, ...commands })) {
       writeFileSync(join(bin, name), script);
       chmodSync(join(bin, name), 0o755);
     }
@@ -106,13 +106,13 @@ export const createWorkflowStepRunner = (prefix: string) => {
     const result = await runCommand(["bash", "-c", step?.run ?? ""], {
       cwd: dir,
       env: {
+        GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_RUN_ID: workflowStepRunId,
         ...stepEnv,
         ...env,
         GH_FIXTURES: fixtureDir,
         GITHUB_OUTPUT: output,
         GITHUB_REPOSITORY: workflowStepRepository,
-        GITHUB_RUN_ATTEMPT: "1",
-        GITHUB_RUN_ID: workflowStepRunId,
         GITHUB_SERVER_URL: "https://github.com",
         GITHUB_STEP_SUMMARY: summary,
         HOME: dir,

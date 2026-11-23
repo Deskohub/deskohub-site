@@ -11,7 +11,12 @@ import {
   prepareWorkspaceE2EHostedPaymentPermitQueue,
   workspaceE2EHostedPaymentPermitDirectory,
 } from "../coordination/hosted-payment-permit.service";
-import { makeWorkspaceE2EEnvironment } from "../e2e-env";
+import {
+  makeWorkspaceE2EEnvironment,
+  nightlyCasesEnabled,
+  workspaceE2EFlowSelection,
+} from "../e2e-env";
+import { needsWorkspaceE2ECheckoutPreparation } from "../flows";
 import { assertE2ECalendarSaleCoverage } from "../integrations/calendar-sale-coverage";
 import { seedDiscountE2EFixtures } from "../integrations/discount-fixtures";
 import { resolveE2EDotyposDiscountGroup } from "../integrations/dotypos";
@@ -59,13 +64,26 @@ test("prepare the workspace checkout run", async ({ browser }) => {
     workspaceE2EHostedPaymentPermitDirectory(runContext.runId)
   );
 
-  const { actualCaseIds, preparation } = await withWorkspaceE2ERuntime(
+  const flowSelection = workspaceE2EFlowSelection(environment);
+  const prepareCheckoutCases = needsWorkspaceE2ECheckoutPreparation(
+    flowSelection,
+    { includeNightlyCases: nightlyCasesEnabled(environment) }
+  );
+
+  const preparationResult = await withWorkspaceE2ERuntime(
     environment,
     runContext,
     (runEffect) =>
       runEffect(
         Effect.gen(function* () {
           const telemetry = yield* E2ETelemetryService;
+          if (!prepareCheckoutCases) {
+            yield* telemetry.tracePhase({
+              effect: assertPreviewEndpointsReady(config),
+              phaseId: "preview-readiness",
+            });
+            return undefined;
+          }
           // Availability preparation reads the preview and the seeded
           // discount rows, so it waits for both; provider preparation reads
           // only Dotypos and overlaps them.
@@ -143,10 +161,22 @@ test("prepare the workspace checkout run", async ({ browser }) => {
       )
   );
 
-  const expectedCaseIds = workspaceE2ECaseIds.filter(
-    (caseId) =>
-      preparation.office !== undefined || !isWorkspaceE2EOfficeCaseId(caseId)
-  );
-  expect(actualCaseIds).toEqual([...expectedCaseIds].toSorted());
-  await writeWorkspaceE2ERunPlan({ preparation, runContext, version: 2 });
+  if (preparationResult) {
+    const expectedCaseIds = workspaceE2ECaseIds.filter(
+      (caseId) =>
+        preparationResult.preparation.office !== undefined ||
+        !isWorkspaceE2EOfficeCaseId(caseId)
+    );
+    expect(preparationResult.actualCaseIds).toEqual(
+      [...expectedCaseIds].toSorted()
+    );
+    await writeWorkspaceE2ERunPlan({
+      preparation: preparationResult.preparation,
+      runContext,
+      version: 2,
+    });
+    return;
+  }
+
+  await writeWorkspaceE2ERunPlan({ runContext, version: 2 });
 });
