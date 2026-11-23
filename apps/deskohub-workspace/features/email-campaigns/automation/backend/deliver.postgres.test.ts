@@ -18,7 +18,11 @@ import { AdvisoryAvailabilityInventory } from "@/features/reservation/backend/av
 import { createWorkspacePostgresSuiteDatabase } from "@/shared/testing/workspace-postgres-test-database.test-utils";
 import { getWorkspaceCanonicalUrl } from "@/shared/utils/site-constants";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
-import { deleteAutomatedCampaigns } from "../../backend/email-campaigns.test-utils";
+import {
+  deleteAutomatedCampaigns,
+  passReminderEmailDocumentFixture,
+  seedPublishedEmail,
+} from "../../backend/email-campaigns.test-utils";
 import type { CampaignId } from "../../campaign-identifiers";
 import type { AutomationWorkUnitId } from "../automation-identifiers";
 import {
@@ -119,6 +123,12 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
        values ($1, 'hash', 'en-US', '2026-01-01T00:00:00Z')`,
       [customer]
     );
+    const published = await seedPublishedEmail(db, {
+      title: `Synthetic ${kind} reminder`,
+      document: passReminderEmailDocumentFixture(
+        kind === "entry-pack" ? "entry-pack-expiring" : "unlimited-ending"
+      ),
+    });
     const seeded = await seedAutomation({
       purpose: "marketing",
       flow: sendOnlyFlow(
@@ -126,7 +136,8 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
           ? { _tag: "EntryPackExpiring" }
           : { _tag: "UnlimitedEnding" }
       ),
-      text: "Generic automation copy must never be sent",
+      emailId: published.emailId,
+      frozenEmailVersionId: published.versionId,
     });
     const passIds = Array.from({ length: count }, () =>
       orderIdSchema.make(crypto.randomUUID())
@@ -292,6 +303,23 @@ describe.skipIf(!database)("deliver units on disposable Postgres", () => {
       getWorkspaceCanonicalUrl(getUnlimitedRenewalPath("en-US", passId!))
     );
     expect(request?.payload).not.toContain(deskLabel);
+  });
+
+  test("Unlimited reminders render the conditional desk block for a Reserved Desk holder", async () => {
+    const {
+      engine,
+      passIds: [passId],
+    } = await seedPassReminder("unlimited", 1, "Desk 14");
+    await pool.query(
+      "update pass_purchases set tier = 'reserved-desk', unlimited_coffee = null where id = $1",
+      [passId]
+    );
+    await engine.tick(startedAt);
+    const [request] = engine.resend.requests();
+    expect(request?.payload).toContain("Desk 14");
+    expect(request?.payload).toContain(
+      getWorkspaceCanonicalUrl(getUnlimitedRenewalPath("en-US", passId!))
+    );
   });
 
   test.each(["sent", "skipped"] as const)(

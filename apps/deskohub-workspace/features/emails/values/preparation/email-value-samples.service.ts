@@ -10,6 +10,7 @@ import type {
   EmailPreparationFailureReason,
   EmailPreparationSkipReason,
 } from "@/db/schema/emails";
+import { sampleEmailTriggerValue } from "@/features/emails/body/pass-reminder-trigger-values";
 import type { DotyposCustomerId } from "@/features/reservation/dotypos-customer";
 import { CustomerValues } from "../customer";
 import { sampleEmailDiscountValue } from "../discount";
@@ -118,6 +119,16 @@ export class EmailValueSamples extends Context.Service<
                       Temporal.Instant.fromEpochMilliseconds(now)
                     ),
                   })
+                )
+              ),
+            trigger: (source) =>
+              Clock.currentTimeMillis.pipe(
+                Effect.map((now) =>
+                  sampleEmailTriggerValue(
+                    source.trigger,
+                    input.locale,
+                    Temporal.Instant.fromEpochMilliseconds(now)
+                  )
                 )
               ),
           })

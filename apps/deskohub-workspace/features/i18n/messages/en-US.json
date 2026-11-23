@@ -1841,48 +1841,6 @@
   "entryPackCheckoutTermsChanged": "The terms changed. Review the current terms and confirm them again before paying.",
   "passEntryPack": "Entry pack",
   "passUnlimited": "Unlimited pass",
-  "passReminderGreeting": "Hi {firstName},",
-  "passReminderGreetingUnnamed": "Hello,",
-  "passReminderEntryPackSubject": [
-    {
-      "declarations": [
-        "input remaining",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "{remainingNumber} entry left on your Entry pack",
-        "remainingPlural=other": "{remainingNumber} entries left on your Entry pack"
-      }
-    }
-  ],
-  "passReminderEntryPackPreheader": "Your {tier} pack ends on {endsOn}.",
-  "passReminderEntryPackBody": [
-    {
-      "declarations": [
-        "input remaining",
-        "input total",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number",
-        "local totalNumber = total: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "Your {tier} Entry pack ends on <strong>{endsOn}</strong>, and <strong>{remainingNumber} of its {totalNumber} entries</strong> is still unused. Pick your days now so they don’t go to waste.",
-        "remainingPlural=other": "Your {tier} Entry pack ends on <strong>{endsOn}</strong>, and <strong>{remainingNumber} of its {totalNumber} entries</strong> are still unused. Pick your days now so they don’t go to waste."
-      }
-    }
-  ],
-  "passReminderEntryPackBook": "Book a day",
-  "passReminderEntryPackExpiry": "Entries that aren’t booked by then expire with the pack.",
-  "passReminderUnlimitedSubject": "Your Unlimited pass ends on {endsOn}",
-  "passReminderUnlimitedPreheader": "Renew now for the next {days} days.",
-  "passReminderUnlimitedPreheaderWithDesk": "Renew now to keep {deskLabel} for the next {days} days.",
-  "passReminderUnlimitedBody": "Your {tier} Unlimited pass ends on <strong>{endsOn}</strong>. Renew now and your next {days} days start right after, on {renewalStartsOn}.",
-  "passReminderUnlimitedBodyWithDesk": "Your {tier} Unlimited pass ends on <strong>{endsOn}</strong>. Renew now and your next {days} days start right after, on {renewalStartsOn}, at <strong>{deskLabel}</strong>.",
-  "passReminderUnlimitedRenew": "Renew for {days} days",
-  "passReminderUnlimitedDeskFallback": "If {deskLabel} is no longer free when you renew, we’ll assign you another desk.",
   "unlimitedPassRenew": "Renew pass",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Reserved Desk",

@@ -111,12 +111,22 @@ export class CampaignDeliveryIncomplete extends Data.TaggedError(
  * its purpose, template and content, while a one-off send mails its
  * campaign's.
  */
+export type RenderedCustomerEmail = {
+  readonly locale: Locale;
+  readonly content: RenderedEmailContent;
+};
+
 export type DeliveredCampaign = {
   readonly id: CampaignId;
   readonly purpose: CampaignPurpose;
   readonly templateKey: CampaignTemplateKey;
   readonly content: CampaignLocalizedContent;
   readonly publication?: FrozenCampaignEmail;
+  /** Automated sends delivering a frozen published email render each recipient here. */
+  readonly renderedByCustomer?: ReadonlyMap<
+    DotyposCustomerId,
+    RenderedCustomerEmail
+  >;
 };
 
 /** An attempt with the campaign email it mails. */
@@ -572,13 +582,30 @@ export class CampaignBatchDelivery extends Context.Service<
               Match.exhaustive
             )
           ),
-          Effect.let("localized", ({ send, recipient, personalizedContent }) =>
-            personalizedContent
-              ? { locale: recipient.locale, content: personalizedContent }
-              : campaignContentForRecipient(
+          Effect.let(
+            "localized",
+            ({ send, recipient, personalizedContent }) => {
+              if (personalizedContent) {
+                return {
+                  locale: recipient.locale,
+                  content: personalizedContent,
+                  sensitive: true,
+                };
+              }
+              const rendered = send.campaign.renderedByCustomer?.get(
+                recipient.dotyposCustomerId
+              );
+              if (rendered) {
+                return { ...rendered, sensitive: true };
+              }
+              return {
+                ...campaignContentForRecipient(
                   send.campaign.content,
                   recipient.locale
-                )
+                ),
+                sensitive: false,
+              };
+            }
           ),
           Effect.flatMap(
             ({
@@ -603,7 +630,7 @@ export class CampaignBatchDelivery extends Context.Service<
                 deploymentEnvironment: config.deploymentEnvironment,
               }).pipe(
                 Effect.map((message) =>
-                  input.personalizedContent
+                  localized.sensitive
                     ? { ...message, sensitiveContent: true }
                     : message
                 )

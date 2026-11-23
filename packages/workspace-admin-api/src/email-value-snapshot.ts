@@ -4,6 +4,7 @@ import {
   selectedEmailCustomerShape,
 } from "./email-customer-selection";
 import { matchesEmailCustomerField } from "./email-customer-value-match";
+import { matchesEmailTriggerValue } from "./email-trigger-selection";
 import type { EmailValueDefinition } from "./emails";
 
 const sameCustomerShape = Schema.toEquivalence(EmailCustomerField);
@@ -64,6 +65,8 @@ const matchesSourceValue = (
   value: JsonValue
 ): boolean => {
   if (definition.source.kind === "discount") return isDiscountValue(value);
+  if (definition.source.kind === "trigger")
+    return matchesEmailTriggerValue(definition.source.trigger, value);
   const selected = definition.customerShape ?? current;
   if (!selected) return false;
   if (exceedsSelectionLimit(selected, definition.source, value)) return false;

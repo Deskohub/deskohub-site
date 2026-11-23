@@ -8,6 +8,7 @@ import {
   type AutomationVersionDetailType as AutomationVersionDetail,
   type AutomationVersionSummaryType as AutomationVersionSummary,
   AutomationFlow as automationFlowContractSchema,
+  requiredEmailLocale,
 } from "@deskohub/workspace-admin-api";
 import { and, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Option, Schema } from "effect";
@@ -33,13 +34,20 @@ import { getWorkspaceDate } from "@/features/reservation/reservation-date";
 import { currentInstant, plainDateStringSchema } from "@/shared/utils/temporal";
 import type { AudienceFilter } from "../../audience-filter";
 import { ensureSavedAudienceFilter } from "../../audience-filter-usage";
+import {
+  lockCampaignEmailPublication,
+  validatePublishedEmailForAutomationTrigger,
+} from "../../backend/campaign-published-email";
 import type {
   CampaignLocalizedContent,
   CampaignPurpose,
   CampaignTemplateKey,
 } from "../../body/campaign-content";
 import { writeCampaignContent } from "../../body/campaign-content-codec";
-import { hashCampaignContent } from "../../body/campaign-content-hash";
+import {
+  hashCampaignContent,
+  hashCampaignEmailVersion,
+} from "../../body/campaign-content-hash";
 import type {
   CampaignAudienceId,
   CampaignId,
@@ -351,7 +359,7 @@ const activateIn = (input: {
     ),
     // 4. Still publishable.
     Effect.bind("flow", ({ copy, publishable }) =>
-      validateActivation({ copy, publishable })
+      validateActivation({ copy, publishable, previewId: input.previewId })
     ),
     // 5. A retry returns the version it published.
     Effect.bind("latest", () => latestVersion(input.campaignId)),
@@ -534,6 +542,7 @@ const currentPublishable = (
 const validateActivation = (input: {
   readonly copy: AutomationWorkingCopy;
   readonly publishable: Publishable;
+  readonly previewId: AutomationPreviewId;
 }) =>
   Effect.Do.pipe(
     Effect.tap(() =>
@@ -548,17 +557,54 @@ const validateActivation = (input: {
     Effect.tap(() =>
       ensureSavedAudienceFilter(input.publishable.audience.filter)
     ),
-    Effect.tap(() =>
-      campaignContentCoversAudience({
-        content: input.copy.campaign.content,
-        audienceFilter: Option.some(input.publishable.audience.filter),
-      })
-        ? Effect.void
-        : Effect.fail(
+    Effect.tap(
+      Effect.fnUntraced(function* () {
+        if (input.copy.campaign.emailId === null) {
+          if (
+            !campaignContentCoversAudience({
+              content: input.copy.campaign.content,
+              audienceFilter: Option.some(input.publishable.audience.filter),
+            })
+          ) {
+            return yield* Effect.fail(
+              new CampaignFallbackContentMissing({
+                campaignId: input.copy.campaign.id,
+              })
+            );
+          }
+          return;
+        }
+        const publication = yield* lockCampaignEmailPublication(
+          input.copy.campaign.emailId
+        );
+        if (
+          !publication ||
+          !Option.exists(
+            input.copy.publishedEmail,
+            ({ versionId }) => versionId === publication.versionId
+          )
+        ) {
+          return yield* Effect.fail(
+            new AutomationDraftChanged({
+              campaignId: input.copy.campaign.id,
+              previewId: input.previewId,
+            })
+          );
+        }
+        if (
+          !Object.hasOwn(publication.document.translations, requiredEmailLocale)
+        ) {
+          return yield* Effect.fail(
             new CampaignFallbackContentMissing({
               campaignId: input.copy.campaign.id,
             })
-          )
+          );
+        }
+        yield* validatePublishedEmailForAutomationTrigger(
+          publication.document,
+          input.publishable.flow.trigger
+        );
+      })
     ),
     Effect.flatMap(() =>
       validatePublishableFlow(
@@ -682,7 +728,19 @@ const publishVersion = (input: {
 }) =>
   Effect.flatMap(WorkspaceTransaction, ({ db }) => {
     const { activatedAt } = input;
-    const { campaign, automation } = input.copy;
+    const { campaign, automation, publishedEmail } = input.copy;
+    const frozenEmail = Option.getOrUndefined(publishedEmail);
+    const purpose = frozenEmail?.document.purpose ?? campaign.purpose;
+    const templateKey =
+      frozenEmail?.document.templateKey ?? campaign.templateKey;
+    const content = frozenEmail ? {} : campaign.content;
+    const contentHash = frozenEmail
+      ? hashCampaignEmailVersion(frozenEmail.versionId)
+      : hashCampaignContent({
+          purpose: campaign.purpose,
+          templateKey: campaign.templateKey,
+          locales: campaign.content,
+        });
     return Effect.Do.pipe(
       Effect.bind("versionId", () =>
         db
@@ -693,15 +751,13 @@ const publishVersion = (input: {
               onNone: () => 1,
               onSome: ({ versionNumber }) => versionNumber + 1,
             }),
+            emailId: frozenEmail?.emailId ?? null,
+            frozenEmailVersionId: frozenEmail?.versionId ?? null,
             flow: input.flow,
-            purpose: campaign.purpose,
-            templateKey: campaign.templateKey,
-            content: campaign.content,
-            contentHash: hashCampaignContent({
-              purpose: campaign.purpose,
-              templateKey: campaign.templateKey,
-              locales: campaign.content,
-            }),
+            purpose,
+            templateKey,
+            content,
+            contentHash,
             audienceFilter: input.publishable.audience.filter,
             draftHash: input.publishable.draftHash,
             activatedAt,

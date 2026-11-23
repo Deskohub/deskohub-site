@@ -221,6 +221,16 @@ export class EmailRecipientPreparation extends Context.Service<
                 locale: input.preparation.locale,
               }).pipe(Effect.provideService(CustomerValues, customers)),
             discount: () => discountValueSnapshot(input),
+            trigger: () =>
+              Effect.fail(
+                new EmailValuesIncomplete({
+                  outcome: {
+                    state: "failed",
+                    reason: "invalid-value",
+                    valueName: input.definition.name,
+                  },
+                })
+              ),
           })
         );
 

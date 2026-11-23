@@ -26,6 +26,7 @@ export async function AutomatedCampaignEmailPage({
         contentLocales: campaign.locales,
         delivery: "automated",
         readOnly: automated.automation.status === "archived",
+        automationTriggerKind: automated.automation.trigger?.kind ?? null,
       }}
       initialFields={campaignComposerFieldsFromCampaign(campaign)}
     />

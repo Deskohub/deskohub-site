@@ -6,7 +6,10 @@ import {
   type EmailTranslation,
   EmailValueDefinition,
   emailCustomerFieldAtPath,
+  emailTriggerFieldAt,
   isEmailCustomerScalar,
+  isEmailTriggerInlineField,
+  isEmailTriggerUrlField,
 } from "@deskohub/workspace-admin-api";
 import { Array as Arr, Match, Option, Schema } from "effect";
 import { emailCustomerValueField } from "./email-sample-values";
@@ -44,6 +47,8 @@ const isScalarReference = (
     Match.discriminatorsExhaustive("kind")({
       discount: () =>
         path?.length === 1 && (path[0] === "code" || path[0] === "expiresAt"),
+      trigger: (source) =>
+        isEmailTriggerInlineField(emailTriggerFieldAt(source.trigger, path)),
       customer: () => {
         const field = emailCustomerValueField(definition);
         return path && path.length > 0
@@ -53,6 +58,13 @@ const isScalarReference = (
       },
     })
   );
+
+const isUrlReference = (
+  definition: EmailValueDefinition,
+  path: readonly string[] | undefined
+) =>
+  definition.source.kind === "trigger" &&
+  isEmailTriggerUrlField(emailTriggerFieldAt(definition.source.trigger, path));
 
 /** The finished parts of a text; unfinished or broken value references drop. */
 const previewParts = (
@@ -137,6 +149,17 @@ const isUsableList = (
  * unfinished. Broken links, unusable record fields and an unfinished sort
  * drop; a value component whose value isn't usable drops with it.
  */
+const previewWhen = (
+  when: DraftComponent["when"],
+  definitions: Definitions
+) => {
+  if (!when?.name || when.present === undefined) return undefined;
+  const definition = definitions.get(when.name);
+  if (!definition || !isScalarReference(definition, when.field))
+    return undefined;
+  return when;
+};
+
 const previewComponent = (
   component: DraftComponent,
   definitions: Definitions
@@ -150,26 +173,47 @@ const previewComponent = (
       isDestination(href)
     )
   );
-  const { href, ...unlinked } = component;
+  const validWhen = previewWhen(component.when, definitions);
+  const { when: _rawWhen, ...withoutWhen } = component;
+  const base = validWhen ? { ...withoutWhen, when: validWhen } : withoutWhen;
+  const { href, hrefValue, ...unlinked } = base;
+  const validHrefValue =
+    hrefValue?.name &&
+    definitions.get(hrefValue.name) &&
+    isUrlReference(definitions.get(hrefValue.name)!, hrefValue.field)
+      ? hrefValue
+      : undefined;
   const candidate = Match.value(component._tag).pipe(
     Match.when("TextList", () => ({
-      ...component,
+      ...base,
       ordered: component.ordered ?? false,
       items: previewTextListItems(component.items),
       links,
     })),
     Match.when("Image", () =>
-      href === undefined || isDestination(href) ? component : unlinked
+      href === undefined || isDestination(href)
+        ? { ...unlinked, ...(href !== undefined && { href }) }
+        : unlinked
     ),
+    Match.when("Button", () => {
+      if (validHrefValue) return { ...unlinked, hrefValue: validHrefValue };
+      if (href !== undefined && isDestination(href)) {
+        return { ...unlinked, href };
+      }
+      return unlinked;
+    }),
     Match.when("Record", () => ({
-      ...component,
+      ...base,
       fields: previewFields(component, definition, false),
     })),
-    Match.when("List", () => previewList(component, definition)),
-    Match.whenOr("Paragraph", "Heading", () => ({ ...component, links })),
-    Match.orElse(() => component)
+    Match.when("List", () => previewList(base, definition)),
+    Match.whenOr("Paragraph", "Heading", () => ({ ...base, links })),
+    Match.orElse(() => base)
   );
   const usable = Match.value(component._tag).pipe(
+    Match.when("Button", () =>
+      Boolean(validHrefValue || (href && isDestination(href)))
+    ),
     Match.when("Record", () => definition?.source.kind === "customer"),
     Match.when("List", () => isUsableList(component, definition)),
     Match.when("Offer", () => definition?.source.kind === "discount"),

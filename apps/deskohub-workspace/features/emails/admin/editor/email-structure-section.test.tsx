@@ -1169,3 +1169,68 @@ test("a button's destination problem is described under its control", async () =
     }).id
   ).toBe(emailEditorFieldIds.text("en-US", "cta-label"));
 });
+
+test("a button can switch to a dynamic trigger link value and blocks can configure display conditions", async () => {
+  const { view, values: form } = renderSection({
+    values: [
+      {
+        name: "pass",
+        source: { kind: "trigger", trigger: "unlimited-ending" },
+      },
+    ],
+    structure: [
+      {
+        _tag: "Paragraph",
+        id: "desk",
+        textKey: "desk-text",
+      },
+      {
+        _tag: "Button",
+        id: "cta",
+        labelKey: "cta-label",
+        href: "https://workspace.deskohub.cz/",
+      },
+    ],
+    translations: {
+      "en-US": {
+        texts: {
+          "desk-text": text("Your desk"),
+          "cta-label": text("Renew"),
+        },
+      },
+    },
+  });
+
+  // Configure a display condition on the paragraph block.
+  const conditionSelect = view.getAllByRole("combobox", {
+    name: m.emailsEditorBlockVisibilityLabel({}, { locale }),
+  })[0]!;
+  await choose(
+    view,
+    conditionSelect,
+    m.emailsEditorBlockVisibilityWhenPresent(
+      { field: "pass.deskLabel" },
+      { locale }
+    )
+  );
+  expect(form().structure?.[0]?.when).toEqual({
+    name: "pass",
+    field: ["deskLabel"],
+    present: true,
+  });
+
+  // Switch the button to a dynamic link value.
+  const modeSelect = view.getByRole("combobox", {
+    name: m.emailsEditorBlockHrefModeLabel({}, { locale }),
+  });
+  await choose(
+    view,
+    modeSelect,
+    m.emailsEditorBlockHrefModeDynamic({}, { locale })
+  );
+  expect(form().structure?.[1]?.href).toBeUndefined();
+  expect(form().structure?.[1]?.hrefValue).toEqual({
+    name: "pass",
+    field: ["actionUrl"],
+  });
+});
