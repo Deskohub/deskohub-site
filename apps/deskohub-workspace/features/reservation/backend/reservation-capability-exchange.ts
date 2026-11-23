@@ -10,6 +10,7 @@ import {
   reservationInvitationTokenSchema,
 } from "@/features/reservation/reservation-access-token";
 import { runWorkspaceEffect } from "@/shared/backend/workspace-effect";
+import { publicUrl } from "@/shared/deployment/public-origin";
 import { markPrivateResponse } from "@/shared/utils/private-response";
 import {
   createReservationAccessCookieCapability,
@@ -85,7 +86,7 @@ const exchangeInvitation = (
       orderId,
       locale,
     });
-    const response = NextResponse.redirect(new URL(cleanPath, request.url));
+    const response = NextResponse.redirect(publicUrl(cleanPath, request.url));
     yield* writeReservationInvitationCookie(response.cookies, invitation);
     setLocaleCookie(response, localeCookieName, locale);
     return markPrivateResponse(response);
@@ -132,7 +133,7 @@ const exchangeAccessToken = (
       orderId,
       locale,
     });
-    const response = NextResponse.redirect(new URL(cleanPath, request.url));
+    const response = NextResponse.redirect(publicUrl(cleanPath, request.url));
     const capability = yield* createReservationAccessCookieCapability({
       orderId,
       locale: tokenClaims.locale,

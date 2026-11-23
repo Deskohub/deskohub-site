@@ -3,6 +3,7 @@ import { type ExecuteOptions, executeExit, settle } from "./internal/executor";
 import {
   makeSharedLayerProvider,
   shareAcrossRequests,
+  shareUntilShutdown,
 } from "./internal/shared-layer";
 
 interface NextEffectBaseOptions {
@@ -98,4 +99,5 @@ export const NextEffect = {
   make,
   settle,
   shareAcrossRequests,
+  shareUntilShutdown,
 };

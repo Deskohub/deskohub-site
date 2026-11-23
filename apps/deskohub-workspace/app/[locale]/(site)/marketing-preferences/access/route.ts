@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getLocalizedParamsDecoder } from "@/features/i18n/server/route-params";
 import { MarketingManagementCookies } from "@/features/legal";
 import { runWorkspaceEffect } from "@/shared/backend/workspace-effect";
+import { publicUrl } from "@/shared/deployment/public-origin";
 
 type MarketingPreferencesAccessRouteContext = {
   readonly params: Promise<{ readonly locale: string }>;
@@ -34,7 +35,7 @@ const invalidRouteResponse = () =>
 
 const redirectToLegal = (request: Request, locale: string) => {
   const response = NextResponse.redirect(
-    new URL(`/${locale}/account/legal`, request.url),
+    publicUrl(`/${locale}/account/legal`, request.url),
     303
   );
   response.headers.set("Cache-Control", privateHeaders["Cache-Control"]);

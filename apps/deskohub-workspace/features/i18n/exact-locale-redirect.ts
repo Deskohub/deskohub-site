@@ -1,5 +1,6 @@
 import { findExactLocalePathname } from "@deskohub/i18n/pathname";
 import { NextResponse } from "next/server";
+import { publicUrl } from "@/shared/deployment/public-origin";
 import { localeConfig, locales } from "./routing";
 
 // A page load whose locale prefix is in another letter case (`/en-us`) or a
@@ -14,7 +15,7 @@ export const exactLocaleRedirect = (method: string, url: URL) => {
   );
   if (!exactPathname) return undefined;
 
-  const exactUrl = new URL(url);
+  const exactUrl = publicUrl(url);
   exactUrl.pathname = exactPathname;
   return NextResponse.redirect(exactUrl, 308);
 };

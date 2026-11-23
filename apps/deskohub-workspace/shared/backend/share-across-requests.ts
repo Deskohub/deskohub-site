@@ -8,3 +8,11 @@ import { NextEffect } from "@deskohub/next-effect";
  * builds again. Each shared layer keeps the layers it is built from to itself.
  */
 export const shareAcrossRequests = NextEffect.shareAcrossRequests;
+
+/**
+ * `shareAcrossRequests` for a capability with finalizers, such as a
+ * connection pool, with the `close` that releases it. A container registers
+ * `close` as a runtime shutdown hook (`onRuntimeShutdown`); on Vercel it
+ * never runs.
+ */
+export const shareUntilShutdown = NextEffect.shareUntilShutdown;

@@ -17,10 +17,15 @@ import {
   Scope,
   Stream,
 } from "effect";
+import { env } from "@/env";
 import { scheduleAgentTrafficEvent } from "@/shared/backend/agent-traffic/agent-traffic-events";
 import { getWorkspaceRuntimeCallbackOrigin } from "@/shared/backend/config/workspace-url.config";
 import type { RequestBudget } from "@/shared/backend/request-budget/request-budget.service";
 import { CurrentAgentTraffic } from "@/shared/backend/workspace-request-context";
+import {
+  containerPublicOrigin,
+  publicUrl,
+} from "@/shared/deployment/public-origin";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 import { currentInstant } from "@/shared/utils/temporal";
 import {
@@ -64,6 +69,34 @@ import type { CustomerAgentCaller } from "./customer-agent-caller";
 
 /** The version of the tool contract agents see; bump it on breaking changes. */
 const agentToolServerVersion = "1.0.0";
+
+/**
+ * Rejects a browser request from any origin but the site's own. The SDK
+ * compares hostnames only, which on Vercel's HTTPS-only hosts names the
+ * origin, and lets an empty Origin through. A container's own host may also
+ * answer on other schemes or ports, so there any Origin a request carries
+ * must be its public origin exactly; a request without one stays allowed.
+ * The rejection has the SDK's own shape.
+ */
+const originRejection = (request: Request): Response | undefined => {
+  const siteUrl = publicUrl(request.url);
+  const origin = request.headers.get("origin");
+  if (
+    containerPublicOrigin(env) &&
+    origin !== null &&
+    origin !== siteUrl.origin
+  ) {
+    return Response.json(
+      {
+        jsonrpc: "2.0",
+        error: { code: -32000, message: `Invalid Origin: ${origin}` },
+        id: null,
+      },
+      { status: 403 }
+    );
+  }
+  return originValidationResponse(request, [siteUrl.hostname]);
+};
 
 /**
  * Answers one MCP request with a set of agent tools: stateless Streamable
@@ -123,11 +156,7 @@ export const answerAgentToolMcpRequest = <
 }) =>
   // One Effect type for both branches, so callers can handle its errors.
   Effect.suspend(() =>
-    Option.fromNullishOr(
-      originValidationResponse(request.request, [
-        new URL(request.request.url).hostname,
-      ])
-    ).pipe(
+    Option.fromNullishOr(originRejection(request.request)).pipe(
       Option.match({
         onSome: (rejection) =>
           Effect.logWarning(
