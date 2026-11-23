@@ -1,7 +1,6 @@
 "use client";
 
 import { effectSchemaResolver } from "@deskohub/effect-schema-resolver";
-import Interpolate from "@doist/react-interpolate";
 import {
   AlertTriangle,
   Clock3,
@@ -42,12 +41,9 @@ import type { CanonicalPromotionCode } from "@/features/discounts";
 import { defaultPhoneRegion, type Locale, m } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import { EntryPackBookingNotice } from "@/features/passes/components/entry-pack-booking-notice";
-import {
-  getEntryPackPurchasePath,
-  minimumEntryPackPricePerDay,
-} from "@/features/passes/entry-pack-discovery";
+import { PassPurchaseOffers } from "@/features/passes/components/pass-purchase-offers";
 import { getEntryPackLastUsableDate } from "@/features/passes/pass-offer";
-import { getUnlimitedPassPurchasePath } from "@/features/passes/unlimited-pass-discovery";
+import { getCoworkPassPurchaseDraft } from "@/features/passes/pass-purchase-draft";
 import { ReservationAdvertisedPrice } from "@/features/reservation/components/reservation-advertised-price";
 import { ReservationCheckoutForm } from "@/features/reservation/components/reservation-checkout-form";
 import { ReservationFormDateInput } from "@/features/reservation/components/reservation-date-input";
@@ -64,6 +60,7 @@ import {
   ReservationTypeInput,
   ReservationTypeOption,
 } from "@/features/reservation/components/reservation-type-input";
+import { useReservationCheckoutStep } from "@/features/reservation/components/use-reservation-checkout-step";
 import {
   useReservationSelectionUrl,
   useWatchedSelection,
@@ -89,7 +86,6 @@ import {
 } from "@/features/reservation/reservation-date";
 import type { ReservationCheckoutCustomerForm } from "@/features/reservation/reservation-existing-customer";
 import type { PreloadedWorkspaceAvailability } from "@/features/reservation/workspace-availability";
-import { GuardedLink as Link } from "@/shared/components/guarded-link";
 import {
   FormControl,
   FormField,
@@ -98,7 +94,6 @@ import {
 } from "@/shared/components/ui/form";
 import { Label } from "@/shared/components/ui/label";
 import { Switch } from "@/shared/components/ui/switch";
-import { textLink } from "@/shared/components/ui/text-link";
 import { currencyCZK } from "@/shared/money/currencies";
 import { formatMoney, type Money } from "@/shared/money/money";
 import { cn } from "@/shared/utils";
@@ -142,11 +137,6 @@ type CoworkReservationFormProps = {
   /** The workspace date the server rendered, which anchors the calendar range. */
   today: string;
 };
-
-const passDiscoveryLinkClassName = cn(
-  textLink({ tone: "inherit" }),
-  "font-semibold text-navy-blue hover:text-burned-orange"
-);
 
 type CoworkReservationFormFallbackProps = Pick<
   CoworkReservationFormProps,
@@ -205,6 +195,7 @@ export function CoworkReservationForm({
 }: CoworkReservationFormProps) {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { step: checkoutStep } = useReservationCheckoutStep();
   const defaultValues =
     initialValues ??
     (initialReservation
@@ -235,10 +226,6 @@ export function CoworkReservationForm({
   const offersStayChoice =
     overnightStayOffered && selectedTier === overnightCoworkStayTier;
   const isOvernightStay = offersStayChoice && selectedStay === "overnight";
-  const selectedPassTier =
-    selectedTier === "reserved-desk" && selectedMonitorOption
-      ? "reserved-desk-workstation"
-      : selectedTier;
   useReservationSelectionUrl(coworkSelectionLink, selection);
   const allowedMonitorOptions =
     getAllowedMonitorOptionsForCoworkTier(selectedTier);
@@ -296,6 +283,16 @@ export function CoworkReservationForm({
         })
       : undefined;
   const pack = appliedPack ?? offeredPack;
+  // Packs and passes are offered to a customer without pass coverage, for
+  // the day stays a pass covers, and only while choosing the reservation.
+  const passPurchaseDraft =
+    entryPackOffered &&
+    !pack &&
+    packSelection?.kind !== "unavailable" &&
+    !isOvernightStay &&
+    checkoutStep !== "contact"
+      ? getCoworkPassPurchaseDraft(selection)
+      : undefined;
   const coffeeCharge =
     appliedPack && selection.coffee
       ? (getCoworkAddOnAmount(selectedPrice, "coffee") ??
@@ -349,7 +346,7 @@ export function CoworkReservationForm({
     workstationOnlyWhenRequired: appliedPack?.tier === "reserved-desk",
   });
 
-  return (
+  const checkoutForm = (
     <ReservationCheckoutForm
       applyEntryPack={applyEntryPack}
       checkoutCustomer={checkoutCustomer}
@@ -542,47 +539,6 @@ export function CoworkReservationForm({
               </ReservationTypeInput>
             </FormControl>
             <FormMessage />
-            {entryPackOffered &&
-              !pack &&
-              packSelection?.kind !== "unavailable" &&
-              !isOvernightStay &&
-              (selectedPassTier === "reserved-desk-workstation" ||
-                isWorkspaceCoworkCurrentProductTier(selectedPassTier)) && (
-                <p className="pt-1 text-sm leading-6 text-navy-blue/60">
-                  <Interpolate
-                    string={m.entryPackDiscoveryCoworkLink(
-                      {
-                        price: formatMoney(minimumEntryPackPricePerDay, locale),
-                      },
-                      { locale }
-                    )}
-                    mapping={{
-                      packLink: (label) => (
-                        <Link
-                          className={passDiscoveryLinkClassName}
-                          href={getEntryPackPurchasePath(
-                            locale,
-                            selectedPassTier
-                          )}
-                        >
-                          {label}
-                        </Link>
-                      ),
-                    }}
-                  />
-                  {" · "}
-                  <Link
-                    className={passDiscoveryLinkClassName}
-                    href={getUnlimitedPassPurchasePath(
-                      locale,
-                      selectedPassTier,
-                      selection.date
-                    )}
-                  >
-                    {m.passUnlimited({}, { locale })}
-                  </Link>
-                </p>
-              )}
           </FormItem>
         )}
       />
@@ -688,6 +644,19 @@ export function CoworkReservationForm({
         </>
       )}
     </ReservationCheckoutForm>
+  );
+
+  return (
+    <>
+      {checkoutForm}
+      {passPurchaseDraft && (
+        <PassPurchaseOffers
+          draft={passPurchaseDraft}
+          locale={locale}
+          today={today}
+        />
+      )}
+    </>
   );
 }
 

@@ -134,7 +134,7 @@ mock.module("@/features/reservation/actions/submit-reservation", () => ({
 }));
 
 mockCheckoutEmailVerification();
-mockReservationCheckoutStep();
+const checkoutStep = mockReservationCheckoutStep();
 
 const { CoworkReservationForm, CoworkReservationFormFallback } = await import(
   "./cowork-reservation-form"
@@ -458,82 +458,171 @@ describe("CoworkReservationForm advertised pricing", () => {
     await unregisterWorkspaceComponentTestEnv();
   });
 
-  describe("Cowork pass discovery", () => {
-    test("omits the purchase links while the release is off", () => {
+  describe("Cowork pass purchase offers", () => {
+    const offerLink = (
+      view: ReturnType<typeof renderForm>,
+      kind: "entry-pack" | "unlimited"
+    ) =>
+      view.container
+        .querySelector(`[data-pass-offer="${kind}"]`)
+        ?.closest("a") ?? null;
+    const offerQuery = (
+      view: ReturnType<typeof renderForm>,
+      kind: "entry-pack" | "unlimited"
+    ) => {
+      const href = offerLink(view, kind)?.getAttribute("href");
+      if (!href) throw new Error(`Expected the ${kind} offer link`);
+      const url = new URL(href, "https://workspace.example");
+      return {
+        path: url.pathname,
+        query: Object.fromEntries(url.searchParams),
+      };
+    };
+
+    test("omits the cards while the release is off", () => {
       const view = renderForm();
+      expect(view.container.querySelector("[data-pass-offer]")).toBeNull();
       expect(
-        view.queryByRole("link", { name: /entry packs from/i })
+        view.queryByRole("heading", {
+          name: m.passPurchaseOffersHeading({}, { locale: "en-US" }),
+        })
       ).toBeNull();
-      expect(view.queryByRole("link", { name: "Unlimited pass" })).toBeNull();
     });
 
-    test("links to the selected cowork tier and advertises the catalog minimum", () => {
+    test("places both cards after the reservation form under the section heading", () => {
       const view = renderForm({ entryPackOffered: true });
-      const link = view.getByRole("link", {
-        name: /^Entry packs from CZK\s219 a day$/,
+      const section = view
+        .getByRole("heading", {
+          name: m.passPurchaseOffersHeading({}, { locale: "en-US" }),
+        })
+        .closest("section");
+      const form = view.container.querySelector("form");
+      if (!section || !form) throw new Error("Expected the form and offers");
+      expect(form.contains(section)).toBe(false);
+      expect(
+        form.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(section.querySelectorAll("[data-pass-offer]").length).toBe(2);
+      expect(
+        view.getByRole("link", {
+          name: m.entryPackOfferLabel(
+            { tier: m.passTierOpenSpace({}, { locale: "en-US" }) },
+            { locale: "en-US" }
+          ),
+        })
+      ).toBe(offerLink(view, "entry-pack") as HTMLAnchorElement);
+    });
+
+    test("links both products with the latest choices as they change and clear", async () => {
+      const view = renderForm({ entryPackOffered: true });
+      expect(offerQuery(view, "entry-pack")).toEqual({
+        path: "/en-US/passes/entry-pack",
+        query: { tier: "open-space" },
       });
-      expect(link.getAttribute("href")).toBe(
-        "/en-US/passes/entry-pack?tier=open-space"
-      );
+      expect(offerQuery(view, "unlimited")).toEqual({
+        path: "/en-US/passes/unlimited",
+        query: { tier: "open-space", startDate: "2099-07-30", coffee: "true" },
+      });
+
+      await act(async () => {
+        fireEvent.click(view.getByRole("switch", { name: /Coffee/i }));
+      });
+      expect(offerQuery(view, "unlimited").query).toEqual({
+        tier: "open-space",
+        startDate: "2099-07-30",
+      });
 
       fireEvent.click(view.getByRole("radio", { name: /Reserved Desk/i }));
+      expect(offerQuery(view, "entry-pack").query).toEqual({
+        tier: "reserved-desk",
+      });
+      expect(offerQuery(view, "unlimited").query).toEqual({
+        tier: "reserved-desk",
+        startDate: "2099-07-30",
+      });
 
-      expect(link.getAttribute("href")).toBe(
-        "/en-US/passes/entry-pack?tier=reserved-desk"
-      );
-    });
+      await act(async () => {
+        fireEvent.click(
+          view.getByRole("switch", { name: /Monitor workstation/i })
+        );
+      });
+      // Turning the workstation on picks its first monitor option.
+      await waitFor(() => {
+        expect(offerQuery(view, "unlimited").query.monitorOption).toBe(
+          "2x27-qhd"
+        );
+      });
+      expect(offerQuery(view, "entry-pack").query).toEqual({
+        tier: "reserved-desk-workstation",
+      });
+      expect(offerQuery(view, "unlimited").query).toEqual({
+        tier: "reserved-desk-workstation",
+        startDate: "2099-07-30",
+        monitorOption: "2x27-qhd",
+      });
 
-    test("prefills the Unlimited pass tier and date from the current selection", async () => {
-      const view = renderForm({ entryPackOffered: true });
-      const link = view.getByRole("link", { name: "Unlimited pass" });
-      expect(link.getAttribute("href")).toBe(
-        "/en-US/passes/unlimited?tier=open-space&startDate=2099-07-30"
-      );
-
-      fireEvent.click(view.getByRole("radio", { name: /Reserved Desk/i }));
+      await act(async () => {
+        fireEvent.click(
+          view.getByRole("switch", { name: /Monitor workstation/i })
+        );
+      });
       await selectCalendarDate(view, "2099-07-29");
-      expect(link.getAttribute("href")).toBe(
-        "/en-US/passes/unlimited?tier=reserved-desk&startDate=2099-07-29"
-      );
+      expect(offerQuery(view, "entry-pack").query).toEqual({
+        tier: "reserved-desk",
+      });
+      expect(offerQuery(view, "unlimited").query).toEqual({
+        tier: "reserved-desk",
+        startDate: "2099-07-29",
+      });
     });
 
-    test("omits the Unlimited start date before a day is chosen", () => {
+    test("shows the expiry of an Unlimited pass starting on the reservation date", () => {
+      const view = renderForm({
+        entryPackOffered: true,
+        initialValues: reservedDeskFormValues("2099-07-30"),
+      });
+      expect(
+        offerLink(view, "unlimited")
+          ?.querySelector("time")
+          ?.getAttribute("dateTime")
+      ).toBe("2099-08-29");
+    });
+
+    test("starts the Unlimited pass today when the draft has no day", () => {
       const view = renderForm({
         entryPackOffered: true,
         initialValues: reservedDeskFormValues(""),
       });
-      expect(
-        view.getByRole("link", { name: "Unlimited pass" }).getAttribute("href")
-      ).toBe("/en-US/passes/unlimited?tier=reserved-desk");
-    });
-
-    test("preselects the workstation tier when a monitor setup is selected", () => {
-      const view = renderForm({
-        entryPackOffered: true,
-        initialValues: reservedDeskFormValues("2099-07-30", "2x27-qhd"),
+      expect(offerQuery(view, "unlimited").query).toEqual({
+        tier: "reserved-desk",
       });
       expect(
-        view
-          .getByRole("link", { name: /entry packs from/i })
-          .getAttribute("href")
-      ).toBe("/en-US/passes/entry-pack?tier=reserved-desk-workstation");
-      expect(
-        view.getByRole("link", { name: "Unlimited pass" }).getAttribute("href")
-      ).toBe(
-        "/en-US/passes/unlimited?tier=reserved-desk-workstation&startDate=2099-07-30"
-      );
+        offerLink(view, "unlimited")
+          ?.querySelector("time")
+          ?.getAttribute("dateTime")
+      ).toBe(Temporal.PlainDate.from(today()).add({ days: 30 }).toString());
     });
 
-    test("omits the single-day link for an overnight stay", () => {
+    test("omits the cards for an overnight stay", () => {
       const view = renderForm({
         entryPackOffered: true,
         overnightStayOffered: true,
         initialValues: { ...reservedDeskFormValues(), stay: "overnight" },
       });
-      expect(
-        view.queryByRole("link", { name: /entry packs from/i })
-      ).toBeNull();
-      expect(view.queryByRole("link", { name: "Unlimited pass" })).toBeNull();
+      expect(view.container.querySelector("[data-pass-offer]")).toBeNull();
+    });
+
+    test("omits the cards at the contact step", () => {
+      checkoutStep.initial = "contact";
+      try {
+        const view = renderForm({
+          entryPackOffered: true,
+          initialValues: reservedDeskFormValues(),
+        });
+        expect(view.container.querySelector("[data-pass-offer]")).toBeNull();
+      } finally {
+        checkoutStep.initial = "selection";
+      }
     });
   });
 
@@ -551,6 +640,21 @@ describe("CoworkReservationForm advertised pricing", () => {
       ...coworkReservationDefaultValues,
       date: "2099-07-30",
     };
+
+    test("keeps the purchase cards away while a held pack is offered or used", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(jsonResponse(availabilityResponse))
+      ) as typeof fetch;
+      const view = renderForm({
+        bookingPasses,
+        entryPackOffered: true,
+        initialValues,
+      });
+      const usePass = await view.findByRole("button", { name: "Use pass" });
+      expect(view.container.querySelector("[data-pass-offer]")).toBeNull();
+      fireEvent.click(usePass);
+      expect(view.container.querySelector("[data-pass-offer]")).toBeNull();
+    });
 
     test("applies the offered pack and keeps the ordinary tier enabled", async () => {
       globalThis.fetch = mock(() =>
