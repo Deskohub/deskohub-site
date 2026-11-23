@@ -325,6 +325,9 @@ describe("answerAgentToolMcpRequest", () => {
         "http://0.0.0.0:3000",
         "https://attacker.example",
         "null",
+        // Its public host on another scheme or port is another origin.
+        "http://workspace-public.example",
+        "https://workspace-public.example:8443",
       ]) {
         const response = await callLegacy(
           { seats: 1 },
