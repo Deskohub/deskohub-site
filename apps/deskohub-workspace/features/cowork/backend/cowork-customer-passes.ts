@@ -6,7 +6,11 @@ import {
   workspaceStatementConcurrency,
 } from "@/db/database.service";
 import { CurrentCustomerAccount } from "@/features/account/backend/current-customer-account";
-import type { CustomerAccountId } from "@/features/account/customer-account";
+import type { CustomerAccountSession } from "@/features/account/backend/customer-authentication.service";
+import {
+  type CustomerAccountId,
+  isCustomerAccountAccessDenial,
+} from "@/features/account/customer-account";
 import { isCurrentUnlimitedPass } from "@/features/passes/backend/customer-pass-coverage";
 import { recoverEntryPackGiftClaims } from "@/features/passes/backend/entry-pack-gift";
 import { listHeldEntryPacks } from "@/features/passes/backend/held-entry-packs";
@@ -105,30 +109,100 @@ const withUnlimitedCoveredDates = Effect.fn("cowork.withUnlimitedCoveredDates")(
   }
 );
 
-export const loadCoworkCustomerPasses = Effect.fn("cowork.loadCustomerPasses")(
-  function* (restored: Parameters<typeof getCoworkBookingPasses>[2]) {
-    const account = yield* CurrentCustomerAccount;
-    const active = yield* Effect.option(account.requireActive);
-    if (Option.isNone(active)) return visitorCoworkPasses;
+type RestoredEntryPack = Parameters<typeof getCoworkBookingPasses>[2];
 
-    const { accountId, verifiedSignInAt } = active.value;
-    const date = getCurrentWorkspaceDate();
-    const today = plainDateStringSchema.make(date.toString());
-    yield* recoverEntryPackGiftClaims(accountId, verifiedSignInAt);
-    const [held, unlimitedPasses] = yield* Effect.all(
-      [listHeldEntryPacks(accountId), listHeldUnlimitedPasses(accountId)],
-      { concurrency: yield* workspaceStatementConcurrency }
-    );
-    const bookingPasses = yield* withUnlimitedCoveredDates(
-      accountId,
-      today,
-      getCoworkBookingPasses(held, today, restored)
-    );
-    return {
-      bookingPasses,
-      passPurchaseOffered: !unlimitedPasses.some((pass) =>
-        isCurrentUnlimitedPass(pass, date)
-      ),
-    } satisfies CoworkCustomerPasses;
-  }
-);
+/**
+ * The Entry packs a signed-in customer can book with on the dates no
+ * Unlimited pass covers. A failed read fails the load.
+ */
+const loadBookingPasses = ({
+  accountId,
+  today,
+  restored,
+}: {
+  readonly accountId: CustomerAccountId;
+  readonly today: PlainDate;
+  readonly restored: RestoredEntryPack;
+}) =>
+  listHeldEntryPacks(accountId).pipe(
+    Effect.map((held) => getCoworkBookingPasses(held, today, restored)),
+    Effect.flatMap((booking) =>
+      withUnlimitedCoveredDates(accountId, today, booking)
+    )
+  );
+
+/**
+ * Whether a signed-in customer holds no current Unlimited pass. A failed read
+ * offers no pass to buy but leaves the Entry packs bookable, since each is
+ * checked against Unlimited coverage on its own.
+ */
+const isPassPurchaseOffered = ({
+  accountId,
+  date,
+}: {
+  readonly accountId: CustomerAccountId;
+  readonly date: Temporal.PlainDate;
+}) =>
+  listHeldUnlimitedPasses(accountId).pipe(
+    Effect.map(
+      (passes) => !passes.some((pass) => isCurrentUnlimitedPass(pass, date))
+    ),
+    Effect.tapError(() =>
+      Effect.logWarning(
+        "Held Unlimited passes could not be read; withholding pass offers.",
+        { code: "cowork.unlimited-passes-unavailable" }
+      )
+    ),
+    Effect.orElseSucceed(() => false)
+  );
+
+/** A signed-in customer's passes, read beside each other. */
+const loadSignedInCustomerPasses = ({
+  session: { accountId, verifiedSignInAt },
+  restored,
+}: {
+  readonly session: CustomerAccountSession;
+  readonly restored: RestoredEntryPack;
+}) =>
+  Effect.Do.pipe(
+    Effect.let("date", () => getCurrentWorkspaceDate()),
+    Effect.let("today", ({ date }) =>
+      plainDateStringSchema.make(date.toString())
+    ),
+    Effect.tap(() => recoverEntryPackGiftClaims(accountId, verifiedSignInAt)),
+    Effect.bind("concurrency", () => workspaceStatementConcurrency),
+    Effect.bind("passes", ({ date, today, concurrency }) =>
+      Effect.all(
+        {
+          bookingPasses: loadBookingPasses({ accountId, today, restored }),
+          passPurchaseOffered: isPassPurchaseOffered({ accountId, date }),
+        },
+        { concurrency }
+      )
+    ),
+    Effect.map(({ passes }): CoworkCustomerPasses => passes)
+  );
+
+/**
+ * The customer's passes for the Cowork form. A visitor without an active
+ * session, such as one signed out or awaiting deletion, may buy one; a
+ * session that can't be read fails the load, so the page withholds every pass.
+ */
+export const loadCoworkCustomerPasses = (restored: RestoredEntryPack) =>
+  Effect.Do.pipe(
+    Effect.bind("account", () => CurrentCustomerAccount),
+    Effect.bind("session", ({ account }) =>
+      account.requireActive.pipe(
+        Effect.asSome,
+        Effect.catchIf(isCustomerAccountAccessDenial, () => Effect.succeedNone)
+      )
+    ),
+    Effect.flatMap(({ session }) =>
+      Option.match(session, {
+        onNone: () => Effect.succeed(visitorCoworkPasses),
+        onSome: (active) =>
+          loadSignedInCustomerPasses({ session: active, restored }),
+      })
+    ),
+    Effect.withSpan("cowork.loadCustomerPasses")
+  );

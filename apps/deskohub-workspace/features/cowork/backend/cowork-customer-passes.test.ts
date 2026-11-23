@@ -6,7 +6,9 @@ import {
   CurrentCustomerAccount,
   requireVerifiedIdentity,
 } from "@/features/account/backend/current-customer-account";
+import { customerAccountUnavailable } from "@/features/account/customer-account";
 import { orderIdSchema } from "@/features/order";
+import type { HeldEntryPack } from "@/features/passes/backend/held-entry-packs";
 import { runWorkspaceEffectOrElse } from "@/shared/backend/workspace-effect";
 import { plainDateStringSchema } from "@/shared/utils/temporal";
 
@@ -23,7 +25,8 @@ let heldUnlimitedPasses: Effect.Effect<
   UnlimitedReadFailure
 > = Effect.succeed([]);
 const listHeldUnlimitedPasses = mock(() => heldUnlimitedPasses);
-const listHeldEntryPacks = mock(() => Effect.succeed([]));
+let heldEntryPacks: readonly HeldEntryPack[] = [];
+const listHeldEntryPacks = mock(() => Effect.succeed(heldEntryPacks));
 
 const heldUnlimitedPassReads = await import(
   "@/features/passes/backend/held-unlimited-passes"
@@ -38,6 +41,13 @@ const heldEntryPackReads = await import(
 mock.module("@/features/passes/backend/held-entry-packs", () => ({
   ...heldEntryPackReads,
   listHeldEntryPacks,
+}));
+const unlimitedPassWindows = await import(
+  "@/features/passes/backend/unlimited-pass-window"
+);
+mock.module("@/features/passes/backend/unlimited-pass-window", () => ({
+  ...unlimitedPassWindows,
+  listUnlimitedPassCoverageWindows: () => Effect.succeed([]),
 }));
 const entryPackGifts = await import(
   "@/features/passes/backend/entry-pack-gift"
@@ -69,16 +79,33 @@ const unlimitedPass = (
   ...overrides,
 });
 
-const load = (signedIn = true) =>
+const heldEntryPack: HeldEntryPack = {
+  id: orderIdSchema.make("b53b3c15-9799-45d2-95b5-20f3ef69f3d2"),
+  tier: "open-space",
+  entryCount: 5,
+  entriesLeft: 3,
+  status: "active",
+  paidAt: Temporal.Instant.from("2099-07-09T12:00:00Z"),
+  validFrom: plainDateStringSchema.make("2099-07-09"),
+  validUntil: plainDateStringSchema.make("2099-09-09"),
+  claimedDates: [],
+  bookedDates: [],
+  reservedEntryDates: {},
+  giftIssuedAt: null,
+  giftClaimedAt: null,
+  giftPaymentIsUsable: true,
+};
+
+const load = (
+  requireActive: Effect.Success<
+    typeof CurrentCustomerAccount
+  >["requireActive"] = requireVerifiedIdentity(testCustomerSession)
+) =>
   loadCoworkCustomerPasses(undefined).pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.mock(WorkspaceDatabase, {}),
-        Layer.mock(CurrentCustomerAccount, {
-          requireActive: requireVerifiedIdentity(
-            signedIn ? testCustomerSession : null
-          ),
-        })
+        Layer.mock(CurrentCustomerAccount, { requireActive })
       )
     ),
     // The page serves the same fallback when the read fails.
@@ -92,6 +119,7 @@ const originalNow = Temporal.Now.instant;
 beforeEach(() => {
   mock.clearAllMocks();
   heldUnlimitedPasses = Effect.succeed([]);
+  heldEntryPacks = [];
   Temporal.Now.instant = () => Temporal.Instant.from("2099-07-30T10:00:00Z");
 });
 afterEach(() => {
@@ -99,11 +127,31 @@ afterEach(() => {
 });
 
 describe("loadCoworkCustomerPasses", () => {
-  test("offers passes to a visitor without reading any", async () => {
-    expect(await load(false)).toEqual({
+  test.each([
+    ["a signed-out", requireVerifiedIdentity(null)],
+    [
+      "an awaiting-deletion",
+      requireVerifiedIdentity({
+        ...testCustomerSession,
+        deletionRequested: true,
+      }),
+    ],
+  ])("offers passes to %s visitor without reading any", async (_, session) => {
+    expect(await load(session)).toEqual({
       bookingPasses: { packs: [], claimedDates: [] },
       passPurchaseOffered: true,
     });
+    expect(listHeldUnlimitedPasses).not.toHaveBeenCalled();
+  });
+
+  test("withholds every pass when the session can't be read", async () => {
+    heldEntryPacks = [heldEntryPack];
+    expect(
+      await load(
+        Effect.fail(customerAccountUnavailable("authentication.session"))
+      )
+    ).toEqual(unreadCoworkCustomerPasses);
+    expect(listHeldEntryPacks).not.toHaveBeenCalled();
     expect(listHeldUnlimitedPasses).not.toHaveBeenCalled();
   });
 
@@ -155,11 +203,13 @@ describe("loadCoworkCustomerPasses", () => {
     }
   );
 
-  test("withholds passes when a signed-in customer's passes can't be read", async () => {
+  test("keeps a usable Entry pack bookable when Unlimited passes can't be read", async () => {
+    heldEntryPacks = [heldEntryPack];
     heldUnlimitedPasses = Effect.fail(new UnlimitedReadFailure());
-    expect(await load()).toEqual({
-      bookingPasses: { packs: [], claimedDates: [] },
-      passPurchaseOffered: false,
-    });
+    const passes = await load();
+    expect(passes.passPurchaseOffered).toBe(false);
+    expect(passes.bookingPasses.packs).toEqual([
+      expect.objectContaining({ id: heldEntryPack.id, entriesLeft: 3 }),
+    ]);
   });
 });
