@@ -220,17 +220,18 @@ project_exclusion_names() {
 
 # Alchemy beta.87 rejects federated credential files, so it gets a bearer
 # token (google-github-actions/auth `token_format: access_token`). The token
-# lives at most one hour; a step past 45 minutes mints a fresh one from the
-# federated gcloud credentials, masked before use.
+# lives at most one hour; a step past 30 minutes mints a fresh one from the
+# federated gcloud credentials, masked before use, so every step starts with
+# at least its 30-minute budget (the longest, the stack destroy) left.
 ensure_alchemy_token() {
   if $dry_run; then
-    echo "+ (GOOGLE_ACCESS_TOKEN from token_format: access_token; refreshed past 45 minutes)" >&2
+    echo "+ (GOOGLE_ACCESS_TOKEN from token_format: access_token; refreshed past 30 minutes)" >&2
     return
   fi
   local now
   now="$(date +%s)"
   if [[ -z "${GOOGLE_ACCESS_TOKEN:-}" ]] ||
-    ((now - ${GOOGLE_ACCESS_TOKEN_MINTED_AT:-0} >= 2700)); then
+    ((now - ${GOOGLE_ACCESS_TOKEN_MINTED_AT:-0} >= 1800)); then
     GOOGLE_ACCESS_TOKEN="$(gcloud auth print-access-token)"
     echo "::add-mask::${GOOGLE_ACCESS_TOKEN}"
     GOOGLE_ACCESS_TOKEN_MINTED_AT="$now"

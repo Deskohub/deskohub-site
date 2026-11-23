@@ -240,8 +240,10 @@ jobs:
         run: bash "$SANDBOX_PROOF_RUNNER" edge-privacy
 
       # Teardown runs after any failure or cancellation of a mutating mode
-      # once the guard and preflight passed, so a failed proof never leaves
-      # a load balancer or Cloud Run service behind.
+      # once the guard and preflight passed. The edge goes with the stack,
+      # under the writer lock: a lock this run cannot prove dead, or a
+      # failed locked destroy, leaves the stack for an operator and a
+      # cleanup-only rerun.
       - name: Destroy the sandbox stack and its edge
         if: always() && inputs.mode != 'read-only' && steps.preflight.outcome == 'success'
         timeout-minutes: 30

@@ -705,6 +705,28 @@ describe("interrupting a deliver mid-apply", () => {
   });
 });
 
+describe("Alchemy access token", () => {
+  // Every step must start with the stack destroy's 30-minute budget left.
+  test("mints a fresh token once the current one is 30 minutes old", () => {
+    const now = 1_800_000_000;
+    for (const [age, minted] of [
+      [29 * 60, false],
+      [30 * 60, true],
+    ] as const) {
+      // A minted token is masked before any use.
+      const { output } = withProofFakes({ now }, (fakes) =>
+        runPhase(fakes, "baseline-inventory", {
+          GOOGLE_ACCESS_TOKEN_MINTED_AT: String(now - age),
+        })
+      );
+      expect({ age, minted: output.includes("::add-mask::") }).toEqual({
+        age,
+        minted,
+      });
+    }
+  });
+});
+
 describe("edge readback from the stack outputs", () => {
   const outputObject = `${stackPrefix}__stack_output__.json`;
   const filter =
