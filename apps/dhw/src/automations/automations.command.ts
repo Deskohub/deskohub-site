@@ -17,9 +17,11 @@ import {
   AutomationRunOutcome,
   type AutomationRunPageType,
   AutomationRunSkipReason,
+  type AutomationRunSkipReason as AutomationRunSkipReasonType,
   AutomationRunState,
   type AutomationRunStatsType,
   type AutomationRunSummaryType,
+  type AutomationSendDeferralCause as AutomationSendDeferralCauseType,
   AutomationStepId,
   type AutomationVersionDetailType,
   AutomationVersionNumber,
@@ -37,6 +39,7 @@ import {
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import type { WorkspaceAdminApiClient } from "../api/workspace-admin-api-client.service";
+import { knownCodeLabel } from "../code-labels";
 import {
   confirmationFlag,
   confirmChange,
@@ -295,6 +298,46 @@ const runDryRun = (
     return yield* readDryRunPages(api, accessToken, previewId);
   });
 
+const runSkipReasons = {
+  "missing-from-dotypos": "missing from Dotypos",
+  "deleted-customer": "deleted customer",
+  "missing-email": "no email address",
+  "invalid-email": "invalid email address",
+  "consent-withdrawn": "marketing consent withdrawn",
+  "outside-test-domain": "outside the test domain",
+  "pass-holder": "holds a usable pass",
+  "already-sent-once": "already sent this campaign once",
+} satisfies Record<AutomationRunSkipReasonType, string>;
+
+const sendDeferralCauses = {
+  "trigger-not-reached": "the triggering visit moved later",
+  "one-off-campaign-gap": "a one-off campaign email was sent too recently",
+} satisfies Record<AutomationSendDeferralCauseType, string>;
+
+/**
+ * A timeline entry's detail. Skipped and deferred entries name their known
+ * reason or cause; any other detail, or a code this binary doesn't know,
+ * prints as JSON.
+ */
+const describeTimelineDetail = (
+  kind: string,
+  detail: Readonly<Record<string, unknown>>
+) => {
+  const reason =
+    kind === "skipped" && typeof detail.reason === "string"
+      ? knownCodeLabel(runSkipReasons, detail.reason)
+      : undefined;
+  if (reason !== undefined) return reason;
+  const cause =
+    kind === "deferred" && typeof detail.cause === "string"
+      ? knownCodeLabel(sendDeferralCauses, detail.cause)
+      : undefined;
+  if (cause !== undefined) {
+    return `${cause}; rechecks at ${String(detail.recheckAt)}`;
+  }
+  return Object.keys(detail).length === 0 ? "" : JSON.stringify(detail);
+};
+
 const formatDryRun = (dryRun: AutomationDryRunType) => {
   // A matching pass draft supplies its forecast date without a schedule frequency.
   const passForecast =
@@ -347,7 +390,7 @@ const formatDryRun = (dryRun: AutomationDryRunType) => {
         customer?.email ?? "",
         row.skipReason === null
           ? row.outcome
-          : `${row.outcome} (${row.skipReason})`,
+          : `${row.outcome} (${runSkipReasons[row.skipReason]})`,
         row.stepId ?? "",
         row.sendAt ?? "",
         [
@@ -614,9 +657,12 @@ const automationsVersionsCommand = Command.make(
 
 const describeRunProgress = (run: AutomationRunSummaryType) => {
   if (run.outcome === null) return run.phase ?? "";
-  return run.outcomeReason === null
-    ? run.outcome
-    : `${run.outcome} (${run.outcomeReason})`;
+  if (run.outcomeReason === null) return run.outcome;
+  const reason =
+    run.outcome === "skipped"
+      ? knownCodeLabel(runSkipReasons, run.outcomeReason)
+      : undefined;
+  return `${run.outcome} (${reason ?? run.outcomeReason})`;
 };
 
 /** The customer's current name and email, or why they're missing. */
@@ -739,9 +785,7 @@ const formatRunDetail = (run: AutomationRunDetailType) =>
         entry.at,
         entry.kind,
         entry.stepId ?? "",
-        Object.keys(entry.detail).length === 0
-          ? ""
-          : JSON.stringify(entry.detail),
+        describeTimelineDetail(entry.kind, entry.detail),
       ].join("\t")
     ),
   ].join("\n");
@@ -779,7 +823,7 @@ const formatRunStats = (stats: AutomationRunStatsType) =>
     ...AutomationRunSkipReason.literals.flatMap((reason) =>
       stats.bySkipReason[reason] === 0
         ? []
-        : [`skipped (${reason})\t${stats.bySkipReason[reason]}`]
+        : [`skipped (${runSkipReasons[reason]})\t${stats.bySkipReason[reason]}`]
     ),
     `Steps: ${stats.bySteps.length}`,
     ...stats.bySteps.map((step) =>
