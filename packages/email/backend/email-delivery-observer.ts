@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect";
-import type { EmailDeliveryId } from "../types/email.types";
+import type { EmailDeliveryId, EmailMessage } from "../types/email.types";
 import type { EmailSendError } from "./capabilities";
 import type { EmailStream } from "./email-providers";
 
@@ -10,7 +10,7 @@ export interface EmailSentEvent {
   readonly stream: EmailStream;
   readonly category: string | undefined;
   readonly tags: readonly string[];
-  readonly metadata: Readonly<Record<string, unknown>> | undefined;
+  readonly metadata: EmailMessage["metadata"];
   readonly idempotencyKey: string | undefined;
   readonly at: Date;
 }

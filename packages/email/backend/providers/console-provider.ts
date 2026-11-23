@@ -10,8 +10,8 @@ import { emailRequestFingerprint } from "../email-request-fingerprint";
 
 const recipientAddresses = (message: EmailMessage): readonly string[] =>
   Array.isArray(message.to)
-    ? message.to.map((r) => (typeof r === "string" ? r : r.email))
-    : [typeof message.to === "string" ? message.to : message.to.email];
+    ? message.to.map((recipient) => recipient.email)
+    : [message.to.email];
 
 const consoleDeliveryIdPrefix = "console-";
 
@@ -44,8 +44,7 @@ export const ConsoleEmailProvider: EmailProvider = {
     } else {
       const recipients = recipientAddresses(message);
       yield* Effect.logInfo("Console Email Provider - Sending Email", {
-        from:
-          typeof message.from === "string" ? message.from : message.from.email,
+        from: message.from.email,
         to: recipients,
         subject: message.subject,
         hasHtml: !!message.html,

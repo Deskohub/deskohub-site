@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Effect, Ref, Result } from "effect";
+import { Array, Effect, Ref, Result } from "effect";
 import type {
   EmailBatchResult,
   EmailMessage,
@@ -16,6 +16,7 @@ import {
   observeEmailDelivery,
 } from "./email-delivery-observer";
 import { type EmailStream, emailCategoryOf } from "./email-providers";
+import { entriesAtBatchPositions } from "./batch-positions";
 import { NetworkError } from "./network-error";
 
 /** What a chain reports deliveries to. */
@@ -81,33 +82,44 @@ export const sendThroughChain = (
   chain: ReadonlyArray<EmailProvider>,
   message: EmailMessage,
   context: EmailChainContext
-): Effect.Effect<EmailSendResult, EmailSendError> => {
-  const attempt = (
-    index: number
-  ): Effect.Effect<EmailSendResult, EmailSendError> => {
-    const provider = chain[index]!;
-    const next = chain[index + 1];
-    return provider.send(message).pipe(
-      Effect.catch((error) =>
-        next && continuesEmailChain(error)
-          ? Effect.logWarning("Email provider failed; trying the next one", {
-              ...emailFailureLogFacts(error),
-              provider: provider.name,
-              nextProvider: next.name,
-            }).pipe(
-              Effect.andThen(
-                reportFallback(context, message, provider, next, error)
-              ),
-              Effect.andThen(attempt(index + 1))
-            )
-          : Effect.fail(error)
-      )
-    );
-  };
-  return attempt(0).pipe(
-    Effect.tap((result) => reportSent(context, message, result))
+): Effect.Effect<EmailSendResult, EmailSendError> =>
+  Array.matchLeft(chain, {
+    onEmpty: () =>
+      Effect.die(new RangeError("An email provider chain has no provider")),
+    onNonEmpty: (provider, fallbacks) =>
+      sendFromProvider(provider, fallbacks, message, context),
+  }).pipe(Effect.tap((result) => reportSent(context, message, result)));
+
+/** Sends `message` through `provider`, then each of `fallbacks` in turn. */
+const sendFromProvider = (
+  provider: EmailProvider,
+  fallbacks: ReadonlyArray<EmailProvider>,
+  message: EmailMessage,
+  context: EmailChainContext
+): Effect.Effect<EmailSendResult, EmailSendError> =>
+  provider.send(message).pipe(
+    Effect.catch((error) => {
+      const [next, ...later] = fallbacks;
+      return next && continuesEmailChain(error)
+        ? Effect.logWarning("Email provider failed; trying the next one", {
+            ...emailFailureLogFacts(error),
+            provider: provider.name,
+            nextProvider: next.name,
+          }).pipe(
+            Effect.andThen(
+              reportFallback(context, message, provider, next, error)
+            ),
+            Effect.andThen(sendFromProvider(next, later, message, context))
+          )
+        : Effect.fail(error);
+    })
   );
-};
+
+/** A batch message still to send, by its place in the caller's batch. */
+interface PendingBatchMessage {
+  readonly index: number;
+  readonly message: EmailMessage;
+}
 
 /**
  * The key a later provider sends a fallback subset under: the caller's key
@@ -177,15 +189,17 @@ const partlyDeniedMessages = (
  * without the denied messages (`allowFallbackWithAdmission`). A replay
  * (`options.replay`) tries only the first provider.
  */
-export const sendBatchThroughChain = (
-  chain: ReadonlyArray<EmailProvider>,
-  messages: readonly EmailMessage[],
-  options: EmailBatchOptions,
-  context: EmailChainContext
-): Effect.Effect<readonly EmailBatchResult[], EmailSendError> =>
-  Effect.gen(function* () {
+export const sendBatchThroughChain = Effect.fn("email.sendBatchThroughChain")(
+  function* (
+    chain: ReadonlyArray<EmailProvider>,
+    messages: readonly EmailMessage[],
+    options: EmailBatchOptions,
+    context: EmailChainContext
+  ) {
     const results: EmailBatchResult[] = [];
-    let pending = messages.map((_, index) => index);
+    let pending: readonly PendingBatchMessage[] = messages.map(
+      (message, index) => ({ index, message })
+    );
 
     const singleProvider =
       options.replay ||
@@ -193,23 +207,26 @@ export const sendBatchThroughChain = (
     const providers = singleProvider ? chain.slice(0, 1) : chain;
     const { beforeRequest, allowFallbackWithAdmission } = options;
     let providerIndex = 0;
-    while (pending.length > 0 && providerIndex < providers.length) {
-      const provider = providers[providerIndex]!;
+    while (pending.length > 0) {
+      const provider = providers[providerIndex];
+      if (provider === undefined) break;
       const next = providers[providerIndex + 1];
+      const pendingIndices = pending.map(({ index }) => index);
       const admitted = yield* Ref.make(false);
       const requested = yield* Ref.make<readonly number[]>([]);
       const outcome = yield* Effect.result(
         provider.sendBatch(
-          pending.map((index) => messages[index]!),
+          pending.map(({ message }) => message),
           {
             ...(beforeRequest && {
-              beforeRequest: (fingerprint, positions) => {
-                const indices = positions.map((position) => pending[position]!);
-                return Ref.set(requested, indices).pipe(
-                  Effect.andThen(beforeRequest(fingerprint, indices)),
+              beforeRequest: (fingerprint, positions) =>
+                entriesAtBatchPositions(pendingIndices, positions).pipe(
+                  Effect.tap((indices) => Ref.set(requested, indices)),
+                  Effect.flatMap((indices) =>
+                    beforeRequest(fingerprint, indices)
+                  ),
                   Effect.andThen(Ref.set(admitted, true))
-                );
-              },
+                ),
             }),
             ...(!singleProvider &&
               allowFallbackWithAdmission && {
@@ -218,7 +235,7 @@ export const sendBatchThroughChain = (
             idempotencyKey: fallbackIdempotencyKey(
               options,
               providerIndex,
-              pending,
+              pendingIndices,
               messages.length
             ),
           }
@@ -246,7 +263,7 @@ export const sendBatchThroughChain = (
           );
           if (denied) {
             const timestamp = new Date();
-            for (const index of pending) {
+            for (const { index } of pending) {
               if (!denied.has(index)) continue;
               results[index] = {
                 status: "failed",
@@ -255,7 +272,7 @@ export const sendBatchThroughChain = (
                 error: answer.failure,
               };
             }
-            pending = pending.filter((index) => !denied.has(index));
+            pending = pending.filter(({ index }) => !denied.has(index));
             continue;
           }
         }
@@ -273,15 +290,14 @@ export const sendBatchThroughChain = (
             })
           );
 
-      const fallingThrough: number[] = [];
-      for (const [position, index] of pending.entries()) {
-        const result = answered[position]!;
-        const message = messages[index]!;
+      const fallingThrough: PendingBatchMessage[] = [];
+      for (const [entry, result] of Array.zip(pending, answered)) {
+        const { index, message } = entry;
         results[index] = result;
         if (result.status !== "failed") {
           yield* reportSent(context, message, result);
         } else if (next && continuesEmailChain(result.error)) {
-          fallingThrough.push(index);
+          fallingThrough.push(entry);
           yield* reportFallback(context, message, provider, next, result.error);
         }
       }
@@ -300,4 +316,5 @@ export const sendBatchThroughChain = (
     }
 
     return results;
-  });
+  }
+);

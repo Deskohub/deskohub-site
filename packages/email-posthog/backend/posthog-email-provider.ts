@@ -335,7 +335,7 @@ const attemptMayHaveQueued = (failure: PostHogSendAttemptFailure) =>
 
 const SendAnswerSchema = Schema.Struct({ message_id: EmailDeliveryIdSchema });
 
-const requestSend = ({
+const requestSend = Effect.fn("PostHogEmailProvider.requestSend")(function* ({
   config,
   email,
   idempotencyKey,
@@ -352,155 +352,152 @@ const requestSend = ({
     | ((fingerprint: string) => Effect.Effect<void, EmailSendError>)
     | undefined;
   readonly allowFallbackWithAdmission?: boolean | undefined;
-}) =>
-  Effect.gen(function* () {
-    const policy = postHogEmailRetryPolicy.withAttemptTimeout(
-      yield* postHogEmailAttemptTimeout(config)
-    );
-    const httpClient = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.post(
-      `${postHogAppHost(config.host)}${sendPath}`
-    ).pipe(
-      HttpClientRequest.bearerToken(Redacted.value(config.secretKey)),
-      HttpClientRequest.acceptJson,
-      HttpClientRequest.setHeader("Idempotency-Key", idempotencyKey),
-      HttpClientRequest.bodyJsonUnsafe(email)
-    );
-    const admit =
-      beforeRequest?.(
-        emailRequestFingerprint(
-          [providerName, request.url, idempotencyKey, email],
-          Redacted.value(config.secretKey)
-        )
-      ) ?? Effect.void;
+}) {
+  const policy = postHogEmailRetryPolicy.withAttemptTimeout(
+    yield* postHogEmailAttemptTimeout(config)
+  );
+  const httpClient = yield* HttpClient.HttpClient;
+  const request = HttpClientRequest.post(
+    `${postHogAppHost(config.host)}${sendPath}`
+  ).pipe(
+    HttpClientRequest.bearerToken(Redacted.value(config.secretKey)),
+    HttpClientRequest.acceptJson,
+    HttpClientRequest.setHeader("Idempotency-Key", idempotencyKey),
+    HttpClientRequest.bodyJsonUnsafe(email)
+  );
+  const admit =
+    beforeRequest?.(
+      emailRequestFingerprint(
+        [providerName, request.url, idempotencyKey, email],
+        Redacted.value(config.secretKey)
+      )
+    ) ?? Effect.void;
 
-    const answeredAttempt = (accepted: Ref.Ref<boolean>) =>
-      httpClient.execute(request).pipe(
-        Effect.mapError(
-          () =>
-            new PostHogSendAttemptFailure({
-              kind: "transport",
-              code: "network_error",
-            })
-        ),
-        // The body is read within the attempt, so its timeout bounds a
-        // stalled body too.
-        Effect.flatMap((response) =>
-          response.status >= 200 && response.status < 300
-            ? Ref.set(accepted, true).pipe(
-                Effect.andThen(response.text),
-                Effect.mapError(
-                  () =>
-                    new PostHogSendAttemptFailure({
-                      kind: "accepted",
-                      code: "invalid_response",
-                    })
-                )
-              )
-            : Effect.gen(function* () {
-                const retryAfter = yield* readRetryAfter(response);
-                const now = yield* Clock.currentTimeMillis;
-                return yield* new PostHogSendAttemptFailure({
-                  kind: "answered",
-                  status: response.status,
-                  code: yield* postHogFailureCode(response),
-                  retryAfter,
-                  retryAfterPastDeadline:
-                    retryAfter !== undefined &&
-                    deadline !== undefined &&
-                    now + Duration.toMillis(retryAfter) >= deadline,
-                });
-              })
-        ),
-        policy.attempt(
-          () =>
-            new PostHogSendAttemptFailure({ kind: "timeout", code: "timeout" })
-        )
-      );
-
-    // Once PostHog answered 2xx, a body that fails or times out leaves the
-    // email possibly queued, so the attempt is not retried or handed on.
-    let mayHaveQueued = false;
-    const attempt = Effect.gen(function* () {
-      const accepted = yield* Ref.make(false);
-      yield* admit;
-      return yield* answeredAttempt(accepted).pipe(
-        Effect.catch((failure) =>
-          Effect.flatMap(Ref.get(accepted), (wasAccepted) =>
-            Effect.fail(
-              wasAccepted
-                ? new PostHogSendAttemptFailure({
+  const answeredAttempt = (accepted: Ref.Ref<boolean>) =>
+    httpClient.execute(request).pipe(
+      Effect.mapError(
+        () =>
+          new PostHogSendAttemptFailure({
+            kind: "transport",
+            code: "network_error",
+          })
+      ),
+      // The body is read within the attempt, so its timeout bounds a
+      // stalled body too.
+      Effect.flatMap((response) =>
+        response.status >= 200 && response.status < 300
+          ? Ref.set(accepted, true).pipe(
+              Effect.andThen(response.text),
+              Effect.mapError(
+                () =>
+                  new PostHogSendAttemptFailure({
                     kind: "accepted",
                     code: "invalid_response",
                   })
-                : failure
+              )
             )
-          )
-        ),
-        Effect.tapError((failure) =>
-          Effect.sync(() => {
-            if (beforeRequest) mayHaveQueued ||= attemptMayHaveQueued(failure);
-          })
-        )
-      );
-    });
-
-    const body = yield* attempt.pipe(
-      policy.retryWhileHonoringDelay<
-        PostHogSendAttemptFailure | EmailSendError
-      >(
-        (failure) =>
-          failure._tag === "PostHogSendAttemptFailure" &&
-          isRetryableAttempt(failure),
-        {
-          requestedDelay: (failure) =>
-            failure._tag === "PostHogSendAttemptFailure"
-              ? failure.retryAfter
-              : undefined,
-          maxRequestedDelay: postHogEmailMaxRetryAfter,
-        }
-      ),
-      Effect.mapError((failure) => {
-        const error =
-          failure._tag === "PostHogSendAttemptFailure"
-            ? toEmailSendError(failure)
-            : failure;
-        const allowsFallback =
-          allowFallbackWithAdmission && error.failureKind === "provider";
-        return mayHaveQueued &&
-          error.failureKind !== "unknown-outcome" &&
-          !allowsFallback
-          ? new NetworkError({
-              message:
-                "An earlier guarded PostHog request may have queued the email",
-              code: error.code,
-              failureKind: "unknown-outcome",
+          : Effect.gen(function* () {
+              const retryAfter = yield* readRetryAfter(response);
+              const now = yield* Clock.currentTimeMillis;
+              return yield* new PostHogSendAttemptFailure({
+                kind: "answered",
+                status: response.status,
+                code: yield* postHogFailureCode(response),
+                retryAfter,
+                retryAfterPastDeadline:
+                  retryAfter !== undefined &&
+                  deadline !== undefined &&
+                  now + Duration.toMillis(retryAfter) >= deadline,
+              });
             })
-          : error;
-      })
-    );
-
-    const answer = yield* Schema.decodeEffect(
-      Schema.fromJsonString(SendAnswerSchema)
-    )(body).pipe(
-      Effect.mapError(
+      ),
+      policy.attempt(
         () =>
-          new NetworkError({
-            message: "PostHog accepted the email without a readable message id",
-            code: "invalid_response",
-            failureKind: "unknown-outcome",
-          })
+          new PostHogSendAttemptFailure({ kind: "timeout", code: "timeout" })
       )
     );
 
-    const result: EmailSendResult = {
-      id: answer.message_id,
-      status: "queued",
-      provider: providerName,
-      timestamp: new Date(yield* Clock.currentTimeMillis),
-    };
-    return result;
-  }).pipe(Effect.provide(FetchHttpClient.layer));
+  // Once PostHog answered 2xx, a body that fails or times out leaves the
+  // email possibly queued, so the attempt is not retried or handed on.
+  let mayHaveQueued = false;
+  const attempt = Effect.gen(function* () {
+    const accepted = yield* Ref.make(false);
+    yield* admit;
+    return yield* answeredAttempt(accepted).pipe(
+      Effect.catch((failure) =>
+        Effect.flatMap(Ref.get(accepted), (wasAccepted) =>
+          Effect.fail(
+            wasAccepted
+              ? new PostHogSendAttemptFailure({
+                  kind: "accepted",
+                  code: "invalid_response",
+                })
+              : failure
+          )
+        )
+      ),
+      Effect.tapError((failure) =>
+        Effect.sync(() => {
+          if (beforeRequest) mayHaveQueued ||= attemptMayHaveQueued(failure);
+        })
+      )
+    );
+  });
+
+  const body = yield* attempt.pipe(
+    policy.retryWhileHonoringDelay<PostHogSendAttemptFailure | EmailSendError>(
+      (failure) =>
+        failure._tag === "PostHogSendAttemptFailure" &&
+        isRetryableAttempt(failure),
+      {
+        requestedDelay: (failure) =>
+          failure._tag === "PostHogSendAttemptFailure"
+            ? failure.retryAfter
+            : undefined,
+        maxRequestedDelay: postHogEmailMaxRetryAfter,
+      }
+    ),
+    Effect.mapError((failure) => {
+      const error =
+        failure._tag === "PostHogSendAttemptFailure"
+          ? toEmailSendError(failure)
+          : failure;
+      const allowsFallback =
+        allowFallbackWithAdmission && error.failureKind === "provider";
+      return mayHaveQueued &&
+        error.failureKind !== "unknown-outcome" &&
+        !allowsFallback
+        ? new NetworkError({
+            message:
+              "An earlier guarded PostHog request may have queued the email",
+            code: error.code,
+            failureKind: "unknown-outcome",
+          })
+        : error;
+    })
+  );
+
+  const answer = yield* Schema.decodeEffect(
+    Schema.fromJsonString(SendAnswerSchema)
+  )(body).pipe(
+    Effect.mapError(
+      () =>
+        new NetworkError({
+          message: "PostHog accepted the email without a readable message id",
+          code: "invalid_response",
+          failureKind: "unknown-outcome",
+        })
+    )
+  );
+
+  const result: EmailSendResult = {
+    id: answer.message_id,
+    status: "queued",
+    provider: providerName,
+    timestamp: new Date(yield* Clock.currentTimeMillis),
+  };
+  return result;
+}, Effect.provide(FetchHttpClient.layer));
 
 /** PostHog answer codes that mean the project cannot send, not the message. */
 const projectRefusalCodes: ReadonlySet<string> = new Set([

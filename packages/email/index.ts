@@ -34,6 +34,7 @@ export type {
   EmailBatchResult,
   EmailConfig,
   EmailDeliveryId,
+  EmailMetadataValue,
   EmailMessage,
   EmailProviderConfig,
   EmailRecipient,

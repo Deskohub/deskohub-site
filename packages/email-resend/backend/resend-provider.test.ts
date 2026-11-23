@@ -18,13 +18,21 @@ import {
   ConfigProvider,
   Duration,
   Effect,
+  type Exit,
   Fiber,
   Logger,
+  Predicate,
   Random,
   Redacted,
   Tracer,
 } from "effect";
 import { TestClock } from "effect/testing";
+import type {
+  CreateBatchOptions,
+  CreateBatchRequestOptions,
+  CreateEmailOptions,
+  CreateEmailRequestOptions,
+} from "resend";
 
 const adaAddress = testEmailAddress("ada");
 const deskohubAddress = testEmailAddress("deskohub");
@@ -38,10 +46,14 @@ type SendResponse =
         readonly statusCode?: number;
       };
     }
-  | { readonly data?: never; readonly error: unknown };
+  | { readonly data?: never; readonly error: UnclassifiedRefusal };
+/** Refusal bodies without a status, including malformed ones. */
+type UnclassifiedRefusal =
+  | string
+  | { readonly message?: string | number; readonly error?: string | number };
 type SendImplementation = (
-  payload?: unknown,
-  options?: { readonly idempotencyKey?: string; readonly signal?: AbortSignal }
+  payload: CreateEmailOptions,
+  options?: CreateEmailRequestOptions
 ) => Promise<SendResponse>;
 type BatchSendResponse =
   | {
@@ -56,8 +68,8 @@ type BatchSendResponse =
       };
     };
 type BatchSendImplementation = (
-  payload?: unknown,
-  options?: { readonly idempotencyKey?: string; readonly signal?: AbortSignal }
+  payload: CreateBatchOptions,
+  options?: CreateBatchRequestOptions
 ) => Promise<BatchSendResponse>;
 let send = mock<SendImplementation>(async () => ({
   data: { id: "resend-id" },
@@ -336,7 +348,7 @@ describe("ResendEmailProvider", () => {
     (statusCode: number, errorMessage = "Refused"): SendImplementation =>
     async () => ({ error: { statusCode, message: errorMessage } });
   const unclassifiedRefusal =
-    (error: unknown): SendImplementation =>
+    (error: UnclassifiedRefusal): SendImplementation =>
     async () => ({ error });
   const accepted: SendImplementation = async () => ({
     data: { id: "resend-id" },
@@ -563,8 +575,7 @@ describe("ResendEmailProvider", () => {
       })
     );
 
-    const payload = send.mock.calls[0]?.[0] as { tags?: unknown } | undefined;
-    expect(payload?.tags).toBeUndefined();
+    expect(send.mock.calls[0]?.[0]?.tags).toBeUndefined();
   });
 
   for (const [env, single, batch] of [
@@ -769,7 +780,7 @@ describe("ResendEmailProvider", () => {
       send = mock<SendImplementation>((payload, options) => {
         const respond =
           row.responses[send.mock.calls.length - 1] ?? row.responses.at(-1);
-        return respond?.(payload, options) ?? accepted();
+        return respond?.(payload, options) ?? accepted(payload, options);
       });
 
       const result = await runProvider(
@@ -973,8 +984,7 @@ describe("ResendEmailProvider", () => {
       })
     );
 
-    const payload = send.mock.calls[0]?.[0] as { tags?: unknown } | undefined;
-    expect(payload?.tags).toEqual([
+    expect(send.mock.calls[0]?.[0]?.tags).toEqual([
       { name: "category", value: "account-magic-link" },
       { name: "surface", value: "workspace" },
     ]);
@@ -1018,35 +1028,27 @@ describe("ResendEmailProvider", () => {
 });
 
 /**
- * Captures terminal span errors, including non-enumerable messages, for leak
- * assertions.
+ * Serializes a terminal span exit for leak assertions. It reads each value as
+ * stored, not through `toJSON`, and spells out error messages, stacks, and
+ * causes, which are not enumerable, next to their other fields.
  */
-const serializeExitValue = (value: unknown, depth = 0): unknown => {
-  if (depth > 8 || value === null || typeof value !== "object") return value;
-  if (value instanceof Error) {
-    return {
-      name: value.name,
-      message: value.message,
-      stack: typeof value.stack === "string" ? value.stack : undefined,
-      cause:
-        "cause" in value && value.cause !== undefined
-          ? serializeExitValue(value.cause, depth + 1)
-          : undefined,
-    };
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => serializeExitValue(item, depth + 1));
-  }
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-      key,
-      serializeExitValue(item, depth + 1),
-    ])
-  );
-};
+const serializeExit = (exit: Exit.Exit<unknown, unknown>) =>
+  JSON.stringify(exit, function (key, serialized) {
+    const stored = this[key];
+    if (stored instanceof Error) {
+      return {
+        ...stored,
+        name: stored.name,
+        message: stored.message,
+        stack: stored.stack,
+        cause: stored.cause,
+      };
+    }
+    return Predicate.isObject(stored) ? { ...stored } : serialized;
+  });
 
 const captureSpans = () => {
-  const ended: Array<{ exit?: unknown; name: string }> = [];
+  const ended: Array<{ exit: string; name: string }> = [];
   const tracer = Tracer.make({
     span: (options) => ({
       _tag: "Span" as const,
@@ -1059,10 +1061,13 @@ const captureSpans = () => {
       links: options.links,
       sampled: true,
       kind: options.kind,
-      status: { _tag: "Started", startTime: 0n } as Tracer.SpanStatus,
-      end: (_endTime: bigint, exit: unknown) => {
+      status: {
+        _tag: "Started",
+        startTime: 0n,
+      } satisfies Tracer.SpanStatus,
+      end: (_endTime: bigint, exit: Exit.Exit<unknown, unknown>) => {
         ended.push({
-          exit: serializeExitValue(exit),
+          exit: serializeExit(exit),
           name: options.name,
         });
       },
