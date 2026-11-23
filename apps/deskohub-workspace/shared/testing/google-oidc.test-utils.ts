@@ -59,6 +59,13 @@ interface TokenClaims {
   readonly expiresIn?: number;
 }
 
+type GoogleCertificatesState =
+  | "serving"
+  | "server-error"
+  | "not-json"
+  | "invalid-set"
+  | "network-error";
+
 const googleCertificatesUrl = "https://www.googleapis.com/oauth2/v3/certs";
 const keyId = "synthetic-google-signing-key";
 const nowSeconds = () => Math.floor(Date.now() / 1000);
@@ -68,7 +75,9 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
  * with it, so OIDC verification runs without the network. Other requests
  * reach the real `fetch`.
  */
-export const serveGoogleSigningKeys = async () => {
+export const serveGoogleSigningKeys = async (
+  initial: GoogleCertificatesState = "serving"
+) => {
   const google = await generateKeyPair("RS256");
   const foreign = await generateKeyPair("RS256");
   const keySet = {
@@ -81,6 +90,15 @@ export const serveGoogleSigningKeys = async () => {
       },
     ],
   };
+  const certificateResponses = {
+    serving: () => Promise.resolve(Response.json(keySet)),
+    "server-error": () =>
+      Promise.resolve(new Response("unavailable", { status: 500 })),
+    "not-json": () => Promise.resolve(new Response("<html>")),
+    "invalid-set": () => Promise.resolve(Response.json({ keys: "none" })),
+    "network-error": () => Promise.reject(new TypeError("fetch failed")),
+  } satisfies Record<GoogleCertificatesState, () => Promise<Response>>;
+  let state = initial;
   const realFetch = globalThis.fetch;
   const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(((
     input: Parameters<typeof fetch>[0],
@@ -88,7 +106,7 @@ export const serveGoogleSigningKeys = async () => {
   ) =>
     String(input instanceof Request ? input.url : input) ===
     googleCertificatesUrl
-      ? Promise.resolve(Response.json(keySet))
+      ? certificateResponses[state]()
       : realFetch(input, init)) as typeof fetch);
 
   /**
@@ -115,5 +133,15 @@ export const serveGoogleSigningKeys = async () => {
       .sign(signedBy === "google" ? google.privateKey : foreign.privateKey);
   };
 
-  return { token, restore: () => fetchSpy.mockRestore() };
+  return {
+    token,
+    /**
+     * Sets how Google's certificate URL answers. Verification caches a
+     * served key set, so an outage shows only before the first success.
+     */
+    serve: (next: GoogleCertificatesState) => {
+      state = next;
+    },
+    restore: () => fetchSpy.mockRestore(),
+  };
 };

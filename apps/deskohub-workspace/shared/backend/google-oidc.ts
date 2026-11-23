@@ -1,4 +1,4 @@
-import { Context, Data, Effect } from "effect";
+import { Context, Data, Effect, Option, Schema } from "effect";
 import {
   createRemoteJWKSet,
   type JWTVerifyGetKey,
@@ -70,21 +70,43 @@ const clockToleranceSeconds = 30;
 export class GoogleInvokerRejection extends Data.TaggedError(
   "GoogleInvokerRejection"
 )<{
-  /** 401 without a valid Google token; 403 for a valid one from another account. */
+  /**
+   * 401 without a valid Google token, including while Google's keys are
+   * unreachable; 403 for a valid, verified one from another account.
+   */
   readonly status: 401 | 403;
   readonly reason:
     | "invoker-not-configured"
     | "missing-bearer-token"
     | "invalid-token"
+    | "key-set-unavailable"
     | "unexpected-invoker";
-  /** The jose error code of an invalid token, such as `ERR_JWT_EXPIRED`. */
+  /** The jose error code, such as `ERR_JWT_EXPIRED`. */
   readonly code?: string;
 }> {}
+
+const decodeVerifiedIdentity = Schema.decodeUnknownOption(
+  Schema.Struct({
+    email: Schema.NonEmptyString,
+    email_verified: Schema.Literal(true),
+  })
+);
 
 const bearerToken = (request: Request) =>
   request.headers
     .get("authorization")
     ?.match(/^Bearer ([\w-]+\.[\w-]+\.[\w-]+)$/)?.[1];
+
+/**
+ * Fetching Google's key set fails with a timeout, an invalid set, a generic
+ * JOSE error for a non-200 or non-JSON response, or a plain fetch error; any
+ * other JOSE error rejects the token itself.
+ */
+const keySetErrorCodes = new Set<string>([
+  joseErrors.JWKSTimeout.code,
+  joseErrors.JWKSInvalid.code,
+  joseErrors.JOSEError.code,
+]);
 
 const verifyToken = Effect.fnUntraced(function* (
   token: string,
@@ -104,11 +126,14 @@ const verifyToken = Effect.fnUntraced(function* (
     catch: (error) =>
       new GoogleInvokerRejection({
         status: 401,
-        reason: "invalid-token",
-        code:
-          error instanceof joseErrors.JOSEError
-            ? error.code
-            : "ERR_KEY_SET_UNAVAILABLE",
+        ...(error instanceof joseErrors.JOSEError
+          ? {
+              reason: keySetErrorCodes.has(error.code)
+                ? "key-set-unavailable"
+                : "invalid-token",
+              code: error.code,
+            }
+          : { reason: "key-set-unavailable", code: "ERR_KEY_SET_FETCH" }),
       }),
   });
 });
@@ -147,7 +172,16 @@ export const authenticateGoogleInvoker = Effect.fn(
       code: "ERR_JWT_CLAIM_VALIDATION_FAILED",
     });
   }
-  if (payload.email !== invoker.email || payload.email_verified !== true) {
+  // Only a verified identity can be the wrong account.
+  const identity = decodeVerifiedIdentity(payload);
+  if (Option.isNone(identity)) {
+    return yield* new GoogleInvokerRejection({
+      status: 401,
+      reason: "invalid-token",
+      code: "ERR_JWT_CLAIM_VALIDATION_FAILED",
+    });
+  }
+  if (identity.value.email !== invoker.email) {
     return yield* new GoogleInvokerRejection({
       status: 403,
       reason: "unexpected-invoker",

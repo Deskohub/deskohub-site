@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Effect, Match, Option } from "effect";
+import { Effect, Match, Option, Schema } from "effect";
 import { NextResponse } from "next/server";
 import { env } from "@/env";
 import { cloudTasksInvoker } from "@/shared/backend/google-oidc";
@@ -42,10 +42,19 @@ const cloudTasksLogAnnotations = (headers: Headers) => ({
   cloudTasksEta: headers.get("x-cloudtasks-tasketa") ?? undefined,
 });
 
+const decodeJsonBody = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Unknown)
+);
+
+/**
+ * A body that fails to arrive is retried; one that arrives but is not JSON
+ * can never succeed.
+ */
 const readJsonBody = (request: Request) =>
-  Effect.tryPromise(() => request.json() as Promise<unknown>).pipe(
-    Effect.option
-  );
+  Effect.tryPromise(() => request.text()).pipe(Effect.map(decodeJsonBody));
+
+const retryResponse = () =>
+  NextResponse.json({ error: "Queue delivery failed" }, { status: 500 });
 
 const acknowledged = (status: "handled" | "invalid" | "acknowledged") =>
   NextResponse.json({ status });
@@ -64,10 +73,7 @@ const cloudTasksResponse = (outcome: QueueDeliveryOutcome) =>
       Failed: ({ action }) =>
         action._tag === "Acknowledge"
           ? acknowledged("acknowledged")
-          : NextResponse.json(
-              { error: "Queue delivery failed" },
-              { status: 500 }
-            ),
+          : retryResponse(),
     })
   );
 
@@ -91,7 +97,7 @@ export const defineCloudTasksQueueRoute = (
             Option.match({
               onNone: () =>
                 Effect.logWarning(
-                  "Cloud Tasks queue message ignored: unreadable body"
+                  "Cloud Tasks queue message ignored: body is not JSON"
                 ).pipe(Effect.as(acknowledged("invalid"))),
               onSome: (payload) =>
                 consume(
@@ -102,6 +108,11 @@ export const defineCloudTasksQueueRoute = (
                   queueDeliveryModeForStage(env.VERCEL_ENV)
                 ).pipe(Effect.map(cloudTasksResponse)),
             })
+          ),
+          Effect.catch((error) =>
+            Effect.logWarning("Cloud Tasks queue message body unreadable", {
+              cause: error,
+            }).pipe(Effect.as(retryResponse()))
           ),
           Effect.annotateLogs(cloudTasksLogAnnotations(request.headers))
         )

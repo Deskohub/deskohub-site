@@ -49,7 +49,7 @@ const topic = "workspace-test-parcel";
 
 const taskRequest = (
   authorization: string | undefined,
-  body: string = JSON.stringify({ parcelId: "p-1" }),
+  body: BodyInit = JSON.stringify({ parcelId: "p-1" }),
   headers: Record<string, string> = {}
 ) => {
   const request = new Request(
@@ -57,6 +57,7 @@ const taskRequest = (
     {
       method: "POST",
       body,
+      duplex: "half",
       headers: {
         "content-type": "application/json",
         "x-cloudtasks-queuename": "workspace-test-parcel-queue",
@@ -153,14 +154,22 @@ describe("Cloud Tasks authentication", () => {
     expect(deliveries).toHaveLength(0);
   });
 
-  test("rejects an unverified invoker email with 403", async () => {
+  test("rejects an unverified invoker email with 401", async () => {
     const { POST, deliveries } = recordingRoute();
 
-    const response = await POST(
+    const own = await POST(
       taskRequest(await bearer(tasksInvoker, { email_verified: false }))
     );
+    const other = await POST(
+      taskRequest(
+        await bearer(schedulerInvoker, {
+          aud: tasksInvoker.audience,
+          email_verified: false,
+        })
+      )
+    );
 
-    expect(response.status).toBe(403);
+    expect([own.status, other.status]).toEqual([401, 401]);
     expect(deliveries).toHaveLength(0);
   });
 
@@ -248,7 +257,23 @@ describe("Cloud Tasks delivery", () => {
     expect(deliveries[0]?.mode).toBe(mode);
   });
 
-  test("acknowledges an unreadable body without delivering it", async () => {
+  test("retries a body that fails to arrive", async () => {
+    const { POST, deliveries } = recordingRoute();
+
+    const response = await POST(
+      taskRequest(
+        await bearer(tasksInvoker),
+        new ReadableStream({
+          pull: (controller) => controller.error(new Error("connection reset")),
+        })
+      )
+    );
+
+    expect(response.status).toBe(500);
+    expect(deliveries).toHaveLength(0);
+  });
+
+  test("acknowledges a body that is not JSON without delivering it", async () => {
     const { POST, deliveries } = recordingRoute();
 
     const response = await POST(

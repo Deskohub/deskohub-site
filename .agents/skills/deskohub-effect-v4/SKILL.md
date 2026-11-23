@@ -1,6 +1,6 @@
 ---
 name: deskohub-effect-v4
-description: Effect V4 code, Context.Service, Layer, Effect.fn, Effect.Do workflow, Effect Schema, typed errors, retry and timeout, Match, tagged unions, runWorkspaceEffect, runWorkspaceEffectOrElse, runWorkspaceBrowserEffect, defineWorkspaceAction, defineWorkspaceRoute, Vercel Queue topic, defineQueueTopic, QueuePublisher, queue consumer, browser failure reporting, Effect bundle size.
+description: Effect V4 code, Context.Service, Layer, Effect.fn, Effect.Do workflow, Effect Schema, typed errors, retry and timeout, Match, tagged unions, runWorkspaceEffect, runWorkspaceEffectOrElse, runWorkspaceBrowserEffect, defineWorkspaceAction, defineWorkspaceRoute, Vercel Queue topic, defineQueueTopic, QueuePublisher, queue consumer, defineQueueRoute, Cloud Tasks queue route, Cloud Scheduler cron, Google OIDC invoker, browser failure reporting, Effect bundle size.
 ---
 
 # Deskohub Effect V4

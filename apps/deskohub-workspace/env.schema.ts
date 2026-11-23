@@ -161,12 +161,14 @@ const paymentProviderEnvironmentCheck = Schema.makeFilter<{
 /**
  * Deployed environments must never serve a release whose account email
  * delivery is unconfigured: without a Resend key every message, including
- * magic links, is only logged. Production must also never leave cleanup jobs
- * publicly invokable without cron authentication. Development and test
- * environments stay usable without these secrets.
+ * magic links, is only logged. Production on Vercel must also never leave
+ * cleanup jobs publicly invokable without cron authentication; a container
+ * host authenticates Cloud Scheduler's OIDC token instead of the cron secret.
+ * Development and test environments stay usable without these secrets.
  */
 const accountOperationsEnvironmentCheck = Schema.makeFilter<{
   readonly VERCEL_ENV: "production" | "preview" | "development";
+  readonly WORKSPACE_RUNTIME_HOST?: "vercel" | "container" | undefined;
   readonly EMAIL_API_KEY?: string | undefined;
   readonly CRON_SECRET?: string | undefined;
 }>((environment) => {
@@ -177,7 +179,8 @@ const accountOperationsEnvironmentCheck = Schema.makeFilter<{
     string,
   ])[] = [
     ["EMAIL_API_KEY", "EMAIL_API_KEY is required in production and preview."],
-    ...(environment.VERCEL_ENV === "production"
+    ...(environment.VERCEL_ENV === "production" &&
+    environment.WORKSPACE_RUNTIME_HOST !== "container"
       ? [["CRON_SECRET", "CRON_SECRET is required in production."] as const]
       : []),
   ];

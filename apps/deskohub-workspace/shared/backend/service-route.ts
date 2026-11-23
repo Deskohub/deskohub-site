@@ -78,6 +78,13 @@ export const requireGoogleInvoker = (
   invoker: GoogleInvoker | undefined
 ) =>
   authenticateGoogleInvoker(request, invoker).pipe(
+    Effect.tapError((rejection) =>
+      rejection.reason === "key-set-unavailable"
+        ? Effect.logError("Google signing keys are unavailable", {
+            code: rejection.code,
+          })
+        : Effect.void
+    ),
     Effect.mapError(
       (rejection) =>
         new WorkspaceRouteFailure({
