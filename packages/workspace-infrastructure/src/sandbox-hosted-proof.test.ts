@@ -17,6 +17,7 @@ import {
 } from "../scripts/sandbox-locked-stack";
 import {
   sandboxProofBudget,
+  sandboxProofEdge,
   sandboxProofStackConfig,
   sandboxProofStackConfigInput,
 } from "../scripts/sandbox-stack-config";
@@ -80,7 +81,7 @@ const proofPhases = [
   "foundation",
   "images",
   "deliver-v1",
-  "edge-apply",
+  "edge-readback",
   "deliver-v2",
   "drift",
   "interrupt-recover",
@@ -88,11 +89,7 @@ const proofPhases = [
   "restore-v1",
   "edge-privacy",
 ];
-const teardownPhases = [
-  "edge-destroy",
-  "stack-destroy",
-  "post-destroy-inventory",
-];
+const teardownPhases = ["stack-destroy", "post-destroy-inventory"];
 const teardownCondition =
   "always() && inputs.mode != 'read-only' && steps.preflight.outcome == 'success'";
 
@@ -102,7 +99,7 @@ const withFakeTools = <A>(run: (env: Record<string, string>) => A) => {
   const bin = join(dir, "bin");
   mkdirSync(bin);
   const calls = join(dir, "calls.log");
-  for (const tool of ["gcloud", "docker", "terraform", "curl", "setsid"]) {
+  for (const tool of ["gcloud", "docker", "curl", "setsid"]) {
     const path = join(bin, tool);
     writeFileSync(
       path,
@@ -198,6 +195,16 @@ describe("sandbox workflow modes", () => {
     expect(steps[guard]?.if).toBe("inputs.mode != 'read-only'");
   });
 
+  test("sets up no Terraform: Alchemy owns the edge", () => {
+    expect(
+      steps.filter(
+        (step) =>
+          step.uses?.startsWith("hashicorp/") ||
+          /\bterraform\b/.test(step.run ?? "")
+      )
+    ).toEqual([]);
+  });
+
   test("runs no mutating phase in read-only mode", () => {
     for (const { phase, step } of phaseSteps) {
       if (phase === "readonly-inventory") {
@@ -226,7 +233,6 @@ describe("sandbox workflow modes", () => {
     for (const phase of [
       "preflight",
       ...proofPhases.slice(1),
-      "edge-destroy",
       "stack-destroy",
     ]) {
       expect(stepFor(phase)?.env?.GOOGLE_ACCESS_TOKEN).toBe(
@@ -344,11 +350,12 @@ describe("sandbox proof runner", () => {
       "bun run release deliver --sha",
       "bun run release status",
       "bun run release plan",
-      "terraform -chdir=",
-      "prefix=terraform/workspace-edge/sandbox-proof",
-      "-auto-approve",
-      "enable_https=false",
+      "gcloud storage cat gs://deskohub-workspace-sandbox-workspace-state/DeskohubWorkspace/sandbox/__stack_output__.json",
+      "gcloud compute backend-services describe workspace-sandbox-dynamic",
+      "gcloud compute backend-services describe workspace-sandbox-static",
+      "gcloud compute security-policies describe workspace-sandbox-edge",
       "http://198.51.100.10/healthz",
+      "http://198.51.100.10/robots.txt",
       "bun run release deliver --sha",
       "gcloud artifacts repositories update workspace",
       "bun scripts/sandbox-locked-stack.ts drift",
@@ -373,7 +380,6 @@ describe("sandbox proof runner", () => {
       "token=synthetic-probe-marker",
       "gcloud logging read",
       "cloudtrace.googleapis.com",
-      "destroy -input=false -auto-approve",
       "bun scripts/sandbox-locked-stack.ts destroy",
       "gcloud storage rm gs://deskohub-workspace-sandbox-workspace-state/workspace-release-record.sandbox.json",
       "gcloud storage rm gs://deskohub-workspace-sandbox-workspace-state/sandbox-proof/run.env",
@@ -391,7 +397,6 @@ describe("sandbox proof runner", () => {
     expect(output).not.toContain("release deliver");
     expect(output).not.toContain("docker");
     expectInOrder(output, [
-      "destroy -input=false -auto-approve",
       "bun scripts/sandbox-locked-stack.ts destroy",
       "gcloud storage ls -r",
     ]);
@@ -421,6 +426,8 @@ describe("sandbox proof stack config", () => {
     );
     expect(config.secrets).toEqual([]);
     expect(config.schedulesEnabled).toBe(false);
+    // The plain-HTTP proof edge, allowed in the approved sandbox only.
+    expect(config.edge).toEqual(sandboxProofEdge);
     expect(
       JSON.parse(await Effect.runPromise(sandboxProofStackConfig(identity)))
     ).toMatchObject({ projectNumber: "759037106024", stage: "sandbox" });

@@ -7,10 +7,12 @@
 #   sandbox-hosted-proof.sh [--dry-run] <phase|hosted-proof|cleanup-only>...
 #
 # --dry-run prints the command sequence and never runs gcloud, docker,
-# terraform, curl or the release command. Proof state between steps lives in
+# curl or the release command. Proof state between steps lives in
 # SANDBOX_PROOF_DIR (uploaded as a workflow artifact); it never holds a
 # token. Every Alchemy write goes through the release command or the
-# writer-locked helper, so this runner is never a second stack writer.
+# writer-locked helper, so this runner is never a second stack writer. The
+# edge is part of the same stack: the first release declares it, the
+# runner reads its outputs back, and the stack destroy removes it.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,18 +24,17 @@ hosted_proof_phases=(
   foundation
   images
   deliver-v1
-  edge-apply
+  edge-readback
   deliver-v2
   drift
   interrupt-recover
   state-snapshot-restore
   restore-v1
   edge-privacy
-  edge-destroy
   stack-destroy
   post-destroy-inventory
 )
-cleanup_phases=(edge-destroy stack-destroy post-destroy-inventory)
+cleanup_phases=(stack-destroy post-destroy-inventory)
 
 usage() {
   cat >&2 <<EOF
@@ -82,7 +83,8 @@ stage=sandbox
 stack_prefix="DeskohubWorkspace/${stage}/"
 lease_object="${stack_prefix}__lease__.json"
 record_object="workspace-release-record.${stage}.json"
-edge_prefix="terraform/workspace-edge/sandbox-proof"
+# The outputs Alchemy persists after each full deploy of the stack.
+stack_output_object="${stack_prefix}__stack_output__.json"
 web_service=workspace-web
 release_services=(workspace-web workspace-tasks-worker workspace-scheduler-worker)
 artifact_repository=workspace
@@ -90,6 +92,8 @@ probe_image=workspace
 collector_image=workspace-otel-collector
 mobile_updates_bucket="${project_id}-mobile-updates"
 edge_exclusion="workspace-${stage}-token-route-requests"
+edge_security_policy="workspace-${stage}-edge"
+edge_backend_services=("workspace-${stage}-dynamic" "workspace-${stage}-static")
 marker=synthetic-probe-marker
 # Token-bearing routes the privacy phase sends the marker to.
 token_routes=(/app/auth/callback /api/auth/magic-link/verify /marketing-preferences/access)
@@ -238,6 +242,7 @@ stack_config_file="${proof_dir}/stack-config.json"
 digests_file="${proof_dir}/digests.env"
 releases_file="${proof_dir}/releases.env"
 edge_file="${proof_dir}/edge.env"
+edge_outputs_file="${proof_dir}/edge-outputs.json"
 exclusion_filter_file="${proof_dir}/edge-exclusion-filter.txt"
 # The proof run's disposable queue ID suffix, kept in the state bucket
 # outside the stack prefix so a later cleanup-only run declares the same
@@ -403,24 +408,6 @@ expect_serving() {
   fail "the edge did not serve ${version} on every request (${served}/10)"
 }
 
-terraform_edge() {
-  local action="$1"
-  local dir="${repo_root}/infra/workspace-edge"
-  export TF_DATA_DIR="${proof_dir}/terraform" TF_IN_AUTOMATION=1
-  run terraform -chdir="$dir" init -input=false -lockfile=readonly \
-    -backend-config="bucket=${state_bucket}" \
-    -backend-config="prefix=${edge_prefix}"
-  run terraform -chdir="$dir" "$action" -input=false -auto-approve \
-    -var "project_id=${project_id}" \
-    -var "stage=${stage}" \
-    -var "region=${region}" \
-    -var "web_service_name=${web_service}" \
-    -var 'domains=[]' \
-    -var static_cdn_enabled=false \
-    -var waf_preview=true \
-    -var enable_https=false
-}
-
 # One state-bucket object's live metadata from the Cloud Storage JSON API,
 # as JSON with the requested fields, or "absent" only when the service
 # answers 404 "No such object" for this very object. An authentication,
@@ -520,8 +507,8 @@ take_inventory() {
 }
 
 # What counts as a proof resource in each class. The shared state bucket,
-# WIF, deployer, the Terraform state file and release record history are
-# preserved by design and not matched.
+# WIF, deployer and release record history are preserved by design and not
+# matched.
 proof_pattern() {
   case "$1" in
     run-services) echo '^workspace-' ;;
@@ -684,18 +671,64 @@ phase_deliver_v1() {
   expect_no_op_plan
 }
 
-# The web service only admits load-balancer traffic (ingress
+# Both backends enforce the stack's Cloud Armor policy, with the sandbox's
+# WAF rules in preview and the auth throttle enforced.
+verify_edge_security() {
+  local backend attached rules
+  for backend in "${edge_backend_services[@]}"; do
+    attached="$(capture "projects/${project_id}/global/securityPolicies/${edge_security_policy}" \
+      gcloud compute backend-services describe "$backend" --global --project="$project_id" \
+      --format='value(securityPolicy)')" ||
+      fail "backend service ${backend} is unreadable; its Cloud Armor policy is unverified"
+    expect_equal "${backend} Cloud Armor policy" "${attached##*/}" "$edge_security_policy"
+  done
+  rules="$(capture '{"rules":[]}' gcloud compute security-policies describe "$edge_security_policy" \
+    --project="$project_id" --format='json(rules)')" ||
+    fail "Cloud Armor policy ${edge_security_policy} is unreadable"
+  if $dry_run; then
+    echo "  expect WAF rules 1000 and 1010 in preview and the 2000 auth throttle enforced" >&2
+    return 0
+  fi
+  jq -e '[.rules[]? | select(.priority == 1000 or .priority == 1010)
+      | select(.action == "deny(403)" and .preview == true)] | length == 2' >/dev/null <<<"$rules" ||
+    fail "Cloud Armor policy ${edge_security_policy} lacks the WAF rules in preview"
+  jq -e '[.rules[]? | select(.priority == 2000 and .action == "throttle" and .preview != true)]
+      | length == 1' >/dev/null <<<"$rules" ||
+    fail "Cloud Armor policy ${edge_security_policy} does not enforce the auth throttle"
+  echo "both backends enforce ${edge_security_policy}: WAF rules in preview, auth throttle enforced"
+}
+
+# deliver-v1 declared the edge with the first release, in the same locked
+# apply; the outputs that apply persisted name it. Reading them back writes
+# nothing. The web service only admits load-balancer traffic (ingress
 # INTERNAL_LOAD_BALANCER), so every HTTP check goes through this edge.
-phase_edge_apply() {
-  terraform_edge apply
-  local dir="${repo_root}/infra/workspace-edge" protocol ip
-  protocol="$(capture http terraform -chdir="$dir" output -raw edge_protocol)"
-  expect_equal "edge protocol" "$protocol" http
-  ip="$(capture 198.51.100.10 terraform -chdir="$dir" output -raw edge_ip_address)"
+phase_edge_readback() {
+  local placeholder="" outputs ip
+  $dry_run && placeholder="$(jq -cn --arg filter "$dry_run_exclusion_filter" \
+    --arg policy "$edge_security_policy" --arg dynamic "${edge_backend_services[0]}" \
+    --arg static "${edge_backend_services[1]}" '{edgeIpAddress: "198.51.100.10",
+      edgeProtocol: "http", securityPolicy: $policy,
+      backendServices: {dynamic: $dynamic, static: $static},
+      tokenRouteExclusionFilter: $filter}')"
+  outputs="$(capture "$placeholder" gcloud storage cat "gs://${state_bucket}/${stack_output_object}")" ||
+    fail "the stack's persisted outputs are unreadable; the edge is unverified"
+  # Only the edge's outputs are kept: the rest of the stack's never reach
+  # the proof artifact.
+  jq '{edgeIpAddress, edgeProtocol, securityPolicy, backendServices, tokenRouteExclusionFilter}' \
+    <<<"$outputs" >"$edge_outputs_file" 2>/dev/null ||
+    fail "the stack's persisted outputs are not JSON"
+  expect_equal "edge protocol" "$(jq -r '.edgeProtocol' "$edge_outputs_file")" http
+  expect_equal "edge Cloud Armor policy" "$(jq -r '.securityPolicy' "$edge_outputs_file")" "$edge_security_policy"
+  expect_equal "edge dynamic backend" "$(jq -r '.backendServices.dynamic' "$edge_outputs_file")" "${edge_backend_services[0]}"
+  expect_equal "edge static backend" "$(jq -r '.backendServices.static' "$edge_outputs_file")" "${edge_backend_services[1]}"
+  ip="$(jq -r '.edgeIpAddress // empty' "$edge_outputs_file")"
+  [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] ||
+    fail "the stack outputs no edge IP address; deliver-v1 must declare the edge"
   record_value "$edge_file" EDGE_IP "$ip"
-  capture "$dry_run_exclusion_filter" terraform -chdir="$dir" output -raw token_route_exclusion_filter \
-    >"$exclusion_filter_file" || fail "the edge reports no token-route exclusion filter"
-  run terraform -chdir="$dir" output -json
+  jq -r '.tokenRouteExclusionFilter // empty' "$edge_outputs_file" >"$exclusion_filter_file"
+  [[ -n "$(cat "$exclusion_filter_file")" ]] ||
+    fail "the edge reports no token-route exclusion filter"
+  verify_edge_security
   expect_serving v1
   local robots
   robots="$(capture 'text/plain' curl -fsS -o /dev/null -w '%{content_type}' "http://${ip}/robots.txt")"
@@ -1016,7 +1049,7 @@ phase_restore_v1() {
 # Every enabled sink that receives this project's logs must drop
 # token-route request logs before a marker is sent: the project's own sinks
 # and any folder or organization sink that includes or intercepts its
-# children. _Default is covered by the Terraform project exclusion, every
+# children. _Default is covered by the stack's project exclusion, every
 # other sink by an enabled sink exclusion with the same filter. _Required
 # carries only audit logs and cannot be changed. An unreadable level, or a
 # sink whose filter could match without that exclusion, fails the proof.
@@ -1051,7 +1084,7 @@ verify_log_routing() {
       '$known[0] + [.[] | . + {parent: $parent, level: "ancestor"}]' <<<"$sinks" >"${dir}/sinks.next"
     mv "${dir}/sinks.next" "${dir}/sinks.json"
   done < <(jq -r '.[] | [.id, .type] | @tsv' <<<"$ancestors")
-  # The live project exclusion must be the filter Terraform applied, and
+  # The live project exclusion must be the filter the stack outputs, and
   # that filter must name both request sources and every token route.
   local expected live source route
   expected="$(cat "$exclusion_filter_file" 2>/dev/null)" ||
@@ -1067,7 +1100,7 @@ verify_log_routing() {
     'map(select(.name == $name and .disabled != true)) | first | .filter // empty' \
     "${dir}/project-exclusions.json")"
   [[ "$live" == "$expected" ]] ||
-    fail "the enabled project exclusion ${edge_exclusion} does not apply the Terraform token-route filter"
+    fail "the enabled project exclusion ${edge_exclusion} does not apply the stack's token-route filter"
   local uncovered
   uncovered="$(jq -r --arg name "$edge_exclusion" --slurpfile exclusions "${dir}/project-exclusions.json" '
     ($exclusions[0] | map(select(.name == $name and .disabled != true)) | first | .filter) as $filter
@@ -1196,12 +1229,9 @@ phase_edge_privacy() {
   echo "marker absent from every Cloud Trace span of the last hour"
 }
 
-phase_edge_destroy() {
-  terraform_edge destroy
-}
-
-# Scoped destroy of exactly the sandbox stack, under the writer lock. The
-# state bucket, WIF, deployer and Terraform state stay; the release record's
+# Scoped destroy of exactly the sandbox stack, edge included, under the
+# writer lock. Alchemy removes the edge before the web service its endpoint
+# group names. The state bucket, WIF and deployer stay; the release record's
 # live object and the proof run record are removed so the next proof starts
 # empty, and their generations stay as noncurrent history in the versioned
 # bucket. A refused lock or a failed destroy stops here: nothing is ever
@@ -1277,7 +1307,7 @@ run_phase() {
     foundation) phase_foundation ;;
     images) phase_images ;;
     deliver-v1) phase_deliver_v1 ;;
-    edge-apply) phase_edge_apply ;;
+    edge-readback) phase_edge_readback ;;
     deliver-v2) phase_deliver_v2 ;;
     drift) phase_drift ;;
     interrupt-recover) phase_interrupt_recover ;;
@@ -1286,7 +1316,6 @@ run_phase() {
     state-restore-locked) phase_state_restore_locked ;;
     restore-v1) phase_restore_v1 ;;
     edge-privacy) phase_edge_privacy ;;
-    edge-destroy) phase_edge_destroy ;;
     stack-destroy) phase_stack_destroy ;;
     post-destroy-inventory) phase_post_destroy_inventory ;;
     *) usage ;;

@@ -85,7 +85,7 @@ const realBun = process.execPath;
 const realDate = Bun.which("date") ?? "/bin/date";
 const realSetsid = Bun.which("setsid") ?? "/usr/bin/setsid";
 const realSleep = Bun.which("sleep") ?? "/bin/sleep";
-const fakeTools = ["gcloud", "bun", "curl", "docker", "terraform"];
+const fakeTools = ["gcloud", "bun", "curl", "docker"];
 
 /**
  * `date +%s` and `date -u +%s` read the fake clock; any other form is the
@@ -225,6 +225,15 @@ const fakeStorage = (
             crc32c_hash: object.generations[object.live],
           })
     );
+    return 0;
+  }
+  if (verb === "cat") {
+    const content = world.files?.[objectName(positional[2] ?? "")];
+    if (content === undefined) {
+      console.error("ERROR: One or more URLs matched no objects.");
+      return 1;
+    }
+    process.stdout.write(content);
     return 0;
   }
   if (verb === "cp" || verb === "rm") {

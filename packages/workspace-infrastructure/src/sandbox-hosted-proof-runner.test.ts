@@ -705,8 +705,180 @@ describe("interrupting a deliver mid-apply", () => {
   });
 });
 
+describe("edge readback from the stack outputs", () => {
+  const outputObject = `${stackPrefix}__stack_output__.json`;
+  const filter =
+    '(resource.type="http_load_balancer" OR (resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests"))) AND httpRequest.requestUrl=~"^https?://[^/]+(/app/auth/callback)([/?#]|$)"';
+  const policy = "workspace-sandbox-edge";
+  const edgeOutputs = {
+    edgeIpAddress: "203.0.113.7",
+    edgeProtocol: "http",
+    securityPolicy: policy,
+    backendServices: {
+      dynamic: "workspace-sandbox-dynamic",
+      static: "workspace-sandbox-static",
+    },
+    tokenRouteExclusionFilter: filter,
+  };
+  const policyLink = `https://www.googleapis.com/compute/v1/projects/${projectId}/global/securityPolicies/${policy}`;
+  const policyRules = [
+    { priority: 1000, action: "deny(403)", preview: true },
+    { priority: 1010, action: "deny(403)", preview: true },
+    { priority: 2000, action: "throttle" },
+    { priority: 2147483647, action: "allow" },
+  ];
+  const liveEdge = (
+    overrides: ReadonlyArray<FakeRule> = []
+  ): ReadonlyArray<FakeRule> => [
+    ...overrides,
+    {
+      tool: "gcloud",
+      pattern: "^compute backend-services describe workspace-sandbox-",
+      stdout: policyLink,
+    },
+    {
+      tool: "gcloud",
+      pattern: `^compute security-policies describe ${policy} `,
+      stdout: JSON.stringify({ rules: policyRules }),
+    },
+    {
+      tool: "curl",
+      pattern: "http://203\\.0\\.113\\.7/healthz$",
+      stdout: JSON.stringify({ status: "ok", version: "v1" }),
+    },
+    {
+      tool: "curl",
+      pattern: "http://203\\.0\\.113\\.7/robots\\.txt$",
+      stdout: "text/plain; charset=utf-8",
+    },
+  ];
+  const readback = (
+    outputs: Record<string, unknown> | null,
+    overrides: ReadonlyArray<FakeRule> = []
+  ) =>
+    withProofFakes(
+      {
+        rules: liveEdge(overrides),
+        files:
+          outputs === null
+            ? {}
+            : // The rest of the stack's outputs persist beside the edge's.
+              {
+                [outputObject]: JSON.stringify({
+                  services: { webServiceId: "workspace-web" },
+                  ...outputs,
+                }),
+              },
+      },
+      (fakes) => {
+        const result = runPhase(fakes, "edge-readback");
+        const read = (name: string) =>
+          existsSync(join(fakes.proofDir, name))
+            ? readFileSync(join(fakes.proofDir, name), "utf8")
+            : null;
+        return {
+          ...result,
+          edgeEnv: read("edge.env"),
+          filter: read("edge-exclusion-filter.txt"),
+          kept: read("edge-outputs.json"),
+          calls: fakes.calls(),
+        };
+      }
+    );
+
+  test("records the edge the locked deploy output and checks v1 through it", () => {
+    const { exitCode, output, edgeEnv, filter: recorded, kept, calls } =
+      readback(edgeOutputs);
+    expect({ exitCode, output: exitCode === 0 ? "" : output }).toEqual({
+      exitCode: 0,
+      output: "",
+    });
+    expect(edgeEnv).toBe("EDGE_IP=203.0.113.7\n");
+    // Byte for byte what the privacy phase compares the live exclusion to.
+    expect(recorded).toBe(`${filter}\n`);
+    expect(JSON.parse(kept ?? "null")).toEqual(edgeOutputs);
+    expect(calls).toContain(
+      `gcloud storage cat gs://${stateBucket}/${outputObject}`
+    );
+    // Reading back writes nothing: no deploy, destroy or upload.
+    expect(
+      calls.filter((call) =>
+        /release\.run\.ts (deliver|deploy)|sandbox-locked-stack|storage (cp|rm)/.test(
+          call
+        )
+      )
+    ).toEqual([]);
+  });
+
+  test("fails when the stack declared no edge", () => {
+    const { edgeIpAddress: _, ...withoutIp } = edgeOutputs;
+    for (const outputs of [null, {}, withoutIp]) {
+      const { exitCode, edgeEnv } = readback(outputs);
+      expect({ outputs, exitCode, edgeEnv }).toEqual({
+        outputs,
+        exitCode: 1,
+        edgeEnv: null,
+      });
+    }
+  });
+
+  test("fails on an HTTPS edge or edge names the proof would not inventory", () => {
+    for (const outputs of [
+      { ...edgeOutputs, edgeProtocol: "https" },
+      { ...edgeOutputs, securityPolicy: "other-policy" },
+      {
+        ...edgeOutputs,
+        backendServices: { ...edgeOutputs.backendServices, static: "other" },
+      },
+      { ...edgeOutputs, tokenRouteExclusionFilter: "" },
+    ]) {
+      expect(readback(outputs).exitCode).toBe(1);
+    }
+  });
+
+  test("fails unless both backends enforce the policy as declared", () => {
+    const detached: FakeRule = {
+      tool: "gcloud",
+      pattern: "^compute backend-services describe workspace-sandbox-static",
+      stdout: "",
+    };
+    const unreadable: FakeRule = {
+      tool: "gcloud",
+      pattern: "^compute backend-services describe workspace-sandbox-dynamic",
+      exit: 1,
+    };
+    const rules = (next: ReadonlyArray<unknown>): FakeRule => ({
+      tool: "gcloud",
+      pattern: "^compute security-policies describe",
+      stdout: JSON.stringify({ rules: next }),
+    });
+    for (const override of [
+      detached,
+      unreadable,
+      // A WAF rule enforced instead of previewed.
+      rules(
+        policyRules.map((rule) =>
+          rule.priority === 1010 ? { ...rule, preview: false } : rule
+        )
+      ),
+      // The auth throttle only previewed, or missing.
+      rules(
+        policyRules.map((rule) =>
+          rule.priority === 2000 ? { ...rule, preview: true } : rule
+        )
+      ),
+      rules(policyRules.filter((rule) => rule.priority !== 2000)),
+    ]) {
+      const { exitCode, calls } = readback(edgeOutputs, [override]);
+      expect({ override, exitCode }).toEqual({ override, exitCode: 1 });
+      // No request is sent through an unverified edge.
+      expect(calls.some((call) => call.startsWith("curl"))).toBe(false);
+    }
+  });
+});
+
 describe("token-route privacy and telemetry", () => {
-  // The filter Terraform builds in infra/workspace-edge/request-log-exclusions.tf.
+  // A token-route exclusion filter as the stack's edge outputs it.
   const lbSource = 'resource.type="http_load_balancer"';
   const runSource =
     'resource.type="cloud_run_revision" AND log_id("run.googleapis.com/requests")';
@@ -905,7 +1077,7 @@ describe("token-route privacy and telemetry", () => {
     }
   });
 
-  test("sends no marker unless the live exclusion is the full Terraform filter", () => {
+  test("sends no marker unless the live exclusion is the stack's full filter", () => {
     const liveExclusion = (filter: string): FakeRule => ({
       tool: "curl",
       pattern: "logging\\.googleapis\\.com/v2/projects/.*/exclusions",
@@ -914,11 +1086,11 @@ describe("token-route privacy and telemetry", () => {
     const withoutCloudRun = `${lbSource} AND httpRequest.requestUrl=~"^https?://[^/]+(${routes})([/?#]|$)"`;
     const withoutRoute = exclusionFilter.replace("/app/auth/callback|", "");
     for (const [overrides, recorded] of [
-      // No filter recorded by the edge apply.
+      // No filter recorded by the edge readback.
       [[], null],
-      // The live exclusion differs from what Terraform applied.
+      // The live exclusion differs from what the stack outputs.
       [[liveExclusion(withoutCloudRun)], exclusionFilter],
-      // Terraform's own filter misses Cloud Run request logs or a route.
+      // The stack's own filter misses Cloud Run request logs or a route.
       [[liveExclusion(withoutCloudRun)], withoutCloudRun],
       [[liveExclusion(withoutRoute)], withoutRoute],
     ] satisfies ReadonlyArray<[ReadonlyArray<FakeRule>, string | null]>) {

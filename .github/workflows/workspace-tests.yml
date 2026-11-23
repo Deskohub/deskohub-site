@@ -133,23 +133,6 @@ jobs:
       - name: Lint and test the Workspace infrastructure
         run: bun turbo lint test --filter=@deskohub/workspace-infrastructure
 
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
-        with:
-          terraform_version: 1.17.2
-          terraform_wrapper: false
-
-      # Offline: no backend and no cloud credentials. Init installs only the
-      # providers the committed lock file pins, and Terraform's working data
-      # stays outside the checkout.
-      - name: Validate the Workspace edge Terraform
-        env:
-          TF_DATA_DIR: ${{ runner.temp }}/workspace-edge-terraform
-          TF_IN_AUTOMATION: "1"
-        run: |
-          terraform fmt -check -recursive infra/workspace-edge
-          terraform -chdir=infra/workspace-edge init -backend=false -lockfile=readonly -input=false
-          terraform -chdir=infra/workspace-edge validate
-
   # A shard task's cache key covers its own inputs, its dependencies' and the
   # $TURBO_ROOT$ files it declares. futureFlags.affectedUsingTaskInputs in
   # turbo.json makes --affected match changed files against exactly those
