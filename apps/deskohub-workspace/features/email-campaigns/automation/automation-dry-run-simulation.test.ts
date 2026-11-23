@@ -480,6 +480,24 @@ describe("simulateRun at a Send step with delivery policies", () => {
       ]);
     });
 
+    test("a customer already sent once is skipped exactly after an approximate row", () => {
+      const rows = replayRows(
+        sendWith({ oncePerCustomer: true }),
+        { alreadySentOnce: true },
+        ["2026-10-10T10:01:00Z", "2026-10-12T10:01:00Z"],
+        Option.some(at("2026-10-11T00:00:00Z"))
+      ).map(({ outcome, reservationStatusesApproximate }) => [
+        outcome.outcome,
+        outcome.skipReason,
+        reservationStatusesApproximate,
+      ]);
+
+      expect(rows).toEqual([
+        ["skipped", "already-sent-once", true],
+        ["skipped", "already-sent-once", false],
+      ]);
+    });
+
     test("a skipped send claims nothing for the later events", () => {
       expect(
         replayWith(

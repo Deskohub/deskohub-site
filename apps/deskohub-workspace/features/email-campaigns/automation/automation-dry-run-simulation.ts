@@ -337,7 +337,8 @@ export type ReplayApproximation = {
  * so it could hold off any event up to the latest its run can end, and it
  * might really have sent, or not, before any later decided row: that
  * changes every later row when the flow counts this campaign's sends, and
- * every later row reaching a once-per-customer Send step.
+ * every later row reaching a once-per-customer Send step unless the
+ * campaign already sent the customer its email.
  */
 export const replayCustomerEvents = <Event, E, R>(input: {
   /** In `occurredAt` order. */
@@ -361,7 +362,10 @@ export const replayCustomerEvents = <Event, E, R>(input: {
     sendStepOf(input.steps),
     (step) => step.oncePerCustomer === true
   );
+  // A customer the campaign already sent once is skipped whatever the
+  // simulated sends did.
   const decidedByOncePerCustomer = (outcome: DecidedEvent["outcome"]) =>
+    input.sendPolicyFacts?.alreadySentOnce !== true &&
     Option.exists(oncePerCustomerSend, (step) => outcome.stepId === step.id);
   const beforeUndatedChange = (triggerAt: Temporal.Instant) =>
     Option.exists(
