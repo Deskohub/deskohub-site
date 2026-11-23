@@ -130,17 +130,26 @@ describe("workspace edge Terraform", () => {
     ]) {
       expect(all).toContain(route);
     }
-    const locales = (await Bun.file(
+    expect(all).toContain('"/api/email-campaigns/unsubscribe"');
+    // Every locale prefix in the Workspace router matches the generic one.
+    const vercel = (await Bun.file(
       new URL("../../../apps/deskohub-workspace/vercel.json", import.meta.url)
     ).json()) as { routes: ReadonlyArray<{ src: string }> };
-    const localized = locales.routes
-      .map((route) => route.src.match(/^\^\/\(\?:([^)]*)\)/)?.[1])
-      .find((match) => match?.includes("en-US"));
-    expect(all).toContain(
-      `workspace_locales = [${(localized ?? "")
-        .split("|")
-        .map((locale) => `"${locale}"`)
-        .join(", ")}]`
+    const locales =
+      vercel.routes
+        .map((route) => route.src.match(/^\^\/\(\?:([^)]*)\)/)?.[1])
+        .find((match) => match?.includes("en-US"))
+        ?.split("|") ?? [];
+    expect(locales.length).toBeGreaterThan(0);
+    for (const locale of locales) {
+      expect(`/${locale}`).toMatch(/^\/[a-z]{2,3}-[A-Z]{2}$/);
+    }
+    expect(all).toContain('locale_prefix = "(/[a-z]{2,3}-[A-Z]{2})?"');
+  });
+
+  test("keeps request logging off on the dynamic backend", () => {
+    expect(resourceBlock("google_compute_backend_service", "dynamic")).toMatch(
+      /log_config \{\s*enable = false\s*\}/
     );
   });
 });

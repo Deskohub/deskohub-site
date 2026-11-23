@@ -24,7 +24,9 @@ resource "google_compute_region_network_endpoint_group" "web" {
   }
 }
 
-# Dynamic pages, Server Actions, auth and API routes. Never cached.
+# Dynamic pages, Server Actions, auth and API routes. Never cached. Its
+# request logging stays off until token routes move to their own no-log,
+# Armor-protected backend, so token URLs never reach the load balancer log.
 resource "google_compute_backend_service" "dynamic" {
   name                  = "workspace-${var.stage}-dynamic"
   load_balancing_scheme = "EXTERNAL_MANAGED"
@@ -37,8 +39,7 @@ resource "google_compute_backend_service" "dynamic" {
   }
 
   log_config {
-    enable      = true
-    sample_rate = 1
+    enable = false
   }
 }
 

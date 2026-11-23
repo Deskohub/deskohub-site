@@ -7,14 +7,20 @@
 # trusts GitHub Actions only for the protected sandbox environment of the
 # trusted workflow, creates the versioned state bucket, and prints the
 # `gh variable set` commands for the repository maintainer. It never reads,
-# writes or prints a secret value. Rerunning it is safe.
+# writes or prints a secret value. Rerunning it is safe and converges.
+#
+# It runs in two phases. The first grants the deploy identity only the
+# read access the smoke workflow needs. After the smoke workflow passes and
+# a run outside the trusted workflow or environment is confirmed denied,
+# rerun with --grant-deploy-roles to grant deployment permissions.
 #
 # Usage:
 #   bootstrap-sandbox-wif.sh \
 #     --project-id <id> --github-repository <owner>/<name> \
 #     --github-owner-id <numeric id> --github-repository-id <numeric id> \
 #     --max-spend <amount> --currency <ISO 4217> --teardown-date <YYYY-MM-DD> \
-#     [--region europe-west1] [--project-number <number>] [--dry-run]
+#     [--region europe-west1] [--project-number <number>] \
+#     [--grant-deploy-roles] [--managed-secret <secret id>]... [--dry-run]
 #
 # Numeric GitHub IDs: gh api repos/<owner>/<name> --jq '.owner.id, .id'
 # --dry-run prints every command instead of running it.
@@ -29,6 +35,8 @@ trusted_ref="refs/heads/main"
 pool_id="workspace-sandbox-github"
 provider_id="deskohub-workspace"
 dry_run=false
+grant_deploy_roles=false
+managed_secrets=()
 project_id=""
 project_number=""
 github_repository=""
@@ -39,7 +47,7 @@ currency=""
 teardown_date=""
 
 usage() {
-  sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -59,6 +67,8 @@ while [[ $# -gt 0 ]]; do
     --max-spend) max_spend="${2:-}"; shift 2 ;;
     --currency) currency="${2:-}"; shift 2 ;;
     --teardown-date) teardown_date="${2:-}"; shift 2 ;;
+    --grant-deploy-roles) grant_deploy_roles=true; shift ;;
+    --managed-secret) managed_secrets+=("${2:-}"); shift 2 ;;
     --dry-run) dry_run=true; shift ;;
     -h | --help) usage ;;
     *) fail "unknown argument: $1" ;;
@@ -73,6 +83,9 @@ done
 [[ "$max_spend" =~ ^[1-9][0-9]*$ ]] || fail "--max-spend must be a whole amount"
 [[ "$currency" =~ ^[A-Z]{3}$ ]] || fail "--currency must be an ISO 4217 code"
 [[ "$teardown_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || fail "--teardown-date must be YYYY-MM-DD"
+for secret_id in "${managed_secrets[@]}"; do
+  [[ "$secret_id" =~ ^[A-Za-z0-9_-]{1,255}$ ]] || fail "--managed-secret must be a Secret Manager secret ID"
+done
 if [[ -n "$project_number" && ! "$project_number" =~ ^[1-9][0-9]{5,19}$ ]]; then
   fail "--project-number must be numeric"
 fi
@@ -137,31 +150,6 @@ for account in workspace-deployer "${runtime_accounts[@]}" "${invoker_accounts[@
     --display-name "Workspace ${account#workspace-}"
 done
 
-echo "== Deployer project roles"
-for role in roles/run.admin roles/cloudtasks.admin roles/cloudscheduler.admin \
-  roles/artifactregistry.admin roles/storage.admin roles/monitoring.alertPolicyEditor \
-  roles/compute.loadBalancerAdmin roles/compute.securityAdmin \
-  roles/logging.configWriter roles/browser roles/serviceusage.serviceUsageConsumer; do
-  run gcloud projects add-iam-policy-binding "$project_id" --condition=None --quiet \
-    --member "serviceAccount:${deployer}" --role "$role" --format=none
-done
-
-# Grants on individual secrets need setIamPolicy, not secret access.
-exists gcloud iam roles describe workspaceSecretIamManager --project "$project_id" ||
-  run gcloud iam roles create workspaceSecretIamManager --project "$project_id" \
-  --title "Workspace secret IAM manager" \
-  --permissions secretmanager.secrets.get,secretmanager.secrets.getIamPolicy,secretmanager.secrets.setIamPolicy
-run gcloud projects add-iam-policy-binding "$project_id" --condition=None --quiet \
-  --member "serviceAccount:${deployer}" \
-  --role "projects/${project_id}/roles/workspaceSecretIamManager" --format=none
-
-echo "== Deployer may attach only the Workspace runtime and invoker accounts"
-for account in "${runtime_accounts[@]}" "${invoker_accounts[@]}"; do
-  run gcloud iam service-accounts add-iam-policy-binding "$(sa_email "$account")" \
-    --project "$project_id" --member "serviceAccount:${deployer}" \
-    --role roles/iam.serviceAccountUser --format=none
-done
-
 echo "== Runtime accounts may enqueue Cloud Tasks as the tasks invoker"
 for account in "${runtime_accounts[@]}"; do
   run gcloud projects add-iam-policy-binding "$project_id" --condition=None --quiet \
@@ -218,7 +206,47 @@ echo "== Versioned state bucket"
 exists gcloud storage buckets describe "gs://${state_bucket}" ||
   run gcloud storage buckets create "gs://${state_bucket}" --project "$project_id" \
   --location "$region" --uniform-bucket-level-access --public-access-prevention
-run gcloud storage buckets update "gs://${state_bucket}" --versioning
+run gcloud storage buckets update "gs://${state_bucket}" --versioning \
+  --uniform-bucket-level-access --public-access-prevention
+
+echo "== Smoke-check access for the deploy identity (read only)"
+run gcloud projects add-iam-policy-binding "$project_id" --condition=None --quiet \
+  --member "serviceAccount:${deployer}" --role roles/browser --format=none
+run gcloud storage buckets add-iam-policy-binding "gs://${state_bucket}" \
+  --member "serviceAccount:${deployer}" --role roles/storage.legacyBucketReader --format=none
+
+if [[ "$grant_deploy_roles" == true ]]; then
+  echo "== Deployer project roles"
+  for role in roles/run.admin roles/cloudtasks.admin roles/cloudscheduler.admin \
+    roles/artifactregistry.admin roles/storage.admin roles/monitoring.alertPolicyEditor \
+    roles/compute.loadBalancerAdmin roles/compute.securityAdmin \
+    roles/logging.configWriter roles/serviceusage.serviceUsageConsumer; do
+    run gcloud projects add-iam-policy-binding "$project_id" --condition=None --quiet \
+      --member "serviceAccount:${deployer}" --role "$role" --format=none
+  done
+
+  # Grants on individual secrets need setIamPolicy, not secret access.
+  exists gcloud iam roles describe workspaceSecretIamManager --project "$project_id" ||
+    run gcloud iam roles create workspaceSecretIamManager --project "$project_id" \
+    --title "Workspace secret IAM manager" \
+    --permissions secretmanager.secrets.get,secretmanager.secrets.getIamPolicy,secretmanager.secrets.setIamPolicy
+  # Bound on each managed secret only, never project-wide.
+  for secret_id in "${managed_secrets[@]}"; do
+    run gcloud secrets add-iam-policy-binding "$secret_id" --project "$project_id" \
+      --member "serviceAccount:${deployer}" \
+      --role "projects/${project_id}/roles/workspaceSecretIamManager" --format=none
+  done
+
+  echo "== Deployer may attach only the Workspace runtime and invoker accounts"
+  for account in "${runtime_accounts[@]}" "${invoker_accounts[@]}"; do
+    run gcloud iam service-accounts add-iam-policy-binding "$(sa_email "$account")" \
+      --project "$project_id" --member "serviceAccount:${deployer}" \
+      --role roles/iam.serviceAccountUser --format=none
+  done
+else
+  echo "== Deploy roles not granted"
+  echo "Run the smoke workflow, confirm an untrusted identity is denied, then rerun with --grant-deploy-roles."
+fi
 
 cat <<EOF
 

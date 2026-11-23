@@ -70,6 +70,8 @@ export type CompatibleDeployment = typeof CompatibleDeployment.Type;
 export const PendingApply = Schema.Struct({
   operation: Schema.Literals(["promote", "restore"]),
   target: ReleaseDeployment,
+  /** The traffic generation the apply writes to the service. */
+  trafficGeneration: Schema.Int.check(Schema.isGreaterThan(0)),
   startedAt: Instant,
 }).annotate({ identifier: "PendingApply" });
 export type PendingApply = typeof PendingApply.Type;
@@ -81,6 +83,17 @@ export type PendingApply = typeof PendingApply.Type;
  */
 export const ReleaseRecord = Schema.Struct({
   generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /**
+   * Advances only when traffic is meant to change. Every service apply
+   * stamps it on the service, so readback can tell a delayed write from an
+   * older run apart from the current intent.
+   */
+  trafficGeneration: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /**
+   * The revision template Cloud Run last created. Promote and restore keep
+   * it, so they change traffic only and never re-create a revision.
+   */
+  materialized: Schema.NullOr(ReleaseDeployment),
   active: Schema.NullOr(VerifiedDeployment),
   previous: Schema.NullOr(VerifiedDeployment),
   /**
@@ -95,6 +108,8 @@ export type ReleaseRecord = typeof ReleaseRecord.Type;
 
 export const emptyReleaseRecord: ReleaseRecord = {
   generation: 0,
+  trafficGeneration: 0,
+  materialized: null,
   active: null,
   previous: null,
   candidate: null,

@@ -209,7 +209,7 @@ export class WorkspaceStackConfigInvalid extends Data.TaggedError(
   "WorkspaceStackConfigInvalid"
 )<{
   readonly paths: ReadonlyArray<string>;
-  readonly reason: "schema" | "secret-material";
+  readonly reason: "schema" | "secret-material" | "identity";
 }> {
   override get message() {
     return `Workspace stack configuration is invalid (${this.reason}) at: ${this.paths.join(", ")}`;
@@ -279,10 +279,10 @@ export const decodeWorkspaceStackConfig = (input: unknown) =>
         reason: "secret-material",
       });
     }
-    return yield* Schema.decodeUnknownEffect(WorkspaceStackConfig)(input, {
-      onExcessProperty: "error",
-      errors: "all",
-    }).pipe(
+    const config = yield* Schema.decodeUnknownEffect(WorkspaceStackConfig)(
+      input,
+      { onExcessProperty: "error", errors: "all" }
+    ).pipe(
       Effect.mapError(
         (error) =>
           new WorkspaceStackConfigInvalid({
@@ -291,7 +291,32 @@ export const decodeWorkspaceStackConfig = (input: unknown) =>
           })
       )
     );
+    const identityPaths = serviceAccountProblems(config);
+    if (identityPaths.length > 0) {
+      return yield* new WorkspaceStackConfigInvalid({
+        paths: identityPaths,
+        reason: "identity",
+      });
+    }
+    return config;
   });
+
+/**
+ * Each role has its own service account, and every account lives in the
+ * stage's own project, so one stage's identity never acts in another.
+ */
+const serviceAccountProblems = (config: WorkspaceStackConfig) => {
+  const entries = Object.entries(config.serviceAccounts);
+  return entries
+    .filter(
+      ([role, email]) =>
+        !email.endsWith(`@${config.projectId}.iam.gserviceaccount.com`) ||
+        entries.some(
+          ([other, otherEmail]) => other !== role && otherEmail === email
+        )
+    )
+    .map(([role]) => `serviceAccounts.${role}`);
+};
 
 /**
  * The configuration as it may appear in logs, plans and stack outputs.

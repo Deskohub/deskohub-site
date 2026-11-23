@@ -45,11 +45,14 @@ export const workloadRuntimeServiceAccount = (
   }
 };
 
-/** A distinct OIDC audience per private worker and project (#1456). */
+/**
+ * The OIDC audience for a private worker: its deterministic HTTPS URL, which
+ * Cloud Run accepts natively and which differs per worker and project.
+ */
 export const workloadAudience = (
   config: WorkspaceStackConfig,
   workload: WorkspaceWorkload
-) => `workspace:${config.projectId}:${workloadServiceIds[workload]}`;
+) => workloadUrl(config, workload);
 
 /** The image reference, pinned by digest; Cloud Run never resolves a tag. */
 export const workspaceImageReference = (

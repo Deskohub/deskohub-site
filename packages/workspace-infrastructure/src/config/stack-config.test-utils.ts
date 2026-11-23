@@ -59,3 +59,8 @@ const { budget: _budget, ...sharedInput } = sandboxConfigInput;
 export const productionConfig: WorkspaceStackConfig = Effect.runSync(
   decodeWorkspaceStackConfig({ ...sharedInput, stage: "production" })
 );
+
+/** The same synthetic identifiers as a preview stage. */
+export const previewConfig: WorkspaceStackConfig = Effect.runSync(
+  decodeWorkspaceStackConfig({ ...sharedInput, stage: "preview" })
+);

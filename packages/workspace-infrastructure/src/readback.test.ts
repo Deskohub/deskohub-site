@@ -5,7 +5,9 @@ import {
   type ObservedService,
   serviceReadbackDrift,
   trafficReadback,
+  webTrafficDrift,
 } from "./readback";
+import { emptyReleaseRecord } from "./release/release-record";
 
 const digest = ImageDigest.make(`sha256:${"1".repeat(64)}`);
 const healthyWorker: ObservedService = {
@@ -21,6 +23,7 @@ const healthyWorker: ObservedService = {
   reconciling: false,
   traffic: [{ revision: "workspace-tasks-worker-00001", percent: 100 }],
   revisionDigests: { "workspace-tasks-worker-00001": digest },
+  annotations: { "deskohub.workspace/traffic-generation": "4" },
 };
 
 describe("stack readback", () => {
@@ -28,6 +31,7 @@ describe("stack readback", () => {
     expect(trafficReadback(healthyWorker)).toEqual({
       servingRevision: "workspace-tasks-worker-00001",
       servingImageDigest: digest,
+      trafficGeneration: 4,
     });
   });
 
@@ -46,6 +50,7 @@ describe("stack readback", () => {
       expect(trafficReadback(observed)).toEqual({
         servingRevision: null,
         servingImageDigest: null,
+        trafficGeneration: 4,
       });
     }
   });
@@ -60,5 +65,24 @@ describe("stack readback", () => {
         invokerIamDisabled: true,
       }).map((drift) => drift.field)
     ).toEqual(["ingress", "invokerIamDisabled", "url"]);
+  });
+
+  test("flags a web service stamped by another traffic generation", () => {
+    const record = { ...emptyReleaseRecord, trafficGeneration: 4 };
+    const web = { ...healthyWorker, workload: "web" as const };
+    expect(webTrafficDrift(record, web)).toEqual([]);
+    expect(
+      webTrafficDrift(record, {
+        ...web,
+        annotations: { "deskohub.workspace/traffic-generation": "3" },
+      })
+    ).toEqual([
+      {
+        workload: "web",
+        field: "trafficGeneration",
+        expected: "4",
+        observed: "3",
+      },
+    ]);
   });
 });

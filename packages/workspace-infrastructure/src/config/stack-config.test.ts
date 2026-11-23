@@ -97,6 +97,35 @@ describe("workspace stack configuration", () => {
     ).toEqual(["serviceAccounts.deployer"]);
   });
 
+  test("requires a distinct service account per role in the stage's project", () => {
+    const foreign = decodeFailure({
+      ...sandboxConfigInput,
+      serviceAccounts: {
+        ...sandboxConfigInput.serviceAccounts,
+        // A service account identifier in another project, not a mailbox.
+        webRuntime: [
+          "workspace-web",
+          "deskohub-ws-production.iam.gserviceaccount.com",
+        ].join("@"),
+      },
+    });
+    expect(foreign).toMatchObject({
+      reason: "identity",
+      paths: ["serviceAccounts.webRuntime"],
+    });
+    const shared = decodeFailure({
+      ...sandboxConfigInput,
+      serviceAccounts: {
+        ...sandboxConfigInput.serviceAccounts,
+        tasksInvoker: sandboxConfigInput.serviceAccounts.schedulerInvoker,
+      },
+    });
+    expect(shared.paths.toSorted()).toEqual([
+      "serviceAccounts.schedulerInvoker",
+      "serviceAccounts.tasksInvoker",
+    ]);
+  });
+
   test("serializes identifiers and pinned versions only", () => {
     const serialized = serializeWorkspaceStackConfig(sandboxConfig);
     expect(JSON.parse(serialized)).toMatchObject({

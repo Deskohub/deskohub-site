@@ -27,7 +27,11 @@ export const workspaceQueueRetry = {
  */
 export type QueueTransportLifetime =
   | { readonly kind: "bounded"; readonly maxRetryDuration: Duration.Duration }
-  | { readonly kind: "provider-default" };
+  | {
+      readonly kind: "provider-default";
+      /** What must be proven before producers may publish to this queue. */
+      readonly activationGate: string;
+    };
 
 export interface QueueContract {
   /** The Vercel queue topic this queue replaces. */
@@ -74,7 +78,11 @@ export const workspaceQueueContracts: ReadonlyArray<QueueContract> = [
     topic: "workspace-email-automation-unit",
     queueId: "workspace-email-automation-unit",
     handlerPath: "/api/queues/workspace/email-automation-unit",
-    transportLifetime: { kind: "provider-default" },
+    transportLifetime: {
+      kind: "provider-default",
+      activationGate:
+        "Read the effective Vercel retention for this topic and approve a business expiry before any producer publishes to the Cloud Tasks queue.",
+    },
     maxScheduleDelay: Duration.zero,
     dispatchDeadline: Duration.seconds(300),
     deliveryKey: "work unit ID + enqueue generation",

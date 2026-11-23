@@ -93,6 +93,7 @@ const release = (
         readback: {
           servingRevision: target?.revision ?? null,
           servingImageDigest: target?.imageDigest ?? null,
+          trafficGeneration: pending.pendingApply?.trafficGeneration ?? null,
         },
         now,
       })
@@ -223,12 +224,25 @@ describe("release reconciler", () => {
       })
     );
     expect(pending.pendingApply?.operation).toBe("restore");
+    // Restore changes traffic only: the template stays the newest revision.
+    const web = webServiceProps(sandboxConfig, pending, later(2));
+    expect(web?.template?.revision).toBe("workspace-web-r4-bbbbbbb");
+    expect(web?.traffic?.[0]).toMatchObject({
+      revision: "workspace-web-r1-aaaaaaa",
+      percent: 100,
+    });
+    expect(web?.annotations).toEqual({
+      "deskohub.workspace/traffic-generation": String(
+        pending.trafficGeneration
+      ),
+    });
     const restored = run(
       settleApply(pending, {
         expectedGeneration: pending.generation,
         readback: {
           servingRevision: "workspace-web-r1-aaaaaaa",
           servingImageDigest: digestA,
+          trafficGeneration: pending.trafficGeneration,
         },
         now: later(2),
       })
@@ -304,11 +318,23 @@ describe("release reconciler", () => {
       {
         servingRevision: "workspace-web-r1-aaaaaaa",
         servingImageDigest: digestA,
+        trafficGeneration: pending.trafficGeneration - 1,
       },
-      { servingRevision: null, servingImageDigest: null },
+      {
+        servingRevision: null,
+        servingImageDigest: null,
+        trafficGeneration: null,
+      },
+      // The target serves, but stamped by an older run's delayed write.
+      {
+        servingRevision: "workspace-web-r4-bbbbbbb",
+        servingImageDigest: digestB,
+        trafficGeneration: pending.trafficGeneration - 1,
+      },
       {
         servingRevision: "workspace-web-r4-bbbbbbb",
         servingImageDigest: digestA,
+        trafficGeneration: pending.trafficGeneration,
       },
     ]) {
       expect(
@@ -332,6 +358,7 @@ describe("release reconciler", () => {
           readback: {
             servingRevision: "workspace-web-r4-bbbbbbb",
             servingImageDigest: digestB,
+            trafficGeneration: pending.trafficGeneration,
           },
           now: later(1.5),
         })

@@ -180,6 +180,34 @@ describe("sandbox bootstrap script", () => {
     );
   });
 
+  test("grants deploy roles only in the second phase and scopes secret IAM", () => {
+    const firstPhase = runBootstrap(...dryRunArgs).stdout.toString();
+    expect(firstPhase).not.toContain("roles/run.admin");
+    expect(firstPhase).not.toContain("workspaceSecretIamManager");
+    expect(firstPhase).toContain("--role roles/browser");
+    expect(firstPhase).toContain(
+      "gcloud storage buckets add-iam-policy-binding gs://deskohub-ws-sandbox-workspace-state"
+    );
+    expect(firstPhase).toContain(
+      "gcloud storage buckets update gs://deskohub-ws-sandbox-workspace-state --versioning --uniform-bucket-level-access --public-access-prevention"
+    );
+
+    const secondPhase = runBootstrap(
+      ...dryRunArgs,
+      "--grant-deploy-roles",
+      "--managed-secret",
+      "workspace-database-url"
+    ).stdout.toString();
+    expect(secondPhase).toContain("--role roles/run.admin");
+    expect(secondPhase).toContain(
+      "gcloud secrets add-iam-policy-binding workspace-database-url --project deskohub-ws-sandbox"
+    );
+    // The secret IAM role is never bound on the project.
+    expect(secondPhase).not.toMatch(
+      /projects add-iam-policy-binding [^\n]*workspaceSecretIamManager/
+    );
+  });
+
   test("prints the gh variable commands and no secret values", () => {
     const output = runBootstrap(...dryRunArgs).stdout.toString();
     const ghCommands = output

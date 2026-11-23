@@ -65,6 +65,10 @@ const container = (
   ],
 });
 
+/** The service annotation carrying the record's traffic generation. */
+export const trafficGenerationAnnotation =
+  "deskohub.workspace/traffic-generation";
+
 /** The release taking untagged traffic: the one being applied, else active. */
 const servingDeployment = (record: ReleaseRecord) =>
   record.pendingApply?.target ?? record.active;
@@ -113,11 +117,11 @@ export const webTraffic = (
  * (`infra/workspace-edge`), and its default URL is off so traffic cannot
  * bypass Cloud Armor.
  *
- * The template is the revision Cloud Run creates next: the pending target,
- * else the candidate, else the active release. A candidate therefore
- * becomes a real zero-traffic revision while the active one keeps serving.
- * Nothing is declared before a release serves: the first release is
- * created by its own promotion.
+ * The template is the candidate, else the revision last materialized; only
+ * the very first release takes its template from the pending promotion. A
+ * candidate therefore becomes a real zero-traffic revision while the active
+ * one keeps serving, and promote and restore change traffic only. Nothing
+ * is declared before a release serves.
  */
 export const webServiceProps = (
   config: WorkspaceStackConfig,
@@ -128,8 +132,7 @@ export const webServiceProps = (
   if (serving === null) {
     return undefined;
   }
-  const template =
-    record.pendingApply?.target ?? record.candidate ?? record.active ?? serving;
+  const template = record.candidate ?? record.materialized ?? serving;
   return {
     serviceId: workloadServiceIds.web,
     location: config.region,
@@ -137,6 +140,9 @@ export const webServiceProps = (
     ingress: "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
     invokerIamDisabled: true,
     defaultUriDisabled: true,
+    annotations: {
+      [trafficGenerationAnnotation]: String(record.trafficGeneration),
+    },
     template: {
       revision: template.revision,
       serviceAccount: config.serviceAccounts.webRuntime,

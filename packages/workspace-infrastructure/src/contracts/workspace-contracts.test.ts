@@ -159,6 +159,8 @@ describe("queue contracts", () => {
         uriOverride: {
           scheme: "HTTPS",
           host: "workspace-tasks-worker-123456789012.europe-west1.run.app",
+          port: "443",
+          queryOverride: { queryParams: "" },
           pathOverride: {
             path: workspaceQueueContracts[index]?.handlerPath,
           },
@@ -166,7 +168,8 @@ describe("queue contracts", () => {
         },
         oidcToken: {
           serviceAccountEmail: sandboxConfig.serviceAccounts.tasksInvoker,
-          audience: "workspace:deskohub-ws-sandbox:workspace-tasks-worker",
+          audience:
+            "https://workspace-tasks-worker-123456789012.europe-west1.run.app",
         },
       });
     }
@@ -198,7 +201,7 @@ describe("schedule contracts", () => {
           oidcToken: {
             serviceAccountEmail: sandboxConfig.serviceAccounts.schedulerInvoker,
             audience:
-              "workspace:deskohub-ws-sandbox:workspace-scheduler-worker",
+              "https://workspace-scheduler-worker-123456789012.europe-west1.run.app",
           },
         },
       });

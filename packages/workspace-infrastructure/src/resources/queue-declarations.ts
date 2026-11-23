@@ -50,7 +50,10 @@ export const queueProps = (
     uriOverride: {
       scheme: "HTTPS",
       host: workloadHost(config, "tasks-worker"),
+      port: "443",
       pathOverride: { path: contract.handlerPath },
+      // An empty query clears whatever query a publisher sent.
+      queryOverride: { queryParams: "" },
       uriOverrideEnforceMode: "ALWAYS",
     },
     oidcToken: {

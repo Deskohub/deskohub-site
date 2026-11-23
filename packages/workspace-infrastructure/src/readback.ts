@@ -4,6 +4,8 @@ import type {
   WorkspaceWorkload,
 } from "./config/stack-config";
 import type { TrafficReadback } from "./release/release-reconciler";
+import type { ReleaseRecord } from "./release/release-record";
+import { trafficGenerationAnnotation } from "./resources/service-declarations";
 import { workloadUrl } from "./resources/workload-names";
 
 /** One traffic status row as Cloud Run reports it after an apply. */
@@ -25,7 +27,14 @@ export interface ObservedService {
   readonly traffic: ReadonlyArray<ObservedTrafficStatus>;
   /** Image digest of each revision that carries traffic or a tag. */
   readonly revisionDigests: Readonly<Record<string, ImageDigest>>;
+  /** Service annotations as Cloud Run reports them. */
+  readonly annotations: Readonly<Record<string, string>>;
 }
+
+const observedTrafficGeneration = (observed: ObservedService) => {
+  const value = observed.annotations[trafficGenerationAnnotation];
+  return value !== undefined && /^[0-9]+$/.test(value) ? Number(value) : null;
+};
 
 export interface ReadbackDrift {
   readonly workload: WorkspaceWorkload;
@@ -55,11 +64,16 @@ export const trafficReadback = (observed: ObservedService): TrafficReadback => {
     only === undefined ||
     only.percent !== 100
   ) {
-    return { servingRevision: null, servingImageDigest: null };
+    return {
+      servingRevision: null,
+      servingImageDigest: null,
+      trafficGeneration: observedTrafficGeneration(observed),
+    };
   }
   return {
     servingRevision: only.revision,
     servingImageDigest: observed.revisionDigests[only.revision] ?? null,
+    trafficGeneration: observedTrafficGeneration(observed),
   };
 };
 
@@ -100,4 +114,26 @@ export const serviceReadbackDrift = (
         )
       : []),
   ];
+};
+
+/**
+ * A web service stamped with any traffic generation other than the
+ * record's is drift: most likely a delayed write from an older run. The
+ * record is not changed; an operator re-applies the current declaration.
+ */
+export const webTrafficDrift = (
+  record: ReleaseRecord,
+  observed: ObservedService
+): ReadonlyArray<ReadbackDrift> => {
+  const actual = observedTrafficGeneration(observed);
+  return actual === record.trafficGeneration
+    ? []
+    : [
+        {
+          workload: "web",
+          field: "trafficGeneration",
+          expected: String(record.trafficGeneration),
+          observed: actual === null ? "<unset>" : String(actual),
+        },
+      ];
 };

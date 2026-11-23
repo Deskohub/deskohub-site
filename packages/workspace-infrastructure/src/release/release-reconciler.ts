@@ -75,6 +75,8 @@ export interface TrafficReadback {
   /** Revision taking 100% of untagged traffic, or null when split/unknown. */
   readonly servingRevision: string | null;
   readonly servingImageDigest: ImageDigest | null;
+  /** The traffic generation stamped on the service, or null when absent. */
+  readonly trafficGeneration: number | null;
 }
 
 const fence = (record: ReleaseRecord, expectedGeneration: number) =>
@@ -201,9 +203,11 @@ export const promote = Effect.fn("WorkspaceRelease.promote")(function* (
   return {
     ...record,
     generation: record.generation + 1,
+    trafficGeneration: record.trafficGeneration + 1,
     pendingApply: {
       operation: "promote",
       target,
+      trafficGeneration: record.trafficGeneration + 1,
       startedAt: isoOf(input.now),
     },
   } satisfies ReleaseRecord;
@@ -232,9 +236,11 @@ export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
   return {
     ...record,
     generation: record.generation + 1,
+    trafficGeneration: record.trafficGeneration + 1,
     pendingApply: {
       operation: "restore",
       target: deploymentOf(target),
+      trafficGeneration: record.trafficGeneration + 1,
       startedAt: isoOf(input.now),
     },
   } satisfies ReleaseRecord;
@@ -246,12 +252,13 @@ export interface SettleInput {
   readonly now: DateTime.Utc;
 }
 
-const servesDeployment = (
+const servesPendingApply = (
   readback: TrafficReadback,
-  deployment: ReleaseDeployment
+  pending: NonNullable<ReleaseRecord["pendingApply"]>
 ) =>
-  readback.servingRevision === deployment.revision &&
-  readback.servingImageDigest === deployment.imageDigest;
+  readback.servingRevision === pending.target.revision &&
+  readback.servingImageDigest === pending.target.imageDigest &&
+  readback.trafficGeneration === pending.trafficGeneration;
 
 /**
  * Settle the persisted traffic intent from readback. A normal apply and a
@@ -269,7 +276,7 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
     return yield* new NoPendingReleaseApply();
   }
   const generation = record.generation + 1;
-  if (servesDeployment(input.readback, pending.target)) {
+  if (servesPendingApply(input.readback, pending)) {
     const verified: VerifiedDeployment = {
       ...pending.target,
       verifiedAt: isoOf(input.now),
@@ -294,6 +301,13 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
     );
     return {
       generation,
+      trafficGeneration: record.trafficGeneration,
+      // The first release creates the template; later ones were candidates.
+      materialized:
+        record.materialized === null ||
+        record.candidate?.releaseId === pending.target.releaseId
+          ? pending.target
+          : record.materialized,
       active: verified,
       previous: record.active,
       candidate:

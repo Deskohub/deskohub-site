@@ -6,6 +6,7 @@ import * as Monitoring from "@alchemy.run/gcp/Monitoring";
 import type { ServiceProps } from "@alchemy.run/gcp/Run";
 import * as Run from "@alchemy.run/gcp/Run";
 import * as Storage from "@alchemy.run/gcp/Storage";
+import * as Data from "effect/Data";
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type {
@@ -29,6 +30,14 @@ import {
   webServiceProps,
   workerServiceProps,
 } from "./resources/service-declarations";
+
+/**
+ * Preview services stay undeclared until IAP and per-SHA worker isolation
+ * exist (#1455); a preview must never get an unprotected public service.
+ */
+export class PreviewServicesUnprotected extends Data.TaggedError(
+  "PreviewServicesUnprotected"
+) {}
 
 const pascal = (id: string) =>
   id
@@ -122,7 +131,8 @@ const withSecretGrants = (
 /**
  * The release-owned services. They derive from the authoritative release
  * record, so only a caller holding that record under its generation fence
- * may declare them; nothing is declared before a release serves.
+ * may declare them; nothing is declared before a release serves. The web
+ * service carries the record's traffic generation for drift readback.
  */
 export const declareWorkspaceServices = (
   config: WorkspaceStackConfig,
@@ -130,6 +140,9 @@ export const declareWorkspaceServices = (
   now: DateTime.Utc
 ) =>
   Effect.gen(function* () {
+    if (config.stage === "preview") {
+      return yield* new PreviewServicesUnprotected();
+    }
     const web = webServiceProps(config, record, now);
     const serving = record.pendingApply?.target ?? record.active;
     if (web === undefined || serving === null) {

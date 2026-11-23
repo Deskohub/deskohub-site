@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import packageJson from "../package.json";
 import { ImageDigest } from "./config/stack-config";
 import {
+  previewConfig,
   productionConfig,
   sandboxConfig,
 } from "./config/stack-config.test-utils";
@@ -104,6 +105,7 @@ const servingRecord = () => {
       readback: {
         servingRevision: "workspace-web-r1-aaaaaaa",
         servingImageDigest: digest,
+        trafficGeneration: 1,
       },
       now,
     })
@@ -185,6 +187,14 @@ describe("Alchemy beta.87 surface", () => {
     ).toEqual([]);
   });
 
+  test("fails closed for preview services until IAP exists", async () => {
+    const preview = await evaluate(
+      declareWorkspaceServices(previewConfig, servingRecord(), now)
+    );
+    expect(preview.exit._tag).toBe("Failure");
+    expect(preview.resources).toEqual({});
+  });
+
   test("orders service grants by output references", async () => {
     const initial = await evaluate(
       declareWorkspaceServices(sandboxConfig, emptyReleaseRecord, now)
@@ -235,7 +245,9 @@ describe("Alchemy beta.87 surface", () => {
       serviceId: "workspace-tasks-worker",
       ingress: "INGRESS_TRAFFIC_INTERNAL_ONLY",
       invokerIamDisabled: false,
-      customAudiences: ["workspace:deskohub-ws-sandbox:workspace-tasks-worker"],
+      customAudiences: [
+        "https://workspace-tasks-worker-123456789012.europe-west1.run.app",
+      ],
       template: {
         serviceAccount: sandboxConfig.serviceAccounts.tasksWorkerRuntime,
         timeout: "300s",
