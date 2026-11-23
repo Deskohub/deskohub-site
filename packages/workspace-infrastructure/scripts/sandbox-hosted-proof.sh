@@ -220,38 +220,53 @@ project_exclusion_names() {
   $dry_run || jq -r '.[] | .name' <<<"$exclusions"
 }
 
+# The seconds a token has left, from Google's tokeninfo; the token goes in
+# the request body, never on a command line.
+token_lifetime() {
+  local seconds
+  seconds="$(printf '%s' "$1" |
+    curl -sS --fail-with-body --data-urlencode 'access_token@-' \
+      https://oauth2.googleapis.com/tokeninfo | jq -r '.expires_in // empty')" || return 1
+  [[ "$seconds" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$seconds"
+}
+
 # Alchemy beta.87 rejects federated credential files, so it gets a bearer
 # token (google-github-actions/auth `token_format: access_token`). The token
 # lives at most one hour. Every phase that runs Alchemy starts with at
-# least its 30-minute budget (the longest, the stack destroy) left: a token
-# closer to its recorded expiry is replaced by a fresh one from the
-# federated gcloud credentials, masked before use. An empty gcloud config
-# has no token cache, so gcloud cannot hand back a cached token near its
-# expiry, and the expiry recorded is the token's own, from tokeninfo.
+# least its 30-minute budget (the longest, the stack destroy) left: a
+# token's expiry is its own, from tokeninfo, never an estimate, and a token
+# closer to it is replaced by a fresh one from the federated gcloud
+# credentials, masked before use. An empty gcloud config has no token
+# cache, so gcloud cannot hand back a cached token near its expiry.
 ensure_alchemy_token() {
   if $dry_run; then
     echo "+ (GOOGLE_ACCESS_TOKEN from token_format: access_token; refreshed under 30 minutes left)" >&2
     return
   fi
-  local now expires_at="${GOOGLE_ACCESS_TOKEN_EXPIRES_AT:-}"
+  local now expires_at="${GOOGLE_ACCESS_TOKEN_EXPIRES_AT:-}" expires_in
   now="$(date +%s)"
-  [[ "$expires_at" =~ ^[0-9]+$ ]] || expires_at=0
+  if ! [[ "$expires_at" =~ ^[0-9]+$ ]]; then
+    # The workflow's token: an unreadable lifetime counts as expired.
+    expires_at=0
+    if [[ -n "${GOOGLE_ACCESS_TOKEN:-}" ]] &&
+      expires_in="$(token_lifetime "$GOOGLE_ACCESS_TOKEN")"; then
+      expires_at=$((now + expires_in))
+    fi
+  fi
   if [[ -z "${GOOGLE_ACCESS_TOKEN:-}" ]] || ((expires_at - now < 1800)); then
-    local config expires_in
+    local config
     config="$(mktemp -d)"
     GOOGLE_ACCESS_TOKEN="$(CLOUDSDK_CONFIG="$config" gcloud auth print-access-token)"
     rm -rf "${config:?}"
     echo "::add-mask::${GOOGLE_ACCESS_TOKEN}"
-    # The token goes in the request body, never on a command line.
-    expires_in="$(printf '%s' "$GOOGLE_ACCESS_TOKEN" |
-      curl -sS --fail-with-body --data-urlencode 'access_token@-' \
-        https://oauth2.googleapis.com/tokeninfo | jq -r '.expires_in // empty')" ||
+    expires_in="$(token_lifetime "$GOOGLE_ACCESS_TOKEN")" ||
       fail "the minted access token's lifetime is unreadable"
-    if ! [[ "$expires_in" =~ ^[0-9]+$ ]] || ((expires_in < 1800)); then
-      fail "the minted access token expires in ${expires_in:-an unknown time} s, under the 30-minute step budget"
-    fi
-    GOOGLE_ACCESS_TOKEN_EXPIRES_AT=$((now + expires_in))
+    ((expires_in >= 1800)) ||
+      fail "the minted access token expires in ${expires_in} s, under the 30-minute step budget"
+    expires_at=$((now + expires_in))
   fi
+  GOOGLE_ACCESS_TOKEN_EXPIRES_AT="$expires_at"
   export GOOGLE_ACCESS_TOKEN GOOGLE_ACCESS_TOKEN_EXPIRES_AT
 }
 

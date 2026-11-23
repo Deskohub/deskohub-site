@@ -57,9 +57,8 @@ interface Workflow {
   >;
 }
 
-const workflow = Bun.YAML.parse(
-  await Bun.file(workflowFile).text()
-) as Workflow;
+const workflowText = await Bun.file(workflowFile).text();
+const workflow = Bun.YAML.parse(workflowText) as Workflow;
 const steps = workflow.jobs.smoke?.steps ?? [];
 const runnerScript = readFileSync(runner, "utf8");
 
@@ -192,6 +191,11 @@ describe("sandbox workflow modes", () => {
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(auth);
     expect(steps[guard]?.if).toBe("inputs.mode != 'read-only'");
+  });
+
+  test("leaves the token's expiry to the runner, never an estimate", () => {
+    // The runner reads each token's remaining lifetime from tokeninfo.
+    expect(workflowText).not.toContain("GOOGLE_ACCESS_TOKEN_EXPIRES_AT");
   });
 
   test("sets up no Terraform: Alchemy owns the edge", () => {

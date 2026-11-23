@@ -70,6 +70,11 @@ export interface FakeWorld {
   readonly failedServiceReads?: number;
   /** Set by an `apply` deliver: the detached child's process ID. */
   readonly detachedChildPid?: number;
+  /**
+   * Seconds each access token has left, by token, as tokeninfo answers;
+   * an unknown token gets a 400.
+   */
+  readonly tokenLifetimes?: Record<string, number>;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
   readonly now?: number;
   readonly [key: string]: unknown;
@@ -367,6 +372,20 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     return interruptedDeliver(world, save);
   }
   const joined = args.join(" ");
+  if (
+    tool === "curl" &&
+    world.tokenLifetimes !== undefined &&
+    joined.includes("oauth2.googleapis.com/tokeninfo")
+  ) {
+    const token = (await Bun.stdin.text()).trim();
+    const seconds = world.tokenLifetimes[token];
+    if (seconds === undefined) {
+      print('{"error":"invalid_token"}');
+      return 22;
+    }
+    print(JSON.stringify({ expires_in: String(seconds) }));
+    return 0;
+  }
   const rule = world.rules?.find(
     (candidate) =>
       candidate.tool === tool && new RegExp(candidate.pattern).test(joined)

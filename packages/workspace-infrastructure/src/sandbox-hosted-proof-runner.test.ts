@@ -745,6 +745,35 @@ describe("Alchemy access token", () => {
     }
   });
 
+  test("verifies the workflow's token by its own remaining lifetime", () => {
+    // However long ago the auth step minted it, only tokeninfo decides.
+    for (const [left, mints] of [
+      [3000, 0],
+      [1790, 1],
+      [undefined, 1],
+    ] as const) {
+      const { exitCode, output } = withProofFakes(
+        {
+          now,
+          tokenLifetimes: {
+            "fake-access-token": 3599,
+            ...(left === undefined ? {} : { "workflow-token": left }),
+          },
+        },
+        (fakes) =>
+          runPhase(fakes, "foundation", {
+            GOOGLE_ACCESS_TOKEN: "workflow-token",
+            GOOGLE_ACCESS_TOKEN_EXPIRES_AT: "",
+          })
+      );
+      expect({
+        left,
+        exitCode,
+        mints: output.split("::add-mask::").length - 1,
+      }).toEqual({ left, exitCode: 0, mints });
+    }
+  });
+
   test("refreshes between phases of one run by the token's real expiry", () => {
     // The minted token has 1805 s; the first deploy takes 600 s of it.
     const { exitCode, mints } = run(["foundation", "foundation"], 0, [

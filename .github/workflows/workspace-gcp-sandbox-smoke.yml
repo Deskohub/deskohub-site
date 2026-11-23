@@ -103,11 +103,6 @@ jobs:
           access_token_lifetime: 3600s
           create_credentials_file: false
 
-      # A minute short of the 3600 s lifetime, for the time since minting.
-      - name: Record the token expiry
-        if: inputs.mode != 'read-only'
-        run: echo "GOOGLE_ACCESS_TOKEN_EXPIRES_AT=$(($(date +%s) + 3540))" >> "$GITHUB_ENV"
-
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
