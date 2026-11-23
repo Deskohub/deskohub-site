@@ -1844,48 +1844,6 @@
   "entryPackCheckoutTermsChanged": "शर्तें बदल गई हैं। भुगतान से पहले मौजूदा शर्तें पढ़ें और उनकी फिर से पुष्टि करें.",
   "passEntryPack": "प्रवेश पैक",
   "passUnlimited": "असीमित पास",
-  "passReminderGreeting": "नमस्ते {firstName},",
-  "passReminderGreetingUnnamed": "नमस्ते,",
-  "passReminderEntryPackSubject": [
-    {
-      "declarations": [
-        "input remaining",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "आपके प्रवेश पैक में {remainingNumber} एंट्री बाकी",
-        "remainingPlural=other": "आपके प्रवेश पैक में {remainingNumber} एंट्री बाकी"
-      }
-    }
-  ],
-  "passReminderEntryPackPreheader": "आपके पैक ({tier}) की अवधि {endsOn} को खत्म हो रही है।",
-  "passReminderEntryPackBody": [
-    {
-      "declarations": [
-        "input remaining",
-        "input total",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number",
-        "local totalNumber = total: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "आपके प्रवेश पैक ({tier}) की अवधि <strong>{endsOn}</strong> को खत्म हो रही है। <strong>{totalNumber} में से {remainingNumber} एंट्री</strong> बाकी है। अभी दिन चुन लें ताकि बची हुई एंट्री बेकार न जाएँ।",
-        "remainingPlural=other": "आपके प्रवेश पैक ({tier}) की अवधि <strong>{endsOn}</strong> को खत्म हो रही है। <strong>{totalNumber} में से {remainingNumber} एंट्री</strong> बाकी हैं। अभी दिन चुन लें ताकि बची हुई एंट्री बेकार न जाएँ।"
-      }
-    }
-  ],
-  "passReminderEntryPackBook": "एक दिन बुक करें",
-  "passReminderEntryPackExpiry": "तब तक जो एंट्री बुक नहीं होंगी, वे पैक के साथ खत्म हो जाएँगी।",
-  "passReminderUnlimitedSubject": "आपके असीमित पास की अवधि {endsOn} को खत्म हो रही है",
-  "passReminderUnlimitedPreheader": "अगले {days} दिनों के लिए अभी पास बढ़ाएँ।",
-  "passReminderUnlimitedPreheaderWithDesk": "{deskLabel} को अगले {days} दिनों के लिए रखने के लिए अभी पास बढ़ाएँ।",
-  "passReminderUnlimitedBody": "आपके असीमित पास ({tier}) की अवधि <strong>{endsOn}</strong> को खत्म हो रही है। अभी पास बढ़ाएँ। अगले {days} दिन इसके तुरंत बाद {renewalStartsOn} से शुरू होंगे।",
-  "passReminderUnlimitedBodyWithDesk": "आपके असीमित पास ({tier}) की अवधि <strong>{endsOn}</strong> को खत्म हो रही है। अभी पास बढ़ाएँ। अगले {days} दिन इसके तुरंत बाद {renewalStartsOn} से शुरू होंगे और <strong>{deskLabel}</strong> आपके लिए तय रहेगी।",
-  "passReminderUnlimitedRenew": "{days} दिनों के लिए बढ़ाएँ",
-  "passReminderUnlimitedDeskFallback": "अगर पास बढ़ाते समय {deskLabel} उपलब्ध न हो, तो हम आपको दूसरी सीट देंगे।",
   "unlimitedPassRenew": "पास का नवीनीकरण करें",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "आरक्षित डेस्क",

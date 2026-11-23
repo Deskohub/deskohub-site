@@ -50,8 +50,10 @@ import { CampaignRecipientService } from "../../backend/campaign-recipient.servi
 import {
   deleteAutomatedCampaigns,
   everyoneFilter,
+  passReminderEmailDocumentFixture,
   seedAutomatedCampaign,
   seedCampaignSend,
+  seedPublishedEmail,
 } from "../../backend/email-campaigns.test-utils";
 import type {
   CampaignAudienceId,
@@ -1966,11 +1968,29 @@ describe.skipIf(!testDatabase)(
       for (const _tag of ["EntryPackExpiring", "UnlimitedEnding"] as const) {
         test(`${_tag} previews current recipients and synthetic emails without entering runs`, async () => {
           const trigger = { _tag };
+          const published = await seedPublishedEmail(db, {
+            title: `Dry-run ${_tag} email`,
+            document: passReminderEmailDocumentFixture(
+              _tag === "EntryPackExpiring"
+                ? "entry-pack-expiring"
+                : "unlimited-ending"
+            ),
+          });
           const campaignId = await seedAutomation({
             flow: decodeFlow({ trigger, steps: [send] }),
             purpose: "marketing",
             filter: { ...everyoneFilter, filters: [taggedVip] },
           });
+          await query(
+            db
+              .update(emailCampaigns)
+              .set({
+                emailId: published.emailId,
+                content: {},
+                templateKey: "workspace",
+              })
+              .where(eq(emailCampaigns.id, campaignId))
+          );
           const operationalId = await seedAutomation({
             flow: decodeFlow({ trigger, steps: [send] }),
             purpose: "operational",
@@ -2080,7 +2100,9 @@ describe.skipIf(!testDatabase)(
           );
           for (const email of report.emails) {
             expect(email.preheader).toBeTruthy();
-            expect(email.html).toContain("https://example.com/");
+            expect(email.html).toContain(
+              _tag === "EntryPackExpiring" ? "/reservation/cowork" : "/passes/"
+            );
             expect(email.html).not.toContain(passId);
             expect(email.html).not.toContain(testEmailAddress(eligible));
             expect(email.subject).not.toBe("Rozpracovaný koncept");

@@ -35,6 +35,7 @@ import {
   emailCustomerFieldPathLabel,
   emailValueKind,
 } from "./email-value-options";
+import { EmailValueTriggerSource } from "./email-value-trigger-source";
 import type { EmailEditorDiscount } from "./email-values-section";
 
 /**
@@ -288,6 +289,15 @@ function EmailValueSourceSettings({
         onChange={changeSource}
       />
     );
+  if (source?.kind === "trigger")
+    return (
+      <EmailValueTriggerSource
+        index={index}
+        name={definition.name}
+        source={source}
+        onChange={changeSource}
+      />
+    );
   return (
     <>
       <EmailValueCustomerPath
@@ -411,11 +421,13 @@ export function EmailValueDefinition({
         takenNames={takenNames}
         update={update}
       />
-      <EmailValueFallbacks
-        containerId={containerId}
-        fallback={definition.fallback}
-        update={update}
-      />
+      {definition.source?.kind !== "trigger" && (
+        <EmailValueFallbacks
+          containerId={containerId}
+          fallback={definition.fallback}
+          update={update}
+        />
+      )}
     </li>
   );
 }

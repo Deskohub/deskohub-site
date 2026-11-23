@@ -438,6 +438,8 @@ export {
   EmailDocumentForPublication,
   EmailDocumentProblem,
   emailComponentTexts,
+  emailDocumentRequiredTriggers,
+  emailDocumentUsesDiscounts,
   emailDraftProblems,
   emailPublicationProblems,
   englishEmailDocumentProblem,
@@ -446,11 +448,26 @@ export {
   requiredEmailValueNames,
 } from "./email-publication";
 export {
+  documentEmailTriggerEvents,
+  EmailTriggerEvent,
+  type EmailTriggerField,
+  EmailTriggerSelection,
+  emailTriggerEvents,
+  emailTriggerFieldAt,
+  emailTriggerFieldCatalogue,
+  emailTriggerFields,
+  isEmailTriggerEvent,
+  isEmailTriggerInlineField,
+  isEmailTriggerUrlField,
+  matchesEmailTriggerValue,
+} from "./email-trigger-selection";
+export {
   EmailValueSnapshot,
   emailValueSnapshotForDefinition,
 } from "./email-value-snapshot";
 export {
   EmailBodyComponent,
+  EmailComponentCondition,
   EmailDiscountSelection,
   EmailDocument,
   EmailDraft,
@@ -459,6 +476,7 @@ export {
   type EmailTextListLevel,
   EmailTranslation,
   EmailValueDefinition,
+  EmailValueReference,
 } from "./emails";
 export {
   type OperationInvoke,

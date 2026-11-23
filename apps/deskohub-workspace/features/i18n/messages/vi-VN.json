@@ -1826,46 +1826,6 @@
   "entryPackCheckoutTermsChanged": "Điều khoản đã thay đổi. Hãy xem và xác nhận lại điều khoản hiện hành trước khi thanh toán.",
   "passEntryPack": "Gói lượt vào",
   "passUnlimited": "Thẻ không giới hạn",
-  "passReminderGreeting": "Chào {firstName},",
-  "passReminderGreetingUnnamed": "Xin chào,",
-  "passReminderEntryPackSubject": [
-    {
-      "declarations": [
-        "input remaining",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=other": "Gói lượt vào của bạn còn {remainingNumber} lượt"
-      }
-    }
-  ],
-  "passReminderEntryPackPreheader": "Gói của bạn ({tier}) hết hạn vào {endsOn}.",
-  "passReminderEntryPackBody": [
-    {
-      "declarations": [
-        "input remaining",
-        "input total",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number",
-        "local totalNumber = total: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=other": "Gói lượt vào của bạn ({tier}) hết hạn vào <strong>{endsOn}</strong>. Bạn vẫn còn <strong>{remainingNumber}/{totalNumber} lượt vào</strong> chưa dùng. Hãy chọn ngày ngay để dùng hết số lượt còn lại."
-      }
-    }
-  ],
-  "passReminderEntryPackBook": "Đặt chỗ một ngày",
-  "passReminderEntryPackExpiry": "Nếu chưa đặt chỗ trước khi gói hết hạn, các lượt còn lại cũng sẽ hết hạn.",
-  "passReminderUnlimitedSubject": "Thẻ không giới hạn của bạn hết hạn vào {endsOn}",
-  "passReminderUnlimitedPreheader": "Hãy gia hạn ngay để dùng thẻ thêm {days} ngày.",
-  "passReminderUnlimitedPreheaderWithDesk": "Hãy gia hạn ngay để giữ chỗ {deskLabel} thêm {days} ngày.",
-  "passReminderUnlimitedBody": "Thẻ không giới hạn của bạn ({tier}) hết hạn vào <strong>{endsOn}</strong>. Hãy gia hạn ngay để dùng thẻ thêm {days} ngày liên tiếp, bắt đầu từ {renewalStartsOn}.",
-  "passReminderUnlimitedBodyWithDesk": "Thẻ không giới hạn của bạn ({tier}) hết hạn vào <strong>{endsOn}</strong>. Hãy gia hạn ngay để dùng thẻ thêm {days} ngày liên tiếp, bắt đầu từ {renewalStartsOn}. Bạn sẽ tiếp tục dùng chỗ <strong>{deskLabel}</strong>.",
-  "passReminderUnlimitedRenew": "Gia hạn thêm {days} ngày",
-  "passReminderUnlimitedDeskFallback": "Nếu chỗ {deskLabel} đã có người dùng khi bạn gia hạn, chúng tôi sẽ xếp cho bạn một chỗ khác.",
   "unlimitedPassRenew": "Gia hạn thẻ",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Bàn đặt riêng",

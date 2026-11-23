@@ -7,6 +7,7 @@ const kindLabels = {
   record: m.emailsEditorValuesKindRecord,
   list: m.emailsEditorValuesKindList,
   discount: m.emailsEditorValuesKindDiscount,
+  trigger: m.emailsEditorValuesKindTrigger,
 } as const satisfies Record<
   EmailValueKind,
   typeof m.emailsEditorValuesKindList

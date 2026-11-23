@@ -72,6 +72,11 @@ export function EmailValuesSection({
       name: suggestedEmailValueName("discount", takenNames()),
       source: { kind: "discount", maxUses: 1, maxUsesPerCustomer: 1 },
     });
+  const addTrigger = () =>
+    add({
+      name: suggestedEmailValueName("pass", takenNames()),
+      source: { kind: "trigger", trigger: "entry-pack-expiring" },
+    });
   const deleteAt = (index: number) => {
     flushSync(() => remove(index));
     const next =
@@ -140,6 +145,15 @@ export function EmailValuesSection({
         >
           <Plus className="size-4" aria-hidden />
           {m.emailsEditorValuesAddDiscount({}, { locale })}
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={addTrigger}
+        >
+          <Plus className="size-4" aria-hidden />
+          {m.emailsEditorValuesAddTrigger({}, { locale })}
         </Button>
       </div>
     </section>

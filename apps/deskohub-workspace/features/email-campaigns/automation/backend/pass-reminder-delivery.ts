@@ -5,8 +5,13 @@ import {
   type DotyposCustomerId,
   DotyposService,
 } from "@deskohub/dotypos";
+import type {
+  EmailDocument,
+  EmailVersionId,
+} from "@deskohub/workspace-admin-api";
 import { Effect, Option, Result, Schema } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
+import type { PassReminderTriggerPayload } from "@/features/emails/body/pass-reminder-trigger-values";
 import type { Locale } from "@/features/i18n";
 import type { OrderId } from "@/features/order";
 import { CoworkPassesReleaseGate } from "@/features/passes/backend/cowork-passes-release-gate";
@@ -30,15 +35,19 @@ import {
   CampaignDeliveryIncomplete,
   type DeliveredAttempt,
   type PersistedBatch,
+  type RenderedCustomerEmail,
 } from "../../backend/campaign-batch-delivery.service";
 import { CampaignEmailConfig } from "../../backend/campaign-email.config";
+import {
+  getCampaignEmailVersion,
+  renderAutomatedPublishedEmail,
+  resolveEmailDocumentLocale,
+} from "../../backend/campaign-published-email";
 import {
   CampaignEligibilityStage,
   campaignEligibility,
   consentingCampaignCustomers,
 } from "../../backend/campaign-reachability";
-import type { CampaignLocalizedContent } from "../../body/campaign-content";
-import { renderPassReminderCopyV1 } from "../../body/pass-reminder-copy";
 import type { AutomationTriggerKind } from "../automation-states";
 import {
   type PassReminderContext,
@@ -99,24 +108,59 @@ const decodeCurrentSnapshot = (candidate: PassReminderCandidate) => {
 const firstNameOf = (profile: DotyposCustomer | undefined) =>
   profile?.firstName?.trim() || undefined;
 
-export const passReminderContent = (input: {
+const passReminderTriggerPayload = (input: {
   readonly reminder: PreparedPassReminder;
   readonly locale: Locale;
   readonly profile: DotyposCustomer | undefined;
-}): CampaignLocalizedContent => {
+}): PassReminderTriggerPayload => {
   const { passId, snapshot } = input.reminder;
+  const firstName = firstNameOf(input.profile);
   const path =
     snapshot.product === "entry-pack"
       ? getEntryPackBookingPath(input.locale, passId)
       : getUnlimitedRenewalPath(input.locale, passId);
-  return {
-    [input.locale]: renderPassReminderCopyV1({
-      ...snapshot,
-      locale: input.locale,
-      firstName: firstNameOf(input.profile),
-      actionUrl: getWorkspaceCanonicalUrl(path),
+  const actionUrl = getWorkspaceCanonicalUrl(path);
+  return snapshot.product === "entry-pack"
+    ? {
+        trigger: "entry-pack-expiring",
+        firstName,
+        tier: snapshot.tier,
+        endsOn: snapshot.endsOn,
+        remainingEntries: snapshot.remainingEntries,
+        totalEntries: snapshot.totalEntries,
+        actionUrl,
+      }
+    : {
+        trigger: "unlimited-ending",
+        firstName,
+        tier: snapshot.tier,
+        endsOn: snapshot.endsOn,
+        renewalStartsOn: snapshot.renewalStartsOn,
+        deskLabel: snapshot.deskLabel,
+        actionUrl,
+      };
+};
+
+/** Renders a pass reminder's published Email Library document for one recipient. */
+export const renderPassReminderPublishedEmail = (input: {
+  readonly document: EmailDocument;
+  readonly reminder: PreparedPassReminder;
+  readonly locale: Locale;
+  readonly profile: DotyposCustomer | undefined;
+}): Result.Result<RenderedCustomerEmail, string> => {
+  const contentLocale = resolveEmailDocumentLocale(
+    input.document,
+    input.locale
+  );
+  return renderAutomatedPublishedEmail({
+    document: input.document,
+    recipientLocale: contentLocale,
+    triggerPayload: passReminderTriggerPayload({
+      reminder: input.reminder,
+      locale: contentLocale,
+      profile: input.profile,
     }),
-  };
+  });
 };
 
 export const makePassReminderDelivery = Effect.gen(function* () {
@@ -232,7 +276,11 @@ export const makePassReminderDelivery = Effect.gen(function* () {
       readonly profiles: Option.Option<BatchProfiles>;
       readonly claim: BatchRequestClaim;
     }) =>
-    (send: DeliveredAttempt, batch: PersistedBatch) =>
+    (
+      send: DeliveredAttempt,
+      batch: PersistedBatch,
+      frozenEmailVersionId: EmailVersionId | null
+    ) =>
       batches.request(
         BatchRequest.Guarded({
           batch,
@@ -257,13 +305,35 @@ export const makePassReminderDelivery = Effect.gen(function* () {
               onSome: Effect.succeed,
               onNone: () => profilesFor(batch),
             });
-            const content = passReminderContent({
-              reminder: { passId: triggerPassId, snapshot: snapshot.value },
-              locale,
-              profile: profiles.get(dotyposCustomerId),
-            });
+            if (frozenEmailVersionId !== null) {
+              const version = yield* getCampaignEmailVersion(
+                db,
+                frozenEmailVersionId
+              );
+              if (!version) return Option.none();
+              const rendered = renderPassReminderPublishedEmail({
+                document: version.document,
+                reminder: { passId: triggerPassId, snapshot: snapshot.value },
+                locale,
+                profile: profiles.get(dotyposCustomerId),
+              });
+              if (Result.isFailure(rendered)) return Option.none();
+              return Option.some({
+                send: {
+                  ...send,
+                  campaign: {
+                    ...send.campaign,
+                    renderedByCustomer: new Map([
+                      [dotyposCustomerId, rendered.success],
+                    ]),
+                  },
+                },
+                profiles,
+                guard: guard({ run: input.run, batch, profiles }),
+              });
+            }
             return Option.some({
-              send: { ...send, campaign: { ...send.campaign, content } },
+              send,
               profiles,
               guard: guard({ run: input.run, batch, profiles }),
             });

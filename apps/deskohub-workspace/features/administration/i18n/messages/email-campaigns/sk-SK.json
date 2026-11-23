@@ -1349,5 +1349,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "Jedna z adries nie je platná e-mailová adresa. Skontrolujte ich a skúste to znova.",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "Mimo produkčného prostredia možno e-maily kampaní posielať iba na adresy @{domain} a niektorí príjemcovia medzi ne nepatria. Nič sa neodoslalo.",
   "emailCampaignsSendingFailureRecipientsUnavailable": "Príjemcov sa nepodarilo určiť, pretože Dotypos alebo databáza nie sú dostupné. Nič sa neodoslalo a kód stále platí; skúste to znova o chvíľu.",
-  "emailCampaignsSendingFailureEmailSetupMissing": "E-maily kampaní nie sú v tomto nasadení nastavené. Požiadajte vývojársky tím o kontrolu premenných prostredia pre e-maily kampaní."
+  "emailCampaignsSendingFailureEmailSetupMissing": "E-maily kampaní nie sú v tomto nasadení nastavené. Požiadajte vývojársky tím o kontrolu premenných prostredia pre e-maily kampaní.",
+  "emailCampaignsComposerEditPublishedEmail": "Upraviť e-mail v knižnici",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "Tento e-mail používa hodnoty spúšťača, ktoré nezodpovedajú spúšťaču tejto automatizácie. Vyberte zodpovedajúci e-mail alebo upravte tok."
 }

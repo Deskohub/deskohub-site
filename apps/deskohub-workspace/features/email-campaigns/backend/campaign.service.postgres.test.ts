@@ -26,7 +26,9 @@ import {
   campaignContentFixture,
   deleteAutomatedCampaigns,
   everyoneFilter,
+  passReminderEmailDocumentFixture,
   seedAutomationVersion,
+  seedPublishedEmail,
 } from "./email-campaigns.test-utils";
 
 const testDatabase = await connectWorkspacePostgresTestDatabase();
@@ -942,5 +944,98 @@ describe.skipIf(!testDatabase)("CampaignService on disposable Postgres", () => {
       )
     );
     expect(failure(lookup)).toMatchObject({ _tag: "CampaignNotFound" });
+  });
+
+  test("links trigger-valued published emails only to automated campaigns and blocks customer values on automated", async () => {
+    const triggerEmail = await seedPublishedEmail(db, {
+      title: "Entry pack trigger email",
+      document: passReminderEmailDocumentFixture("entry-pack-expiring"),
+    });
+    const customerEmail = await seedPublishedEmail(db, {
+      title: "Customer personalized email",
+      document: {
+        purpose: "marketing",
+        templateKey: "workspace",
+        values: [
+          {
+            name: "first_name",
+            source: {
+              kind: "customer",
+              path: ["profile", "customer", "displayName"],
+            },
+          },
+        ],
+        structure: [{ _tag: "Paragraph", id: "body", textKey: "body" }],
+        translations: {
+          "cs-CZ": {
+            subject: [{ _tag: "Text", text: "Ahoj" }],
+            preheader: [],
+            texts: {
+              body: [
+                { _tag: "Text", text: "Ahoj " },
+                { _tag: "Value", name: "first_name" },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const onceDraft = await createDraft();
+    const automatedId = await createAutomated("draft");
+
+    // Once campaign rejects trigger-valued email.
+    expect(
+      failure(
+        await withCampaigns((campaigns) =>
+          campaigns.update({
+            campaignId: onceDraft.id,
+            emailId: triggerEmail.emailId,
+          })
+        )
+      )
+    ).toMatchObject({
+      _tag: "CampaignPublishedEmailInvalid",
+      reason: "trigger-required",
+    });
+
+    // Automated campaign rejects customer-valued email.
+    expect(
+      failure(
+        await withCampaigns((campaigns) =>
+          campaigns.update({
+            campaignId: automatedId,
+            emailId: customerEmail.emailId,
+          })
+        )
+      )
+    ).toMatchObject({
+      _tag: "CampaignPublishedEmailInvalid",
+      reason: "automated-values-unsupported",
+    });
+
+    // Automated campaign links trigger-valued email, then detaches back to inline.
+    const linked = succeeded(
+      await withCampaigns((campaigns) =>
+        campaigns.update({
+          campaignId: automatedId,
+          emailId: triggerEmail.emailId,
+        })
+      )
+    );
+    expect(linked.emailId).toBe(triggerEmail.emailId);
+    expect(linked.purpose).toBe("marketing");
+
+    const detached = succeeded(
+      await withCampaigns((campaigns) =>
+        campaigns.update({
+          campaignId: automatedId,
+          emailId: null,
+          templateKey: "workspace",
+          content: campaignContentFixture("Inline copy"),
+        })
+      )
+    );
+    expect(detached.emailId).toBeNull();
+    expect(detached.content).toEqual(campaignContentFixture("Inline copy"));
   });
 });

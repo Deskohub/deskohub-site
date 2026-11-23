@@ -70,6 +70,7 @@ import {
   getLinkedCampaignEmail,
   getLinkedCampaignEmails,
   lockCampaignEmailPublication,
+  validatePublishedEmailForDelivery,
 } from "./campaign-published-email";
 
 type Campaign = CampaignRow;
@@ -460,10 +461,6 @@ export class CampaignService extends Context.Service<
         delivery: CampaignDelivery,
         content?: CampaignLocalizedContent
       ) {
-        if (delivery !== "once")
-          return yield* new CampaignPublishedEmailInvalid({
-            reason: "automated",
-          });
         if (content && Object.keys(content).length > 0)
           return yield* new CampaignPublishedEmailInvalid({
             reason: "inline-content",
@@ -473,6 +470,10 @@ export class CampaignService extends Context.Service<
           return yield* new CampaignPublishedEmailInvalid({
             reason: "unavailable",
           });
+        yield* validatePublishedEmailForDelivery(
+          publication.document,
+          delivery
+        );
         return {
           emailId,
           purpose: publication.document.purpose,
@@ -552,7 +553,6 @@ export class CampaignService extends Context.Service<
               return Option.none<Campaign>();
             const current = locked.value;
             if (
-              isOnceCampaign(current) &&
               current.emailId &&
               edit.emailId === undefined &&
               (edit.content !== undefined ||
@@ -591,11 +591,7 @@ export class CampaignService extends Context.Service<
           const automation = yield* lockAutomation(edit.campaignId, "update");
           const current = yield* lockDraft(edit.campaignId);
           if (Option.isNone(current)) return Option.none<Campaign>();
-          if (
-            isOnceCampaign(current.value) &&
-            current.value.emailId &&
-            edit.emailId === undefined
-          )
+          if (current.value.emailId && edit.emailId === undefined)
             return yield* new CampaignPublishedEmailInvalid({
               reason: "inline-content",
             });

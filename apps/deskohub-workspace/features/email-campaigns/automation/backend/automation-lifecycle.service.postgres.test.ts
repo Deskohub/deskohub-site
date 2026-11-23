@@ -9,7 +9,9 @@ import { TestClock } from "effect/testing";
 import { withPostgresAdvisoryLock } from "@/db/postgres-advisory-lock";
 import {
   campaignContentFixture,
+  passReminderEmailDocumentFixture,
   seedAutomatedSend,
+  seedPublishedEmail,
 } from "@/features/email-campaigns/backend/email-campaigns.test-utils";
 import type {
   CampaignAudienceId,
@@ -172,6 +174,104 @@ describe.skipIf(!testDatabase)(
         expect((await automationRow(campaignId)).status).toBe("draft");
         expect(await versionRows(campaignId)).toEqual([]);
       }
+    });
+
+    test("freezes linked published email version on activation, changes draft hash on republish, and rejects trigger mismatch", async () => {
+      const permitPassReminders = Effect.provideService(
+        PassReminderWritesOpen,
+        Effect.succeed(true)
+      );
+      const entryEmail = await seedPublishedEmail(db, {
+        title: "Entry pack reminder",
+        document: passReminderEmailDocumentFixture("entry-pack-expiring"),
+      });
+      const unlimitedEmail = await seedPublishedEmail(db, {
+        title: "Unlimited reminder",
+        document: passReminderEmailDocumentFixture("unlimited-ending"),
+      });
+      const { campaignId } = await seedDraft();
+      const flow = automationFlowFixture({
+        trigger: { _tag: "EntryPackExpiring" },
+        steps: [{ _tag: "Send", id: "send" }],
+      });
+      await run(
+        lifecycle((service) => service.updateFlow({ campaignId, flow })).pipe(
+          permitPassReminders
+        )
+      );
+
+      // Mismatched trigger email is refused at activation.
+      await pool.query(
+        "update email_campaigns set email_id = $2, content = '{}'::jsonb where id = $1",
+        [campaignId, unlimitedEmail.emailId]
+      );
+      const mismatchedPreview = await seedPreview(campaignId, {
+        status: "completed",
+      });
+      const { fireAt } = nextPassReminderPreviewOccurrence(
+        { _tag: "EntryPackExpiring" },
+        now
+      );
+      await pool.query(
+        "update email_campaign_automation_previews set as_of = $2 where id = $1",
+        [mismatchedPreview, fireAt.toString()]
+      );
+      expect(
+        (
+          await failure(
+            lifecycle((service) =>
+              service.activate({
+                campaignId,
+                previewId: mismatchedPreview,
+                activatedBy: null,
+              })
+            ).pipe(permitPassReminders)
+          )
+        )._tag
+      ).toBe("AutomationFlowInvalid");
+
+      // Matching trigger email changes draft hash when republished and freezes its version on activation.
+      await pool.query(
+        "update email_campaigns set email_id = $2 where id = $1",
+        [campaignId, entryEmail.emailId]
+      );
+      const hashV1 = await draftHash(campaignId);
+      const [v2] = (
+        await pool.query<{ id: string }>(
+          `insert into email_versions (email_id, version_number, document, required_value_names)
+             select email_id, 2, document, required_value_names
+               from email_versions where id = $1
+             returning id`,
+          [entryEmail.versionId]
+        )
+      ).rows;
+      const hashV2 = await draftHash(campaignId);
+      expect(hashV2).not.toBe(hashV1);
+
+      const previewId = await seedPreview(campaignId, { status: "completed" });
+      await pool.query(
+        "update email_campaign_automation_previews set as_of = $2 where id = $1",
+        [previewId, fireAt.toString()]
+      );
+      await run(
+        lifecycle((service) =>
+          service.activate({ campaignId, previewId, activatedBy: null })
+        ).pipe(permitPassReminders)
+      );
+      const {
+        rows: [frozen],
+      } = await pool.query<{
+        email_id: string | null;
+        frozen_email_version_id: string | null;
+      }>(
+        "select email_id, frozen_email_version_id from email_campaign_automation_versions where campaign_id = $1",
+        [campaignId]
+      );
+      expect(frozen).toEqual({
+        email_id: entryEmail.emailId,
+        frozen_email_version_id: v2!.id,
+      });
+      await run(lifecycle((service) => service.archive(campaignId)));
     });
 
     describe("pass reminder campaign ownership", () => {

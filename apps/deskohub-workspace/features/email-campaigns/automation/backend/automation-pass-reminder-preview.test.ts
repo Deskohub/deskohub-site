@@ -1,9 +1,6 @@
 import { expect, test } from "bun:test";
-import { campaignLocales } from "../../recipient-locale";
-import {
-  nextPassReminderPreviewOccurrence,
-  passReminderSampleContent,
-} from "./automation-pass-reminder-preview";
+import { sampleEmailTriggerValue } from "@/features/emails/body/pass-reminder-trigger-values";
+import { nextPassReminderPreviewOccurrence } from "./automation-pass-reminder-preview";
 
 test.each([
   ["2026-10-24T07:59:59Z", "2026-10-24T08:00:00Z"],
@@ -18,23 +15,45 @@ test.each([
   ).toBe(expected);
 });
 
-test("anchors the sample expiry and renewal to the previewed occurrence", () => {
+test("anchors sample trigger dates to the previewed occurrence", () => {
   const occurrence = Temporal.Instant.from("2026-11-27T09:00:00Z");
-  const trigger = { _tag: "UnlimitedEnding" as const };
-  const sample = passReminderSampleContent(trigger, occurrence)["en-US"];
-  expect(sample?.subject).toContain("Wed 2 Dec");
-  expect(JSON.stringify(sample?.body)).toContain("Thu 3 Dec");
-  expect(
-    passReminderSampleContent(trigger, occurrence.add({ hours: 24 }))["en-US"]
-      ?.subject
-  ).toContain("Thu 3 Dec");
+  const sample = sampleEmailTriggerValue(
+    "unlimited-ending",
+    "en-US",
+    occurrence
+  );
+  expect(sample._tag).toBe("Resolved");
+  if (sample._tag === "Resolved") {
+    expect(sample.value).toMatchObject({
+      endsOn: "Wed 2 Dec",
+      renewalStartsOn: "Thu 3 Dec",
+      deskLabel: "Desk 14",
+    });
+  }
+  const nextDay = sampleEmailTriggerValue(
+    "unlimited-ending",
+    "en-US",
+    occurrence.add({ hours: 24 })
+  );
+  if (nextDay._tag === "Resolved") {
+    expect(nextDay.value).toMatchObject({ endsOn: "Thu 3 Dec" });
+  }
 });
 
-test("provides deterministic sample copy for all locales using the approved examples", () => {
-  const pack = passReminderSampleContent({ _tag: "EntryPackExpiring" });
-  const unlimited = passReminderSampleContent({ _tag: "UnlimitedEnding" });
-  expect(Object.keys(pack).toSorted()).toEqual(campaignLocales.toSorted());
-  expect(Object.keys(unlimited).toSorted()).toEqual(campaignLocales.toSorted());
-  expect(JSON.stringify(pack["en-US"]?.body)).toContain("Thu 14 Jan");
-  expect(unlimited["en-US"]?.subject).toContain("Wed 2 Dec");
+test("omits optional sample fields when requested", () => {
+  const occurrence = Temporal.Instant.from("2026-11-27T09:00:00Z");
+  const sample = sampleEmailTriggerValue(
+    "unlimited-ending",
+    "en-US",
+    occurrence,
+    new Set(["firstName", "deskLabel"])
+  );
+  expect(sample._tag).toBe("Resolved");
+  if (sample._tag === "Resolved") {
+    expect(sample.value).toMatchObject({
+      firstName: null,
+      deskLabel: null,
+      tier: "Open Space",
+    });
+  }
 });

@@ -1235,5 +1235,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "Một trong các địa chỉ không phải là địa chỉ email hợp lệ. Vui lòng kiểm tra và thử lại.",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "Ngoài môi trường chính thức, email chiến dịch chỉ có thể gửi đến địa chỉ @{domain}, và một số người nhận không thuộc tên miền này. Chưa có gì được gửi.",
   "emailCampaignsSendingFailureRecipientsUnavailable": "Không thể xác định người nhận vì Dotypos hoặc cơ sở dữ liệu không khả dụng. Chưa có gì được gửi và mã vẫn còn hiệu lực; vui lòng thử lại sau ít phút.",
-  "emailCampaignsSendingFailureEmailSetupMissing": "Email chiến dịch chưa được cấu hình cho bản triển khai này. Vui lòng yêu cầu nhà phát triển kiểm tra các biến môi trường cho email chiến dịch."
+  "emailCampaignsSendingFailureEmailSetupMissing": "Email chiến dịch chưa được cấu hình cho bản triển khai này. Vui lòng yêu cầu nhà phát triển kiểm tra các biến môi trường cho email chiến dịch.",
+  "emailCampaignsComposerEditPublishedEmail": "Chỉnh sửa email trong thư viện",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "Email này dùng giá trị kích hoạt không khớp với điều kiện kích hoạt của tự động hóa này. Hãy chọn email phù hợp hoặc cập nhật luồng."
 }

@@ -410,6 +410,7 @@ export function CampaignSettingsFields({
   template,
   publishedEmails,
   templates,
+  triggerMismatch = false,
 }: {
   readonly audience: AudienceOption | undefined;
   readonly audiences: readonly AudienceOption[];
@@ -423,6 +424,7 @@ export function CampaignSettingsFields({
   readonly template: CampaignComposerTemplate | undefined;
   readonly publishedEmails: readonly CampaignComposerPublishedEmail[];
   readonly templates: readonly CampaignComposerTemplate[];
+  readonly triggerMismatch?: boolean;
 }) {
   return (
     <div className="space-y-5">
@@ -434,21 +436,43 @@ export function CampaignSettingsFields({
         />
       )}
       <TitleField control={control} locale={locale} />
-      {delivery === "once" && (publishedEmails.length > 0 || linkedEmailId) && (
+      {(publishedEmails.length > 0 || linkedEmailId) && (
         <PublishedEmailField
           control={control}
           locale={locale}
           publishedEmails={publishedEmails}
         />
       )}
-      {delivery === "once" && (
+      {triggerMismatch && (
+        <p
+          className="rounded-lg border border-burned-orange/25 bg-burned-orange/5 px-3 py-2 text-burned-orange-ink text-xs"
+          role="alert"
+        >
+          {m.emailCampaignsComposerPublishedEmailTriggerMismatch(
+            {},
+            { locale }
+          )}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        {linkedEmailId && (
+          <AdministrationLink
+            className={textLink({ className: "font-medium text-sm" })}
+            href={administrationHref(
+              "/[locale]/admin/email-campaigns/library/[emailId]",
+              { emailId: linkedEmailId }
+            )}
+          >
+            {m.emailCampaignsComposerEditPublishedEmail({}, { locale })}
+          </AdministrationLink>
+        )}
         <AdministrationLink
           className={textLink({ className: "text-sm" })}
           href={administrationHref("/[locale]/admin/email-campaigns/library")}
         >
           {m.emailsLibraryHeading({}, { locale })}
         </AdministrationLink>
-      )}
+      </div>
       {!linkedEmailId && (
         <>
           <PurposeField control={control} locale={locale} />

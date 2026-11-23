@@ -11,6 +11,7 @@ import {
   type AdministrationCampaignSummaryType,
   AdministrationCampaignTemplateKey,
   type AdministrationCampaignUpdateInputType,
+  EmailId,
 } from "@deskohub/workspace-admin-api";
 import { Console, Effect, FileSystem, Option, Path } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
@@ -244,18 +245,22 @@ type CampaignUpdateField<
   Key extends keyof AdministrationCampaignUpdateInputType,
 > = Option.Option<NonNullable<AdministrationCampaignUpdateInputType[Key]>>;
 
-/** The update request: only the given changes, with a cleared audience as null. */
+/** The update request: only the given changes, with a cleared audience or email as null. */
 const campaignUpdateInput = ({
   audience,
   clearAudience,
+  clearEmail,
   contentPatch,
+  email,
   purpose,
   template,
   title,
 }: {
   readonly audience: CampaignUpdateField<"audienceId">;
   readonly clearAudience: boolean;
+  readonly clearEmail: boolean;
   readonly contentPatch: CampaignUpdateField<"content">;
+  readonly email: CampaignUpdateField<"emailId">;
   readonly purpose: CampaignUpdateField<"purpose">;
   readonly template: CampaignUpdateField<"templateKey">;
   readonly title: CampaignUpdateField<"title">;
@@ -265,6 +270,8 @@ const campaignUpdateInput = ({
   ...(Option.isSome(template) && { templateKey: template.value }),
   ...(Option.isSome(audience) && { audienceId: audience.value }),
   ...(clearAudience && { audienceId: null }),
+  ...(Option.isSome(email) && { emailId: email.value }),
+  ...(clearEmail && { emailId: null }),
   ...(Option.isSome(contentPatch) && { content: contentPatch.value }),
 });
 
@@ -293,6 +300,15 @@ const campaignsUpdateCommand = Command.make(
       Flag.withDefault(false),
       Flag.withDescription("Unassign the audience")
     ),
+    email: Flag.String("email").pipe(
+      Flag.withSchema(EmailId),
+      Flag.optional,
+      Flag.withDescription("Published Email Library ID")
+    ),
+    clearEmail: Flag.Boolean("clear-email").pipe(
+      Flag.withDefault(false),
+      Flag.withDescription("Detach the published Email Library email")
+    ),
     ...localizedContentFlags,
     clearOperationalReason: campaignLocaleFlag("clear-operational-reason").pipe(
       Flag.atLeast(0),
@@ -311,6 +327,8 @@ const campaignsUpdateCommand = Command.make(
     audience,
     campaignId,
     clearAudience,
+    clearEmail,
+    email,
     purpose,
     template,
     title,
@@ -323,6 +341,11 @@ const campaignsUpdateCommand = Command.make(
             message: "Pass either --audience or --clear-audience, not both.",
           });
         }
+        if (clearEmail && Option.isSome(email)) {
+          return yield* new InvalidMutationInputError({
+            message: "Pass either --email or --clear-email, not both.",
+          });
+        }
         const campaignTitle = yield* Effect.transposeOption(
           Option.map(title, (value) => requireText("title", value))
         );
@@ -330,7 +353,9 @@ const campaignsUpdateCommand = Command.make(
         const update = campaignUpdateInput({
           audience,
           clearAudience,
+          clearEmail,
           contentPatch,
+          email,
           purpose,
           template,
           title: campaignTitle,
