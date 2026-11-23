@@ -1501,30 +1501,50 @@ exit 1
 
     // Multi-page `commits/<sha>/pulls`: a second eligible PR on page 2 must
     // keep ambiguity unresolved in BOTH initial target resolution and
-    // publish-status-without-run, and an unreadable later page must fail closed.
+    // publish-status-without-run, and an unreadable later page must fail closed
+    // (including publishing failure over a prior green status when a preview
+    // fails during a partial PR lookup).
     const multiPageGh = (
-      secondPageMode: "ambiguous" | "error"
+      secondPageMode: "ambiguous" | "error" | "page1-then-error"
     ) => `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$GH_FIXTURES/calls.log"
 if [[ "$*" == *"/commits/${targetSha}/pulls"* ]]; then
-  if [[ "$*" != *"--paginate"* || "$*" != *"--slurp"* ]]; then
+  if [[ "$*" != *"--paginate"* ]]; then
     echo "expected paginated commits/pulls lookup: $*" >&2
+    exit 1
+  fi
+  if [[ "${secondPageMode}" == "page1-then-error" ]]; then
+    echo '[${JSON.stringify(pullRequest)}]'
+    echo "HTTP 502 on page 2" >&2
     exit 1
   fi
   if [[ "${secondPageMode}" == "error" ]]; then
     echo "HTTP 502 on page 2" >&2
     exit 1
   fi
-  echo '[[${JSON.stringify(pullRequest)}],[${JSON.stringify({ ...pullRequest, number: prNumber + 1 })}]]'
+  if [[ "$*" == *"--slurp"* ]]; then
+    echo '[[${JSON.stringify(pullRequest)}],[${JSON.stringify({ ...pullRequest, number: prNumber + 1 })}]]'
+  else
+    echo '[${JSON.stringify(pullRequest)}]'
+    echo '[${JSON.stringify({ ...pullRequest, number: prNumber + 1 })}]'
+  fi
   exit 0
 fi
 if [[ "$*" == *"/pulls/${prNumber}"* ]]; then
   echo '{"body":"## E2E flows\\n- none\\n","head":{"sha":"${targetSha}"}}'
   exit 0
 fi
+if [[ "$*" == *"/pulls?state=open"* ]]; then
+  echo '[]'
+  exit 0
+fi
 if [[ "$*" == *"/commits/${targetSha}/statuses"* ]]; then
-  echo '[[${JSON.stringify(ambiguityFailure)}]]'
+  if [[ "${secondPageMode}" == "error" || "${secondPageMode}" == "page1-then-error" ]]; then
+    echo '[[{"context":"Workspace E2E","creator":{"login":"github-actions[bot]"},"state":"success","description":"Protected preview E2E passed [flows: admin]"}]]'
+  else
+    echo '[[${JSON.stringify(ambiguityFailure)}]]'
+  fi
   exit 0
 fi
 if [[ "$*" == *"/deployments/11/statuses"* ]]; then
@@ -1560,6 +1580,72 @@ exit 1
     expect(page2Target.result.exitCode).not.toBe(0);
     expect(page2Target.outputs.resolution_error_kind).toBe("ambiguous-pr");
 
+    // Failed preview + unreadable second page on a SHA with a prior green
+    // status: resolve-target must still mark the head eligible and route to
+    // publish-status-without-run so the prior green status is overwritten with
+    // failure (both when page 1 streamed and when lookup errored with no body).
+    for (const mode of ["page1-then-error", "error"] as const) {
+      const failedTarget = await runStep(
+        targetStep,
+        {},
+        {
+          EVENT_NAME: "repository_dispatch",
+          FLOWS_CLI: flowsCli,
+          INCLUDE_NIGHTLY_CASES: "false",
+          INPUT_FLOWS: "",
+          TARGET_DEPLOYMENT: "failed",
+          TARGET_REF: pullRequest.head.ref,
+          TARGET_SHA: targetSha,
+          TARGET_URL: previewUrl,
+        },
+        { gh: multiPageGh(mode) }
+      );
+      expect(failedTarget.result.exitCode).not.toBe(0);
+      expect(failedTarget.outputs.eligible).toBe("true");
+      expect(failedTarget.outputs.sha).toBe(targetSha);
+      expect(failedTarget.outputs.resolution_error_kind).toBe(
+        "pr-lookup-failed"
+      );
+
+      const decided = await runStep(
+        statusStep,
+        {},
+        {
+          DEPLOYMENT: failedTarget.outputs.deployment ?? "",
+          FLOWS: failedTarget.outputs.flows ?? "",
+          FLOWS_CLI: flowsCli,
+          PR_NUMBER: failedTarget.outputs.pr_number ?? "",
+          RESOLUTION_ERROR: failedTarget.outputs.resolution_error ?? "",
+          RESOLUTION_ERROR_KIND:
+            failedTarget.outputs.resolution_error_kind ?? "",
+          TARGET_OUTCOME: "failure",
+          TARGET_SHA: failedTarget.outputs.sha ?? "",
+        }
+      );
+      expect(decided.result.exitCode).toBe(0);
+      expect(decided.outputs.state).toBe("failure");
+
+      const published = await runStep(
+        publishStep,
+        { [`statuses/${targetSha}`]: {} },
+        {
+          FLOWS_PUBLISH: flowsPublish,
+          PR_NUMBER: failedTarget.outputs.pr_number ?? "",
+          STATUS_DESCRIPTION: decided.outputs.description ?? "",
+          STATUS_REASON: decided.outputs.reason ?? "",
+          STATUS_STATE: decided.outputs.state ?? "failure",
+          TARGET_SHA: failedTarget.outputs.sha ?? "",
+        }
+      );
+      expect(published.result.exitCode).toBe(0);
+      const failurePosts = published.calls.filter((call) =>
+        call.includes(`statuses/${targetSha}`)
+      );
+      expect(failurePosts).toHaveLength(1);
+      expect(failurePosts[0]).toContain("state=failure");
+      expect(failurePosts[0]).toContain("could not verify PR state");
+    }
+
     const page2Publish = await runStep(
       publishStep,
       {},
@@ -1581,15 +1667,29 @@ exit 1
 
     const unreadablePage2Publish = await runStep(
       publishStep,
-      {},
+      {
+        [`pulls/${prNumber}`]: {
+          body: "## E2E flows\n- none\n",
+          head: { sha: targetSha },
+        },
+        [`commits/${targetSha}/statuses`]: [ambiguityFailure],
+        deployments: [{ creator: { login: "vercel[bot]" }, id: 11 }],
+        "deployments/11/statuses": [
+          {
+            description: "Deployment has completed",
+            environment_url: `${previewUrl}/`,
+            state: "success",
+          },
+        ],
+        [`statuses/${targetSha}`]: {},
+      },
       {
         FLOWS_PUBLISH: flowsPublish,
         PR_NUMBER: String(prNumber),
         STATUS_DESCRIPTION: "Protected preview E2E skipped [flows: none]",
         STATUS_STATE: "success",
         TARGET_SHA: targetSha,
-      },
-      { gh: multiPageGh("error") }
+      }
     );
     expect(unreadablePage2Publish.result.exitCode).toBe(0);
     expect(

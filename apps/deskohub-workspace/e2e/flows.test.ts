@@ -294,6 +294,14 @@ describe("PR description ## E2E flows parser", () => {
     ["mixing all and none", "## E2E flows\n- all\n- none"],
     ["non-bullet prose", "## E2E flows\nadmin"],
     ["space typo inside flow name", "## E2E flows\n- checkout cowork"],
+    [
+      "sibling * list item closing an unfinished inline comment",
+      "## E2E flows\n* admin <!-- start\n*\n  follow-up -->\n",
+    ],
+    [
+      "sibling - list item closing an unfinished inline comment",
+      "## E2E flows\n- admin <!-- start\n-\n  follow-up -->\n",
+    ],
   ])("fails closed on %s", (_label, body) => {
     expect(parsePrBodyE2EFlows(body).ok).toBe(false);
   });

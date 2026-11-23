@@ -295,31 +295,67 @@ const stripInlineHtmlComments = (
   return { text: out, inComment };
 };
 
-// Per GFM §5.2, only a non-empty list item (unordered or ordered starting
-// with `1`) can interrupt a paragraph; bare markers like `+` or `-` cannot.
+// Per GFM §5.2:
+// - Inside a paragraph, only a non-empty list item (unordered or ordered
+//   starting with `1`) can interrupt it; bare markers like `+` or `*` cannot.
+// - At the parent container level (indentation less than the open list item's
+//   content indent), ANY list marker (even an empty one like `*` or `-`)
+//   closes the current item and starts a sibling item or new list.
+const listItemOpenPattern = /^( {0,3})([-*+]|[0-9]{1,9}[.)])([ \t]+)(\S.*)$/;
+const anyListMarkerPattern = /^( {0,3})(?:[-*+]|[0-9]{1,9}[.)])(?:[ \t]|$)/;
 const listItemStartPattern = /^ {0,3}(?:[-*+]|1[.)])[ \t]+\S/;
 const blockquoteStartPattern = /^ {0,3}>/;
 
-const interruptsParagraph = (line, isBlank) => {
+const computeListContentIndent = (line) => {
+  const match = listItemOpenPattern.exec(line);
+  if (!match) return null;
+  const leading = match[1].length;
+  const markerLen = match[2].length;
+  const spacesAfter = match[3].replace(/\t/g, "    ").length;
+  return leading + markerLen + (spacesAfter >= 5 ? 1 : spacesAfter);
+};
+
+const stripUpToIndent = (line, maxSpaces) => {
+  let removed = 0;
+  let index = 0;
+  while (index < line.length && removed < maxSpaces && line[index] === " ") {
+    removed += 1;
+    index += 1;
+  }
+  return line.slice(index);
+};
+
+const interruptsParagraph = (line, isBlank, listContentIndent) => {
   if (isBlank) return true;
+  if (listContentIndent !== null) {
+    const markerMatch = anyListMarkerPattern.exec(line);
+    if (markerMatch && markerMatch[1].length < listContentIndent) {
+      return true;
+    }
+  }
+  const candidate =
+    listContentIndent !== null
+      ? stripUpToIndent(line, listContentIndent)
+      : line;
   if (
-    anyHeadingPattern.test(line) ||
-    thematicBreakPattern.test(line) ||
-    blockquoteStartPattern.test(line)
+    anyHeadingPattern.test(candidate) ||
+    thematicBreakPattern.test(candidate) ||
+    blockquoteStartPattern.test(candidate)
   ) {
     return true;
   }
-  const fenceMatch = fenceOpenPattern.exec(line);
+  const fenceMatch = fenceOpenPattern.exec(candidate);
   if (
     fenceMatch &&
-    (fenceMatch[1][0] !== "`" || !line.slice(fenceMatch[0].length).includes("`"))
+    (fenceMatch[1][0] !== "`" ||
+      !candidate.slice(fenceMatch[0].length).includes("`"))
   ) {
     return true;
   }
-  if (matchHtmlBlockStart(line, true) !== null) {
+  if (matchHtmlBlockStart(candidate, true) !== null) {
     return true;
   }
-  if (listItemStartPattern.test(line)) {
+  if (listItemStartPattern.test(candidate)) {
     return true;
   }
   return false;
@@ -331,6 +367,7 @@ const scanVisibleLines = (lines) => {
   let fenceLength = 0;
   let previousBlank = true;
   let inParagraph = false;
+  let listContentIndent = null;
   let inIndentedCode = false;
   let htmlBlock = null;
   let inInlineComment = false;
@@ -349,6 +386,7 @@ const scanVisibleLines = (lines) => {
         previousBlank = false;
       }
       inParagraph = false;
+      listContentIndent = null;
       visible.push({
         index,
         line,
@@ -364,6 +402,7 @@ const scanVisibleLines = (lines) => {
         htmlBlock = null;
         previousBlank = true;
         inParagraph = false;
+        listContentIndent = null;
         visible.push({
           index,
           line,
@@ -379,6 +418,7 @@ const scanVisibleLines = (lines) => {
       }
       previousBlank = isBlank;
       inParagraph = false;
+      listContentIndent = null;
       visible.push({
         index,
         line,
@@ -396,6 +436,7 @@ const scanVisibleLines = (lines) => {
       if (setextUnderlinePattern.test(line)) {
         inInlineComment = false;
         inParagraph = false;
+        listContentIndent = null;
         previousBlank = false;
         visible.push({
           index,
@@ -408,11 +449,13 @@ const scanVisibleLines = (lines) => {
       }
       // Inline comments cannot cross a Markdown block boundary (GFM parses
       // block structure before inlines). If this line ends or interrupts the
-      // open paragraph, abandon the unclosed inline comment and parse this
-      // line as its own block.
-      if (interruptsParagraph(line, isBlank)) {
+      // open paragraph (or starts a sibling list item outside the open list
+      // item's content indent), abandon the unclosed inline comment and parse
+      // this line as its own block.
+      if (interruptsParagraph(line, isBlank, listContentIndent)) {
         inInlineComment = false;
         inParagraph = false;
+        listContentIndent = null;
       } else {
         const stripped = stripInlineHtmlComments(line, true);
         inInlineComment = stripped.inComment;
@@ -443,6 +486,7 @@ const scanVisibleLines = (lines) => {
         inIndentedCode = false;
         previousBlank = false;
         inParagraph = false;
+        listContentIndent = null;
         visible.push({
           index,
           line,
@@ -457,6 +501,7 @@ const scanVisibleLines = (lines) => {
     if (isBlank) {
       previousBlank = true;
       inParagraph = false;
+      listContentIndent = null;
       visible.push({
         index,
         line,
@@ -474,6 +519,7 @@ const scanVisibleLines = (lines) => {
       inIndentedCode = true;
       previousBlank = false;
       inParagraph = false;
+      listContentIndent = null;
       visible.push({
         index,
         line,
@@ -495,6 +541,7 @@ const scanVisibleLines = (lines) => {
       }
       previousBlank = false;
       inParagraph = false;
+      listContentIndent = null;
       visible.push({
         index,
         line,
@@ -516,6 +563,14 @@ const scanVisibleLines = (lines) => {
       !closesSetextHeading &&
       !anyHeadingPattern.test(line) &&
       !thematicBreakPattern.test(line);
+    const openedListIndent = continuesParagraph
+      ? computeListContentIndent(line)
+      : null;
+    if (!continuesParagraph) {
+      listContentIndent = null;
+    } else if (openedListIndent !== null) {
+      listContentIndent = openedListIndent;
+    }
     const stripped = stripInlineHtmlComments(line, false, {
       allowUnclosed: continuesParagraph,
     });

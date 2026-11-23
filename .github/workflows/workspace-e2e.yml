@@ -137,23 +137,43 @@ jobs:
             exit 1
           fi
 
-          pulls="$(gh api --paginate --slurp \
+          pulls_raw_file="$(mktemp)"
+          pulls_lookup_ok=true
+          if ! gh api --paginate \
             -H "Accept: application/vnd.github+json" \
-            "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/pulls?per_page=100" | \
-            jq 'add // []')"
-          eligible_pulls="$(jq \
-            --arg repo "$GITHUB_REPOSITORY" \
-            --arg ref "$TARGET_REF" \
-            --arg sha "$TARGET_SHA" \
-            '[.[] | select(
-              .state == "open" and
-              .draft == false and
-              .head.repo.full_name == $repo and
-              .head.ref == $ref and
-              .head.sha == $sha and
-              .user.login != "dependabot[bot]" and
-              (.head.ref | startswith("dependabot/") | not)
-            )]' <<<"$pulls")"
+            "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/pulls?per_page=100" >"$pulls_raw_file"; then
+            pulls_lookup_ok=false
+          fi
+          pulls="$(jq -s '
+            if length == 0 then []
+            elif all(.[]; type == "array") then add
+            else empty
+            end
+          ' "$pulls_raw_file" 2>/dev/null)" || {
+            pulls_lookup_ok=false
+            pulls="[]"
+          }
+          rm -f "$pulls_raw_file"
+          if [[ -z "$pulls" ]]; then
+            pulls_lookup_ok=false
+            pulls="[]"
+          fi
+          filter_eligible_pulls() {
+            jq \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg ref "$TARGET_REF" \
+              --arg sha "$TARGET_SHA" \
+              '[.[] | select(
+                .state == "open" and
+                .draft == false and
+                .head.repo.full_name == $repo and
+                .head.ref == $ref and
+                .head.sha == $sha and
+                .user.login != "dependabot[bot]" and
+                (.head.ref | startswith("dependabot/") | not)
+              )]'
+          }
+          eligible_pulls="$(filter_eligible_pulls <<<"$pulls")"
           eligible_count="$(jq 'length' <<<"$eligible_pulls")"
           fail() {
             echo "$1" >&2
@@ -207,6 +227,47 @@ jobs:
               echo "Only workspace-e2e-nightly.yml starts E2E for the nightly branch"
               echo "eligible=false" >> "$GITHUB_OUTPUT"
               exit 0
+            fi
+            if [[ "$pulls_lookup_ok" != "true" ]]; then
+              # If a paginated PR lookup failed partway through, determine
+              # whether this SHA is already a verified eligible PR head (from
+              # partial page results, open PRs for this head branch, or an
+              # existing Workspace E2E status) so a failed preview cannot leave
+              # a prior green status in place.
+              verified_head=false
+              if [[ "$eligible_count" != "0" ]]; then
+                verified_head=true
+              elif [[ "$TARGET_REF" != dependabot/* ]]; then
+                owner="${GITHUB_REPOSITORY%%/*}"
+                fallback_pulls="$(gh api \
+                  -H "Accept: application/vnd.github+json" \
+                  "repos/$GITHUB_REPOSITORY/pulls?state=open&head=$owner:$TARGET_REF&per_page=100" \
+                  2>/dev/null || echo '[]')"
+                if [[ "$(filter_eligible_pulls <<<"$fallback_pulls" 2>/dev/null | jq 'length' 2>/dev/null || echo 0)" != "0" ]]; then
+                  verified_head=true
+                else
+                  existing_statuses="$(gh api --paginate --slurp \
+                    -H "Accept: application/vnd.github+json" \
+                    "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/statuses?per_page=100" \
+                    2>/dev/null | jq 'add // []' 2>/dev/null || echo '[]')"
+                  if jq -e 'any(.[]; .context == "Workspace E2E" and .creator.login == "github-actions[bot]")' \
+                    <<<"$existing_statuses" >/dev/null 2>&1; then
+                    verified_head=true
+                  fi
+                fi
+              fi
+              if [[ "$verified_head" == "true" ]]; then
+                {
+                  echo "deployment=$TARGET_DEPLOYMENT"
+                  echo "eligible=true"
+                  echo "sha=$TARGET_SHA"
+                } >> "$GITHUB_OUTPUT"
+                fail 'Could not read all pull requests associated with this commit' \
+                  'Workspace E2E could not verify PR state; re-run the failed jobs' \
+                  pr-lookup-failed
+              fi
+              echo "Could not read pull requests associated with this commit" >&2
+              exit 1
             fi
             if [[ "$eligible_count" == "0" ]]; then
               echo "No eligible open internal PR matches the exact deployment SHA"
