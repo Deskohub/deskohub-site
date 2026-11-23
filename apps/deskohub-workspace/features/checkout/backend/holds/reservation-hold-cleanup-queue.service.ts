@@ -94,6 +94,21 @@ export const processReservationHoldCleanupScheduleMessage = Effect.fn(
   payload: ReservationHoldCleanupSchedulePayload,
   now = Temporal.Now.instant()
 ) {
+  // A delivery exactly at the deadline is still on time.
+  if (
+    payload.cleanupDeadlineIso !== undefined &&
+    Temporal.Instant.compare(
+      now,
+      Temporal.Instant.from(payload.cleanupDeadlineIso)
+    ) > 0
+  ) {
+    yield* Effect.logWarning(
+      "Reservation hold cleanup queue message acknowledged: past its cleanup deadline",
+      { payload, checkedAt: now }
+    );
+    return "past_deadline" as const;
+  }
+
   const reservationHoldExpiresAt = Temporal.Instant.from(
     payload.reservationHoldExpiresAtIso
   );
