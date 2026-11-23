@@ -19,6 +19,7 @@ import {
   readFencedReleaseRecord,
   requireRecordCoversLiveService,
 } from "./release/release-delivery";
+import { ReleaseApplyPending } from "./release/release-reconciler";
 import type { ReleaseRecord } from "./release/release-record";
 import { ReleaseRecordStore } from "./release/release-record-store";
 import {
@@ -201,6 +202,22 @@ export const declareWorkspaceServices = (
   });
 
 /**
+ * The record a plain deploy re-declares. A pending traffic change belongs
+ * to the release run that persisted it; only its fenced apply or `recover`
+ * may declare it, so a plain deploy refuses while one is pending. A staged
+ * candidate alone is fine: re-declaring it is what the candidate apply did.
+ */
+const readUnfencedReleaseRecord = Effect.gen(function* () {
+  const { record } = yield* (yield* ReleaseRecordStore).read;
+  if (record.pendingApply !== null) {
+    return yield* new ReleaseApplyPending({
+      releaseId: record.pendingApply.target.releaseId,
+    });
+  }
+  return record;
+});
+
+/**
  * The release-owned services as the authoritative release record declares
  * them now. Every deploy of a stage that serves a release must declare them,
  * or Alchemy would delete them; a fenced apply passes the generation it
@@ -221,7 +238,7 @@ export const declareRecordedWorkspaceServices = (
     }
     const record =
       expectedGeneration === undefined
-        ? (yield* (yield* ReleaseRecordStore).read).record
+        ? yield* readUnfencedReleaseRecord
         : yield* readFencedReleaseRecord(expectedGeneration);
     // Declaring nothing from a lost record would delete the live services.
     yield* requireRecordCoversLiveService(record);

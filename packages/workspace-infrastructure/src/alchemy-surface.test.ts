@@ -20,7 +20,11 @@ import {
 import { ReleaseServiceReadback } from "./release/release-platform";
 import { workersServing } from "./release/release-readback.test-utils";
 import { promote, settleApply, stage } from "./release/release-reconciler";
-import { emptyReleaseRecord, GitSha } from "./release/release-record";
+import {
+  emptyReleaseRecord,
+  GitSha,
+  type ReleaseRecord,
+} from "./release/release-record";
 import {
   makeInMemoryReleaseRecordStore,
   ReleaseRecordStore,
@@ -267,6 +271,42 @@ describe("Alchemy beta.87 surface", () => {
         )
       ).toHaveLength(3);
     }
+  });
+
+  test("a plain deploy refuses a pending traffic change but keeps a candidate", async () => {
+    const plain = (record: ReleaseRecord) =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(record);
+          return yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            undefined
+          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+        })
+      );
+    const serving = servingRecord();
+    const { record: candidate, releaseId } = Effect.runSync(
+      stage(serving, {
+        expectedGeneration: serving.generation,
+        sha: GitSha.make("b".repeat(40)),
+        imageDigest: digest,
+        origin: "cloud-run",
+      })
+    );
+    const pending = Effect.runSync(
+      promote(candidate, {
+        expectedGeneration: candidate.generation,
+        releaseId,
+        now,
+        candidateReadback: candidate.candidate,
+      })
+    );
+
+    const staged = await plain(candidate);
+    expect(staged.exit._tag).toBe("Success");
+    const refused = await plain(pending);
+    expect(String(refused.exit)).toContain("ReleaseApplyPending");
+    expect(refused.resources).toEqual({});
   });
 
   test("refuses an empty record while the web service is live", async () => {
