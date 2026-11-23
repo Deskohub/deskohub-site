@@ -90,12 +90,10 @@ export function mutation<Input extends Schema.Top, Output extends Schema.Top>({
   return { kind: "mutation", input, output, ledger, minimumDhwVersion };
 }
 
-/** Names each definition after its key. */
-export const defineOperations = <
-  const Definitions extends Record<string, OperationDefinition>,
->(
-  definitions: Definitions
-): {
+/** Each definition of `Definitions`, named after its key. */
+export type NamedOperations<
+  Definitions extends Readonly<Record<string, OperationDefinition>>,
+> = {
   readonly [Name in keyof Definitions & string]: Operation<
     Name,
     Definitions[Name]["input"],
@@ -103,13 +101,48 @@ export const defineOperations = <
     Definitions[Name]["ledger"],
     Definitions[Name]["kind"]
   >;
-} =>
-  Object.fromEntries(
+};
+
+/**
+ * Whether `operations` holds each of `definitions`, unchanged and named
+ * after its key, which TypeScript can't tell of entries built at run time.
+ */
+const namesEachDefinition = <
+  Definitions extends Readonly<Record<string, OperationDefinition>>,
+>(
+  definitions: Definitions,
+  operations: Operations
+): operations is NamedOperations<Definitions> =>
+  Object.entries(definitions).every(([name, definition]) => {
+    const operation = operations[name];
+    return (
+      operation !== undefined &&
+      operation.name === name &&
+      operation.kind === definition.kind &&
+      operation.input === definition.input &&
+      operation.output === definition.output &&
+      operation.ledger === definition.ledger &&
+      operation.minimumDhwVersion === definition.minimumDhwVersion
+    );
+  });
+
+/** Names each definition after its key. */
+export const defineOperations = <
+  const Definitions extends Readonly<Record<string, OperationDefinition>>,
+>(
+  definitions: Definitions
+): NamedOperations<Definitions> => {
+  const operations: Operations = Object.fromEntries(
     Object.entries(definitions).map(([name, definition]) => [
       name,
       { ...definition, name },
     ])
-  ) as never;
+  );
+  if (!namesEachDefinition(definitions, operations)) {
+    throw new Error("An operation lost its definition while being named.");
+  }
+  return operations;
+};
 
 /** What an adapter passes in: the encoded input, decoded by the port. */
 export type OperationInput<Op extends Operation> = Op["input"]["Encoded"];

@@ -1,4 +1,11 @@
-import { type Array as Arr, Effect, Option, Schema, Struct } from "effect";
+import {
+  type Array as Arr,
+  Effect,
+  Option,
+  Schema,
+  Struct,
+  type Types,
+} from "effect";
 import { HttpMethod, type HttpRouter } from "effect/http";
 import {
   HttpApi,
@@ -62,22 +69,40 @@ type ReadOptions = Pick<RouteOptions, "behavior" | "query">;
 type WriteOptions = Pick<RouteOptions, "behavior" | "body">;
 type NoOptions = Record<never, never>;
 
-type RouteOn<
+interface RouteOn<
   Method extends HttpMethod.HttpMethod,
   Allowed extends RouteOptions,
-> = <
-  const Path extends HttpRouter.PathInput,
-  const Options extends Allowed = Extract<NoOptions, Allowed>,
->(
-  path: Path,
-  options?: Options
-) => OperationRoute<Method, Path, Options>;
+> {
+  <const Path extends HttpRouter.PathInput>(
+    path: Path
+  ): OperationRoute<Method, Path, NoOptions>;
+  <const Path extends HttpRouter.PathInput, const Options extends Allowed>(
+    path: Path,
+    options: Options
+  ): OperationRoute<Method, Path, Options>;
+}
 
-const routeOn =
-  <Method extends HttpMethod.HttpMethod>(
-    method: Method
-  ): RouteOn<Method, RouteOptions> =>
-  (path, options) => ({ method, path, options: options ?? ({} as never) });
+const routeOn = <
+  Method extends HttpMethod.HttpMethod,
+  Allowed extends RouteOptions,
+>(
+  method: Method
+): RouteOn<Method, Allowed> => {
+  function on<const Path extends HttpRouter.PathInput>(
+    path: Path
+  ): OperationRoute<Method, Path, NoOptions>;
+  function on<
+    const Path extends HttpRouter.PathInput,
+    const Options extends Allowed,
+  >(path: Path, options: Options): OperationRoute<Method, Path, Options>;
+  function on(
+    path: HttpRouter.PathInput,
+    options?: Allowed
+  ): OperationRoute<Method, HttpRouter.PathInput, Allowed | NoOptions> {
+    return { method, path, options: options ?? {} };
+  }
+  return on;
+};
 
 /**
  * Routes for an operation's endpoint. Path parameters are the input fields
@@ -85,19 +110,13 @@ const routeOn =
  * `query: true`; a write's other fields are its body, which is absent when
  * there are none and is the whole input when the path names none.
  */
-export const route: {
-  readonly get: RouteOn<"GET", ReadOptions>;
-  readonly post: RouteOn<"POST", WriteOptions>;
-  readonly put: RouteOn<"PUT", WriteOptions>;
-  readonly patch: RouteOn<"PATCH", WriteOptions>;
-  readonly delete: RouteOn<"DELETE", WriteOptions>;
-} = {
-  get: routeOn("GET"),
-  post: routeOn("POST"),
-  put: routeOn("PUT"),
-  patch: routeOn("PATCH"),
-  delete: routeOn("DELETE"),
-};
+export const route = {
+  get: routeOn<"GET", ReadOptions>("GET"),
+  post: routeOn<"POST", WriteOptions>("POST"),
+  put: routeOn<"PUT", WriteOptions>("PUT"),
+  patch: routeOn<"PATCH", WriteOptions>("PATCH"),
+  delete: routeOn<"DELETE", WriteOptions>("DELETE"),
+} as const;
 
 type FieldsOf<Input> =
   Input extends Schema.Struct<infer Fields extends Schema.Struct.Fields>
@@ -296,10 +315,14 @@ export interface OperationBinding<
   };
 }
 
+/** Whether `input` is a struct, whose fields a route places in its request. */
+const isStructInput = (
+  input: Schema.Top
+): input is Schema.Struct<Schema.Struct.Fields> =>
+  "fields" in input && "mapFields" in input;
+
 const fieldsOf = (input: Schema.Top): Schema.Struct.Fields =>
-  Schema.isSchema(input) && "fields" in input
-    ? (input as Schema.Struct<Schema.Struct.Fields>).fields
-    : {};
+  isStructInput(input) ? input.fields : {};
 
 /** What a route's body carries: one input field, the rest of the input, or nothing. */
 type RequestBody = { readonly field: string } | "rest" | "none";
@@ -354,12 +377,15 @@ const endpointOf = (
     operation,
     operationRoute
   );
-  const rest = (): Schema.Top =>
-    paramKeys.length === 0
-      ? input
-      : (input as Schema.Struct<Schema.Struct.Fields>).mapFields(
-          Struct.omit(paramKeys)
-        );
+  const rest = (): Schema.Top => {
+    if (paramKeys.length === 0) return input;
+    if (!isStructInput(input)) {
+      throw new Error(
+        `${operation.name} names path parameters without a struct input.`
+      );
+    }
+    return input.mapFields(Struct.omit(paramKeys));
+  };
   const behavior =
     operation.kind === "query"
       ? readOperation
@@ -399,6 +425,19 @@ const endpointOf = (
 };
 
 /**
+ * Whether `endpoints` are one endpoint per route, named after its operation
+ * in the routes' order, which TypeScript can't tell of endpoints built from
+ * the routes at run time.
+ */
+const areRouteEndpoints = <Endpoint extends HttpApiEndpoint.Constraint>(
+  endpoints: ReadonlyArray<HttpApiEndpoint.Constraint>,
+  names: ReadonlyArray<string>
+): endpoints is Arr.NonEmptyReadonlyArray<Endpoint> =>
+  endpoints.length > 0 &&
+  endpoints.length === names.length &&
+  endpoints.every((endpoint, index) => endpoint.identifier === names[index]);
+
+/**
  * The `/api/v1/cli` group serving `operations`, one endpoint per operation
  * named after it. Each endpoint's request parts come from the operation's
  * input as its route places them, its success is the operation's output,
@@ -421,11 +460,23 @@ export const operationGroup = <
   routes: Routes & CheckedRoutes<Ops, Routes>,
   { errors }: { readonly errors: Errors }
 ) => {
-  const endpoints = Object.entries(routes).map(([name, operationRoute]) =>
-    endpointOf(operations[name] as Operation, operationRoute, errors)
-  ) as unknown as Arr.NonEmptyReadonlyArray<
-    OperationGroupEndpoints<Ops, Routes, Errors[number]>
-  >;
+  const endpoints: ReadonlyArray<HttpApiEndpoint.Constraint> = Object.entries(
+    routes
+  ).map(([name, operationRoute]) => {
+    const operation = operations[name];
+    if (operation === undefined) {
+      throw new Error(`${identifier}.${name} routes no operation.`);
+    }
+    return endpointOf(operation, operationRoute, errors);
+  });
+  if (
+    !areRouteEndpoints<OperationGroupEndpoints<Ops, Routes, Errors[number]>>(
+      endpoints,
+      Object.keys(routes)
+    )
+  ) {
+    throw new Error(`${identifier} serves no operation.`);
+  }
   const group = administrationOperationGroup(
     HttpApiGroup.make(identifier).add(...endpoints),
     { checkDhwVersionBeforeAuthentication: true }
@@ -461,36 +512,37 @@ type ServedRequirements<Endpoint extends HttpApiEndpoint.Constraint, Services> =
         : HttpRouter.Request<"Requires", Required>
       : never);
 
+/** An operation's input fields by name, before its schema decodes them. */
+const InputFields = Schema.Record(Schema.String, Schema.Unknown);
+type InputFields = typeof InputFields.Type;
+
 /** The parts of a request that carry an operation's input. */
-export type OperationRequest = {
-  readonly params?: Readonly<Record<string, unknown>>;
-  readonly query?: Readonly<Record<string, unknown>>;
-  readonly payload?: unknown;
-};
+export const OperationRequest = Schema.Struct({
+  params: Schema.optional(InputFields),
+  query: Schema.optional(InputFields),
+  payload: Schema.optional(Schema.Unknown),
+});
+export type OperationRequest = typeof OperationRequest.Type;
 
 /** The request parts that carry an operation's input, as its route places them. */
 const requestOf = (
   operation: Operation,
   operationRoute: OperationRoute,
-  input: Readonly<Record<string, unknown>>
+  input: InputFields
 ): OperationRequest => {
   const { paramKeys, query, body } = requestLayoutOf(operation, operationRoute);
   const rest = Struct.omit(input, paramKeys);
-  return {
-    ...(paramKeys.length === 0
-      ? {}
-      : { params: Struct.pick(input, paramKeys) }),
-    ...(query ? { query: rest } : {}),
-    ...(body === "none"
-      ? {}
-      : {
-          payload: bodyValue(
-            body,
-            () => rest,
-            (name) => input[name]
-          ),
-        }),
-  };
+  const request: Types.Mutable<OperationRequest> = {};
+  if (paramKeys.length > 0) request.params = Struct.pick(input, paramKeys);
+  if (query) request.query = rest;
+  if (body !== "none") {
+    request.payload = bodyValue(
+      body,
+      () => rest,
+      (name) => input[name]
+    );
+  }
+  return request;
 };
 
 /**
@@ -512,20 +564,24 @@ export const operationRequest = <
   if (operation === undefined || operationRoute === undefined) {
     throw new Error(`${name} has no route in this group.`);
   }
-  return requestOf(
-    operation,
-    operationRoute,
-    input as Readonly<Record<string, unknown>>
-  );
+  if (!Schema.is(InputFields)(input)) {
+    throw new Error(`${name} takes no struct input.`);
+  }
+  return requestOf(operation, operationRoute, input);
 };
 
 /** The operation's input from the request parts its route placed it in. */
-const inputOf = ({ options }: OperationRoute, request: OperationRequest) =>
+const inputOf = (
+  { options }: OperationRoute,
+  request: OperationRequest
+): InputFields =>
   options.body === undefined
     ? {
         ...request.params,
         ...request.query,
-        ...(request.payload as object | undefined),
+        ...Schema.decodeUnknownOption(InputFields)(request.payload).pipe(
+          Option.getOrElse((): InputFields => ({}))
+        ),
       }
     : { ...request.params, [options.body]: request.payload };
 
@@ -576,36 +632,96 @@ export const operationGroupHandlers = <
   >,
   outputs?: Outputs
 ) => {
-  const { routes } = group[operationBinding];
+  const { operations, routes } = group[operationBinding];
+  const names = Object.keys(routes);
   const serve =
     (invoke: OperationInvoke<OperationsOf<Group>, Failure, Services>) =>
-    ([name, operationRoute]: [string, OperationRoute]) =>
-    (request: OperationRequest) => {
-      const output = invoke(name, inputOf(operationRoute, request) as never);
-      const adapt: OutputAdapter | undefined = outputs?.[name];
-      return adapt === undefined ? output : Effect.flatMap(output, adapt);
-    };
+    ([name, operationRoute]: [string, OperationRoute]): HttpApiEndpoint.Handler<
+      HttpApiEndpoint.Constraint,
+      never,
+      unknown
+    > =>
+    (request) =>
+      Effect.flatMap(
+        Effect.orDie(Schema.decodeUnknownEffect(OperationRequest)(request)),
+        (parts) => {
+          if (!isOperationName(operations, name)) {
+            return Effect.die(new Error(`${name} routes no operation.`));
+          }
+          const operation = operations[name];
+          if (operation === undefined) {
+            return Effect.die(new Error(`${name} routes no operation.`));
+          }
+          const input = inputOf(operationRoute, parts);
+          // The endpoint decoded each part; the operation decodes the input.
+          if (!Schema.is(Schema.toEncoded(operation.input))(input)) {
+            return Effect.die(
+              new Error(`${name}'s request doesn't carry its input.`)
+            );
+          }
+          const output = invoke(name, input);
+          const adapt: OutputAdapter | undefined = outputs?.[name];
+          return adapt === undefined ? output : Effect.flatMap(output, adapt);
+        }
+      );
   type Served = HttpApiBuilder.Handlers<
     ServedRequirements<
       HttpApiGroup.Endpoints<Group>,
       Services | OutputServices<Outputs>
     >
   >;
-  return HttpApiBuilder.group(
-    api,
-    group.identifier as HttpApiGroup.Identifier<Group>,
-    (handlers) =>
-      Effect.map(invoker, (invoke) =>
-        // `HttpApiBuilder` types each `handle` by an endpoint name known at
-        // compile time; these are the group's own routes, read at run time.
-        Object.entries<OperationRoute>(routes).reduce<Served>(
-          (served, entry): Served =>
-            served.handle(
-              entry[0] as never,
-              serve(invoke)(entry) as never
-            ) as never,
-          handlers as never
-        )
-      )
+  if (!isGroupIdentifier(api, group.identifier)) {
+    throw new Error(`${group.identifier} is no group of this API.`);
+  }
+  return HttpApiBuilder.group(api, group.identifier, (handlers) =>
+    Effect.flatMap(invoker, (invoke) => {
+      // `HttpApiBuilder` types each handler by an endpoint name known at
+      // compile time; these are the group's own routes, read at run time.
+      // Each `handle` registers on `handlers` itself, which the check below
+      // confirms for every route.
+      const byName: RouteHandlers = handlers;
+      for (const entry of Object.entries<OperationRoute>(routes)) {
+        byName.handle(entry[0], serve(invoke)(entry));
+      }
+      if (!servesEveryRoute<Served>(byName, names)) {
+        return Effect.die(
+          new Error(`${group.identifier} leaves a route unserved.`)
+        );
+      }
+      return Effect.succeed<Served>(byName);
+    })
+  );
+};
+
+/** Handlers registered by an endpoint name read at run time. */
+type RouteHandlers = HttpApiBuilder.Handlers<
+  unknown,
+  Readonly<Record<string, HttpApiEndpoint.Constraint>>
+>;
+
+/** Whether `name` names one of `operations`. */
+const isOperationName = <Ops extends Operations>(
+  operations: Ops,
+  name: string
+): name is keyof Ops & string => Object.hasOwn(operations, name);
+
+/** Whether `identifier` names one of `api`'s groups. */
+const isGroupIdentifier = <Groups extends HttpApiGroup.Constraint>(
+  api: HttpApi.HttpApi<string, Groups>,
+  identifier: string
+): identifier is HttpApiGroup.Identifier<Groups> =>
+  Object.hasOwn(api.groups, identifier);
+
+/**
+ * Whether `handlers` serves each of `names`, which TypeScript can't tell of
+ * handlers registered by names read at run time.
+ */
+const servesEveryRoute = <Served extends RouteHandlers>(
+  handlers: RouteHandlers,
+  names: ReadonlyArray<string>
+): handlers is Served => {
+  const registered = "handlers" in handlers ? handlers.handlers : undefined;
+  return (
+    registered instanceof Map && names.every((name) => registered.has(name))
   );
 };

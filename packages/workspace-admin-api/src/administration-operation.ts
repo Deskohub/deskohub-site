@@ -3,7 +3,7 @@ import {
   Context,
   Match,
   Option,
-  type Schema,
+  Schema,
   SchemaAST,
 } from "effect";
 import { HttpApi, type HttpApiGroup } from "effect/http-api";
@@ -340,20 +340,24 @@ export const administrationOperationDeclaration = (
  */
 export const administrationOperationVariantOf = (
   variants: AdministrationOperationVariants["Service"],
-  body: unknown
-): Option.Option<string> => {
-  const member = ownProperty(body, variants.field);
-  const variant = ownProperty(member, variants.discriminator);
-  return typeof variant === "string" &&
-    Object.hasOwn(variants.operations, variant)
-    ? Option.some(variant)
-    : Option.none();
-};
+  body: Schema.Json
+): Option.Option<string> =>
+  ownMember(body, variants.field).pipe(
+    Option.flatMap((member) => ownMember(member, variants.discriminator)),
+    Option.filter(Schema.is(Schema.String)),
+    Option.filter((variant) => Object.hasOwn(variants.operations, variant))
+  );
 
-const ownProperty = (value: unknown, key: string): unknown =>
-  typeof value === "object" && value !== null && Object.hasOwn(value, key)
-    ? (value as Readonly<Record<string, unknown>>)[key]
-    : undefined;
+const JsonFields = Schema.Record(Schema.String, Schema.Json);
+
+/** The member `key` names on `value` itself, not on its prototype. */
+const ownMember = (
+  value: Schema.Json,
+  key: string
+): Option.Option<Schema.Json> =>
+  Schema.is(JsonFields)(value) && Object.hasOwn(value, key)
+    ? Option.fromNullishOr(value[key])
+    : Option.none();
 
 /**
  * Every operation of the API, one entry per endpoint and one per generic

@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+import { hasEveryKey } from "./administration-record-keys";
 
 /**
  * Response fields a newer `dhw` must still decode from an older server, which
@@ -20,7 +21,7 @@ export const nullableField = <S extends Schema.Top>(schema: S) =>
 export const listField = <S extends Schema.Top>(schema: S) =>
   Schema.Array(schema).pipe(
     Schema.withDecodingDefaultTypeKey(
-      Effect.succeed([] as ReadonlyArray<S["Type"]>)
+      Effect.succeed<ReadonlyArray<S["Type"]>>([])
     )
   );
 
@@ -32,23 +33,29 @@ export const listField = <S extends Schema.Top>(schema: S) =>
 export const countsField = <
   const Key extends string,
   const AddedKey extends Key,
-  S extends Schema.Top,
+  S extends Schema.Top & { readonly Type: number },
 >(
   keys: ReadonlyArray<Key>,
   addedKeys: ReadonlyArray<AddedKey>,
-  count: S & { readonly Type: number }
+  count: S
 ) => {
   const added: ReadonlySet<string> = new Set(addedKeys);
-  return Schema.Struct(
-    Object.fromEntries(
-      keys.map((key) => [
-        key,
-        added.has(key) ? fieldWithDefault(count, 0 as S["Type"]) : count,
-      ])
-    ) as {
-      readonly [K in Key]: K extends AddedKey
-        ? ReturnType<typeof fieldWithDefault<S>>
-        : S;
-    }
+  // The count schema decodes 0 itself, so a branded count keeps its brand.
+  const defaulted = count.pipe(
+    Schema.withDecodingDefaultTypeKey(Schema.decodeUnknownEffect(count)(0))
   );
+  const requiredKeys = keys.filter(
+    (key): key is Exclude<Key, AddedKey> => !added.has(key)
+  );
+  const required = Object.fromEntries(requiredKeys.map((key) => [key, count]));
+  const defaultedFields = Object.fromEntries(
+    addedKeys.map((key) => [key, defaulted])
+  );
+  if (
+    !hasEveryKey(required, requiredKeys) ||
+    !hasEveryKey(defaultedFields, addedKeys)
+  ) {
+    throw new Error("A count lost its key while being declared.");
+  }
+  return Schema.Struct({ ...required, ...defaultedFields });
 };

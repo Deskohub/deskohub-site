@@ -1,6 +1,7 @@
 import { supportedLocales } from "@deskohub/i18n/locale-registry";
 import { Temporal } from "@js-temporal/polyfill";
 import { Context, Effect, Option, Schema } from "effect";
+import type { HttpMethod } from "effect/http";
 import {
   HttpApi,
   HttpApiEndpoint,
@@ -490,17 +491,39 @@ export class AdministrationActionRecord extends HttpApiMiddleware.Service<
  */
 export const requiresDhw =
   (minimum: DhwVersion, refusal?: (typeof OutdatedDhwRefusal)["Service"]) =>
-  <Endpoint extends HttpApiEndpoint.Constraint>(
-    endpoint: Endpoint
-  ): HttpApiEndpoint.AddMiddleware<Endpoint, CliClientCompatibility> => {
-    const required = (endpoint as unknown as HttpApiEndpoint.Top)
+  <
+    Identifier extends string,
+    Method extends HttpMethod.HttpMethod,
+    Path extends string,
+    Params extends Schema.Top,
+    Query extends Schema.Top,
+    Payload extends Schema.Top,
+    Headers extends Schema.Top,
+    Success extends Schema.Top,
+    Failure extends Schema.Top,
+    Middleware,
+    MiddlewareServices,
+  >(
+    endpoint: HttpApiEndpoint.HttpApiEndpoint<
+      Identifier,
+      Method,
+      Path,
+      Params,
+      Query,
+      Payload,
+      Headers,
+      Success,
+      Failure,
+      Middleware,
+      MiddlewareServices
+    >
+  ) => {
+    const required = endpoint
       .annotate(MinimumDhwVersion, Option.some(minimum))
       .middleware(CliClientCompatibility);
-    return (
-      refusal === undefined
-        ? required
-        : required.annotate(OutdatedDhwRefusal, refusal)
-    ) as never;
+    return refusal === undefined
+      ? required
+      : required.annotate(OutdatedDhwRefusal, refusal);
   };
 
 interface AdministrationOperationGroupOptions {
@@ -529,20 +552,42 @@ export type AdministrationOperationGroup<
   "/api/v1/cli"
 >;
 
+const administrationOperationPrefix = "/api/v1/cli";
+
+/**
+ * Whether `served` serves each endpoint as an administration operation:
+ * under the prefix, authenticated and recorded, and checked for its minimum
+ * `dhw` first when `checksFirst`. TypeScript can't tell this of a group whose
+ * middleware depends on an option read at run time.
+ */
+const isAdministrationOperationGroup = <Served extends HttpApiGroup.Constraint>(
+  served: HttpApiGroup.Constraint,
+  checksFirst: boolean
+): served is Served =>
+  Object.values(served.endpoints).every((endpoint) => {
+    if (!HttpApiEndpoint.isHttpApiEndpoint(endpoint)) return false;
+    const middlewares: ReadonlySet<unknown> = endpoint.middlewares;
+    return (
+      endpoint.path.startsWith(administrationOperationPrefix) &&
+      middlewares.has(AdministrationActionRecord) &&
+      middlewares.has(AdministrationAuthentication) &&
+      (!checksFirst || middlewares.has(CliClientCompatibility))
+    );
+  });
+
 /**
  * Throws when an endpoint can't be an administration operation in its group:
  * it is CLI-only, or the group and the endpoint disagree on who checks the
  * minimum `dhw`.
  */
 const assertAdministrationOperationEndpoint = (
-  declared: HttpApiGroup.Top,
+  declared: Pick<HttpApiGroup.Top, "identifier" | "annotations">,
   endpoint: HttpApiEndpoint.Top,
   checksFirst: boolean
 ) => {
   const reference = `${declared.identifier}.${endpoint.identifier}`;
-  const checksOwn = (endpoint.middlewares as ReadonlySet<unknown>).has(
-    CliClientCompatibility
-  );
+  const middlewares: ReadonlySet<unknown> = endpoint.middlewares;
+  const checksOwn = middlewares.has(CliClientCompatibility);
   const annotations = Context.merge(declared.annotations, endpoint.annotations);
   const minimum = Context.get(annotations, MinimumDhwVersion);
   if (Option.isSome(Context.getOption(annotations, CliOnly))) {
@@ -580,26 +625,32 @@ export const administrationOperationGroup = <
   group: Group,
   options?: Options
 ): AdministrationOperationGroup<Group, Options> => {
-  const declared = group as unknown as HttpApiGroup.Top;
+  if (!HttpApiGroup.isHttpApiGroup(group)) {
+    throw new Error(`${group.identifier} isn't an HttpApiGroup.`);
+  }
   const checksFirst = options?.checkDhwVersionBeforeAuthentication ?? false;
-  for (const endpoint of Object.values(declared.endpoints)) {
-    assertAdministrationOperationEndpoint(declared, endpoint, checksFirst);
+  for (const endpoint of Object.values(group.endpoints)) {
+    assertAdministrationOperationEndpoint(group, endpoint, checksFirst);
   }
   // Each middleware added later runs outside the earlier ones.
-  const middleware: ReadonlyArray<
-    Context.Key<HttpApiMiddleware.AnyId, unknown>
-  > = [
-    AdministrationActionRecord,
-    AdministrationAuthentication,
-    ...(checksFirst ? [CliClientCompatibility] : []),
-  ];
-  return middleware
-    .reduce(
-      (served, service) =>
-        served.middleware(service) as unknown as HttpApiGroup.Top,
-      declared
-    )
-    .prefix("/api/v1/cli") as never;
+  const authenticated = group
+    .middleware(AdministrationActionRecord)
+    .middleware(AdministrationAuthentication);
+  const served: HttpApiGroup.Constraint = checksFirst
+    ? authenticated
+        .middleware(CliClientCompatibility)
+        .prefix(administrationOperationPrefix)
+    : authenticated.prefix(administrationOperationPrefix);
+  if (
+    !isAdministrationOperationGroup<
+      AdministrationOperationGroup<Group, Options>
+    >(served, checksFirst)
+  ) {
+    throw new Error(
+      `${group.identifier} lost its administration middleware while being served.`
+    );
+  }
+  return served;
 };
 
 export const AdministrationOverviewMetric = Schema.Struct({
