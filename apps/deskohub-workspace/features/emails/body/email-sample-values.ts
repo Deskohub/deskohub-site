@@ -8,6 +8,7 @@ import {
 } from "@deskohub/workspace-admin-api";
 import { Match, type Schema } from "effect";
 import { sampleEmailDiscountValue } from "@/features/emails/values/discount";
+import { sampleEmailTriggerValue } from "./pass-reminder-trigger-values";
 
 const [ResolvedSnapshot, FallbackSnapshot] = EmailValueSnapshot.members;
 
@@ -26,6 +27,7 @@ export const emailCustomerValueField = (
       customer: (source) =>
         definition["customerShape"] ?? selectedEmailCustomerFields(source),
       discount: () => undefined,
+      trigger: () => undefined,
     })
   );
 
@@ -67,10 +69,24 @@ const sampleOfField = (
     })
   );
 
+const omittedFieldsFor = (
+  valueName: string,
+  omittedFields: ReadonlySet<string> | undefined
+): ReadonlySet<string> | undefined => {
+  if (!omittedFields || omittedFields.size === 0) return undefined;
+  const prefix = `${valueName}.`;
+  const fields = new Set<string>();
+  for (const key of omittedFields) {
+    if (key.startsWith(prefix)) fields.add(key.slice(prefix.length));
+  }
+  return fields.size > 0 ? fields : undefined;
+};
+
 const sampleSnapshot = (
   definition: EmailValueDefinition,
   locale: string,
-  now: Temporal.Instant
+  now: Temporal.Instant,
+  omittedFields?: ReadonlySet<string>
 ): EmailValueSnapshot => {
   const fallback = FallbackSnapshot.make({
     text: definition.fallback?.[locale] ?? `[${definition.name}]`,
@@ -79,7 +95,15 @@ const sampleSnapshot = (
     Match.discriminatorsExhaustive("kind")({
       discount: (source) =>
         ResolvedSnapshot.make({ value: sampleEmailDiscountValue(source, now) }),
+      trigger: (source) =>
+        sampleEmailTriggerValue(
+          source.trigger,
+          locale,
+          now,
+          omittedFieldsFor(definition.name, omittedFields)
+        ),
       customer: (source) => {
+        if (omittedFields?.has(definition.name)) return fallback;
         const field = emailCustomerValueField(definition);
         return field
           ? ResolvedSnapshot.make({
@@ -104,7 +128,8 @@ const sampleSnapshot = (
 export const sampleEmailValues = (
   document: EmailDocument,
   locale: string,
-  now: Temporal.Instant
+  now: Temporal.Instant,
+  options?: { readonly omittedFields?: ReadonlySet<string> }
 ): Record<string, EmailValueSnapshot> => {
   const required = new Set<string>(requiredEmailValueNames(document));
   return Object.fromEntries(
@@ -112,7 +137,7 @@ export const sampleEmailValues = (
       .filter((definition) => required.has(definition.name))
       .map((definition) => [
         definition.name,
-        sampleSnapshot(definition, locale, now),
+        sampleSnapshot(definition, locale, now, options?.omittedFields),
       ])
   );
 };

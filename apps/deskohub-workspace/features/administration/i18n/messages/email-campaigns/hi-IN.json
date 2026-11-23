@@ -1283,5 +1283,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "इनमें से एक पता मान्य email पता नहीं है। पते जाँचें और फिर से कोशिश करें।",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "प्रोडक्शन के बाहर अभियान email केवल @{domain} पतों पर भेजे जा सकते हैं, और कुछ प्राप्तकर्ता इनमें शामिल नहीं हैं। कुछ भी नहीं भेजा गया।",
   "emailCampaignsSendingFailureRecipientsUnavailable": "प्राप्तकर्ता तय नहीं किए जा सके, क्योंकि Dotypos या डेटाबेस उपलब्ध नहीं है। कुछ भी नहीं भेजा गया और कोड अब भी मान्य है; थोड़ी देर बाद फिर से कोशिश करें।",
-  "emailCampaignsSendingFailureEmailSetupMissing": "इस डिप्लॉयमेंट में अभियान email सेट नहीं हैं। किसी डेवलपर से अभियान email के एनवायरनमेंट वेरिएबल जाँचने के लिए कहें।"
+  "emailCampaignsSendingFailureEmailSetupMissing": "इस डिप्लॉयमेंट में अभियान email सेट नहीं हैं। किसी डेवलपर से अभियान email के एनवायरनमेंट वेरिएबल जाँचने के लिए कहें।",
+  "emailCampaignsComposerEditPublishedEmail": "लाइब्रेरी में ईमेल संपादित करें",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "यह ईमेल ऐसे ट्रिगर मान उपयोग करता है जो इस ऑटोमेशन के ट्रिगर से मेल नहीं खाते। कोई उपयुक्त ईमेल चुनें या फ़्लो अपडेट करें।"
 }

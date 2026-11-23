@@ -146,6 +146,7 @@ mock.module("react-native-svg", () => ({
   default: svgElement("Svg"),
   Svg: svgElement("Svg"),
   Circle: svgElement("Circle"),
+  ClipPath: svgElement("ClipPath"),
   Defs: svgElement("Defs"),
   Ellipse: svgElement("Ellipse"),
   G: svgElement("G"),
@@ -154,6 +155,7 @@ mock.module("react-native-svg", () => ({
   Path: svgElement("Path"),
   Polygon: svgElement("Polygon"),
   Polyline: svgElement("Polyline"),
+  RadialGradient: svgElement("RadialGradient"),
   Rect: svgElement("Rect"),
   Stop: svgElement("Stop"),
 }));

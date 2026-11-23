@@ -32,6 +32,7 @@ import {
   emailScalarValueOptions,
   emailValueReferenceLabel,
 } from "./email-value-options";
+import { emailTriggerFieldLabel } from "./email-value-trigger-source";
 
 const selectMarks = ({ editor }: { editor: Editor | null }) => {
   if (!editor) return undefined;
@@ -237,13 +238,12 @@ function EmailInlineValuePicker({
     ["expiresAt", m.emailsEditorInlineValueDiscountExpiry({}, { locale })],
   ]);
   const description = ({ name, field }: EmailScalarValueOption) => {
-    const discount = definitions.some(
-      (definition) =>
-        definition.name === name && definition.source?.kind === "discount"
-    );
-    return discount && field?.[0] !== undefined
-      ? discountFields.get(field[0])
-      : undefined;
+    const definition = definitions.find((candidate) => candidate.name === name);
+    if (definition?.source?.kind === "discount" && field?.[0] !== undefined)
+      return discountFields.get(field[0]);
+    if (definition?.source?.kind === "trigger" && field?.[0] !== undefined)
+      return emailTriggerFieldLabel(field[0], locale);
+    return undefined;
   };
 
   const insert = (value: string) => {

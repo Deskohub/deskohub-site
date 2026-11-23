@@ -579,3 +579,34 @@ test("gives a definition without a source a customer field", async () => {
     },
   ]);
 });
+
+test("adds a trigger value and switches between pass reminder triggers", async () => {
+  const view = renderSection();
+  await act(async () => {
+    fireEvent.click(
+      view.getByRole("button", {
+        name: m.emailsEditorValuesAddTrigger({}, { locale }),
+      })
+    );
+  });
+  expect(values()).toEqual([
+    {
+      name: "pass",
+      source: { kind: "trigger", trigger: "entry-pack-expiring" },
+    },
+  ]);
+  const definition = definitionAt(0);
+  definition.getByText(m.emailsEditorValuesKindTrigger({}, { locale }));
+  const triggerSelect = byId(emailEditorFieldIds.valueSetting(0, "trigger"));
+  await choose(
+    view,
+    triggerSelect,
+    m.emailsEditorValuesTriggerUnlimitedEnding({}, { locale })
+  );
+  expect(values()).toEqual([
+    {
+      name: "pass",
+      source: { kind: "trigger", trigger: "unlimited-ending" },
+    },
+  ]);
+});

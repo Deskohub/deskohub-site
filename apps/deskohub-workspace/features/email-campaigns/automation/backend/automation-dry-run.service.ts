@@ -40,6 +40,10 @@ import { currentInstant, instantStringSchema } from "@/shared/utils/temporal";
 import type { AudienceFilter } from "../../audience-filter";
 import type { AudienceEvaluationContext } from "../../backend/audience-evaluation-context";
 import { CampaignCandidateRepository } from "../../backend/campaign-candidate.repository";
+import {
+  sampleCampaignEmailContent,
+  validatePublishedEmailForAutomationTrigger,
+} from "../../backend/campaign-published-email";
 import type { CampaignPurpose } from "../../body/campaign-content";
 import { renderCampaignEmailPreview } from "../../campaign-email";
 import type { CampaignId } from "../../campaign-identifiers";
@@ -68,10 +72,7 @@ import {
 import { readAutomationCustomerContacts } from "./automation-customer-contacts";
 import { AutomationEvaluationFacts } from "./automation-evaluation-facts.service";
 import { lockAutomationForLifecycle } from "./automation-lifecycle-lock";
-import {
-  nextPassReminderPreviewOccurrence,
-  passReminderSampleContent,
-} from "./automation-pass-reminder-preview";
+import { nextPassReminderPreviewOccurrence } from "./automation-pass-reminder-preview";
 import {
   conditionFilterOf,
   plannedPreviewUnit,
@@ -92,7 +93,7 @@ import {
   type AutomationWorkingCopy,
   loadAutomationWorkingCopy,
 } from "./automation-working-copy";
-import { ensurePassReminderWritesAllowed } from "./pass-reminder-write-policy";
+import { ensurePassReminderPurpose } from "./pass-reminder-write-policy";
 
 /** How many next fires a schedule's dry run shows (§8.1). */
 const previewedFires = 5;
@@ -202,8 +203,23 @@ export class AutomationDryRun extends Context.Service<
             })
           ),
           Effect.tap(({ flow }) =>
-            ensurePassReminderWritesAllowed(flow.trigger, copy.campaign.purpose)
+            ensurePassReminderPurpose(flow.trigger, copy.campaign.purpose)
           ),
+          Effect.tap(({ flow }) => {
+            if (copy.campaign.emailId === null) return Effect.void;
+            if (Option.isNone(copy.publishedEmail)) {
+              return Effect.fail(
+                new AutomationFlowInvalid({
+                  message:
+                    "The linked library email is archived or has no published version. Select another published email.",
+                })
+              );
+            }
+            return validatePublishedEmailForAutomationTrigger(
+              copy.publishedEmail.value.document,
+              flow.trigger
+            );
+          }),
           Effect.bind("audience", () =>
             Option.match(copy.audience, {
               onNone: () =>
@@ -626,26 +642,46 @@ export class AutomationDryRun extends Context.Service<
           )
         );
 
-      /** A pass reminder uses synthetic copy inputs in every campaign locale. */
+      /** Renders the working copy's email (published library email or inline content). */
       const renderEmails = (
         copy: Option.Option<AutomationWorkingCopy>,
         preview: AutomationPreviewRow
       ): Effect.Effect<
         AutomationDryRunWithLifecycle["emails"],
-        Effect.Error<ReturnType<typeof renderCampaignEmailPreview>>
+        | Effect.Error<ReturnType<typeof renderCampaignEmailPreview>>
+        | Effect.Error<ReturnType<typeof sampleCampaignEmailContent>>
       > =>
         Option.match(copy, {
           onNone: () => Effect.succeed([]),
-          onSome: ({ campaign, flow }) => {
-            const trigger = Option.getOrUndefined(flow)?.trigger;
-            const passTrigger =
-              trigger !== undefined && isPassReminderTrigger(trigger)
-                ? trigger
-                : undefined;
+          onSome: ({ campaign, publishedEmail }) => {
+            if (Option.isSome(publishedEmail)) {
+              const { document } = publishedEmail.value;
+              const locales = campaignLocales.filter((locale) =>
+                Object.hasOwn(document.translations, locale)
+              );
+              return Effect.forEach(locales, (locale) =>
+                sampleCampaignEmailContent(document, locale, {
+                  now: preview.asOf,
+                }).pipe(
+                  Effect.flatMap((content) =>
+                    renderCampaignEmailPreview({
+                      templateKey: document.templateKey,
+                      purpose: document.purpose,
+                      locale,
+                      content,
+                    }).pipe(
+                      Effect.map((email) => ({
+                        locale,
+                        ...email,
+                        preheader: content.preheader,
+                      }))
+                    )
+                  )
+                )
+              );
+            }
             const localizedContent = campaignLocaleEntries(
-              passTrigger
-                ? passReminderSampleContent(passTrigger, preview.asOf)
-                : campaign.content,
+              campaign.content,
               campaignLocales
             );
             return Effect.forEach(localizedContent, ([locale, content]) =>

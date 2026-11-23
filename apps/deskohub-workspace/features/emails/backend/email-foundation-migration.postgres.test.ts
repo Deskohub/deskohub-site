@@ -64,7 +64,7 @@ describe.skipIf(!databaseUrl)(
               ).rows,
               versions: (
                 await pool.query(
-                  "select to_jsonb(t) - 'email_id' as row from email_campaign_automation_versions t order by id"
+                  "select to_jsonb(t) - 'email_id' - 'frozen_email_version_id' as row from email_campaign_automation_versions t order by id"
                 )
               ).rows,
               sends: (

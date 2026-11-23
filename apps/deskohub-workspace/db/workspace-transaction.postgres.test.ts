@@ -15,9 +15,12 @@ import {
   Option,
   Redacted,
   Ref,
+  Schema,
   Scope,
   Stream,
 } from "effect";
+import { PersistedQueue } from "effect/persistence";
+import { SqlClient } from "effect/sql";
 import { openDatabasePool } from "@/shared/testing/workspace-database-pool.test-utils";
 import {
   createWorkspacePostgresSuiteDatabase,
@@ -43,7 +46,7 @@ describe.skipIf(!suiteDatabase)(
   "Workspace transactions on disposable Postgres",
   () => {
     if (!suiteDatabase) return;
-    const { db, pool } = suiteDatabase;
+    const { databasePool, db, pool } = suiteDatabase;
     const database = WorkspaceDatabase.make(db);
     const { transaction } = database;
 
@@ -147,6 +150,68 @@ describe.skipIf(!suiteDatabase)(
       expect(await labels(prefix)).toEqual([]);
       await Effect.runPromise(transaction(recordProbe(`${prefix}-after`)));
       expect(await labels(prefix)).toEqual([`${prefix}-after`]);
+    });
+
+    test("commits and rolls back SQL queue offers with Workspace writes", async () => {
+      const queueName = "workspace-transaction";
+      const tableName = "workspace_transaction_queue_probe";
+      const queueLayer = PersistedQueue.layer.pipe(
+        Layer.provide(PersistedQueue.layerStoreSql({ tableName }))
+      );
+
+      type ProbeRows = { label: string | null; element: string | null };
+      const readProbeRows = `select
+        (select label from workspace_transaction_probe where label = $1) as label,
+        (select element from ${tableName} where id = $1 and queue_name = $2) as element`;
+      const observe = (id: string) =>
+        Effect.promise(
+          async () =>
+            (await pool.query<ProbeRows>(readProbeRows, [id, queueName])).rows
+        );
+      const present = (id: string) => [
+        { label: id, element: JSON.stringify(id) },
+      ];
+      const absent = [{ label: null, element: null }];
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          // Drizzle and the queue layer receive the same wrapped PgClient.
+          const client = yield* SqlClient.SqlClient;
+          expect(db.$client).toBe(client);
+          const queue = yield* PersistedQueue.make({
+            name: queueName,
+            schema: Schema.String,
+          });
+
+          const writeAndOffer = (id: string) =>
+            Effect.gen(function* () {
+              yield* recordProbe(id);
+              expect(yield* queue.offer(id, { id })).toBe(id);
+              expect(
+                yield* client.unsafe<ProbeRows>(readProbeRows, [id, queueName])
+              ).toEqual(present(id));
+              expect(yield* observe(id)).toEqual(absent);
+            });
+
+          const commitId = crypto.randomUUID();
+          yield* transaction(writeAndOffer(commitId));
+          expect(yield* observe(commitId)).toEqual(present(commitId));
+
+          const rollbackId = crypto.randomUUID();
+          const exit = yield* Effect.exit(
+            transaction(
+              writeAndOffer(rollbackId).pipe(
+                Effect.andThen(Effect.fail("abort queue offer" as const))
+              )
+            )
+          );
+          expect(exit).toStrictEqual(Exit.fail("abort queue offer"));
+          expect(yield* observe(rollbackId)).toEqual(absent);
+        }).pipe(
+          Effect.provide(queueLayer),
+          Effect.provideContext(databasePool.postgres)
+        )
+      );
     });
 
     test("a nested transaction is a savepoint", async () => {

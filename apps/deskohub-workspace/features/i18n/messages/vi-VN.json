@@ -1313,6 +1313,7 @@
   "accountReservationsOtherTitle": "Đặt chỗ thiếu thông tin ngày",
   "accountReservationsCurrentEmpty": "Bạn không có đặt chỗ nào hiện tại hoặc sắp tới.",
   "accountReservationsPastEmpty": "Bạn chưa có đặt chỗ nào trước đây.",
+  "accountReservationsPassSavingsLink": "Tiết kiệm với gói lượt vào và thẻ",
   "accountReservationsUnavailableTitle": "Lịch sử đặt chỗ tạm thời không khả dụng",
   "accountReservationsProviderUnavailable": "Hệ thống đặt chỗ của chúng tôi hiện không khả dụng. Hồ sơ của bạn vẫn dùng được, hãy thử lại sau.",
   "accountReservationOtherProduct": "Đặt chỗ tại Workspace",
@@ -1563,6 +1564,7 @@
   ],
   "landingNavCoworking": "Coworking",
   "landingOfferingCoworkPageLink": "Xem không gian coworking",
+  "landingOfferingPassesLink": "Gói lượt vào và thẻ",
   "breadcrumbLabel": "Đường dẫn điều hướng",
   "breadcrumbHome": "Deskohub Workspace",
   "coworkingBreadcrumb": "Coworking",
@@ -1593,6 +1595,7 @@
   "coworkingReservedDeskPointWorkstation": "Trả thêm phí để có trạm làm việc với hai màn hình",
   "coworkingReservedDeskCta": "Đặt chỗ ngồi giữ riêng",
   "coworkingPricesNote": "Giá các dịch vụ bổ sung và chương trình khuyến mãi (nếu có) nằm trong <pricing>bảng giá</pricing>.",
+  "coworkingComparePassesLink": "So sánh lượt theo ngày với gói lượt vào và thẻ",
   "coworkingAmenitiesTitle": "Bạn sẽ có gì ở đây",
   "coworkingAmenityInternetTitle": "Kết nối internet",
   "coworkingAmenityInternetText": "Internet cáp quang và Wi-Fi 6 đáp ứng tốt cả cuộc gọi video lẫn tệp lớn.",
@@ -1823,46 +1826,6 @@
   "entryPackCheckoutTermsChanged": "Điều khoản đã thay đổi. Hãy xem và xác nhận lại điều khoản hiện hành trước khi thanh toán.",
   "passEntryPack": "Gói lượt vào",
   "passUnlimited": "Thẻ không giới hạn",
-  "passReminderGreeting": "Chào {firstName},",
-  "passReminderGreetingUnnamed": "Xin chào,",
-  "passReminderEntryPackSubject": [
-    {
-      "declarations": [
-        "input remaining",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=other": "Gói lượt vào của bạn còn {remainingNumber} lượt"
-      }
-    }
-  ],
-  "passReminderEntryPackPreheader": "Gói của bạn ({tier}) hết hạn vào {endsOn}.",
-  "passReminderEntryPackBody": [
-    {
-      "declarations": [
-        "input remaining",
-        "input total",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number",
-        "local totalNumber = total: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=other": "Gói lượt vào của bạn ({tier}) hết hạn vào <strong>{endsOn}</strong>. Bạn vẫn còn <strong>{remainingNumber}/{totalNumber} lượt vào</strong> chưa dùng. Hãy chọn ngày ngay để dùng hết số lượt còn lại."
-      }
-    }
-  ],
-  "passReminderEntryPackBook": "Đặt chỗ một ngày",
-  "passReminderEntryPackExpiry": "Nếu chưa đặt chỗ trước khi gói hết hạn, các lượt còn lại cũng sẽ hết hạn.",
-  "passReminderUnlimitedSubject": "Thẻ không giới hạn của bạn hết hạn vào {endsOn}",
-  "passReminderUnlimitedPreheader": "Hãy gia hạn ngay để dùng thẻ thêm {days} ngày.",
-  "passReminderUnlimitedPreheaderWithDesk": "Hãy gia hạn ngay để giữ chỗ {deskLabel} thêm {days} ngày.",
-  "passReminderUnlimitedBody": "Thẻ không giới hạn của bạn ({tier}) hết hạn vào <strong>{endsOn}</strong>. Hãy gia hạn ngay để dùng thẻ thêm {days} ngày liên tiếp, bắt đầu từ {renewalStartsOn}.",
-  "passReminderUnlimitedBodyWithDesk": "Thẻ không giới hạn của bạn ({tier}) hết hạn vào <strong>{endsOn}</strong>. Hãy gia hạn ngay để dùng thẻ thêm {days} ngày liên tiếp, bắt đầu từ {renewalStartsOn}. Bạn sẽ tiếp tục dùng chỗ <strong>{deskLabel}</strong>.",
-  "passReminderUnlimitedRenew": "Gia hạn thêm {days} ngày",
-  "passReminderUnlimitedDeskFallback": "Nếu chỗ {deskLabel} đã có người dùng khi bạn gia hạn, chúng tôi sẽ xếp cho bạn một chỗ khác.",
   "unlimitedPassRenew": "Gia hạn thẻ",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Bàn đặt riêng",
@@ -1931,8 +1894,18 @@
   "entryPackDiscoveryPerDay": "{price} mỗi ngày",
   "entryPackDiscoveryBuy": "Mua",
   "entryPackDiscoveryBuyTier": "Mua gói lượt vào ({tier})",
-  "entryPackDiscoveryCoworkLink": "Bạn thường xuyên đến đây? <packLink>Gói lượt vào từ {price} mỗi ngày</packLink>",
-  "unlimitedPassDiscoveryIntro": "30 ngày liên tiếp kể từ ngày bạn chọn. Mã vào cửa có sẵn mỗi ngày mà bạn không cần đặt chỗ.",
+  "unlimitedPassDiscoveryIntro": "Ra vào không giới hạn trong 30 ngày kể từ ngày bạn chọn. Mã vào cửa có sẵn mỗi ngày mà bạn không cần đặt chỗ.",
+  "passPurchaseOffersHeading": "Gói lượt vào và thẻ",
+  "entryPackOfferTagline": "trả ít hơn cho mỗi lượt",
+  "entryPackOfferSizes": "{smaller} hoặc {larger}",
+  "entryPackOfferVisits": "lượt",
+  "entryPackOfferAction": "Chọn gói",
+  "entryPackOfferLabel": "Chọn gói lượt vào ({tier})",
+  "unlimitedPassOfferTaglineOpenSpace": "ra vào không giới hạn trong {days} ngày",
+  "unlimitedPassOfferTaglineReservedDesk": "chỗ ngồi cố định của riêng bạn",
+  "unlimitedPassOfferExpiry": "Ngày hết hạn: <date>{date}</date>",
+  "unlimitedPassOfferAction": "Chọn thẻ",
+  "unlimitedPassOfferLabel": "Chọn thẻ không giới hạn ({tier})",
   "unlimitedPassDiscoveryOpenSpaceDescription": "Một chỗ ngồi trong không gian mở mỗi ngày từ 00:00 đến {until}.",
   "unlimitedPassDiscoveryReservedDeskDescription": "Bạn có cùng một bàn riêng suốt ngày đêm trong cả 30 ngày.",
   "unlimitedPassDiscoveryWorkstationDescription": "Bạn có cùng một bàn riêng với hai màn hình suốt ngày đêm trong cả 30 ngày.",

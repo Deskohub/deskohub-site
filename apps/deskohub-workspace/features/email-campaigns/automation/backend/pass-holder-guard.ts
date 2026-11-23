@@ -2,6 +2,7 @@ import "server-only";
 
 import type { DotyposCustomer } from "@deskohub/dotypos";
 import { DotyposService } from "@deskohub/dotypos";
+import type { EmailVersionId } from "@deskohub/workspace-admin-api";
 import { Effect, Option, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import { customerHoldsCoveringPass } from "@/features/passes/backend/customer-pass-coverage";
@@ -22,6 +23,7 @@ import {
   campaignEligibility,
   consentingCampaignCustomers,
 } from "../../backend/campaign-reachability";
+import { renderFrozenEmailForBatch } from "./automated-campaign-send";
 
 /**
  * The refusal code of a pass-holder-skipping send whose recipient's email
@@ -95,14 +97,19 @@ export const makePassHolderGuard = Effect.gen(function* () {
 
   /**
    * The request of a persisted batch of the send: with the profiles it was
-   * persisted from on the first request, or re-read for a replay.
+   * persisted from on the first request, or re-read for a replay. A send
+   * whose version froze an Email Library email delivers its rendering.
    */
   const request =
     (input: {
       readonly profiles: Option.Option<BatchProfiles>;
       readonly claim: BatchRequestClaim;
     }) =>
-    (send: DeliveredAttempt, batch: PersistedBatch) =>
+    (
+      send: DeliveredAttempt,
+      batch: PersistedBatch,
+      frozenEmailVersionId: EmailVersionId | null
+    ) =>
       batches.request(
         BatchRequest.Guarded({
           batch,
@@ -115,8 +122,22 @@ export const makePassHolderGuard = Effect.gen(function* () {
               onSome: Effect.succeed,
               onNone: () => profilesFor(batch),
             });
+            const delivered =
+              frozenEmailVersionId === null
+                ? send
+                : {
+                    ...send,
+                    campaign: {
+                      ...send.campaign,
+                      renderedByCustomer: yield* renderFrozenEmailForBatch(db, {
+                        sendId: batch.sendId,
+                        batch,
+                        frozenEmailVersionId,
+                      }),
+                    },
+                  };
             return Option.some({
-              send,
+              send: delivered,
               profiles,
               guard: guard({ send, batch, expected: profiles.get(id) }),
             });

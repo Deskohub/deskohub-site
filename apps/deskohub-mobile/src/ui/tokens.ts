@@ -99,6 +99,60 @@ export const color = {
   /** The one-tone line drawings on paper, such as the sign-in shield. */
   illustration: "#B5B0A6",
   white: "#FFFFFF",
+  /** The dotted rule above the pass offers at the end of a booking form. */
+  offerRule: "#C9BDB0",
+  /** The Entry pack ticket (board 00): its paper, tear-off stub and edge. */
+  ticketPaper: "#FFF5E9",
+  ticketStub: "#FAE7D1",
+  ticketEdge: "#D4A17D",
+  /** The ticket's title, stub count and action. */
+  ticketInk: "#6A270E",
+  /** The ticket's tagline. */
+  ticketDetail: "#793F25",
+  /** The ticket's left accent bar. */
+  ticketAccent: "#A43810",
+  /** The ticket's dashed tear-off line. */
+  ticketPerforation: "#AE6E4C",
+  /** The logo watermark on the ticket's body (darkened into the paper). */
+  ticketWatermark: "#EAD8C6",
+  /** The logo watermark on the stub (soft light over the stub). */
+  ticketStubWatermark: "#1B100A",
+  /** The Unlimited pass credential (board 00), burgundy. */
+  credentialTop: "#83223A",
+  credentialBase: "#761730",
+  /** The glow in the credential's top right corner. */
+  credentialGlow: "#942941",
+  credentialEdge: "#B06C7D",
+  /** The credential's title. */
+  credentialInk: "#FFF6F8",
+  /** The issuer line and tagline. */
+  credentialQuiet: "#FAE8EE",
+  /** The date of expiry. */
+  credentialExpiry: "#EADCE0",
+  /** The credential's action. */
+  credentialAction: "#FFDAE6",
+  /** The issuer rule and the footer's top line. */
+  credentialLine: "rgba(245, 192, 208, 0.31)",
+  /** The logo in the credential's photo area. */
+  credentialMark: "#FFF2F5",
+  /** The photo area's fill (a gradient between the two) and outline. */
+  credentialBadgeStart: "rgba(243, 184, 200, 0.28)",
+  credentialBadgeEnd: "rgba(229, 162, 192, 0.14)",
+  credentialBadgeEdge: "rgba(239, 181, 203, 0.45)",
+  /** The photo area's diagonal hatching. */
+  credentialTexture: "rgba(255, 204, 220, 0.13)",
+  /** The foil stripe at the credential's top right, a three-stop gradient. */
+  credentialFoilFirst: "#FFC2CC",
+  credentialFoilMid: "#D999BF",
+  credentialFoilLast: "#F3D9C6",
+  /**
+   * The ticket's logo watermark as drawn: the board blends `ticketWatermark`
+   * into `ticketPaper` with darken at 78% and `ticketStubWatermark` into
+   * `ticketStub` with soft light at 72%. Native views can't blend, so these
+   * are the results on those flat fills.
+   */
+  ticketWatermarkOnPaper: "#EFDECE",
+  ticketWatermarkOnStub: "#F7D9B8",
 } as const;
 
 /** Corner radii. */
@@ -164,6 +218,8 @@ export const shadow = {
   toastConfirmation: { boxShadow: "0 10px 24px -8px rgba(0, 81, 62, 0.55)" },
   /** A light card lifted off navy, such as the update offer on the sign-in masthead. */
   onNavy: { boxShadow: "0 8px 20px -12px rgba(0, 0, 24, 0.8)" },
+  /** The Unlimited pass credential at the end of a booking form. */
+  credential: { boxShadow: "0 3px 8px rgba(6, 10, 58, 0.13)" },
   /** The pull-to-refresh disc. */
   refresh: { boxShadow: "0 2px 8px rgba(0, 2, 79, 0.25)" },
 } as const;
@@ -237,6 +293,12 @@ export const typeScale = {
   buttonSmall: brandText(14, 20, 600),
   /** Dialog titles. */
   dialogTitle: brandText(22, 28, 700),
+  /** A pass offer card's product name (board 00). */
+  offerTitle: brandText(22, 25, 700, -0.9),
+  /** The visit count on the Entry pack ticket's stub. */
+  offerCount: brandText(20, 22, 700, -0.8),
+  /** The date of expiry on the Unlimited pass credential, in regular weight. */
+  offerExpiry: brandText(12, 16, 400),
 } as const;
 
 export type TypeVariant = keyof typeof typeScale;

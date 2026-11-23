@@ -9,6 +9,7 @@ const send = mock((..._args: Parameters<typeof vercelQueue.send>) =>
 mock.module("@vercel/queue", () => ({ ...vercelQueue, send }));
 
 const { QueuePublisher } = await import("./queue-publisher");
+const { VercelQueuePublisher } = await import("./vercel-queue-publisher");
 
 const publication = {
   topic: "workspace-test-topic",
@@ -20,12 +21,12 @@ const publish = () =>
   Effect.flatMap(QueuePublisher, (publisher) =>
     publisher.publish(publication)
   ).pipe(
-    Effect.provide(QueuePublisher.Default),
+    Effect.provide(VercelQueuePublisher),
     Effect.result,
     Effect.runPromise
   );
 
-describe("QueuePublisher", () => {
+describe("VercelQueuePublisher", () => {
   test("sends the message to its topic with its options", async () => {
     sendResult = () => Promise.resolve({ messageId: "id" });
 

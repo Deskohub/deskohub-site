@@ -1,0 +1,66 @@
+import * as Effect from "effect/Effect";
+import {
+  decodeWorkspaceStackConfig,
+  type WorkspaceStackConfig,
+} from "./stack-config";
+
+const projectId = "deskohub-ws-sandbox";
+
+/** A service account identifier in the synthetic project, not a mailbox. */
+export const sandboxServiceAccount = (name: string) =>
+  `${name}@${projectId}.iam.gserviceaccount.com`;
+
+/** A synthetic sandbox configuration: identifiers only, no real project. */
+export const sandboxConfigInput = {
+  stage: "sandbox",
+  projectId,
+  projectNumber: "123456789012",
+  stateBucket: "deskohub-ws-sandbox-workspace-state",
+  mobileUpdatesBucket: "deskohub-ws-sandbox-mobile-updates",
+  serviceAccounts: {
+    deployer: sandboxServiceAccount("workspace-deployer"),
+    webRuntime: sandboxServiceAccount("workspace-web"),
+    tasksWorkerRuntime: sandboxServiceAccount("workspace-tasks-worker"),
+    schedulerWorkerRuntime: sandboxServiceAccount("workspace-scheduler-worker"),
+    tasksInvoker: sandboxServiceAccount("workspace-tasks-invoker"),
+    schedulerInvoker: sandboxServiceAccount("workspace-scheduler-invoker"),
+    mobileUpdatesPublisher: sandboxServiceAccount("workspace-mobile-publisher"),
+  },
+  secrets: [
+    {
+      consumers: ["web", "tasks-worker"],
+      environmentVariable: "DATABASE_URL",
+      secretId: "workspace-database-url",
+      version: "3",
+    },
+  ],
+  capacity: {
+    webMaxInstances: 2,
+    workerMaxInstances: 1,
+    queueMaxConcurrentDispatches: 2,
+    queueMaxDispatchesPerSecond: 1,
+  },
+  schedulesEnabled: false,
+  alertNotificationChannels: [],
+  budget: {
+    currency: "EUR",
+    maximumSpend: 200,
+    teardownAt: "2026-12-31T00:00:00Z",
+  },
+} as const;
+
+export const sandboxConfig: WorkspaceStackConfig = Effect.runSync(
+  decodeWorkspaceStackConfig(sandboxConfigInput)
+);
+
+const { budget: _budget, ...sharedInput } = sandboxConfigInput;
+
+/** The same synthetic identifiers as a production stage. */
+export const productionConfig: WorkspaceStackConfig = Effect.runSync(
+  decodeWorkspaceStackConfig({ ...sharedInput, stage: "production" })
+);
+
+/** The same synthetic identifiers as a preview stage. */
+export const previewConfig: WorkspaceStackConfig = Effect.runSync(
+  decodeWorkspaceStackConfig({ ...sharedInput, stage: "preview" })
+);

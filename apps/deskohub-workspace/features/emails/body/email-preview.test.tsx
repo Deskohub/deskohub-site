@@ -464,4 +464,85 @@ describe("previewEmailDocument", () => {
       renderEmailContent({ document, locale: "en-US", values: {} })
     ).toMatchObject({ success: { subject: "", preheader: "" } });
   });
+
+  test("previews trigger values with optional-field toggles and dynamic button links", async () => {
+    const draftDocument = previewEmailDocument(
+      {
+        purpose: "marketing",
+        values: [
+          {
+            name: "pass",
+            source: { kind: "trigger", trigger: "unlimited-ending" },
+          },
+        ],
+        structure: [
+          {
+            _tag: "Paragraph",
+            id: "greeting_named",
+            textKey: "greeting_named",
+            when: { name: "pass", field: ["firstName"], present: true },
+          },
+          {
+            _tag: "Paragraph",
+            id: "greeting_unnamed",
+            textKey: "greeting_unnamed",
+            when: { name: "pass", field: ["firstName"], present: false },
+          },
+          {
+            _tag: "Paragraph",
+            id: "desk_note",
+            textKey: "desk_note",
+            when: { name: "pass", field: ["deskLabel"], present: true },
+          },
+          {
+            _tag: "Button",
+            id: "renew",
+            labelKey: "renew_label",
+            hrefValue: { name: "pass", field: ["actionUrl"] },
+          },
+        ],
+        translations: {
+          "en-US": {
+            subject: [{ _tag: "Value", name: "pass", field: ["endsOn"] }],
+            texts: {
+              greeting_named: [
+                { _tag: "Text", text: "Hi " },
+                { _tag: "Value", name: "pass", field: ["firstName"] },
+              ],
+              greeting_unnamed: [{ _tag: "Text", text: "Hello," }],
+              desk_note: [
+                { _tag: "Value", name: "pass", field: ["deskLabel"] },
+              ],
+              renew_label: [{ _tag: "Text", text: "Renew" }],
+            },
+          },
+        },
+      },
+      "en-US"
+    );
+
+    const withAll = await Effect.runPromise(
+      renderEmailPreview({
+        document: draftDocument,
+        locale: "en-US",
+        values: sampleEmailValues(draftDocument, "en-US", now),
+      })
+    );
+    expect(withAll.html).toContain("Hi [firstName]");
+    expect(withAll.html).toContain("Desk 14");
+    expect(withAll.html).not.toContain("Hello,");
+
+    const omitted = await Effect.runPromise(
+      renderEmailPreview({
+        document: draftDocument,
+        locale: "en-US",
+        values: sampleEmailValues(draftDocument, "en-US", now, {
+          omittedFields: new Set(["pass.firstName", "pass.deskLabel"]),
+        }),
+      })
+    );
+    expect(omitted.html).toContain("Hello,");
+    expect(omitted.html).not.toContain("Hi [firstName]");
+    expect(omitted.html).not.toContain("Desk 14");
+  });
 });

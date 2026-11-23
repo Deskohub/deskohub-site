@@ -1325,6 +1325,7 @@
   "accountReservationsOtherTitle": "तारीख़ के बिना बुकिंग",
   "accountReservationsCurrentEmpty": "आपकी कोई मौजूदा या आने वाली बुकिंग नहीं है।",
   "accountReservationsPastEmpty": "अभी तक आपकी कोई पिछली बुकिंग नहीं है।",
+  "accountReservationsPassSavingsLink": "पैक और पास के साथ बचत करें",
   "accountReservationsUnavailableTitle": "बुकिंग का इतिहास कुछ समय के लिए उपलब्ध नहीं है",
   "accountReservationsProviderUnavailable": "हमारा बुकिंग सिस्टम उपलब्ध नहीं है। आपकी प्रोफ़ाइल अब भी उपलब्ध है, कृपया बाद में फिर से कोशिश करें।",
   "accountReservationOtherProduct": "Workspace में बुकिंग",
@@ -1578,6 +1579,7 @@
   ],
   "landingNavCoworking": "कोवर्किंग",
   "landingOfferingCoworkPageLink": "कोवर्किंग देखें",
+  "landingOfferingPassesLink": "पैक और पास",
   "breadcrumbLabel": "नेविगेशन पथ",
   "breadcrumbHome": "Deskohub Workspace",
   "coworkingBreadcrumb": "कोवर्किंग",
@@ -1608,6 +1610,7 @@
   "coworkingReservedDeskPointWorkstation": "अतिरिक्त शुल्क पर दो मॉनिटर वाला वर्कस्टेशन जोड़ें",
   "coworkingReservedDeskCta": "तय डेस्क बुक करें",
   "coworkingPricesNote": "ऐड-ऑन की कीमतें और मौजूदा ऑफ़र <pricing>कीमतों</pricing> के पेज पर मिलेंगे।",
+  "coworkingComparePassesLink": "एक दिन की विज़िट की तुलना पैक और पास से करें",
   "coworkingAmenitiesTitle": "यहाँ क्या-क्या है",
   "coworkingAmenityInternetTitle": "इंटरनेट",
   "coworkingAmenityInternetText": "ऑप्टिकल फ़ाइबर इंटरनेट और Wi-Fi 6 वीडियो कॉल और बड़ी फ़ाइलें आसानी से संभाल लेते हैं।",
@@ -1841,48 +1844,6 @@
   "entryPackCheckoutTermsChanged": "शर्तें बदल गई हैं। भुगतान से पहले मौजूदा शर्तें पढ़ें और उनकी फिर से पुष्टि करें.",
   "passEntryPack": "प्रवेश पैक",
   "passUnlimited": "असीमित पास",
-  "passReminderGreeting": "नमस्ते {firstName},",
-  "passReminderGreetingUnnamed": "नमस्ते,",
-  "passReminderEntryPackSubject": [
-    {
-      "declarations": [
-        "input remaining",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "आपके प्रवेश पैक में {remainingNumber} एंट्री बाकी",
-        "remainingPlural=other": "आपके प्रवेश पैक में {remainingNumber} एंट्री बाकी"
-      }
-    }
-  ],
-  "passReminderEntryPackPreheader": "आपके पैक ({tier}) की अवधि {endsOn} को खत्म हो रही है।",
-  "passReminderEntryPackBody": [
-    {
-      "declarations": [
-        "input remaining",
-        "input total",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number",
-        "local totalNumber = total: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "आपके प्रवेश पैक ({tier}) की अवधि <strong>{endsOn}</strong> को खत्म हो रही है। <strong>{totalNumber} में से {remainingNumber} एंट्री</strong> बाकी है। अभी दिन चुन लें ताकि बची हुई एंट्री बेकार न जाएँ।",
-        "remainingPlural=other": "आपके प्रवेश पैक ({tier}) की अवधि <strong>{endsOn}</strong> को खत्म हो रही है। <strong>{totalNumber} में से {remainingNumber} एंट्री</strong> बाकी हैं। अभी दिन चुन लें ताकि बची हुई एंट्री बेकार न जाएँ।"
-      }
-    }
-  ],
-  "passReminderEntryPackBook": "एक दिन बुक करें",
-  "passReminderEntryPackExpiry": "तब तक जो एंट्री बुक नहीं होंगी, वे पैक के साथ खत्म हो जाएँगी।",
-  "passReminderUnlimitedSubject": "आपके असीमित पास की अवधि {endsOn} को खत्म हो रही है",
-  "passReminderUnlimitedPreheader": "अगले {days} दिनों के लिए अभी पास बढ़ाएँ।",
-  "passReminderUnlimitedPreheaderWithDesk": "{deskLabel} को अगले {days} दिनों के लिए रखने के लिए अभी पास बढ़ाएँ।",
-  "passReminderUnlimitedBody": "आपके असीमित पास ({tier}) की अवधि <strong>{endsOn}</strong> को खत्म हो रही है। अभी पास बढ़ाएँ। अगले {days} दिन इसके तुरंत बाद {renewalStartsOn} से शुरू होंगे।",
-  "passReminderUnlimitedBodyWithDesk": "आपके असीमित पास ({tier}) की अवधि <strong>{endsOn}</strong> को खत्म हो रही है। अभी पास बढ़ाएँ। अगले {days} दिन इसके तुरंत बाद {renewalStartsOn} से शुरू होंगे और <strong>{deskLabel}</strong> आपके लिए तय रहेगी।",
-  "passReminderUnlimitedRenew": "{days} दिनों के लिए बढ़ाएँ",
-  "passReminderUnlimitedDeskFallback": "अगर पास बढ़ाते समय {deskLabel} उपलब्ध न हो, तो हम आपको दूसरी सीट देंगे।",
   "unlimitedPassRenew": "पास का नवीनीकरण करें",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "आरक्षित डेस्क",
@@ -1952,8 +1913,18 @@
   "entryPackDiscoveryPerDay": "{price} प्रति दिन",
   "entryPackDiscoveryBuy": "खरीदें",
   "entryPackDiscoveryBuyTier": "प्रवेश पैक खरीदें ({tier})",
-  "entryPackDiscoveryCoworkLink": "अक्सर आते हैं? <packLink>प्रवेश पैक {price} प्रति दिन से</packLink>",
-  "unlimitedPassDiscoveryIntro": "आपकी चुनी हुई तारीख़ से लगातार 30 दिन। बुकिंग किए बिना हर दिन आपका प्रवेश कोड तैयार रहेगा।",
+  "unlimitedPassDiscoveryIntro": "आपकी चुनी हुई तारीख़ से 30 दिनों तक असीमित प्रवेश। बुकिंग किए बिना हर दिन आपका प्रवेश कोड तैयार रहेगा।",
+  "passPurchaseOffersHeading": "पैक और पास",
+  "entryPackOfferTagline": "हर विज़िट पर कम भुगतान करें",
+  "entryPackOfferSizes": "{smaller} या {larger}",
+  "entryPackOfferVisits": "विज़िट",
+  "entryPackOfferAction": "पैक चुनें",
+  "entryPackOfferLabel": "प्रवेश पैक चुनें ({tier})",
+  "unlimitedPassOfferTaglineOpenSpace": "{days} दिनों तक असीमित प्रवेश",
+  "unlimitedPassOfferTaglineReservedDesk": "आपकी अपनी स्थायी सीट",
+  "unlimitedPassOfferExpiry": "समाप्ति तिथि: <date>{date}</date>",
+  "unlimitedPassOfferAction": "पास चुनें",
+  "unlimitedPassOfferLabel": "असीमित पास चुनें ({tier})",
   "unlimitedPassDiscoveryOpenSpaceDescription": "ओपन स्पेस में रोज़ 00:00 से {until} बजे तक एक सीट।",
   "unlimitedPassDiscoveryReservedDeskDescription": "पूरे 30 दिन, चौबीसों घंटे आपके लिए वही डेस्क।",
   "unlimitedPassDiscoveryWorkstationDescription": "पूरे 30 दिन, चौबीसों घंटे आपके लिए दो मॉनिटर वाली वही डेस्क।",

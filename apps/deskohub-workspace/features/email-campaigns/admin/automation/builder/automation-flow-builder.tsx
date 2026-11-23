@@ -185,7 +185,6 @@ export function AutomationFlowBuilder({
           <li>
             <TriggerCard
               trigger={trigger}
-              passRemindersAvailable={data.passRemindersAvailable}
               onChange={(next) => {
                 if (saveFailure?.code === scheduleMinutesNotAllowedCode) {
                   setSaveFailure(null);

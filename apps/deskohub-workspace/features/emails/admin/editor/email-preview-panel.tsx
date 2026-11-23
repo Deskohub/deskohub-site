@@ -30,6 +30,7 @@ export type EmailPreviewRenderer = (input: {
   readonly draft: EmailDraftFormValues;
   readonly locale: Locale;
   readonly values?: EmailPreviewValues;
+  readonly omittedFields?: readonly string[];
 }) => Promise<{
   readonly data?: EmailPreview;
   readonly serverError?: string;
@@ -52,19 +53,39 @@ type PreviewResult = {
  * pauses. Only the latest request's answer counts; an older one arriving late
  * is dropped, and a failure replaces the old picture.
  */
+const conditionFieldKeys = (draft: EmailDraftFormValues): readonly string[] => {
+  const keys = new Set<string>();
+  for (const component of draft.structure ?? []) {
+    if (!component.when?.name) continue;
+    const key = [component.when.name, ...(component.when.field ?? [])]
+      .filter(Boolean)
+      .join(".");
+    if (key) keys.add(key);
+  }
+  return [...keys];
+};
+
 const useEmailPreview = ({
   renderPreview,
   values,
+  omittedFields,
 }: {
   readonly renderPreview: EmailPreviewRenderer;
   readonly values: EmailPreviewValues | undefined;
+  readonly omittedFields: readonly string[];
 }) => {
   const locale = useRouteLocale();
   const { activeLocale } = useEmailEditor();
   const { control, getValues } = useEmailDraftForm();
   useWatch({ control });
   const draft = getValues();
-  const requestKey = JSON.stringify([activeLocale, draft, values]);
+  const activeOmitted = omittedFields.length > 0 ? omittedFields : undefined;
+  const requestKey = JSON.stringify([
+    activeLocale,
+    draft,
+    values,
+    activeOmitted,
+  ]);
   // Any change of input outdates the requests already sent.
   const latestRequest = useRef(requestKey);
   const [result, setResult] = useState<PreviewResult>();
@@ -77,7 +98,12 @@ const useEmailPreview = ({
       if (latestRequest.current !== requestKey) return;
       setResult({ request: requestKey, locale: activeLocale, ...outcome });
     };
-    renderPreview({ draft, locale: activeLocale, values }).then(
+    renderPreview({
+      draft,
+      locale: activeLocale,
+      values,
+      ...(activeOmitted && { omittedFields: activeOmitted }),
+    }).then(
       (answer) =>
         settle(
           answer.data
@@ -96,6 +122,7 @@ const useEmailPreview = ({
 
   return {
     activeLocale,
+    conditionalFields: conditionFieldKeys(draft),
     // Another language's picture never shows under this language's heading.
     shown: result?.locale === activeLocale ? result : undefined,
     current: result?.request === requestKey,
@@ -154,11 +181,19 @@ export function EmailPreviewPanel({
   readonly values?: EmailPreviewValues;
 }) {
   const locale = useRouteLocale();
-  const { activeLocale, shown, current } = useEmailPreview({
+  const [omittedFields, setOmittedFields] = useState<readonly string[]>([]);
+  const { activeLocale, conditionalFields, shown, current } = useEmailPreview({
     renderPreview,
     values,
+    omittedFields,
   });
   const language = emailEditorLanguageName(activeLocale);
+  const toggleField = (fieldKey: string) =>
+    setOmittedFields((previous) =>
+      previous.includes(fieldKey)
+        ? previous.filter((item) => item !== fieldKey)
+        : [...previous, fieldKey]
+    );
   return (
     <section
       aria-labelledby="email-editor-preview-heading"
@@ -173,6 +208,29 @@ export function EmailPreviewPanel({
       <p className="mb-3 rounded-md bg-sunset-yellow/15 px-3 py-2 text-navy-blue/80 text-xs">
         {m.emailsEditorPreviewSampleNote({}, { locale })}
       </p>
+      {conditionalFields.length > 0 && (
+        <fieldset className="mb-3 space-y-1.5 rounded-md border border-navy-blue/10 px-3 py-2">
+          <legend className="px-1 font-medium text-navy-blue/70 text-xs">
+            {m.emailsEditorPreviewOptionalFieldsLabel({}, { locale })}
+          </legend>
+          <div className="flex flex-wrap gap-3">
+            {conditionalFields.map((fieldKey) => (
+              <label
+                key={fieldKey}
+                className="flex cursor-pointer items-center gap-1.5 font-mono text-navy-blue text-xs"
+              >
+                <input
+                  checked={!omittedFields.includes(fieldKey)}
+                  className="size-3.5 accent-[var(--brand-burned-orange)]"
+                  onChange={() => toggleField(fieldKey)}
+                  type="checkbox"
+                />
+                {fieldKey}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
       <p className="sr-only" role="status">
         {current
           ? shown?.preview && m.emailsEditorPreviewUpdated({}, { locale })

@@ -53,11 +53,11 @@ import { Icon } from "../../ui/icon";
 import { ListGroup, SectionHeader } from "../../ui/list";
 import { Masthead } from "../../ui/masthead";
 import { Notice } from "../../ui/notice";
-import { ScrollScreen } from "../../ui/scroll-screen";
+import { ScrollScreen, StickyFooterGroup } from "../../ui/scroll-screen";
 import { Skeleton, SkeletonGroup } from "../../ui/skeleton";
 import { SplitPane } from "../../ui/split-pane";
 import { Text } from "../../ui/text";
-import { useToast } from "../../ui/toast";
+import { useToast, useToastObstruction } from "../../ui/toast";
 import { brandText, color, radius, space } from "../../ui/tokens";
 import { useContentColumn, useViewport } from "../../ui/viewport";
 import {
@@ -88,6 +88,7 @@ import {
   OrderStatusScreen,
   ReservationPaneHeading,
 } from "./order-status-screen";
+import { PastSavingsFooter } from "./past-savings-footer";
 import {
   type NextAccess,
   nextReservationView,
@@ -103,6 +104,7 @@ import {
   savedReservationsAtom,
   savedReservationsBeforeAccountAtom,
 } from "./reservations-list-state";
+import { showsSavingsOffer } from "./savings-offer";
 import { rowOffersWithdrawal } from "./withdrawal-eligibility";
 import { WithdrawalLink } from "./withdrawal-link";
 
@@ -429,6 +431,7 @@ function ReservationsListView<E extends CustomerRequestFailure>({
             <ReservationGroupsView
               groups={groups}
               passes={passReads}
+              fresh={Option.isNone(savedAt)}
               // The list from the device, with when it was saved.
               savedNotice={
                 <Notice
@@ -515,9 +518,8 @@ function useReservationPasses(
   const listAtom = passesReleased ? heldPassesAtom(locale) : unneededReadAtom;
   const list = useAtomValue(listAtom);
   const refreshList = useAtomRefresh(listAtom);
-  const unlimited = AsyncResult.isSuccess(list)
-    ? list.value.held.filter((pass) => pass.kind === "unlimited")
-    : [];
+  const held = AsyncResult.isSuccess(list) ? list.value.held : undefined;
+  const unlimited = (held ?? []).filter((pass) => pass.kind === "unlimited");
   const own = Option.match(groups, {
     onNone: () => [],
     onSome: ({ featured, moreCurrent, undated, past }) => [
@@ -543,6 +545,8 @@ function useReservationPasses(
   const funding = useAtomValue(fundingAtom);
   const refreshFunding = useAtomRefresh(fundingAtom);
   return {
+    // Read only while the pass rollout is open.
+    held: passesReleased ? held : undefined,
     unlimited,
     funded: AsyncResult.isSuccess(funding) ? funding.value : undefined,
     initial:
@@ -568,10 +572,13 @@ function ReservationGroupsView({
   groups,
   savedNotice,
   passes,
+  fresh,
 }: {
   readonly groups: ReservationGroups;
   readonly savedNotice: ReactNode;
   readonly passes: ReturnType<typeof useReservationPasses>;
+  /** Whether the Workspace's list shows, not the one saved on this device. */
+  readonly fresh: boolean;
 }) {
   const locale = useAppLocale();
   const selection = useContext(SelectionContext);
@@ -641,7 +648,19 @@ function ReservationGroupsView({
           </View>
         )}
         {(groups.past.length > 0 || ended.length > 0) && (
-          <PastReservations rows={groups.past} passes={ended} />
+          <PastReservations
+            rows={groups.past}
+            passes={ended}
+            // A saved list keeps no party, so only a fresh one decides.
+            savings={
+              fresh &&
+              showsSavingsOffer({
+                past: groups.past,
+                held: passes.held,
+                entryPackFunded: passes.funded,
+              })
+            }
+          />
         )}
       </View>
     </EntryPackFundingContext>
@@ -731,9 +750,12 @@ function NothingUpcoming() {
 function PastReservations({
   rows,
   passes,
+  savings,
 }: {
   readonly rows: ReadonlyArray<ReservationListRow>;
   readonly passes: ReadonlyArray<CustomerHeldUnlimitedPass>;
+  /** Whether the group ends with the packs and passes offer. */
+  readonly savings: boolean;
 }) {
   const locale = useAppLocale();
   const selection = useContext(SelectionContext);
@@ -770,6 +792,7 @@ function PastReservations({
                 />
               ) : undefined
             }
+            stickyFooter={savings ? <PastSavingsFooter /> : undefined}
           />
         )}
       </View>
@@ -781,13 +804,23 @@ function ReservationRows({
   rows,
   place,
   footer,
+  stickyFooter,
 }: {
   readonly rows: ReadonlyArray<ReservationListRow>;
   readonly place: "later" | "past";
   readonly footer?: ReactNode;
+  /** The group's last row, pinned above the tab bar while the group scrolls. */
+  readonly stickyFooter?: ReactNode;
 }) {
+  const [obstruction, setObstruction] = useState(0);
+  useToastObstruction(obstruction);
   return (
-    <View style={styles.group}>
+    <StickyFooterGroup
+      style={styles.group}
+      footer={stickyFooter}
+      pinnedStyle={styles.pinnedFooter}
+      onObstruction={setObstruction}
+    >
       {rows.map((row, index) => (
         <ReservationRow
           key={row.id}
@@ -797,7 +830,7 @@ function ReservationRows({
         />
       ))}
       {footer}
-    </View>
+    </StickyFooterGroup>
   );
 }
 
@@ -1137,6 +1170,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.group,
     borderWidth: 1,
     overflow: "hidden",
+  },
+  // The pinned savings footer, between the Past group's sides.
+  pinnedFooter: {
+    borderColor: color.line,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
   },
   row: {
     alignItems: "center",

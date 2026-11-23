@@ -1395,4 +1395,38 @@ describe("dhw campaigns templates", () => {
       "workspace\tWorkspace\tDeskohub Workspace layout",
     ]);
   });
+
+  test("links and clears a published Email Library email via update flags", async () => {
+    const emailId = "019c0000-0000-7000-8000-000000000042";
+    const { calls, layer } = makeCampaignLayer();
+
+    await run(
+      ["campaigns", "update", "campaign-1", "--email", emailId],
+      layer
+    ).pipe(Effect.runPromise);
+    await run(
+      ["campaigns", "update", "campaign-1", "--clear-email"],
+      layer
+    ).pipe(Effect.runPromise);
+
+    expect(calls).toEqual([
+      ["updateCampaign", "campaign-1", { emailId }],
+      ["updateCampaign", "campaign-1", { emailId: null }],
+    ]);
+
+    const conflict = await runFailure(
+      [
+        "campaigns",
+        "update",
+        "campaign-1",
+        "--email",
+        emailId,
+        "--clear-email",
+      ],
+      layer
+    );
+    expect(conflict).toMatchObject({
+      message: expect.stringContaining("--email or --clear-email"),
+    });
+  });
 });

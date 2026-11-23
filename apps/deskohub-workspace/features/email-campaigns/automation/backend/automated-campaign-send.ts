@@ -1,7 +1,10 @@
-import { and, eq, isNull, type SQL } from "drizzle-orm";
-import { Data, Effect, Option } from "effect";
+import type { DotyposCustomerId } from "@deskohub/dotypos";
+import type { EmailVersionId } from "@deskohub/workspace-admin-api";
+import { and, eq, inArray, isNull, type SQL } from "drizzle-orm";
+import { Data, Effect, Option, Result } from "effect";
 import {
   WorkspaceDatabase,
+  type WorkspaceDatabaseClient,
   type WorkspaceTransaction,
 } from "@/db/database.service";
 import {
@@ -16,15 +19,19 @@ import {
   type BatchRecipient,
   BatchRequest,
   CampaignBatchDelivery,
-  type CampaignDeliveryIncomplete,
+  CampaignDeliveryIncomplete,
   type DeliveredAttempt,
   type DeliveredCampaign,
   type PersistedBatch,
   PreparedBatch,
+  type RenderedCustomerEmail,
 } from "../../backend/campaign-batch-delivery.service";
+import {
+  getCampaignEmailVersion,
+  renderAutomatedPublishedEmail,
+} from "../../backend/campaign-published-email";
 import type { CampaignDeliveryAttempt } from "../../backend/campaign-send-queue.service";
 import { sendAutomationVersion } from "../../backend/campaign-send-selection";
-import type { CampaignLocalizedContent } from "../../body/campaign-content";
 import type { CampaignId, CampaignSendId } from "../../campaign-identifiers";
 import type { AutomationVersionId } from "../automation-identifiers";
 
@@ -55,6 +62,62 @@ const automatedAttempt = (sendId: CampaignSendId): CampaignDeliveryAttempt => ({
 });
 
 /**
+ * Each recipient's rendering, in their persisted locale, of the frozen Email
+ * Library email version an automated send's batch delivers. A missing
+ * version or a rendering that fails leaves the batch unrequested.
+ */
+export const renderFrozenEmailForBatch = Effect.fn(
+  "AutomatedCampaignSend.renderFrozenEmailForBatch"
+)(function* (
+  db: WorkspaceDatabaseClient,
+  input: {
+    readonly sendId: CampaignSendId;
+    readonly batch: PersistedBatch;
+    readonly frozenEmailVersionId: EmailVersionId;
+  }
+) {
+  const version = yield* getCampaignEmailVersion(
+    db,
+    input.frozenEmailVersionId
+  );
+  if (!version) {
+    return yield* new CampaignDeliveryIncomplete({
+      sendId: input.batch.sendId,
+      deliveryAttempt: input.batch.deliveryAttempt,
+    });
+  }
+  const recipientRows = yield* db
+    .select({
+      dotyposCustomerId: emailCampaignRecipients.dotyposCustomerId,
+      locale: emailCampaignRecipients.locale,
+    })
+    .from(emailCampaignRecipients)
+    .where(
+      and(
+        eq(emailCampaignRecipients.sendId, input.sendId),
+        inArray(emailCampaignRecipients.dotyposCustomerId, [
+          ...input.batch.dotyposCustomerIds,
+        ])
+      )
+    );
+  const rendered = new Map<DotyposCustomerId, RenderedCustomerEmail>();
+  for (const recipient of recipientRows) {
+    const content = renderAutomatedPublishedEmail({
+      document: version.document,
+      recipientLocale: recipient.locale,
+    });
+    if (Result.isFailure(content)) {
+      return yield* new CampaignDeliveryIncomplete({
+        sendId: input.batch.sendId,
+        deliveryAttempt: input.batch.deliveryAttempt,
+      });
+    }
+    rendered.set(recipient.dotyposCustomerId, content.success);
+  }
+  return rendered;
+});
+
+/**
  * The send steps of a deliver unit (§5.9) over the campaign batch protocol.
  * The unit's claim stands in for a one-off send's lease, and its own
  * transactions interleave its run moves with these steps.
@@ -69,26 +132,44 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
    */
   const automatedCampaignOf = (
     send: SQL | undefined
-  ): Effect.Effect<Option.Option<DeliveredCampaign>, DatabaseQueryError> =>
+  ): Effect.Effect<
+    Option.Option<{
+      readonly campaign: DeliveredCampaign;
+      readonly frozenEmailVersionId: EmailVersionId | null;
+    }>,
+    DatabaseQueryError
+  > =>
     db
       .select({
         id: emailCampaignSends.campaignId,
         purpose: emailCampaignAutomationVersions.purpose,
         templateKey: emailCampaignAutomationVersions.templateKey,
         content: emailCampaignAutomationVersions.content,
+        frozenEmailVersionId:
+          emailCampaignAutomationVersions.frozenEmailVersionId,
       })
       .from(emailCampaignSends)
       .innerJoin(emailCampaignAutomationVersions, sendAutomationVersion)
       .where(send)
-      .pipe(Effect.map(([campaign]) => Option.fromNullishOr(campaign)));
+      .pipe(
+        Effect.map(([row]) =>
+          Option.map(
+            Option.fromNullishOr(row),
+            ({ frozenEmailVersionId, ...campaign }) => ({
+              campaign,
+              frozenEmailVersionId,
+            })
+          )
+        )
+      );
 
   /** The automated send's first attempt with the email its version pins. */
   const deliveredAttempt = (sendId: CampaignSendId) =>
     automatedCampaignOf(eq(emailCampaignSends.id, sendId)).pipe(
       Effect.map(
-        (campaign): DeliveredAttempt => ({
+        (found): DeliveredAttempt => ({
           ...automatedAttempt(sendId),
-          campaign: Option.getOrThrow(campaign),
+          campaign: Option.getOrThrow(found).campaign,
         })
       )
     );
@@ -150,16 +231,19 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
    * read, before any request. The delivery recheck skips whoever fails it;
    * rendering that fails fails the rest, as nothing was requested. A
    * `guarded` batch can only be requested through a guard
-   * (`BatchRequest.Guarded`); `content` replaces the version's content
-   * with what the code renders for this send.
+   * (`BatchRequest.Guarded`); `renderedByCustomer` carries each
+   * recipient's rendering of the version's frozen Email Library email.
    */
   const persistBatch = (input: {
     readonly sendId: CampaignSendId;
     readonly recipients: readonly BatchRecipient[];
     readonly profiles: BatchProfiles;
     readonly at: Temporal.Instant;
+    readonly renderedByCustomer?: ReadonlyMap<
+      DotyposCustomerId,
+      RenderedCustomerEmail
+    >;
     readonly guarded?: true;
-    readonly content?: CampaignLocalizedContent;
   }): Effect.Effect<void, DatabaseQueryError, WorkspaceTransaction> =>
     db
       .insert(emailCampaignRecipients)
@@ -176,10 +260,13 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
           batches.prepare({
             send: {
               ...send,
-              ...(input.guarded && { guarded: input.guarded }),
-              ...(input.content && {
-                campaign: { ...send.campaign, content: input.content },
-              }),
+              ...(input.guarded && { guarded: true }),
+              campaign: {
+                ...send.campaign,
+                ...(input.renderedByCustomer && {
+                  renderedByCustomer: input.renderedByCustomer,
+                }),
+              },
             },
             recipients: input.recipients,
             profiles: Option.some(input.profiles),
@@ -224,27 +311,56 @@ export const makeAutomatedCampaignSend = Effect.gen(function* () {
       readonly profiles: Option.Option<BatchProfiles>;
       readonly requestGuarded?: (
         send: DeliveredAttempt,
-        batch: PersistedBatch
+        batch: PersistedBatch,
+        frozenEmailVersionId: EmailVersionId | null
       ) => Effect.Effect<
         BatchOutcome,
         CampaignDeliveryIncomplete | DatabaseQueryError
       >;
     }) {
-      const campaign = yield* uncompletedAutomatedCampaign(input.sendId);
-      if (Option.isNone(campaign))
+      const found = yield* uncompletedAutomatedCampaign(input.sendId);
+      if (Option.isNone(found))
         return AutomatedSendSubmission.AlreadyCompleted();
 
+      const { campaign, frozenEmailVersionId } = found.value;
       const attempt = automatedAttempt(input.sendId);
-      const send = { ...attempt, campaign: campaign.value };
+      const send = { ...attempt, campaign };
       const requested = yield* batches.listRequested(attempt);
-      const submitted = yield* Effect.forEach(requested, (batch) => {
-        const request = input.requestGuarded
-          ? input.requestGuarded(send, batch)
-          : batches.request(
-              batchRequest({ send, batch, profiles: input.profiles })
+      const submitted = yield* Effect.forEach(
+        requested,
+        Effect.fnUntraced(function* (batch) {
+          if (input.requestGuarded) {
+            const outcome = yield* input.requestGuarded(
+              send,
+              batch,
+              frozenEmailVersionId
             );
-        return request.pipe(Effect.map((outcome) => ({ batch, outcome })));
-      });
+            return { batch, outcome };
+          }
+          const sendWithEmail =
+            frozenEmailVersionId !== null
+              ? {
+                  ...send,
+                  campaign: {
+                    ...send.campaign,
+                    renderedByCustomer: yield* renderFrozenEmailForBatch(db, {
+                      sendId: input.sendId,
+                      batch,
+                      frozenEmailVersionId,
+                    }),
+                  },
+                }
+              : send;
+          const outcome = yield* batches.request(
+            batchRequest({
+              send: sendWithEmail,
+              batch,
+              profiles: input.profiles,
+            })
+          );
+          return { batch, outcome };
+        })
+      );
       return AutomatedSendSubmission.Submitted({ batches: submitted });
     },
     (effect, input) =>

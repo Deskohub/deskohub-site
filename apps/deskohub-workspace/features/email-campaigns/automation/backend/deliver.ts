@@ -4,8 +4,17 @@ import {
   DotyposService,
   dotyposIdReadRequests,
 } from "@deskohub/dotypos";
+import type { EmailDocument } from "@deskohub/workspace-admin-api";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
-import { Array as Arr, Effect, Match, Option, Order, Schema } from "effect";
+import {
+  Array as Arr,
+  Effect,
+  Match,
+  Option,
+  Order,
+  Result,
+  Schema,
+} from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
   emailCampaignAutomationCustomerClaims as customerClaims,
@@ -23,10 +32,15 @@ import {
 } from "@/features/reservation/backend/reservation-visits.service";
 import type { WorkspaceReservationId } from "@/features/reservation/persistence-contracts";
 import { temporalInstantToIsoString } from "@/shared/utils/temporal";
+import type { RenderedCustomerEmail } from "../../backend/campaign-batch-delivery.service";
 import {
   CampaignCandidateRepository,
   type OneOffCampaignEmails,
 } from "../../backend/campaign-candidate.repository";
+import {
+  getCampaignEmailVersion,
+  renderAutomatedPublishedEmail,
+} from "../../backend/campaign-published-email";
 import type { CampaignId, CampaignSendId } from "../../campaign-identifiers";
 import {
   campaignFallbackLocale,
@@ -80,7 +94,7 @@ import {
   makePassReminderDelivery,
   type PassReminderRun,
   type PreparedPassReminder,
-  passReminderContent,
+  renderPassReminderPublishedEmail,
 } from "./pass-reminder-delivery";
 
 /** A deliver unit holds at most this many runs of one version (§1.2.13). */
@@ -161,6 +175,7 @@ type DeliverFacts = {
   readonly profiles: ReadonlyMap<DotyposCustomerId, DotyposCustomer>;
   readonly locales: ReadonlyMap<DotyposCustomerId, Locale>;
   readonly passReminder: Option.Option<PreparedPassReminder>;
+  readonly emailDocument: Option.Option<EmailDocument>;
 };
 
 const decodeFlow = Schema.decodeUnknownOption(automationFlowSchema);
@@ -257,6 +272,7 @@ export const makeDeliverHandler = Effect.gen(function* () {
         campaignId: versions.campaignId,
         purpose: versions.purpose,
         flow: versions.flow,
+        frozenEmailVersionId: versions.frozenEmailVersionId,
       })
       .from(versions)
       .where(eq(versions.id, versionId))
@@ -328,6 +344,21 @@ export const makeDeliverHandler = Effect.gen(function* () {
           ? passReminders.prepare(run)
           : Effect.succeed(Option.none<PreparedPassReminder>())
       ),
+      Effect.bind("emailDocument", ({ version }) =>
+        version.frozenEmailVersionId === null
+          ? Effect.succeed(Option.none<EmailDocument>())
+          : getCampaignEmailVersion(db, version.frozenEmailVersionId).pipe(
+              Effect.flatMap((loaded) =>
+                loaded
+                  ? Effect.succeed(Option.some(loaded.document))
+                  : Effect.fail(
+                      new AutomationUnitFetchFailure({
+                        code: "email-version-missing",
+                      })
+                    )
+              )
+            )
+      ),
       Effect.map(
         ({
           version,
@@ -336,6 +367,7 @@ export const makeDeliverHandler = Effect.gen(function* () {
           profiles,
           locales,
           passReminder,
+          emailDocument,
         }): DeliverFacts => ({
           campaignId: version.campaignId,
           sendStep: sendStepOf(version),
@@ -344,6 +376,7 @@ export const makeDeliverHandler = Effect.gen(function* () {
           profiles,
           locales,
           passReminder,
+          emailDocument,
         })
       ),
       Effect.catchIf(isDatabaseQueryError, (cause) =>
@@ -747,27 +780,45 @@ export const makeDeliverHandler = Effect.gen(function* () {
               input.facts.locales.get(dotyposCustomerId) ??
               campaignFallbackLocale,
           }));
-          const [recipient] = recipients;
-          const content =
-            recipient && Option.isSome(input.facts.passReminder)
-              ? passReminderContent({
-                  reminder: input.facts.passReminder.value,
-                  locale: recipient.locale,
-                  profile: input.facts.profiles.get(
-                    recipient.dotyposCustomerId
-                  ),
-                })
-              : undefined;
+          const guarded =
+            Option.isSome(input.facts.passReminder) ||
+            input.sendStep.skipPassHolders === true;
+          let renderedByCustomer:
+            | Map<DotyposCustomerId, RenderedCustomerEmail>
+            | undefined;
+          if (Option.isSome(input.facts.emailDocument)) {
+            renderedByCustomer = new Map();
+            const document = input.facts.emailDocument.value;
+            for (const recipient of recipients) {
+              const rendered = Option.isSome(input.facts.passReminder)
+                ? renderPassReminderPublishedEmail({
+                    document,
+                    reminder: input.facts.passReminder.value,
+                    locale: recipient.locale,
+                    profile: input.facts.profiles.get(
+                      recipient.dotyposCustomerId
+                    ),
+                  })
+                : renderAutomatedPublishedEmail({
+                    document,
+                    recipientLocale: recipient.locale,
+                  });
+              if (Result.isSuccess(rendered)) {
+                renderedByCustomer.set(
+                  recipient.dotyposCustomerId,
+                  rendered.success
+                );
+              }
+            }
+          }
           return sends
             .persistBatch({
               sendId,
               recipients,
               profiles: input.facts.profiles,
               at: input.at,
-              ...((content || input.sendStep.skipPassHolders) && {
-                guarded: true,
-              }),
-              ...(content && { content }),
+              ...(renderedByCustomer && { renderedByCustomer }),
+              ...(guarded && { guarded: true as const }),
             })
             .pipe(
               Effect.andThen(

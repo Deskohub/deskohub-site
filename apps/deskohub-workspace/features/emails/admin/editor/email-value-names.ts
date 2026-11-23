@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import type { EmailCustomerFieldPath } from "./email-value-options";
 
 /** Value names allow 64 characters; keep room for a `_12` suffix. */
@@ -22,11 +23,11 @@ const valueNameBase = (segment: string): string => {
  * for a discount value, numbered from `_2` while it's taken.
  */
 export const suggestedEmailValueName = (
-  source: EmailCustomerFieldPath | "discount",
+  source: EmailCustomerFieldPath | "discount" | "pass",
   takenNames: Iterable<string | undefined>
 ): string => {
   const base = valueNameBase(
-    source === "discount" ? "discount" : (source.at(-1) ?? "")
+    Predicate.isString(source) ? source : (source.at(-1) ?? "")
   );
   const taken = new Set(takenNames);
   if (!taken.has(base)) return base;

@@ -119,8 +119,7 @@ export const useCampaignComposerSave = ({
     if (created) return;
     setSaveError(undefined);
     setSubmittedFields(values);
-    const emailId =
-      delivery === "once" ? values.emailId || undefined : undefined;
+    const emailId = values.emailId || undefined;
     const fields = {
       title: values.title.trim(),
       purpose: values.purpose,

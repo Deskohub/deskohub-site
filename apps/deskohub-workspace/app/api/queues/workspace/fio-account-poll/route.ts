@@ -14,7 +14,8 @@ import { LatePaymentRecoveryQueueService } from "@/features/checkout/backend/pay
 import { FioPaymentSettlementRepository } from "@/features/checkout/backend/repositories/fio-payment-settlement.repository";
 import { PaymentLifecycleRepository } from "@/features/checkout/backend/repositories/payment-lifecycle.repository";
 import { QrPaymentRepository } from "@/features/checkout/backend/repositories/qr-payment.repository";
-import { QueuePublisher } from "@/shared/backend/queue/queue-publisher";
+import { defineVercelQueueRoute } from "@/shared/backend/queue/vercel-queue-consumer";
+import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
 
 // The persisted interrupted-read gate includes this execution limit.
 export const maxDuration = 60;
@@ -32,8 +33,12 @@ const SettlementsLive = FioPaymentSettlementService.Default.pipe(
         Layer.provide(WorkspaceDatabase.Default)
       ),
       PaymentLifecycleRepository.Live,
-      PaidFulfillmentQueueService.Live,
-      LatePaymentRecoveryQueueService.Live
+      PaidFulfillmentQueueService.Default.pipe(
+        Layer.provide(VercelQueuePublisher)
+      ),
+      LatePaymentRecoveryQueueService.Default.pipe(
+        Layer.provide(VercelQueuePublisher)
+      )
     )
   )
 );
@@ -46,16 +51,18 @@ const PollerLive = FioAccountPoller.Default.pipe(
       FioAccountPollRepository.Default,
       FioAccounts.Default,
       FioMovements.Live,
-      QueuePublisher.Default
+      VercelQueuePublisher
     )
   )
 );
 
-export const POST = fioPollTopic.consume(
+export const POST = defineVercelQueueRoute(
   "fioAccountPollQueue",
-  (job) =>
-    Effect.flatMap(FioAccountPoller, (poller) => poller.consume(job)).pipe(
-      Effect.provide(PollerLive)
-    ),
-  fioPollRedelivery
+  fioPollTopic.consume(
+    (job) =>
+      Effect.flatMap(FioAccountPoller, (poller) => poller.consume(job)).pipe(
+        Effect.provide(PollerLive)
+      ),
+    fioPollRedelivery
+  )
 );

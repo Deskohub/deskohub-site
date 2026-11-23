@@ -1349,6 +1349,7 @@
   "accountReservationsOtherTitle": "Бронювання без дати",
   "accountReservationsCurrentEmpty": "У вас немає поточних чи майбутніх бронювань.",
   "accountReservationsPastEmpty": "У вас ще немає минулих бронювань.",
+  "accountReservationsPassSavingsLink": "Заощаджуйте з пакетами й абонементами",
   "accountReservationsUnavailableTitle": "Історія бронювань тимчасово недоступна",
   "accountReservationsProviderUnavailable": "Наша система бронювання недоступна. Ваш профіль і далі доступний, спробуйте пізніше.",
   "accountReservationOtherProduct": "Бронювання в коворкінгу Workspace",
@@ -1608,6 +1609,7 @@
   ],
   "landingNavCoworking": "Коворкінг",
   "landingOfferingCoworkPageLink": "Переглянути коворкінг",
+  "landingOfferingPassesLink": "Пакети й абонементи",
   "breadcrumbLabel": "Навігаційний ланцюжок",
   "breadcrumbHome": "Deskohub Workspace",
   "coworkingBreadcrumb": "Коворкінг",
@@ -1638,6 +1640,7 @@
   "coworkingReservedDeskPointWorkstation": "За доплату можна додати робочу станцію з двома моніторами",
   "coworkingReservedDeskCta": "Забронювати закріплене місце",
   "coworkingPricesNote": "Ціни додаткових послуг і поточні акції дивіться на сторінці «<pricing>Ціни</pricing>».",
+  "coworkingComparePassesLink": "Порівняти разові відвідування з пакетами й абонементами",
   "coworkingAmenitiesTitle": "Що тут є",
   "coworkingAmenityInternetTitle": "Інтернет",
   "coworkingAmenityInternetText": "Оптоволоконний інтернет і Wi-Fi 6 впораються і з відеодзвінками, і з великими файлами.",
@@ -1877,52 +1880,6 @@
   "entryPackCheckoutTermsChanged": "Умови змінилися. Перегляньте чинні умови й підтвердьте їх знову перед оплатою.",
   "passEntryPack": "Пакет відвідувань",
   "passUnlimited": "Безлімітний абонемент",
-  "passReminderGreeting": "Вітаємо, {firstName}!",
-  "passReminderGreetingUnnamed": "Вітаємо!",
-  "passReminderEntryPackSubject": [
-    {
-      "declarations": [
-        "input remaining",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "У пакеті залишилося {remainingNumber} відвідування",
-        "remainingPlural=few": "У пакеті залишилося {remainingNumber} відвідування",
-        "remainingPlural=many": "У пакеті залишилося {remainingNumber} відвідувань",
-        "remainingPlural=other": "У пакеті залишилося {remainingNumber} відвідування"
-      }
-    }
-  ],
-  "passReminderEntryPackPreheader": "Ваш пакет ({tier}) діє до {endsOn}.",
-  "passReminderEntryPackBody": [
-    {
-      "declarations": [
-        "input remaining",
-        "input total",
-        "local remainingPlural = remaining: plural",
-        "local remainingNumber = remaining: number",
-        "local totalNumber = total: number"
-      ],
-      "selectors": ["remainingPlural"],
-      "match": {
-        "remainingPlural=one": "Ваш пакет відвідувань ({tier}) діє до <strong>{endsOn}</strong>. Ще можна використати <strong>{remainingNumber} із {totalNumber} відвідувань</strong>. Виберіть дні зараз, щоб відвідування не згоріли.",
-        "remainingPlural=few": "Ваш пакет відвідувань ({tier}) діє до <strong>{endsOn}</strong>. Ще можна використати <strong>{remainingNumber} із {totalNumber} відвідувань</strong>. Виберіть дні зараз, щоб відвідування не згоріли.",
-        "remainingPlural=many": "Ваш пакет відвідувань ({tier}) діє до <strong>{endsOn}</strong>. Ще можна використати <strong>{remainingNumber} із {totalNumber} відвідувань</strong>. Виберіть дні зараз, щоб відвідування не згоріли.",
-        "remainingPlural=other": "Ваш пакет відвідувань ({tier}) діє до <strong>{endsOn}</strong>. Ще можна використати <strong>{remainingNumber} із {totalNumber} відвідувань</strong>. Виберіть дні зараз, щоб відвідування не згоріли."
-      }
-    }
-  ],
-  "passReminderEntryPackBook": "Забронювати день",
-  "passReminderEntryPackExpiry": "Відвідування, які ви не забронюєте до цієї дати, згорять разом із пакетом.",
-  "passReminderUnlimitedSubject": "Ваш безлімітний абонемент діє до {endsOn}",
-  "passReminderUnlimitedPreheader": "Продовжте абонемент ще на {days} днів.",
-  "passReminderUnlimitedPreheaderWithDesk": "Продовжте абонемент зараз, щоб зберегти місце {deskLabel} ще на {days} днів.",
-  "passReminderUnlimitedBody": "Ваш безлімітний абонемент ({tier}) діє до <strong>{endsOn}</strong>. Продовжте його зараз, і наступні {days} днів почнуться одразу після цього, {renewalStartsOn}.",
-  "passReminderUnlimitedBodyWithDesk": "Ваш безлімітний абонемент ({tier}) діє до <strong>{endsOn}</strong>. Продовжте його зараз, і наступні {days} днів почнуться одразу після цього, {renewalStartsOn}. За вами залишиться місце <strong>{deskLabel}</strong>.",
-  "passReminderUnlimitedRenew": "Продовжити на {days} днів",
-  "passReminderUnlimitedDeskFallback": "Якщо під час продовження місце {deskLabel} уже буде зайнято, ми надамо вам інше.",
   "unlimitedPassRenew": "Продовжити абонемент",
   "passTierOpenSpace": "Open Space",
   "passTierReservedDesk": "Зарезервований стіл",
@@ -1994,8 +1951,18 @@
   "entryPackDiscoveryPerDay": "{price} на день",
   "entryPackDiscoveryBuy": "Купити",
   "entryPackDiscoveryBuyTier": "Купити пакет відвідувань ({tier})",
-  "entryPackDiscoveryCoworkLink": "Плануєте приходити часто? <packLink>Пакети відвідувань від {price} на день</packLink>",
-  "unlimitedPassDiscoveryIntro": "30 днів поспіль від обраної вами дати. Код доступу буде готовий щодня без бронювання.",
+  "unlimitedPassDiscoveryIntro": "Безлімітний доступ на 30 днів від обраної вами дати. Код доступу буде готовий щодня без бронювання.",
+  "passPurchaseOffersHeading": "Пакети й абонементи",
+  "entryPackOfferTagline": "платіть менше за кожне відвідування",
+  "entryPackOfferSizes": "{smaller} або {larger}",
+  "entryPackOfferVisits": "відвідувань",
+  "entryPackOfferAction": "Обрати пакет",
+  "entryPackOfferLabel": "Обрати пакет відвідувань ({tier})",
+  "unlimitedPassOfferTaglineOpenSpace": "безлімітний доступ на {days} днів",
+  "unlimitedPassOfferTaglineReservedDesk": "ваше власне постійне місце",
+  "unlimitedPassOfferExpiry": "Дійсний до: <date>{date}</date>",
+  "unlimitedPassOfferAction": "Обрати абонемент",
+  "unlimitedPassOfferLabel": "Обрати безлімітний абонемент ({tier})",
   "unlimitedPassDiscoveryOpenSpaceDescription": "Місце у відкритому просторі щодня з 00:00 до {until}.",
   "unlimitedPassDiscoveryReservedDeskDescription": "Один і той самий стіл у вашому розпорядженні цілодобово всі 30 днів.",
   "unlimitedPassDiscoveryWorkstationDescription": "Один і той самий стіл із двома моніторами у вашому розпорядженні цілодобово всі 30 днів.",

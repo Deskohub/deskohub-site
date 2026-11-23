@@ -2,12 +2,21 @@ import {
   type EmailCustomerField,
   emailCustomerFieldAtPath,
   emailCustomerFieldCatalogue,
+  emailTriggerFields,
   isEmailCustomerScalar,
+  isEmailTriggerEvent,
+  isEmailTriggerInlineField,
+  isEmailTriggerUrlField,
 } from "@deskohub/workspace-admin-api";
 import type { EmailDraftValueDefinition } from "./email-draft-form";
 
 /** What a value definition yields per recipient. */
-export type EmailValueKind = "scalar" | "record" | "list" | "discount";
+export type EmailValueKind =
+  | "scalar"
+  | "record"
+  | "list"
+  | "discount"
+  | "trigger";
 
 /** A customer field path, as selections and references name it. */
 export type EmailCustomerFieldPath = readonly string[];
@@ -31,6 +40,10 @@ export const emailValueKind = (
   definition: EmailDraftValueDefinition
 ): EmailValueKind | undefined => {
   if (definition.source?.kind === "discount") return "discount";
+  if (definition.source?.kind === "trigger")
+    return isEmailTriggerEvent(definition.source.trigger)
+      ? "trigger"
+      : undefined;
   const field = selectedEmailCustomerField(definition);
   if (!field) return undefined;
   if (field.kind === "list") return "list";
@@ -119,8 +132,8 @@ const emailDiscountScalarFields = ["code", "expiresAt"] as const;
 
 /**
  * Everything a text can show from `definitions`, in definition order: each
- * named scalar customer value, each selected field of a record value, and
- * each discount's code and expiry. Lists show only through list blocks.
+ * named scalar customer value, each selected field of a record value, each
+ * discount's code and expiry, and each trigger's inline fields.
  */
 export const emailScalarValueOptions = (
   definitions: readonly EmailDraftValueDefinition[]
@@ -141,9 +154,34 @@ export const emailScalarValueOptions = (
           name,
           field: [field],
         }));
+      case "trigger": {
+        const trigger = definition.source?.trigger;
+        if (!isEmailTriggerEvent(trigger)) return [];
+        return emailTriggerFields(trigger)
+          .filter(isEmailTriggerInlineField)
+          .map((field) => ({ name, field: [field.name] }));
+      }
       default:
         return [];
     }
+  });
+
+/** Every dynamic URL field from `definitions` usable as a Button destination. */
+export const emailUrlValueOptions = (
+  definitions: readonly EmailDraftValueDefinition[]
+): readonly EmailScalarValueOption[] =>
+  definitions.flatMap((definition): EmailScalarValueOption[] => {
+    const name = definition.name;
+    const trigger = definition.source?.trigger;
+    if (
+      !name ||
+      definition.source?.kind !== "trigger" ||
+      !isEmailTriggerEvent(trigger)
+    )
+      return [];
+    return emailTriggerFields(trigger)
+      .filter(isEmailTriggerUrlField)
+      .map((field) => ({ name, field: [field.name] }));
   });
 
 /** A value reference as one readable token, such as `booking.date`. */

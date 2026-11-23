@@ -7,6 +7,8 @@ import { testEmailAddress } from "@deskohub/test-email";
 import {
   type AutomationFlowType as AutomationFlow,
   AutomationFlow as automationFlowContractSchema,
+  type EmailId,
+  type EmailVersionId,
 } from "@deskohub/workspace-admin-api";
 import { Effect, Fiber, Schema } from "effect";
 import type { WorkspaceDatabaseClient } from "@/db/database.service";
@@ -80,17 +82,24 @@ export const seedDeliverAutomation = async (
     readonly purpose?: CampaignPurpose;
     readonly flow?: AutomationFlow;
     readonly text?: string;
+    readonly emailId?: EmailId;
+    readonly frozenEmailVersionId?: EmailVersionId;
     readonly activatedAt: Temporal.Instant;
   }
 ) => {
   const purpose = input.purpose ?? "operational";
   const flow = input.flow ?? sendOnlyFlow();
-  const campaignId = await seedAutomatedCampaign(db, { purpose });
+  const campaignId = await seedAutomatedCampaign(db, {
+    purpose,
+    emailId: input.emailId,
+  });
   const versionId = await seedAutomationVersion(db, {
     campaignId,
     purpose,
     flow,
     text: input.text,
+    emailId: input.emailId,
+    frozenEmailVersionId: input.frozenEmailVersionId,
     activatedAt: input.activatedAt,
   });
   await seedAutomation(db, {

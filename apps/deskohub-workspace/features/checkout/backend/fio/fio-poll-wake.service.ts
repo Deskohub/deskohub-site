@@ -98,12 +98,6 @@ export class FioPollWake extends Context.Service<FioPollWake, IFioPollWake>()(
       };
     })
   );
-
-  static Live = this.Default.pipe(
-    Layer.provide(
-      Layer.mergeAll(FioAccountPollRepository.Default, QueuePublisher.Default)
-    )
-  );
 }
 
 export const publishFioPollJob = (job: FioPollJob, delay?: Duration.Duration) =>

@@ -315,3 +315,144 @@ describe("rich text parity with campaign bodies", () => {
     );
   });
 });
+
+describe("trigger values, conditional blocks, and dynamic button links", () => {
+  const triggerDocument = Schema.decodeUnknownSync(EmailDocument)({
+    purpose: "marketing",
+    templateKey: "workspace",
+    values: [
+      {
+        name: "pass",
+        source: { kind: "trigger", trigger: "unlimited-ending" },
+      },
+    ],
+    structure: [
+      {
+        _tag: "Paragraph",
+        id: "greeting_named",
+        textKey: "greeting_named",
+        when: { name: "pass", field: ["firstName"], present: true },
+      },
+      {
+        _tag: "Paragraph",
+        id: "greeting_unnamed",
+        textKey: "greeting_unnamed",
+        when: { name: "pass", field: ["firstName"], present: false },
+      },
+      {
+        _tag: "Paragraph",
+        id: "desk_note",
+        textKey: "desk_note",
+        when: { name: "pass", field: ["deskLabel"], present: true },
+      },
+      {
+        _tag: "Button",
+        id: "renew",
+        labelKey: "renew_label",
+        hrefValue: { name: "pass", field: ["actionUrl"] },
+      },
+    ],
+    translations: {
+      "en-US": {
+        subject: [
+          { _tag: "Text", text: "Ends on " },
+          { _tag: "Value", name: "pass", field: ["endsOn"] },
+        ],
+        preheader: [{ _tag: "Value", name: "pass", field: ["tier"] }],
+        texts: {
+          greeting_named: [
+            { _tag: "Text", text: "Hi " },
+            { _tag: "Value", name: "pass", field: ["firstName"] },
+            { _tag: "Text", text: "," },
+          ],
+          greeting_unnamed: [{ _tag: "Text", text: "Hello," }],
+          desk_note: [
+            { _tag: "Text", text: "Keep " },
+            { _tag: "Value", name: "pass", field: ["deskLabel"], bold: true },
+            { _tag: "Text", text: " starting " },
+            { _tag: "Value", name: "pass", field: ["renewalStartsOn"] },
+          ],
+          renew_label: [{ _tag: "Text", text: "Renew pass" }],
+        },
+      },
+    },
+  });
+
+  test("renders conditional blocks and dynamic button hrefs when optional fields are present or missing", async () => {
+    const withFields = renderedContent(
+      "en-US",
+      {
+        pass: {
+          _tag: "Resolved",
+          value: {
+            firstName: "Jana",
+            tier: "Reserved Desk",
+            endsOn: "Mon 26 Oct",
+            renewalStartsOn: "Tue 27 Oct",
+            deskLabel: "Desk 14",
+            actionUrl: "https://workspace.deskohub.cz/en-US/passes/renew",
+          },
+        },
+      },
+      triggerDocument
+    );
+    expect(withFields.subject).toBe("Ends on Mon 26 Oct");
+    expect(withFields.preheader).toBe("Reserved Desk");
+    const htmlWith = await renderHtml(withFields.body);
+    expect(htmlWith).toContain("Hi Jana,");
+    expect(htmlWith).not.toContain("Hello,");
+    expect(htmlWith).toContain("<strong>Desk 14</strong>");
+    expect(htmlWith).toContain(
+      'href="https://workspace.deskohub.cz/en-US/passes/renew"'
+    );
+
+    const withoutOptional = renderedContent(
+      "en-US",
+      {
+        pass: {
+          _tag: "Resolved",
+          value: {
+            firstName: null,
+            tier: "Open Space",
+            endsOn: "Mon 26 Oct",
+            renewalStartsOn: "Tue 27 Oct",
+            deskLabel: null,
+            actionUrl: "https://workspace.deskohub.cz/en-US/passes/renew",
+          },
+        },
+      },
+      triggerDocument
+    );
+    const htmlWithout = await renderHtml(withoutOptional.body);
+    expect(htmlWithout).toContain("Hello,");
+    expect(htmlWithout).not.toContain("Hi ");
+    expect(htmlWithout).not.toContain("Keep ");
+    expect(htmlWithout).toContain(
+      'href="https://workspace.deskohub.cz/en-US/passes/renew"'
+    );
+  });
+
+  test("rejects unsafe protocols in dynamic button href values", () => {
+    expect(
+      failureOf(
+        rendered(
+          "en-US",
+          {
+            pass: {
+              _tag: "Resolved",
+              value: {
+                firstName: null,
+                tier: "Open Space",
+                endsOn: "Mon 26 Oct",
+                renewalStartsOn: "Tue 27 Oct",
+                deskLabel: null,
+                actionUrl: "javascript:alert(1)",
+              },
+            },
+          },
+          triggerDocument
+        )
+      )
+    ).toMatchObject({ _tag: "EmailValueMismatch", name: "pass" });
+  });
+});

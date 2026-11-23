@@ -1283,5 +1283,7 @@
   "emailCampaignsSendingFailureTestRecipientsInvalid": "Eine der Adressen ist keine gültige E-Mail-Adresse. Überprüfen Sie die Adressen und versuchen Sie es erneut.",
   "emailCampaignsSendingFailureRecipientsOutsideTestDomain": "Außerhalb der Produktion können Kampagnen-E-Mails nur an Adressen mit @{domain} gesendet werden, und einige Empfänger gehören nicht dazu. Es wurde nichts gesendet.",
   "emailCampaignsSendingFailureRecipientsUnavailable": "Die Empfänger konnten nicht ermittelt werden, weil Dotypos oder die Datenbank nicht erreichbar ist. Es wurde nichts gesendet und der Code ist weiterhin gültig; versuchen Sie es in Kürze erneut.",
-  "emailCampaignsSendingFailureEmailSetupMissing": "Kampagnen-E-Mails sind in diesem Deployment nicht eingerichtet. Bitten Sie das Entwicklungsteam, die Umgebungsvariablen für Kampagnen-E-Mails zu prüfen."
+  "emailCampaignsSendingFailureEmailSetupMissing": "Kampagnen-E-Mails sind in diesem Deployment nicht eingerichtet. Bitten Sie das Entwicklungsteam, die Umgebungsvariablen für Kampagnen-E-Mails zu prüfen.",
+  "emailCampaignsComposerEditPublishedEmail": "E-Mail in der Bibliothek bearbeiten",
+  "emailCampaignsComposerPublishedEmailTriggerMismatch": "Diese E-Mail verwendet Auslöser-Werte, die nicht zum Auslöser dieser Automatisierung passen. Wähle eine passende E-Mail oder aktualisiere den Ablauf."
 }

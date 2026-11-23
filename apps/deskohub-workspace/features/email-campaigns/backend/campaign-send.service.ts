@@ -22,6 +22,7 @@ import { reservationCustomerEmailSchema } from "@/features/reservation/reservati
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
 import type { WorkspaceUrlConfigError } from "@/shared/backend/config/workspace-url.config";
+import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
 import { currentInstant } from "@/shared/utils/temporal";
 import type { AudienceFilter } from "../audience-filter";
 import {
@@ -599,7 +600,9 @@ export class CampaignSendService extends Context.Service<
             Layer.provide(NodeCrypto.layer)
           ),
           CampaignEmailConfig.Default,
-          CampaignSendQueueService.Live,
+          CampaignSendQueueService.Default.pipe(
+            Layer.provide(VercelQueuePublisher)
+          ),
           WorkspaceEmailLayer
         )
       ),
