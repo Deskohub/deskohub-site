@@ -132,69 +132,62 @@ export const makeGcsReleaseRecordStore = Effect.fn(
   const uploadUrl = `${cloudStorageApi}/upload/storage/v1/b/${bucketPath}/o`;
 
   /**
-   * Attach a bearer token. Nothing is dispatched yet, so a stalled or
-   * failed token exchange never makes a write's outcome unknown.
+   * One attempt under one deadline: resolve a bearer token, dispatch, and
+   * handle the response. Only once the request is dispatched can a lost
+   * answer leave a write's outcome unknown; a token exchange that stalls
+   * or fails sends nothing.
    */
-  const authorize = (
+  const attempt = <A, E>(
     operation: "read" | "write",
-    request: HttpClientRequest.HttpClientRequest
-  ) =>
-    credentials.pipe(
-      Effect.mapError(
-        () =>
-          new ReleaseStoreUnavailable({
-            operation,
-            status: null,
-            reason: "Google Cloud credentials are unavailable",
-          })
-      ),
-      Effect.timeoutOrElse({
-        duration: attemptTimeout,
-        orElse: () =>
-          Effect.fail(
-            new RetryableAttempt({
-              status: null,
-              reason: "Google Cloud credentials did not resolve in time",
-              outcomeUnknown: false,
-            })
-          ),
-      }),
-      Effect.map(({ accessToken }) =>
-        request.pipe(HttpClientRequest.bearerToken(accessToken))
-      )
-    );
-
-  /**
-   * Dispatch an authorized request and handle its response within one
-   * bound. From here on a lost answer leaves a write's outcome unknown.
-   */
-  const exchange = <A, E>(
     request: HttpClientRequest.HttpClientRequest,
     handle: (
       response: HttpClientResponse.HttpClientResponse
     ) => Effect.Effect<A, E>
   ) =>
-    http.execute(request).pipe(
-      Effect.mapError(
-        () =>
-          new RetryableAttempt({
-            status: null,
-            reason: "Cloud Storage could not be reached",
-            outcomeUnknown: true,
-          })
-      ),
-      Effect.flatMap(handle),
-      Effect.timeoutOrElse({
-        duration: attemptTimeout,
-        orElse: () =>
-          Effect.fail(
-            new RetryableAttempt({
-              status: null,
-              reason: "Cloud Storage did not answer in time",
-              outcomeUnknown: true,
-            })
+    Ref.make(false).pipe(
+      Effect.flatMap((dispatched) =>
+        credentials.pipe(
+          Effect.mapError(
+            () =>
+              new ReleaseStoreUnavailable({
+                operation,
+                status: null,
+                reason: "Google Cloud credentials are unavailable",
+              })
           ),
-      })
+          Effect.tap(() => Ref.set(dispatched, true)),
+          Effect.flatMap(({ accessToken }) =>
+            http
+              .execute(request.pipe(HttpClientRequest.bearerToken(accessToken)))
+              .pipe(
+                Effect.mapError(
+                  () =>
+                    new RetryableAttempt({
+                      status: null,
+                      reason: "Cloud Storage could not be reached",
+                      outcomeUnknown: true,
+                    })
+                )
+              )
+          ),
+          Effect.flatMap(handle),
+          Effect.timeoutOrElse({
+            duration: attemptTimeout,
+            orElse: () =>
+              Effect.flatMap(Ref.get(dispatched), (sent) =>
+                Effect.fail(
+                  new RetryableAttempt({
+                    status: null,
+                    reason: sent
+                      ? "Cloud Storage did not answer in time"
+                      : "Google Cloud credentials did not resolve in time",
+                    outcomeUnknown: sent,
+                  })
+                )
+              ),
+          })
+        )
+      )
     );
 
   const bodyText = (response: HttpClientResponse.HttpClientResponse) =>
@@ -256,16 +249,16 @@ export const makeGcsReleaseRecordStore = Effect.fn(
     );
 
   /** The stored record, or null while no object exists. */
-  const readPresent = authorize(
+  const readPresent = attempt(
     "read",
     HttpClientRequest.get(objectUrl).pipe(
       HttpClientRequest.setUrlParam("alt", "media")
-    )
+    ),
+    storedObject
   ).pipe(
-    Effect.flatMap((request) => exchange(request, storedObject)),
     retryTransient,
-    Effect.catchTag("RetryableAttempt", (attempt) =>
-      Effect.fail(unavailableAfterRetries("read")(attempt))
+    Effect.catchTag("RetryableAttempt", (last) =>
+      Effect.fail(unavailableAfterRetries("read")(last))
     ),
     Effect.flatMap((stored) =>
       stored === null ? Effect.succeed(null) : decodeStored(stored)
@@ -317,7 +310,7 @@ export const makeGcsReleaseRecordStore = Effect.fn(
     readonly ifVersion: string;
     readonly outcomeUnknown: Ref.Ref<boolean>;
   }) =>
-    authorize(
+    attempt(
       "write",
       HttpClientRequest.post(uploadUrl).pipe(
         HttpClientRequest.setUrlParams({
@@ -326,17 +319,17 @@ export const makeGcsReleaseRecordStore = Effect.fn(
           ifGenerationMatch: input.ifVersion,
         }),
         HttpClientRequest.bodyText(input.body, "application/json")
-      )
+      ),
+      uploadedGeneration
     ).pipe(
-      Effect.flatMap((request) => exchange(request, uploadedGeneration)),
       Effect.tapError((error) =>
         error._tag === "RetryableAttempt" && error.outcomeUnknown
           ? Ref.set(input.outcomeUnknown, true)
           : Effect.void
       ),
       retryTransient,
-      Effect.catchTag("RetryableAttempt", (attempt) =>
-        Effect.fail(unavailableAfterRetries("write")(attempt))
+      Effect.catchTag("RetryableAttempt", (last) =>
+        Effect.fail(unavailableAfterRetries("write")(last))
       )
     );
 

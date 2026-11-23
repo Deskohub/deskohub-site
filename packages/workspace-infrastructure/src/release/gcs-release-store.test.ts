@@ -29,7 +29,11 @@ import {
   GitSha,
   type ReleaseRecord,
 } from "./release-record";
-import { ReleaseRecordStore, runReleaseStep } from "./release-record-store";
+import {
+  ReleaseRecordStore,
+  ReleaseStoreUnavailable,
+  runReleaseStep,
+} from "./release-record-store";
 
 const location = releaseRecordLocation(sandboxConfig);
 const objectPath = `/storage/v1/b/${sandboxConfig.stateBucket}/o/workspace-release-record.sandbox.json`;
@@ -128,6 +132,40 @@ const requestLines = (fake: FakeCloudStorage) =>
     ({ method, url }) =>
       `${method} ${url.pathname}${url.searchParams.has("ifGenerationMatch") ? ` if=${url.searchParams.get("ifGenerationMatch")}` : ""}`
   );
+
+const unavailableReason = (error: { readonly _tag: string }) => {
+  if (!(error instanceof ReleaseStoreUnavailable)) {
+    throw new Error(`expected ReleaseStoreUnavailable, got ${error._tag}`);
+  }
+  return error.reason;
+};
+
+/**
+ * What a write failure adds once an earlier attempt's outcome is unknown,
+ * derived from the same refusal with and without a prior server error so
+ * tests do not pin its wording.
+ */
+const uncertaintyNote = async () => {
+  const certainFake = makeFakeCloudStorage();
+  certainFake.intercept(respondWith(403));
+  const certain = failure(
+    await withStore(certainFake, write(emptyReleaseRecord, "0"))
+  );
+  const fake = makeFakeCloudStorage();
+  fake.intercept(respondWith(503), respondWith(403));
+  const uncertain = failure(
+    await withStore(fake, write(emptyReleaseRecord, "0"))
+  );
+  expect([certain, uncertain]).toMatchObject([
+    { _tag: "ReleaseStoreUnavailable", operation: "write", status: 403 },
+    { _tag: "ReleaseStoreUnavailable", operation: "write", status: 403 },
+  ]);
+  expect(fake.requests).toHaveLength(2);
+  const certainReason = unavailableReason(certain);
+  const uncertainReason = unavailableReason(uncertain);
+  expect(uncertainReason.startsWith(certainReason)).toBe(true);
+  return uncertainReason.slice(certainReason.length);
+};
 
 describe("Cloud Storage release record store", () => {
   test("keeps the record at the state bucket root, outside Alchemy's stage prefixes", () => {
@@ -395,9 +433,33 @@ describe("Cloud Storage release record store", () => {
     fake.intercept(delayed(31));
     expect(success(await withStore(fake, read)).version).toBe("0");
     expect(fake.requests).toHaveLength(3);
+
+    // The token exchange counts against the same deadline.
+    const slowTokens = Layer.succeed(
+      Credentials,
+      Effect.as(Effect.sleep("20 seconds"), {
+        accessToken: Redacted.make(fakeAccessToken),
+      })
+    );
+    const slow = makeFakeCloudStorage();
+    slow.intercept(delayed(20));
+    expect(success(await withStore(slow, read, slowTokens)).version).toBe("0");
+    expect(requestLines(slow)).toEqual([
+      `GET ${objectPath}`,
+      `GET ${objectPath}`,
+    ]);
   });
 
   test("gives up on a write that never answers, saying it may have landed", async () => {
+    const note = await uncertaintyNote();
+    const throttled = makeFakeCloudStorage();
+    throttled.intercept(...Array.from({ length: 5 }, () => respondWith(429)));
+    const notApplied = failure(
+      await withStore(throttled, write(emptyReleaseRecord, "0"))
+    );
+    expect(notApplied).toMatchObject({ status: 429 });
+    expect(unavailableReason(notApplied).endsWith(note)).toBe(false);
+
     const fake = makeFakeCloudStorage();
     fake.intercept(...Array.from({ length: 5 }, () => () => Effect.never));
     expect(
@@ -408,27 +470,13 @@ describe("Cloud Storage release record store", () => {
       _tag: "ReleaseStoreUnavailable",
       operation: "write",
       status: null,
+      reason: expect.stringMatching(new RegExp(`${RegExp.escape(note)}$`)),
     });
     expect(fake.requests).toHaveLength(5);
   });
 
   test("keeps an earlier unknown outcome in a later refusal", async () => {
-    const certainFake = makeFakeCloudStorage();
-    certainFake.intercept(respondWith(403));
-    const certain = failure(
-      await withStore(certainFake, write(emptyReleaseRecord, "0"))
-    );
-    const fake = makeFakeCloudStorage();
-    fake.intercept(respondWith(503), respondWith(403));
-    const uncertain = failure(
-      await withStore(fake, write(emptyReleaseRecord, "0"))
-    );
-    expect([certain, uncertain]).toMatchObject([
-      { _tag: "ReleaseStoreUnavailable", operation: "write", status: 403 },
-      { _tag: "ReleaseStoreUnavailable", operation: "write", status: 403 },
-    ]);
-    expect(fake.requests).toHaveLength(2);
-    expect(uncertain).not.toEqual(certain);
+    expect(await uncertaintyNote()).not.toBe("");
   });
 
   test("reports a failed confirmation read as an uncertain write", async () => {
@@ -439,6 +487,7 @@ describe("Cloud Storage release record store", () => {
       ({ forward }) => forward,
       respondWith(401)
     );
+    const note = await uncertaintyNote();
     expect(
       failure(
         await withStore(fake, write(staged(emptyReleaseRecord, shaA), "0"))
@@ -447,6 +496,7 @@ describe("Cloud Storage release record store", () => {
       _tag: "ReleaseStoreUnavailable",
       operation: "write",
       status: 401,
+      reason: expect.stringMatching(new RegExp(`${RegExp.escape(note)}$`)),
     });
     expect(requestLines(fake)).toEqual([
       `POST ${uploadPath} if=0`,
