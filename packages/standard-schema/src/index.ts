@@ -6,7 +6,7 @@ const getSchemaValidationResult = <Input, Output>(
 ): StandardSchemaV1.Result<Output> => {
   const result = schema["~standard"].validate(value);
 
-  if (result instanceof Promise) {
+  if ("then" in result) {
     throw new Error("Async Standard Schema validation is not supported here");
   }
 
