@@ -19,6 +19,10 @@ import {
 import { Data, Effect, Layer } from "effect";
 import { createCensoredOtelSpanExporter } from "../logging/censorship";
 import {
+  createAllowlistedSpanExporter,
+  SpanAllowlistProcessor,
+} from "./span-allowlist";
+import {
   isPostHogLogsExportEnabled,
   type PostHogLogsExport,
 } from "./telemetry-policy";
@@ -40,29 +44,106 @@ export interface TelemetryIdentity {
   readonly deploymentEnvironment?: string;
   readonly serviceName?: string;
   readonly serviceVersion?: string;
+  readonly deploymentId?: string;
 }
 
 const identityResource = ({
   deploymentEnvironment,
   serviceName = WORKSPACE_SERVICE_NAME,
   serviceVersion,
+  deploymentId,
 }: TelemetryIdentity) =>
   resourceFromAttributes({
     "deployment.environment.name": deploymentEnvironment,
     "service.name": serviceName,
     "service.namespace": WORKSPACE_SERVICE_NAMESPACE,
     "service.version": serviceVersion,
+    ...(deploymentId && { "deployment.id": deploymentId }),
   });
 
+export interface WorkspaceOTelRegistrationOptions {
+  /** The source commit the process serves. */
+  readonly serviceVersion?: string | undefined;
+  /** The host's rollout, such as a Cloud Run revision. */
+  readonly deploymentId?: string | undefined;
+  /**
+   * A loopback OTLP/HTTP collector, such as the Cloud Run sidecar at
+   * `http://127.0.0.1:4318`.
+   */
+  readonly otlpEndpoint?: string | undefined;
+  /**
+   * Whether `registerOTel` may add its automatic exporters when there is no
+   * OTLP endpoint, as on Vercel (the default). A container host turns it off:
+   * there they would send spans unfiltered to any OTLP endpoint the
+   * environment names, or to `localhost:4318`.
+   */
+  readonly automaticExport?: boolean | undefined;
+}
+
 /**
- * `registerOTel` options for the Workspace: its identity, with the span
- * redactors ahead of the automatic exporting processors.
+ * `registerOTel` options for the Workspace server.
+ *
+ * By default, as on Vercel, they are the Workspace identity and the span
+ * redactors ahead of `registerOTel`'s automatic exporting processors, as
+ * they have always been.
+ *
+ * With an OTLP endpoint, as in a container, the span redactors and the span
+ * allowlist run ahead of a single bounded batch export to that collector,
+ * which applies the allowlist again, and no automatic exporter runs; the
+ * identity adds the revision and the rollout. Without automatic export and
+ * without an endpoint, spans are recorded and filtered but never exported.
  */
-export const workspaceOTelRegistration = () => ({
-  serviceName: WORKSPACE_SERVICE_NAME,
-  attributes: { "service.namespace": WORKSPACE_SERVICE_NAMESPACE },
-  spanProcessors: [...createWorkspaceSpanRedactors(), "auto" as const],
-});
+export const createWorkspaceOTelRegistration = ({
+  serviceVersion,
+  deploymentId,
+  otlpEndpoint,
+  automaticExport = true,
+}: WorkspaceOTelRegistrationOptions = {}) => {
+  if (!otlpEndpoint && automaticExport) {
+    return {
+      serviceName: WORKSPACE_SERVICE_NAME,
+      attributes: { "service.namespace": WORKSPACE_SERVICE_NAMESPACE },
+      spanProcessors: [...createWorkspaceSpanRedactors(), "auto" as const],
+    };
+  }
+  return {
+    serviceName: WORKSPACE_SERVICE_NAME,
+    attributes: {
+      "service.namespace": WORKSPACE_SERVICE_NAMESPACE,
+      ...(serviceVersion && { "service.version": serviceVersion }),
+      ...(deploymentId && { "deployment.id": deploymentId }),
+    },
+    spanProcessors: [
+      ...createWorkspaceSpanRedactors(),
+      new SpanAllowlistProcessor(),
+      ...(otlpEndpoint ? [createCollectorSpanProcessor(otlpEndpoint)] : []),
+    ],
+  };
+};
+
+/** A loopback collector answers fast or is down; either way, don't wait. */
+const collectorExportTimeoutMs = 1_000;
+
+/**
+ * The batch export to a loopback collector, which applies the span allowlist
+ * again to what it exports. Its queue and batches are bounded, so a collector that is down drops spans instead of growing the
+ * process's memory.
+ */
+const createCollectorSpanProcessor = (otlpEndpoint: string): SpanProcessor =>
+  new BatchSpanProcessor(
+    createAllowlistedSpanExporter(
+      new OTLPTraceExporter({
+        timeoutMillis: collectorExportTimeoutMs,
+        url: new URL("/v1/traces", otlpEndpoint).toString(),
+      })
+    ),
+    {
+      exportTimeoutMillis: collectorExportTimeoutMs,
+      maxExportBatchSize: 256,
+      maxQueueSize: 2_048,
+      scheduledDelayMillis: 1_000,
+    }
+  );
 
 /**
  * Span processors that scrub credentials, such as signed Cloudinary URL
@@ -141,7 +222,9 @@ export function createPostHogLoggerProvider({
     );
   }
   if (!identity.deploymentEnvironment) {
-    throw new Error("VERCEL_ENV is required when PostHog logging is enabled");
+    throw new Error(
+      "The deployment stage (WORKSPACE_DEPLOYMENT_STAGE or VERCEL_ENV) is required when PostHog logging is enabled"
+    );
   }
 
   return createWorkspaceLoggerProvider(

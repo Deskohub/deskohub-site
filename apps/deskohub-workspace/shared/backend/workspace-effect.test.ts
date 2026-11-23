@@ -3,6 +3,7 @@ import { Cause, Clock, Context, Deferred, Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { redirect } from "next/navigation";
 import * as nextServer from "next/server";
+import { installRuntimeShutdown } from "@/shared/deployment/runtime-lifecycle";
 import { savedConsentCookieValue } from "@/shared/testing/consent-cookie.test-utils";
 import { captureWorkspaceLogs } from "@/shared/testing/workspace-telemetry.test-utils";
 import { CENSORED_LOG_VALUE } from "@/shared/utils/log-classification";
@@ -670,6 +671,53 @@ describe("toWorkspaceWebHandler", () => {
 
     expect(logFlushes).toHaveBeenCalledTimes(1);
     expect(serverAnalyticsFlushes).toHaveBeenCalledTimes(1);
+  });
+
+  test("makes a container's shutdown wait for the route's work and the flush after its response", async () => {
+    afterResponse.length = 0;
+    const lifecycleKey = Symbol.for("@deskohub-workspace/runtime-lifecycle");
+    const exits: number[] = [];
+    const shutdown = installRuntimeShutdown({
+      run: (effect) => Effect.runPromise(effect),
+      exit: (code) => {
+        exits.push(code);
+      },
+      signals: [],
+    });
+    const routeReleased = Promise.withResolvers<void>();
+    const flushReleased = Promise.withResolvers<void>();
+    logFlushes.mockImplementationOnce(() => flushReleased.promise);
+    const handler = toWorkspaceWebHandler(
+      HttpRouter.add(
+        "GET",
+        "/draining",
+        Effect.promise(() => routeReleased.promise).pipe(
+          Effect.as(HttpServerResponse.text("served"))
+        )
+      )
+    );
+
+    try {
+      const response = handler(request("/draining", "ada"));
+      const stopped = shutdown();
+      await Bun.sleep(20);
+      expect(exits).toEqual([]);
+
+      routeReleased.resolve();
+      expect(await (await response).text()).toBe("served");
+      const sent = sendResponse();
+      await Bun.sleep(20);
+      expect(exits).toEqual([]);
+
+      flushReleased.resolve();
+      await sent;
+      await stopped;
+      expect(exits).toEqual([0]);
+    } finally {
+      routeReleased.resolve();
+      flushReleased.resolve();
+      Reflect.deleteProperty(globalThis, lifecycleKey);
+    }
   });
 
   test("keeps each of several concurrent requests' services its own over one shared build", async () => {

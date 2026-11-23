@@ -1,16 +1,21 @@
 import { NextEffect } from "@deskohub/next-effect";
 import { NodeHttpServer } from "@effect/platform-node";
-import { waitUntil } from "@vercel/functions";
 import { Cause, Data, Effect, Exit, identity, Layer, Result } from "effect";
 import { HttpRouter } from "effect/http";
 import { unstable_rethrow } from "next/navigation";
 import { after } from "next/server";
 import {
+  keepRuntimeAliveUntil,
+  trackRuntimeWork,
+} from "@/shared/deployment/runtime-lifecycle";
+import {
   flushServerAnalytics,
   isServerAnalyticsEnabled,
 } from "./analytics/analytics-event-delivery.service";
 import {
+  exportsWorkspaceTraces,
   flushWorkspaceLogs,
+  flushWorkspaceTracesAfterResponse,
   WorkspaceObservabilityLive,
   workspaceLoggerProvider,
 } from "./observability/workspace-telemetry";
@@ -93,7 +98,7 @@ const runWorkspaceExit = <A, E>(
   // once the shell is ready, so a revalidation started by a later-streamed
   // boundary can outlive the response. The suspended instance then fires
   // the run's timers on its next invocation as spurious timeouts.
-  waitUntil(exit.then(ignoreSettlement));
+  keepRuntimeAliveUntil(exit.then(ignoreSettlement));
   if (flushTiming === "after-response") {
     // Scheduled now, in the caller's request context, which the run's fibers
     // may not keep.
@@ -330,6 +335,9 @@ const flushTelemetry = Effect.all(
         message: "Server analytics flush failed",
       })
     ),
+    flushWorkspaceTracesAfterResponse.pipe(
+      Effect.ignoreCause({ log: "Warn", message: "Trace flush failed" })
+    ),
   ],
   { concurrency: "unbounded", discard: true }
 );
@@ -344,7 +352,9 @@ const runTelemetryFlush = () =>
   );
 
 const sendsTelemetry = () =>
-  isServerAnalyticsEnabled || workspaceLoggerProvider() !== undefined;
+  isServerAnalyticsEnabled ||
+  workspaceLoggerProvider() !== undefined ||
+  exportsWorkspaceTraces();
 
 /**
  * Flushes the telemetry of the work `settled` stands for after the current
@@ -360,8 +370,15 @@ const flushAfterResponse = (settled: Promise<unknown>) => {
   if (Result.isFailure(enabled) || !enabled.success) return;
   const flushOnceSettled = () =>
     settled.then(runTelemetryFlush, runTelemetryFlush);
-  if (Result.isFailure(Result.try(() => after(flushOnceSettled)))) {
-    waitUntil(flushOnceSettled());
+  // Next.js runs the callback after the response; a container waits for it
+  // from then on, as Vercel's `waitUntil` does.
+  const trackedFlush = () => {
+    const flush = flushOnceSettled();
+    trackRuntimeWork(flush);
+    return flush;
+  };
+  if (Result.isFailure(Result.try(() => after(trackedFlush)))) {
+    keepRuntimeAliveUntil(flushOnceSettled());
   }
 };
 
@@ -407,6 +424,9 @@ export const toWorkspaceWebHandler = <A, E>(
       { disableLogger: true, memoMap }
     ).handler;
     const response = handler(request);
+    // A container waits for the route's work before it exits, as it does for
+    // a Workspace run.
+    trackRuntimeWork(response);
     // The handler runs outside the Workspace runtime, so it schedules the
     // flush a run would.
     flushAfterResponse(response);

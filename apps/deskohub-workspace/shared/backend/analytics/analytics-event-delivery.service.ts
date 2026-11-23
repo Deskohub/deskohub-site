@@ -4,11 +4,11 @@ import type {
   PostHogDistinctId,
   PostHogEventId,
 } from "@deskohub/analytics-posthog/identifiers";
-import { waitUntil } from "@vercel/functions";
 import { Context, Effect, Layer, Predicate, Schema } from "effect";
 import { PostHog } from "posthog-node";
 import { postHogRuntimeConfig } from "@/shared/backend/config/posthog.config";
 import { runStandaloneWorkspaceEffect } from "@/shared/backend/standalone-workspace-effect";
+import { keepRuntimeAliveUntil } from "@/shared/deployment/runtime-lifecycle";
 import { temporalInstantToDate } from "@/shared/utils/temporal";
 
 /** A server event as PostHog receives it, before the SDK's own fields. */
@@ -116,7 +116,7 @@ export const flushServerAnalytics: Effect.Effect<void> = Effect.suspend(() => {
  * One capture client per process, shared by every module instance Next.js
  * loads, so a flush reaches the events any of them queued. It never evaluates
  * feature flags, which have their own client. Each queued event extends the
- * serverless invocation through `waitUntil` until a debounced flush sends
+ * serverless invocation (`keepRuntimeAliveUntil`) until a debounced flush sends
  * it, which covers an event the telemetry flush misses.
  */
 const captureClientKey = Symbol.for(
@@ -137,7 +137,10 @@ const processCaptureClient = () => {
 };
 
 const createCaptureClient = (projectToken: string, host: string) => {
-  const client = new PostHog(projectToken, { host, waitUntil });
+  const client = new PostHog(projectToken, {
+    host,
+    waitUntil: keepRuntimeAliveUntil,
+  });
   client.on("error", (cause) => {
     void Effect.logWarning("Server analytics delivery failed", { cause }).pipe(
       runStandaloneWorkspaceEffect("analytics.delivery")

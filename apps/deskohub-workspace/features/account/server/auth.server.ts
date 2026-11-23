@@ -26,6 +26,8 @@ import { AccountRoleGrants } from "@/features/administrators/backend/account-rol
 import { AnalyticsConsentLedger } from "@/features/legal/backend/analytics-consent-ledger";
 import { ReviewAccounts } from "@/features/review-accounts";
 import { BotProtectionService } from "@/shared/backend/bot-protection/bot-protection.service";
+import { workspaceDeploymentHosts } from "@/shared/backend/config/workspace-url.config";
+import { trustedClientAddressHeaders } from "@/shared/deployment/trusted-client-address";
 import { workspaceSiteConstants } from "@/shared/utils/site-constants";
 
 const secrets = parseBetterAuthSecrets(env.BETTER_AUTH_SECRETS);
@@ -33,12 +35,14 @@ if (secrets.kind === "invalid") {
   throw new Error(`Workspace account bootstrap failed: ${secrets.message}`);
 }
 
+const deploymentHosts = workspaceDeploymentHosts();
+
 const hostEnvironment: BetterAuthHostEnvironment = {
   vercelEnv: env.VERCEL_ENV,
   customerFacingHost: workspaceSiteConstants.brand.domain,
-  projectProductionUrl: env.VERCEL_PROJECT_PRODUCTION_URL,
-  deploymentUrl: env.VERCEL_URL,
-  branchUrl: env.VERCEL_BRANCH_URL,
+  projectProductionUrl: deploymentHosts.productionUrl,
+  deploymentUrl: deploymentHosts.deploymentUrl,
+  branchUrl: deploymentHosts.branchUrl,
 };
 
 const allowedHosts = resolveBetterAuthAllowedHosts(hostEnvironment);
@@ -81,6 +85,7 @@ export const auth = makeWorkspaceAuth({
   passkeyRelyingParty: passkeyRelyingParty.relyingParty,
   customerMcpResource,
   httpsOnly: env.VERCEL_ENV !== "development",
+  clientAddressHeaders: trustedClientAddressHeaders(env),
   reviewAccountCredentials: env.REVIEW_ACCOUNT_CREDENTIALS ?? [],
   sendMagicLink: workspaceSendMagicLink,
   // Each hook run builds these once, against the run's request. A release

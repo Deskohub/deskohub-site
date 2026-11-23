@@ -22,8 +22,19 @@ const parseOriginTrialTokens = (value) =>
     .map((token) => token.trim())
     .filter((token) => token.length > 0);
 
+/**
+ * A container image build (`WORKSPACE_BUILD_TARGET=oci`) emits Next's
+ * standalone server; every other build, Vercel's included, keeps the
+ * default output.
+ */
+const workspaceBuildOutput =
+  process.env.WORKSPACE_BUILD_TARGET === "oci"
+    ? { output: /** @type {const} */ ("standalone") }
+    : {};
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  ...workspaceBuildOutput,
   cacheLife: {
     advertisedPricingSources: {
       stale: 30,

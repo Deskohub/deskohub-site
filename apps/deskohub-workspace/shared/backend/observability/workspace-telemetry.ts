@@ -1,19 +1,75 @@
+import { ProxyTracerProvider, trace } from "@opentelemetry/api";
 import type { LoggerProvider } from "@opentelemetry/sdk-logs";
-import { Effect, Layer, References } from "effect";
+import { Data, Effect, Layer, Logger, Predicate, References } from "effect";
 import { env } from "@/env";
+import { resolveDeploymentIdentity } from "@/shared/deployment/deployment-identity";
+import { defaultServiceRole } from "@/shared/deployment/runtime-host";
 import {
+  createCensoredOtelLogger,
   createWorkspaceOtelLoggerLive,
   WorkspaceLoggerLive,
 } from "../logging/censorship";
+import {
+  type CloudLoggingIdentity,
+  makeCloudLoggingLogger,
+} from "./cloud-logging";
 import { workspaceMinimumLogLevel } from "./telemetry-policy";
 import {
   createIdentifiedTracingLive,
   createPostHogLoggerProvider,
+  createWorkspaceOTelRegistration,
   flushLoggerProvider,
 } from "./telemetry-sinks";
 import { WorkspaceClockLive } from "./workspace-clock";
 
-export { workspaceOTelRegistration } from "./telemetry-sinks";
+/** The build and rollout this process serves, whichever host runs it. */
+const workspaceDeploymentIdentity = () => resolveDeploymentIdentity(env);
+
+/**
+ * `registerOTel` options for this process: Vercel's by default; on a
+ * container host the span allowlist and the loopback collector when
+ * `WORKSPACE_OTLP_ENDPOINT` names one, and no automatic exporter.
+ */
+export const workspaceOTelRegistration = () => {
+  const identity = workspaceDeploymentIdentity();
+  return createWorkspaceOTelRegistration({
+    serviceVersion: identity.revisionSha,
+    deploymentId: identity.deploymentId,
+    otlpEndpoint: env.WORKSPACE_OTLP_ENDPOINT,
+    automaticExport: env.WORKSPACE_RUNTIME_HOST !== "container",
+  });
+};
+
+/** Who emits this process's structured log records. */
+const workspaceCloudLoggingIdentity = (): CloudLoggingIdentity => {
+  const identity = workspaceDeploymentIdentity();
+  return {
+    deploymentStage: env.VERCEL_ENV,
+    serviceRole: env.WORKSPACE_SERVICE_ROLE ?? defaultServiceRole,
+    revisionSha: identity.revisionSha,
+    deploymentId: identity.deploymentId,
+    traceProjectId: env.WORKSPACE_TRACE_PROJECT_ID,
+  };
+};
+
+/**
+ * The loggers of every run, all censoring: the console's logfmt lines, or
+ * Cloud Logging structured JSON when `WORKSPACE_LOG_FORMAT` asks for it, plus
+ * the PostHog export when `loggerProvider` is on.
+ */
+const workspaceLoggerLive = (loggerProvider: LoggerProvider | undefined) => {
+  if (env.WORKSPACE_LOG_FORMAT !== "cloud-logging-json") {
+    return loggerProvider
+      ? createWorkspaceOtelLoggerLive(loggerProvider)
+      : WorkspaceLoggerLive;
+  }
+  const consoleLogger = makeCloudLoggingLogger(workspaceCloudLoggingIdentity());
+  return Logger.layer(
+    loggerProvider
+      ? [consoleLogger, createCensoredOtelLogger(loggerProvider)]
+      : [consoleLogger]
+  );
+};
 
 /**
  * The process's Workspace telemetry, kept on `globalThis` under this key.
@@ -61,7 +117,7 @@ export const workspaceLoggerProvider = () => {
       logsExport: env.POSTHOG_LOGS_EXPORT,
       posthogHost: env.POSTHOG_INGEST_HOST,
       posthogProjectToken: env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN,
-      serviceVersion: env.VERCEL_GIT_COMMIT_SHA,
+      serviceVersion: workspaceDeploymentIdentity().revisionSha,
     }),
   };
   return processGlobals[workspaceTelemetryHandle].loggerProvider;
@@ -79,11 +135,9 @@ export const WorkspaceObservabilityLive: Layer.Layer<never> = Layer.unwrap(
     const loggerProvider = workspaceLoggerProvider();
     return Layer.mergeAll(
       WorkspaceClockLive,
-      loggerProvider
-        ? createWorkspaceOtelLoggerLive(loggerProvider)
-        : WorkspaceLoggerLive,
+      workspaceLoggerLive(loggerProvider),
       createIdentifiedTracingLive({
-        serviceVersion: env.VERCEL_GIT_COMMIT_SHA,
+        serviceVersion: workspaceDeploymentIdentity().revisionSha,
       }),
       Layer.succeed(
         References.MinimumLogLevel,
@@ -95,6 +149,26 @@ export const WorkspaceObservabilityLive: Layer.Layer<never> = Layer.unwrap(
     );
   })
 );
+
+/**
+ * Observability for standalone runs of a process that logs Cloud Logging
+ * JSON: the censoring structured console logger, without the PostHog
+ * export, and the tracer over the registered provider, so a record carries
+ * the trace and span it was written in. Undefined for any other log format,
+ * where standalone runs keep their logfmt logger.
+ */
+export const workspaceStandaloneObservabilityLive = ():
+  | Layer.Layer<never>
+  | undefined =>
+  env.WORKSPACE_LOG_FORMAT === "cloud-logging-json"
+    ? Layer.mergeAll(
+        WorkspaceClockLive,
+        Logger.layer([makeCloudLoggingLogger(workspaceCloudLoggingIdentity())]),
+        createIdentifiedTracingLive({
+          serviceVersion: workspaceDeploymentIdentity().revisionSha,
+        })
+      )
+    : undefined;
 
 /**
  * Exports what `loggerProvider` buffers when the drain starts. The SDK's
@@ -138,3 +212,59 @@ export const flushWorkspaceLogs: Effect.Effect<void> = Effect.suspend(() => {
       }
   );
 });
+
+/**
+ * Exports the spans the registered tracer provider still batches, for a
+ * container's shutdown. Resolves at once when no SDK provider is registered.
+ */
+export const flushWorkspaceTraces = (): Promise<void> => {
+  const registered = trace.getTracerProvider();
+  const provider: object =
+    registered instanceof ProxyTracerProvider
+      ? registered.getDelegate()
+      : registered;
+  return Predicate.hasProperty(provider, "forceFlush") &&
+    Predicate.isFunction(provider.forceFlush)
+    ? Promise.resolve(provider.forceFlush()).then(() => undefined)
+    : Promise.resolve();
+};
+
+/**
+ * Whether this process exports its own spans, to the loopback collector
+ * `WORKSPACE_OTLP_ENDPOINT` names. On Vercel `registerOTel`'s automatic
+ * exporters send them and the Workspace never flushes them.
+ */
+export const exportsWorkspaceTraces = () =>
+  env.WORKSPACE_OTLP_ENDPOINT !== undefined;
+
+class TraceFlushError extends Data.TaggedError("TraceFlushError")<{
+  readonly cause: unknown;
+}> {}
+
+/** The post-response deadline of the loopback trace flush. */
+const traceFlushTimeoutMs = 2_000;
+
+/**
+ * Exports the spans the process batches for its loopback collector within
+ * the post-response deadline, so a container that idles after the response
+ * still sends them. A no-op without the collector, as on Vercel. Never fails.
+ */
+export const flushWorkspaceTracesAfterResponse: Effect.Effect<void> =
+  Effect.suspend(() =>
+    exportsWorkspaceTraces()
+      ? Effect.tryPromise({
+          try: flushWorkspaceTraces,
+          catch: (cause) => new TraceFlushError({ cause }),
+        }).pipe(
+          Effect.timeout(traceFlushTimeoutMs),
+          Effect.catchTags({
+            TraceFlushError: ({ cause }) =>
+              Effect.logWarning("Workspace trace flush failed.", { cause }),
+            TimeoutError: () =>
+              Effect.logWarning(
+                "Workspace trace flush exceeded its post-response deadline."
+              ),
+          })
+        )
+      : Effect.void
+  );
