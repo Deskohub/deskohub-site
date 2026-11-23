@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   type FakeRule,
   type FakeWorld,
+  fakeWriterFingerprint,
   type ProofFakes,
   withProofFakes,
 } from "./sandbox-proof-fakes.test-utils";
@@ -154,25 +155,44 @@ describe("cleanup under the writer lock", () => {
   });
 
   test("leaves the lock when the Alchemy lease is unreadable", () => {
-    withProofFakes(
-      heldBy("h", [
-        {
-          tool: "gcloud",
-          pattern: "^storage objects describe .*__lease__",
-          exit: 1,
-        },
-      ]),
-      (fakes) => {
-        seed(fakes, {
-          "stack-config.json": "{}",
-          "interrupted-dead-holder": "h\n",
-        });
-        const { exitCode, output } = runPhase(fakes, "stack-destroy");
-        expect(exitCode).toBe(1);
-        expect(output).toContain("the Alchemy lease is unreadable");
-        expect(fakes.calls().join("\n")).not.toContain("unlock");
-      }
-    );
+    const leaseRead = "storage\\.googleapis\\.com/storage/v1/b/.*__lease__";
+    for (const failure of [
+      // Expired or missing credentials, worded like an absent object.
+      { stdout: '{"error":{"code":401,"message":"File not found"}}\n401' },
+      // A 404 for the bucket, not the lease object.
+      {
+        stdout:
+          '{"error":{"code":404,"message":"The specified bucket does not exist."}}\n404',
+      },
+      // A transport failure.
+      { exit: 7 },
+    ]) {
+      withProofFakes(
+        heldBy("h", [{ tool: "curl", pattern: leaseRead, ...failure }]),
+        (fakes) => {
+          seed(fakes, {
+            "stack-config.json": "{}",
+            "interrupted-dead-holder": "h\n",
+          });
+          const { exitCode, output } = runPhase(fakes, "stack-destroy");
+          expect({ failure, exitCode }).toEqual({ failure, exitCode: 1 });
+          expect(output).toContain("the Alchemy lease is unreadable");
+          expect(fakes.calls().join("\n")).not.toContain("unlock");
+        }
+      );
+    }
+  });
+
+  test("reads a missing lease object as absent, not unreadable", () => {
+    withProofFakes(heldBy("h"), (fakes) => {
+      seed(fakes, {
+        "stack-config.json": "{}",
+        "interrupted-dead-holder": "h\n",
+      });
+      const { output } = runPhase(fakes, "stack-destroy");
+      expect(output).not.toContain("the Alchemy lease is unreadable");
+      expect(fakes.calls().join("\n")).toContain("unlock --holder h");
+    });
   });
 
   test("deletes nothing outside the lock when the locked destroy is refused", () => {
@@ -272,6 +292,9 @@ describe("disposable queue IDs", () => {
       "QUEUE_SUFFIX=r111-2\ntouch pwned\n",
       "QUEUE_SUFFIX=$(touch pwned)\n",
       "QUEUE_SUFFIX=r111-2;touch_pwned\n",
+      // A valid suffix cannot smuggle in another setting.
+      "QUEUE_SUFFIX=r111-2\nSANDBOX_PROOF_MODE=cleanup-only\n",
+      "QUEUE_SUFFIX=r111-2\nQUEUE_SUFFIX=r112-1\n",
     ]) {
       withProofFakes(
         {
@@ -294,7 +317,7 @@ describe("disposable queue IDs", () => {
             SANDBOX_PROOF_MODE: "cleanup-only",
           });
           expect({ record, exitCode }).toEqual({ record, exitCode: 1 });
-          expect(output).toMatch(/not a plain KEY=value|invalid queue suffix/);
+          expect(output).toContain("not exactly one valid QUEUE_SUFFIX");
           expect(
             existsSync(join(packageRoot, "pwned")) ||
               existsSync(join(fakes.proofDir, "pwned"))
@@ -476,7 +499,9 @@ describe("state snapshot and restore", () => {
 });
 
 describe("interrupting a deliver mid-apply", () => {
-  const interruptWorld = (behaviour: "apply" | "exit"): FakeWorld => ({
+  const interruptWorld = (
+    behaviour: NonNullable<FakeWorld["interruptedDeliver"]>
+  ): FakeWorld => ({
     interruptedDeliver: behaviour,
     serviceGenerations: {
       "workspace-web": 4,
@@ -487,7 +512,7 @@ describe("interrupting a deliver mid-apply", () => {
     rules: [
       {
         tool: "bun",
-        pattern: "^release\\.run\\.ts unlock --holder interrupted-holder$",
+        pattern: `^release\\.run\\.ts unlock --holder ${fakeWriterFingerprint}$`,
         set: { status: settled(`sha256:${"2".repeat(64)}`) },
       },
       {
@@ -542,7 +567,9 @@ describe("interrupting a deliver mid-apply", () => {
       expect(alive).toBe(false);
       const calls = fakes.calls();
       const unlock = calls.findIndex((call) =>
-        call.startsWith("bun release.run.ts unlock --holder interrupted-holder")
+        call.startsWith(
+          `bun release.run.ts unlock --holder ${fakeWriterFingerprint}`
+        )
       );
       const redeliver = calls.findLastIndex((call) =>
         call.startsWith("bun release.run.ts deliver")
@@ -550,6 +577,45 @@ describe("interrupting a deliver mid-apply", () => {
       expect(unlock).toBeGreaterThan(-1);
       expect(redeliver).toBeGreaterThan(unlock);
     });
+  });
+
+  test("leaves a lock another writer took after the deliver was killed", () => {
+    const world = interruptWorld("apply");
+    withProofFakes(
+      {
+        ...world,
+        rules: [
+          // By the lease check after the kill, another writer holds the lock.
+          {
+            tool: "curl",
+            pattern: "storage\\.googleapis\\.com/storage/v1/b/.*__lease__",
+            stdout: '{"generation":"9"}\n200',
+            set: {
+              status: {
+                version: "1",
+                record: {
+                  generation: 8,
+                  writer: { holder: "0123456789ab" },
+                  pendingApply: null,
+                },
+              },
+            },
+          },
+          ...(world.rules ?? []),
+        ],
+      },
+      (fakes) => {
+        seedDeliver(fakes);
+        const { exitCode, output } = runPhase(fakes, "interrupt-recover");
+        const child = fakes.world().detachedChildPid;
+        if (child !== undefined && isAlive(child)) {
+          process.kill(child, "SIGKILL");
+        }
+        expect(exitCode).toBe(1);
+        expect(output).toContain("not the killed deliver");
+        expect(fakes.calls().join("\n")).not.toContain("unlock");
+      }
+    );
   });
 
   test("fails without a baseline generation read", () => {
@@ -578,10 +644,14 @@ describe("interrupting a deliver mid-apply", () => {
 
   test("never counts a failed generation read as a change", () => {
     withProofFakes(
-      { ...interruptWorld("exit"), serviceReadsFailAfterDeliver: true },
+      {
+        ...interruptWorld("exit-after-failed-read"),
+        serviceReadsFailAfterDeliver: true,
+      },
       (fakes) => {
         seedDeliver(fakes);
         const { exitCode, output } = runPhase(fakes, "interrupt-recover");
+        expect(fakes.world().failedServiceReads).toBeGreaterThan(0);
         expect(exitCode).toBe(1);
         expect(output).toContain("persisted no Cloud Run change");
         expect(fakes.calls().join("\n")).not.toContain("unlock");

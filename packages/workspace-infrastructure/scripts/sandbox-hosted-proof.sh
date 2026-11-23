@@ -266,11 +266,16 @@ load_env_file() {
   done <"$file"
 }
 
-# The proof run record from the state bucket names only the queue suffix.
+# The proof run record comes back from the state bucket, so it sets nothing
+# but the queue suffix: when present it must be exactly one valid
+# QUEUE_SUFFIX line, checked whole before anything is assigned.
 load_proof_run_file() {
-  load_env_file "$proof_run_file"
-  [[ -z "${QUEUE_SUFFIX:-}" || "$QUEUE_SUFFIX" =~ ^r[0-9]{1,20}-[0-9]{1,4}$ ]] ||
-    fail "the proof run record holds an invalid queue suffix"
+  [[ -f "$proof_run_file" ]] || return 0
+  local -a lines
+  mapfile -t lines < <(grep -v '^$' "$proof_run_file")
+  ((${#lines[@]} == 1)) && [[ "${lines[0]}" =~ ^QUEUE_SUFFIX=(r[0-9]{1,20}-[0-9]{1,4})$ ]] ||
+    fail "the proof run record is not exactly one valid QUEUE_SUFFIX"
+  QUEUE_SUFFIX="${BASH_REMATCH[1]}"
 }
 
 record_value() {
@@ -416,20 +421,38 @@ terraform_edge() {
     -var enable_https=false
 }
 
-# An object's live generation, or "absent" when the bucket reports it not
-# found; any other failure fails, so an unreadable object never reads as
-# an unchanged one.
+# An object's live generation from the Cloud Storage JSON API, or "absent"
+# only when the service answers 404 "No such object" for this object. An
+# authentication, transport or any other error fails, so an unreadable
+# object never reads as an unchanged one.
 object_generation() {
-  local generation err="${proof_dir}/object-generation.err"
-  if generation="$(capture 1 gcloud storage objects describe "gs://${state_bucket}/$1" \
-    --format='value(generation)' 2>"$err")"; then
-    [[ "$generation" =~ ^[0-9]+$ ]] || return 1
-    echo "$generation"
-  elif grep -qiE 'not found|404' "$err"; then
-    echo absent
-  else
-    return 1
+  local url response code body generation token
+  url="https://storage.googleapis.com/storage/v1/b/${state_bucket}/o/$(jq -rn --arg name "$1" '$name | @uri')?fields=generation"
+  trace curl -sS "$url" "(bearer from gcloud, never printed)"
+  if $dry_run; then
+    echo 1
+    return 0
   fi
+  token="$(gcloud auth print-access-token)" || return 1
+  [[ -n "$token" ]] || return 1
+  response="$(printf 'Authorization: Bearer %s\n' "$token" |
+    curl -sS --max-time 30 -H @- -w '\n%{http_code}' "$url")" || return 1
+  code="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  case "$code" in
+    200)
+      generation="$(jq -r '.generation // empty' <<<"$body" 2>/dev/null)" || return 1
+      [[ "$generation" =~ ^[0-9]+$ ]] || return 1
+      echo "$generation"
+      ;;
+    404)
+      jq -e --arg object "${state_bucket}/$1" \
+        '.error.code == 404 and (.error.message == "No such object: \($object)")' \
+        >/dev/null <<<"$body" 2>/dev/null || return 1
+      echo absent
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 # No Alchemy lease holder: a live holder refreshes the 60 s lease well
@@ -741,6 +764,22 @@ token_processes() {
   return 0
 }
 
+# The writer-lock fingerprint of a token process's release writer: the
+# lock holder is the first 12 hex digits of the SHA-256 of the writer token
+# the deliver hands its Alchemy apply. The token itself is never printed.
+token_writer_fingerprint() {
+  local token="$1" pid writer
+  while IFS= read -r pid; do
+    writer="$(tr '\0' '\n' <"/proc/${pid}/environ" 2>/dev/null |
+      sed -n 's/^WORKSPACE_RELEASE_WRITER=//p' | head -n 1)"
+    if [[ -n "$writer" ]]; then
+      printf '%s' "$writer" | sha256sum | cut -c1-12
+      return 0
+    fi
+  done < <(token_processes "$token")
+  return 1
+}
+
 # Stop, then kill, every token process until none remain; stopping first
 # keeps one from forking a replacement. Fails if any survive.
 kill_token_processes() {
@@ -771,7 +810,7 @@ phase_interrupt_recover() {
   trace env "SANDBOX_PROOF_INTERRUPT_TOKEN=<random>" bun run release deliver \
     --sha "$GITHUB_SHA" --image-digest "${PROBE_V3_DIGEST:-}" "&"
   if ! $dry_run; then
-    local token pid changed=false running deadline=$((SECONDS + 900))
+    local token pid changed=false running fingerprint="" deadline=$((SECONDS + 900))
     token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
     (cd "$package_dir" && exec env "SANDBOX_PROOF_INTERRUPT_TOKEN=${token}" bun release.run.ts \
       deliver --sha "$GITHUB_SHA" --image-digest "$PROBE_V3_DIGEST") >"$log" 2>&1 &
@@ -785,6 +824,8 @@ phase_interrupt_recover() {
     done
     # `kill -0` would still see an exited, unreaped deliver; the token does not.
     while ((SECONDS < deadline)) && [[ -n "$(token_processes "$token")" ]]; do
+      # The deliver's own lock, read from its apply while it still runs.
+      [[ -n "$fingerprint" ]] || fingerprint="$(token_writer_fingerprint "$token")" || true
       # A failed read is inconclusive: only a read generation increase counts.
       if after="$(release_service_generations)" && generations_increased "$before" "$after"; then
         changed=true
@@ -792,12 +833,15 @@ phase_interrupt_recover() {
       fi
       sleep 1
     done
+    [[ -n "$fingerprint" ]] || fingerprint="$(token_writer_fingerprint "$token")" || true
     running="$(token_processes "$token")"
     kill_token_processes "$token" ||
       fail "processes of the interrupted deliver survived SIGKILL: $(token_processes "$token" | tr '\n' ' ')"
     wait "$pid" 2>/dev/null || true
     $changed || fail "the deliver persisted no Cloud Run change before it ended; nothing was interrupted"
     [[ -n "$running" ]] || fail "the deliver had exited when its change was seen; nothing was interrupted"
+    [[ "$fingerprint" =~ ^[0-9a-f]{12}$ ]] ||
+      fail "the interrupted deliver's writer lock was never identified; its lock stays for an operator"
     echo "killed the deliver after a persisted Cloud Run change; all its processes have exited"
   fi
   # A live Alchemy holder refreshes its lease; a quiet one has expired.
@@ -806,8 +850,13 @@ phase_interrupt_recover() {
   status="$(release_status interrupted)"
   holder="$(json_get '.record.writer.holder' "$status")"
   [[ -n "$holder" && "$holder" != null ]] || fail "the interrupted deliver left no writer lock"
-  # Only this holder's processes were proven dead; teardown may clear no other.
-  $dry_run || printf '%s\n' "$holder" >"$dead_holder_file"
+  # Only the killed deliver's own lock is proven dead; another writer may
+  # have taken the lock since, and teardown may clear no other.
+  if ! $dry_run; then
+    [[ "$holder" == "$fingerprint" ]] ||
+      fail "the writer lock is held by ${holder}, not the killed deliver (${fingerprint}); it stays for an operator"
+    printf '%s\n' "$holder" >"$dead_holder_file"
+  fi
   local unlocked=false
   for _ in $(seq 1 20); do
     if release unlock --holder "$holder"; then

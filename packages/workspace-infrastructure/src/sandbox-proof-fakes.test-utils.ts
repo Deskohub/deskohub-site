@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -58,17 +59,27 @@ export interface FakeWorld {
    * a Cloud Run change, leaves a detached child in its own session and
    * hangs; `exit` changes nothing and exits.
    */
-  readonly interruptedDeliver?: "apply" | "exit";
+  readonly interruptedDeliver?: "apply" | "exit" | "exit-after-failed-read";
   /** Cloud Run service reads fail once an interrupted deliver has started. */
   readonly serviceReadsFailAfterDeliver?: boolean;
   /** Set by any deliver started with an interrupt token. */
   readonly deliverStarted?: boolean;
+  /** Cloud Run service reads that failed, counted by the fake. */
+  readonly failedServiceReads?: number;
   /** Set by an `apply` deliver: the detached child's process ID. */
   readonly detachedChildPid?: number;
   /** The fake clock's start, in epoch seconds; defaults to the real clock. */
   readonly now?: number;
   readonly [key: string]: unknown;
 }
+
+/** The writer token an `apply` deliver hands its detached Alchemy child. */
+const fakeWriterToken = "fake-writer-token";
+/** The lock holder an `apply` deliver records: its token's fingerprint. */
+export const fakeWriterFingerprint = createHash("sha256")
+  .update(fakeWriterToken)
+  .digest("hex")
+  .slice(0, 12);
 
 const realBun = process.execPath;
 const realDate = Bun.which("date") ?? "/bin/date";
@@ -278,6 +289,14 @@ const interruptedDeliver = async (
   save: (next: FakeWorld) => void
 ) => {
   save({ ...world, deliverStarted: true });
+  if (world.interruptedDeliver === "exit-after-failed-read") {
+    // Keep running, changing nothing, until the runner has seen a read fail.
+    const worldFile = process.env.FAKE_WORLD ?? "";
+    while ((readWorld(worldFile).failedServiceReads ?? 0) < 1) {
+      await Bun.sleep(10);
+    }
+    return 0;
+  }
   if (world.interruptedDeliver !== "apply") {
     return 0;
   }
@@ -285,7 +304,10 @@ const interruptedDeliver = async (
   // A detached child in its own session, like Alchemy under Bun's spawner.
   Bun.spawn(
     [realSetsid, "sh", "-c", `echo $$ > "${pidFile}"; exec tail -f /dev/null`],
-    { stdio: ["ignore", "ignore", "ignore"] }
+    {
+      stdio: ["ignore", "ignore", "ignore"],
+      env: { ...process.env, WORKSPACE_RELEASE_WRITER: fakeWriterToken },
+    }
   );
   while (!existsSync(pidFile) || readFileSync(pidFile, "utf8").trim() === "") {
     await Bun.sleep(10);
@@ -300,7 +322,7 @@ const interruptedDeliver = async (
       version: "1",
       record: {
         generation: 7,
-        writer: { holder: "interrupted-holder" },
+        writer: { holder: fakeWriterFingerprint },
         pendingApply: null,
       },
     },
@@ -353,9 +375,34 @@ const runFake = async (tool: string, args: ReadonlyArray<string>) => {
     }
     return 0;
   }
+  if (tool === "curl") {
+    const object = joined.match(
+      /storage\.googleapis\.com\/storage\/v1\/b\/([^/]+)\/o\/([^?\s]+)/
+    );
+    if (object !== null) {
+      // The JSON API object read, with the HTTP status `-w` appends.
+      const [, bucket = "", encoded = ""] = object;
+      const name = decodeURIComponent(encoded);
+      const live = world.objects?.[name]?.live;
+      print(
+        live == null
+          ? `${JSON.stringify({ error: { code: 404, message: `No such object: ${bucket}/${name}` } })}\n404`
+          : `${JSON.stringify({ generation: live })}\n200`
+      );
+      return 0;
+    }
+  }
   if (tool === "gcloud") {
+    if (args[0] === "auth" && args[1] === "print-access-token") {
+      print("fake-access-token");
+      return 0;
+    }
     if (args[0] === "run" && args[1] === "services" && args[2] === "describe") {
       if (world.serviceReadsFailAfterDeliver && world.deliverStarted) {
+        save({
+          ...world,
+          failedServiceReads: (world.failedServiceReads ?? 0) + 1,
+        });
         process.stderr.write("ERROR: 503 Service Unavailable\n");
         return 1;
       }
