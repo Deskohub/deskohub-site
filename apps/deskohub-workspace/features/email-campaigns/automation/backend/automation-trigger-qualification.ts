@@ -135,7 +135,7 @@ export const loadStayVisits = (
   WorkspaceDatabase | DotyposService
 > =>
   reservationIds.length === 0
-    ? Effect.succeed(new Map())
+    ? Effect.succeed(new Map<WorkspaceReservationId, StayVisit>())
     : Effect.Do.pipe(
         Effect.bind("linked", () => linkedReservations({ reservationIds })),
         Effect.let("dotyposIds", ({ linked }) =>
@@ -192,7 +192,9 @@ export const loadStayTiers = (
   WorkspaceDatabase
 > =>
   reservationIds.length === 0
-    ? Effect.succeed(new Map())
+    ? Effect.succeed(
+        new Map<WorkspaceReservationId, WorkspaceCoworkProductTier>()
+      )
     : Effect.Do.pipe(
         Effect.bind("linked", () => linkedReservations({ reservationIds })),
         Effect.bind("tiers", ({ linked }) =>
@@ -289,7 +291,7 @@ export const loadPaidReservations = (
     onNone: () => Effect.succeed(Option.none()),
     onSome: (payment) =>
       reservationIds.length === 0
-        ? Effect.succeed(Option.some(new Set()))
+        ? Effect.succeed(Option.some(new Set<WorkspaceReservationId>()))
         : Effect.flatMap(WorkspaceDatabase, ({ db }) =>
             db
               .select({ id: workspaceReservations.id })

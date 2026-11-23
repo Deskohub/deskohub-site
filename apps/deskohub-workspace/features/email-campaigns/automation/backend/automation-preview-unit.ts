@@ -578,7 +578,9 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
         ? withVisits((visits) => visits.ofReservations(reservationIds)).pipe(
             Effect.mapError(AutomationUnitFetchFailure.fromReservationVisits)
           )
-        : Effect.succeed(new Map());
+        : Effect.succeed(
+            new Map<WorkspaceReservationId, Option.Option<ReservationVisit>>()
+          );
 
     return Effect.Do.pipe(
       Effect.bind("planned", () =>
