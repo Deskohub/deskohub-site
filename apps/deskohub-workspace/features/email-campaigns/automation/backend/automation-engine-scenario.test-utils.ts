@@ -875,6 +875,71 @@ export const makeEngineFixtures = (
     return passId;
   };
 
+  /** Makes `reservationId`'s active payment attempt `attempt`. */
+  const settleReservation = async (
+    reservationId: WorkspaceReservationId,
+    attempt: {
+      readonly id: string;
+      readonly provider: "nexi" | "internal";
+      readonly amountValue: number;
+    }
+  ) => {
+    const { pool } = database;
+    await pool.query(
+      `insert into payment_attempts (id, order_id, workspace_reservation_id, provider,
+         provider_order_id, state, amount_value, amount_exponent, currency)
+       values ($1, $2, $2, $3, $4, 'paid', $5, 2, 'CZK')`,
+      [
+        attempt.id,
+        reservationId,
+        attempt.provider,
+        attempt.provider === "nexi" ? `order-${attempt.id}` : null,
+        attempt.amountValue,
+      ]
+    );
+    await pool.query(
+      "update workspace_reservations set active_payment_attempt_id = $2 where id = $1",
+      [reservationId, attempt.id]
+    );
+  };
+
+  /** Pays `reservationId` by its own order: a paid card attempt it keeps. */
+  const payIndividually = (reservationId: WorkspaceReservationId) =>
+    settleReservation(reservationId, {
+      id: `${reservationId}-card`,
+      provider: "nexi",
+      amountValue: 29000,
+    });
+
+  /**
+   * Funds `reservationId` from an Entry pack `customer` holds for its visit
+   * date only: a consumed entry claim and the zero-amount internal attempt
+   * that marks it paid.
+   */
+  const payFromEntryPack = async (input: {
+    readonly reservationId: WorkspaceReservationId;
+    readonly customer: DotyposCustomerId;
+    readonly date: string;
+  }) => {
+    const passId = await holdPass({
+      customer: input.customer,
+      kind: "entry-pack",
+      validFrom: input.date,
+      validUntil: Temporal.PlainDate.from(input.date)
+        .add({ days: 1 })
+        .toString(),
+    });
+    await database.pool.query(
+      "insert into pass_entry_claims (reservation_id, pass_id, date, status) values ($1, $2, $3, 'consumed')",
+      [input.reservationId, passId, input.date]
+    );
+    await settleReservation(input.reservationId, {
+      id: `${input.reservationId}-entry`,
+      provider: "internal",
+      amountValue: 0,
+    });
+  };
+
   const cleanup = async () => {
     const { pool } = database;
     await pool.query("delete from pass_entry_claims where pass_id = any($1)", [
@@ -944,6 +1009,8 @@ export const makeEngineFixtures = (
     recordEvent,
     deliverOneOffCampaign,
     holdPass,
+    payIndividually,
+    payFromEntryPack,
     cleanup,
     created,
   };
