@@ -12,6 +12,8 @@
       "**/*.jsx",
       "**/*.ts",
       "**/*.tsx",
+      "packages/workspace-infrastructure/**/*.mts",
+      "packages/workspace-infrastructure/**/*.cts",
       "**/*.json",
       "!**/.vercel",
       "!**/.turbo",

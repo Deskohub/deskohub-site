@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "biome check . --config-path ../../biome.json --vcs-root ../..",
+    "lint": "cd ../.. && biome check packages/workspace-infrastructure",
     "release": "bun release.run.ts",
     "test": "bun test",
     "typecheck": "tsc --project tsconfig.json"

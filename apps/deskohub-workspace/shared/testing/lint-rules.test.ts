@@ -930,6 +930,8 @@ const rules: { name: string; diagnostic: string; module: string; cases: Row[] }[
       ["rejects assertions in the sandbox probe tests", "export const { port } = server.address() as AddressInfo;\n", true, "packages/workspace-infrastructure/sandbox-probe/probe.test.ts"],
       ["rejects a const angle-bracket assertion", "export const codes = <const>[0, 2];\n", true, "packages/workspace-infrastructure/scripts/probe.ts"],
       ["rejects assertions in a new top-level module", "export const value = input as string;\n", true, "packages/workspace-infrastructure/review-probe.ts"],
+      ["rejects assertions in an ES module file", "export const value = input as string;\n", true, "packages/workspace-infrastructure/review-probe.mts"],
+      ["rejects assertions in a CommonJS module file", "export const value = input as string;\n", true, "packages/workspace-infrastructure/src/review-probe.cts"],
       ["permits as const", 'export const conflict = { status: "conflict" as const, codes: [0, 2] as const };\n', false],
       ["permits satisfies", "export const settled = { name } satisfies ComputeOperation;\n", false],
       ["permits assertions outside workspace infrastructure", "export const value = input as Settled;\n", false, "packages/workspace-admin-api/src/probe.ts"],

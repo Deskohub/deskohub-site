@@ -3,7 +3,7 @@ language js(typescript, jsx)
 
 // Workspace infrastructure decodes or narrows values instead of asserting their types.
 file($name, $body) where {
-  $name <: r".*packages/workspace-infrastructure/.*\.(?:ts|tsx)$",
+  $name <: r".*packages/workspace-infrastructure/.*\.(?:ts|tsx|mts|cts)$",
   $body <: contains bubble {
     or {
       TsAsExpression() as $assertion where {
