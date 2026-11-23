@@ -88,7 +88,28 @@ export class ReservationHoldCleanupScheduleService extends Context.Service<
   );
 }
 
-export const processReservationHoldCleanupScheduleMessage = Effect.fn(
+/** A delivery exactly at the deadline is still on time. */
+const isPastCleanupDeadline = (
+  payload: ReservationHoldCleanupSchedulePayload,
+  now: Temporal.Instant
+) =>
+  payload.cleanupDeadlineIso !== undefined &&
+  Temporal.Instant.compare(
+    now,
+    Temporal.Instant.from(payload.cleanupDeadlineIso)
+  ) > 0;
+
+const acknowledgePastCleanupDeadline = (
+  payload: ReservationHoldCleanupSchedulePayload,
+  now: Temporal.Instant
+) =>
+  Effect.logWarning(
+    "Reservation hold cleanup queue message acknowledged: past its cleanup deadline",
+    { payload, checkedAt: now }
+  ).pipe(Effect.as("past_deadline" as const));
+
+/** Cleans up a delivery already accepted against its cleanup deadline. */
+const cleanUpScheduledHold = Effect.fn(
   "reservationHoldCleanupSchedule.processMessage"
 )(function* (
   payload: ReservationHoldCleanupSchedulePayload,
@@ -144,8 +165,32 @@ export const processReservationHoldCleanupScheduleMessage = Effect.fn(
   return outcome satisfies ReservationHoldCleanupOutcome;
 });
 
+export const processReservationHoldCleanupScheduleMessage = (
+  payload: ReservationHoldCleanupSchedulePayload,
+  now = Temporal.Now.instant()
+) =>
+  isPastCleanupDeadline(payload, now)
+    ? acknowledgePastCleanupDeadline(payload, now)
+    : cleanUpScheduledHold(payload, now);
+
 /** Classifies a failed delivery; the route's Layer failures stay unclassified. */
 export const reservationHoldCleanupRedelivery = (cause: unknown) =>
   cause instanceof ReservationHoldCleanupDeferredError
     ? QueueRedelivery.At({ instant: cause.redeliverAt })
     : QueueRedelivery.Default();
+
+/**
+ * The queue delivery: the receive instant alone decides the cleanup deadline,
+ * before `dependencies` are built, so a late delivery never retries even when
+ * they can't be. An accepted delivery's cleanup reads its own clock once they
+ * are built.
+ */
+export const reservationHoldCleanupConsumer = <ROut, E, RIn>(
+  dependencies: Layer.Layer<ROut | ReservationHoldCleanupService, E, RIn>
+) =>
+  reservationHoldCleanupTopic.consume((message) => {
+    const receivedAt = Temporal.Now.instant();
+    return isPastCleanupDeadline(message, receivedAt)
+      ? acknowledgePastCleanupDeadline(message, receivedAt)
+      : cleanUpScheduledHold(message).pipe(Effect.provide(dependencies));
+  }, reservationHoldCleanupRedelivery);
