@@ -8,8 +8,9 @@ import {
   mock,
   test,
 } from "bun:test";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, within } from "@testing-library/react";
 import type { ComponentPropsWithoutRef } from "react";
+import { renderToReadableStream } from "react-dom/server";
 import type { AccountUnlimitedPass } from "@/features/account/account-unlimited-passes.server";
 import { type Locale, m } from "@/features/i18n";
 import { orderIdSchema } from "@/features/order";
@@ -71,6 +72,7 @@ mock.module(
 
 const { ReservationHistory } = await import("./reservation-history");
 const { AccountUnlimitedPassCard } = await import("./account-unlimited-pass");
+const { PassSavingsFooter } = await import("./pass-savings-footer");
 
 const renderHistory = (locale: Locale, history: CustomerReservationHistory) =>
   render(<ReservationHistory history={history} locale={locale} />);
@@ -956,5 +958,85 @@ describe("ReservationHistory", () => {
     ).toBeNull();
     expect(view.queryByRole("link")).toBeNull();
     expect(view.queryByRole("button")).toBeNull();
+  });
+
+  describe("packs and passes offer", () => {
+    const paidVisit = reservation({
+      id: "paid-visit",
+      product: { kind: "cowork", tier: "open-space" },
+      startsAt: "2026-08-21T08:00:00Z",
+      endsAt: "2026-08-21T16:00:00Z",
+      paidIndividually: true,
+    });
+    const historyOf = (
+      past: readonly CustomerReservationSummary[]
+    ): CustomerReservationHistory => ({
+      kind: "available",
+      groups: { current: [], past: [...past], unavailable: [] },
+    });
+    const noPacks = { held: [], boughtForOthers: [] };
+    const pastFooter = (view: ReturnType<typeof render>) =>
+      view.container.querySelector(
+        '[data-account-reservation-group="past"] > [data-footer-layout]'
+      );
+    test("docks the Pricing link in the Past reservations panel's sticky edge-to-edge footer", async () => {
+      // The offer waits for the Entry pack read, as the server streams it.
+      const stream = await renderToReadableStream(
+        <UnsavedChangesProvider>
+          <ReservationHistory
+            entryPacks={Promise.resolve(noPacks)}
+            history={historyOf([paidVisit])}
+            locale="en-US"
+          />
+        </UnsavedChangesProvider>
+      );
+      await stream.allReady;
+      document.body.innerHTML = await new Response(stream).text();
+      const view = within(document.body);
+
+      const link = view.getByRole("link", {
+        name: m.accountReservationsPassSavingsLink({}, { locale: "en-US" }),
+      });
+      const footer = document.querySelector(
+        '[data-account-reservation-group="past"] > [data-footer-layout]'
+      );
+      expect(footer?.getAttribute("data-footer-layout")).toBe("edge-to-edge");
+      expect(footer?.className).toContain("sticky");
+      expect(footer?.className).toContain(
+        "bottom-[max(var(--install-bar-space,0px),env(safe-area-inset-bottom))]"
+      );
+      expect(footer?.contains(link)).toBe(true);
+      expect(link.getAttribute("href")).toBe("/en-US/pricing");
+      expect(
+        link.querySelectorAll("[data-account-pass-savings-marks] svg")
+      ).toHaveLength(2);
+      document.body.innerHTML = "";
+    });
+
+    test("never offers packs and passes while passes aren't released", () => {
+      const view = render(
+        <UnsavedChangesProvider>
+          <ReservationHistory history={historyOf([paidVisit])} locale="en-US" />
+        </UnsavedChangesProvider>
+      );
+
+      expect(pastFooter(view)).toBeNull();
+      expect(view.queryAllByRole("link")).toHaveLength(0);
+    });
+
+    test("shows the product marks before the label, hidden from assistive technology", () => {
+      const view = render(
+        <UnsavedChangesProvider>
+          <PassSavingsFooter
+            locale="en-US"
+            marks={<span data-testid="product-marks" />}
+          />
+        </UnsavedChangesProvider>
+      );
+
+      const marks = view.getByTestId("product-marks").parentElement;
+      expect(marks?.getAttribute("aria-hidden")).toBe("true");
+      expect(view.getByRole("link").firstElementChild).toBe(marks);
+    });
   });
 });

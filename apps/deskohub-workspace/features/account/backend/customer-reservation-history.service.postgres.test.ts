@@ -649,7 +649,7 @@ describe.skipIf(!testDatabase)(
           const service = yield* CustomerReservationHistoryService;
           return yield* service.load(
             { accountId: account, dotyposCustomerId },
-            { includeEntryPackPayment: true }
+            { includeFunding: true }
           );
         }).pipe(
           Effect.provide(
@@ -773,6 +773,223 @@ describe.skipIf(!testDatabase)(
         held: [expect.objectContaining({ status: "expired" })],
       });
       expect(JSON.stringify(expiry)).not.toContain(passId);
+    });
+
+    test("marks a booking paid individually only when its own payment collected money", async () => {
+      const account = customerAccountIdSchema.make(uniqueId());
+      const dotyposCustomerId = DotyposCustomerIdSchema.make(uniqueDotyposId());
+      await insertAuthUser(account, testEmailAddress(`p-${account}`));
+      await testDatabase!.pool.query(
+        `update customer_accounts set dotypos_customer_id = $2 where id = $1`,
+        [account, dotyposCustomerId]
+      );
+      const booking = (day: number) => ({
+        workspaceReservationId: workspaceReservationIdSchema.make(
+          `workspace-${uniqueId()}`
+        ),
+        dotyposReservationId: DotyposReservationIdSchema.make(
+          `dotypos-${uniqueId()}`
+        ),
+        day,
+      });
+      const paidWithMoney = booking(1);
+      const fullyDiscounted = booking(2);
+      const packWithPaidAddOns = booking(3);
+      const paidWithoutAttempt = booking(4);
+      const unpaid = booking(5);
+      const fullyRefunded = booking(6);
+      const refundOwed = booking(7);
+      const partlyRefunded = booking(8);
+      const partRefundOwed = booking(9);
+      const providerOnly = DotyposReservationIdSchema.make(
+        `dotypos-${uniqueId()}`
+      );
+
+      for (const { workspaceReservationId, dotyposReservationId } of [
+        paidWithMoney,
+        fullyDiscounted,
+        packWithPaidAddOns,
+        paidWithoutAttempt,
+        fullyRefunded,
+        refundOwed,
+        partlyRefunded,
+        partRefundOwed,
+      ]) {
+        await insertWorkspaceReservation({
+          id: workspaceReservationId,
+          dotyposCustomerId,
+          dotyposReservationId,
+          authorAccountId: account,
+          stage: { reservation: "confirmed", payment: "paid" },
+        });
+      }
+      await insertWorkspaceReservation({
+        id: unpaid.workspaceReservationId,
+        dotyposCustomerId,
+        dotyposReservationId: unpaid.dotyposReservationId,
+        authorAccountId: account,
+        stage: { reservation: "confirmed" },
+      });
+
+      const settleAttempt = async (
+        reservationId: WorkspaceReservationId,
+        attempt: {
+          readonly provider: "nexi" | "internal";
+          readonly amount: number;
+          readonly refund?:
+            | { readonly state: "required"; readonly target?: number }
+            | { readonly state: "refunded"; readonly amount: number };
+        }
+      ) => {
+        const attemptId = uniqueId();
+        await testDatabase!.pool.query(
+          `insert into payment_attempts
+             (id, workspace_reservation_id, order_id, provider, provider_order_id, state, amount_value, amount_exponent, currency)
+           values ($1, $2, $2, $3, $4, 'paid', $5, 2, 'CZK')`,
+          [
+            attemptId,
+            reservationId,
+            attempt.provider,
+            attempt.provider === "nexi" ? `order-${attemptId}` : null,
+            attempt.amount,
+          ]
+        );
+        await testDatabase!.pool.query(
+          `update workspace_reservations set active_payment_attempt_id = $1 where id = $2`,
+          [attemptId, reservationId]
+        );
+        const { refund } = attempt;
+        if (refund) {
+          await testDatabase!.pool.query(
+            `update payment_attempts
+               set refund_state = $2, refund_target_value = $3,
+                 refunded_amount_value = $4,
+                 refunded_at = case when $2 = 'refunded' then now() end
+             where id = $1`,
+            [
+              attemptId,
+              refund.state,
+              refund.state === "required" ? (refund.target ?? null) : null,
+              refund.state === "refunded" ? refund.amount : null,
+            ]
+          );
+        }
+      };
+      await settleAttempt(paidWithMoney.workspaceReservationId, {
+        provider: "nexi",
+        amount: 7000,
+      });
+      await settleAttempt(fullyDiscounted.workspaceReservationId, {
+        provider: "internal",
+        amount: 0,
+      });
+      await settleAttempt(packWithPaidAddOns.workspaceReservationId, {
+        provider: "nexi",
+        amount: 4000,
+      });
+      await settleAttempt(fullyRefunded.workspaceReservationId, {
+        provider: "nexi",
+        amount: 7000,
+        refund: { state: "refunded", amount: 7000 },
+      });
+      await settleAttempt(refundOwed.workspaceReservationId, {
+        provider: "nexi",
+        amount: 7000,
+        refund: { state: "required" },
+      });
+      await settleAttempt(partlyRefunded.workspaceReservationId, {
+        provider: "nexi",
+        amount: 7000,
+        refund: { state: "refunded", amount: 2000 },
+      });
+      await settleAttempt(partRefundOwed.workspaceReservationId, {
+        provider: "nexi",
+        amount: 7000,
+        refund: { state: "required", target: 2000 },
+      });
+
+      const passId = uniqueId();
+      await testDatabase!.pool.query(
+        `insert into orders (id, kind, dotypos_customer_id, payment_state, fulfillment_state, paid_at)
+         values ($1, 'pass-purchase', $2, 'paid', 'not_started', '2000-01-01T00:00:00Z')`,
+        [passId, dotyposCustomerId]
+      );
+      await testDatabase!.pool.query(
+        `insert into pass_purchases
+           (id, buyer_account_id, holder_account_id, product, tier, entry_count, status, valid_from, valid_until, quote, locale, created_at)
+         values ($1, $2, $2, 'entry-pack', 'open-space', 5, 'active', '2000-01-01', '2000-03-01', '{}', 'en-US', now())`,
+        [passId, account]
+      );
+      await testDatabase!.pool.query(
+        `insert into pass_entry_claims (reservation_id, pass_id, date, status)
+         values ($1, $2, '2000-01-03', 'consumed')`,
+        [packWithPaidAddOns.workspaceReservationId, passId]
+      );
+
+      const loadHistory = (includeFunding: boolean) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const service = yield* CustomerReservationHistoryService;
+            return yield* service.load(
+              { accountId: account, dotyposCustomerId },
+              { includeFunding }
+            );
+          }).pipe(
+            Effect.provide(
+              makeHistoryLayer([
+                ...[
+                  paidWithMoney,
+                  fullyDiscounted,
+                  packWithPaidAddOns,
+                  paidWithoutAttempt,
+                  unpaid,
+                  fullyRefunded,
+                  refundOwed,
+                  partlyRefunded,
+                  partRefundOwed,
+                ].map(({ dotyposReservationId, day }) =>
+                  makeDotyposReservation({
+                    id: dotyposReservationId,
+                    startDate: `2000-01-0${day}T10:00:00.000Z`,
+                    endDate: `2000-01-0${day}T11:00:00.000Z`,
+                  })
+                ),
+                makeDotyposReservation({
+                  id: providerOnly,
+                  startDate: "2000-01-09T10:00:00.000Z",
+                  endDate: "2000-01-09T11:00:00.000Z",
+                }),
+              ])
+            )
+          )
+        );
+      const paidIndividuallyById = async (includeFunding: boolean) => {
+        const history = await loadHistory(includeFunding);
+        if (history.kind !== "available")
+          throw new Error("History unavailable");
+        return Object.fromEntries(
+          history.groups.past.map((summary) => [
+            summary.id,
+            summary.paidIndividually,
+          ])
+        );
+      };
+
+      expect(await paidIndividuallyById(true)).toEqual({
+        [paidWithMoney.workspaceReservationId]: true,
+        [fullyDiscounted.workspaceReservationId]: undefined,
+        [packWithPaidAddOns.workspaceReservationId]: undefined,
+        [paidWithoutAttempt.workspaceReservationId]: undefined,
+        [unpaid.workspaceReservationId]: undefined,
+        [fullyRefunded.workspaceReservationId]: undefined,
+        [refundOwed.workspaceReservationId]: undefined,
+        [partlyRefunded.workspaceReservationId]: true,
+        [partRefundOwed.workspaceReservationId]: true,
+        [providerOnly]: undefined,
+      });
+      expect(
+        Object.values(await paidIndividuallyById(false)).filter(Boolean)
+      ).toEqual([]);
     });
 
     test("keeps bought gifts and holder passes separate", async () => {

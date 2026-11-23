@@ -1,7 +1,10 @@
-import { decodeStandardSchema } from "@deskohub/standard-schema";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { Duration, Effect } from "effect";
-import { defineQueueConsumer, type QueueRedelivery } from "./queue-consumer";
+import {
+  defineQueueConsumer,
+  type QueueConsumer,
+  QueueRedelivery,
+} from "./queue-consumer";
 import {
   type QueueMessageSendError,
   type QueuePublication,
@@ -21,8 +24,8 @@ export type QueueTopicMessage<Message> = {
 };
 
 /**
- * One Vercel Queue topic: the messages its publishers send and its consumer
- * decodes. Its route still needs a literal trigger in `vercel.json`.
+ * One Workspace queue topic: the messages its publishers send and its
+ * consumer decodes.
  */
 export interface QueueTopic<
   Topic extends string,
@@ -48,16 +51,15 @@ export interface QueueTopic<
     QueuePublisher
   >;
   /**
-   * Defines the topic's queue route handler. A message that doesn't decode is
+   * Defines the topic's delivery Effect. A message that doesn't decode is
    * logged and acknowledged; `redelivery` classifies the handler's failures.
    */
-  readonly consume: <E>(
-    operation: string,
+  readonly consume: <E, R>(
     handle: (
       message: StandardSchemaV1.InferOutput<Message>
-    ) => Effect.Effect<unknown, E, never>,
+    ) => Effect.Effect<unknown, E, R>,
     redelivery?: (error: E) => QueueRedelivery
-  ) => ReturnType<typeof defineQueueConsumer>;
+  ) => QueueConsumer<R>;
 }
 
 export const defineQueueTopic = <
@@ -85,7 +87,6 @@ export const defineQueueTopic = <
     return {
       topic: definition.topic,
       message,
-      // The SDK sends only the options that are defined.
       options: {
         delaySeconds: toSeconds(delay),
         retentionSeconds: toSeconds(retention),
@@ -102,19 +103,13 @@ export const defineQueueTopic = <
       Effect.flatMap(QueuePublisher, (publisher) =>
         publisher.publish(publication(input))
       ),
-    consume: (operation, handle, redelivery) =>
-      defineQueueConsumer(
-        operation,
-        (message) => {
-          const decoded = decodeStandardSchema(definition.message, message);
-          return decoded === undefined
-            ? Effect.logWarning(
-                `${definition.label} queue message ignored: invalid payload`
-              ).pipe(Effect.as("ignored" as const))
-            : handle(decoded);
-        },
-        redelivery
-      ),
+    consume: (handle, redelivery = () => QueueRedelivery.Default()) =>
+      defineQueueConsumer({
+        schema: definition.message,
+        label: definition.label,
+        handle,
+        redelivery,
+      }),
   };
 };
 

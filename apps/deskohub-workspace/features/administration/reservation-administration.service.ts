@@ -51,6 +51,7 @@ import { ReservationAccessService } from "@/features/reservation-access";
 import { ReservationInvitations } from "@/features/reservation-invitees/backend/reservation-invitations.service";
 import { WorkspaceDotyposLayer } from "@/shared/backend/config/dotypos.config";
 import { WorkspaceEmailLayer } from "@/shared/backend/config/email.config";
+import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
 import { servicePerOperation } from "@/shared/backend/service-per-operation";
 import {
   ReservationAdministrationError,
@@ -744,7 +745,9 @@ export class ReservationAdministrationService extends Context.Service<
       WorkspaceDotyposLayer,
       WorkspaceFeatureFlagService.Default,
       InvoiceCancellationService.Live,
-      PaidFulfillmentQueueService.Live,
+      PaidFulfillmentQueueService.Default.pipe(
+        Layer.provide(VercelQueuePublisher)
+      ),
       ReservationInvoiceService.Live,
       PaymentRefundService.Live,
       AccountingDocumentSnapshots.Default.pipe(

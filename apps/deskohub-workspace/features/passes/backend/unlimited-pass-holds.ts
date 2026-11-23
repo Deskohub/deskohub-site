@@ -1,7 +1,7 @@
 import "server-only";
 
 import { type DotyposReservation, DotyposService } from "@deskohub/dotypos";
-import { and, asc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull } from "drizzle-orm";
 import { Data, Effect, Array as EffectArray, Result } from "effect";
 import { WorkspaceDatabase } from "@/db/database.service";
 import {
@@ -20,6 +20,11 @@ import {
 import { type PassTier, unlimitedPassDays } from "../pass-offer";
 import { hasUnlimitedPassFirstDayEnded } from "./entry-pack-settlement";
 import { recordAmbiguousPassDayHolds } from "./pass-day-hold-ownership";
+import {
+  bookPassDay,
+  endReleasedPassDay,
+  matchesPassDayAttempt,
+} from "./unlimited-pass-day-transitions";
 import {
   createUnlimitedPassDayHold,
   listUnlimitedPassDayHolds,
@@ -76,33 +81,6 @@ export const passDayHold = (
   day: providerDay(row, purchase.tier),
   generation: row.passDayHoldGeneration,
 });
-
-const matchesPassDayAttempt = (row: PassDay) =>
-  and(
-    eq(workspaceReservations.id, row.id),
-    eq(workspaceReservations.reservationState, row.reservationState),
-    row.passDayHoldGeneration === null
-      ? isNull(workspaceReservations.passDayHoldGeneration)
-      : eq(
-          workspaceReservations.passDayHoldGeneration,
-          row.passDayHoldGeneration
-        ),
-    row.passDayHoldRequestedAt === null
-      ? isNull(workspaceReservations.passDayHoldRequestedAt)
-      : eq(
-          workspaceReservations.passDayHoldRequestedAt,
-          row.passDayHoldRequestedAt
-        ),
-    row.dotyposReservationId === null
-      ? isNull(workspaceReservations.dotyposReservationId)
-      : eq(
-          workspaceReservations.dotyposReservationId,
-          row.dotyposReservationId
-        ),
-    row.failureCode === null
-      ? isNull(workspaceReservations.failureCode)
-      : eq(workspaceReservations.failureCode, row.failureCode)
-  );
 
 const findUnboundPassDayHolds = (
   records: readonly DotyposReservation[],
@@ -550,18 +528,7 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
               yield* dotypos.cancelReservation(releasedId);
             }
           }
-          yield* db
-            .update(workspaceReservations)
-            .set({
-              reservationState: releasedId ? "cancelled" : "hold_expired",
-              ...(releasedId && {
-                dotyposReservationId: releasedId,
-                reservationCancelledAt: now,
-              }),
-              reservationHoldExpiredAt: now,
-              updatedAt: now,
-            })
-            .where(matchesPassDayAttempt(attempt));
+          yield* endReleasedPassDay(attempt, releasedId, now);
         },
         Effect.catch(() =>
           Effect.logWarning("Unlimited pass day release needs reconciliation")
@@ -576,7 +543,6 @@ export const releaseUnlimitedPassDays = Effect.fn("releaseUnlimitedPassDays")(
 /** Confirms each stable day idempotently before the entitlement is activated. */
 export const confirmUnlimitedPassDays = Effect.fn("confirmUnlimitedPassDays")(
   function* (purchase: Purchase, range?: PassDayRange) {
-    const { db } = yield* WorkspaceDatabase;
     const dotypos = yield* DotyposService;
     const rows = (yield* readUnlimitedPassDays(purchase.id)).filter(
       (day) =>
@@ -623,26 +589,10 @@ export const confirmUnlimitedPassDays = Effect.fn("confirmUnlimitedPassDays")(
             reason: "changed",
           });
         }
-        const now = yield* currentInstant;
-        yield* db
-          .update(workspaceReservations)
-          .set({
-            reservationState: "confirmed",
-            fulfillmentState: "fulfilled",
-            reservationConfirmedAt: now,
-            fulfilledAt: now,
-            updatedAt: now,
-          })
-          .where(
-            and(
-              eq(workspaceReservations.id, row.id),
-              eq(workspaceReservations.reservationState, "confirming"),
-              eq(
-                workspaceReservations.dotyposReservationId,
-                row.dotyposReservationId
-              )
-            )
-          );
+        yield* bookPassDay(
+          { id: row.id, dotyposReservationId: row.dotyposReservationId },
+          yield* currentInstant
+        );
       }),
       { concurrency: 2, discard: true }
     );

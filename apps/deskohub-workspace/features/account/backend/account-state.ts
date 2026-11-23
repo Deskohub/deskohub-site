@@ -212,20 +212,20 @@ export const loadAccountState: Effect.Effect<
  * unavailable notice.
  */
 export const loadAccountStateWithHistory = (
-  includeEntryPackPayment = false
+  includeFunding = false
 ): Effect.Effect<
   CustomerAccountStateWithHistory,
   never,
   AccountStateCapabilities | CustomerReservationHistoryService
 > =>
   Effect.suspend(() => loadAccount).pipe(
-    Effect.flatMap((loaded) => attachHistory(loaded, includeEntryPackPayment))
+    Effect.flatMap((loaded) => attachHistory(loaded, includeFunding))
   );
 
 /** Reads the history `loaded` shows and attaches it to its state. */
 function attachHistory(
   loaded: LoadedAccount,
-  includeEntryPackPayment: boolean
+  includeFunding: boolean
 ): Effect.Effect<
   CustomerAccountStateWithHistory,
   never,
@@ -235,15 +235,11 @@ function attachHistory(
     case undefined:
       return Effect.succeed(loaded.state);
     case "always":
-      return loadReservationHistory(
-        loaded.history,
-        includeEntryPackPayment
-      ).pipe(Effect.map((history) => ({ ...loaded.state, history })));
+      return loadReservationHistory(loaded.history, includeFunding).pipe(
+        Effect.map((history) => ({ ...loaded.state, history }))
+      );
     case "when-any":
-      return loadReservationHistory(
-        loaded.history,
-        includeEntryPackPayment
-      ).pipe(
+      return loadReservationHistory(loaded.history, includeFunding).pipe(
         Effect.map((history) =>
           mayHaveReservations(history)
             ? { ...loaded.state, history }
@@ -533,11 +529,11 @@ const loadLinkedAccount = Effect.fn(function* (
  */
 const loadReservationHistory = (
   account: ReservationHistoryAccount,
-  includeEntryPackPayment: boolean
+  includeFunding: boolean
 ) =>
   Effect.flatMap(CustomerReservationHistoryService, (service) =>
-    includeEntryPackPayment
-      ? service.load(account, { includeEntryPackPayment })
+    includeFunding
+      ? service.load(account, { includeFunding })
       : service.load(account)
   ).pipe(
     degradable(

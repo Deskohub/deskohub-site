@@ -4,6 +4,7 @@ import { WorkspaceDatabase, WorkspaceTransaction } from "@/db/database.service";
 import { WorkspaceDatabaseAdvisoryLock } from "@/db/postgres-advisory-lock";
 import { emailCampaignAutomationWorkUnits as units } from "@/db/schema";
 import { isDatabaseQueryError } from "@/db/sql-constraint";
+import { VercelQueuePublisher } from "@/shared/backend/queue/vercel-queue-publisher";
 import { currentInstant } from "@/shared/utils/temporal";
 import type { CampaignSendId } from "../../campaign-identifiers";
 import type { AutomationWorkUnitId } from "../automation-identifiers";
@@ -431,7 +432,7 @@ export class AutomationUnitProcessor extends Context.Service<
         WorkspaceDatabase.Default,
         WorkspaceDatabaseAdvisoryLock.Default,
         AutomationUnitHandlers.Live,
-        AutomationUnitQueue.Live
+        AutomationUnitQueue.Default.pipe(Layer.provide(VercelQueuePublisher))
       )
     )
   );

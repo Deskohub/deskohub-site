@@ -42,6 +42,10 @@ export function AccountPage({
     return <AccountUnavailableCard locale={locale} />;
   }
 
+  // One read serves the Passes section and the history's packs and passes offer.
+  const entryPacks =
+    loadPasses && state.kind !== "deletion-pending" ? loadPasses() : undefined;
+
   return (
     <>
       <SessionRefresh />
@@ -56,15 +60,20 @@ export function AccountPage({
         }
         locale={locale}
         passes={
-          loadPasses && state.kind !== "deletion-pending" ? (
+          entryPacks && (
             <AccountPassesPanel
               locale={locale}
-              packs={loadPasses()}
+              packs={entryPacks}
               unlimitedPasses={unlimitedPasses}
             />
-          ) : undefined
+          )
         }
-        state={withRenderedReservations(state, locale, unlimitedPasses)}
+        state={withRenderedReservations(
+          state,
+          locale,
+          unlimitedPasses,
+          entryPacks
+        )}
       />
     </>
   );
@@ -80,7 +89,8 @@ function withRenderedReservations(
     { readonly kind: "unauthenticated" | "unavailable" }
   >,
   locale: Locale,
-  unlimitedPasses: AccountUnlimitedPasses
+  unlimitedPasses: AccountUnlimitedPasses,
+  entryPacks: Promise<AccountPasses> | undefined
 ): SignedInAccountState {
   const currentPassCount =
     unlimitedPasses === "unavailable"
@@ -95,6 +105,7 @@ function withRenderedReservations(
         : undefined,
     history: (
       <ReservationHistory
+        entryPacks={entryPacks}
         history={history}
         locale={locale}
         unlimitedPasses={unlimitedPasses}
