@@ -197,7 +197,7 @@ describe("workspace edge Terraform", () => {
 
   test("allows plain HTTP only in the sandbox", () => {
     expect(sources["variables.tf"]).toContain(
-      'condition     = var.enable_https || var.stage == "sandbox"'
+      'condition     = var.enable_https || (var.stage == "sandbox" && var.project_id == "deskohub-workspace-sandbox")'
     );
   });
 

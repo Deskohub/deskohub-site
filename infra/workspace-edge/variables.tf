@@ -30,13 +30,13 @@ variable "domains" {
 }
 
 variable "enable_https" {
-  description = "Serve HTTPS with a managed certificate and redirect port 80 to it. Only the sandbox may set false, to serve plain HTTP on port 80 for a proof without DNS."
+  description = "Serve HTTPS with a managed certificate and redirect port 80 to it. Only the sandbox stage in the approved sandbox project may set false, to serve plain HTTP on port 80 for a proof without DNS."
   type        = bool
   default     = true
 
   validation {
-    condition     = var.enable_https || var.stage == "sandbox"
-    error_message = "enable_https may be false only when stage is sandbox."
+    condition     = var.enable_https || (var.stage == "sandbox" && var.project_id == "deskohub-workspace-sandbox")
+    error_message = "enable_https may be false only for stage sandbox in project deskohub-workspace-sandbox."
   }
 }
 
