@@ -1109,6 +1109,9 @@ describe("ResendEmailProvider span censorship", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(ended.length).toBeGreaterThan(0);
     const traced = JSON.stringify(ended);
+    // Positive control: the serializer reaches the failure's message and code.
+    expect(traced).toContain("Resend cannot send now");
+    expect(traced).toContain("http-429");
     expect(traced).not.toContain(rawProviderDetail);
     expect(traced).not.toContain("quota");
     expect(traced).not.toContain("rk_123");
@@ -1134,6 +1137,9 @@ describe("ResendEmailProvider span censorship", () => {
     expect(send).toHaveBeenCalledTimes(4);
     expect(ended.length).toBeGreaterThan(0);
     const traced = JSON.stringify(ended);
+    // Positive control: the serializer reaches the failure's message and code.
+    expect(traced).toContain("Resend request failed");
+    expect(traced).toContain("transport");
     expect(traced).not.toContain(rawTransportDetail);
     expect(traced).not.toContain("getaddrinfo");
     expect(traced).not.toContain("ENOTFOUND");

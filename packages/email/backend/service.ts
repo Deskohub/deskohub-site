@@ -1,9 +1,10 @@
-import { Array, Context, Effect, Layer, Predicate } from "effect";
+import { Array as Arr, Context, Effect, Layer, Predicate } from "effect";
 import type {
   EmailBatchResult,
   EmailMessage,
   EmailSendResult,
 } from "../types/email.types";
+import { entriesAtBatchPositions } from "./batch-positions";
 import {
   type EmailBatchOptions,
   EmailConfigTag,
@@ -23,7 +24,6 @@ import {
   emailCategoryOf,
   emailStreamOf,
 } from "./email-providers";
-import { entriesAtBatchPositions } from "./batch-positions";
 import { addressesOnlyTestRecipients } from "./email-routing";
 import { ConsoleEmailProvider } from "./providers/console-provider";
 
@@ -215,7 +215,7 @@ const makeEmailService = Effect.fn("email.makeService")(function* (options: {
             },
             context
           );
-          for (const [index, result] of Array.zip(indices, groupResults)) {
+          for (const [index, result] of Arr.zip(indices, groupResults)) {
             results[index] = result;
           }
         }

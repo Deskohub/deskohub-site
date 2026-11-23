@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { Array, Effect, Ref, Result } from "effect";
+import { Array as Arr, Effect, Ref, Result } from "effect";
 import type {
   EmailBatchResult,
   EmailMessage,
   EmailSendResult,
 } from "../types/email.types";
+import { entriesAtBatchPositions } from "./batch-positions";
 import {
   continuesEmailChain,
   type EmailBatchOptions,
@@ -16,7 +17,6 @@ import {
   observeEmailDelivery,
 } from "./email-delivery-observer";
 import { type EmailStream, emailCategoryOf } from "./email-providers";
-import { entriesAtBatchPositions } from "./batch-positions";
 import { NetworkError } from "./network-error";
 
 /** What a chain reports deliveries to. */
@@ -83,7 +83,7 @@ export const sendThroughChain = (
   message: EmailMessage,
   context: EmailChainContext
 ): Effect.Effect<EmailSendResult, EmailSendError> =>
-  Array.matchLeft(chain, {
+  Arr.matchLeft(chain, {
     onEmpty: () =>
       Effect.die(new RangeError("An email provider chain has no provider")),
     onNonEmpty: (provider, fallbacks) =>
@@ -291,7 +291,7 @@ export const sendBatchThroughChain = Effect.fn("email.sendBatchThroughChain")(
           );
 
       const fallingThrough: PendingBatchMessage[] = [];
-      for (const [entry, result] of Array.zip(pending, answered)) {
+      for (const [entry, result] of Arr.zip(pending, answered)) {
         const { index, message } = entry;
         results[index] = result;
         if (result.status !== "failed") {

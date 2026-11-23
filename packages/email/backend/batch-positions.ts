@@ -1,4 +1,4 @@
-import { Array, Effect, Option } from "effect";
+import { Array as Arr, Effect, Option } from "effect";
 
 /**
  * The entries a provider names by their positions in the batch request it
@@ -10,7 +10,11 @@ export const entriesAtBatchPositions = <A>(
   positions: ReadonlyArray<number>
 ): Effect.Effect<ReadonlyArray<A>> =>
   Option.match(
-    Option.all(positions.map((position) => Array.get(entries, position))),
+    Option.all(
+      positions.map((position) =>
+        Number.isInteger(position) ? Arr.get(entries, position) : Option.none()
+      )
+    ),
     {
       onNone: () =>
         Effect.die(
