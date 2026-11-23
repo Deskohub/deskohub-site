@@ -117,8 +117,8 @@ describe("app config", () => {
   const updatesWithoutSigning = {
     enabled: true,
     url: updatesManifestUrl(undefined),
-    checkAutomatically: "ON_ERROR_RECOVERY",
-    fallbackToCacheTimeout: 0,
+    checkAutomatically: "ON_LOAD",
+    fallbackToCacheTimeout: 15_000,
   } as const;
 
   test("configures updates without signing for development clients and Metro", () => {

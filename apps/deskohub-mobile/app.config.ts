@@ -205,14 +205,17 @@ export default (
     ],
   },
   // Updates apply only in release builds; debug and dev-client builds load
-  // JS from Metro. The app checks on launch and foreground itself
-  // (src/updates), so the native launch check runs only to recover from a
-  // crashing update, and launch never waits for the network.
+  // JS from Metro. Each launch checks for an update and waits up to 15
+  // seconds for it to download, so the app starts on the newest update
+  // instead of offering a restart into it; offline, the app starts on the
+  // update it has once the check fails. A download that takes longer
+  // finishes in the background and applies on the next launch. Updates
+  // published while the app runs are offered from src/updates.
   updates: {
     enabled: true,
     url: updatesManifestUrl(env.EXPO_PUBLIC_API_ORIGIN),
-    checkAutomatically: "ON_ERROR_RECOVERY",
-    fallbackToCacheTimeout: 0,
+    checkAutomatically: "ON_LOAD",
+    fallbackToCacheTimeout: 15_000,
     ...updatesCodeSigning(env.MOBILE_UPDATES_CODE_SIGNING),
   },
 });

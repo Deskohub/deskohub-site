@@ -101,7 +101,8 @@ update downloaded for its next start. `expo-updates` reports the directive as
 no update available with `isRollBackToEmbedded` while its commit time is later
 than that of the update the app runs, so it keeps reporting it until the app
 restarts, and ignores it after the restart or on an APK built after the
-rollback. `findReadyUpdate` (`apps/deskohub-mobile/src/updates/ota-update.ts`)
+rollback. A cold start applies it before launching (see Client); while the app runs,
+`findReadyUpdate` (`apps/deskohub-mobile/src/updates/ota-update.ts`)
 fetches it, which gives the embedded update the directive's commit time so the
 next start launches it over any downloaded update, and the app offers the
 usual Restart banner unless it already runs its embedded update. A dismissed
@@ -109,20 +110,31 @@ rollback stays hidden for the session and applies at the next cold start.
 
 ## Client
 
-`app/_layout.tsx` mounts `UpdateBanner`. `use-update-prompt.ts` checks on
-launch and on returning to the foreground, at most every 15 minutes. On
-Android it also reads `GET /api/mobile/releases/latest` and compares its
-`versionCode` with the installed build: a newer APK takes precedence and opens
-that version's `/android/download/deskohub-X.Y.Z.apk`, an OTA update restarts the app on accept, and dismissing
-lasts for the session. An app that an updater or store installed
-(`src/updates/updater-install.ts`: Obtainium, F-Droid clients, Google Play)
-skips the APK check and leaves new versions to that installer; one installed
-from a browser or file manager keeps it. A rollback offers the same restart into the embedded
-update. iOS checks OTA only. `app.config.ts` sets
-`checkAutomatically: "ON_ERROR_RECOVERY"`, which turns off the launch-time
-check; only error recovery after a failed launch still downloads on its own.
-The restart applies a downloaded update or fetched rollback at once; otherwise
-it takes effect at the next cold start.
+`app.config.ts` sets `checkAutomatically: "ON_LOAD"` and
+`fallbackToCacheTimeout: 15_000`: every cold start of a release build asks the
+manifest endpoint first and waits up to 15 seconds for a new update or a
+rollback to download, then launches it, so starting the app never ends on a
+restart offer. Offline, the app launches the update it has once the request
+fails; a download that outlasts the wait finishes in the background and
+applies at the next cold start. Error recovery after a failed launch still
+works as before.
+
+`app/_layout.tsx` mounts `UpdateBanner`. `use-update-prompt.ts` records an
+applied update on launch, and `scheduleUpdateChecks` (`update-check.ts`) plans
+the JS checks: launch checks only for a newer APK on Android, and returning to
+the foreground at least 15 minutes after launch or the previous check runs
+every planned check, so the OTA banner only offers an update or rollback
+published while the app ran. On Android it also reads
+`GET /api/mobile/releases/latest` and compares its `versionCode` with the
+installed build: a newer APK takes precedence and opens that version's
+`/android/download/deskohub-X.Y.Z.apk`, an OTA update restarts the app on
+accept, and dismissing lasts for the session. An app that an updater or store
+installed (`src/updates/updater-install.ts`: Obtainium, F-Droid clients,
+Google Play) skips the APK check and leaves new versions to that installer;
+one installed from a browser or file manager keeps it. A rollback offers the
+same restart into the embedded update. iOS checks OTA only. The restart
+applies a downloaded update or fetched rollback at once; otherwise it takes
+effect at the next cold start.
 
 Development clients load from Metro and never take OTA updates. Before a tag,
 the one OTA check is a release-shaped build (`--signing debug`) against

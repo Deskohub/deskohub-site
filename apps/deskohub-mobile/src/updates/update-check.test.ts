@@ -1,20 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Fiber, Layer } from "effect";
 import { FetchHttpClient } from "effect/http";
-import type { OtaUpdateSource } from "./ota-update";
+import { fakeAppState } from "../platform/testing/fake-app-state";
+import type { OtaUpdateSource, ReadyUpdate } from "./ota-update";
 import {
   isUpdateCheckDue,
   planUpdateCheck,
   runUpdateCheck,
+  scheduleUpdateChecks,
+  type UpdateCheckPlan,
 } from "./update-check";
+import { noUpdatePromptDismissals, selectUpdatePrompt } from "./update-prompt";
 
 describe("isUpdateCheckDue", () => {
   const startedAt = 1_000_000;
   const fifteenMinutesMs = 15 * 60 * 1000;
-
-  test("checks when no check has started yet", () => {
-    expect(isUpdateCheckDue(undefined, startedAt)).toBeTrue();
-  });
 
   test("waits fifteen minutes between checks", () => {
     expect(isUpdateCheckDue(startedAt, startedAt)).toBeFalse();
@@ -107,80 +107,80 @@ describe("planUpdateCheck", () => {
   });
 });
 
-describe("runUpdateCheck", () => {
-  const checkResult = {
-    isAvailable: true,
-    isRollBackToEmbedded: false,
-    manifest: { id: "update-a" },
-    reason: undefined,
-  } as unknown as Awaited<ReturnType<OtaUpdateSource["checkForUpdateAsync"]>>;
-  const fetchResult = {
-    isNew: true,
-    isRollBackToEmbedded: false,
-    manifest: { id: "update-a" },
-  } as unknown as Awaited<ReturnType<OtaUpdateSource["fetchUpdateAsync"]>>;
+const checkResult = {
+  isAvailable: true,
+  isRollBackToEmbedded: false,
+  manifest: { id: "update-a" },
+  reason: undefined,
+} as unknown as Awaited<ReturnType<OtaUpdateSource["checkForUpdateAsync"]>>;
+const fetchResult = {
+  isNew: true,
+  isRollBackToEmbedded: false,
+  manifest: { id: "update-a" },
+} as unknown as Awaited<ReturnType<OtaUpdateSource["fetchUpdateAsync"]>>;
 
-  const rollBackCheckResult = {
-    isAvailable: false,
-    isRollBackToEmbedded: true,
-    manifest: undefined,
-    reason: undefined,
-  } as unknown as typeof checkResult;
-  const rollBackFetchResult = {
-    isNew: false,
-    isRollBackToEmbedded: true,
-    manifest: undefined,
-  } as unknown as typeof fetchResult;
+const rollBackCheckResult = {
+  isAvailable: false,
+  isRollBackToEmbedded: true,
+  manifest: undefined,
+  reason: undefined,
+} as unknown as typeof checkResult;
+const rollBackFetchResult = {
+  isNew: false,
+  isRollBackToEmbedded: true,
+  manifest: undefined,
+} as unknown as typeof fetchResult;
 
-  const recordingSources = ({
-    answer = async () => checkResult,
-    download = async () => fetchResult,
-  }: {
-    readonly answer?: () => Promise<typeof checkResult>;
-    readonly download?: () => Promise<typeof fetchResult>;
-  } = {}) => {
-    const calls: Array<string> = [];
-    const updates: OtaUpdateSource = {
-      checkForUpdateAsync: () => {
-        calls.push("ota-check");
-        return answer();
-      },
-      fetchUpdateAsync: () => {
-        calls.push("ota-fetch");
-        return download();
-      },
-    };
-    const fetch = Object.assign(
-      async () => {
-        calls.push("release-lookup");
-        return Response.json({ versionName: "1.3.0", versionCode: 1_003_000 });
-      },
-      { preconnect: globalThis.fetch.preconnect }
-    );
-    const layer = FetchHttpClient.layer.pipe(
-      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch))
-    );
-    return { calls, layer, updates };
+const recordingSources = ({
+  answer = async () => checkResult,
+  download = async () => fetchResult,
+}: {
+  readonly answer?: () => Promise<typeof checkResult>;
+  readonly download?: () => Promise<typeof fetchResult>;
+} = {}) => {
+  const calls: Array<string> = [];
+  const updates: OtaUpdateSource = {
+    checkForUpdateAsync: () => {
+      calls.push("ota-check");
+      return answer();
+    },
+    fetchUpdateAsync: () => {
+      calls.push("ota-fetch");
+      return download();
+    },
   };
+  const fetch = Object.assign(
+    async () => {
+      calls.push("release-lookup");
+      return Response.json({ versionName: "1.3.0", versionCode: 1_003_000 });
+    },
+    { preconnect: globalThis.fetch.preconnect }
+  );
+  const layer = FetchHttpClient.layer.pipe(
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch))
+  );
+  return { calls, layer, updates };
+};
 
-  const check = (
-    platform: string,
-    sources: ReturnType<typeof recordingSources>,
-    reports: Array<unknown>
-  ) =>
-    runUpdateCheck({
-      plan: planUpdateCheck({
-        platform,
-        otaUpdatesEnabled: true,
-        installingPackageName: sideloaded,
-      }),
-      updates: sources.updates,
-      installedBuildVersion: "1002000",
-      latestReleaseUrl: "https://workspace.test/api/mobile/releases/latest",
-      onReadyUpdate: (update) => reports.push({ readyUpdate: update }),
-      onNativeRelease: (release) => reports.push({ nativeRelease: release }),
-    }).pipe(Effect.provide(sources.layer));
+const check = (
+  platform: string,
+  sources: ReturnType<typeof recordingSources>,
+  reports: Array<unknown>
+) =>
+  runUpdateCheck({
+    plan: planUpdateCheck({
+      platform,
+      otaUpdatesEnabled: true,
+      installingPackageName: sideloaded,
+    }),
+    updates: sources.updates,
+    installedBuildVersion: "1002000",
+    latestReleaseUrl: "https://workspace.test/api/mobile/releases/latest",
+    onReadyUpdate: (update) => reports.push({ readyUpdate: update }),
+    onNativeRelease: (release) => reports.push({ nativeRelease: release }),
+  }).pipe(Effect.provide(sources.layer));
 
+describe("runUpdateCheck", () => {
   test("reports both updates on Android", async () => {
     const sources = recordingSources();
     const reports: Array<unknown> = [];
@@ -241,5 +241,140 @@ describe("runUpdateCheck", () => {
     await Effect.runPromise(check("web", sources, reports));
     expect(reports).toEqual([]);
     expect(sources.calls).toEqual([]);
+  });
+});
+
+describe("scheduleUpdateChecks", () => {
+  const launchedAt = 1_000_000;
+  const fifteenMinutesMs = 15 * 60 * 1000;
+  const androidPlan: UpdateCheckPlan = { otaUpdate: true, nativeRelease: true };
+
+  const session = (plan: UpdateCheckPlan) => {
+    const appState = fakeAppState("active");
+    const clock = { now: launchedAt };
+    const checks: Array<UpdateCheckPlan> = [];
+    const stop = scheduleUpdateChecks({
+      plan,
+      appState: appState.source,
+      now: () => clock.now,
+      check: (planned) => checks.push(planned),
+    });
+    const returnAt = (at: number) => {
+      clock.now = at;
+      appState.change("background");
+      appState.change("active");
+    };
+    return { appState, checks, returnAt, stop };
+  };
+
+  test("checks only for a newer APK on launch, which started on the newest JS update", () => {
+    expect(session(androidPlan).checks).toEqual([
+      { otaUpdate: false, nativeRelease: true },
+    ]);
+    expect(session({ otaUpdate: true, nativeRelease: false }).checks).toEqual(
+      []
+    );
+  });
+
+  test("waits fifteen minutes after launch before checking again", () => {
+    const { checks, returnAt } = session(androidPlan);
+    returnAt(launchedAt + 1000);
+    returnAt(launchedAt + fifteenMinutesMs - 1);
+    expect(checks).toEqual([{ otaUpdate: false, nativeRelease: true }]);
+  });
+
+  test("checks for every planned update on a return fifteen minutes on", () => {
+    const { checks, returnAt } = session(androidPlan);
+    returnAt(launchedAt + fifteenMinutesMs);
+    returnAt(launchedAt + fifteenMinutesMs + 1000);
+    returnAt(launchedAt + 2 * fifteenMinutesMs);
+    expect(checks).toEqual([
+      { otaUpdate: false, nativeRelease: true },
+      androidPlan,
+      androidPlan,
+    ]);
+  });
+
+  test("stops listening to the app state once stopped", () => {
+    const { appState, stop } = session(androidPlan);
+    expect(appState.listeners.size).toBe(1);
+    stop();
+    expect(appState.listeners.size).toBe(0);
+  });
+
+  const promptAfterReturn = async (
+    sources: ReturnType<typeof recordingSources>,
+    platform: string
+  ) => {
+    const appState = fakeAppState("active");
+    const clock = { now: launchedAt };
+    const runs: Array<Promise<void>> = [];
+    let readyUpdate: ReadyUpdate | undefined;
+    scheduleUpdateChecks({
+      plan: planUpdateCheck({
+        platform,
+        otaUpdatesEnabled: true,
+        installingPackageName: sideloaded,
+      }),
+      appState: appState.source,
+      now: () => clock.now,
+      check: (plan) =>
+        runs.push(
+          Effect.runPromise(
+            runUpdateCheck({
+              plan,
+              updates: sources.updates,
+              installedBuildVersion: "1003000",
+              latestReleaseUrl:
+                "https://workspace.test/api/mobile/releases/latest",
+              onReadyUpdate: (update) => {
+                readyUpdate = update ?? readyUpdate;
+              },
+              onNativeRelease: () => undefined,
+            }).pipe(Effect.provide(sources.layer))
+          )
+        ),
+    });
+    await Promise.all(runs);
+    const prompt = () =>
+      selectUpdatePrompt({
+        nativeUpdate: undefined,
+        readyUpdate,
+        runsEmbeddedUpdate: false,
+        dismissals: noUpdatePromptDismissals,
+      });
+    const atLaunch = prompt();
+    clock.now = launchedAt + fifteenMinutesMs;
+    appState.change("background");
+    appState.change("active");
+    await Promise.all(runs);
+    return { atLaunch, afterReturn: prompt() };
+  };
+
+  test("offers a restart into an update published while the app ran", async () => {
+    const sources = recordingSources();
+    const { atLaunch, afterReturn } = await promptAfterReturn(
+      sources,
+      "android"
+    );
+    expect(atLaunch).toBeUndefined();
+    expect(afterReturn).toEqual({ kind: "ota-update", updateId: "update-a" });
+    expect(sources.calls.toSorted()).toEqual([
+      "ota-check",
+      "ota-fetch",
+      "release-lookup",
+      "release-lookup",
+    ]);
+  });
+
+  test("offers a restart into a rollback published while the app ran", async () => {
+    const sources = recordingSources({
+      answer: async () => rollBackCheckResult,
+      download: async () => rollBackFetchResult,
+    });
+    const { atLaunch, afterReturn } = await promptAfterReturn(sources, "ios");
+    expect(atLaunch).toBeUndefined();
+    expect(afterReturn).toEqual({ kind: "roll-back" });
+    expect(sources.calls).toEqual(["ota-check", "ota-fetch"]);
   });
 });
