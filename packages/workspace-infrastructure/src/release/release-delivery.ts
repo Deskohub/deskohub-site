@@ -264,10 +264,15 @@ const requireDeclarableTemplate = Effect.fn(
   const live = yield* readLiveTemplate;
   const liveSpecFingerprint =
     live?.revision === declared.revision ? live.specFingerprint : undefined;
-  // The spec the name stands for: the one it was minted for, else the one
-  // Cloud Run created it with. Undefined while an own name is unused.
-  const decidedFor = declared.specFingerprint ?? liveSpecFingerprint;
-  if (decidedFor !== undefined && decidedFor !== declaredSpecFingerprint) {
+  // The name must stand for the current spec both in the record (the spec
+  // it was minted for) and on Cloud Run (the spec it was created with).
+  const mintedForOtherSpec =
+    declared.specFingerprint !== null &&
+    declared.specFingerprint !== declaredSpecFingerprint;
+  const createdFromOtherSpec =
+    liveSpecFingerprint !== undefined &&
+    liveSpecFingerprint !== declaredSpecFingerprint;
+  if (mintedForOtherSpec || createdFromOtherSpec) {
     return yield* new ReleaseTemplateSpecChanged({
       revision: declared.revision,
       liveSpecFingerprint: liveSpecFingerprint ?? null,

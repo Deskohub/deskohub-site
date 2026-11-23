@@ -639,4 +639,29 @@ describe("declared web template", () => {
       restaged.releaseId
     );
   });
+
+  test("restore never keeps a minted name the record decided for another spec", () => {
+    const settled = twoReleases();
+    const materialized = settled.materialized;
+    if (materialized === null) {
+      throw new Error("expected a materialized template");
+    }
+    const disagreeing: ReleaseRecord = {
+      ...settled,
+      materialized: {
+        ...materialized,
+        template: {
+          revision: "workspace-web-r4-bbbbbbb-t5",
+          specFingerprint: "spec-old",
+        },
+      },
+    };
+    // Cloud Run runs the name from the current spec; the record says otherwise.
+    const live = templateOf(disagreeing.materialized);
+    const pending = restoreFirst(disagreeing, live);
+    expect(pending.materialized?.template).toEqual({
+      revision: `workspace-web-r1-aaaaaaa-t${pending.generation}`,
+      specFingerprint: "spec-a",
+    });
+  });
 });

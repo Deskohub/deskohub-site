@@ -1592,6 +1592,74 @@ describe("declared web template", () => {
       webTemplateSpecFingerprint(changed, digestA)
     );
   });
+
+  test("a name the record and Cloud Run tie to different specs is never re-declared", async () => {
+    const changed: WorkspaceStackConfig = {
+      ...sandboxConfig,
+      capacity: {
+        ...sandboxConfig.capacity,
+        webMaxInstances: sandboxConfig.capacity.webMaxInstances + 1,
+      },
+    };
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, applies, declaredTemplates, provide } =
+          yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        yield* provide(deliver(shaB, digestB));
+        // The restore decides its name for the sandbox spec, but the
+        // template lands from another spec and the workers never show up.
+        faults.failedTemplate = true;
+        faults.missingWorkerReads = 100;
+        faults.config = changed;
+        yield* provide(
+          restoreFirst((yield* store.read).record.generation).pipe(Effect.exit)
+        );
+        faults.failedTemplate = false;
+        faults.missingWorkerReads = 0;
+        const disagreeing = (yield* store.read).record;
+        const appliesBefore = applies.length;
+        // Recovery under the spec the record names: Cloud Run disagrees.
+        faults.config = undefined;
+        const recovered = yield* provide(
+          recoverRelease(sandboxConfig, policy).pipe(Effect.exit)
+        );
+        const newApplies = applies.length - appliesBefore;
+        // A restore under the live spec: the record disagrees, so it mints.
+        faults.config = changed;
+        const served = yield* provide(
+          restoreRelease(
+            changed,
+            {
+              releaseId: ReleaseId.make("r1-aaaaaaa"),
+              expectedGeneration: (yield* store.read).record.generation,
+            },
+            policy
+          )
+        );
+        return {
+          disagreeing,
+          recovered,
+          newApplies,
+          served,
+          declaredTemplates,
+          record: (yield* store.read).record,
+        };
+      })
+    );
+    const minted = "workspace-web-r1-aaaaaaa-t7";
+    expect(result.disagreeing.materialized?.template?.revision).toBe(minted);
+    expect(errorOf(result.recovered)).toMatchObject({
+      _tag: "ReleaseTemplateSpecChanged",
+      revision: minted,
+    });
+    expect(result.newApplies).toBe(0);
+    expect(result.served.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
+    expect(result.record.materialized?.template?.revision).not.toBe(minted);
+    expect(
+      result.declaredTemplates.filter(({ revision }) => revision === minted)
+    ).toHaveLength(1);
+  });
 });
 
 describe("worker readback during a rollout", () => {

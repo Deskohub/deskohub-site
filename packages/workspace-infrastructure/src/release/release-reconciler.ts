@@ -107,8 +107,9 @@ export interface TemplateInput {
 
 /**
  * The live template is this deployment's, under the name the record
- * declares it, ready, and declared from the spec the stack declares now:
- * re-declaring it changes nothing.
+ * declares it, ready, and declared from the spec the stack declares now,
+ * which is also the spec a minted name was decided for: re-declaring it
+ * changes nothing.
  */
 const keepsTemplate = (
   input: TemplateInput,
@@ -120,7 +121,10 @@ const keepsTemplate = (
   input.liveTemplate.revision === templateRevisionOf(deployment) &&
   input.liveTemplate.imageDigest === deployment.imageDigest &&
   input.liveTemplate.specFingerprint ===
-    input.specFingerprintOf(deployment.imageDigest);
+    input.specFingerprintOf(deployment.imageDigest) &&
+  (deployment.template === undefined ||
+    deployment.template.specFingerprint ===
+      input.specFingerprintOf(deployment.imageDigest));
 
 /**
  * A template for `target` under a name of the record's own, for when the
