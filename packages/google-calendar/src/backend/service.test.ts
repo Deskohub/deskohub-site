@@ -17,7 +17,12 @@ import {
 type CalendarListQuery = {
   readonly calendarId: string;
   readonly pageToken?: string;
-  readonly [key: string]: unknown;
+  readonly maxResults?: number;
+  readonly orderBy?: string;
+  readonly singleEvents?: boolean;
+  readonly timeMax?: string;
+  readonly timeMin?: string;
+  readonly timeZone?: string;
 };
 
 type CalendarListResponse = {
@@ -28,6 +33,11 @@ type CalendarListResponse = {
 };
 
 type RequestOptions = { readonly signal?: AbortSignal };
+type JwtOptions = {
+  readonly email: string;
+  readonly key: string;
+  readonly scopes: readonly string[];
+};
 
 type ListEventsImplementation = (
   params: CalendarListQuery,
@@ -53,12 +63,12 @@ let listEvents = mock<ListEventsImplementation>(async () => ({
   data: { items: [] },
 }));
 let watchEvents = mock<WatchEventsImplementation>(async () => ({ data: {} }));
-const jwtCalls: unknown[] = [];
+const jwtCalls: JwtOptions[] = [];
 
 mock.module("@googleapis/calendar", () => ({
   auth: {
     JWT: class {
-      constructor(options: unknown) {
+      constructor(options: JwtOptions) {
         jwtCalls.push(options);
       }
     },

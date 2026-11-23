@@ -1,4 +1,4 @@
-import { BigDecimal, Option } from "effect";
+import { BigDecimal, Option, Predicate } from "effect";
 
 /**
  * Formats a currency amount for display. Whole amounts render without minor
@@ -46,7 +46,7 @@ const toFormattableAmount = (
   readonly value: number | Intl.StringNumericLiteral;
   readonly whole: boolean;
 } => {
-  if (typeof amount === "number") {
+  if (Predicate.isNumber(amount)) {
     return { value: amount, whole: Number.isInteger(amount) };
   }
   return Option.match(BigDecimal.fromString(amount), {
@@ -55,15 +55,28 @@ const toFormattableAmount = (
       // BigDecimal has no negative zero, so the sign comes from the text.
       const sign =
         BigDecimal.isZero(decimal) && amount.startsWith("-") ? "-" : "";
+      const exactText = `${sign}${decimal.value}e${-decimal.scale}`;
+      if (!isStringNumericLiteral(exactText)) {
+        return toFormattableAmount(Number(amount));
+      }
       return {
         // Intl formats a numeric string as an exact decimal, not as a double.
-        value:
-          `${sign}${decimal.value}e${-decimal.scale}` as Intl.StringNumericLiteral,
+        value: exactText,
         whole: BigDecimal.isInteger(decimal),
       };
     },
   });
 };
+
+/**
+ * Whether text is a finite numeric string, which TypeScript's
+ * `Intl.StringNumericLiteral` admits. Text that overflows to infinity, such as
+ * "1e309", is not.
+ */
+const isStringNumericLiteral = (
+  text: string
+): text is Intl.StringNumericLiteral =>
+  text.trim() !== "" && Number.isFinite(Number(text));
 
 /**
  * Names a currency in the reader's language, such as "česká koruna" for CZK in
@@ -77,7 +90,7 @@ export function formatCurrencyName({
   readonly currency: string;
   readonly locale: string;
 }): string {
-  if (typeof Intl.DisplayNames !== "function") {
+  if (!Predicate.isFunction(Intl.DisplayNames)) {
     return currency;
   }
   return (
