@@ -456,9 +456,9 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
   /**
    * The job with only the events that qualify for the trigger's payment
    * and stay (D1), as intake would take them in, and the stay visits it
-   * read. Payment comes first, so unpaid events read no visits. With
-   * `stayFrom: "tiers"` the stay is judged only as far as the stored tiers
-   * tell, reading no visits. The 1,000 events stay fixed across units, so
+   * read. Payment, then the stored tiers, come first, so events they rule
+   * out read no visits. With `stayFrom: "tiers"` the stay is judged only as
+   * far as the stored tiers tell, reading no visits. The 1,000 events stay fixed across units, so
    * payment is judged per unit, as it is now, like the stay.
    */
   const qualifiedJob = (job: PreviewJob, stayFrom: "visits" | "tiers") => {
@@ -486,28 +486,32 @@ export const makePreviewUnitHandler = Effect.gen(function* () {
           isPaidAsTriggerRequires(paid, workspaceReservationId)
         )
       ),
-      Effect.bind("stayVisits", ({ paidEvents }) =>
-        loadStayVisits(
-          stayFrom === "visits" ? stayReservations(paidEvents) : []
-        ).pipe(Effect.provideContext(context))
-      ),
       Effect.bind("tiers", ({ paidEvents }) =>
-        loadStayTiers(
-          stayFrom === "tiers" ? stayReservations(paidEvents) : []
+        loadStayTiers(stayReservations(paidEvents)).pipe(
+          Effect.provideContext(context)
+        )
+      ),
+      // The stored tiers rule out what they can before any visit is read.
+      Effect.let("tierEvents", ({ paidEvents, tiers }) =>
+        paidEvents.filter((event) =>
+          mayBeOfTriggerStay(stay, Option.getOrUndefined(stayOf(tiers, event)))
+        )
+      ),
+      Effect.bind("stayVisits", ({ tierEvents }) =>
+        loadStayVisits(
+          stayFrom === "visits" ? stayReservations(tierEvents) : []
         ).pipe(Effect.provideContext(context))
       ),
-      Effect.map(({ paidEvents, stayVisits, tiers }) => ({
+      Effect.map(({ tierEvents, stayVisits }) => ({
         stayVisits,
         job: {
           ...job,
-          events: paidEvents.filter((event) =>
+          events:
             stayFrom === "visits"
-              ? isOfTriggerStay(stay, stayOf(stayVisits, event))
-              : mayBeOfTriggerStay(
-                  stay,
-                  Option.getOrUndefined(stayOf(tiers, event))
+              ? tierEvents.filter((event) =>
+                  isOfTriggerStay(stay, stayOf(stayVisits, event))
                 )
-          ),
+              : tierEvents,
         },
       }))
     );

@@ -166,6 +166,9 @@ const dotyposState = {
   failNextCustomerPage: false,
   customerPageCalls: [] as number[],
   reservationReads: 0,
+  /** Fails every reservation lookup by id that asks for any id. */
+  failReservationLookups: false,
+  reservationLookups: [] as number[],
 };
 const dotypos = DotyposServiceMock({
   getCustomersByIds: (ids) => {
@@ -193,6 +196,17 @@ const dotypos = DotyposServiceMock({
   },
   getReservationsByIds: (ids, readOptions) => {
     dotyposState.reservationReads += 1;
+    const asked = [...ids].length;
+    dotyposState.reservationLookups.push(asked);
+    if (dotyposState.failReservationLookups && asked > 0) {
+      return Effect.fail(
+        new DotyposUnavailable({
+          operation: "getReservationsByIds",
+          reason: "server",
+          httpStatus: 503,
+        })
+      );
+    }
     return makeInMemoryDotypos({
       reservations: dotyposState.reservations,
     }).service.getReservationsByIds(ids, readOptions);
@@ -1565,6 +1579,91 @@ describe.skipIf(!testDatabase)(
       expect(outcomes.has(olaEvent!)).toBe(false);
       expect(outcomes.has(quinEvent!)).toBe(false);
       expect(outcomes.get(piaEvent!)).toBe("unavailable");
+    });
+
+    test("a stay its stored tiers rule out reads no visits, so Dotypos can't stall the replay", async () => {
+      const [rita, sven] = ["rita", "sven"].map(customerId) as [
+        DotyposCustomerId,
+        DotyposCustomerId,
+      ];
+      const finishedAt = ago({ hours: 24 * 2 });
+      const labels = { "rita-open-space": rita, "sven-open-space": sven };
+      await seedReservations(
+        Object.entries(labels).map(([label, customer]) => ({
+          label,
+          customer,
+          startsAt: finishedAt.subtract({ hours: 24 }),
+          endsAt: finishedAt,
+        }))
+      );
+      await query(
+        db
+          .update(workspaceReservations)
+          .set({
+            reservationDetails: {
+              kind: "cowork",
+              entryTier: "open-space",
+              coffee: false,
+            },
+          })
+          .where(
+            inArray(
+              workspaceReservations.id,
+              Object.keys(labels).map(reservationIdOf)
+            )
+          )
+      );
+      const events = await seedEvents(
+        Object.entries(labels).map(([reservation, customer]) => ({
+          kind: "reservation-finished" as const,
+          reservation,
+          customer,
+          occurredAt: finishedAt,
+        }))
+      );
+      const started = await start(
+        await seedAutomation({
+          flow: decodeFlow({
+            trigger: {
+              _tag: "ReservationFinished",
+              // Only this test's Open Space visits are candidates.
+              product: {
+                family: "cowork",
+                properties: [
+                  {
+                    property: "tier",
+                    operator: "anyOf",
+                    value: ["open-space"],
+                  },
+                ],
+              },
+              stay: "overnight",
+            },
+            steps: [send],
+          }),
+        })
+      );
+
+      dotyposState.reservationLookups = [];
+      dotyposState.failReservationLookups = true;
+      try {
+        await processAll(started.previewId);
+      } finally {
+        dotyposState.failReservationLookups = false;
+      }
+
+      expect(
+        dotyposState.reservationLookups.filter((asked) => asked > 0)
+      ).toEqual([]);
+      expect(
+        (await unitsOf(started.previewId)).map(({ status }) => status)
+      ).toEqual(["done"]);
+      const rows = await rowsOf(started.previewId);
+      expect(
+        rows.filter(({ customerEventId }) =>
+          events.includes(customerEventId ?? "")
+        )
+      ).toEqual([]);
     });
 
     test("a reschedule in Dotypos changes the next preview without local writes", async () => {
