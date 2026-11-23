@@ -8,6 +8,7 @@ import {
 import type { Point } from "./geometry";
 import {
   type LoadingDieMotion,
+  type LottieDocument,
   loadingDieAnimation,
   loadingDieBox,
   loadingDieBrandGradient,
@@ -258,5 +259,25 @@ describe("loadingDieTiming", () => {
     const playback = { ...loadingDieTiming };
     playback.frameCount = playback.frameCount / 2;
     expect(playback.frameCount).toBe(loadingDieTiming.frameCount / 2);
+  });
+});
+
+describe("LottieDocument", () => {
+  test("takes any Lottie document with its header fields, extra fields included", () => {
+    const document: LottieDocument = {
+      w: 1,
+      h: 1,
+      fr: 30,
+      ip: 0,
+      op: 60,
+      markers: [],
+    };
+    expect(document.markers).toEqual([]);
+  });
+
+  test("reads a loading die document's fields by name", () => {
+    const field: string = "fr";
+    const document: LottieDocument = brandDocument("tumble");
+    expect(document[field]).toBe(loadingDieTiming.framesPerSecond);
   });
 });

@@ -6,6 +6,7 @@
  * player or draw sampled frames themselves.
  */
 
+import type { Schema } from "effect";
 import {
   faceIsDrawn,
   facePathData,
@@ -22,7 +23,6 @@ import {
 } from "./lottie";
 import type { LoadingDieMotion } from "./timing";
 
-export type { LoadingDieLottie as LottieDocument } from "./lottie";
 export {
   type LoadingDieMotion,
   type LoadingDieTiming,
@@ -33,6 +33,16 @@ export {
 export type LoadingDieFill =
   | { readonly kind: "brand" }
   | { readonly kind: "solid"; readonly color: `#${string}` };
+
+/**
+ * A Lottie (Bodymovin) document: its header fields, and any other top-level
+ * field as JSON. `loadingDieAnimation` also returns the die's own layers.
+ */
+export type LottieDocument = Pick<
+  LoadingDieLottie,
+  "w" | "h" | "fr" | "ip" | "op"
+> &
+  Readonly<Record<string, Schema.Json | LoadingDieLottie["layers"]>>;
 
 /** Size of a motion's document and of the die at rest inside it, in document units. */
 export interface LoadingDieBox {
@@ -127,7 +137,7 @@ const animations = new Map<string, LoadingDieLottie>();
 export function loadingDieAnimation(options: {
   readonly motion: LoadingDieMotion;
   readonly fill: LoadingDieFill;
-}): LoadingDieLottie {
+}): LottieDocument & LoadingDieLottie {
   const { motion, fill } = options;
   if (fill.kind === "brand") {
     return committedDocument(motion);
