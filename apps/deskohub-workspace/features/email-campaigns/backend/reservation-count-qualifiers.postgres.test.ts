@@ -57,7 +57,12 @@ type Funding =
   | {
       readonly _tag: "Order";
       readonly amount: number;
-      readonly refunded?: true;
+      /** A refund done (`refunded`) or owed (`required`, with its target). */
+      readonly refund?: {
+        readonly state: "refunded" | "required";
+        readonly refunded: number;
+        readonly target?: number;
+      };
     }
   | { readonly _tag: "EntryPack"; readonly amount: number }
   | { readonly _tag: "Unlimited" }
@@ -133,7 +138,44 @@ const visits = [
     tier: "open-space",
     date: "2026-10-12",
     interval: "day",
-    funding: { _tag: "Order", amount: 45_000, refunded: true },
+    funding: {
+      _tag: "Order",
+      amount: 45_000,
+      refund: { state: "refunded", refunded: 45_000 },
+    },
+  },
+  {
+    label: "full-refund-owed",
+    tier: "open-space",
+    date: "2026-10-13",
+    interval: "day",
+    funding: {
+      _tag: "Order",
+      amount: 45_000,
+      refund: { state: "required", refunded: 10_000, target: 45_000 },
+    },
+  },
+  {
+    label: "partial-refund-owed",
+    tier: "open-space",
+    date: "2026-10-14",
+    interval: "day",
+    funding: {
+      _tag: "Order",
+      amount: 45_000,
+      refund: { state: "required", refunded: 10_000, target: 20_000 },
+    },
+  },
+  {
+    label: "partially-refunded",
+    tier: "open-space",
+    date: "2026-10-15",
+    interval: "day",
+    funding: {
+      _tag: "Order",
+      amount: 45_000,
+      refund: { state: "refunded", refunded: 10_000 },
+    },
   },
 ] as const satisfies readonly Visit[];
 
@@ -230,21 +272,23 @@ describe.skipIf(!testDatabase)(
     ) => {
       if (funding._tag === "Unlimited" || funding._tag === "Unpaid") return;
       const attempt = crypto.randomUUID();
-      const refunded = funding._tag === "Order" && funding.refunded;
+      const refund = funding._tag === "Order" ? funding.refund : undefined;
       await pool.query(
         `insert into payment_attempts (id, workspace_reservation_id, order_id,
            provider, state, provider_order_id, amount_value, amount_exponent,
-           currency, refund_state, refunded_amount_value, refunded_at)
-         values ($1, $2, $2, $3, 'paid', $4, $5, 2, 'CZK', $6, $7, $8)`,
+           currency, refund_state, refunded_amount_value, refunded_at,
+           refund_target_value)
+         values ($1, $2, $2, $3, 'paid', $4, $5, 2, 'CZK', $6, $7, $8, $9)`,
         [
           attempt,
           reservationId,
           funding.amount === 0 ? "internal" : "nexi",
           funding.amount === 0 ? null : attempt,
           funding.amount,
-          refunded ? "refunded" : "not_required",
-          refunded ? funding.amount : null,
-          refunded ? "2026-10-13T10:00:00Z" : null,
+          refund?.state ?? "not_required",
+          refund?.refunded ?? null,
+          refund ? "2026-10-16T10:00:00Z" : null,
+          refund?.target ?? null,
         ]
       );
       await pool.query(
@@ -489,7 +533,14 @@ describe.skipIf(!testDatabase)(
               payment: "individual",
             })
           )
-        ).toEqual(of("overnight-desk", "day-desk"));
+        ).toEqual(
+          of(
+            "overnight-desk",
+            "day-desk",
+            "partial-refund-owed",
+            "partially-refunded"
+          )
+        );
       }
     });
 
@@ -515,7 +566,7 @@ describe.skipIf(!testDatabase)(
             payment: "individual",
           })
         )
-      ).toEqual(of("day-desk"));
+      ).toEqual(of("day-desk", "partial-refund-owed", "partially-refunded"));
       expect(
         await automationMatches(
           reservationCount({

@@ -29,6 +29,7 @@ import {
   type WorkspaceDatabaseClient,
   workspaceStatementConcurrency,
 } from "@/db/database.service";
+import { equalsAny } from "@/db/equals-any";
 import {
   customerAccounts,
   customerMarketingConsents,
@@ -182,10 +183,12 @@ const reservationSelection = ({
     status &&
       asOf &&
       sql`${workspaceReservations.createdAt} <= ${temporalInstantToDate(asOf)}`,
+    // One array parameter: a stay count at any time can list every visit.
     dotyposReservationIds &&
-      inArray(workspaceReservations.dotyposReservationId, [
-        ...dotyposReservationIds,
-      ])
+      equalsAny(
+        workspaceReservations.dotyposReservationId,
+        dotyposReservationIds
+      )
   );
 
 export interface ICampaignCandidateRepository {
