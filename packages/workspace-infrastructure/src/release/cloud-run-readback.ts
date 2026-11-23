@@ -64,7 +64,12 @@ const CloudRunService = Schema.Struct({
   ),
   annotations: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   template: Schema.optional(
-    Schema.Struct({ revision: Schema.optional(Schema.String) })
+    Schema.Struct({
+      revision: Schema.optional(Schema.String),
+      containers: Schema.optional(
+        Schema.Array(Schema.Struct({ image: Schema.optional(Schema.String) }))
+      ),
+    })
   ),
 });
 
@@ -91,6 +96,12 @@ const CloudRunRevision = Schema.Struct({
 type CloudRunRevision = typeof CloudRunRevision.Type;
 
 const isImageDigest = Schema.is(ImageDigest);
+
+/** The digest an image reference pins after "@", or undefined for a tag. */
+const pinnedDigest = (image: string | undefined) => {
+  const digest = image?.slice(image.indexOf("@") + 1);
+  return image?.includes("@") && isImageDigest(digest) ? digest : undefined;
+};
 
 /**
  * The status of the serving container. A revision with one container and
@@ -286,6 +297,7 @@ export const makeCloudRunServiceReadback = Effect.fnUntraced(function* (
       revisionDigests,
       annotations: live.annotations ?? {},
       templateRevision: live.template?.revision,
+      templateImageDigest: pinnedDigest(live.template?.containers?.[0]?.image),
     } satisfies ObservedService;
   });
 

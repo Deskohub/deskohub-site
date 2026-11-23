@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import type * as Effect from "effect/Effect";
+import type * as Redacted from "effect/Redacted";
 import type { ImageDigest, WorkspaceWorkload } from "../config/stack-config";
 import type { ObservedService } from "../readback";
 
@@ -43,24 +44,41 @@ export class ReleaseServiceReadback extends Context.Service<
   }
 >()("@deskohub/workspace-infrastructure/ReleaseServiceReadback") {}
 
-/** The service apply did not finish; whether any of it landed is unknown. */
+/**
+ * One run of the stack under the writer lock. `deploy` changes resources;
+ * `plan` only previews them. A fenced run declares the release-owned
+ * services only from the record at exactly `generation`; a plain run
+ * (`generation` null) re-declares the current record.
+ */
+export interface StackApplyRequest {
+  readonly action: "deploy" | "plan";
+  readonly generation: number | null;
+  /** The writer's secret token; the stack refuses to run without it. */
+  readonly writer: Redacted.Redacted<string>;
+}
+
+/**
+ * The stack run did not finish. `not-started` means it failed before the
+ * apply process existed, so nothing changed; `unknown` means it may have
+ * changed resources before it failed.
+ */
 export class ReleaseServiceApplyFailed extends Data.TaggedError(
   "ReleaseServiceApplyFailed"
 )<{
-  readonly generation: number;
+  readonly generation: number | null;
+  readonly outcome: "not-started" | "unknown";
   readonly reason: string;
 }> {}
 
 /**
- * Applies the release-owned services declared from the release record at
- * exactly `generation`. The apply refuses a record at any other generation,
- * and applying the same generation again is idempotent.
+ * Runs the stack for one request. A fenced run refuses a record at any
+ * other generation, and applying the same generation again is idempotent.
  */
 export class ReleaseServiceApply extends Context.Service<
   ReleaseServiceApply,
   {
     readonly apply: (
-      generation: number
+      request: StackApplyRequest
     ) => Effect.Effect<void, ReleaseServiceApplyFailed>;
   }
 >()("@deskohub/workspace-infrastructure/ReleaseServiceApply") {}

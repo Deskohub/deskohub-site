@@ -18,6 +18,7 @@ import {
 import {
   emptyReleaseRecord,
   GitSha,
+  type ReleaseDeployment,
   type ReleaseId,
   ReleaseRecord,
 } from "./release-record";
@@ -34,6 +35,12 @@ const digestA = ImageDigest.make(`sha256:${"1".repeat(64)}`);
 const digestB = ImageDigest.make(`sha256:${"2".repeat(64)}`);
 const digestC = ImageDigest.make(`sha256:${"3".repeat(64)}`);
 const t0 = DateTime.makeUnsafe("2026-11-22T10:00:00Z");
+
+/** The live template Cloud Run reports once a deployment's template landed. */
+const templateOf = (deployment: ReleaseDeployment | null) =>
+  deployment === null
+    ? null
+    : { revision: deployment.revision, imageDigest: deployment.imageDigest };
 const later = (hours: number) =>
   DateTime.addDuration(t0, Duration.hours(hours));
 
@@ -58,6 +65,8 @@ const stageRelease = (
       sha,
       imageDigest: digest,
       origin: "cloud-run",
+      liveTemplate: null,
+      now: t0,
     })
   );
 
@@ -177,6 +186,8 @@ describe("release reconciler", () => {
           sha: shaB,
           imageDigest: digestB,
           origin: "cloud-run",
+          liveTemplate: null,
+          now: t0,
         })
       )
     ).toMatchObject({
@@ -188,7 +199,7 @@ describe("release reconciler", () => {
         restore(settled, {
           expectedGeneration: 1,
           releaseId: "r1-aaaaaaa" as ReleaseId,
-          liveTemplateRevision: settled.materialized?.revision ?? null,
+          liveTemplate: templateOf(settled.materialized),
           now: t0,
         })
       )
@@ -224,7 +235,7 @@ describe("release reconciler", () => {
       restore(second.settled, {
         expectedGeneration: second.settled.generation,
         releaseId: first.releaseId,
-        liveTemplateRevision: second.settled.materialized?.revision ?? null,
+        liveTemplate: templateOf(second.settled.materialized),
         now: later(2),
       })
     );
@@ -269,7 +280,7 @@ describe("release reconciler", () => {
         restore(third.settled, {
           expectedGeneration: third.settled.generation,
           releaseId: first.releaseId,
-          liveTemplateRevision: third.settled.materialized?.revision ?? null,
+          liveTemplate: templateOf(third.settled.materialized),
           now: later(12.5),
         })
       ).pendingApply?.target.releaseId
@@ -279,7 +290,7 @@ describe("release reconciler", () => {
         restore(third.settled, {
           expectedGeneration: third.settled.generation,
           releaseId: first.releaseId,
-          liveTemplateRevision: third.settled.materialized?.revision ?? null,
+          liveTemplate: templateOf(third.settled.materialized),
           now: later(13),
         })
       )
@@ -313,6 +324,8 @@ describe("release reconciler", () => {
         sha: shaC,
         imageDigest: digestC,
         origin: "cloud-run",
+        liveTemplate: null,
+        now: t0,
       }),
     ];
     for (const blocked of blockedSteps) {
@@ -390,6 +403,8 @@ describe("release reconciler", () => {
                 sha,
                 imageDigest: digestA,
                 origin: "cloud-run",
+                liveTemplate: null,
+                now: t0,
               })
             ).pipe(
               Effect.map(({ record: next, releaseId }) => ({
@@ -426,7 +441,10 @@ describe("restore template", () => {
           expectedGeneration: second.settled.generation,
           releaseId: first.releaseId,
           now: later(2),
-          liveTemplateRevision: "workspace-web-r9-fffffff",
+          liveTemplate: {
+            revision: "workspace-web-r9-fffffff",
+            imageDigest: digestA,
+          },
         })
       )
     ).toMatchObject({

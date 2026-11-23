@@ -10,6 +10,8 @@ import { isOutput } from "alchemy/Output";
 import { Stack } from "alchemy/Stack";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import packageJson from "../package.json";
 import { ImageDigest } from "./config/stack-config";
 import {
@@ -20,11 +22,21 @@ import {
 import { ReleaseServiceReadback } from "./release/release-platform";
 import { workersServing } from "./release/release-readback.test-utils";
 import { promote, settleApply, stage } from "./release/release-reconciler";
-import { emptyReleaseRecord, GitSha } from "./release/release-record";
+import {
+  emptyReleaseRecord,
+  GitSha,
+  type ReleaseRecord,
+} from "./release/release-record";
 import {
   makeInMemoryReleaseRecordStore,
   ReleaseRecordStore,
 } from "./release/release-record-store";
+import { requireStackWriter } from "./release/release-writer";
+import {
+  heldBy,
+  runAsHolder,
+  testWriterToken,
+} from "./release/release-writer.test-utils";
 import {
   alertPolicyDeclarations,
   artifactRepositoryProps,
@@ -96,6 +108,8 @@ const servingRecord = () => {
       sha: GitSha.make("a".repeat(40)),
       imageDigest: digest,
       origin: "cloud-run",
+      liveTemplate: null,
+      now,
     })
   );
   const pending = Effect.runSync(
@@ -244,12 +258,14 @@ describe("Alchemy beta.87 surface", () => {
 
   test("declares services only from the record at the fenced generation", async () => {
     const record = servingRecord();
-    const fromStore = (expectedGeneration: number | undefined) =>
+    const fromStore = (expectedGeneration: number | null) =>
       Effect.gen(function* () {
-        const store = yield* makeInMemoryReleaseRecordStore(record);
+        const store = yield* makeInMemoryReleaseRecordStore(
+          heldBy(record, expectedGeneration === null ? "deploy" : "deliver")
+        );
         return yield* declareRecordedWorkspaceServices(
           sandboxConfig,
-          expectedGeneration
+          runAsHolder(expectedGeneration)
         ).pipe(Effect.provideService(ReleaseRecordStore, store));
       });
 
@@ -258,7 +274,7 @@ describe("Alchemy beta.87 surface", () => {
     expect(String(stale.exit)).toContain("StaleReleaseGeneration");
     expect(stale.resources).toEqual({});
 
-    for (const fenced of [record.generation, undefined]) {
+    for (const fenced of [record.generation, null]) {
       const applied = await evaluate(fromStore(fenced));
       expect(applied.exit._tag).toBe("Success");
       expect(
@@ -296,11 +312,12 @@ describe("Alchemy beta.87 surface", () => {
     const declare = (live: boolean) =>
       evaluate(
         Effect.gen(function* () {
-          const store =
-            yield* makeInMemoryReleaseRecordStore(emptyReleaseRecord);
+          const store = yield* makeInMemoryReleaseRecordStore(
+            heldBy(emptyReleaseRecord, "deploy")
+          );
           return yield* declareRecordedWorkspaceServices(
             sandboxConfig,
-            undefined
+            runAsHolder(null)
           ).pipe(
             Effect.provideService(ReleaseRecordStore, store),
             Effect.provideService(ReleaseServiceReadback, liveWeb(live))
@@ -319,22 +336,105 @@ describe("Alchemy beta.87 surface", () => {
   });
 
   test("declares no preview services and refuses a fenced preview apply", async () => {
-    const preview = (expectedGeneration: number | undefined) =>
+    const preview = (expectedGeneration: number | null) =>
       evaluate(
         Effect.gen(function* () {
           const store = yield* makeInMemoryReleaseRecordStore(servingRecord());
-          return yield* declareRecordedWorkspaceServices(
-            previewConfig,
-            expectedGeneration
-          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+          return yield* declareRecordedWorkspaceServices(previewConfig, {
+            writer: Option.none(),
+            generation: expectedGeneration,
+          }).pipe(Effect.provideService(ReleaseRecordStore, store));
         })
       );
-    const plain = await preview(undefined);
+    const plain = await preview(null);
     expect(plain.exit._tag).toBe("Success");
     expect(plain.resources).toEqual({});
     const fenced = await preview(2);
     expect(fenced.exit._tag).toBe("Failure");
     expect(fenced.resources).toEqual({});
+  });
+
+  test("the stack refuses a run without the held lock's token", async () => {
+    const record = heldBy(servingRecord(), "deploy");
+    const check = (
+      config: typeof sandboxConfig,
+      writer: Option.Option<Redacted.Redacted<string>>
+    ) =>
+      Effect.runPromiseExit(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(record);
+          return yield* requireStackWriter(config, writer).pipe(
+            Effect.provideService(ReleaseRecordStore, store)
+          );
+        })
+      );
+    expect(String(await check(sandboxConfig, Option.none()))).toContain(
+      "ReleaseWriterRequired"
+    );
+    expect(
+      String(await check(sandboxConfig, Option.some(Redacted.make("other"))))
+    ).toContain("ReleaseWriterLost");
+    expect(
+      (await check(sandboxConfig, Option.some(testWriterToken)))._tag
+    ).toBe("Success");
+    // Preview needs no lock and never reads the record.
+    const preview = await Effect.runPromiseExit(
+      requireStackWriter(previewConfig, Option.none()).pipe(
+        Effect.provideService(
+          ReleaseRecordStore,
+          ReleaseRecordStore.of({
+            read: Effect.die("preview read the record"),
+            write: () => Effect.die("preview wrote the record"),
+          })
+        )
+      )
+    );
+    expect(preview._tag).toBe("Success");
+  });
+
+  test("the lock's operation decides whether the stack run is fenced", async () => {
+    const record = servingRecord();
+    const declare = (
+      operation: "deploy" | "deliver",
+      generation: number | null,
+      stored: ReleaseRecord = record
+    ) =>
+      evaluate(
+        Effect.gen(function* () {
+          const store = yield* makeInMemoryReleaseRecordStore(
+            heldBy(stored, operation)
+          );
+          return yield* declareRecordedWorkspaceServices(
+            sandboxConfig,
+            runAsHolder(generation)
+          ).pipe(Effect.provideService(ReleaseRecordStore, store));
+        })
+      );
+    // An inherited generation never turns a plain deploy into a fenced one.
+    const inherited = await declare("deploy", record.generation);
+    expect(String(inherited.exit)).toContain("ReleaseWriterModeMismatch");
+    expect(inherited.resources).toEqual({});
+    const unfenced = await declare("deliver", null);
+    expect(String(unfenced.exit)).toContain("ReleaseWriterModeMismatch");
+    expect(unfenced.resources).toEqual({});
+    // A plain deploy leaves a pending traffic change to recover or restore.
+    const active = record.active;
+    if (active === null) {
+      throw new Error("expected a serving release");
+    }
+    const pending = {
+      ...record,
+      pendingApply: {
+        operation: "restore" as const,
+        target: active,
+        trafficGeneration: record.trafficGeneration + 1,
+        startedAt: "2026-11-22T10:00:00Z",
+      },
+    };
+    expect(pending.pendingApply).not.toBeNull();
+    const plainOverPending = await declare("deploy", null, pending);
+    expect(String(plainOverPending.exit)).toContain("ReleaseApplyPending");
+    expect(plainOverPending.resources).toEqual({});
   });
 
   test("plans private workers by digest with distinct audiences", () => {
@@ -390,6 +490,8 @@ describe("Alchemy beta.87 surface", () => {
         sha: GitSha.make("a".repeat(40)),
         imageDigest: digest,
         origin: "cloud-run",
+        liveTemplate: null,
+        now,
       })
     );
     const pending = Effect.runSync(

@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -7,6 +8,7 @@ import type { WorkspaceStackConfig } from "../config/stack-config";
 import {
   ReleaseServiceApply,
   ReleaseServiceApplyFailed,
+  type StackApplyRequest,
 } from "./release-platform";
 
 /**
@@ -16,31 +18,45 @@ import {
  */
 export const releaseApplyGenerationVariable = "WORKSPACE_RELEASE_GENERATION";
 
+/**
+ * The variable that carries the writer lock's secret token to the stack.
+ * Every run of a stage that serves releases refuses without the token of
+ * the lock the release record holds.
+ */
+export const releaseWriterVariable = "WORKSPACE_RELEASE_WRITER";
+
 const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
 
+/** The Alchemy CLI this package installs, never one resolved at run time. */
+const alchemyCli = join(packageRoot, "node_modules", ".bin", "alchemy");
+
 /**
- * `alchemy deploy` of this package's stack for the config's stage, fenced
- * to one release generation. Output streams to the caller's console.
+ * `alchemy deploy` or `alchemy plan` of this package's stack for the
+ * config's stage. The child gets the writer token and exactly the fence the
+ * request names: an inherited generation never turns a plain run fenced.
+ * Output streams to the caller's console.
  */
-export const alchemyDeployCommand = (
+export const alchemyStackCommand = (
   config: WorkspaceStackConfig,
-  generation: number
+  request: StackApplyRequest
 ) =>
   ChildProcess.make(
-    "bun",
+    alchemyCli,
     [
-      "x",
-      "alchemy",
-      "deploy",
+      request.action,
       "alchemy.run.ts",
       "--stage",
       config.stage,
-      "--yes",
+      ...(request.action === "deploy" ? ["--yes"] : []),
       "--no-input",
     ],
     {
       cwd: packageRoot,
-      env: { [releaseApplyGenerationVariable]: String(generation) },
+      env: {
+        [releaseWriterVariable]: request.writer,
+        [releaseApplyGenerationVariable]:
+          request.generation === null ? undefined : String(request.generation),
+      },
       extendEnv: true,
       stdin: "ignore",
       stdout: "inherit",
@@ -48,39 +64,49 @@ export const alchemyDeployCommand = (
     }
   );
 
-/** A service apply that runs one command per generation and checks its exit. */
+/**
+ * A stack apply that runs one command per request and checks its exit. A
+ * command that never started changed nothing; once the process exists,
+ * any failure leaves the outcome unknown.
+ */
 export const commandServiceApply = (
-  command: (generation: number) => ChildProcess.Command
+  command: (request: StackApplyRequest) => ChildProcess.Command
 ) =>
   Layer.effect(
     ReleaseServiceApply,
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner;
       return ReleaseServiceApply.of({
-        apply: (generation) =>
-          spawner.exitCode(command(generation)).pipe(
-            Effect.mapError(
-              (error) =>
-                new ReleaseServiceApplyFailed({
-                  generation,
-                  reason: error.message,
-                })
+        apply: (request) => {
+          const failed =
+            (outcome: ReleaseServiceApplyFailed["outcome"]) =>
+            (reason: string) =>
+              new ReleaseServiceApplyFailed({
+                generation: request.generation,
+                outcome,
+                reason,
+              });
+          return spawner.spawn(command(request)).pipe(
+            Effect.mapError((error) => failed("not-started")(error.message)),
+            Effect.flatMap((handle) =>
+              handle.exitCode.pipe(
+                Effect.mapError((error) => failed("unknown")(error.message))
+              )
             ),
             Effect.flatMap((exitCode) =>
               exitCode === 0
                 ? Effect.void
                 : Effect.fail(
-                    new ReleaseServiceApplyFailed({
-                      generation,
-                      reason: `The apply exited with code ${exitCode}`,
-                    })
+                    failed("unknown")(`The apply exited with code ${exitCode}`)
                   )
-            )
-          ),
+            ),
+            Effect.scoped
+          );
+        },
       });
     })
   );
 
-/** The live apply: a fenced `alchemy deploy` of the config's stage. */
+/** The live apply: `alchemy` runs of the config's stage. */
 export const alchemyServiceApply = (config: WorkspaceStackConfig) =>
-  commandServiceApply((generation) => alchemyDeployCommand(config, generation));
+  commandServiceApply((request) => alchemyStackCommand(config, request));

@@ -714,4 +714,34 @@ describe("Cloud Run service template readback", () => {
     );
     expect(observed?.templateRevision).toBe(candidateRevision);
   });
+
+  test("reports the digest the live template's image pins, never a tag", async () => {
+    const pinned = ImageDigest.make(`sha256:${"9".repeat(64)}`);
+    const read = (image: string) =>
+      success(
+        readback(
+          fakeCloudRun({
+            ...steadyRoutes,
+            [webPath]: {
+              status: 200,
+              body: {
+                ...steadyWeb,
+                template: {
+                  revision: candidateRevision,
+                  containers: [{ image }],
+                },
+              },
+            },
+          }),
+          (port) => port.service("web")
+        )
+      );
+    const registry = "europe-west1-docker.pkg.dev/project/workspace/web";
+    expect((await read(`${registry}@${pinned}`))?.templateImageDigest).toBe(
+      pinned
+    );
+    expect(
+      (await read(`${registry}:latest`))?.templateImageDigest
+    ).toBeUndefined();
+  });
 });

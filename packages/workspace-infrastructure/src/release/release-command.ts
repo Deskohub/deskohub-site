@@ -27,9 +27,11 @@ import {
   deliverRelease,
   recoverRelease,
   restoreRelease,
+  runStack,
 } from "./release-delivery";
 import { GitSha, ReleaseId } from "./release-record";
 import { ReleaseRecordStore } from "./release-record-store";
+import { describeStoredRecord, unlockReleaseWriter } from "./release-writer";
 
 /** The verified stack every release command acts on. */
 export class ReleaseStack extends Context.Service<
@@ -103,23 +105,58 @@ const recoverCommand = Command.make("recover", {}, () =>
   )
 );
 
+const stackCommand = (action: "deploy" | "plan", description: string) =>
+  Command.make(action, {}, () =>
+    Effect.gen(function* () {
+      yield* runStack(yield* ReleaseStack, action);
+    })
+  ).pipe(Command.withDescription(description));
+
+const unlockCommand = Command.make(
+  "unlock",
+  {
+    holder: Flag.String("holder").pipe(
+      Flag.withDescription(
+        "The fingerprint `status` shows for the lock. Confirm first that its run or process has ended."
+      )
+    ),
+  },
+  ({ holder }) =>
+    Effect.gen(function* () {
+      const cleared = yield* unlockReleaseWriter(yield* ReleaseStack, holder);
+      yield* printJson({ cleared });
+    })
+).pipe(
+  Command.withDescription(
+    "Clear the writer lock of a run that has stopped, once no service is rolling out"
+  )
+);
+
 const statusCommand = Command.make("status", {}, () =>
   Effect.gen(function* () {
     const store = yield* ReleaseRecordStore;
-    yield* printJson(yield* store.read);
+    yield* printJson(describeStoredRecord(yield* store.read));
   })
 ).pipe(
-  Command.withDescription("Print the release record and its store version")
+  Command.withDescription(
+    "Print the release record, its writer lock and its store version"
+  )
 );
 
 export const releaseCommand = Command.make("workspace-release").pipe(
   Command.withDescription(
-    "Operate Workspace releases through the generation-fenced release record"
+    "Operate Workspace releases and stack runs through the release record and its writer lock"
   ),
   Command.withSubcommands([
     deliverCommand,
     restoreCommand,
     recoverCommand,
+    stackCommand(
+      "deploy",
+      "Apply the whole stack, such as an infrastructure change, as the stage's only writer"
+    ),
+    stackCommand("plan", "Preview the whole stack as the stage's only writer"),
+    unlockCommand,
     statusCommand,
   ])
 );

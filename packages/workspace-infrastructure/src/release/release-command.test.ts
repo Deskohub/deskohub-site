@@ -10,20 +10,25 @@ import {
   ReleaseServiceApply,
   ReleaseServiceReadback,
 } from "./release-platform";
-import { emptyReleaseRecord } from "./release-record";
+import { emptyReleaseRecord, type ReleaseRecord } from "./release-record";
 import {
   makeInMemoryReleaseRecordStore,
   ReleaseRecordStore,
 } from "./release-record-store";
+import { describeStoredRecord, writerFingerprint } from "./release-writer";
+import { heldBy } from "./release-writer.test-utils";
 
 /**
  * Runs one command against an in-memory record and a project with no
  * services, whose apply and revision reads must stay untouched.
  */
-const runRelease = (args: ReadonlyArray<string>) =>
+const runRelease = (
+  args: ReadonlyArray<string>,
+  initial: ReleaseRecord = emptyReleaseRecord
+) =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const store = yield* makeInMemoryReleaseRecordStore(emptyReleaseRecord);
+      const store = yield* makeInMemoryReleaseRecordStore(initial);
       const platformCalls: Array<string> = [];
       const untouched = (name: string) =>
         Effect.sync(() => {
@@ -98,5 +103,35 @@ describe("workspace release command", () => {
     expect(Exit.isSuccess(result.exit)).toBe(true);
     // It only reads the services, to rule out a lost record.
     expect(result.platformCalls).not.toContain("apply");
+  });
+
+  test("unlock clears only the lock its fingerprint names", async () => {
+    const locked = heldBy(emptyReleaseRecord, "deliver");
+    const holder =
+      locked.writer === null
+        ? ""
+        : writerFingerprint(locked.writer.holderDigest);
+    const wrong = await runRelease(
+      ["unlock", "--holder", "000000000000"],
+      locked
+    );
+    expect(Exit.isFailure(wrong.exit)).toBe(true);
+    expect(wrong.stored.record).toEqual(locked);
+    const cleared = await runRelease(["unlock", "--holder", holder], locked);
+    expect(Exit.isSuccess(cleared.exit)).toBe(true);
+    expect(cleared.stored.record.writer).toBeNull();
+  });
+
+  test("status names the lock by fingerprint, never by digest", () => {
+    const locked = heldBy(emptyReleaseRecord, "deploy");
+    const printed = JSON.stringify(
+      describeStoredRecord({ record: locked, version: "4" })
+    );
+    expect(printed).not.toContain(locked.writer?.holderDigest ?? "<none>");
+    expect(printed).toContain(
+      locked.writer === null
+        ? "<none>"
+        : writerFingerprint(locked.writer.holderDigest)
+    );
   });
 });

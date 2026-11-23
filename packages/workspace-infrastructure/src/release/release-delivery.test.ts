@@ -1,33 +1,51 @@
 import { describe, expect, test } from "bun:test";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Redacted from "effect/Redacted";
 import { ImageDigest, type WorkspaceWorkload } from "../config/stack-config";
-import { sandboxConfig } from "../config/stack-config.test-utils";
+import {
+  previewConfig,
+  sandboxConfig,
+} from "../config/stack-config.test-utils";
 import type { ObservedService } from "../readback";
 import { webServiceProps } from "../resources/service-declarations";
 import { workloadUrl } from "../resources/workload-names";
+import { requireRecordCoversLiveService } from "./live-release-services";
 import {
   deliverRelease,
   type ReleaseReadbackPolicy,
   readFencedReleaseRecord,
   recoverRelease,
-  requireRecordCoversLiveService,
   restoreRelease,
+  runStack,
 } from "./release-delivery";
 import {
   ReleaseServiceApply,
   ReleaseServiceApplyFailed,
   ReleaseServiceReadback,
+  type StackApplyRequest,
 } from "./release-platform";
 import { stage } from "./release-reconciler";
-import { emptyReleaseRecord, GitSha, ReleaseId } from "./release-record";
+import {
+  emptyReleaseRecord,
+  GitSha,
+  ReleaseId,
+  type ReleaseRecord,
+} from "./release-record";
 import {
   makeInMemoryReleaseRecordStore,
   ReleaseRecordStore,
   runReleaseStep,
 } from "./release-record-store";
+import {
+  unlockReleaseWriter,
+  writerDigestOf,
+  writerFingerprint,
+} from "./release-writer";
 
 const shaA = GitSha.make("a".repeat(40));
 const shaB = GitSha.make("b".repeat(40));
@@ -56,6 +74,13 @@ interface FakeCloudRunOptions {
   >;
   /** The ingress Cloud Run reports for the tasks worker. */
   readonly tasksWorkerIngress?: string;
+  /**
+   * Runs inside each apply right after it read its record, while the
+   * writer still holds the lock: a test can pause the apply here.
+   */
+  readonly afterRecordRead?: (
+    request: StackApplyRequest
+  ) => Effect.Effect<void, never, ReleaseRecordStore>;
 }
 
 /** Platform misbehaviour a test can switch on between runs. */
@@ -66,6 +91,10 @@ interface CloudRunFaults {
   staleWorkers?: boolean;
   /** Each apply sends 10% of traffic to the newest tagged revision. */
   splitTraffic?: boolean;
+  /** Workers stay missing for this many reads after the next apply. */
+  missingWorkerReads?: number;
+  /** Services report a rollout in progress. */
+  reconciling?: boolean;
 }
 
 /**
@@ -76,32 +105,51 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
   Effect.gen(function* () {
     const store = yield* ReleaseRecordStore;
     const faults: CloudRunFaults = { resolvedDigest: options.resolvedDigest };
-    const applies: Array<number> = [];
+    const applies: Array<number | null> = [];
     const revisions = new Map<string, ImageDigest>();
     let web: ObservedService | null = null;
     let visible: ObservedService | null = null;
     let lagReads = 0;
     let workerDigest: ImageDigest | null = null;
+    let missingWorkerReads = 0;
 
     const apply = ReleaseServiceApply.of({
-      apply: (generation) =>
+      apply: (request) =>
         Effect.gen(function* () {
+          const { generation } = request;
           applies.push(generation);
-          const record = yield* readFencedReleaseRecord(generation).pipe(
-            Effect.provideService(ReleaseRecordStore, store),
-            Effect.mapError(
-              (error) =>
-                new ReleaseServiceApplyFailed({
-                  generation,
-                  reason: error._tag,
-                })
-            )
-          );
-          if (options.interruptApplyOf?.has(generation)) {
-            return yield* new ReleaseServiceApplyFailed({
+          const failed = (reason: string) =>
+            new ReleaseServiceApplyFailed({
               generation,
-              reason: "interrupted",
+              outcome: "unknown",
+              reason,
             });
+          // The stack's own checks: the held lock's token, then the fence.
+          const record = yield* (
+            generation === null
+              ? store.read.pipe(Effect.map(({ record }) => record))
+              : readFencedReleaseRecord(generation)
+          ).pipe(
+            Effect.provideService(ReleaseRecordStore, store),
+            Effect.mapError((error) => failed(error._tag))
+          );
+          if (
+            record.writer?.holderDigest !== writerDigestOf(request.writer) ||
+            record.writer.state !== "held"
+          ) {
+            return yield* failed("ReleaseWriterLost");
+          }
+          yield* (options.afterRecordRead?.(request) ?? Effect.void).pipe(
+            Effect.provideService(ReleaseRecordStore, store)
+          );
+          if (
+            generation !== null &&
+            options.interruptApplyOf?.has(generation)
+          ) {
+            return yield* failed("interrupted");
+          }
+          if (request.action === "plan") {
+            return;
           }
           const props = webServiceProps(
             sandboxConfig,
@@ -155,8 +203,13 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
             revisionDigests: Object.fromEntries(revisions),
             annotations: { ...props.annotations },
             templateRevision: props.template?.revision,
+            templateImageDigest:
+              typeof image === "string"
+                ? ImageDigest.make(image.slice(image.indexOf("@") + 1))
+                : undefined,
           };
           lagReads = options.trafficLagReads ?? 0;
+          missingWorkerReads = faults.missingWorkerReads ?? 0;
         }),
     });
 
@@ -173,7 +226,7 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
           : "INGRESS_TRAFFIC_INTERNAL_ONLY",
       invokerIamDisabled: false,
       terminalConditionState: "CONDITION_SUCCEEDED",
-      reconciling: false,
+      reconciling: faults.reconciling === true,
       traffic: [{ revision: `${workload}-00001`, percent: 100 }],
       revisionDigests: { [`${workload}-00001`]: imageDigest },
       annotations: {},
@@ -183,6 +236,10 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
       service: (workload) =>
         Effect.sync(() => {
           if (workload !== "web") {
+            if (missingWorkerReads > 0) {
+              missingWorkerReads -= 1;
+              return null;
+            }
             return workerDigest === null
               ? null
               : worker(workload, workerDigest);
@@ -192,7 +249,9 @@ const makeFakeCloudRun = (options: FakeCloudRunOptions = {}) =>
             return visible;
           }
           visible = web;
-          return web;
+          return web !== null && faults.reconciling
+            ? { ...web, reconciling: true }
+            : web;
         }),
       revision: (revision) =>
         (options.beforeRevisionRead ?? Effect.void).pipe(
@@ -239,7 +298,7 @@ const setup = (options?: FakeCloudRunOptions) =>
     };
   });
 
-const errorOf = <A, E>(exit: Exit.Exit<A, E>) => {
+const errorOf = (exit: Exit.Exit<unknown, unknown>) => {
   if (Exit.isSuccess(exit)) {
     throw new Error("expected a failure");
   }
@@ -330,6 +389,8 @@ describe("fenced release delivery", () => {
             policy
           )
         );
+        const settled = (yield* store.read).record;
+        // Restoring the active release re-asserts its traffic only.
         const restored = yield* provide(
           restoreRelease(
             sandboxConfig,
@@ -338,26 +399,32 @@ describe("fenced release delivery", () => {
               expectedGeneration: promoted.generation,
             },
             policy
-          ).pipe(Effect.exit)
+          )
         );
-        const previous = (yield* store.read).record.previous;
+        const reasserted = (yield* store.read).record;
         const back = yield* provide(
           restoreRelease(
             sandboxConfig,
             {
-              releaseId: previous?.releaseId ?? promoted.releaseId,
-              expectedGeneration: promoted.generation,
+              releaseId: settled.previous?.releaseId ?? promoted.releaseId,
+              expectedGeneration: reasserted.generation,
             },
             policy
           )
         );
-        return { restored, back, record: (yield* store.read).record };
+        return {
+          settled,
+          restored,
+          reasserted,
+          back,
+          record: (yield* store.read).record,
+        };
       })
     );
-    // The active release is not a restore target.
-    expect(errorOf(result.restored)).toMatchObject({
-      _tag: "ReleaseNotRestorable",
-    });
+    expect(result.restored.releaseId).toBe(ReleaseId.make("r4-bbbbbbb"));
+    expect(result.reasserted.active).toEqual(result.settled.active);
+    expect(result.reasserted.previous).toEqual(result.settled.previous);
+    expect(result.reasserted.compatible).toEqual(result.settled.compatible);
     expect(result.back).toMatchObject({
       releaseId: "r1-aaaaaaa",
       imageDigest: digestA,
@@ -411,11 +478,12 @@ describe("fenced release delivery", () => {
       expectedGeneration: 3,
       currentGeneration: 6,
     });
-    expect(result.after).toEqual(result.before);
+    // Only the writer lock came and went.
+    expect(result.after.record).toEqual(result.before.record);
     expect(result.newApplies).toBe(0);
   });
 
-  test("an interrupted traffic apply stays pending and recovery settles it", async () => {
+  test("an interrupted traffic apply stays pending and recovery settles it once unlocked", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const { store, applies, provide } = yield* setup({
@@ -435,10 +503,12 @@ describe("fenced release delivery", () => {
     expect(errorOf(result.interrupted)).toMatchObject({
       _tag: "ReleaseServiceApplyFailed",
       generation: 2,
+      outcome: "unknown",
     });
     expect(result.pending?.target.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
 
-    // The interruption was transient: the next run re-applies generation 2.
+    // The interruption was transient: the next run re-applies generation 2
+    // once an operator confirmed the old run ended and unlocked it.
     const recovered = await Effect.runPromise(
       Effect.gen(function* () {
         const { provide } = yield* setup();
@@ -447,16 +517,30 @@ describe("fenced release delivery", () => {
             // Seed the new run's store with the interrupted run's record.
             const store = yield* ReleaseRecordStore;
             const seeded = yield* store.read;
-            yield* store.write(
-              (yield* result.store.read).record,
-              seeded.version
+            const interrupted = (yield* result.store.read).record;
+            yield* store.write(interrupted, seeded.version);
+            const blocked = yield* recoverRelease(sandboxConfig, policy).pipe(
+              Effect.exit
             );
-            return yield* recoverRelease(sandboxConfig, policy);
+            yield* unlockReleaseWriter(
+              sandboxConfig,
+              interrupted.writer === null
+                ? ""
+                : writerFingerprint(interrupted.writer.holderDigest)
+            );
+            return {
+              blocked,
+              settled: yield* recoverRelease(sandboxConfig, policy),
+            };
           })
         );
       })
     );
-    expect(recovered).toMatchObject({
+    expect(errorOf(recovered.blocked)).toMatchObject({
+      _tag: "ReleaseWriterBusy",
+      state: "in-doubt",
+    });
+    expect(recovered.settled).toMatchObject({
       releaseId: "r1-aaaaaaa",
       imageDigest: digestA,
     });
@@ -567,6 +651,8 @@ describe("fenced release delivery", () => {
                 sha: shaC,
                 imageDigest: digestC,
                 origin: "cloud-run",
+                liveTemplate: null,
+                now: DateTime.makeUnsafe("2026-11-22T10:00:00Z"),
               }).pipe(
                 Effect.map((staged) => ({
                   record: staged.record,
@@ -727,6 +813,16 @@ describe("restore after a failed candidate", () => {
       }
       const failed = yield* provide(deliver(shaC, digestC).pipe(Effect.exit));
       faults.resolvedDigest = undefined;
+      const lock = (yield* store.read).record.writer;
+      if (lock !== null) {
+        // The failed apply left its lock in doubt; the operator clears it.
+        yield* provide(
+          unlockReleaseWriter(
+            sandboxConfig,
+            writerFingerprint(lock.holderDigest)
+          )
+        );
+      }
       const before = yield* store.read;
       const restored = yield* provide(
         restoreRelease(
@@ -828,5 +924,376 @@ describe("lost release record", () => {
       _tag: "ReleaseRecordLost",
       liveWorkloads: ["scheduler-worker"],
     });
+  });
+});
+
+const fingerprintOf = (record: ReleaseRecord) =>
+  record.writer === null ? "" : writerFingerprint(record.writer.holderDigest);
+
+describe("release writer lock", () => {
+  test("a writer paused after its fence read keeps every other writer out", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reached = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        let pauseNext = false;
+        const { store, applies, provide } = yield* setup({
+          afterRecordRead: () =>
+            pauseNext
+              ? Effect.gen(function* () {
+                  pauseNext = false;
+                  yield* Deferred.succeed(reached, undefined);
+                  yield* Deferred.await(resume);
+                })
+              : Effect.void,
+        });
+        yield* provide(deliver(shaA, digestA));
+        pauseNext = true;
+        // Run A applies the candidate and stops right after its fence read.
+        const runA = yield* Effect.forkChild(provide(deliver(shaB, digestB)));
+        yield* Deferred.await(reached);
+        const paused = yield* store.read;
+        const appliesWhilePaused = applies.length;
+        const refused = yield* Effect.all([
+          provide(deliver(shaC, digestC).pipe(Effect.exit)),
+          provide(
+            restoreRelease(
+              sandboxConfig,
+              {
+                releaseId: ReleaseId.make("r1-aaaaaaa"),
+                expectedGeneration: paused.record.generation,
+              },
+              policy
+            ).pipe(Effect.exit)
+          ),
+          provide(recoverRelease(sandboxConfig, policy).pipe(Effect.exit)),
+          provide(runStack(sandboxConfig, "deploy").pipe(Effect.exit)),
+          provide(runStack(sandboxConfig, "plan").pipe(Effect.exit)),
+        ]);
+        const afterRefusals = yield* store.read;
+        const newApplies = applies.length - appliesWhilePaused;
+        yield* Deferred.succeed(resume, undefined);
+        const servedA = yield* Fiber.join(runA);
+        // Once A finished, the next writer proceeds.
+        const servedB = yield* provide(deliver(shaC, digestC));
+        return {
+          refused,
+          paused,
+          afterRefusals,
+          newApplies,
+          servedA,
+          servedB,
+          final: (yield* store.read).record,
+        };
+      })
+    );
+    for (const exit of result.refused) {
+      expect(errorOf(exit)).toMatchObject({
+        _tag: "ReleaseWriterBusy",
+        operation: "deliver",
+        state: "held",
+      });
+    }
+    expect(result.afterRefusals).toEqual(result.paused);
+    expect(result.newApplies).toBe(0);
+    expect(result.servedA.releaseId).toBe(ReleaseId.make("r4-bbbbbbb"));
+    expect(result.servedB.releaseId).toBe(ReleaseId.make("r7-ccccccc"));
+    expect(result.final.writer).toBeNull();
+  });
+
+  test("a failed apply leaves the lock in doubt until an operator unlocks it", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, provide } = yield* setup({
+          interruptApplyOf: new Set([5]),
+        });
+        yield* provide(deliver(shaA, digestA));
+        const failed = yield* provide(deliver(shaB, digestB).pipe(Effect.exit));
+        const inDoubt = (yield* store.read).record;
+        const blocked = yield* provide(
+          deliver(shaC, digestC).pipe(Effect.exit)
+        );
+        const wrongHolder = yield* provide(
+          unlockReleaseWriter(sandboxConfig, "000000000000").pipe(Effect.exit)
+        );
+        faults.reconciling = true;
+        const rollingOut = yield* provide(
+          unlockReleaseWriter(sandboxConfig, fingerprintOf(inDoubt)).pipe(
+            Effect.exit
+          )
+        );
+        const stillLocked = (yield* store.read).record;
+        faults.reconciling = false;
+        const cleared = yield* provide(
+          unlockReleaseWriter(sandboxConfig, fingerprintOf(inDoubt))
+        );
+        // The pending promote of r4 is superseded by a restore of the
+        // active release, which keeps the release history.
+        const restored = yield* provide(
+          restoreRelease(
+            sandboxConfig,
+            {
+              releaseId: ReleaseId.make("r1-aaaaaaa"),
+              expectedGeneration: (yield* store.read).record.generation,
+            },
+            policy
+          )
+        );
+        return {
+          failed,
+          inDoubt,
+          blocked,
+          wrongHolder,
+          rollingOut,
+          stillLocked,
+          cleared,
+          restored,
+          final: (yield* store.read).record,
+        };
+      })
+    );
+    expect(errorOf(result.failed)).toMatchObject({
+      _tag: "ReleaseServiceApplyFailed",
+      outcome: "unknown",
+    });
+    expect(result.inDoubt.writer).toMatchObject({
+      operation: "deliver",
+      state: "in-doubt",
+    });
+    expect(result.inDoubt.pendingApply?.target.releaseId).toBe(
+      ReleaseId.make("r4-bbbbbbb")
+    );
+    expect(errorOf(result.blocked)).toMatchObject({
+      _tag: "ReleaseWriterBusy",
+      state: "in-doubt",
+    });
+    expect(errorOf(result.wrongHolder)).toMatchObject({
+      _tag: "ReleaseWriterNotHeld",
+    });
+    expect(errorOf(result.rollingOut)).toMatchObject({
+      _tag: "ReleaseServicesReconciling",
+    });
+    expect(result.stillLocked.writer).toEqual(result.inDoubt.writer);
+    expect(result.cleared).toMatchObject({
+      holder: fingerprintOf(result.inDoubt),
+      state: "in-doubt",
+    });
+    expect(JSON.stringify(result.cleared)).not.toContain(
+      result.inDoubt.writer?.holderDigest ?? "<none>"
+    );
+    expect(result.restored.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
+    expect(result.final).toMatchObject({
+      pendingApply: null,
+      candidate: null,
+      writer: null,
+      active: result.inDoubt.active,
+      previous: result.inDoubt.previous,
+      compatible: result.inDoubt.compatible,
+      // r4's candidate template landed before its promotion failed.
+      materialized: { revision: "workspace-web-r4-bbbbbbb" },
+    });
+  });
+
+  test("a writer whose lock was taken over stops before its next step", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const usurper = writerDigestOf(Redacted.make("another-writer"));
+        const { store, provide } = yield* setup({
+          afterRecordRead: () =>
+            Effect.gen(function* () {
+              // An operator unlocked the run and another writer took over.
+              const store = yield* ReleaseRecordStore;
+              const current = yield* store.read.pipe(Effect.orDie);
+              yield* store
+                .write(
+                  {
+                    ...current.record,
+                    writer: {
+                      holderDigest: usurper,
+                      operation: "recover",
+                      acquiredAt: "2026-11-22T10:00:00Z",
+                      state: "held",
+                    },
+                  },
+                  current.version
+                )
+                .pipe(Effect.orDie);
+            }),
+        });
+        const exit = yield* provide(deliver(shaA, digestA).pipe(Effect.exit));
+        return { exit, usurper, record: (yield* store.read).record };
+      })
+    );
+    expect(errorOf(result.exit)).toMatchObject({
+      _tag: "ReleaseWriterLost",
+      heldFingerprint: writerFingerprint(result.usurper),
+    });
+    // Nothing was settled, and the other writer's lock is left alone.
+    expect(result.record.pendingApply?.target.releaseId).toBe(
+      ReleaseId.make("r1-aaaaaaa")
+    );
+    expect(result.record.writer?.holderDigest).toBe(result.usurper);
+  });
+
+  test("preview operations refuse before reading or writing the record", async () => {
+    const untouched = ReleaseRecordStore.of({
+      read: Effect.die("preview read the record"),
+      write: () => Effect.die("preview wrote the record"),
+    });
+    const exits = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { provide } = yield* setup();
+        return yield* provide(
+          Effect.all([
+            deliverRelease(
+              previewConfig,
+              { sha: shaA, imageDigest: digestA },
+              policy
+            ).pipe(Effect.exit),
+            restoreRelease(
+              previewConfig,
+              {
+                releaseId: ReleaseId.make("r1-aaaaaaa"),
+                expectedGeneration: 0,
+              },
+              policy
+            ).pipe(Effect.exit),
+            recoverRelease(previewConfig, policy).pipe(Effect.exit),
+            runStack(previewConfig, "deploy").pipe(Effect.exit),
+            unlockReleaseWriter(previewConfig, "000000000000").pipe(
+              Effect.exit
+            ),
+          ]).pipe(Effect.provideService(ReleaseRecordStore, untouched))
+        );
+      })
+    );
+    for (const exit of exits) {
+      expect(errorOf(exit)).toMatchObject({
+        _tag: "PreviewServicesUnprotected",
+      });
+    }
+  });
+
+  test("a plain stack run refuses a pending traffic change", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, applies, provide } = yield* setup({
+          trafficLagReads: 10,
+        });
+        yield* provide(deliver(shaA, digestA).pipe(Effect.exit));
+        const appliesBefore = applies.length;
+        const exit = yield* provide(
+          runStack(sandboxConfig, "deploy").pipe(Effect.exit)
+        );
+        return {
+          exit,
+          newApplies: applies.length - appliesBefore,
+          record: (yield* store.read).record,
+        };
+      })
+    );
+    expect(errorOf(result.exit)).toMatchObject({ _tag: "ReleaseApplyPending" });
+    expect(result.newApplies).toBe(0);
+    expect(result.record.writer).toBeNull();
+  });
+
+  test("a plain stack run applies unfenced and releases the lock", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, applies, provide } = yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        yield* provide(runStack(sandboxConfig, "deploy"));
+        yield* provide(runStack(sandboxConfig, "plan"));
+        return { applies, record: (yield* store.read).record };
+      })
+    );
+    expect(result.applies.slice(-2)).toEqual([null, null]);
+    expect(result.record.writer).toBeNull();
+  });
+});
+
+describe("recovery from a failed apply", () => {
+  test("a first release whose apply failed is replaced in one stage and promote step", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, applies, provide } = yield* setup({
+          interruptApplyOf: new Set([2]),
+        });
+        yield* provide(deliver(shaA, digestA).pipe(Effect.exit));
+        const failed = (yield* store.read).record;
+        yield* provide(
+          unlockReleaseWriter(sandboxConfig, fingerprintOf(failed))
+        );
+        const served = yield* provide(deliver(shaB, digestB));
+        return { failed, served, applies, record: (yield* store.read).record };
+      })
+    );
+    expect(result.failed.pendingApply?.operation).toBe("promote");
+    expect(result.served).toMatchObject({
+      releaseId: "r3-bbbbbbb",
+      imageDigest: digestB,
+    });
+    // One apply for the replacement: no candidate stage before it.
+    expect(result.applies).toEqual([2, 3]);
+    expect(result.record).toMatchObject({
+      active: { releaseId: "r3-bbbbbbb" },
+      materialized: { releaseId: "r3-bbbbbbb" },
+      previous: null,
+      candidate: null,
+      pendingApply: null,
+    });
+  });
+
+  test("a replaced candidate whose template landed becomes the materialized template", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, provide } = yield* setup();
+        yield* provide(deliver(shaA, digestA));
+        faults.splitTraffic = true;
+        yield* provide(deliver(shaB, digestB).pipe(Effect.exit));
+        const afterB = (yield* store.read).record;
+        yield* provide(deliver(shaC, digestC).pipe(Effect.exit));
+        return { afterB, afterC: (yield* store.read).record };
+      })
+    );
+    expect(result.afterB.candidate?.releaseId).toBe(
+      ReleaseId.make("r4-bbbbbbb")
+    );
+    expect(result.afterB.materialized?.releaseId).toBe(
+      ReleaseId.make("r1-aaaaaaa")
+    );
+    expect(result.afterC.candidate?.releaseId).toBe(
+      ReleaseId.make("r5-ccccccc")
+    );
+    expect(result.afterC.materialized?.releaseId).toBe(
+      ReleaseId.make("r4-bbbbbbb")
+    );
+  });
+
+  test("a worker missing after an apply is retried until it appears", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { store, faults, provide } = yield* setup();
+        // One settle attempt reads both workers once.
+        faults.missingWorkerReads = 2;
+        const served = yield* provide(deliver(shaA, digestA));
+        faults.missingWorkerReads = 100;
+        const stuck = yield* provide(deliver(shaB, digestB).pipe(Effect.exit));
+        return { served, stuck, record: (yield* store.read).record };
+      })
+    );
+    expect(result.served.releaseId).toBe(ReleaseId.make("r1-aaaaaaa"));
+    expect(errorOf(result.stuck)).toMatchObject({
+      _tag: "ReleaseApplyNotObserved",
+      observed: {
+        "tasks-worker": { servingRevision: null },
+        "scheduler-worker": { servingRevision: null },
+      },
+    });
+    // Readback that never converged keeps the intent pending, lock released.
+    expect(result.record.pendingApply?.target.releaseId).toBe(
+      ReleaseId.make("r4-bbbbbbb")
+    );
+    expect(result.record.writer).toBeNull();
   });
 });

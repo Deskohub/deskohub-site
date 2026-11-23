@@ -4,14 +4,21 @@ import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { configuredWorkspaceStack } from "./src/config/stack-config";
+import {
+  configuredWorkspaceStack,
+  type WorkspaceStackConfig,
+} from "./src/config/stack-config";
 import { workspaceGcpAccess, workspaceGoogleApiAccess } from "./src/gcp-access";
-import { releaseApplyGenerationVariable } from "./src/release/alchemy-service-apply";
+import {
+  releaseApplyGenerationVariable,
+  releaseWriterVariable,
+} from "./src/release/alchemy-service-apply";
 import { cloudRunServiceReadbackLayer } from "./src/release/cloud-run-readback";
 import {
   gcsReleaseRecordStoreLayer,
   releaseRecordLocation,
 } from "./src/release/gcs-release-store";
+import { requireStackWriter } from "./src/release/release-writer";
 import { verifyStackTarget } from "./src/stack-target";
 import {
   declareRecordedWorkspaceServices,
@@ -23,7 +30,19 @@ const stackConfig = configuredWorkspaceStack.pipe(Effect.orDie);
 /** Set only by the fenced release apply (`alchemyServiceApply`). */
 const releaseGeneration = Config.option(
   Config.Int(releaseApplyGenerationVariable)
-).pipe(Effect.map(Option.getOrUndefined), Effect.orDie);
+).pipe(Effect.map(Option.getOrNull), Effect.orDie);
+
+/** The writer lock's token, set by the release command for its own runs. */
+const releaseWriter = Config.option(
+  Config.Redacted(releaseWriterVariable)
+).pipe(Effect.orDie);
+
+/** The release record store and live readback of one stage. */
+const releasePlatform = (config: WorkspaceStackConfig) =>
+  Layer.mergeAll(
+    gcsReleaseRecordStoreLayer(releaseRecordLocation(config)),
+    cloudRunServiceReadbackLayer(config)
+  ).pipe(Layer.provide(workspaceGoogleApiAccess));
 
 /**
  * The Workspace stack. State lives in the config's own state bucket,
@@ -35,6 +54,12 @@ const releaseGeneration = Config.option(
  * sets `WORKSPACE_RELEASE_GENERATION` and the deploy refuses a record at any
  * other generation; a plain deploy re-declares the current record so the
  * services are kept.
+ *
+ * Every Alchemy command on a stage that serves releases (plan, deploy,
+ * drift, destroy) builds this state layer, which refuses unless
+ * `WORKSPACE_RELEASE_WRITER` holds the token of the lock the record holds:
+ * only the release command's own runs touch the stack. Preview declares no
+ * release-owned services and stays lock-free (#1455).
  */
 export default Alchemy.Stack(
   "DeskohubWorkspace",
@@ -45,11 +70,18 @@ export default Alchemy.Stack(
         Effect.map((config) =>
           Layer.mergeAll(
             GCP.state({ bucketName: config.stateBucket }),
-            Layer.effectDiscard(verifyStackTarget(config)).pipe(
-              // The same resolution the GCS state store uses.
-              Layer.provide(workspaceGcpAccess),
-              Layer.orDie
-            )
+            Layer.effectDiscard(
+              verifyStackTarget(config).pipe(
+                // The same resolution the GCS state store uses.
+                Effect.provide(workspaceGcpAccess),
+                Effect.andThen(releaseWriter),
+                Effect.flatMap((writer) =>
+                  requireStackWriter(config, writer).pipe(
+                    Effect.provide(releasePlatform(config))
+                  )
+                )
+              )
+            ).pipe(Layer.orDie)
           )
         )
       )
@@ -58,18 +90,13 @@ export default Alchemy.Stack(
   Effect.gen(function* () {
     const config = yield* stackConfig;
     const foundation = yield* declareWorkspaceFoundation(config);
-    const services = yield* declareRecordedWorkspaceServices(
-      config,
-      yield* releaseGeneration
-    ).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          gcsReleaseRecordStoreLayer(releaseRecordLocation(config)),
-          cloudRunServiceReadbackLayer(config)
-        ).pipe(Layer.provide(workspaceGoogleApiAccess))
-      ),
-      // A stale fence, lost or unreadable record or unprotected preview stops the
-      // deploy before any service is planned.
+    const services = yield* declareRecordedWorkspaceServices(config, {
+      writer: yield* releaseWriter,
+      generation: yield* releaseGeneration,
+    }).pipe(
+      Effect.provide(releasePlatform(config)),
+      // A missing lock, stale fence, lost or unreadable record or unprotected
+      // preview stops the deploy before any service is planned.
       Effect.orDie
     );
     return { ...foundation, services };

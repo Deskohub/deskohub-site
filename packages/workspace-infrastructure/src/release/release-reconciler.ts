@@ -2,7 +2,7 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import type { ImageDigest } from "../config/stack-config";
+import type { ImageDigest, WorkspaceWorkload } from "../config/stack-config";
 import { workspaceWebServiceId } from "../resources/workload-names";
 import {
   type CompatibleDeployment,
@@ -43,7 +43,10 @@ export class ReleaseNotStaged extends Data.TaggedError("ReleaseNotStaged")<{
   readonly releaseId: ReleaseId;
 }> {}
 
-/** Restore accepts only the previous release or an unexpired compatible one. */
+/**
+ * Restore accepts only the active release, the previous one, or an
+ * unexpired compatible one.
+ */
 export class ReleaseNotRestorable extends Data.TaggedError(
   "ReleaseNotRestorable"
 )<{
@@ -63,6 +66,8 @@ export class ReleaseApplyNotObserved extends Data.TaggedError(
 )<{
   readonly intended: ReleaseId;
   readonly servingRevision: string | null;
+  /** What each release-owned service showed; a missing one reads all null. */
+  readonly observed: Readonly<Record<WorkspaceWorkload, TrafficReadback>>;
 }> {}
 
 /** What the platform actually serves, read back after an apply. */
@@ -73,6 +78,27 @@ export interface TrafficReadback {
   /** The traffic generation stamped on the service, or null when absent. */
   readonly trafficGeneration: number | null;
 }
+
+/** The workers that run the serving release's image beside the web service. */
+export type ReleaseWorker = Exclude<WorkspaceWorkload, "web">;
+
+/**
+ * The revision the web service's live template declares and the image
+ * digest it pins, or null while the service does not exist.
+ */
+export interface LiveTemplate {
+  readonly revision: string | null;
+  readonly imageDigest: ImageDigest | null;
+}
+
+const templateIs = (
+  live: LiveTemplate | null,
+  deployment: ReleaseDeployment | null
+): deployment is ReleaseDeployment =>
+  live !== null &&
+  deployment !== null &&
+  live.revision === deployment.revision &&
+  live.imageDigest === deployment.imageDigest;
 
 const fence = (record: ReleaseRecord, expectedGeneration: number) =>
   record.generation === expectedGeneration
@@ -127,19 +153,29 @@ export interface StageInput {
   readonly sha: GitSha;
   readonly imageDigest: ImageDigest;
   readonly origin: ReleaseOrigin;
+  /** The web service's live template, read just before the step. */
+  readonly liveTemplate: LiveTemplate | null;
+  readonly now: DateTime.Utc;
 }
 
 /**
  * Record a built image as the candidate, replacing any earlier one. Its
  * release ID and Cloud Run revision name derive from the new generation, so
- * reruns never collide.
+ * reruns never collide. A replaced candidate whose template already landed
+ * becomes the materialized template, so the record never forgets the
+ * revision Cloud Run runs.
+ *
+ * A first release whose promotion never settled is replaced instead: no
+ * release has served, so there is no traffic to protect and no candidate
+ * revision to verify. The new build is staged and promoted in one step
+ * (`promoted`), so the record never shows "no release, nothing pending"
+ * while services may exist. Any other pending change refuses the stage.
  */
 export const stage = Effect.fn("WorkspaceRelease.stage")(function* (
   record: ReleaseRecord,
   input: StageInput
 ) {
   yield* fence(record, input.expectedGeneration);
-  yield* requireNoPendingApply(record);
   const generation = record.generation + 1;
   const releaseId = ReleaseId.make(`r${generation}-${input.sha.slice(0, 7)}`);
   const deployment: ReleaseDeployment = {
@@ -149,11 +185,34 @@ export const stage = Effect.fn("WorkspaceRelease.stage")(function* (
     origin: input.origin,
     revision: `${workspaceWebServiceId}-${releaseId}`,
   };
+  if (record.active === null && record.pendingApply?.operation === "promote") {
+    return {
+      releaseId,
+      promoted: true,
+      record: {
+        ...record,
+        generation,
+        trafficGeneration: record.trafficGeneration + 1,
+        candidate: deployment,
+        pendingApply: {
+          operation: "promote",
+          target: deployment,
+          trafficGeneration: record.trafficGeneration + 1,
+          startedAt: isoOf(input.now),
+        },
+      } satisfies ReleaseRecord,
+    };
+  }
+  yield* requireNoPendingApply(record);
   return {
     releaseId,
+    promoted: false,
     record: {
       ...record,
       generation,
+      materialized: templateIs(input.liveTemplate, record.candidate)
+        ? deploymentOf(record.candidate)
+        : record.materialized,
       candidate: deployment,
     } satisfies ReleaseRecord,
   };
@@ -217,29 +276,29 @@ export const promote = Effect.fn("WorkspaceRelease.promote")(function* (
 export class ReleaseTemplateUnknown extends Data.TaggedError(
   "ReleaseTemplateUnknown"
 )<{
-  readonly liveTemplateRevision: string | null;
+  readonly liveTemplate: LiveTemplate | null;
   readonly expectedRevisions: ReadonlyArray<string>;
 }> {}
 
 export interface RestoreInput extends TrafficChangeInput {
-  /** The revision the live web service template names, if it exists. */
-  readonly liveTemplateRevision: string | null;
+  /** The web service's live template, read just before the step. */
+  readonly liveTemplate: LiveTemplate | null;
 }
 
 /**
  * The template the web service keeps once restore drops the candidate: the
  * candidate itself if its template already landed, else the materialized
- * one. Either way it must be the revision Cloud Run's template names now.
+ * one. Either way Cloud Run's live template must name that revision and pin
+ * its digest.
  */
 const restoredTemplate = (record: ReleaseRecord, input: RestoreInput) => {
-  const landed = [record.candidate, record.materialized].find(
-    (deployment) =>
-      deployment !== null && deployment.revision === input.liveTemplateRevision
+  const landed = [record.candidate, record.materialized].find((deployment) =>
+    templateIs(input.liveTemplate, deployment)
   );
   return landed === undefined || landed === null
     ? Effect.fail(
         new ReleaseTemplateUnknown({
-          liveTemplateRevision: input.liveTemplateRevision,
+          liveTemplate: input.liveTemplate,
           expectedRevisions: [record.candidate, record.materialized].flatMap(
             (deployment) => (deployment === null ? [] : [deployment.revision])
           ),
@@ -249,25 +308,27 @@ const restoredTemplate = (record: ReleaseRecord, input: RestoreInput) => {
 };
 
 /**
- * Persist the intent to move traffic back to the previous verified release
- * or a deployment still inside its compatible window. An unverified
- * candidate is dropped, so it loses its traffic tag; the service template
- * stays the revision Cloud Run already runs.
+ * Persist the intent to move traffic back to the previous verified release,
+ * a deployment still inside its compatible window, or the active release
+ * itself. It supersedes a pending traffic change: only the lock holder
+ * restores, so the earlier apply's outcome is known or an operator
+ * unlocked it. An unverified candidate is dropped, so it loses its traffic
+ * tag; the service template stays the revision Cloud Run already runs.
  */
 export const restore = Effect.fn("WorkspaceRelease.restore")(function* (
   record: ReleaseRecord,
   input: RestoreInput
 ) {
   yield* fence(record, input.expectedGeneration);
-  yield* requireNoPendingApply(record);
   const candidates: ReadonlyArray<VerifiedDeployment> = [
+    ...(record.active === null ? [] : [record.active]),
     ...(record.previous === null ? [] : [record.previous]),
     ...unexpired(record.compatible, input.now),
   ];
   const target = candidates.find(
     (entry) => entry.releaseId === input.releaseId
   );
-  if (target === undefined || target.releaseId === record.active?.releaseId) {
+  if (target === undefined) {
     return yield* new ReleaseNotRestorable({ releaseId: input.releaseId });
   }
   const materialized = yield* restoredTemplate(record, input);
@@ -291,7 +352,7 @@ export interface SettleInput {
   /** The web service's traffic. */
   readonly readback: TrafficReadback;
   /** Each worker's traffic; workers run the serving release's image. */
-  readonly workers: ReadonlyArray<TrafficReadback>;
+  readonly workers: Readonly<Record<ReleaseWorker, TrafficReadback>>;
   readonly now: DateTime.Utc;
 }
 
@@ -302,7 +363,7 @@ const servesPendingApply = (
   input.readback.servingRevision === pending.target.revision &&
   input.readback.servingImageDigest === pending.target.imageDigest &&
   input.readback.trafficGeneration === pending.trafficGeneration &&
-  input.workers.every(
+  Object.values(input.workers).every(
     (worker) => worker.servingImageDigest === pending.target.imageDigest
   );
 
@@ -322,6 +383,17 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
     return yield* new NoPendingReleaseApply();
   }
   const generation = record.generation + 1;
+  if (
+    servesPendingApply(input, pending) &&
+    pending.target.releaseId === record.active?.releaseId
+  ) {
+    // Restoring the active release only re-asserts its traffic.
+    return {
+      ...record,
+      generation,
+      pendingApply: null,
+    } satisfies ReleaseRecord;
+  }
   if (servesPendingApply(input, pending)) {
     const verified: VerifiedDeployment = {
       ...pending.target,
@@ -367,11 +439,13 @@ export const settleApply = Effect.fn("WorkspaceRelease.settleApply")(function* (
         ...demoted,
       ],
       pendingApply: null,
+      writer: record.writer,
     } satisfies ReleaseRecord;
   }
   return yield* new ReleaseApplyNotObserved({
     intended: pending.target.releaseId,
     servingRevision: input.readback.servingRevision,
+    observed: { web: input.readback, ...input.workers },
   });
 });
 

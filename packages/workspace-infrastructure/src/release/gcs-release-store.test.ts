@@ -23,6 +23,7 @@ import {
   makeGcsReleaseRecordStore,
   releaseRecordLocation,
 } from "./gcs-release-store";
+import { workersServing } from "./release-readback.test-utils";
 import { promote, settleApply, stage } from "./release-reconciler";
 import {
   emptyReleaseRecord,
@@ -50,6 +51,8 @@ const staged = (record: ReleaseRecord, sha: GitSha) =>
       sha,
       imageDigest: digestA,
       origin: "cloud-run",
+      liveTemplate: null,
+      now: t0,
     })
   ).record;
 
@@ -64,6 +67,8 @@ const stageStep = (sha: GitSha) =>
         sha,
         imageDigest: digestA,
         origin: "cloud-run",
+        liveTemplate: null,
+        now: t0,
       })
     ).pipe(
       Effect.map(({ record: next, releaseId }) => ({
@@ -298,6 +303,22 @@ describe("Cloud Storage release record store", () => {
         status: 200,
       });
     }
+  });
+
+  test("reads a record written before the writer lock existed as unlocked", async () => {
+    const fake = makeFakeCloudStorage();
+    const { writer: _writer, ...beforeLock } = emptyReleaseRecord;
+    fake.intercept(
+      respondWith(200, JSON.stringify({ ...beforeLock, generation: 3 }), {
+        "x-goog-generation": "1763900000000001",
+      })
+    );
+    const stored = success(await withStore(fake, read));
+    expect(stored.record).toEqual({
+      ...emptyReleaseRecord,
+      generation: 3,
+      writer: null,
+    });
   });
 
   test("fails refused credentials without retrying or exposing the token", async () => {
@@ -646,7 +667,7 @@ describe("Cloud Storage release record store", () => {
                 trafficGeneration:
                   record.pendingApply?.trafficGeneration ?? null,
               },
-              workers: [],
+              workers: workersServing(target?.imageDigest ?? null),
               now: t0,
             }).pipe(Effect.map((next) => ({ record: next, result: next })))
           ),
